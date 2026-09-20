@@ -249,6 +249,37 @@ def test_ledger_only_fixed_row_rebinds_to_certified_head(tmp_path):
     assert receipt.get("verifyResult") == "pass"
 
 
+def test_terminal_rebind_preserves_disposition_family(tmp_path):
+    """BP-2g-i: terminal re-bind carries the row's whole family forward.
+
+    A fixed ledger row that also carries `mergedInto` and another family member must keep
+    every member after finalization; losing `mergedInto` turns a refusing unresolved-merge
+    chain into a certifiable independent disposition — a fail-direction inversion.
+    """
+    session_dir, certified_head = _certifiable_session(tmp_path)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        state = json.load(fh)
+    row = state["dispositionLedger"][0]
+    row[SC.MERGED_INTO_FIELD] = "representative-key"
+    row["followUp"] = {
+        "item": "revisit",
+        "trigger": "next release",
+        "closure": "done",
+    }
+    RD._finalize_certification_inputs(session_dir, state, head_sha=certified_head)
+    entry = state["dispositionLedger"][0]
+    receipt = entry.get("dispositionReceipt")
+    assert isinstance(receipt, dict)
+    assert receipt.get("headSha") == certified_head
+    assert receipt.get("verifyResult") == "pass"
+    assert entry.get(SC.MERGED_INTO_FIELD) == "representative-key"
+    assert entry.get("followUp") == {
+        "item": "revisit",
+        "trigger": "next release",
+        "closure": "done",
+    }
+
+
 # --- item 2: persistence-order detector (BP-2g-f) -----------------------------------
 
 def test_terminal_gate_rebind_visible_to_certify_receipt(tmp_path):

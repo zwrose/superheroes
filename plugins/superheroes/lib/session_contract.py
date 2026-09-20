@@ -33,6 +33,9 @@ __all__ = (
     "read_disposition_ledger",
     "DISPOSITION_LEDGER_OWNER_FIELD",
     "DISPOSITION_LEDGER_OWNER_VALUE",
+    "DISPOSITION_LEDGER_OWNER_ABSENT",
+    "DISPOSITION_LEDGER_OWNER_RECOGNIZED",
+    "DISPOSITION_LEDGER_OWNER_UNRECOGNIZED",
     "disposition_ledger_owner_classification",
     "MERGED_INTO_FIELD",
     "RAISED_ROUND_FIELD",
@@ -86,6 +89,9 @@ DISPOSITION_LEDGER_KEY = "dispositionLedger"
 DISPOSITION_LEDGER_MALFORMED_TOKEN = "disposition-ledger-malformed"
 DISPOSITION_LEDGER_OWNER_FIELD = "dispositionLedgerOwner"
 DISPOSITION_LEDGER_OWNER_VALUE = "ledger"
+DISPOSITION_LEDGER_OWNER_ABSENT = "absent"
+DISPOSITION_LEDGER_OWNER_RECOGNIZED = "recognized"
+DISPOSITION_LEDGER_OWNER_UNRECOGNIZED = "unrecognized"
 MERGED_INTO_FIELD = "mergedInto"
 
 
@@ -145,13 +151,13 @@ def legacy_disposition_ledger_rows(state):
 def disposition_ledger_owner_classification(state):
     """Single derivation of the disposition-ledger owner marker — absent, recognized, or unrecognized."""
     if not isinstance(state, dict):
-        return "absent"
+        return DISPOSITION_LEDGER_OWNER_ABSENT
     if DISPOSITION_LEDGER_OWNER_FIELD not in state:
-        return "absent"
+        return DISPOSITION_LEDGER_OWNER_ABSENT
     value = state[DISPOSITION_LEDGER_OWNER_FIELD]
     if value == DISPOSITION_LEDGER_OWNER_VALUE:
-        return "recognized"
-    return "unrecognized"
+        return DISPOSITION_LEDGER_OWNER_RECOGNIZED
+    return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
 RAISED_ROUND_FIELD = "raisedRound"
 DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",

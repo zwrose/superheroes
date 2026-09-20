@@ -357,7 +357,7 @@ def _out_of_scope_follow_up(finding):
 def _certification_findings_by_key(state):
     """Keyed findings for disposition checks — ledger owner uses ledger + live only."""
     classification = session_contract.disposition_ledger_owner_classification(state)
-    if classification == "unrecognized":
+    if classification == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED:
         value = state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD)
         return {}, _refusal(
             "disposition-without-receipt",
@@ -366,7 +366,7 @@ def _certification_findings_by_key(state):
             binding_failure="disposition-ledger-owner-unrecognized",
         )
     by_key = {}
-    if classification == "recognized":
+    if classification == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED:
         # axis: ledger-owned reads take disposition family from the ledger only — _records is not a source
         ledger_by_key = {}
         ledger_rows, ledger_fault = session_contract.read_disposition_ledger(state)
@@ -432,14 +432,6 @@ def _certification_findings_by_key(state):
             if key:
                 by_key[key] = finding
     return by_key, None
-
-
-def _certification_findings(state):
-    """Live open-work plus durable ledger and review-record history for disposition checks."""
-    by_key, refusal = _certification_findings_by_key(state)
-    if refusal is not None:
-        return [], refusal
-    return list(by_key.values()), None
 
 
 def _resolve_merged_into_entry(finding, by_key):

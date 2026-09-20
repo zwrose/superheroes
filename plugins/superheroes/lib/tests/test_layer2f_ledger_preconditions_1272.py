@@ -143,10 +143,10 @@ def test_marker_certification_refuses_unrecognized_via_findings_by_key():
 
 def test_marker_certification_refuses_unrecognized_via_findings_wrapper():
     state = _unrecognized_marker_state()
-    findings, refusal = RC._certification_findings(state)
+    by_key, refusal = RC._certification_findings_by_key(state)
     assert refusal is not None
     assert refusal["bindingFailure"] == "disposition-ledger-owner-unrecognized"
-    assert findings == []
+    assert by_key == {}
 
 
 def test_marker_certification_refuses_unrecognized_via_check_disposition(tmp_path):

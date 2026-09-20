@@ -1439,7 +1439,7 @@ def _stage_findings(state, compiled):
     ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
     owner_class = session_contract.disposition_ledger_owner_classification(state)
-    first_ledger_owner = owner_class == "absent"
+    first_ledger_owner = owner_class == session_contract.DISPOSITION_LEDGER_OWNER_ABSENT
     if first_ledger_owner:
         _backfill_ledger_from_records(state, ledger, seen)
     round_no = state["round"]
@@ -1620,6 +1620,19 @@ def _fixed_ledger_rows(state):
     return rows, by_key, None
 
 
+def _fixed_disposition_family_with_receipt(entry, receipt):
+    """Carry the row's whole family forward with an updated receipt.
+
+    The writer applies a WHOLE family and pops every member the family omits. Passing the
+    receipt alone would delete `mergedInto` (and the refuted/out-of-scope reasons) from a
+    retained row and turn a refusing unresolved-merge chain into a certifiable independent
+    disposition — a fail-direction inversion, not a cosmetic loss."""
+    family = session_contract.disposition_family_snapshot(entry)
+    family.pop("disposition", None)
+    family.pop("dispositionRound", None)
+    return dict(family, dispositionReceipt=receipt)
+
+
 def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
     """Stamp verify on fixed receipts when audits folded before verify in the same round."""
     if verify_result is None:
@@ -1633,15 +1646,7 @@ def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
             continue
         updated_receipt = dict(receipt)
         updated_receipt["verifyResult"] = verify_result
-        # The writer applies a WHOLE family and pops every member the family omits, so the
-        # stamp carries the row's existing family forward. Passing the receipt alone would
-        # delete `mergedInto` (and the refuted/out-of-scope reasons) from a retained row and
-        # turn a refusing unresolved-merge chain into a certifiable independent disposition —
-        # a fail-direction inversion, not a cosmetic loss.
-        family = session_contract.disposition_family_snapshot(entry)
-        family.pop("disposition", None)
-        family.pop("dispositionRound", None)
-        family = dict(family, dispositionReceipt=updated_receipt)
+        family = _fixed_disposition_family_with_receipt(entry, updated_receipt)
         _record_disposition(state, key, "fixed", round_no, **family)
 
 
@@ -2181,7 +2186,9 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     `changed_subjects_seam` is threaded to the fixer fold: run_loop passes the injected seam (the
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
     wires the real git derivation. It is inert for every other phase."""
-    if session_contract.disposition_ledger_owner_classification(state) == "unrecognized":
+    if session_contract.disposition_ledger_owner_classification(state) == (
+        session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
+    ):
         raise DispositionLedgerOwnerRefusal(DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE)
     artifact = artifact if isinstance(artifact, dict) else {}
     _record_adapter_provenance(state, artifact, phase)
@@ -5519,7 +5526,7 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
                     key,
                     "fixed",
                     entry.get("dispositionRound"),
-                    dispositionReceipt=stamp_receipt,
+                    **_fixed_disposition_family_with_receipt(entry, stamp_receipt),
                 )
                 changed = True
                 continue
@@ -5541,7 +5548,7 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
             key,
             "fixed",
             entry.get("dispositionRound"),
-            dispositionReceipt=updated_receipt,
+            **_fixed_disposition_family_with_receipt(entry, updated_receipt),
         )
         changed = True
     if residuals:
@@ -6352,7 +6359,9 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "outcome": "hash-mismatch"})
         return {"ok": False, "reason": "state-hash mismatch — the state moved under a stale submit"}
 
-    if session_contract.disposition_ledger_owner_classification(state) == "unrecognized":
+    if session_contract.disposition_ledger_owner_classification(state) == (
+        session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
+    ):
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
