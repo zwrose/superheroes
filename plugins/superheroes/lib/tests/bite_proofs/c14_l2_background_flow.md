@@ -211,24 +211,57 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_backgr
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-___________ test_claude_background_agents_unreadable_refused ___________
+_______________ test_claude_background_agents_unreadable_refused _______________
+
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-2621/test_claude_background_agents_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106285f70>
 
     def test_claude_background_agents_unreadable_refused(tmp_path, monkeypatch):
-        ...
+        cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+        repo_root = _repo(tmp_path)
+        run_dir = str(tmp_path / "bg-agents-blind")
+        opened = _plant_claude_background_journal(
+            tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+        )
+        _write_bg_transcript(cfg, session_id, [
+            {"type": "user", "message": {"content": "working"}},
+        ])
+        agents_calls = {"count": 0}
+
+        def cli_blind_after_launch(args, config_dir, cwd=None, timeout=30):
+            harness["cli_calls"].append(list(args))
+            if args[:1] == ["agents"]:
+                agents_calls["count"] += 1
+                if agents_calls["count"] > 2:
+                    return 1, "", "agents failed"
+                return 0, json.dumps(harness["agents_rows"]), ""
+            if args[:1] == ["stop"]:
+                stopped = args[1]
+                harness["agents_rows"] = [
+                    dict(r, state="stopped", status=None, pid=None)
+                    if r.get("id") == stopped else r
+                    for r in harness["agents_rows"]
+                ]
+                return 0, "", ""
+            return 0, "", ""
+
+        monkeypatch.setattr(ED, "_claude_cli", cli_blind_after_launch)
+        _run_bg_engine_files(tmp_path, run_dir, opened, timeout=10)
+        ended = _bg_attempt_ended(run_dir)
 >       assert ended["refusal"] == "background-agents-unreadable"
 E       AssertionError: assert None == 'background-agents-unreadable'
 
-plugins/superheroes/lib/tests/test_engine_dispatch.py:15130: AssertionError
+plugins/superheroes/lib/tests/test_engine_dispatch.py:15143: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_background_agents_unreadable_refused
-1 failed in 1.19s
+1 failed in 0.84s
 ```
 
 **raw green:**
 
 ```
 .                                                                        [100%]
-1 passed in 1.06s
+1 passed in 0.71s
 ```
 
 ## background-session-ended-without-result

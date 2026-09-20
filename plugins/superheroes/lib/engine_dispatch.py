@@ -1132,6 +1132,17 @@ def _background_session_ended(row):
     return state in ("stopped", "done")
 
 
+def _attempt_bg_wall_cap(opened, attempt):
+    return _attempt_timeout(opened, attempt)
+
+
+def _attempt_bg_budget_exhausted(opened, slot, attempt):
+    """True when accumulated background wall time reached the attempt cap. Never raises."""
+    suspended = (slot or {}).get("suspended") or {}
+    wall = suspended.get("wallSeconds") or 0
+    return wall >= _attempt_bg_wall_cap(opened, attempt)
+
+
 def _attempt_bg_resumable(state, attempt):
     slot = (state.get("attempts") or {}).get(attempt) or {}
     if slot.get("ended") is not None:
@@ -1393,47 +1404,20 @@ def _run_engine_files_background(
     transcript_result = None
     refusal = None
     bg_resumable = False
+    timed_out = False
+    wall_cap = _attempt_bg_wall_cap(opened, attempt)
     wall_seconds = round(_NOW() - start, 1) + prior_wall_seconds
 
-    while _NOW() < deadline:
-        rows, transcript_paths, file_size = _read_session_transcript_rows(
-            config_dir, session_id,
-        )
-        if len(transcript_paths) > 1:
-            refusal = background_outcome.REFUSAL_TRANSCRIPT_AMBIGUOUS
-            break
-        if (
-            prior_file_size is not None
-            and file_size != prior_file_size
-            and file_size > MAX_STDOUT_CAPTURE
-        ):
-            rows_after_cursor = rows
-        else:
-            rows_after_cursor = rows[cursor:] if cursor else rows
-        if engine_adapter.claude_transcript_turn_ended(rows_after_cursor):
-            payload = engine_adapter.claude_transcript_result(rows)
-            tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
-            result_path = _native_result_path(run_dir_real, attempt)
-            if result_path is None:
-                transcript_result = "error"
-            elif payload is not None:
-                transcript_result = _native_result_materialization_status(
-                    result_path, payload,
-                )
-            else:
-                transcript_result = _native_result_materialization_status(
-                    result_path, None,
-                )
-            break
-        agent_rows, listing_ok = _claude_agents_rows(config_dir, cwd)
-        if not listing_ok:
-            refusal = background_outcome.REFUSAL_AGENTS_UNREADABLE
-            break
-        agent_row = _claude_agent_row_for_launch(agent_rows, launch_id)
-        if _background_session_ended(agent_row):
+    if prior_wall_seconds >= wall_cap:
+        timed_out = True
+    else:
+        while _NOW() < deadline:
             rows, transcript_paths, file_size = _read_session_transcript_rows(
                 config_dir, session_id,
             )
+            if len(transcript_paths) > 1:
+                refusal = background_outcome.REFUSAL_TRANSCRIPT_AMBIGUOUS
+                break
             if (
                 prior_file_size is not None
                 and file_size != prior_file_size
@@ -1457,19 +1441,59 @@ def _run_engine_files_background(
                         result_path, None,
                     )
                 break
-            if transcript_result is None:
-                refusal = background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
-            break
-        elapsed = _NOW() - start
-        try:
-            write_progress(attempt, elapsed, 0, 0)
-        except Exception:
-            pass
-        _SLEEP(_BACKGROUND_POLL_INTERVAL)
-        wall_seconds = round(_NOW() - start, 1) + prior_wall_seconds
+            agent_rows, listing_ok = _claude_agents_rows(config_dir, cwd)
+            if not listing_ok:
+                refusal = background_outcome.REFUSAL_AGENTS_UNREADABLE
+                break
+            agent_row = _claude_agent_row_for_launch(agent_rows, launch_id)
+            if _background_session_ended(agent_row):
+                rows, transcript_paths, file_size = _read_session_transcript_rows(
+                    config_dir, session_id,
+                )
+                if (
+                    prior_file_size is not None
+                    and file_size != prior_file_size
+                    and file_size > MAX_STDOUT_CAPTURE
+                ):
+                    rows_after_cursor = rows
+                else:
+                    rows_after_cursor = rows[cursor:] if cursor else rows
+                if engine_adapter.claude_transcript_turn_ended(rows_after_cursor):
+                    payload = engine_adapter.claude_transcript_result(rows)
+                    tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+                    result_path = _native_result_path(run_dir_real, attempt)
+                    if result_path is None:
+                        transcript_result = "error"
+                    elif payload is not None:
+                        transcript_result = _native_result_materialization_status(
+                            result_path, payload,
+                        )
+                    else:
+                        transcript_result = _native_result_materialization_status(
+                            result_path, None,
+                        )
+                    break
+                if transcript_result is None:
+                    refusal = background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
+                break
+            elapsed = _NOW() - start
+            try:
+                write_progress(attempt, elapsed, 0, 0)
+            except Exception:
+                pass
+            _SLEEP(_BACKGROUND_POLL_INTERVAL)
+            wall_seconds = round(_NOW() - start, 1) + prior_wall_seconds
 
-    if refusal is None and transcript_result is None and _NOW() >= deadline:
-        bg_resumable = True
+    if (
+        not timed_out
+        and refusal is None
+        and transcript_result is None
+        and _NOW() >= deadline
+    ):
+        if wall_seconds < wall_cap:
+            bg_resumable = True
+        else:
+            timed_out = True
 
     if bg_resumable:
         _journal_bg_suspended({
@@ -1488,8 +1512,8 @@ def _run_engine_files_background(
 
     ended_record = {
         "kind": "attempt-ended", "attempt": attempt,
-        "exit": 0 if refusal is None else 1,
-        "timedOut": False,
+        "exit": 0 if refusal is None and not timed_out else 1,
+        "timedOut": timed_out,
         "signal": None,
         "refusal": refusal,
         "at": time.time(),
@@ -3310,9 +3334,13 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
     opened = state.get("opened") or {}
     _stop_live_background_sessions(state, opened, run_dir_real=run_dir_real)
     argv = list(opened.get("argv") or result.get("argv") or [])
+    terminal_result = result
 
     if record_kind == "run-folded":
-        record = {"kind": "run-folded", "result": dict(result), "at": time.time()}
+        terminal_result = dict(result)
+        if _background_stop_unconfirmed(state):
+            terminal_result["backgroundStopUnconfirmed"] = True
+        record = {"kind": "run-folded", "result": dict(terminal_result), "at": time.time()}
     elif record_kind == "run-abandoned":
         # axis: that repeat reads return the stored result — not a fresh abandon mint.
         abandon_result = _abandon_terminal_result(run_dir_real, state)
@@ -3340,7 +3368,7 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
             run_dir=run_dir_real, argv=argv,
         )
 
-    return _with_run_fields(result, run_dir=run_dir_real, argv=argv)
+    return _with_run_fields(terminal_result, run_dir=run_dir_real, argv=argv)
 
 
 def _capture_sibling_baseline(repo_root, cwd_real, *, preflight_timeout):
@@ -3416,11 +3444,6 @@ def _fold_run(run_dir_real, state, result):
     if sibling is not None:
         result = dict(result)
         result["siblingWorktrees"] = sibling
-    opened = state.get("opened") or {}
-    _stop_live_background_sessions(state, opened, run_dir_real=run_dir_real)
-    if _background_stop_unconfirmed(state):
-        result = dict(result)
-        result["backgroundStopUnconfirmed"] = True
     return _terminate_run(run_dir_real, state, record_kind="run-folded", result=result)
 
 
@@ -5148,6 +5171,22 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     attempts[latest].get("ended") is None
                     and _attempt_bg_resumable(state, latest)
                 ):
+                    if _attempt_bg_budget_exhausted(opened, attempts[latest], latest):
+                        suspended = (attempts[latest].get("suspended") or {})
+                        _stop_live_background_sessions(
+                            state, opened, run_dir_real=run_dir_real,
+                        )
+                        _journal_append(run_dir_real, {
+                            "kind": "attempt-ended", "attempt": latest,
+                            "exit": None, "timedOut": True, "signal": None,
+                            "refusal": None, "at": time.time(),
+                            "wallSeconds": suspended.get("wallSeconds"),
+                            "capSeconds": _attempt_bg_wall_cap(opened, latest),
+                            "launchId": suspended.get("launchId"),
+                            "bgSessionId": suspended.get("bgSessionId"),
+                        })
+                        time.sleep(SUPERVISOR_POLL_INTERVAL)
+                        continue
                     ok_spawn, detail = _spawn_attempt(
                         run_dir_real, state, latest, run_engine=run_engine, resume=True,
                     )
@@ -5298,6 +5337,14 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                 run_dir=run_dir_real, argv=argv,
                             ))
                     _stop_live_background_sessions(state, opened, run_dir_real=run_dir_real)
+                    if _background_stop_unconfirmed(state):
+                        return _fold_run(run_dir_real, state, _with_run_fields(
+                            {"ok": False, "terminal": True,
+                             "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                             "detail": "background-stop-unconfirmed",
+                             "attempts": latest, "forfeited": False},
+                            run_dir=run_dir_real, argv=argv,
+                        ))
                     ok_spawn, detail = _spawn_attempt(
                         run_dir_real, state, latest + 1, run_engine=run_engine,
                     )
