@@ -1365,7 +1365,8 @@ def _finding_key_of(finding):
     return session_contract.finding_identity_key(finding)
 
 
-def _ensure_disposition_ledger(state):
+def _ensure_disposition_ledger_for_write(state):
+    """Fold-time writer for ``dispositionLedger`` — not for terminal or certification reads."""
     ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
     if not isinstance(ledger, list):
         ledger = []
@@ -1431,7 +1432,7 @@ def _stage_findings(state, compiled):
     if not isinstance(compiled, list):
         state["_toVerify"] = compiled
         return
-    ledger = _ensure_disposition_ledger(state)
+    ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
     owner_class = session_contract.disposition_ledger_owner_classification(state)
     first_ledger_owner = owner_class == "absent"
@@ -1477,7 +1478,7 @@ def _stage_findings(state, compiled):
 def _record_disposition(state, key, disposition, round_no, **fields):
     if disposition not in session_contract.DISPOSITIONS:
         raise ValueError("unknown disposition %r" % (disposition,))
-    ledger = _ensure_disposition_ledger(state)
+    ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
     live = _live_finding_by_key(state, key)
     if key in seen and isinstance(ledger[seen[key]], dict):
@@ -1501,7 +1502,7 @@ def _record_disposition(state, key, disposition, round_no, **fields):
 
 
 def _record_merged_into(state, key, into_key):
-    ledger = _ensure_disposition_ledger(state)
+    ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
     live = _live_finding_by_key(state, key)
     if key in seen and isinstance(ledger[seen[key]], dict):
@@ -1595,31 +1596,31 @@ def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
 def _fixed_ledger_rows(state):
     """Fixed disposition-ledger rows as ordered (key, entry) pairs plus the by_key map.
 
-    A pure read: a ledger that is not a list yields no rows and is never repaired here, so no
-    read path can launder a malformed ledger past the fold chokepoint's ``bc-03`` refusal."""
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-    if not isinstance(ledger, list):
-        return [], {}
-    seen = _ledger_index_by_key(ledger)
+    A pure read: a malformed ledger yields no rows and is never repaired here, so no read path
+    can launder it past the fold chokepoint's ``bc-03`` refusal."""
+    ledger_rows, fault = session_contract.read_disposition_ledger(state)
+    if fault is not None:
+        return [], {}, fault
+    seen = _ledger_index_by_key(ledger_rows)
     by_key = {
-        key: ledger[idx]
+        key: ledger_rows[idx]
         for key, idx in seen.items()
-        if isinstance(ledger[idx], dict)
+        if isinstance(ledger_rows[idx], dict)
     }
     rows = []
     for key, idx in list(seen.items()):
-        entry = ledger[idx]
+        entry = ledger_rows[idx]
         if not isinstance(entry, dict) or entry.get("disposition") != "fixed":
             continue
         rows.append((key, entry))
-    return rows, by_key
+    return rows, by_key, None
 
 
 def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
     """Stamp verify on fixed receipts when audits folded before verify in the same round."""
     if verify_result is None:
         return
-    rows, _by_key = _fixed_ledger_rows(state)
+    rows, _by_key, _fault = _fixed_ledger_rows(state)
     for key, entry in rows:
         if entry.get("dispositionRound") != round_no:
             continue
@@ -1644,7 +1645,7 @@ def _archive_departures(state, departing):
     """Write every departing keyed finding into dispositionLedger (replace-by-key)."""
     if not departing:
         return
-    ledger = _ensure_disposition_ledger(state)
+    ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
     for finding in departing:
         if not isinstance(finding, dict):
@@ -5388,7 +5389,7 @@ def _resolve_repo_root(session_dir, state):
 
 def _fixed_ledger_content_paths(state, artifact=None):
     """Proof paths for fixed ledger rows plus any fix-batch paths at the certified head."""
-    rows, _by_key = _fixed_ledger_rows(state)
+    rows, _by_key, _fault = _fixed_ledger_rows(state)
     paths = []
     seen = set()
     for key, entry in rows:

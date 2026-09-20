@@ -2,6 +2,7 @@
 """Session-contract path and phase constants — leaf module with no round_* imports."""
 import hashlib
 import json
+from dataclasses import dataclass
 
 from finding_identity import clamp_title, finding_identity, finding_label, normalize_title
 
@@ -24,6 +25,9 @@ __all__ = (
     "TRANSIENT_FINDING_FIELDS",
     "DISPOSITIONS",
     "DISPOSITION_LEDGER_KEY",
+    "DISPOSITION_LEDGER_MALFORMED_TOKEN",
+    "DispositionLedgerReadFault",
+    "read_disposition_ledger",
     "DISPOSITION_LEDGER_OWNER_FIELD",
     "DISPOSITION_LEDGER_OWNER_VALUE",
     "disposition_ledger_owner_classification",
@@ -70,9 +74,48 @@ FINDING_KEY_FIELD = "findingKey"
 
 DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
 DISPOSITION_LEDGER_KEY = "dispositionLedger"
+DISPOSITION_LEDGER_MALFORMED_TOKEN = "disposition-ledger-malformed"
 DISPOSITION_LEDGER_OWNER_FIELD = "dispositionLedgerOwner"
 DISPOSITION_LEDGER_OWNER_VALUE = "ledger"
 MERGED_INTO_FIELD = "mergedInto"
+
+
+@dataclass(frozen=True)
+class DispositionLedgerReadFault:
+    """Malformed dispositionLedger — propagates to certification refusal, never repaired here."""
+    token: str
+    detail: str
+
+
+def read_disposition_ledger(state):
+    """Pure read of ``dispositionLedger`` — never mutates ``state``.
+
+    Returns shallow-copied rows and ``None``, or ``([], fault)`` when the stored ledger is
+    malformed. An absent key is not malformed."""
+    if not isinstance(state, dict) or DISPOSITION_LEDGER_KEY not in state:
+        return [], None
+    ledger = state[DISPOSITION_LEDGER_KEY]
+    if not isinstance(ledger, list):
+        return [], DispositionLedgerReadFault(
+            token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+            detail="dispositionLedger must be a list when dispositionLedgerOwner is %r"
+            % (DISPOSITION_LEDGER_OWNER_VALUE,),
+        )
+    rows = []
+    for entry in ledger:
+        if not isinstance(entry, dict):
+            return [], DispositionLedgerReadFault(
+                token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+                detail="dispositionLedger row must be an object",
+            )
+        key = finding_identity_key(entry)
+        if not key:
+            return [], DispositionLedgerReadFault(
+                token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+                detail="dispositionLedger row lacks a finding key",
+            )
+        rows.append(dict(entry))
+    return rows, None
 
 
 def disposition_ledger_owner_classification(state):
