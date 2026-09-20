@@ -13,10 +13,10 @@ real specimens behind the three order-quality reworks the build record attribute
 
 `c11_l3_wo_a3.md` is the WO-A3 rework order itself: it quotes the wrong shape as evidence — the
 mixed-shape defect is **named for the semantic half** (item (b)); the deterministic half does not
-fire without the protocol literals. Not demonstrated: the recorded semantic-seat runs on WO-A and on
-this fixture returned other findings (the plugin-only path claim, unresolved measured citations) and
-did not report the mixed shape, so the catch is a reading the prompt asks for, not one a run has
-shown.
+fire without the protocol literals. Not demonstrated: the recorded semantic-seat runs
+(`lib/tests/bite_proofs/order_lint_1339.md` § The semantic half) cover a planted order, its clean
+twin, and `c11_l3_wo_c.md` — none covers WO-A or this fixture — so item (b) on these two orders is a
+reading the prompt asks for, not one a recorded run has shown.
 
 `test_order_lint.py` states, per fixture, which half of the lint catches which defect at which
 repository root, and where a defect is not caught, why.
