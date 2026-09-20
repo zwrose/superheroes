@@ -643,6 +643,71 @@ def test_C13_backfill_preserves_preexisting_ledger_disposition():
     assert ledger[key]["refutedReason"] == refuted_reason
 
 
+def test_C13_backfill_merges_record_severity_preserves_disposition_family(tmp_path):
+    key = "o::old@L1"
+    follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
+                 "classClosure": "tracked separately"}
+    preexisting_family = {
+        "disposition": "out-of-scope",
+        "dispositionRound": 1,
+        "outOfScopeReason": "product choice",
+        "followUp": follow_up,
+    }
+    preexisting_entry = {
+        "file": "o", "line": 1, "title": "old", "severity": "Minor",
+        SC.FINDING_KEY_FIELD: key,
+        **preexisting_family,
+    }
+    record_finding = {
+        "file": "o", "line": 1, "title": "old", "severity": "Critical",
+        SC.FINDING_KEY_FIELD: key,
+    }
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    compiled, _ = RD.mechanical_compile([new_raw], None)
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["dispositionLedger"] = [dict(preexisting_entry)]
+    state["_records"] = [{"findings": [record_finding]}]
+    RD._stage_findings(state, compiled)
+    ledger = _ledger_by_key(state)
+    entry = ledger[key]
+    assert entry["severity"] == "Critical"
+    for field in SC.DISPOSITION_FAMILY_FIELDS:
+        if field in preexisting_family:
+            assert entry[field] == preexisting_family[field]
+        else:
+            assert field not in entry
+    state["dispositionLedgerOwner"] = "ledger"
+    state["findings"] = [entry]
+    ctx = _ctx(state, tmp_path)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["detail"] == "Critical finding may not take out-of-scope disposition"
+
+
+def test_C13_out_of_scope_reason_required_before_follow_up_checks(tmp_path):
+    follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
+                 "classClosure": "tracked separately"}
+    base = {"file": "o", "line": 1, "title": "old", "severity": "Important",
+            "disposition": "out-of-scope", "dispositionRound": 1, "followUp": follow_up}
+    state = RD.new_state(_cfg())
+    state["dispositionLedgerOwner"] = "ledger"
+    state["findings"] = [dict(base)]
+    ctx = _ctx(state, tmp_path)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["detail"] == "out-of-scope disposition lacks recorded reason"
+    reason = "deferred to next release"
+    state["findings"] = [dict(base, outOfScopeReason=reason)]
+    ctx = _ctx(state, tmp_path)
+    assert RC.check_disposition_without_receipt(ctx) is None
+    assert ctx["important_disclosures"] == [
+        {"id": None, "title": "old", "severity": "Important", "reason": reason},
+    ]
+
+
 # --- L7 bite-proof: departure chokepoint ---------------------------------------------
 
 def test_L7_archive_departure_without_prior_staging():

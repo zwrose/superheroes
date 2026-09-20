@@ -1615,6 +1615,13 @@ def check_disposition_without_receipt(ctx):
                     fid,
                     "Critical finding may not take out-of-scope disposition",
                 )
+            reason = graded.get("outOfScopeReason")
+            if not isinstance(reason, str) or not reason.strip():
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "out-of-scope disposition lacks recorded reason",
+                )
             follow_up = _out_of_scope_follow_up(graded)
             if not isinstance(follow_up, dict):
                 return _refusal(
