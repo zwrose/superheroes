@@ -1356,14 +1356,14 @@ def _backfill_ledger_from_records(state, ledger, seen):
             if not isinstance(finding, dict):
                 continue
             key = _finding_identity_key(finding)
-            if not key or key in seen:
+            if not key:
                 continue
-            if finding.get("disposition") is not None:
-                entry = dict(finding)
+            entry = _strip_disposition_family(dict(finding))
+            if key in seen:
+                ledger[seen[key]] = entry
             else:
-                entry = _strip_disposition_family(dict(finding))
-            seen[key] = len(ledger)
-            ledger.append(entry)
+                seen[key] = len(ledger)
+                ledger.append(entry)
 
 
 def _stage_findings(state, compiled):
@@ -1390,7 +1390,7 @@ def _stage_findings(state, compiled):
             sanitized.append(finding)
             continue
         existing = ledger[seen[key]] if key in seen else None
-        entry = dict(finding)
+        entry = _strip_disposition_family(dict(finding))
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
         if (isinstance(existing, dict)
                 and existing.get("disposition") is not None
@@ -1884,7 +1884,11 @@ def _append_review_record(state, rnd, kind, dim_map, findings):
     (so `_round_reviewed` / `_confirmation_qualifies` read it), the challenged-annotated coverage
     accumulated so far, and the recurrence-derived generalize grace (recurrent_classes over PRIOR
     records + coverage — the same current=compiled / prior=record split tally_round_decider uses)."""
-    findings = [f for f in (findings or []) if isinstance(f, dict)]
+    findings = [
+        _strip_disposition_family(dict(f)) if isinstance(f, dict) else f
+        for f in (findings or [])
+        if isinstance(f, dict)
+    ]
     coverage = _annotate_challenged(state.get("_coverage") or [], findings)
     prior = [r for r in (state.get("_records") or []) if r.get("round") != rnd]
     record = {

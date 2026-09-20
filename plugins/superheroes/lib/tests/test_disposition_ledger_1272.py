@@ -193,6 +193,48 @@ def test_L2_stage_findings_strips_seat_supplied_disposition_family():
     assert "dispositionReceipt" not in staged[0]
 
 
+def test_L2_append_review_record_then_stage_strips_seat_supplied_disposition():
+    finding = {"file": "x", "line": 1, "title": "t", "severity": "Minor",
+               "disposition": "refuted", "dispositionRound": 1, "refutedReason": "seat"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    state = RD.new_state(_cfg())
+    RD._append_review_record(state, 1, "baseline", {}, compiled)
+    RD._stage_findings(state, compiled)
+    staged = state.get("_toVerify") or []
+    assert len(staged) == 1
+    assert staged[0].get("disposition") is None
+    assert staged[0].get("dispositionRound") is None
+    assert staged[0].get("refutedReason") is None
+    key = SC.finding_identity_key(compiled[0])
+    entry = _ledger_by_key(state)[key]
+    assert entry.get("disposition") is None
+
+
+def test_L2_backfill_last_record_wins_over_earlier_disposition(tmp_path):
+    key = "o::old@L1"
+    old = {"file": "o", "line": 1, "title": "old", "severity": "Important",
+           SC.FINDING_KEY_FIELD: key, "disposition": "refuted",
+           "dispositionRound": 1, "refutedReason": "stale"}
+    later = {"file": "o", "line": 1, "title": "old", "severity": "Important",
+             SC.FINDING_KEY_FIELD: key}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    compiled, _ = RD.mechanical_compile([new_raw], None)
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["_records"] = [{"findings": [old]}, {"findings": [later]}]
+    RD._stage_findings(state, compiled)
+    ledger = _ledger_by_key(state)
+    assert ledger[key].get("disposition") is None
+    new_key = SC.finding_identity_key(compiled[0])
+    RD._record_disposition(state, new_key, "refuted", 2, refutedReason="no")
+    state["findings"] = []
+    ctx = _ctx(state, tmp_path)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["detail"] == "finding has no disposition recorded"
+
+
 def test_L2_merged_away_member_resolves_through_representative(tmp_path):
     f1 = {"file": "m.py", "line": 1, "title": "root a", "severity": "Important",
           "verdict": "CONFIRMED"}
@@ -229,6 +271,47 @@ def test_L2_merged_away_member_resolves_through_representative(tmp_path):
     assert refusal is not None
     assert refusal["class"] == "disposition-without-receipt"
     assert refusal["detail"] == "merged-into chain does not resolve", refusal
+
+
+def test_L2_cross_file_merged_member_fixed_validates_representative_content(tmp_path):
+    head = "c" * 40
+    rep = {"file": "rep.py", "line": 1, "title": "shared root", "severity": "Critical",
+           "verdict": "CONFIRMED"}
+    member = {"file": "mem.py", "line": 1, "title": "shared root", "severity": "Important",
+              "verdict": "CONFIRMED"}
+    compiled, _ = RD.mechanical_compile([rep, member], None)
+    state = RD.new_state(_cfg())
+    RD._stage_findings(state, compiled)
+    staged = V.stage_ids(compiled)
+    state["_verified"] = staged
+    id0, id1 = staged[0]["id"], staged[1]["id"]
+    key0 = SC.finding_identity_key(staged[0])
+    key1 = SC.finding_identity_key(staged[1])
+    RD._fold_synthesis(state, state["config"], {"grouping": [{"group_id": "g",
+                                                              "member_ids": [id0, id1]}]})
+    receipt = {
+        "headSha": head,
+        "verifyResult": "pass",
+        "fixContentDigest": _FIX_PRESENT_DIGEST,
+    }
+    RD._record_disposition(state, key0, "fixed", 1, dispositionReceipt=receipt)
+    ledger = _ledger_by_key(state)
+    member_entry = dict(ledger[key1])
+    state["dispositionLedgerOwner"] = "ledger"
+    state["findings"] = []
+    state["dispositionLedger"] = [ledger[key0], member_entry]
+    ctx = _ctx(state, tmp_path, certified_head=head)
+    blobs = _head_content_blobs([{"file": "rep.py", "disposition": "fixed"}], head)
+    with open(os.path.join(ctx["session_dir"], RC.HEAD_CONTENT_BLOBS_FILE), "w",
+              encoding="utf-8") as fh:
+        json.dump(blobs, fh)
+    blobs_path = os.path.join(ctx["session_dir"], RC.HEAD_CONTENT_BLOBS_FILE)
+    with open(blobs_path, encoding="utf-8") as fh:
+        blobs = json.load(fh)
+    reads = blobs.get("reads") or []
+    assert any(row.get("path") == "rep.py" for row in reads), reads
+    assert not any(row.get("path") == "mem.py" for row in reads), reads
+    assert RC.check_disposition_without_receipt(ctx) is None
 
 
 # --- L3 ------------------------------------------------------------------------------

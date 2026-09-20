@@ -156,7 +156,7 @@ def _execution_evidence(**over):
     return evidence
 
 
-def _execution_evidence_for_payload(payload, source="runner", read="engaged"):
+def _execution_evidence_for_payload(payload, source="runner", read="unknown"):
     observation = {
         "tokens": None,
         "toolCalls": 1,
@@ -180,7 +180,7 @@ def _execution_evidence_for_payload(payload, source="runner", read="engaged"):
     return _execution_evidence(observation=observation, source=source)
 
 
-def _land(session_dir, state, pend, seat, payload, occurrence=0, evidence_read="engaged"):
+def _land(session_dir, state, pend, seat, payload, occurrence=0, evidence_read="unknown"):
     """Write ONE seat's envelope into the LANDING area (what the host does)."""
     manifest_sha, order_sha = _anchor_hashes(session_dir, state, pend, seat)
     schema = round_records.seat_result_schema_for_state_version(state.get("schemaVersion"))
@@ -802,7 +802,7 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
 def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
                                                   panel_findings, head_diff_path,
                                                   telemetry_shape="dispatch-observed",
-                                                  evidence_read="engaged"):
+                                                  evidence_read="unknown"):
     _assert_adapters_are_real()
     state = _state(session_dir)
     pend = state["pending"]
@@ -843,7 +843,7 @@ def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdi
                                                       panel_findings, head_diff_path,
                                                       max_steps=24,
                                                       telemetry_shape="dispatch-observed",
-                                                      evidence_read="engaged"):
+                                                      evidence_read="unknown"):
     folded = []
     for _ in range(max_steps):
         if _state(session_dir).get("terminal"):

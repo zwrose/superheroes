@@ -468,7 +468,7 @@ def test_real_loop_dispatch_observed_row_carries_cited_head_matching_certified_h
         baseGuard=RCE.BASE_GUARD_CHECKED,
     )
     folded = TRI._drive_to_terminal_with_panel_dispatch_evidence(
-        session_dir, tmp_path, gitdir, [], head_path)
+        session_dir, tmp_path, gitdir, [], head_path, evidence_read="engaged")
     assert RD.P_PANEL in folded
     journal = RD.read_journal(session_dir)
     recorded = [row for row in journal

@@ -1017,9 +1017,21 @@ def _read_head_content_blobs(session_dir):
     return blobs, None
 
 
-def _fix_still_present_at_head(ctx, finding, receipt):
-    fid = finding.get("id") or finding.get("title") or "finding"
+def _fix_content_proof_path(finding, by_key=None):
+    """File path whose head-content proof binds a fixed disposition — representative for merged members."""
     path = finding.get("file")
+    if by_key is not None and finding.get(session_contract.MERGED_INTO_FIELD):
+        resolved = _resolve_merged_into_entry(finding, by_key)
+        if isinstance(resolved, dict):
+            rep_path = resolved.get("file")
+            if isinstance(rep_path, str) and rep_path:
+                path = rep_path
+    return path
+
+
+def _fix_still_present_at_head(ctx, finding, receipt, by_key=None):
+    fid = finding.get("id") or finding.get("title") or "finding"
+    path = _fix_content_proof_path(finding, by_key)
     if not isinstance(path, str) or not path:
         return _refusal(
             "disposition-without-receipt",
@@ -1586,7 +1598,7 @@ def check_disposition_without_receipt(ctx):
                     "fixed disposition verification receipt did not pass",
                     binding_failure="verify-not-pass",
                 )
-            refusal = _fix_still_present_at_head(ctx, graded, receipt)
+            refusal = _fix_still_present_at_head(ctx, graded, receipt, by_key=by_key)
             if refusal is not None:
                 return refusal
         elif disposition == "refuted":
