@@ -156,7 +156,7 @@ register, or a single-issue child standing in for one under FR-36 — run the re
 zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
 derived from the issue alone, the route names the register and child token for you to pass. On
 `pass`, record the check's own output in the intake note — the `result` line, or `pass` together
-with `requiredEntries` — not merely a claim that it ran. When the register path and child token are
+with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child token are
 known — the route names them or they are derivable — **run the check**; an `undecided` result
 blocks exactly like `fail`. When they are not known and applicability is genuinely unclear, that is
 a **routing gap, not a reason to proceed**: raise it with the advisor (a builder **parks**; the

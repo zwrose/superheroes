@@ -3530,6 +3530,64 @@ def test_register_check_vocabulary_completeness():
     )
 
 
+_REGISTER_CHECK_VERIFICATION_SENTENCE_CLAUSE = (
+    "the `result` line, or `pass` together with `requiredEntries` "
+    "and `registerCopy`/`registerRef` — not merely a claim that it ran."
+)
+
+_REGISTER_CHECK_VERIFICATION_SENTENCE_COPY_HOLDERS = {
+    "skills/workhorse/SKILL.md": 1,
+    "skills/showrunner/SKILL.md": 2,
+    "skills/showrunner/reference/register-check.md": 3,
+}
+
+_REGISTER_CHECK_VERIFICATION_SENTENCE_RE = re.compile(
+    r"the `result` line, or `pass` together\s+with `requiredEntries`"
+    r"(?: and `registerCopy`/`registerRef`)?"
+    r" — not merely a claim that it ran\.",
+)
+
+
+def _register_check_verification_sentence_occurrences(text):
+    text_norm = _anchor_whitespace_normalize(text)
+    return list(_REGISTER_CHECK_VERIFICATION_SENTENCE_RE.finditer(text_norm))
+
+
+def test_register_check_verification_sentence_pinned_across_copy_holders():
+    """Register-check pass evidence sentence is identical in every enumerated copy-holder."""
+    pinned_norm = _anchor_whitespace_normalize(
+        _REGISTER_CHECK_VERIFICATION_SENTENCE_CLAUSE
+    )
+    for rel, expected_count in _REGISTER_CHECK_VERIFICATION_SENTENCE_COPY_HOLDERS.items():
+        path = os.path.normpath(os.path.join(PLUGIN, rel))
+        assert os.path.isfile(path), (
+            "%s: copy-holder missing or unreadable — expected file at %s"
+            % (rel, path)
+        )
+        text = _read(rel)
+        matches = _register_check_verification_sentence_occurrences(text)
+        assert len(matches) == expected_count, (
+            "%s: expected exactly %d verification-sentence occurrence(s), found %d"
+            % (rel, expected_count, len(matches))
+        )
+        for match in matches:
+            clause = match.group(0)
+            clause_norm = _anchor_whitespace_normalize(clause)
+            assert clause_norm == pinned_norm, (
+                "%s: verification-sentence clause drift — expected %r, found %r"
+                % (rel, pinned_norm, clause_norm)
+            )
+            assert "`requiredEntries`" in clause, (
+                "%s: verification-sentence missing `requiredEntries`" % rel
+            )
+            assert "`registerCopy`" in clause, (
+                "%s: verification-sentence missing `registerCopy`" % rel
+            )
+            assert "`registerRef`" in clause, (
+                "%s: verification-sentence missing `registerRef`" % rel
+            )
+
+
 # --- Cluster: R5 weight vocabulary + R7 park surface (pinned register literals) ---
 
 # The epic register is the home of record for these sentences. lib/tests/ ships inside the

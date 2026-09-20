@@ -243,7 +243,7 @@ quoted block; a body with zero quoted blocks is exactly the case the check is th
 Where applicability cannot be derived from the issue alone, the route names the register and
 child token at routing for the builder to pass. On `fail`, fix the body — do not file a drifted
 quote. On `pass`, record the check's own output in the filing note — the `result` line, or `pass`
-together with `requiredEntries` — not merely a claim that it ran. When the register path and child
+together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child
 token are known — the route names them or they are derivable — **run the check**; an `undecided`
 result blocks exactly like `fail`. When they are not known and applicability is genuinely unclear,
 that is a **routing gap, not a reason to proceed**: raise it with the advisor (a builder **parks**;
@@ -257,7 +257,7 @@ for the filing obligation.
 run the check at intake before the brief, whether or not the body contains a quoted block. On
 `fail`, **park** — the quoted text is the contract the build is graded on, so a drifted quote is
 not a buildable surface. On `pass`, record the check's own output in the intake note — the
-`result` line, or `pass` together with `requiredEntries` — not merely a claim that it ran. When
+`result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When
 the register path and child token are known — the route names them or they are derivable — **run
 the check**; an `undecided` result blocks exactly like `fail`. When they are not known and
 applicability is genuinely unclear, that is a **routing gap, not a reason to proceed**: raise it
@@ -271,7 +271,7 @@ park obligation.
 pass, re-run the check per **register-consuming child** across **both** directions, whether or
 not each body contains a quoted block. On `fail`, record a blocking package-read finding and do
 not treat the package as verified. On `pass`, record the check's own output in the package-read
-verification record — the `result` line, or `pass` together with `requiredEntries` — not merely a
+verification record — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a
 claim that it ran. When the register path and child token are known — the route names them or they
 are derivable — **run the check**; an `undecided` result blocks exactly like `fail`. When they are
 not known and applicability is genuinely unclear, that is a **routing gap, not a reason to
