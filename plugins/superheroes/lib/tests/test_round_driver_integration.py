@@ -864,14 +864,16 @@ def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdi
     raise AssertionError("did not reach a terminal in %d steps: %s" % (max_steps, folded))
 
 
-def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_records_head(
-        tmp_path):
-    """Seam between dispatch-observed telemetry and cited-head binding on the writer.
+def test_real_loop_dispatch_observed_row_cites_the_runner_observed_head(tmp_path):
+    """R28 re-pin: C13 layer 1c produces the cited head on dispatch-observed journal rows.
 
-    The telemetry half is proven here: before certification the journal row's execution evidence
-    shows read engaged, at least one tool call, and source codex-events. The head half waits for
-    C13's producer — when the loop records the cited head on journal rows, this test flips to a
-    certifying assertion under R28's classification.
+    The telemetry half is unchanged: execution evidence shows read engaged, at least one tool
+    call, and source codex-events. The head half is now produced by layer 1c — the recorded row
+    cites the runner-observed view head with citedHeadSource runner-view, and the stored envelope
+    carries the same headSha. Certification may still refuse for other reasons (the shared harness
+    hand-lands seats with evidence_read unknown); the residual execution-evidence-not-engaged
+    refusal belongs to layer 4, not this layer. This test pins only that head binding no longer
+    refuses BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND.
 
     A review that raised findings is ``test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions``.
     """
@@ -900,7 +902,8 @@ def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_recor
                 and row.get("phase") == round_driver.P_PANEL
                 and row.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED]
     assert recorded, journal
-    evidence = recorded[0].get("executionEvidence")
+    row = recorded[0]
+    evidence = row.get("executionEvidence")
     assert isinstance(evidence, dict)
     assert evidence.get("runnerNonce")
     observation = evidence["observation"]
@@ -912,19 +915,33 @@ def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_recor
     assert load_refusal is None, load_refusal
     certified_head = round_certification._certified_head_sha(ctx)
     assert isinstance(certified_head, str) and certified_head
+    assert row["citedHeadSource"] == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW
+    assert isinstance(row["citedHead"], str) and row["citedHead"]
+    assert row["citedHead"] == certified_head
+    store_path = round_records.store_path(
+        session_dir, row["round"], row["phase"],
+        round_records.storage_key(FINDING_SEAT), row["attempt"])
+    stored, read_err = round_records.read_json(store_path)
+    assert read_err is None, read_err
+    assert stored["headSha"] == row["citedHead"]
     receipt, refusal = round_certification.certify(session_dir)
     assert receipt is None
     assert refusal is not None
-    assert refusal["class"] == "unrun-review"
     assert (
-        refusal["bindingFailure"]
-        == round_certification.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
+        refusal.get("bindingFailure")
+        != round_certification.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
     )
-    assert refusal["artifact"] == FINDING_SEAT
 
 
-def test_real_loop_refuses_when_certified_head_unresolvable(tmp_path):
-    """Proves a session with no resolvable certified head does not certify."""
+def test_real_loop_refuses_record_when_no_head_is_resolvable_anywhere(tmp_path):
+    """R28 re-pin: record-time refuses view-head-underivable when no anchor head exists anywhere.
+
+    Bootstrapping with head_sha=None leaves the orders anchor without a head; layer 1c refuses at
+    record-result before certification can run. Certification's own
+    BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE branch stays directly covered by
+    ``test_round_certification.py`` (the assertion at roughly line 428), so moving this test to
+    the earlier refusal loses no coverage.
+    """
     seat_map = {
         "seats": {
             dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
@@ -939,17 +956,38 @@ def test_real_loop_refuses_when_certified_head_unresolvable(tmp_path):
         vendors=["codex"],
         baseGuard=round_certification.BASE_GUARD_CHECKED,
     )
-    _drive_to_terminal_with_panel_dispatch_evidence(
-        session_dir, tmp_path, gitdir, [], head_path)
-    receipt, refusal = round_certification.certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "unrun-review"
-    assert (
-        refusal["bindingFailure"]
-        == round_certification.BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE
-    )
-    assert refusal["artifact"] == round_certification.META_FILE
+    _drive_to_phase(session_dir, gitdir, [], head_path, round_driver.P_PANEL)
+    state = _state(session_dir)
+    pend = state["pending"]
+    phase = pend["phase"]
+    assert phase == round_driver.P_PANEL
+    roster, roster_reason = round_adapters.roster_for(phase, state, state.get("config") or {})
+    assert roster_reason is None, (phase, roster_reason)
+    slots = _slots_of(roster)
+    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    anchor = round_driver._orders_anchor(state, session_dir, pend["round"], pend["phase"],
+                                         pend["attempt"])
+    anchor_head = (anchor or {}).get("headSha")
+    assert anchor_head is None
+    for seat, occurrence in slots:
+        payload = _payload_for(session_dir, state, pend, seat, [], head_path)
+        if phase == round_driver.P_PANEL and seat == FINDING_SEAT and state["round"] == 1:
+            _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
+            order_path = round_records.order_prompt_path(
+                session_dir, pend["round"], pend["phase"],
+                round_records.storage_key(seat, occurrence), pend["attempt"])
+            run_dir = _execution_run_dir(
+                tmp_path, order_path, [], view_head_sha=anchor_head or "abc123fake")
+            out = round_driver.cmd_record_result(
+                session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
+            assert out["ok"] is False
+            assert out["reason"] == "view-head-underivable"
+            assert out["anchorCitedHead"] is None
+            assert out["runKind"] == engine_dispatch.RUN_KIND_REVIEW
+        else:
+            _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+            rec_out = _record(session_dir, seat, occurrence=occurrence)
+            assert rec_out["ok"], (phase, seat, occurrence, rec_out)
 
 
 def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_path):
