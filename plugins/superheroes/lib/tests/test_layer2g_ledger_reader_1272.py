@@ -268,6 +268,32 @@ def test_legacy_branch_tolerates_malformed_ledger_row():
     assert _state_bytes(state) == before
 
 
+def test_fixed_ledger_rows_legacy_tolerates_malformed_sibling():
+    good_key = "good@L1"
+    state = {
+        "schemaVersion": 5,
+        "dispositionLedger": [
+            {
+                SC.FINDING_KEY_FIELD: good_key,
+                "file": "good.py",
+                "line": 1,
+                "title": "ok",
+                "severity": "Minor",
+                "disposition": "fixed",
+                "dispositionRound": 1,
+            },
+            "not-a-dict",
+        ],
+        "findings": [],
+        "_records": [],
+    }
+    rows, by_key, fault = RD._fixed_ledger_rows(state)
+    assert fault is None
+    assert len(rows) == 1
+    assert rows[0][0] == good_key
+    assert good_key in by_key
+
+
 # --- BP-2f-b: submit preflight journal row --------------------------------------------
 
 def test_bite_bp2f_b_submit_preflight_journals_unrecognized_owner(tmp_path):

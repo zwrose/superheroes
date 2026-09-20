@@ -1553,8 +1553,17 @@ def _verify_result_for_disposition(state, round_no, bound_head):
     """Per-round verify result, or a prior round's only when its fix-fold head matches bound_head."""
     rounds = state.get("rounds") or {}
     rec = rounds.get(str(round_no)) or {}
-    if rec.get("verifyResult") is not None:
-        return rec.get("verifyResult")
+    val = rec.get("verifyResult")
+    if val is not None:
+        fix_head = rec.get("fixFoldHead")
+        if (
+            isinstance(bound_head, str)
+            and bound_head
+            and isinstance(fix_head, str)
+            and fix_head
+            and fix_head == bound_head
+        ):
+            return val
     if not isinstance(bound_head, str) or not bound_head:
         return None
     prior = []
@@ -1600,12 +1609,19 @@ def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
 def _fixed_ledger_rows(state):
     """Fixed disposition-ledger rows as ordered (key, entry) pairs plus the by_key map.
 
-    A pure read: a malformed ledger yields no rows and is never repaired here, so no read path
-    can launder it past the fold chokepoint's ``bc-03`` refusal."""
-    required = (
-        session_contract.disposition_ledger_owner_classification(state)
-        == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED
-    )
+    A pure read: under a recognized owner a malformed ledger yields no rows and is never
+    repaired here. Legacy (owner-absent) ledgers skip malformed rows instead."""
+    owner = session_contract.disposition_ledger_owner_classification(state)
+    if owner == session_contract.DISPOSITION_LEDGER_OWNER_ABSENT:
+        rows = []
+        by_key = {}
+        for key, entry in session_contract.legacy_disposition_ledger_rows(state):
+            if not isinstance(entry, dict) or entry.get("disposition") != "fixed":
+                continue
+            rows.append((key, entry))
+            by_key[key] = entry
+        return rows, by_key, None
+    required = owner == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED
     ledger_rows, fault = session_contract.read_disposition_ledger(state, required=required)
     if fault is not None:
         return [], {}, fault
@@ -5546,6 +5562,10 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
 def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
     """One terminal step: persist head-content blobs, re-bind fixed receipts, save state."""
     if not session_dir:
+        return
+    if session_contract.disposition_ledger_owner_classification(state) == (
+        session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
+    ):
         return
     head = head_sha or _session_certified_head(session_dir, state)
     if not isinstance(head, str) or not head:

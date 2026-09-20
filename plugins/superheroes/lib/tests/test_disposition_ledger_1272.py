@@ -327,8 +327,9 @@ def test_L2_cross_file_merged_member_fixed_validates_representative_content(tmp_
 def test_L3_fold_audits_stamps_fixed_on_discharged_only():
     state = RD.new_state(_cfg())
     state["round"] = 2
-    state["config"][RD.FIX_FOLD_HEAD_KEY] = "b" * 40
-    state["rounds"] = {"2": {"verifyResult": "pass"}}
+    head = "b" * 40
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = head
+    state["rounds"] = {"2": {"verifyResult": "pass", "fixFoldHead": head}}
     discharged_f = {"title": "fixed bug", "severity": "Important", "file": "f.py", "line": 1}
     open_f = {"title": "open bug", "severity": "Important", "file": "g.py", "line": 2}
     state["fixBatch"] = [discharged_f, open_f]
@@ -350,7 +351,7 @@ def test_L3_fold_audits_stamps_fixed_on_discharged_only():
     assert ledger[discharged_id]["disposition"] == "fixed"
     assert ledger[discharged_id]["dispositionRound"] == 2
     receipt = ledger[discharged_id]["dispositionReceipt"]
-    assert receipt["headSha"] == "b" * 40
+    assert receipt["headSha"] == head
     assert receipt["verifyResult"] == "pass"
     live_discharged = next(f for f in state["findings"]
                            if SC.finding_identity_key(f) == discharged_id)

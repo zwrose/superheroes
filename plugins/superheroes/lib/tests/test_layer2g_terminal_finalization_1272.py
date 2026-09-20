@@ -180,7 +180,7 @@ def _ledger_only_fixed_state(certified_head, **over):
         "findings": [],
         "_records": [],
         "round": 1,
-        "rounds": {"1": {"verifyResult": "pass"}},
+        "rounds": {"1": {"verifyResult": "pass", "fixFoldHead": certified_head}},
         "config": {
             "fixerVendor": "claude",
             "baseGuard": RC.BASE_GUARD_CHECKED,
@@ -445,6 +445,36 @@ def test_run_loop_leg_does_not_synthesize_a_pass_receipt(tmp_path):
         assert loop_refusal["class"] == "disposition-without-receipt"
     finally:
         shutil.rmtree(materialized, ignore_errors=True)
+
+
+def test_legacy_ledger_tolerates_malformed_sibling_through_backfill_and_terminal(tmp_path):
+    """axis: owner-absent legacy ledger skips malformed rows — verify backfill and re-bind proceed."""
+    session_dir, certified_head = _certifiable_session(tmp_path)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        state = json.load(fh)
+    state.pop("dispositionLedgerOwner", None)
+    state["dispositionLedger"].append("not-a-dict")
+    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": certified_head}}
+    RD._backfill_fixed_disposition_verify_receipts(state, 1, "pass")
+    receipt = _ledger_receipt(state)
+    assert isinstance(receipt, dict)
+    assert receipt.get("verifyResult") == "pass"
+    RD._finalize_certification_inputs(session_dir, state, head_sha=certified_head)
+    receipt = _ledger_receipt(state)
+    assert receipt.get("headSha") == certified_head
+    assert receipt.get("verifyResult") == "pass"
+
+
+def test_unrecognized_owner_terminal_gate_leaves_state_byte_identical(tmp_path):
+    """axis: unrecognized dispositionLedgerOwner refuses terminal finalization — no ledger rewrite."""
+    session_dir, certified_head = _certifiable_session(tmp_path)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        state = json.load(fh)
+    state["dispositionLedgerOwner"] = "ledger-v2"
+    before = _state_bytes(state)
+    RD._finalize_certification_inputs(session_dir, state, head_sha=certified_head)
+    assert _state_bytes(state) == before
+    assert "_fixedDispositionFinalizationResiduals" not in state
 
 
 def test_malformed_ledger_fault_leaves_state_unchanged(tmp_path):
