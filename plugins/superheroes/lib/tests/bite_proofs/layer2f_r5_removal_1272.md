@@ -452,3 +452,45 @@ FAILED ...::test_bite_verify_backfill_preserves_disposition_family
   test_layer2f_exclusive_read_1272.py -q -p no:cacheprovider
 178 passed in 1.42s
 ```
+
+---
+
+## 3. BP-2f-r2-f re-taken on the fix — the census bit this lane's own code
+
+**Not a planted probe.** The first shape of BP-2f-t's fix wrote the family member by subscript:
+
+```python
+        family["dispositionReceipt"] = updated_receipt
+```
+
+That is exactly the class BP-2f-r2-f's census guards — a disposition-family member spelled
+outside `session_contract` — and the **project verify gate caught it**, not the scoped test
+commands this lane had been running. The census ran red against real code this session wrote:
+
+**Raw red** (`verify_touched_tests.py --base 6407a927`, `VERIFY_GATE_EXIT=1`):
+
+```
+E       AssertionError: disposition-family member presence outside session_contract:
+E         round_driver.py:1639: family["dispositionReceipt"] = updated_receipt
+E       assert not ['round_driver.py:1639: family["dispositionReceipt"] = updated_receipt']
+plugins/superheroes/lib/tests/test_disposition_family_home_1272.py:211: AssertionError
+1 failed, 4641 passed in 414.30s (0:06:54)
+```
+
+**Fix.** The same sanctioned form BP-2f-r2-f's own restore uses:
+
+```python
+        family = dict(family, dispositionReceipt=updated_receipt)
+```
+
+**Raw green** (EXIT=0):
+
+```
+/usr/bin/python3 … -m pytest test_disposition_family_home_1272.py test_disposition_ledger_1272.py \
+  test_round_certification.py test_layer2f_exclusive_read_1272.py \
+  test_layer2f_ledger_preconditions_1272.py -q -p no:cacheprovider
+202 passed in 14.58s
+```
+
+**Lesson recorded, not hidden.** The section-2 green for BP-2f-t did not include the census file,
+so a scoped green ran while the project gate was red. The gate is the receipt; a scoped run is not.

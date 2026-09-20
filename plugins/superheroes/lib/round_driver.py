@@ -1636,7 +1636,7 @@ def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
         family = session_contract.disposition_family_snapshot(entry)
         family.pop("disposition", None)
         family.pop("dispositionRound", None)
-        family["dispositionReceipt"] = updated_receipt
+        family = dict(family, dispositionReceipt=updated_receipt)
         _record_disposition(state, key, "fixed", round_no, **family)
 
 
