@@ -1550,6 +1550,12 @@ def _collect_seats(ctx):
         occurrence = event.get("occurrence", 0)
         key = (phase, rnd, attempt, seat, occurrence)
         cited_head = event.get("headSha") or event.get("citedHead")
+        model = None
+        evidence = event.get("executionEvidence")
+        if isinstance(evidence, dict):
+            engine_model = evidence.get("engineModel")
+            if isinstance(engine_model, str) and engine_model:
+                model = engine_model
         latest[key] = {
             "seat": seat,
             "phase": phase,
@@ -1558,6 +1564,7 @@ def _collect_seats(ctx):
             "occurrence": occurrence,
             "provenance": provenance,
             "citedHead": cited_head,
+            "model": model,
         }
     return list(latest.values())
 
@@ -1764,6 +1771,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
             "round": s["round"],
             "attempt": s["attempt"],
             "provenance": s.get("provenance"),
+            "model": s.get("model"),
         }
         for s in seats_info
     ]
@@ -1773,7 +1781,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         if isinstance(f, dict)
     ]
     rounds = _build_receipt_rounds(state, form)
-    degraded, skipped_blockers = build_degraded_prose(state, form)
+    degraded, skipped_blockers = build_degraded_prose(state, form, journal=journal)
     base = {
         k: cfg.get(k)
         for k in (

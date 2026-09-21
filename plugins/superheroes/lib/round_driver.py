@@ -3948,7 +3948,8 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                  "unverified": f.get("unverified")}
                 for f in (state.get("findings") or []) if isinstance(f, dict)]
     cfg = state.get("config") or {}
-    degraded, skipped_blockers = build_degraded_prose(state, form)
+    journal = read_journal(session_dir) if session_dir else None
+    degraded, skipped_blockers = build_degraded_prose(state, form, journal=journal)
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "baseRepo",
@@ -6973,6 +6974,21 @@ def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
     return out
 
 
+def _journal_execution_evidence_fields(evidence):
+    """Mandatory execution-evidence members plus each optional field when present — shared by
+    ``_journal_revision_fields`` and ``_assemble_dispatch_evidence`` so the two copies cannot drift."""
+    if not isinstance(evidence, dict):
+        return None
+    if not all(field in evidence for field in round_records.EXECUTION_EVIDENCE_FIELDS):
+        return None
+    out = {field: evidence[field] for field in round_records.EXECUTION_EVIDENCE_FIELDS}
+    for field in round_records.EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
+        val = evidence.get(field)
+        if isinstance(val, str) and val:
+            out[field] = val
+    return out
+
+
 def _journal_revision_fields(envelope):
     """The revision identity a `recorded` row carries: the payload hash (kept, never removed —
     FR-D5) and the ENVELOPE's own CAS token, which is what `reconcile` compares. Every site that
@@ -6981,12 +6997,7 @@ def _journal_revision_fields(envelope):
     not an envelope and must not be passed here."""
     if not isinstance(envelope, dict):
         return {"payloadSha256": None, "casToken": None, "executionEvidence": None}
-    evidence = envelope.get("executionEvidence")
-    execution_evidence = None
-    if isinstance(evidence, dict):
-        if all(field in evidence for field in round_records.EXECUTION_EVIDENCE_FIELDS):
-            execution_evidence = {field: evidence[field]
-                                  for field in round_records.EXECUTION_EVIDENCE_FIELDS}
+    execution_evidence = _journal_execution_evidence_fields(envelope.get("executionEvidence"))
     return {"payloadSha256": envelope.get("payloadSha256"),
             "casToken": round_records.envelope_cas_token(envelope),
             "executionEvidence": execution_evidence}
@@ -7297,7 +7308,9 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "payloadSha256": payload_digest,
                                                        "resultKind": result_kind}
-    evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
+    evidence = _journal_execution_evidence_fields(record)
+    if evidence is None:
+        return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}
     out = dict(envelope)
     out["executionEvidence"] = evidence
     out["envelopeSha256"] = round_records.envelope_sha256(out.get("payload"), evidence)

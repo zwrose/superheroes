@@ -268,7 +268,31 @@ def seat_map_unjudgeable(state):
     return bool(seat_map_receipts.unjudgeable_receipts(state, author_family(state)))
 
 
-def build_degraded_prose(state, form):
+def _native_in_session_seats(state, journal):
+    if not isinstance(journal, list):
+        return []
+    seat_map = seat_map_receipts.effective_seat_map(state)
+    map_seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(map_seats, dict):
+        map_seats = {}
+    native = []
+    seen = set()
+    for event in journal:
+        if event.get("outcome") != "recorded":
+            continue
+        seat = event.get("seat")
+        if not isinstance(seat, str) or not seat or seat in seen:
+            continue
+        if event.get("executionEvidence") is not None:
+            continue
+        cfg = map_seats.get(seat)
+        if isinstance(cfg, dict) and cfg.get("vendor") == "claude":
+            native.append(seat)
+            seen.add(seat)
+    return sorted(native)
+
+
+def build_degraded_prose(state, form, journal=None):
     cfg = state.get("config") or {}
     degraded_out = []
     if degraded(state):
@@ -527,6 +551,12 @@ def build_degraded_prose(state, form):
     )
     if _run_unj and seat_map_unjudgeable(state):
         degraded_out.append(_run_unj)
+    native_seats = _native_in_session_seats(state, journal)
+    if native_seats:
+        degraded_out.append(
+            "unprobed native seat(s) %s: native in-session seats run on the host model and are "
+            "declared live, never probed — their engagement rests on the seat's own record"
+            % ", ".join(native_seats))
     return degraded_out, skipped_blockers
 
 
