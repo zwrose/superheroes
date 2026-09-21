@@ -1366,10 +1366,6 @@ def _observe_settle(proc, settle_seconds, deadline=None):
     return rc
 
 
-def _same_commit(a, b):
-    return isinstance(a, str) and isinstance(b, str) and a.lower() == b.lower()
-
-
 def _lookup_stack_entry_pr(
     repo_root, resolved_base_commit, env=None, gh_run=None, deadline=None,
 ):
@@ -1433,7 +1429,7 @@ def _lookup_stack_entry_pr(
         number = pr.get("number")
         if pr.get("state") != "OPEN":
             continue
-        if not _same_commit(pr.get("headRefOid"), resolved_base_commit):
+        if not stack_check.same_commit(pr.get("headRefOid"), resolved_base_commit):
             continue
         if not isinstance(number, int) or isinstance(number, bool):
             continue
@@ -1517,7 +1513,7 @@ def _apply_stack_gate(
     if queried["position"] != layer_pos - 1:
         return {"ok": False, "reason": "base-not-layer-head"}
     # axis: queried headRefOid must equal resolved base commit
-    if not _same_commit(queried["headRefOid"], resolved_base_commit):
+    if not stack_check.same_commit(queried["headRefOid"], resolved_base_commit):
         return {"ok": False, "reason": "base-not-layer-head"}
     return {
         "ok": True,
@@ -1625,7 +1621,7 @@ def _apply_dependency_gate(
         }
     head_sha = pr_state["headRefOid"]
     # axis: READY dependency requires base exactly equal to dependency head
-    if _same_commit(resolved_base_commit, head_sha):
+    if stack_check.same_commit(resolved_base_commit, head_sha):
         return {
             "ok": True,
             "dependencyGate": {
