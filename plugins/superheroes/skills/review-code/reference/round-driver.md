@@ -583,7 +583,10 @@ marker names another session is refused before anything is written. The target c
 is claimed atomically before the session commit (`O_CREAT|O_EXCL`); an existing marker naming this
 session is accepted as an idempotent retry. A detached-HEAD target is refused because it cannot carry
 the marker. After the commit, the old checkout's marker is retired only when it names this session.
-Outcomes are journalled as `marker-retirement` (`retired`, `not-ours`, `absent`, `failed`).
+Outcomes are journalled as `marker-retirement` (`retired`, `not-ours`, `absent`, `failed`). A crash
+after the session commit but before old-marker retirement leaves the old checkout's marker naming
+this session (fail-closed: that checkout stays gated and other sessions are refused there);
+recovery is removing that file by hand after confirming the journal's `relocated` row.
 
 **The same head** means the fix-fold head when a fix fold recorded one — both copies must agree —
 otherwise the session's setup head. A session with a pending `dispatch-fixer` phase — fixer dispatched

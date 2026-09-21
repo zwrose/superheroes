@@ -6402,8 +6402,13 @@ def _cmd_relocate_locked(session_dir, target_root, by):
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
-        if marker_created:
+        if marker_created and exc.reason != "commit-cleanup-failed":
             _relocate_release_target_marker(target_marker_path, session_rp)
+        if exc.reason == "commit-cleanup-failed":
+            marker_outcome = _retire_relocate_marker(old_root_rp, session_rp)
+            _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
+                                          "result": marker_outcome, "phase": None, "round": None,
+                                          "attempt": None})
         return _commit_refused_response(session_dir, "relocate", exc)
     marker_outcome = _retire_relocate_marker(old_root_rp, session_rp)
     _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
