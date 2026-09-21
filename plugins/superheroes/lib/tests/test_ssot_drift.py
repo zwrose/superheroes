@@ -2118,6 +2118,43 @@ def test_round_driver_and_review_base_guard_raw_mode_read_census():
         )
 
 
+def _vet_verdict_form_from_home():
+    """Parse the three verdict tokens and separator from vet-receipt.md's verdict-form clause."""
+    text = _read("skills/showrunner/reference/vet-receipt.md")
+    m = re.search(
+        r"\*\*The verdict form — how the slot is read\.\*\*(.*?)\*\*Each of these reads NOT-READY",
+        text,
+        re.DOTALL,
+    )
+    assert m, "vet-receipt.md verdict-form clause not found (moved or renamed?)"
+    clause = m.group(1)
+    tokens = re.findall(r"`(\*\*Verdict: [^`]+?\*\*)`", clause)
+    assert len(tokens) == 3, "expected three verdict tokens in the home, got %r" % tokens
+    sep_m = re.search(r"followed by `([^`]+)` and the", clause)
+    assert sep_m, "verdict-form separator not found in the home"
+    return tokens, sep_m.group(1)
+
+
+def test_vet_verdict_form_matches_stack_check():
+    """vet-receipt.md verdict-form clause is the authoritative home for stack_check literals.
+
+    §11: binds stack_check._VET_VERDICT_TOKENS and _VET_SEPARATOR to the prose home so a
+    one-sided edit breaks CI rather than letting the copies drift.
+    """
+    import stack_check as sc
+
+    home_tokens, home_separator = _vet_verdict_form_from_home()
+    code_tokens = tuple(token for token, _verdict in sc._VET_VERDICT_TOKENS)
+    assert tuple(home_tokens) == code_tokens, (
+        "vet-receipt.md verdict tokens %r disagree with stack_check._VET_VERDICT_TOKENS %r"
+        % (home_tokens, code_tokens)
+    )
+    assert home_separator == sc._VET_SEPARATOR, (
+        "vet-receipt.md separator %r disagrees with stack_check._VET_SEPARATOR %r"
+        % (repr(home_separator), repr(sc._VET_SEPARATOR))
+    )
+
+
 def test_vet_receipt_markers_match_conventions_10_7():
     """§11 + §12.3: the vet-receipt marker literals agree across every hand-maintained copy.
 

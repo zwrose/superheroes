@@ -1434,7 +1434,11 @@ def test_l2f_v11_sha_differs_from_head():
 
 def test_l2f_v12_duplicated_marker():
     # axis: two live advisor-vet markers in one body
-    body = _vet_body("**Verdict: READY** · %s") + "\n\n" + _vet_body("**Verdict: READY** · %s" % HEAD_SHA)
+    body = (
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA)
+        + "\n\n"
+        + _vet_body("**Verdict: READY** · %s" % HEAD_SHA)
+    )
     _assert_vet_not_ready(body)
 
 
