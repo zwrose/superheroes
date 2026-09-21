@@ -584,6 +584,15 @@ def test_codex_pin_verdict_astra_on_reviewer_refused_pin_role(monkeypatch):
     assert reason.startswith("pin-role-not-eligible:")
 
 
+def test_codex_pin_verdict_terra_accepted_on_reviewer_deep_and_pilot():
+    ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-5.6-terra")
+    assert ok is True
+    assert reason is None
+    ok, reason = MR.codex_pin_verdict("pilot", "gpt-5.6-terra")
+    assert ok is True
+    assert reason is None
+
+
 def test_codex_pin_verdict_non_str_inputs():
     ok, reason = MR.codex_pin_verdict(42, "gpt-5.6-sol")
     assert ok is False

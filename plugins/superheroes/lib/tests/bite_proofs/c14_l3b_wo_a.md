@@ -93,3 +93,51 @@ FAILED plugins/superheroes/lib/tests/test_model_registry.py::test_codex_pin_verd
 ```
 1 passed in 2.09s
 ```
+
+---
+
+## WO-A2 re-run
+
+Re-run after removing the erroneous allowlist leg from `codex_pin_verdict` (WO-A2).
+
+### BP-A2 — probe-pending refusal in `codex_pin_verdict`
+
+- **axis:** probe-pending row refused as pin before other checks
+
+**neutralization** (`plugins/superheroes/lib/model_registry.py`, `codex_pin_verdict`): remove the `registration == "probe-pending"` branch.
+
+**command:** `plugins/superheroes/lib/tests/test_model_registry.py::test_codex_pin_verdict_pending_astra_on_reviewer_deep`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_model_registry.py::test_codex_pin_verdict_pending_astra_on_reviewer_deep
+1 failed in 2.34s
+```
+
+**restore:** reinstate the `probe-pending` branch in `codex_pin_verdict`.
+
+**raw green** (exit 0):
+```
+1 passed in 1.98s
+```
+
+### BP-A3 — `pin_roles` refusal in `codex_pin_verdict`
+
+- **axis:** model pin refused when role not in row `pin_roles`
+
+**neutralization** (`plugins/superheroes/lib/model_registry.py`, `codex_pin_verdict`): remove the `pin_roles` eligibility branch.
+
+**command:** `plugins/superheroes/lib/tests/test_model_registry.py::test_codex_pin_verdict_astra_on_reviewer_refused_pin_role`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_model_registry.py::test_codex_pin_verdict_astra_on_reviewer_refused_pin_role
+1 failed in 1.74s
+```
+
+**restore:** reinstate the `pin_roles` eligibility branch in `codex_pin_verdict`.
+
+**raw green** (exit 0):
+```
+1 passed in 2.21s
+```

@@ -544,8 +544,6 @@ def codex_pin_verdict(role: object, model: object) -> tuple[bool, str | None]:
             False,
             "pin-role-not-eligible: %s is a valid pin only for %s" % (model, eligible),
         )
-    if not resolve_dispatch(role, "codex", model, None)["ok"]:
-        return False, "%s is not on the %s/codex allowlist" % (model, role)
     return True, None
 
 
