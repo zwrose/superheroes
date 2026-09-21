@@ -1558,11 +1558,32 @@ def _apply_dependency_gate(
         return out
     if pr_state is None:
         return {"ok": False, "reason": "dependency-read-unavailable"}
-    # axis: merged or closed dependency is not gated — trunk base is what merged deps are for
-    if pr_state["state"] != "OPEN":
+    pr_lifecycle = pr_state["state"]
+    # axis: merged dependency is not gated — trunk base is what merged deps are for
+    if pr_lifecycle == "MERGED":
         return {
             "ok": True,
             "dependencyGate": {"applied": False, "reason": "dependency-not-open"},
+        }
+    # axis: closed-unmerged dependency is stale — the premise cannot resolve by itself
+    if pr_lifecycle == "CLOSED":
+        return {
+            "ok": False,
+            "reason": "dependency-closed-unmerged",
+            "detail": dependency,
+        }
+    # Allowlist guarantees OPEN/MERGED/CLOSED only; any other value refuses.
+    if pr_lifecycle != "OPEN":
+        return {
+            "ok": False,
+            "reason": "dependency-read-unavailable",
+            "detail": pr_lifecycle,
+        }
+    # axis: draft dependency is work in flight — verdict is not consulted
+    if pr_state.get("isDraft"):
+        return {
+            "ok": True,
+            "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
         }
     verdict, vet_refusal = stack_check.read_vet_verdict(
         pr_state["body"], pr_state["headRefOid"],

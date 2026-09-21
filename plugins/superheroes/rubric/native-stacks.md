@@ -59,9 +59,9 @@ position), and optionally `layersPlanned` (the stack's planned layer count). `st
 `layerPosition` are optional together — one without the other is refused at launch; `layersPlanned`
 requires both. For `layerPosition >= 2`, the launcher refuses a base that is not the current head of
 the member at `layerPosition - 1` (the **base-not-layer-head** gate), reading membership through the
-same GraphQL read this section's successor describes. The launcher can emit eleven refusal tokens from
-premise validation and the layer gate — each token's meaning is in `lib/launcher.py`; the premise
-shape change is in `TRANSITION.md`:
+same GraphQL read this section's successor describes. The launcher can emit thirteen refusal tokens from
+premise validation and the layer and dependency gates — each token's meaning is in `lib/launcher.py`;
+the premise shape change is in `TRANSITION.md`:
 
 - `premise-stack-fields-incomplete` — only one of `stack` or `layerPosition` was supplied.
 - `premise-stack-field-invalid` — either key is present but not a positive integer (`bool` is not
@@ -72,6 +72,8 @@ shape change is in `TRANSITION.md`:
 - `premise-stack-layers-planned-invalid` — `layersPlanned` is present but not a positive integer
   (`bool` is not an integer here).
 - `premise-stack-layers-planned-under-position` — `layersPlanned` is less than `layerPosition`.
+- `premise-dependency-invalid` — `dependency` is present but not a positive integer (`bool` is not
+  an integer here).
 - `base-not-layer-head` — for `layerPosition >= 2`, the resolved base commit is not the current
   head of the stack member at position `layerPosition - 1`.
 - `stack-read-unavailable` — the launcher could not read stack membership and the gate could not
@@ -79,6 +81,7 @@ shape change is in `TRANSITION.md`:
 - `order-mismatch` — the membership read found the stack's order inconsistent with the premise.
 - `layer-position-occupied` — the claimed `layerPosition` is already held by an existing member
   (`layerPosition >= 2` only).
+- `dependency-closed-unmerged` — the premise names a closed, unmerged dependency pull request.
 - `dependency-open-ready-pr` — the premise names an open dependency pull request with a READY
   vet and the resolved base commit is not that pull request's current head.
 - `dependency-read-unavailable` — the launcher could not read the dependency pull request or its

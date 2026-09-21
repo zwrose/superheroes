@@ -6742,11 +6742,11 @@ def _ready_vet_body(head_sha):
     return _VET_MARKER + "\n**Verdict: READY** · " + head_sha
 
 
-def _pr_vet_state_ok(head_sha, body="", state="OPEN", pr_number=701):
+def _pr_vet_state_ok(head_sha, body="", state="OPEN", pr_number=701, is_draft=False):
     return {
         "number": pr_number,
         "state": state,
-        "isDraft": False,
+        "isDraft": is_draft,
         "headRefOid": head_sha,
         "body": body,
     }
@@ -6981,8 +6981,116 @@ def test_dependency_gate_unrecognised_pr_state_refuses(tmp_path, monkeypatch):
     assert "UNKNOWN" in result.get("detail", "")
 
 
+def test_dependency_gate_closed_unmerged_refuses(tmp_path, monkeypatch):
+  # axis: closed-unmerged dependency refuses dependency-closed-unmerged
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, state="CLOSED"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-closed-unmerged"
+    assert result["detail"] == 701
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "dependency" for r in refused)
+
+
+def test_dependency_gate_merged_passes_not_gated(tmp_path, monkeypatch):
+  # axis: merged dependency passes without applying gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, state="MERGED"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": False,
+        "reason": "dependency-not-open",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_draft_not_ready_passes(tmp_path, monkeypatch):
+  # axis: OPEN draft with READY verdict passes dependency-not-ready, not applied
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(
+            head, _ready_vet_body(head), state="OPEN", is_draft=True,
+        ), None
+
+    def refusing_vet(*args, **kwargs):
+        raise AssertionError("draft dependency must not consult verdict")
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+    monkeypatch.setattr(L.stack_check, "read_vet_verdict", refusing_vet)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": False,
+        "reason": "dependency-not-ready",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
 def test_dependency_gate_not_open_passes(tmp_path, monkeypatch):
-  # axis: merged or closed dependency passes without applying gate
+  # axis: merged dependency passes without applying gate
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
