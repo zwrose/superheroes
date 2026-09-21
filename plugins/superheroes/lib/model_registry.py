@@ -228,7 +228,7 @@ _ROLE_META: dict[str, dict] = {
     "registration-probe": {
         "model_tier_role": False,
         "engine_pref_key": None,
-        "codex_kind": None,
+        "codex_kind": "review",
         "read_write": "read",
         "pin_eligible": False,
         "owner_tunable": False,

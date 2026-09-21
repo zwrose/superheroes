@@ -527,6 +527,7 @@ def test_matrix_cells_reviewer_roles_unchanged_at_base():
 def test_pending_astra_hidden_from_allowlist_but_probe_role_admits():
     assert MR.allowlist("reviewer-deep", "codex") == ((_REVIEWER_DEEP_CODEX[0], _REVIEWER_DEEP_CODEX[1]),)
     assert MR.allowlist("registration-probe", "codex") == (("gpt-6-astra", "high"),)
+    assert MR.codex_effort_for_kind("review") == MR.matrix_config("reviewer", "codex")[1]
     r = MR.resolve_dispatch("registration-probe", "codex")
     assert r["ok"] is True
     assert r["effort"] == "high"
