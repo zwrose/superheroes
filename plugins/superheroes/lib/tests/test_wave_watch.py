@@ -334,56 +334,70 @@ def test_event_e3_builder_exited(tmp_path, monkeypatch):
     assert result["launches"] == [{"launchId": "lane-a", "pid": dead_pid}]
 
 
-def test_lane_terminal_makes_zero_gh_run_calls(tmp_path, monkeypatch):
+def test_lane_terminal_makes_one_pr_list_call(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="handback")
     gh_calls = [0]
+    clock = [0.0]
 
     def counting_gh_run(argv, **kwargs):
         gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
+    def mono():
+        return clock[0]
+
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
-        gh_run=counting_gh_run,
+        monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
     )
     assert result["event"] == "lane-terminal"
     # axis: one open-PR-list read per tick even when a higher-precedence lane event fires
     assert gh_calls[0] == 1
 
 
-def test_lane_blocked_makes_zero_gh_run_calls(tmp_path, monkeypatch):
+def test_lane_blocked_makes_one_pr_list_call(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="blocked")
     gh_calls = [0]
+    clock = [0.0]
 
     def counting_gh_run(argv, **kwargs):
         gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
+    def mono():
+        return clock[0]
+
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
-        gh_run=counting_gh_run,
+        monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
     )
     assert result["event"] == "lane-blocked"
+    # axis: one open-PR-list read per tick even when a higher-precedence lane event fires
     assert gh_calls[0] == 1
 
 
-def test_builder_exited_makes_zero_gh_run_calls(tmp_path, monkeypatch):
+def test_builder_exited_makes_one_pr_list_call(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead_pid = 999999999
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
     gh_calls = [0]
+    clock = [0.0]
 
     def counting_gh_run(argv, **kwargs):
         gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
+    def mono():
+        return clock[0]
+
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
-        gh_run=counting_gh_run,
+        monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
     )
     assert result["event"] == "builder-exited"
+    # axis: one open-PR-list read per tick even when a higher-precedence lane event fires
     assert gh_calls[0] == 1
 
 
