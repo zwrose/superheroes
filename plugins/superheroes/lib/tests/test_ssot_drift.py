@@ -2135,23 +2135,43 @@ def _vet_verdict_form_from_home():
     return tokens, sep_m.group(1)
 
 
-def test_vet_verdict_form_matches_stack_check():
-    """vet-receipt.md verdict-form clause is the authoritative home for stack_check literals.
+def _vet_verdict_form_from_data():
+    """Load separator and token strings from rubric/vet-verdict-form.json."""
+    raw = _read("rubric/vet-verdict-form.json")
+    data = json.loads(raw)
+    assert isinstance(data, dict), "vet-verdict-form.json is not an object"
+    separator = data.get("separator")
+    assert isinstance(separator, str), "vet-verdict-form.json separator is missing or not a string"
+    tokens_raw = data.get("tokens")
+    assert isinstance(tokens_raw, list) and tokens_raw, (
+        "vet-verdict-form.json tokens is missing, not a list, or empty"
+    )
+    tokens = []
+    for index, entry in enumerate(tokens_raw):
+        assert isinstance(entry, dict), "vet-verdict-form.json tokens[%d] is not an object" % index
+        token = entry.get("token")
+        assert isinstance(token, str), (
+            "vet-verdict-form.json tokens[%d].token is missing or not a string" % index
+        )
+        tokens.append(token)
+    return tokens, separator
 
-    §11: binds stack_check._VET_VERDICT_TOKENS and _VET_SEPARATOR to the prose home so a
+
+def test_vet_verdict_form_prose_matches_data_file():
+    """vet-receipt.md prose and vet-verdict-form.json share one verdict form.
+
+    §11: binds the human-facing verdict-form clause to the machine-readable home so a
     one-sided edit breaks CI rather than letting the copies drift.
     """
-    import stack_check as sc
-
     home_tokens, home_separator = _vet_verdict_form_from_home()
-    code_tokens = tuple(token for token, _verdict in sc._VET_VERDICT_TOKENS)
-    assert tuple(home_tokens) == code_tokens, (
-        "vet-receipt.md verdict tokens %r disagree with stack_check._VET_VERDICT_TOKENS %r"
-        % (home_tokens, code_tokens)
+    data_tokens, data_separator = _vet_verdict_form_from_data()
+    assert tuple(home_tokens) == tuple(data_tokens), (
+        "vet-receipt.md verdict tokens %r disagree with vet-verdict-form.json %r"
+        % (home_tokens, data_tokens)
     )
-    assert home_separator == sc._VET_SEPARATOR, (
-        "vet-receipt.md separator %r disagrees with stack_check._VET_SEPARATOR %r"
-        % (repr(home_separator), repr(sc._VET_SEPARATOR))
+    assert home_separator == data_separator, (
+        "vet-receipt.md separator %r disagrees with vet-verdict-form.json %r"
+        % (repr(home_separator), repr(data_separator))
     )
 
 

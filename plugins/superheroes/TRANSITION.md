@@ -24,8 +24,11 @@ fixed-schema round-trips must accept up to three new keys rather than exactly th
 names a `dependency` carries that key in the stamped premise. A non-stacked launch without a
 dependency is unchanged.
 
-A successful launch that ran the dependency gate carries `dependencyGate` on its result — the gate's
-applied flag, reason, and when applied the dependency number, head, and verdict.
+A successful launch that ran the dependency gate carries `dependencyGate` on its result. Two
+variants: when the gate did not apply, `applied` is `false` and `reason` names why (`dependency-not-open`
+for a merged or closed dependency, `dependency-not-ready` for an open dependency whose vet is not
+READY); when the gate applied, `applied` is `true` and the object carries `dependency`,
+`dependencyHead`, and `verdict` with no `reason` field.
 
 `launcher.py launch` adds thirteen refusal tokens (see `lib/launcher.py`; rule in
 `rubric/launch-doctrine.md`): `premise-stack-fields-incomplete` when only one of `stack` or
