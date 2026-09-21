@@ -16106,32 +16106,34 @@ def _journal_claude_stdout_write_run_for_engine_files(tmp_path, run_dir, prompt_
 
 def _large_claude_result_stream(result_payload, *, min_result_line_bytes=20000):
     """Build a claude stdout stream whose final result JSON line meets min size."""
-    pad_target = result_payload
+    pad_path = ()
     pad_key = "report"
     if isinstance(result_payload, dict) and "result" in result_payload:
         branch = result_payload["result"]
         if isinstance(branch, dict):
             if branch.get("resultKind") == "verdicts" and branch.get("verdicts"):
-                pad_target = branch["verdicts"][0]
+                pad_path = ("result", "verdicts", 0)
                 pad_key = "reason"
             elif branch.get("resultKind") == "findings" and branch.get("findings"):
-                pad_target = branch["findings"][0]
+                pad_path = ("result", "findings", 0)
                 pad_key = "body"
-            elif "reason" in branch:
-                pad_target = branch
+            elif branch.get("resultKind") == "ruling":
+                pad_path = ("result",)
                 pad_key = "reason"
             else:
-                pad_target = branch
+                pad_path = ("result",)
                 pad_key = "report"
-    elif isinstance(pad_target, dict) and "report" in pad_target:
+    elif isinstance(result_payload, dict) and "report" in result_payload:
+        pad_path = ()
         pad_key = "report"
     extra = ""
     while True:
         trial_payload = json.loads(json.dumps(result_payload))
-        if isinstance(trial_payload, dict) and "result" in trial_payload:
-            branch = dict(trial_payload["result"])
-            branch[pad_key] = (branch.get(pad_key) or "") + extra
-            trial_payload["result"] = branch
+        if pad_path:
+            node = trial_payload
+            for step in pad_path:
+                node = node[step]
+            node[pad_key] = (node.get(pad_key) or "") + extra
         elif isinstance(trial_payload, dict):
             trial_payload[pad_key] = (trial_payload.get(pad_key) or "") + extra
         line = json.dumps({
@@ -16145,6 +16147,19 @@ def _large_claude_result_stream(result_payload, *, min_result_line_bytes=20000):
         if line_bytes >= min_result_line_bytes:
             return _claude_event_stream(result=trial_payload), trial_payload, line_bytes
         extra += "x" * 500
+
+
+def _patch_stdout_completion_bounds(monkeypatch, max_stdout_capture):
+    """Patch stdout cap and derived stampable line bound for readable bound tests."""
+    monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", max_stdout_capture)
+    stampable = (
+        max_stdout_capture
+        - len(ED._truncation_marker(
+            ED.CAP_STREAM_STDOUT, ED._STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES,
+        ).encode("utf-8"))
+    )
+    monkeypatch.setattr(ED, "_STDOUT_STAMPABLE_LINE_MAX", stampable)
+    return max_stdout_capture, stampable
 
 
 def _stdout_last_line_byte_length(stdout_path):
@@ -16307,9 +16322,9 @@ def test_completion_producer_stdout_large_result_lingering_child_admits(tmp_path
     assert ended["stdoutResult"] == "materialized"
     _assert_completion_keys(ended, structured)
     state = ED._journal_state(records)
-    _, detail = ED._load_native_result_json(run_dir, 1, state["opened"])
-    assert detail != ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
-    assert detail is None
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
 
 
 def test_completion_producer_stdout_large_result_immediate_exit_admits(tmp_path, monkeypatch):
@@ -16340,9 +16355,43 @@ def test_completion_producer_stdout_large_result_immediate_exit_admits(tmp_path,
     assert ended["stdoutResult"] == "materialized"
     _assert_completion_keys(ended, structured)
     state = ED._journal_state(records)
-    _, detail = ED._load_native_result_json(run_dir, 1, state["opened"])
-    assert detail != ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
-    assert detail is None
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_producer_stdout_large_result_multi_chunk_read_admits(tmp_path, monkeypatch):
+    """axis: result line larger than one read chunk reassembles and admits with digest intact."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    chunk = ED._STDOUT_COMPLETION_READ_CHUNK
+    stream, structured, result_line_bytes = _large_claude_result_stream(
+        structured, min_result_line_bytes=chunk + 1024,
+    )
+    assert result_line_bytes > chunk
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir = str(tmp_path / "stdout-multi-chunk")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert _stdout_last_line_byte_length(stdout_path) > chunk
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, structured)
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
 
 
 def test_completion_producer_stdout_large_result_before_cap_admits_after_timeout(
@@ -16418,11 +16467,20 @@ def test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal(
     """axis: terminal observation stamps when trailing line hides the result from pre-check."""
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))
     stream = _claude_event_stream(result=structured)
+    stream_body = stream if stream.endswith("\n") else stream + "\n"
+    result_line = stream_body.rstrip("\n").split("\n")[-1]
+    prefix = stream_body[:stream_body.rfind(result_line) + len(result_line)]
+    release_path = str(tmp_path / "release-trailing")
     script = (
-        "import sys\n"
-        "sys.stdout.write(%r)\n"
-        "sys.stdout.write('warning: done\\n')\n"
-        % stream
+        "import os, sys\n"
+        "prefix = %r\n"
+        "release = %r\n"
+        "sys.stdout.write(prefix)\n"
+        "sys.stdout.flush()\n"
+        "while not os.path.exists(release):\n"
+        "    pass\n"
+        "sys.stdout.write('\\nwarning: done\\n')\n"
+        % (prefix, release_path)
     )
     run_dir = str(tmp_path / "stdout-trailing-line")
     os.makedirs(run_dir)
@@ -16434,11 +16492,22 @@ def test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal(
         tmp_path, run_dir, prompt_path, monkeypatch,
     )
     _install_fake_claude(monkeypatch, tmp_path, script)
+    real_observe = ED._observe_stdout_completion
+    released = {"done": False}
+
+    def _observe_release_after_first(obs_state, stdout_path_arg, *, terminal=False):
+        real_observe(obs_state, stdout_path_arg, terminal=terminal)
+        if not terminal and not released["done"]:
+            released["done"] = True
+            open(release_path, "w", encoding="utf-8").close()
+
+    monkeypatch.setattr(ED, "_observe_stdout_completion", _observe_release_after_first)
     ED._run_engine_files(
         run_dir, 1, argv, run_dir,
         prompt_path, stdout_path, stderr_path, 30,
         os.path.join(run_dir, "progress.jsonl"),
     )
+    assert released["done"] is True
     records, _ = ED._journal_read(run_dir)
     ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
     _assert_completion_keys(ended, structured)
@@ -17240,6 +17309,113 @@ def test_completion_stdout_truncated_final_line_forfeits_unrecorded(
     verdict, detail = ERC.completion_window(ended, digest)
     assert verdict == "forfeit"
     assert detail == ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
+
+
+def test_completion_stdout_over_bound_line_forfeits_unrecorded(tmp_path, monkeypatch):
+    """axis: a result line longer than the stampable bound is dropped whole."""
+    _cap, stampable = _patch_stdout_completion_bounds(monkeypatch, 16384)
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream, _payload, result_line_bytes = _large_claude_result_stream(
+        structured, min_result_line_bytes=stampable + 1,
+    )
+    assert result_line_bytes > stampable
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-unrecorded"
+
+
+def test_completion_stdout_at_bound_line_admits(tmp_path, monkeypatch):
+    """axis: a result line just inside the stampable bound is stamped and admitted."""
+    _cap, stampable = _patch_stdout_completion_bounds(monkeypatch, 16384)
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream, structured, result_line_bytes = _large_claude_result_stream(
+        structured, min_result_line_bytes=max(stampable - 512, 1),
+    )
+    assert result_line_bytes < stampable
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_stdout_large_under_cap_still_admits(tmp_path, monkeypatch):
+    """axis: stamped result survives when stdout is large but still at or under the cap."""
+    cap, stampable = _patch_stdout_completion_bounds(monkeypatch, 16384)
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_stream = _claude_event_stream(result=structured)
+    filler_line = json.dumps({
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": "x" * 400}]},
+    }, separators=(",", ":")) + "\n"
+    filler_bytes = len(filler_line.encode("utf-8"))
+    result_bytes = len(result_stream.encode("utf-8"))
+    filler_count = max(1, (cap - result_bytes - 256) // filler_bytes)
+    total_bytes = result_bytes + filler_count * filler_bytes
+    assert total_bytes <= cap
+    assert total_bytes > result_bytes + filler_bytes
+    script = (
+        "import sys\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.write(%r * %d)\n"
+        % (result_stream, filler_line, filler_count)
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    assert os.path.getsize(_stdout_path) <= cap
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_stdout_overflow_does_not_suppress_following_result(
+        tmp_path, monkeypatch,
+):
+    """axis: overflow on one over-bound line must not leak into the next valid result line."""
+    _cap, stampable = _patch_stdout_completion_bounds(monkeypatch, 16384)
+    read_chunk = 256
+    monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", read_chunk)
+    structured = _wrap_native_review_result(_native_review_branch("findings"))
+    result_stream = _claude_event_stream(result=structured)
+    result_line = result_stream.rstrip("\n").split("\n")[-1] + "\n"
+    assert len(result_line.encode("utf-8")) < stampable
+    assert len(result_line.encode("utf-8")) > read_chunk
+    over_line = ("x" * (stampable + 1)) + "\n"
+    split_at = read_chunk - (len(over_line.encode("utf-8")) % read_chunk)
+    if split_at <= 0 or split_at >= len(result_line):
+        split_at = read_chunk
+    head = result_line[:split_at]
+    tail = result_line[split_at:]
+    script = (
+        "import sys\n"
+        "over = %r\n"
+        "head = %r\n"
+        "tail = %r\n"
+        "sys.stdout.write(over)\n"
+        "sys.stdout.flush()\n"
+        "sys.stdout.write(head)\n"
+        "sys.stdout.flush()\n"
+        "sys.stdout.write(tail)\n"
+        % (over_line, head, tail)
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
 
 
 def test_completion_producer_argv_delivery_admits_with_stamp(tmp_path, monkeypatch):
