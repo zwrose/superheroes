@@ -96,7 +96,7 @@ REVIEWER_ENGINE=$(echo "$EP" | jq -r '.reviewer // "claude"')
 IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 ```
 
-**Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. Optional per-seat pins come from `enginePreferences.seatPins` in `$EP`; pins the account cannot honor stay loud via the shipped seat-map machinery (degradations in the receipt, seat falls back to rotation). `$AUTHOR_FAMILY` is the implementation engine's maker family; the narrative family is this orchestrator (`anthropic`). The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `skills/review-code/reference/auto-fix-loop.md`.
+**Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. Optional per-seat pins come from `enginePreferences.seatPins` in `$EP`; pins the account cannot honor stay loud via the shipped seat-map machinery (degradations in the receipt, seat falls back to rotation). Author and narrative families come from the host model the session-start hook read (`SUPERHEROES_HOST_MODEL`) and the implementation engine; an unreadable host model is unknown and excludes nothing, disclosed on the map. A `codexModels` role pin for `reviewer` or `reviewer-deep` seats a codex seat on the pinned model at that model's own effort when live, else falls back with a disclosure. The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `skills/review-code/reference/auto-fix-loop.md`.
 
 **What `--pins` does and does not do (#1039).** A pin value is `{vendor, model?, effort?}`; a **bare
 string is the documented shorthand** for `{"vendor": "<string>"}` and resolves down the identical
@@ -111,12 +111,8 @@ does not hold the others** — every unpinned seat stays in the normal seeded as
 vendors are eligible for it, so an operator excluding a second maker family must pin **every** seat
 they need held; there is no hold-the-rest knob.
 
-An empty `$AUTHOR_FAMILY` composes an unjudgeable seat map — the constraint surfaces only later at the backstop — so composition refuses here (guard covers unresolved/empty only, not whether a non-empty family is correct):
-
 ```bash
 CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))" "$ROOT_DIR")
-AUTHOR_FAMILY=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import model_registry as m;print(m.family_for('code-fixer',sys.argv[2]) or '')" "$ROOT_DIR" "$IMPL_ENGINE")
-[ -n "$AUTHOR_FAMILY" ] || { echo "author-family-unresolved: no maker family for implementation engine '$IMPL_ENGINE'" >&2; exit 1; }
 SEAT_PINS=$(echo "$EP" | jq -c 'if (.seatPins // {}) == {} then empty else .seatPins end')  # owner per-seat pins (#607); empty/absent → omit --pins
 PINS_ARGS=()
 [ -n "$SEAT_PINS" ] && PINS_ARGS=(--pins "$SEAT_PINS")
@@ -124,7 +120,8 @@ PINS_ARGS=()
 # otherwise. Every review-code path dispatches a panel, so there is no receipt-only mode to
 # select: seat_map's `cache-only` probe mode lost its last caller when --post was removed
 # (#1121) and was reaped in #1138.
-SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to the host model"}]}')
+SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --implementation-engine "$IMPL_ENGINE" --host-model "${SUPERHEROES_HOST_MODEL:-}" --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to the host model"}]}')
+AUTHOR_FAMILY=$(echo "$SEAT_MAP" | jq -r '.authorFamily // empty')
 ```
 
 When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.

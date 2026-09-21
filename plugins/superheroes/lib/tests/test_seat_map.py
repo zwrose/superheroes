@@ -2967,3 +2967,287 @@ def test_accepted_tiers_for_seat_matches_default_override_and_backfill():
     assert SM.accepted_tiers_for_seat(
         "code-reviewer", tier_by_seat={"code-reviewer": "reviewer"},
     ) == frozenset({"reviewer-deep", "reviewer"})
+
+
+# --- codex role pins + host-model families (#1273 WO-B) -------------------------------------
+
+
+def _write_core_with_prefs(repo, prefs):
+    import importlib.util as _u
+    spec = _u.spec_from_file_location("core_md", os.path.join(_LIB, "core_md.py"))
+    cm = _u.module_from_spec(spec)
+    spec.loader.exec_module(cm)
+    cm.write(
+        repo,
+        {
+            "verifyCommand": "npm test",
+            "stackTags": [],
+            "threatModel": "x",
+            "patterns": "",
+            "enginePreferences": prefs,
+        },
+        "confirmed",
+        now="2026-06-30",
+    )
+
+
+def _register_astra(monkeypatch):
+    import model_registry as MR
+    models = dict(MR._MODELS)
+    codex = dict(models["codex"])
+    astra = dict(codex["gpt-6-astra"])
+    astra.pop("registration", None)
+    codex["gpt-6-astra"] = astra
+    models["codex"] = codex
+    monkeypatch.setattr(MR, "_MODELS", models)
+
+
+def test_codex_role_pin_sol_seats_deep_at_xhigh():
+    live_cells = [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "cursor"],
+        "xai",
+        "anthropic",
+        0,
+        codex_role_pins={"reviewer-deep": "gpt-5.6-sol"},
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    codex_deep = [
+        m["seats"][s]
+        for s in SM.LENS_SEATS
+        if m["seats"][s]["vendor"] == "codex" and m["seats"][s]["tier"] == "reviewer-deep"
+    ]
+    assert codex_deep
+    for cfg in codex_deep:
+        assert cfg["model"] == "gpt-5.6-sol"
+        assert cfg["effort"] == "xhigh"
+        assert cfg["source"] == "role-pinned"
+
+
+def test_codex_role_pin_astra_registered_seats_at_high(monkeypatch):
+    _register_astra(monkeypatch)
+    live_cells = [
+        ["codex", "gpt-6-astra", "high"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "cursor"],
+        "xai",
+        "anthropic",
+        0,
+        codex_role_pins={"reviewer-deep": "gpt-6-astra"},
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    codex_deep = [
+        m["seats"][s]
+        for s in SM.LENS_SEATS
+        if m["seats"][s]["vendor"] == "codex" and m["seats"][s]["tier"] == "reviewer-deep"
+    ]
+    assert codex_deep
+    for cfg in codex_deep:
+        assert cfg["model"] == "gpt-6-astra"
+        assert cfg["effort"] == "high"
+        assert cfg["source"] == "role-pinned"
+
+
+def test_codex_role_pin_astra_not_live_falls_back_to_matrix(monkeypatch):
+    _register_astra(monkeypatch)
+    live_cells = [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "cursor"],
+        "xai",
+        "anthropic",
+        0,
+        codex_role_pins={"reviewer-deep": "gpt-6-astra"},
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    matrix_model, matrix_effort, _ = SM._cell("reviewer-deep", "codex", None)
+    for seat in SM.STRONG_TIER_SEATS:
+        cfg = m["seats"][seat]
+        if cfg["vendor"] == "codex":
+            assert cfg["model"] == matrix_model
+            assert cfg["effort"] == matrix_effort
+            assert cfg["source"] != "role-pinned"
+    not_live = [d for d in m["degradations"] if d["constraint"] == "role-pin-not-live"]
+    assert not_live
+
+
+def test_no_codex_role_pins_byte_identical_to_default_kwarg():
+    kwargs = dict(
+        roster=SM.PANEL_ROSTER,
+        live_vendors=THREE_VENDORS,
+        author_family="xai",
+        narrative_family="anthropic",
+        seed=SM.seed_from(510, None),
+        live_cells=_aug15_live_cells(),
+        live_cells_source="probed",
+    )
+    without = SM.build(**kwargs)
+    with_none = SM.build(**kwargs, codex_role_pins=None)
+    assert without == with_none
+
+
+def test_reachable_configs_includes_role_pinned_cell():
+    rc = SM.reachable_configs(
+        ["codex", "cursor"],
+        None,
+        codex_role_pins={"reviewer-deep": "gpt-5.6-sol"},
+    )
+    assert ["gpt-5.6-sol", "xhigh"] in rc["codex"]
+
+
+def test_matrix_config_calls_only_inside_cell():
+    import ast
+    with open(_MOD, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=_MOD)
+    cell_nodes = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_cell":
+            cell_nodes.append(node)
+    assert len(cell_nodes) == 1
+    cell_node = cell_nodes[0]
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "matrix_config":
+            if not any(node in ast.walk(cn) for cn in cell_nodes):
+                offenders.append(node.lineno)
+    assert offenders == []
+
+
+def test_cli_compose_host_model_known(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "cursor",
+            "--host-model",
+            "claude-opus-5",
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["narrativeFamily"] == "anthropic"
+    assert receipt["authorFamily"] == "xai"
+
+
+def test_cli_compose_host_model_unknown_degrades(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "claude",
+            "--host-model",
+            "",
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authorFamily"] is None
+    assert receipt["narrativeFamily"] is None
+    host_unknown = [
+        d for d in receipt["degradations"] if d["constraint"] == "host-model-unknown"
+    ]
+    assert len(host_unknown) == 1
+
+
+def test_cli_compose_claude_impl_unknown_host_exits_zero(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "claude",
+            "--host-model",
+            "mystery-model",
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authorFamily"] is None
+    assert any(d["constraint"] == "host-model-unknown" for d in receipt["degradations"])
+
+
+def test_cli_compose_family_flags_conflict(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude",
+            "--implementation-engine",
+            "cursor",
+            "--author-family",
+            "xai",
+        ]
+    )
+    assert rc == 1
+    assert "family-flags-conflict" in capsys.readouterr().err
+
+
+def test_cli_compose_reads_codex_models_from_repo(tmp_path, capsys):
+    repo = str(tmp_path)
+    _write_core_with_prefs(
+        repo,
+        {"codexModels": {"reviewer-deep": "gpt-5.6-sol", "implementer": "gpt-5.6-terra"}},
+    )
+    live_cells = [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "cursor",
+            "--host-model",
+            "composer-2.5",
+            "--repo-root",
+            repo,
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    codex_deep = [
+        receipt["seats"][s]
+        for s in SM.LENS_SEATS
+        if receipt["seats"][s]["vendor"] == "codex"
+        and receipt["seats"][s]["tier"] == "reviewer-deep"
+    ]
+    assert codex_deep
+    for cfg in codex_deep:
+        assert cfg["model"] == "gpt-5.6-sol"
+        assert cfg["source"] == "role-pinned"
