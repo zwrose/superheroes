@@ -195,6 +195,7 @@ def _seed_pending_verify_landing(session_dir):
     return payload["verify"]["landingPath"]
 
 
+# bite-proof: G19 — the state.config.repoRoot rewrite bites on the new checkout's config
 def test_relocate_positive_and_next_from_new_checkout(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -259,22 +260,39 @@ def test_relocate_journal_appended_not_rewritten(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("reason,setup", [
+    # bite-proof: G4 — terminal-session check bites on the terminal-state refusal
     ("relocate-session-terminal", "terminal"),
+    # bite-proof: G13 — target HEAD vs recorded head compare bites on a moved-ahead target
     ("relocate-head-mismatch", "head_mismatch"),
+    # bite-proof: G10 — base-mismatch bites on meta.baseRef vs config.baseRef disagreeing
     ("relocate-base-mismatch", "base_mismatch"),
+    # bite-proof: G9 — repo-mismatch bites on origin vs recorded baseRepo disagreeing
     ("relocate-repo-mismatch", "repo_mismatch"),
+    # bite-proof: G8 — repo-unverifiable bites on a missing baseRepo
     ("relocate-repo-unverifiable", "repo_unverifiable"),
+    # bite-proof: G12a — meta_has != cfg_has bites when only one FIX_FOLD_HEAD copy is set
     ("relocate-head-ambiguous", "head_ambiguous"),
+    # bite-proof: G5 — target-not-toplevel realpath-equality check bites on a non-toplevel target
     ("relocate-target-not-toplevel", "not_toplevel"),
+    # bite-proof: G7 — same-checkout check bites when target equals the recorded checkout
     ("relocate-same-checkout", "same_checkout"),
+    # bite-proof: G14 — records-path-bound check bites when recordsPath lies inside the old root
     ("relocate-records-path-bound", "records_bound"),
+    # bite-proof: G17 — the session lock bites on a held lock refusing relocate
     ("relocate-locked", "locked"),
+    # bite-proof: G3 — loop-state unreadable check bites when loop-state.json is missing
     ("relocate-session-unreadable", "unreadable"),
+    # bite-proof: G6 — session-dir-moved check bites when invoked from a copied session dir
     ("relocate-session-dir-moved", "session_dir_moved"),
+    # bite-proof: G1a — repoRoot presence/type check bites when repoRoot is missing
     ("relocate-session-unreadable", "unreadable_no_repo_root"),
+    # bite-proof: G1b — repoRoot absolute check bites when repoRoot is a relative path
     ("relocate-session-unreadable", "unreadable_relative_repo_root"),
+    # bite-proof: G2 — sessionDir presence/type check bites when sessionDir is missing
     ("relocate-session-unreadable", "unreadable_no_session_dir"),
+    # bite-proof: G15 — target marker foreign bites when the target marker names another session
     ("relocate-target-marker-foreign", "target_marker_foreign"),
+    # bite-proof: G16 — target marker unparseable bites on non-JSON marker content
     ("relocate-target-marker-foreign", "target_marker_not_json"),
 ], ids=[
     "relocate-session-terminal",
@@ -409,6 +427,7 @@ def test_relocate_refusal_tokens(tmp_path, capsys, reason, setup):
         assert _read_bytes(marker_path) == marker_before
 
 
+# bite-proof: G13 — target HEAD vs recorded head compare bites on a moved-ahead target
 def test_relocate_refuses_target_ahead_of_recorded_head(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -439,6 +458,7 @@ def test_relocate_honors_agreeing_fix_fold_head(tmp_path, capsys):
     assert out["relocated"]["head"] == h2
 
 
+# bite-proof: G12b — meta_key != cfg_key bites when both FIX_FOLD_HEAD copies are set and disagree
 def test_relocate_refuses_when_fix_fold_head_copies_disagree(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -485,6 +505,7 @@ def test_relocate_mid_fix_head_mismatch_at_setup_head(tmp_path, capsys):
     assert out["reason"] == "relocate-head-mismatch"
 
 
+# bite-proof: G21 — post-commit gate bites: no retirement unless the target marker names this session
 def test_relocate_marker_kept_when_target_detached(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -515,6 +536,7 @@ def test_relocate_marker_retirement(tmp_path, capsys):
     assert meta["branch"] == target_branch
 
 
+# bite-proof: G11 — resolved_pin is None bites on an unresolvable base pin (UNPROVEN — see record)
 def test_relocate_refuses_a_base_pin_that_does_not_resolve_in_the_target(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -557,6 +579,7 @@ def test_relocate_refuses_none_session_dir(tmp_path, capsys):
     assert _read_bytes(state_path) == state_before
 
 
+# bite-proof: G20 — the not-ours ownership check bites on a foreign marker's sessionDir
 def test_relocate_marker_not_ours_left_alone(tmp_path):
     repo = _mobility_repo(tmp_path)
     other_dir = str(tmp_path / "other_session")
@@ -577,6 +600,7 @@ def test_relocate_marker_not_ours_left_alone(tmp_path):
     assert json.load(open(marker_a, encoding="utf-8"))["sessionDir"] == os.path.realpath(other_dir)
 
 
+# bite-proof: G7 — same-checkout check bites even invoked from the recorded session dir
 def test_relocate_same_checkout_refused_even_from_the_recorded_session_dir(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -592,6 +616,7 @@ def test_relocate_same_checkout_refused_even_from_the_recorded_session_dir(tmp_p
     assert _read_bytes(state_path) == state_before
 
 
+# bite-proof: G6 — session-dir-moved check bites before the same-checkout check (ordering axis)
 def test_relocate_session_dir_moved_refuses_before_same_checkout(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -637,6 +662,7 @@ def test_relocate_changes_nothing_else_in_the_session(tmp_path, capsys):
         assert _is_driver_scratch_relpath(relpath), "unexpected new file: %s" % relpath
 
 
+# bite-proof: G18 — rewritten-only mutation bites on any extra non-checkout key rewrite
 def test_relocate_rewritten_keys_are_exactly_the_checkout_keys(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
