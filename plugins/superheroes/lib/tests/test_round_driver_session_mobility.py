@@ -807,9 +807,10 @@ def test_relocate_marker_retirement_survives_interleaved_replacement(tmp_path, m
 
     monkeypatch.setattr(os, "rename", racing_rename)
     outcome = RD._retire_relocate_marker(repo["root_a"], session_dir)
-    assert outcome == "not-ours"
+    assert outcome == "retired"
     surviving = json.load(open(marker_a, encoding="utf-8"))
     assert surviving["sessionDir"] == os.path.realpath(other_dir)
+    assert not os.path.exists(marker_a + ".retire.tmp")
 
 
 def test_relocate_post_commit_crash_repaired_by_same_target_retry(tmp_path, capsys, monkeypatch):
