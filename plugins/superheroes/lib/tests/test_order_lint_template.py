@@ -166,9 +166,16 @@ def test_fixer_door_refuses_placeholder_in_altered_template_copy(tmp_path, monke
         _emit_fixer_with(tmp_path, monkeypatch, _fixer_order(altered))
 
 
-def test_crlf_charter_shaped_order_passes_both_doors(consumer_repo, tmp_path, monkeypatch):
-    # axis: one newline policy — a CRLF order is graded the same through the CLI and the fixer door (E6)
-    code, out = _cli(_order(_shipped_body()).replace("\n", "\r\n"), consumer_repo, tmp_path)
-    assert (code, out["ok"], out["templateCopiesMasked"]) == (0, True, 1)
-    anchor = _emit_fixer_with(tmp_path, monkeypatch, _fixer_order(_shipped_body()).replace("\n", "\r\n"))
+@pytest.mark.parametrize("eol", ["\r\n", "\r"], ids=["crlf", "cr"])
+def test_crlf_charter_shaped_order_passes_both_doors(consumer_repo, tmp_path, monkeypatch, eol):
+    # axis: one newline policy — a CRLF or CR order is graded the same through the CLI and the fixer door (E6)
+    order = tmp_path / "order.md"
+    order.write_bytes(_order(_shipped_body()).replace("\n", eol).encode("utf-8"))
+    run = subprocess.run(
+        [sys.executable, "-B", _SCRIPT, "check", "--order", str(order), "--repo-root", consumer_repo],
+        capture_output=True, text=True, check=False,
+    )
+    out = json.loads(run.stdout)
+    assert (run.returncode, out["ok"], out["templateCopiesMasked"]) == (0, True, 1)
+    anchor = _emit_fixer_with(tmp_path, monkeypatch, _fixer_order(_shipped_body()).replace("\n", eol))
     assert "manifestSha256" in anchor

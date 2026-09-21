@@ -99,8 +99,8 @@ def _template_body():
 
 def mask_template(text):
     """Blank every verbatim template copy (line count kept); return (text, copies masked)."""
-    # One newline policy for both doors: the CLI's file read already folds CRLF to LF.
-    text = text.replace("\r\n", "\n")
+    # One newline policy for both doors: the CLI's universal-newline read folds CRLF and CR to LF.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     body = _template_body()
     n = text.count(body) if body else 0
     if n:
