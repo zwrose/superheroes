@@ -5507,6 +5507,110 @@ def test_seat_config_dir_never_raises_when_reader_raises(monkeypatch, unpatched_
     assert result["reason"] == "seat-snapshot-unreadable"
 
 
+def test_seat_config_dir_reads_versioned_binary_instance(
+    monkeypatch, unpatched_seat_config_dir,
+):
+    # axis: versioned Claude Code binary layout resolves instance (T-B8-1)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(
+        L,
+        "_read_seat_snapshot",
+        lambda pid: {
+            "exec_path": "/Users/u/.local/share/claude/versions/2.1.278",
+            "argv": [],
+            "env": {
+                "HOME": "/Users/u",
+                "CLAUDE_CONFIG_DIR": "/Users/u/.claude-four",
+            },
+        },
+    )
+    result = L.seat_config_dir()
+    assert result == {
+        "instance": os.path.normpath("/Users/u/.claude-four"),
+        "reason": None,
+    }
+
+
+@pytest.mark.parametrize("exec_path", [
+    None,
+    "",
+    "/Users/u/.local/share/notclaude/versions/2.1.278",
+    "/Users/u/.local/share/claude/versions/latest",
+    "/Users/u/.local/share/claude/bin/2.1.278",
+    "/usr/bin/python3",
+])
+def test_seat_config_dir_reports_seat_not_claude_for_non_runtime_exec(
+    monkeypatch, unpatched_seat_config_dir, exec_path,
+):
+    # axis: non-runtime exec paths are seat-not-claude (T-B8-2)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    snapshot = {
+        "exec_path": exec_path,
+        "argv": [],
+        "env": {"HOME": "/Users/u", "CLAUDE_CONFIG_DIR": "/Users/u/.claude-four"},
+    }
+    monkeypatch.setattr(L, "_read_seat_snapshot", lambda pid: snapshot)
+    result = L.seat_config_dir()
+    assert result["instance"] is None
+    assert result["reason"] == "seat-not-claude"
+
+
+def test_launch_versioned_binary_foreign_instance_pin(
+    tmp_path, monkeypatch, unpatched_seat_config_dir,
+):
+    # axis: versioned seat binary foreign pin refuses without flag (T-B8-3)
+    worktree = str(tmp_path / "build-wt")
+    monkeypatch.setattr(
+        L,
+        "build_worktree_path",
+        lambda repo_root, issue, launch_id, env=None: worktree,
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-requested")
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(
+        L,
+        "_read_seat_snapshot",
+        lambda pid: {
+            "exec_path": "/Users/u/.local/share/claude/versions/2.1.278",
+            "argv": [],
+            "env": {
+                "HOME": "/Users/u",
+                "CLAUDE_CONFIG_DIR": "/Users/u/.claude-four",
+            },
+        },
+    )
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "launch-foreign-instance-pin"
+    assert result["seatInstance"] == os.path.normpath("/Users/u/.claude-four")
+    assert result["requestedInstance"] == os.path.normpath("/tmp/launcher-requested")
+
+    pass_result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        allow_foreign_instance=True,
+    )
+    assert pass_result["ok"] is True, pass_result
+    try:
+        os.kill(pass_result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
 def test_launch_foreign_instance_pin_refuses_mismatch(tmp_path, monkeypatch):
     # axis: mismatched config roots refuse with both instances named
     repo = _init_repo(tmp_path / "repo")
@@ -6247,6 +6351,10 @@ def test_stack_gate_bottom_layer_skips_reader(tmp_path, monkeypatch):
 
 def test_stack_gate_zero_entry_candidates_refuses(tmp_path, monkeypatch):
   # axis: zero entry PR candidates refuses base-not-layer-head
+    monkeypatch.setattr(
+        L.stack_check.shutil, "which",
+        lambda name: "/usr/bin/gh" if name == "gh" else None,
+    )
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
@@ -6278,6 +6386,10 @@ def test_stack_gate_zero_entry_candidates_refuses(tmp_path, monkeypatch):
 
 def test_stack_gate_two_entry_candidates_refuses(tmp_path, monkeypatch):
   # axis: ambiguous entry PR lookup refuses stack-read-unavailable
+    monkeypatch.setattr(
+        L.stack_check.shutil, "which",
+        lambda name: "/usr/bin/gh" if name == "gh" else None,
+    )
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
@@ -6724,6 +6836,54 @@ def test_stack_gate_full_agreement_proceeds(tmp_path, monkeypatch):
         pass
 
 
+def test_stack_gate_passes_when_github_heads_are_uppercase(tmp_path, monkeypatch):
+  # axis: stack gate compares commit ids case-insensitively (T-CASE-STACK)
+    sc = L.stack_check
+    monkeypatch.setattr(sc.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    head_upper = head.upper()
+
+    def uppercase_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"nameWithOwner": "owner/repo"}), "",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            pr_list = [
+                {"number": 1352, "headRefOid": head_upper, "state": "OPEN"},
+            ]
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps(pr_list), "",
+            )
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    def reader(**kwargs):
+        return _membership_ok(1, head_upper)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=7, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=uppercase_gh_run, deadline=deadline,
+        ),
+        membership_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["stackGate"]["applied"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
 # --- dependency premise field and gate (I3) ----------------------------------
 
 
@@ -6971,6 +7131,10 @@ def test_dependency_gate_unrecognised_pr_state_refuses(tmp_path, monkeypatch):
   # axis: unrecognised dependency PR state refuses dependency-read-unavailable
     from types import SimpleNamespace
 
+    monkeypatch.setattr(
+        L.stack_check.shutil, "which",
+        lambda name: "/usr/bin/gh" if name == "gh" else None,
+    )
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
@@ -7220,6 +7384,40 @@ def test_dependency_gate_ready_base_match_passes(tmp_path, monkeypatch):
         "dependencyHead": head,
         "verdict": L.stack_check.VERDICT_READY,
     }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_passes_when_github_head_is_uppercase(tmp_path, monkeypatch):
+  # axis: dependency gate compares commit ids case-insensitively (T-CASE-DEP)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    head_upper = head.upper()
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head_upper, _ready_vet_body(head_upper)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"]["applied"] is True
     try:
         os.kill(result["pid"], signal.SIGTERM)
     except ProcessLookupError:
