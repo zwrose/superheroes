@@ -2302,6 +2302,7 @@ def test_ignore_event_suppressed_lane_still_in_also_observed(tmp_path, monkeypat
     (("", ww.EVENT_LANE_STALE),),
     (("lane-a", ""),),
     (("lane-a", ww.EVENT_PR_SET_CHANGED),),
+    (("lane-a", ww.EVENT_STACK_STATE_CHANGED),),
     (("lane-a", ww.EVENT_TIMER),),
 ])
 def test_ignore_event_invalid_direct_call(tmp_path, ignore_events):
@@ -2319,6 +2320,7 @@ def test_ignore_event_invalid_direct_call(tmp_path, ignore_events):
     "lane-a:",
     ":lane-stale",
     "lane-a:pr-set-changed",
+    "lane-a:stack-state-changed",
     "lane-a:timer",
 ])
 def test_ignore_event_invalid_cli(tmp_path, cli_value):
@@ -3527,6 +3529,7 @@ def test_resolve_pr_stack_groups_changing_snapshot_covers_every_changed_pr():
         env={},
         degraded=degraded,
         changed_prs=[30, 40],
+        repo_slug=_TEST_REPO_SLUG,
     )
 
     assert _changed_pr_partition(stacks, ungrouped) == {30, 40}
@@ -3553,6 +3556,7 @@ def test_resolve_pr_stack_groups_shrinking_snapshot_covers_every_changed_pr():
         env={},
         degraded=degraded,
         changed_prs=[30, 40],
+        repo_slug=_TEST_REPO_SLUG,
     )
 
     assert _changed_pr_partition(stacks, ungrouped) == {30, 40}
@@ -3579,6 +3583,7 @@ def test_resolve_pr_stack_groups_refusal_then_membership_no_duplicate():
         env={},
         degraded=degraded,
         changed_prs=[30, 40],
+        repo_slug=_TEST_REPO_SLUG,
     )
 
     assert _changed_pr_partition(stacks, ungrouped) == {30, 40}
@@ -4056,8 +4061,13 @@ def _vet_not_ready_body(head_sha=_HEAD_SHA):
     return _VET_MARKER + "\n**Verdict: NOT READY** · %s\n" % head_sha
 
 
-def _pr_vet_state(body=None, head=_HEAD_SHA):
-    return {"body": body or _vet_ready_body(head), "headRefOid": head}
+def _pr_vet_state(body=None, head=_HEAD_SHA, state="OPEN", is_draft=False):
+    return {
+        "body": body or _vet_ready_body(head),
+        "headRefOid": head,
+        "state": state,
+        "isDraft": is_draft,
+    }
 
 
 def _patch_pr_vet(monkeypatch, vet_by_pr):
@@ -4142,6 +4152,7 @@ def _setup_stack_batch(
 
 def _snapshot_stack_state(
     repo, batch_lanes, open_prs, monkeypatch, membership_reader, pr_vet_reader,
+    repo_slug=_TEST_REPO_SLUG,
 ):
     degraded = set()
     snapshot = ww._compute_stack_state_snapshot(
@@ -4154,6 +4165,7 @@ def _snapshot_stack_state(
         membership_reader=membership_reader,
         env={},
         degraded=degraded,
+        repo_slug=repo_slug,
         pr_vet_reader=pr_vet_reader,
     )
     return snapshot, degraded
@@ -4211,7 +4223,7 @@ def test_stack_complete_fires_when_every_position_ready(tmp_path, monkeypatch):
     )
     assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
     stack_entry = result["stacks"][0]
-    assert stack_entry["state"] == "stack-complete"
+    assert stack_entry["state"] == ww.STACK_STATE_COMPLETE
     assert stack_entry["layersPlanned"] == 2
 
 
@@ -4222,12 +4234,20 @@ def test_stack_complete_fires_on_vet_only_without_pr_set_change(
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
         repo, tmp_path, monkeypatch,
-        launch_specs=[{
-            "launch_id": "lane-a",
-            "stack": _STACK_NUM,
-            "layer_position": 1,
-            "layers_planned": 2,
-        }],
+        launch_specs=[
+            {
+                "launch_id": "lane-a",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 2,
+            },
+            {
+                "launch_id": "lane-b",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 2,
+            },
+        ],
     )
     vet_states = [
         {
@@ -4280,7 +4300,7 @@ def test_stack_complete_fires_on_vet_only_without_pr_set_change(
     )
     assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
     assert tick[0] >= 1
-    assert result["stacks"][0]["state"] == "stack-complete"
+    assert result["stacks"][0]["state"] == ww.STACK_STATE_COMPLETE
 
 
 def test_layers_planned_read_from_terminal_launch(tmp_path, monkeypatch):
@@ -4327,7 +4347,7 @@ def test_layers_planned_read_from_terminal_launch(tmp_path, monkeypatch):
         ),
     )
     assert snapshot["stacks"][0]["layersPlanned"] == 2
-    assert snapshot["stacks"][0]["state"] == "stack-complete"
+    assert snapshot["stacks"][0]["state"] == ww.STACK_STATE_COMPLETE
 
 
 def test_stack_incomplete_missing_position(tmp_path, monkeypatch):
@@ -4353,7 +4373,7 @@ def test_stack_incomplete_missing_position(tmp_path, monkeypatch):
         ),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
     assert entry["missingPositions"] == [2]
 
 
@@ -4383,7 +4403,7 @@ def test_stack_incomplete_not_ready_verdict(tmp_path, monkeypatch):
         ),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
     assert entry["missingPositions"] == [2]
 
 
@@ -4417,7 +4437,7 @@ def test_stack_incomplete_stale_sha(tmp_path, monkeypatch):
         ),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
     assert entry["missingPositions"] == [2]
 
 
@@ -4452,7 +4472,7 @@ def test_stack_incomplete_pr_read_refuses(tmp_path, monkeypatch):
         ),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
     assert entry["missingPositions"] == [2]
     assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded
 
@@ -4496,7 +4516,7 @@ def test_stack_incomplete_vet_read_refuses(tmp_path, monkeypatch):
         ),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
     assert entry["missingPositions"] == [2]
     assert entry["reason"] is None
     assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded
@@ -4526,8 +4546,8 @@ def test_stack_incomplete_membership_unresolved(tmp_path, monkeypatch):
         _position_ready_reader({1: 50}, {50: {"state": _pr_vet_state()}}),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
-    assert entry["reason"] == "membership-unresolved"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
+    assert entry["reason"] == ww.STACK_REASON_MEMBERSHIP_UNRESOLVED
     assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded
 
 
@@ -4550,8 +4570,8 @@ def test_layers_planned_unknown_incomplete(tmp_path, monkeypatch):
         _position_ready_reader({1: 50}, {50: {"state": _pr_vet_state()}}),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
-    assert entry["reason"] == "layers-planned-unknown"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
+    assert entry["reason"] == ww.STACK_REASON_LAYERS_PLANNED_UNKNOWN
 
 
 def test_layers_planned_disagreed_incomplete(tmp_path, monkeypatch):
@@ -4585,8 +4605,8 @@ def test_layers_planned_disagreed_incomplete(tmp_path, monkeypatch):
         ),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
-    assert entry["reason"] == "layers-planned-disagreed"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
+    assert entry["reason"] == ww.STACK_REASON_LAYERS_PLANNED_DISAGREED
 
 
 def test_two_stacks_one_complete_one_not(tmp_path, monkeypatch):
@@ -4632,8 +4652,8 @@ def test_two_stacks_one_complete_one_not(tmp_path, monkeypatch):
         ),
     )
     by_stack = {entry["stack"]: entry for entry in snapshot["stacks"]}
-    assert by_stack[100]["state"] == "stack-complete"
-    assert by_stack[200]["state"] == "stack-incomplete"
+    assert by_stack[100]["state"] == ww.STACK_STATE_COMPLETE
+    assert by_stack[200]["state"] == ww.STACK_STATE_INCOMPLETE
     assert by_stack[200]["missingPositions"] == [2]
 
 
@@ -4642,12 +4662,20 @@ def test_incomplete_seeds_silently_complete_fires(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
         repo, tmp_path, monkeypatch,
-        launch_specs=[{
-            "launch_id": "lane-a",
-            "stack": _STACK_NUM,
-            "layer_position": 1,
-            "layers_planned": 2,
-        }],
+        launch_specs=[
+            {
+                "launch_id": "lane-a",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 2,
+            },
+            {
+                "launch_id": "lane-b",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 2,
+            },
+        ],
     )
     vet_states = [
         {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state(_vet_not_ready_body())}},
@@ -4698,6 +4726,7 @@ def test_incomplete_seeds_silently_complete_fires(tmp_path, monkeypatch):
         "env": {},
         "degraded": seeded["degraded"],
         "pr_vet_reader": read_pr_vet_state,
+        "repo_slug": _TEST_REPO_SLUG,
         "stack_state": stack_state,
         "terminal_launches": [],
         "blocked_launches": [],
@@ -4728,7 +4757,7 @@ def test_incomplete_seeds_silently_complete_fires(tmp_path, monkeypatch):
         stack_state=stack_state,
     )
     assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
-    assert stack_state[0]["stacks"][0]["state"] == "stack-complete"
+    assert stack_state[0]["stacks"][0]["state"] == ww.STACK_STATE_COMPLETE
 
 
 def test_baseline_advances_unchanged_complete_does_not_refire(tmp_path, monkeypatch):
@@ -4769,12 +4798,20 @@ def test_precedence_stack_state_over_pr_set_pr_baseline_unchanged(
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
         repo, tmp_path, monkeypatch,
-        launch_specs=[{
-            "launch_id": "lane-a",
-            "stack": _STACK_NUM,
-            "layer_position": 1,
-            "layers_planned": 2,
-        }],
+        launch_specs=[
+            {
+                "launch_id": "lane-a",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 2,
+            },
+            {
+                "launch_id": "lane-b",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 2,
+            },
+        ],
     )
     pr_sets = [{50, 51}, {50, 51, 52}]
     vet_states = [
@@ -4838,8 +4875,229 @@ def test_precedence_stack_state_over_pr_set_pr_baseline_unchanged(
     assert pr_state[0] == {50, 51}
 
 
-def test_stack_state_not_suppressible_via_ignore_events(tmp_path, monkeypatch):
-    # axis: stack-state-changed is not per-lane suppressible through ignore_events
+def test_stack_state_vocabulary_literal_pins():
+    assert ww.STACK_STATE_COMPLETE == "stack-complete"
+    assert ww.STACK_STATE_INCOMPLETE == "stack-incomplete"
+    assert ww.STACK_REASON_LAYERS_PLANNED_UNKNOWN == "layers-planned-unknown"
+    assert ww.STACK_REASON_LAYERS_PLANNED_DISAGREED == "layers-planned-disagreed"
+    assert ww.STACK_REASON_MEMBERSHIP_UNRESOLVED == "membership-unresolved"
+    assert ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD == "idle-seat-launchable-child"
+
+
+def test_draft_pr_excluded_from_ready_positions(tmp_path, monkeypatch):
+    # axis: isDraft True — READY verdict does not count the position READY
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-a",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 2,
+            },
+            {
+                "launch_id": "lane-b",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 2,
+            },
+        ],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    snapshot, degraded = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {
+                50: {"state": _pr_vet_state()},
+                51: {"state": _pr_vet_state(is_draft=True)},
+            },
+        ),
+    )
+    entry = snapshot["stacks"][0]
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
+    assert entry["missingPositions"] == [2]
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE not in degraded
+
+
+def test_merged_pr_excluded_from_ready_positions(tmp_path, monkeypatch):
+    # axis: non-OPEN state — READY verdict does not count the position READY
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-a",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 2,
+            },
+            {
+                "launch_id": "lane-b",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 2,
+            },
+        ],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    snapshot, degraded = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {
+                50: {"state": _pr_vet_state()},
+                51: {"state": _pr_vet_state(state="MERGED")},
+            },
+        ),
+    )
+    entry = snapshot["stacks"][0]
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
+    assert entry["missingPositions"] == [2]
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE not in degraded
+
+
+def test_repo_slug_resolved_once_per_run_tick(tmp_path, monkeypatch):
+    # axis: one gh repo view per tick when stack snapshot and PR set both evaluate
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-a",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 2,
+            },
+            {
+                "launch_id": "lane-b",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 2,
+            },
+        ],
+    )
+    _patch_pr_vet(monkeypatch, {
+        50: {"state": _pr_vet_state()},
+        51: {"state": _pr_vet_state()},
+        52: {"state": _pr_vet_state()},
+    })
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    complete_snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+        ),
+    )
+    repo_view_calls = []
+
+    def gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            repo_view_calls.append(1)
+            return subprocess.CompletedProcess(
+                argv, 0,
+                stdout=json.dumps({"nameWithOwner": _TEST_REPO_SLUG}),
+                stderr="",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            body = [{"number": n} for n in [50, 51, 52]]
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps(body), stderr="",
+            )
+        raise AssertionError("unexpected gh argv: %r" % argv)
+
+    result = ww.run(
+        repo,
+        "batch-982",
+        max_seconds=2,
+        interval_seconds=1,
+        gh_run=gh_run,
+        membership_reader=_membership_for_stack([50, 51, 52]),
+        sleep=lambda _d: None,
+        stack_state=[complete_snapshot],
+        pr_state=[{50, 51}],
+    )
+    assert result["event"] == ww.EVENT_PR_SET_CHANGED
+    assert len(repo_view_calls) == 1
+
+
+def test_slug_resolution_failure_adds_stack_signal_degradation(
+    tmp_path, monkeypatch,
+):
+    # axis: slug read failure yields membership-unresolved and degradation
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-a",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 2,
+            },
+            {
+                "launch_id": "lane-b",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 2,
+            },
+        ],
+    )
+
+    def gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="fail")
+        if argv[:3] == ["gh", "pr", "list"]:
+            body = [{"number": n} for n in [50, 51]]
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps(body), stderr="",
+            )
+        raise AssertionError("unexpected gh argv: %r" % argv)
+
+    result = ww.run(
+        repo,
+        "batch-982",
+        max_seconds=2,
+        interval_seconds=1,
+        gh_run=gh_run,
+        membership_reader=_membership_for_stack([50, 51]),
+        sleep=lambda _d: None,
+    )
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in result["degraded"]
+
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    degraded = set()
+    snapshot = ww._compute_stack_state_snapshot(
+        batch_lanes,
+        [50, 51],
+        repo,
+        deadline=time.monotonic() + 30,
+        monotonic=time.monotonic,
+        gh_run=_gh_open_prs([50, 51]),
+        membership_reader=_membership_for_stack([50, 51]),
+        env={},
+        degraded=degraded,
+        repo_slug=None,
+        pr_vet_reader=_position_ready_reader(
+            {1: 50, 2: 51},
+            {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+        ),
+    )
+    assert snapshot["stacks"][0]["reason"] == ww.STACK_REASON_MEMBERSHIP_UNRESOLVED
+
+
+def test_unrelated_ignore_pair_does_not_suppress_stack_state_event(
+    tmp_path, monkeypatch,
+):
+    # axis: unrelated valid ignore pair does not suppress stack-state-changed
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
         repo, tmp_path, monkeypatch,
@@ -4864,6 +5122,200 @@ def test_stack_state_not_suppressible_via_ignore_events(tmp_path, monkeypatch):
         ignore_events=(("lane-a", ww.EVENT_LANE_TERMINAL),),
     )
     assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
+
+
+def test_ignore_launch_stack_snapshot_reads_terminal_layers_planned(
+    tmp_path, monkeypatch,
+):
+    # axis: ignored terminal lane still supplies layersPlanned and occupied position
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-live",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "started": True,
+            },
+            {
+                "launch_id": "lane-term",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 2,
+                "started": True,
+                "terminal": True,
+            },
+        ],
+    )
+    degraded = set()
+    ledger_observed = [False]
+    batch_lanes, live_lanes, ledger_readable = ww._derive_batch_lanes(
+        repo, "batch-982", None, degraded, ("lane-term",), ledger_observed,
+    )
+    assert ledger_readable
+    assert "lane-term" in batch_lanes
+    assert batch_lanes["lane-term"]["layersPlanned"] == 2
+    assert "lane-term" not in live_lanes
+    snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50],
+        monkeypatch,
+        _membership_for_stack([50]),
+        _position_ready_reader(
+            {1: 50},
+            {50: {"state": _pr_vet_state()}},
+        ),
+    )
+    entry = snapshot["stacks"][0]
+    assert entry["layersPlanned"] == 2
+    assert ww._occupied_layer_positions(batch_lanes, _STACK_NUM) == {1, 2}
+    assert not any(
+        flag["flag"] == ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD
+        for flag in snapshot["flags"]
+    )
+
+
+def test_stack_state_fires_no_baseline_incomplete_with_flag(tmp_path, monkeypatch):
+    # axis: no baseline fires when incomplete snapshot carries idle-seat flag
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-pos1",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 3,
+            },
+            {
+                "launch_id": "lane-pos2",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 3,
+            },
+        ],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+        ),
+    )
+    assert snapshot["stacks"][0]["state"] == ww.STACK_STATE_INCOMPLETE
+    expected_flag = {
+        "flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
+        "stack": _STACK_NUM,
+        "position": 2,
+    }
+    assert expected_flag in snapshot["flags"]
+    assert ww._stack_state_fires(snapshot, None)
+    payload = ww._payload_stack_state_changed({
+        "batch_lanes": batch_lanes,
+        "open_pr_numbers": [50, 51],
+        "repo_root": repo,
+        "deadline": time.monotonic() + 30,
+        "monotonic": time.monotonic,
+        "gh_run": _gh_open_prs([50, 51]),
+        "membership_reader": _membership_for_stack([50, 51]),
+        "env": {},
+        "degraded": set(),
+        "repo_slug": _TEST_REPO_SLUG,
+        "pr_vet_reader": _position_ready_reader(
+            {1: 50, 2: 51},
+            {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+        ),
+        "stack_state": [None],
+        "terminal_launches": [],
+        "blocked_launches": [],
+        "exited_launches": [],
+        "stale_live_launches": [],
+    })
+    assert payload is not None
+    assert expected_flag in payload["flags"]
+
+
+def test_stack_state_fires_no_baseline_incomplete_no_flags(tmp_path, monkeypatch):
+    # axis: no baseline incomplete without flags seeds silently
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-a",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 2,
+            },
+            {
+                "launch_id": "lane-b",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 2,
+            },
+        ],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {
+                50: {"state": _pr_vet_state()},
+                51: {"state": _pr_vet_state(_vet_not_ready_body())},
+            },
+        ),
+    )
+    assert snapshot["stacks"][0]["state"] == ww.STACK_STATE_INCOMPLETE
+    assert snapshot["flags"] == []
+    assert not ww._stack_state_fires(snapshot, None)
+
+
+def test_stack_state_changed_emits_flags_on_first_arm_with_idle_seat(
+    tmp_path, monkeypatch,
+):
+    # axis: end-to-end stack-state-changed returns idle-seat flag on first arm
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-pos1",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 3,
+            },
+            {
+                "launch_id": "lane-pos2",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 3,
+            },
+        ],
+    )
+    _patch_pr_vet(monkeypatch, {
+        50: {"state": _pr_vet_state()},
+        51: {"state": _pr_vet_state()},
+    })
+    result = ww.run(
+        repo,
+        "batch-982",
+        max_seconds=2,
+        interval_seconds=1,
+        gh_run=_gh_open_prs([50, 51]),
+        membership_reader=_membership_for_stack([50, 51]),
+    )
+    assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
+    assert {
+        "flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
+        "stack": _STACK_NUM,
+        "position": 2,
+    } in result["flags"]
 
 
 def test_idle_seat_launchable_child_flag_present_and_absent(tmp_path, monkeypatch):
@@ -4901,14 +5353,14 @@ def test_idle_seat_launchable_child_flag_present_and_absent(tmp_path, monkeypatc
         ),
     )
     flags = snapshot["flags"]
-    assert {"flag": "idle-seat-launchable-child", "stack": _STACK_NUM, "position": 2} in flags
+    assert {"flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD, "stack": _STACK_NUM, "position": 2} in flags
     assert not any(
         entry["position"] == 1 for entry in flags
-        if entry["flag"] == "idle-seat-launchable-child"
+        if entry["flag"] == ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD
     )
     assert not any(
         entry["position"] == 3 for entry in flags
-        if entry["flag"] == "idle-seat-launchable-child"
+        if entry["flag"] == ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD
     )
 
 
@@ -4945,10 +5397,10 @@ def test_idle_seat_launchable_child_incomplete_unlaunched_position(
         ),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
     assert entry["missingPositions"] == [3]
     assert {
-        "flag": "idle-seat-launchable-child",
+        "flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
         "stack": _STACK_NUM,
         "position": 2,
     } in snapshot["flags"]
@@ -4991,10 +5443,10 @@ def test_idle_seat_launchable_child_incomplete_not_ready_next_position(
         ),
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
     assert entry["missingPositions"] == [3]
     assert {
-        "flag": "idle-seat-launchable-child",
+        "flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
         "stack": _STACK_NUM,
         "position": 2,
     } in snapshot["flags"]
@@ -5018,7 +5470,7 @@ def test_idle_seat_no_flags_layers_planned_unknown(tmp_path, monkeypatch):
         _membership_for_stack([50]),
         _position_ready_reader({1: 50}, {50: {"state": _pr_vet_state()}}),
     )
-    assert snapshot["stacks"][0]["reason"] == "layers-planned-unknown"
+    assert snapshot["stacks"][0]["reason"] == ww.STACK_REASON_LAYERS_PLANNED_UNKNOWN
     assert snapshot["flags"] == []
 
 
@@ -5052,7 +5504,7 @@ def test_idle_seat_no_flags_layers_planned_disagreed(tmp_path, monkeypatch):
             {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
         ),
     )
-    assert snapshot["stacks"][0]["reason"] == "layers-planned-disagreed"
+    assert snapshot["stacks"][0]["reason"] == ww.STACK_REASON_LAYERS_PLANNED_DISAGREED
     assert snapshot["flags"] == []
 
 
@@ -5079,7 +5531,7 @@ def test_idle_seat_no_flags_membership_unresolved(tmp_path, monkeypatch):
         refusing_membership,
         _position_ready_reader({1: 50}, {50: {"state": _pr_vet_state()}}),
     )
-    assert snapshot["stacks"][0]["reason"] == "membership-unresolved"
+    assert snapshot["stacks"][0]["reason"] == ww.STACK_REASON_MEMBERSHIP_UNRESOLVED
     assert snapshot["flags"] == []
 
 
@@ -5122,6 +5574,7 @@ def test_resolve_pr_stack_groups_same_stack_position_order_not_append():
         env={},
         degraded=degraded,
         changed_prs=[40, 30],
+        repo_slug=_TEST_REPO_SLUG,
     )
 
     assert stacks == [{"stack": 1, "prs": [30, 40]}]
@@ -5217,13 +5670,14 @@ def test_stack_budget_exhausted_mid_walk_remaining_incomplete(tmp_path, monkeypa
         membership_reader=membership_reader,
         env={},
         degraded=degraded,
+        repo_slug=_TEST_REPO_SLUG,
     )
     by_stack = {entry["stack"]: entry for entry in snapshot["stacks"]}
     assert reader_calls == [50]
     assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded
-    assert by_stack[100]["state"] == "stack-incomplete"
-    assert by_stack[200]["state"] == "stack-incomplete"
-    assert by_stack[200]["reason"] == "membership-unresolved"
+    assert by_stack[100]["state"] == ww.STACK_STATE_INCOMPLETE
+    assert by_stack[200]["state"] == ww.STACK_STATE_INCOMPLETE
+    assert by_stack[200]["reason"] == ww.STACK_REASON_MEMBERSHIP_UNRESOLVED
 
 
 def test_stack_position_ready_budget_exhausted(tmp_path, monkeypatch):
@@ -5263,10 +5717,11 @@ def test_stack_position_ready_budget_exhausted(tmp_path, monkeypatch):
         membership_reader=_membership_for_stack([50, 51]),
         env={},
         degraded=degraded,
+        repo_slug=_TEST_REPO_SLUG,
         pr_vet_reader=pr_vet_reader,
     )
     entry = snapshot["stacks"][0]
-    assert entry["state"] == "stack-incomplete"
+    assert entry["state"] == ww.STACK_STATE_INCOMPLETE
     assert entry["missingPositions"] == [1, 2]
     assert entry["reason"] is None
     assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded

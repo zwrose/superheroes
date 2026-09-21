@@ -371,8 +371,9 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
   invocations** and for bare `run`, where the baseline is rebuilt per call.
 - **Stack-state baseline:** within one `loop` invocation, the stack-state baseline threads across
   timer arms, so a stack that becomes complete between arms is reported once. Each new invocation
-  starts without one: a watch armed on a batch whose stack is already complete returns
-  `stack-state-changed` on its first arm, and every re-arm reports it again until the stack merges.
+  starts without one: a watch armed on a batch whose stack is already complete, or that already
+  carries an `idle-seat-launchable-child` flag, returns `stack-state-changed` on its first arm,
+  and every re-arm reports it again until the stack merges.
   Once the stack is on the click list, stop watching that batch.
 - **A mistyped batch id is indistinguishable from a quiet batch** — but the verb matters. Bare
   `run` produces a calm `timer`, not a refusal. `loop` treats every `timer` as non-terminal and
