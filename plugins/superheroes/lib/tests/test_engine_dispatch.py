@@ -16970,6 +16970,319 @@ def test_completion_producer_transcript_scrubbed_digest_admits(tmp_path, monkeyp
     assert grade.get("ok") is True
 
 
+# --- incremental stdout completion e2e (#1273 WO-B) ---
+
+
+def _run_claude_stdout_review_script(tmp_path, monkeypatch, script_body, *, timeout=30):
+    run_dir = str(tmp_path / "stdout-review")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script_body)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, timeout,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    return run_dir, state, ended, stdout_path
+
+
+def test_completion_stdout_two_results_admits_last_stamp_and_materialized(
+        tmp_path, monkeypatch,
+):
+    """axis: two stdout result events — stamp and materializer must follow the last."""
+    first = _wrap_native_review_result(_native_review_branch("findings"))
+    second = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream = _claude_event_stream(result=first) + _claude_event_stream(result=second)
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    _assert_completion_keys(ended, second)
+    with open(ED._native_result_path(run_dir, 1), encoding="utf-8") as fh:
+        materialized = json.load(fh)
+    assert materialized == second
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_stdout_second_result_after_deadline_forfeits(tmp_path, monkeypatch):
+    """axis: last stamped event after the monotonic deadline forfeits, not payload-mismatch."""
+    first = json.loads(_native_write_result_json(report="first result"))
+    second = json.loads(_native_write_result_json(report="second result"))
+    first_stream = _claude_event_stream(result=first)
+    second_stream = _claude_event_stream(result=second)
+    script = (
+        "import signal, sys, time\n"
+        "second = %r\n"
+        "def _on_term(signum, frame):\n"
+        "    sys.stdout.write(second)\n"
+        "    sys.stdout.flush()\n"
+        "signal.signal(signal.SIGTERM, _on_term)\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % (second_stream, first_stream)
+    )
+    run_dir = str(tmp_path / "stdout-after-deadline")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    attempt_timeout = 2
+    real_observe = ED._observe_stdout_completion
+    late_stamp = {"active": False}
+    run_start = {"t": None}
+
+    def _observe_late_second(obs_state, stdout_path_arg, *, terminal=False):
+        if terminal:
+            with open(stdout_path_arg, "rb") as fh:
+                if second_stream.encode("utf-8") in fh.read():
+                    late_stamp["active"] = True
+        real_observe(obs_state, stdout_path_arg, terminal=terminal)
+
+    class _TimeProxy:
+        def __init__(self, real):
+            self._real = real
+
+        def monotonic(self):
+            if late_stamp["active"] and run_start["t"] is not None:
+                return run_start["t"] + float(attempt_timeout) + 1.0
+            val = self._real.monotonic()
+            if run_start["t"] is None:
+                run_start["t"] = val
+            return val
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(ED, "_observe_stdout_completion", _observe_late_second)
+    monkeypatch.setattr(ED, "time", _TimeProxy(time))
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, attempt_timeout,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["timedOut"] is True
+    _assert_completion_keys(ended, second)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("admissionDetail") == ERC.REFUSAL_RESULT_COMPLETION_AFTER_DEADLINE
+
+
+def test_completion_stdout_grace_window_second_result_stamps_last(tmp_path, monkeypatch):
+    """axis: terminal observation after termination must stamp a grace-window second result."""
+    first = _wrap_native_review_result(_native_review_branch("findings"))
+    second = _wrap_native_review_result(_native_review_branch("verdicts"))
+    first_stream = _claude_event_stream(result=first)
+    second_stream = _claude_event_stream(result=second)
+    script = (
+        "import signal, sys, time\n"
+        "def _on_term(signum, frame):\n"
+        "    sys.stdout.write(%r)\n"
+        "    sys.stdout.flush()\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, _on_term)\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % (second_stream, first_stream)
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    _assert_completion_keys(ended, second)
+    with open(ED._native_result_path(run_dir, 1), encoding="utf-8") as fh:
+        materialized = json.load(fh)
+    assert materialized == second
+
+
+def test_completion_stdout_evicted_result_forfeits_unrecorded(tmp_path, monkeypatch):
+    """axis: a stamped result pushed out of the retained tail clears the stamp."""
+    structured = _wrap_native_review_result(_native_review_branch("findings"))
+    result_stream = _claude_event_stream(result=structured)
+    filler_line = json.dumps({
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": "x" * 500}]},
+    }, separators=(",", ":")) + "\n"
+    filler_bytes = len(filler_line.encode("utf-8"))
+    filler_budget = ED._cap_content_budget(
+        ED.MAX_STDOUT_CAPTURE, ED.CAP_STREAM_STDOUT, ED.MAX_STDOUT_CAPTURE * 2,
+    )
+    filler_count = (filler_budget // filler_bytes) + (ED.MAX_STDOUT_CAPTURE // filler_bytes) + 1
+    script = (
+        "import sys\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.write(%r * %d)\n"
+        % (result_stream, filler_line, filler_count)
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+    digest = ERC.canonical_payload_digest(ED._scrub_native_payload(structured))
+    verdict, detail = ERC.completion_window(ended, digest)
+    assert verdict == "forfeit"
+    assert detail == ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
+
+
+def test_completion_stdout_trailing_whitespace_incremental_reads_admit(
+        tmp_path, monkeypatch,
+):
+    """axis: megabytes of trailing whitespace must not re-read from offset zero."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_stream = _claude_event_stream(result=structured)
+    whitespace_bytes = 3 * 1024 * 1024
+    chunk_bytes = ED._STDOUT_COMPLETION_READ_CHUNK
+    script = (
+        "import sys, time\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "remaining = %d\n"
+        "while remaining > 0:\n"
+        "    n = min(%d, remaining)\n"
+        "    sys.stdout.write(' ' * n)\n"
+        "    sys.stdout.flush()\n"
+        "    remaining -= n\n"
+        "    time.sleep(0.05)\n"
+        % (result_stream, whitespace_bytes, chunk_bytes)
+    )
+    run_dir = str(tmp_path / "stdout-whitespace")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    real_observe = ED._observe_stdout_completion
+    offset_spans = []
+
+    def _observe_track_reads(obs_state, stdout_path_arg, *, terminal=False):
+        before = obs_state.get("offset", 0)
+        real_observe(obs_state, stdout_path_arg, terminal=terminal)
+        after = obs_state.get("offset", 0)
+        if after > before:
+            offset_spans.append((before, after))
+
+    monkeypatch.setattr(ED, "_observe_stdout_completion", _observe_track_reads)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    final_size = os.path.getsize(stdout_path)
+    assert offset_spans
+    assert offset_spans[0][0] == 0
+    for index in range(1, len(offset_spans)):
+        assert offset_spans[index][0] == offset_spans[index - 1][1]
+    assert offset_spans[-1][1] == final_size
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_stdout_truncated_final_line_forfeits_unrecorded(
+        tmp_path, monkeypatch,
+):
+    """axis: a partial final stdout line must not produce a completion stamp."""
+    structured = _wrap_native_review_result(_native_review_branch("findings"))
+    partial = (
+        '{"type":"result","subtype":"success","is_error":false,'
+        '"structured_output":{"result":{"resultKind":"findings"'
+    )
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "partial = %r\n"
+        "for ch in partial:\n"
+        "    sys.stdout.write(ch)\n"
+        "    sys.stdout.flush()\n"
+        "    time.sleep(0.01)\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % partial
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script, timeout=1,
+    )
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+    digest = ERC.canonical_payload_digest(ED._scrub_native_payload(structured))
+    verdict, detail = ERC.completion_window(ended, digest)
+    assert verdict == "forfeit"
+    assert detail == ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
+
+
+def test_completion_producer_argv_delivery_admits_with_stamp(tmp_path, monkeypatch):
+    """axis: argv delivery still admits through the shared terminal observation path."""
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    script = (
+        "import sys\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % native_write
+    )
+    run_dir = str(tmp_path / "argv-admits")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
 def test_admission_scrubbed_digest_binds_admitted_object(tmp_path):
     """axis: admission returns the scrubbed digest subject, not a distinct raw rewrite."""
     secret = "Bearer " + ("a" * 32)
