@@ -3103,9 +3103,66 @@ def test_reachable_configs_includes_role_pinned_cell():
     rc = SM.reachable_configs(
         ["codex", "cursor"],
         None,
-        codex_role_pins={"reviewer-deep": "gpt-5.6-sol"},
+        codex_role_pins={"reviewer": "gpt-5.6-sol"},
     )
-    assert ["gpt-5.6-sol", "xhigh"] in rc["codex"]
+    assert ["gpt-5.6-terra", "high"] in rc["codex"]
+    assert ["gpt-5.6-sol", "high"] in rc["codex"]
+
+
+def test_reachable_configs_role_pinned_cell_absent_without_pin():
+    rc = SM.reachable_configs(["codex", "cursor"], None)
+    assert ["gpt-5.6-sol", "high"] not in rc["codex"]
+
+
+def test_codex_role_pin_reviewer_not_live_seats_matrix_with_one_degradation():
+    live_cells = [
+        ["codex", "gpt-5.6-terra", "high"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "codex", "cursor"],
+        "xai",
+        "anthropic",
+        0,
+        tier_by_seat={"grounding-seat": "reviewer"},
+        codex_role_pins={"reviewer": "gpt-5.6-sol"},
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    cfg = m["seats"]["grounding-seat"]
+    assert cfg["vendor"] == "codex"
+    assert cfg["model"] == "gpt-5.6-terra"
+    assert cfg["effort"] == "high"
+    not_live = [d for d in m["degradations"] if d["constraint"] == "role-pin-not-live"]
+    assert len(not_live) == 1
+    assert not_live[0]["seat"] == "grounding-seat"
+
+
+def test_codex_role_pin_no_degradation_when_seat_not_on_codex():
+    live_cells = [
+        ["codex", "gpt-5.6-terra", "high"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "codex", "cursor"],
+        "xai",
+        "openai",
+        0,
+        tier_by_seat={"grounding-seat": "reviewer"},
+        codex_role_pins={"reviewer": "gpt-5.6-sol"},
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    cfg = m["seats"]["grounding-seat"]
+    assert cfg["vendor"] != "codex"
+    pin_degs = [
+        d for d in m["degradations"]
+        if d.get("constraint") in ("role-pin-not-live", "role-pin-not-honorable")
+        and d.get("seat") == "grounding-seat"
+    ]
+    assert pin_degs == []
 
 
 def test_matrix_config_calls_only_inside_cell():
@@ -3167,12 +3224,17 @@ def test_cli_compose_host_model_unknown_degrades(capsys):
     )
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
-    assert receipt["authorFamily"] is None
+    assert receipt["authorFamily"] == "anthropic"
     assert receipt["narrativeFamily"] is None
     host_unknown = [
         d for d in receipt["degradations"] if d["constraint"] == "host-model-unknown"
     ]
     assert len(host_unknown) == 1
+    assert "claude engine" in host_unknown[0]["reason"]
+    assert all(
+        seat_cfg.get("family") != "anthropic"
+        for seat_cfg in receipt["seats"].values()
+    )
 
 
 def test_cli_compose_claude_impl_unknown_host_exits_zero(capsys):
@@ -3192,7 +3254,7 @@ def test_cli_compose_claude_impl_unknown_host_exits_zero(capsys):
     )
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
-    assert receipt["authorFamily"] is None
+    assert receipt["authorFamily"] == "anthropic"
     assert any(d["constraint"] == "host-model-unknown" for d in receipt["degradations"])
 
 

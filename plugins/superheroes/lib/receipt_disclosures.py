@@ -271,10 +271,7 @@ def seat_map_unjudgeable(state):
 def _native_in_session_seats(state, journal):
     if not isinstance(journal, list):
         return []
-    seat_map = seat_map_receipts.effective_seat_map(state)
-    map_seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
-    if not isinstance(map_seats, dict):
-        map_seats = {}
+    default_round = str(state.get("round") or "1")
     native = []
     seen = set()
     for event in journal:
@@ -285,6 +282,12 @@ def _native_in_session_seats(state, journal):
             continue
         if event.get("executionEvidence") is not None:
             continue
+        event_round = event.get("round")
+        round_label = str(event_round) if event_round is not None else default_round
+        governing = seat_map_receipts.round_governing_map(state, round_label)
+        map_seats = governing.get("seats") if isinstance(governing, dict) else None
+        if not isinstance(map_seats, dict):
+            map_seats = {}
         cfg = map_seats.get(seat)
         if isinstance(cfg, dict) and cfg.get("vendor") == "claude":
             native.append(seat)

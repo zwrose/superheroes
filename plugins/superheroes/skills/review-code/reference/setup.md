@@ -124,6 +124,12 @@ SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "
 AUTHOR_FAMILY=$(echo "$SEAT_MAP" | jq -r '.authorFamily // empty')
 ```
 
+An empty author family refuses before any seat is dispatched — the composed map would be unjudgeable for maker-family constraints.
+
+```bash
+[ -n "$AUTHOR_FAMILY" ] || { echo "author-family-unresolved: the composed seat map has no author family" >&2; exit 1; }
+```
+
 When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
 
 **Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. Read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:

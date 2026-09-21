@@ -394,7 +394,7 @@ def reachable_configs(
         )
 
     def _add_cell(vendor: str, tier: str) -> None:
-        model, effort, _pin = _cell(tier, vendor, codex_role_pins)
+        model, effort, _pin = _cell(tier, vendor, None)
         if model is not None:
             reachable[vendor].add((model, effort))
 
@@ -541,14 +541,6 @@ def build(
                 matrix_model, matrix_effort, _mp = _cell(tier, vendor, None)
                 if matrix_model is None:
                     return None
-                degradations.append({
-                    "constraint": "role-pin-not-live",
-                    "seat": seat,
-                    "reason": (
-                        "codex role pin %s for %s is not live — the seat fell back to %s"
-                        % (pin_info["pin"], tier, matrix_model)
-                    ),
-                })
                 model, effort = matrix_model, matrix_effort
             else:
                 source = "role-pinned"
@@ -556,14 +548,6 @@ def build(
             matrix_model, matrix_effort, _mp = _cell(tier, vendor, None)
             if matrix_model is None:
                 return None
-            degradations.append({
-                "constraint": "role-pin-not-honorable",
-                "seat": seat,
-                "reason": (
-                    "codex role pin %s for %s is not on that tier's allowlist — "
-                    "the seat kept %s" % (pin_info["pin"], tier, matrix_model)
-                ),
-            })
             model, effort = matrix_model, matrix_effort
         # bite-axis: a seat is refused a cell that is not live — claude is always live, never probed
         if vendor != "claude" and (vendor, model, effort) not in live_cells_normalized:
@@ -859,6 +843,48 @@ def build(
                     "reason": "relaxed critical-diversity — no assignment spanned ≥2 families",
                 })
                 seats_out = chosen
+
+    role_pin_degraded: set[str] = set()
+    for seat in roster:
+        if seat in role_pin_degraded:
+            continue
+        cfg = seats_out.get(seat)
+        if not isinstance(cfg, dict) or cfg.get("vendor") != "codex":
+            continue
+        tier = cfg.get("tier") or _tier_for(seat)
+        if tier not in role_pins:
+            continue
+        matrix_model, matrix_effort, _mp = _cell(tier, "codex", None)
+        if matrix_model is None:
+            continue
+        if cfg.get("model") != matrix_model or cfg.get("effort") != matrix_effort:
+            continue
+        pin_model, pin_effort, pin_info = _cell(tier, "codex", role_pins)
+        if not pin_info:
+            continue
+        if pin_info.get("honored"):
+            if (pin_model, pin_effort) == (matrix_model, matrix_effort):
+                continue
+            if ("codex", pin_model, pin_effort) in live_cells_normalized:
+                continue
+            degradations.append({
+                "constraint": "role-pin-not-live",
+                "seat": seat,
+                "reason": (
+                    "codex role pin %s for %s is not live — the seat fell back to %s"
+                    % (pin_info["pin"], tier, matrix_model)
+                ),
+            })
+        else:
+            degradations.append({
+                "constraint": "role-pin-not-honorable",
+                "seat": seat,
+                "reason": (
+                    "codex role pin %s for %s is not on that tier's allowlist — "
+                    "the seat kept %s" % (pin_info["pin"], tier, matrix_model)
+                ),
+            })
+        role_pin_degraded.add(seat)
 
     result = {
         "seats": seats_out,
@@ -1282,12 +1308,12 @@ def main(argv):
                 family_degradations.append({
                     "constraint": "host-model-unknown",
                     "reason": (
-                        "host model unknown — its family is treated as unknown and excludes nothing"
+                        "host model unknown — author family fell back to the claude engine's family"
                     ),
                 })
             impl_engine = args.implementation_engine
             if impl_engine == "claude":
-                author_family = host_fam
+                author_family = host_fam or model_registry.family_for("code-fixer", "claude")
             else:
                 author_family = model_registry.family_for("code-fixer", impl_engine)
                 if author_family is None:

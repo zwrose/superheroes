@@ -185,7 +185,7 @@ action that owns it, leaving the rest of the calibration untouched:
   registry rung (Astra `high`, Sol `xhigh`) — the role's `enginePreferences.effort` setting is not
   consulted for a pinned model. Show the current engine preferences and effective model first, merge
   only the requested role into the existing object, and preserve every sibling key. Before writing,
-  validate the selected model with `engine_pref.valid_codex_model_effort`; reject an invalid model
+  validate the selected model with `model_registry.codex_pin_verdict`; reject an invalid model
   and leave the prior valid config unchanged. `max` is owner opt-in only — never proposed as a
   default.
 

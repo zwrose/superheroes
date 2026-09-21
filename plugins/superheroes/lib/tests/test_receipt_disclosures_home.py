@@ -61,6 +61,47 @@ def test_native_in_session_disclosure_absent_when_claude_seat_has_evidence():
     assert not any(line.startswith("unprobed native seat(s)") for line in degraded)
 
 
+def test_native_in_session_disclosure_uses_round_governing_map_not_latest():
+    """Round 1 claude seat stays native even when round 2 map seats the same seat on codex."""
+    state = {
+        "seatMapReceipts": [
+            {"round": "1", "map": {"seats": {"code-reviewer": {"vendor": "claude"}}}},
+            {"round": "2", "map": {"seats": {"code-reviewer": {"vendor": "codex"}}}},
+        ],
+    }
+    journal = [{"outcome": "recorded", "seat": "code-reviewer", "round": 1}]
+    degraded, _ = receipt_disclosures.build_degraded_prose(
+        state, receipt_disclosures.RECEIPT_FORM_CERTIFIED, journal=journal,
+    )
+    assert any(line.startswith("unprobed native seat(s) code-reviewer") for line in degraded)
+
+
+def test_native_in_session_disclosure_inverse_map_change():
+    """Round 2 claude without evidence is native; round 1 codex with evidence is not."""
+    state = {
+        "seatMapReceipts": [
+            {"round": "1", "map": {"seats": {"code-reviewer": {"vendor": "codex"}}}},
+            {"round": "2", "map": {"seats": {"code-reviewer": {"vendor": "claude"}}}},
+        ],
+    }
+    journal = [
+        {
+            "outcome": "recorded",
+            "seat": "code-reviewer",
+            "round": 1,
+            "executionEvidence": {"runnerNonce": "n"},
+        },
+        {"outcome": "recorded", "seat": "code-reviewer", "round": 2},
+    ]
+    degraded, _ = receipt_disclosures.build_degraded_prose(
+        state, receipt_disclosures.RECEIPT_FORM_CERTIFIED, journal=journal,
+    )
+    native_lines = [line for line in degraded if line.startswith("unprobed native seat(s)")]
+    assert len(native_lines) == 1
+    assert "code-reviewer" in native_lines[0]
+    assert receipt_disclosures._native_in_session_seats(state, journal[:1]) == []
+
+
 def test_no_pending_registration_disclosure_strings():
     for name in ("receipt_disclosures.py", "round_certification.py"):
         path = os.path.join(_LIB, name)
