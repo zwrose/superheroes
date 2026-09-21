@@ -477,7 +477,7 @@ def test_unchanged_head_with_failed_binding_leaves_the_receipt_unverified(tmp_pa
     assert receipt.get("verifyResult") is None
 
 
-def test_fixed_row_without_receipt_synthesizes_none_and_certification_refuses(tmp_path):
+def test_fixed_row_without_receipt_remains_without_receipt_and_certification_refuses(tmp_path):
     session_dir, certified_head = _certifiable_session(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
