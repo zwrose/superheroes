@@ -29,7 +29,7 @@ by its **exact node id**, never `-k`.
 |---|---|---|---|---|
 | D1 | launcher.py:1584 | the resolved base must equal the dependency's current head | `test_dependency_gate_ready_base_mismatch_refuses` | proven |
 | D2 | launcher.py:1577 | only `VERDICT_READY` gates; every other verdict passes | `test_dependency_gate_not_ready_passes` | proven |
-| D3 | launcher.py:1562 | only an **open** dependency is gated | `test_dependency_gate_not_open_passes` | proven |
+| D3 | launcher.py:1562 | only an **open** dependency is gated | `test_dependency_gate_merged_passes_not_gated` | proven |
 | D4 | launcher.py:1570 | an unreadable verdict **refuses**, never passes as absent | `test_dependency_gate_vet_refusal_refuses` | proven |
 
 ---
@@ -98,11 +98,11 @@ FAILED plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_not_
     if False:
 ```
 
-**node id:** `plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_not_open_passes`
+**node id:** `plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_merged_passes_not_gated`
 
 **raw red:**
 ```
-FAILED plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_not_open_passes
+FAILED plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_merged_passes_not_gated
 1 failed in 1.81s
 ```
 

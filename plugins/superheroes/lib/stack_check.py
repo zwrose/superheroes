@@ -39,13 +39,106 @@ _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _SHA40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 PR_VET_STATE_VALUES = frozenset({"OPEN", "CLOSED", "MERGED"})
 
-# Authoritative home: skills/showrunner/reference/vet-receipt.md (verdict-form clause).
-_VET_SEPARATOR = " · "
-_VET_VERDICT_TOKENS = (
-    ("**Verdict: READY**", VERDICT_READY),
-    ("**Verdict: NOT-READY**", VERDICT_NOT_READY),
-    ("**Verdict: PARKED**", VERDICT_PARKED),
-)
+# Machine-readable home: rubric/vet-verdict-form.json (loaded lazily on first
+# read_vet_verdict call). Human-facing statement: skills/showrunner/reference/vet-receipt.md
+# (verdict-form clause).
+_vet_verdict_form_loaded = False
+_vet_verdict_form = None
+_vet_verdict_form_error = None
+
+
+def _vet_verdict_form_path():
+    return os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rubric", "vet-verdict-form.json")
+    )
+
+
+def _reset_vet_verdict_form_cache():
+    global _vet_verdict_form_loaded, _vet_verdict_form, _vet_verdict_form_error
+    _vet_verdict_form_loaded = False
+    _vet_verdict_form = None
+    _vet_verdict_form_error = None
+
+
+def _load_vet_verdict_form():
+    """Return (form, error_detail) — form is (separator, tokens) or None."""
+    global _vet_verdict_form_loaded, _vet_verdict_form, _vet_verdict_form_error
+    if _vet_verdict_form_loaded:
+        return _vet_verdict_form, _vet_verdict_form_error
+
+    _vet_verdict_form_loaded = True
+    path = _vet_verdict_form_path()
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        _vet_verdict_form_error = "vet-verdict-form.json is missing"
+        return None, _vet_verdict_form_error
+    except OSError as exc:
+        _vet_verdict_form_error = "vet-verdict-form.json is unreadable: %s" % exc
+        return None, _vet_verdict_form_error
+
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _vet_verdict_form_error = "vet-verdict-form.json is not valid JSON"
+        return None, _vet_verdict_form_error
+
+    if not isinstance(data, dict):
+        _vet_verdict_form_error = "vet-verdict-form.json is not an object"
+        return None, _vet_verdict_form_error
+
+    separator = data.get("separator")
+    if not isinstance(separator, str):
+        _vet_verdict_form_error = "vet-verdict-form.json separator is missing or not a string"
+        return None, _vet_verdict_form_error
+
+    tokens_raw = data.get("tokens")
+    if not isinstance(tokens_raw, list):
+        _vet_verdict_form_error = "vet-verdict-form.json tokens is missing or not a list"
+        return None, _vet_verdict_form_error
+    if not tokens_raw:
+        _vet_verdict_form_error = "vet-verdict-form.json tokens is empty"
+        return None, _vet_verdict_form_error
+
+    tokens = []
+    for index, entry in enumerate(tokens_raw):
+        if not isinstance(entry, dict):
+            _vet_verdict_form_error = "vet-verdict-form.json tokens[%d] is not an object" % index
+            return None, _vet_verdict_form_error
+        token = entry.get("token")
+        if not isinstance(token, str):
+            _vet_verdict_form_error = "vet-verdict-form.json tokens[%d].token is missing or not a string" % index
+            return None, _vet_verdict_form_error
+        verdict = entry.get("verdict")
+        if not isinstance(verdict, str):
+            _vet_verdict_form_error = "vet-verdict-form.json tokens[%d].verdict is missing or not a string" % index
+            return None, _vet_verdict_form_error
+        tokens.append((token, verdict))
+
+    expected_verdicts = {VERDICT_READY, VERDICT_NOT_READY, VERDICT_PARKED}
+    seen_verdicts = set()
+    for _token, verdict in tokens:
+        if verdict not in expected_verdicts:
+            _vet_verdict_form_error = (
+                "vet-verdict-form.json verdict %r is not recognised" % verdict
+            )
+            return None, _vet_verdict_form_error
+        if verdict in seen_verdicts:
+            _vet_verdict_form_error = (
+                "vet-verdict-form.json verdict %r is duplicated" % verdict
+            )
+            return None, _vet_verdict_form_error
+        seen_verdicts.add(verdict)
+    if seen_verdicts != expected_verdicts:
+        for missing in expected_verdicts - seen_verdicts:
+            _vet_verdict_form_error = (
+                "vet-verdict-form.json verdict %r is missing" % missing
+            )
+            return None, _vet_verdict_form_error
+
+    _vet_verdict_form = (separator, tuple(tokens))
+    return _vet_verdict_form, None
 
 QUERY = """\
 query($owner:String!,$repo:String!,$pr:Int!,$first:Int!,$after:String){
@@ -746,10 +839,10 @@ def _first_nonempty_line(text):
     return None
 
 
-def _parse_vet_verdict_line(line, head_sha):
+def _parse_vet_verdict_line(line, head_sha, separator, tokens):
     matched_verdict = None
     matched_token = None
-    for token, verdict in _VET_VERDICT_TOKENS:
+    for token, verdict in tokens:
         if line.startswith(token):
             matched_verdict = verdict
             matched_token = token
@@ -758,14 +851,14 @@ def _parse_vet_verdict_line(line, head_sha):
         return VET_NOT_READY
 
     rest = line[len(matched_token):]
-    for token, _verdict in _VET_VERDICT_TOKENS:
+    for token, _verdict in tokens:
         if token in rest:
             return VET_NOT_READY
 
-    if not rest.startswith(_VET_SEPARATOR):
+    if not rest.startswith(separator):
         return VET_NOT_READY
 
-    after_sep = rest[len(_VET_SEPARATOR):]
+    after_sep = rest[len(separator):]
     if len(after_sep) < 40:
         return VET_NOT_READY
 
@@ -796,6 +889,12 @@ def read_vet_verdict(body, head_sha):
     if arg_refusal is not None:
         return None, arg_refusal
 
+    form, form_error = _load_vet_verdict_form()
+    if form_error is not None:
+        return None, _read_refusal(REASON_VET_UNREADABLE, form_error)
+
+    separator, tokens = form
+
     marker = grounding_stage.REGION_MARKERS["advisor-vet"]
     scan = grounding_stage._context_scan(body)
     try:
@@ -815,7 +914,7 @@ def read_vet_verdict(body, head_sha):
     if line is None:
         return VET_NOT_READY, None
 
-    return _parse_vet_verdict_line(line, head_sha), None
+    return _parse_vet_verdict_line(line, head_sha, separator, tokens), None
 
 
 def read_membership(

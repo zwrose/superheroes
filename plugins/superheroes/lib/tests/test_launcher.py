@@ -7089,42 +7089,6 @@ def test_dependency_gate_draft_not_ready_passes(tmp_path, monkeypatch):
         pass
 
 
-def test_dependency_gate_not_open_passes(tmp_path, monkeypatch):
-  # axis: merged dependency passes without applying gate
-    repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
-    log_dir = str(tmp_path / "logs")
-    head = _head_sha(repo)
-
-    def reader(pr, repo_name, **kwargs):
-        return _pr_vet_state_ok(head, state="MERGED"), None
-
-    monkeypatch.setattr(
-        L.stack_check, "resolve_repo_slug",
-        lambda *a, **k: ("owner/repo", None),
-    )
-
-    result = L.launch_build(
-        repo,
-        656,
-        _dependency_premise(repo, 701),
-        _all_checks(),
-        log_dir,
-        spawn_fn=_make_spawn_fn("sleep"),
-        settle_seconds=0.2,
-        pr_vet_reader=reader,
-    )
-    assert result["ok"] is True
-    assert result["dependencyGate"] == {
-        "applied": False,
-        "reason": "dependency-not-open",
-    }
-    try:
-        os.kill(result["pid"], signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-
-
 def test_dependency_gate_vet_refusal_refuses(tmp_path, monkeypatch):
   # axis: unreadable vet refuses dependency-read-unavailable
     repo = _init_repo(tmp_path / "repo")

@@ -1558,6 +1558,77 @@ def test_l2f_v29_head_sha_none_refuses():
     _assert_vet_refusal(_vet_body("**Verdict: READY** · %s" % HEAD_SHA), None, sc.REASON_BAD_ARGUMENT)
 
 
+def test_l2f_v30_vet_form_missing_refuses(monkeypatch):
+    # axis: missing vet-verdict-form.json refuses vet-unreadable, never READY
+    monkeypatch.setattr(sc, "_vet_verdict_form_path", lambda: "/nonexistent/vet-verdict-form.json")
+    sc._reset_vet_verdict_form_cache()
+    _assert_vet_refusal(
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
+        HEAD_SHA,
+        sc.REASON_VET_UNREADABLE,
+    )
+
+
+def _write_vet_form(path, tokens):
+    import json
+
+    payload = {
+        "schema": "vet-verdict-form/1",
+        "separator": " · ",
+        "tokens": tokens,
+    }
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+
+_VALID_VET_FORM_TOKENS = [
+    {"token": "**Verdict: READY**", "verdict": sc.VERDICT_READY},
+    {"token": "**Verdict: NOT-READY**", "verdict": sc.VERDICT_NOT_READY},
+    {"token": "**Verdict: PARKED**", "verdict": sc.VERDICT_PARKED},
+]
+
+
+def _patch_vet_form(monkeypatch, tmp_path, tokens):
+    form_path = tmp_path / "vet-verdict-form.json"
+    _write_vet_form(form_path, tokens)
+    monkeypatch.setattr(sc, "_vet_verdict_form_path", lambda: str(form_path))
+    sc._reset_vet_verdict_form_cache()
+
+
+def test_l2f_v31_vet_form_unknown_verdict_refuses(monkeypatch, tmp_path):
+    # axis: unknown verdict value in the form refuses vet-unreadable
+    tokens = list(_VALID_VET_FORM_TOKENS)
+    tokens[0] = {"token": "**Verdict: READY**", "verdict": "SHIPPED"}
+    _patch_vet_form(monkeypatch, tmp_path, tokens)
+    _assert_vet_refusal(
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
+        HEAD_SHA,
+        sc.REASON_VET_UNREADABLE,
+    )
+
+
+def test_l2f_v32_vet_form_duplicate_verdict_refuses(monkeypatch, tmp_path):
+    # axis: duplicated verdict value in the form refuses vet-unreadable
+    tokens = list(_VALID_VET_FORM_TOKENS)
+    tokens[2] = {"token": "**Verdict: PARKED**", "verdict": sc.VERDICT_READY}
+    _patch_vet_form(monkeypatch, tmp_path, tokens)
+    _assert_vet_refusal(
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
+        HEAD_SHA,
+        sc.REASON_VET_UNREADABLE,
+    )
+
+
+def test_l2f_v33_vet_form_missing_verdict_refuses(monkeypatch, tmp_path):
+    # axis: missing member of the verdict vocabulary refuses vet-unreadable
+    tokens = _VALID_VET_FORM_TOKENS[:2]
+    _patch_vet_form(monkeypatch, tmp_path, tokens)
+    _assert_vet_refusal(
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
+        HEAD_SHA,
+        sc.REASON_VET_UNREADABLE,
+    )
+
+
 # --- WO #1340 layer 2f: read_pr_vet_state ----------------------------------------------
 
 
