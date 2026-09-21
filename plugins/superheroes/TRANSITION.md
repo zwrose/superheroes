@@ -9,6 +9,23 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Launcher stacked premise
+
+`validate_premise` copies every premise key into the stamped premise. A premise may now carry
+`stack` (the GitHub native stack's number) and `layerPosition` (this PR's 1-based position in that
+stack). Both are optional, and optional together — one without the other refuses.
+
+A stacked launch's stamped premise carries two keys a pre-existing consumer never saw; strict key
+enumeration or fixed-schema round-trips must accept them. A non-stacked launch is unchanged.
+
+`launcher.py launch` adds four refusal tokens (see `lib/launcher.py`; rule in
+`rubric/launch-doctrine.md`): `premise-stack-fields-incomplete` when only one key is supplied;
+`premise-stack-field-invalid` when either key is present but not a positive integer (`bool` is not
+an integer here); `base-not-layer-head` when `layerPosition >= 2` and the resolved base commit is
+not the current head of the stack member at position `layerPosition - 1`; `stack-read-unavailable`
+when the launcher could not read stack membership and the gate could not run — the launcher's own
+token, distinct from `stack_check.py`'s `stack-unreadable` (never aliases, never interchanged).
+
 ### Dispatch-shell exit codes
 
 A dispatch-shell command-line entry point exits **1** when it refuses (returns without doing the

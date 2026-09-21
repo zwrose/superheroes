@@ -35,6 +35,7 @@ def _gh_on_path(monkeypatch):
 
 def _make_run(handlers):
     calls = []
+    kw_calls = []
     queues = {}
     for key, value in handlers.items():
         if isinstance(value, list):
@@ -46,6 +47,7 @@ def _make_run(handlers):
 
     def _run(argv, **kwargs):
         calls.append(list(argv))
+        kw_calls.append(dict(kwargs))
         key = tuple(argv)
         if key not in queues or not queues[key]:
             raise AssertionError("unexpected gh argv: %r" % (argv,))
@@ -54,6 +56,7 @@ def _make_run(handlers):
             raise handler
         return handler
 
+    _run.kw_calls = kw_calls
     return _run, calls
 
 
@@ -304,6 +307,19 @@ def test_e15_payload_not_object():
     )
     result = sc.read_membership(pr=PR, repo=REPO, run=run)
     _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+
+
+def test_e15_payload_missing_data_key():
+    run, _calls = _make_run(
+        {
+            _argv_page(PR, sc.DEFAULT_PAGE_SIZE): SimpleNamespace(
+                returncode=0, stdout="{}", stderr=""
+            ),
+        }
+    )
+    result = sc.read_membership(pr=PR, repo=REPO, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert "graphql data/repository is null or not an object" in result["detail"]
 
 
 def test_e16_graphql_errors_nonempty():
@@ -576,11 +592,30 @@ def test_e28_stack_entry_null():
 # --- register E29-E31: order-mismatch -------------------------------------------
 
 
-def test_e29_collected_count_or_positions_mismatch():
+def test_e33_collected_count_not_equal_stack_size():
     page = _pull_request(nodes=[_member(1), _member(2)], has_next_page=False, stack_size=5)
     run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
     result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
     _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "collected member count does not equal stack size"
+
+
+def test_e34_collected_positions_not_one_to_size():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR), _member(3)],
+        has_next_page=False,
+        stack_size=2,
+        head_ref_name="branch-1",
+        head_ref_oid="oid1",
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
+    result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
+    _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "collected positions are not exactly 1..size"
 
 
 def test_e30_collected_positions_not_exact():
@@ -598,6 +633,7 @@ def test_e30_collected_positions_not_exact():
     run, _calls = _make_run({_argv_page(PR, 2): _graphql_ok(page)})
     result = sc.read_membership(pr=PR, repo=REPO, page_size=2, run=run)
     _assert_refusal(result, sc.REASON_ORDER_MISMATCH)
+    assert result["detail"] == "collected positions are not exactly 1..size"
 
 
 def test_e30_queried_pr_not_at_reported_position():
@@ -866,3 +902,101 @@ def test_cli_bad_argument_cases(capsys, argv):
     _assert_refusal(result, sc.REASON_BAD_ARGUMENT)
     assert rc == 1
     assert "usage:" not in out.lower()
+
+
+# --- register E39-E41: read budget (WO #1340 layer 2b R1) -----------------------
+
+
+def test_deadline_not_a_number_refuses():
+    for bad_deadline in ("5", True):
+        result = sc.read_membership(
+            pr=PR, repo=REPO, deadline=bad_deadline, run=lambda *a, **k: None,
+        )
+        _assert_refusal(result, sc.REASON_BAD_ARGUMENT)
+
+
+@pytest.mark.parametrize("bad_deadline", [0, -1, float("nan")])
+def test_deadline_not_positive_refuses(bad_deadline):
+    result = sc.read_membership(
+        pr=PR, repo=REPO, deadline=bad_deadline, run=lambda *a, **k: None,
+    )
+    _assert_refusal(result, sc.REASON_BAD_ARGUMENT)
+
+
+def test_deadline_exhausted_in_second_pass_refuses(monkeypatch):
+    budget = 100.0
+    times = [0, 1, 2, 3, 4, 5, 6, 100]
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+    run, _calls = _make_run(_success_handlers(page_size=2))
+    result = sc.read_membership(pr=PR, repo=REPO, page_size=2, deadline=budget, run=run)
+    _assert_refusal(result, sc.REASON_STACK_UNREADABLE)
+    assert str(budget) in result["detail"] or ("%g" % budget) in result["detail"]
+    assert result["members"] == []
+
+
+def test_effective_timeout_is_bounded_by_remaining_budget(monkeypatch):
+    budget = 50.0
+    times = [0, 39, 40]
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    sc.read_membership(pr=PR, repo=REPO, timeout=120, deadline=budget, run=run)
+    assert run.kw_calls[0]["timeout"] == 10.0
+
+
+def test_deadline_none_leaves_timeout_untouched():
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    sc.read_membership(pr=PR, repo=REPO, timeout=120, deadline=None, run=run)
+    assert run.kw_calls[0]["timeout"] == 120
+
+
+def test_deadline_with_timeout_none_returns_dict_not_typeerror():
+    budget = 50.0
+    page = _pull_request(
+        pr_number=PR,
+        position=1,
+        nodes=[_member(1, number=PR)],
+        has_next_page=False,
+        stack_size=1,
+    )
+    page["number"] = PR
+    page["stackEntry"]["position"] = 1
+    run, _calls = _make_run({_argv_page(PR, sc.DEFAULT_PAGE_SIZE): _graphql_ok(page)})
+    result = sc.read_membership(
+        pr=PR, repo=REPO, timeout=None, deadline=budget, run=run,
+    )
+    assert set(result.keys()) == TOTAL_KEYS
+    assert result["ok"] is True
