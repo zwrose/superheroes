@@ -89,8 +89,9 @@ def test_authored_placeholder_refuses_and_names_the_authored_line(consumer_repo,
 def test_placeholder_planted_in_an_altered_template_copy_refuses(consumer_repo):
     # axis: only a verbatim copy is masked — an altered copy is authored text, placeholders and all (E2)
     body = _shipped_body()
-    altered = body.replace("exactly one", "exactly {{COUNT}}", 1)
-    assert altered != body
+    # Planted mid-template, past the first line, so a mask anchored on the template's opening fires.
+    altered = body.replace("## Validating your work order", "## Validating your {{COUNT}} work order", 1)
+    assert altered != body and altered.splitlines()[:4] == body.splitlines()[:4]
     out = OL.check_text(_order(altered), consumer_repo)
     assert out["ok"] is False
     assert out["templateCopiesMasked"] == 0
