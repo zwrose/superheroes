@@ -152,3 +152,23 @@ def test_fixer_door_refuses_authored_placeholder(tmp_path, monkeypatch):
             match=r"^order-render-refused:%s:order-lint:order-placeholder-unfilled:TARGET_FILE$"
             % _FIXER_SKEY):
         _emit_fixer_with(tmp_path, monkeypatch, text)
+
+
+def test_fixer_door_refuses_placeholder_in_altered_template_copy(tmp_path, monkeypatch):
+    # axis: the fixer-emission door masks only a verbatim copy, exactly as the CLI does (E2)
+    altered = _shipped_body().replace(
+        "## Validating your work order", "## Validating your {{COUNT}} work order", 1)
+    # The door names the first finding: the unmasked copy's own example placeholder comes first.
+    with pytest.raises(
+            ValueError,
+            match=r"^order-render-refused:%s:order-lint:order-placeholder-unfilled:(NAME|COUNT)$"
+            % _FIXER_SKEY):
+        _emit_fixer_with(tmp_path, monkeypatch, _fixer_order(altered))
+
+
+def test_crlf_charter_shaped_order_passes_both_doors(consumer_repo, tmp_path, monkeypatch):
+    # axis: one newline policy — a CRLF order is graded the same through the CLI and the fixer door (E6)
+    code, out = _cli(_order(_shipped_body()).replace("\n", "\r\n"), consumer_repo, tmp_path)
+    assert (code, out["ok"], out["templateCopiesMasked"]) == (0, True, 1)
+    anchor = _emit_fixer_with(tmp_path, monkeypatch, _fixer_order(_shipped_body()).replace("\n", "\r\n"))
+    assert "manifestSha256" in anchor
