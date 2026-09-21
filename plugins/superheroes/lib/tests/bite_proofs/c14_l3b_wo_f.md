@@ -98,3 +98,21 @@ FAILED plugins/superheroes/lib/tests/test_ssot_drift.py::test_concrete_model_tok
 .                                                                        [100%]
 1 passed in 0.19s
 ```
+
+---
+
+## WO-F2 re-run
+
+BP-F1 red and green re-run at WO-F2 head after rejoining the `Codex tier map:` line in `view-and-tune.md` (the earlier BP-F1 green was masked by the tier-map line break).
+
+**BP-F1 red command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/wh1273r3-pyc -m pytest plugins/superheroes/lib/tests/test_ssot_drift.py::test_complete_codex_policy_single_sourced -q
+```
+**BP-F1 red result:** exit 1 — `AssertionError: skills/configure/reference/set-up.md Codex model IDs drifted from model_registry` (missing `gpt-6-astra`).
+
+**BP-F1 green command:** (same, after restoring Astra line in `set-up.md`)
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/wh1273r3-pyc -m pytest plugins/superheroes/lib/tests/test_ssot_drift.py::test_complete_codex_policy_single_sourced -q
+```
+**BP-F1 green result:** exit 0 — `1 passed in 0.16s`.
