@@ -3,7 +3,7 @@
 Per-guard bite proof for `_apply_dependency_gate`, the refusal `dependency-closed-unmerged` and the
 draft `dependency-not-ready` arm.
 
-**Register:** 2 guards — closed-unmerged refuses, draft skips verdict.
+**Register:** 3 guards — closed-unmerged refuses, draft skips verdict, lifecycle fallback refuses.
 
 **Method:** the mutation is the smallest possible edit to the **guarded code** (never to the test),
 applied through the host's edit action and reverted by the inverse edit. Each proving test is selected
@@ -21,6 +21,7 @@ by its **exact node id**, never `-k`.
 |---|---|---|---|---|
 | F1 | launcher.py:1569 | closed-unmerged dependency refuses | `test_dependency_gate_closed_unmerged_refuses` | proven |
 | F2 | launcher.py:1583 | draft dependency passes not-ready without consulting verdict | `test_dependency_gate_draft_not_ready_passes` | proven |
+| F3 | launcher.py:1576 | unrecognised lifecycle from injected reader refuses | `test_dependency_gate_launcher_lifecycle_fallback_refuses` | proven |
 
 ---
 
@@ -171,7 +172,68 @@ FAILED plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_draf
 1 passed in 0.98s
 ```
 
+## F3 — unrecognised lifecycle from injected reader refuses
+
+**neutralization** (`plugins/superheroes/lib/launcher.py`):
+
+```python
+    if pr_lifecycle != "OPEN":
+```
+→
+```python
+    if False:
+```
+
+**node id:** `plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_launcher_lifecycle_fallback_refuses`
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_dependency_gate_launcher_lifecycle_fallback_refuses ___________
+
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3683/test_dependency_gate_launcher_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x104823b80>
+
+    def test_dependency_gate_launcher_lifecycle_fallback_refuses(tmp_path, monkeypatch):
+      # axis: launcher fallback refuses unrecognised lifecycle from injected reader
+        repo = _init_repo(tmp_path / "repo")
+        _ledger_env(tmp_path, monkeypatch)
+        log_dir = str(tmp_path / "logs")
+        head = _head_sha(repo)
+
+        def reader(pr, repo_name, **kwargs):
+            return _pr_vet_state_ok(head, state="UNKNOWN"), None
+
+        monkeypatch.setattr(
+            L.stack_check, "resolve_repo_slug",
+            lambda *a, **k: ("owner/repo", None),
+        )
+
+        result = L.launch_build(
+            repo,
+            656,
+            _dependency_premise(repo, 701),
+            _all_checks(),
+            log_dir,
+            pr_vet_reader=reader,
+        )
+>       assert result["ok"] is False
+E       assert True is False
+
+plugins/superheroes/lib/tests/test_launcher.py:6965: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_launcher_lifecycle_fallback_refuses
+1 failed in 21.06s
+```
+
+**raw green** after the inverse edit:
+```
+.                                                                        [100%]
+1 passed in 0.58s
+```
+
 ## Restore receipt
 
-Restored lines quoted above in `_apply_dependency_gate` after each guard (`if pr_lifecycle == "CLOSED":`
-and `if pr_state.get("isDraft"):`).
+Restored lines quoted above in `_apply_dependency_gate` after each guard (`if pr_lifecycle == "CLOSED":`,
+`if pr_state.get("isDraft"):`, and `if pr_lifecycle != "OPEN":`).

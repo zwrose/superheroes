@@ -6939,6 +6939,34 @@ def test_dependency_gate_pr_read_refusal_refuses_with_detail(tmp_path, monkeypat
     assert result["detail"] == "read failed"
 
 
+def test_dependency_gate_launcher_lifecycle_fallback_refuses(tmp_path, monkeypatch):
+  # axis: launcher fallback refuses unrecognised lifecycle from injected reader
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, state="UNKNOWN"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert result["detail"] == "UNKNOWN"
+
+
 def test_dependency_gate_unrecognised_pr_state_refuses(tmp_path, monkeypatch):
   # axis: unrecognised dependency PR state refuses dependency-read-unavailable
     from types import SimpleNamespace
@@ -7006,7 +7034,7 @@ def test_dependency_gate_closed_unmerged_refuses(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "dependency-closed-unmerged"
-    assert result["detail"] == 701
+    assert result["detail"] == "701"
     refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
     assert any(r.get("stage") == "dependency" for r in refused)
 
