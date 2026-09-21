@@ -1483,12 +1483,29 @@ def _apply_stack_gate(
         # axis: entry PR is not linked to a stack
         if reason == stack_check.REASON_NOT_LINKED:
             return {"ok": False, "reason": "base-not-layer-head"}
+        # axis: membership read found stack order inconsistent with premise
+        if reason == stack_check.REASON_ORDER_MISMATCH:
+            out = {"ok": False, "reason": "order-mismatch"}
+            if "detail" in membership:
+                out["detail"] = membership["detail"]
+            return out
         return {
             "ok": False,
             "reason": "stack-read-unavailable",
             "detail": reason,
         }
     queried = membership["queried"]
+    members = membership.get("members", [])
+    # axis: claimed layer position is already occupied in the stack
+    if layer_pos >= 2:
+        for member in members:
+            position = member.get("position")
+            if (
+                isinstance(position, int)
+                and not isinstance(position, bool)
+                and position == layer_pos
+            ):
+                return {"ok": False, "reason": "layer-position-occupied"}
     # axis: queried position must equal layerPosition - 1
     if queried["position"] != layer_pos - 1:
         return {"ok": False, "reason": "base-not-layer-head"}

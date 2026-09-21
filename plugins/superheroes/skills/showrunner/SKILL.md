@@ -147,7 +147,7 @@ above).
    against the filed body **before filing**, whether or not the body contains a quoted block; a body
    with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
    filing a drifted or incomplete quote. On `pass`, record the check's own output in the filing
-   note — the `result` line, or `pass` together with `requiredEntries` — not merely a claim that
+   note — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that
    it ran. When the register path and child token are known — the route names them or they are
    derivable — **run the check**; an `undecided` result blocks exactly like `fail`. When they are
    not known and applicability is genuinely unclear, that is a **routing gap, not a reason to
@@ -199,7 +199,7 @@ above).
    **register-consuming child** across **both** directions, whether or not each body contains a
    quoted block. On `fail`, record a blocking package-read finding. On `pass`, record the check's
    own output in the package-read verification record — the `result` line, or `pass` together with
-   `requiredEntries` — not merely a claim that it ran. When the register path and child token are
+   `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child token are
    known — the route names them or they are derivable — **run the check**; an `undecided` result
    blocks exactly like `fail`. When they are not known and applicability is genuinely unclear,
    that is a **routing gap, not a reason to proceed**: raise it with the advisor (a builder

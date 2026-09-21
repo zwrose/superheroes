@@ -6007,8 +6007,8 @@ def _stack_premise(repo, **overrides):
     return base
 
 
-def _membership_ok(position, head_sha, pr_number=1352):
-    return {
+def _membership_ok(position, head_sha, pr_number=1352, members=None):
+    out = {
         "ok": True,
         "queried": {
             "number": pr_number,
@@ -6018,6 +6018,9 @@ def _membership_ok(position, head_sha, pr_number=1352):
             "baseRefName": "main",
         },
     }
+    if members is not None:
+        out["members"] = members
+    return out
 
 
 def _pr_lookup_ok(pr=1352, repo="owner/repo"):
@@ -6330,6 +6333,220 @@ def test_stack_gate_head_mismatch_refuses(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "base-not-layer-head"
+
+
+def test_stack_gate_order_mismatch_refuses_with_detail(tmp_path, monkeypatch):
+  # bite-axis: membership order-mismatch maps to gate order-mismatch with reader detail
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    reader_detail = "collected positions are not exactly 1..size"
+
+    def reader(**kwargs):
+        return {
+            "ok": False,
+            "reason": L.stack_check.REASON_ORDER_MISMATCH,
+            "detail": reader_detail,
+        }
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "order-mismatch"
+    assert result["detail"] == reader_detail
+
+
+def test_stack_gate_layer_position_occupied_refuses(tmp_path, monkeypatch):
+  # bite-axis: claimed layerPosition already present in membership refuses layer-position-occupied
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    members = [
+        {"position": 1, "number": 1352, "headRefOid": head, "headRefName": "b1", "baseRefName": "main"},
+        {"position": 2, "number": 9999, "headRefOid": "a" * 40, "headRefName": "b2", "baseRefName": "main"},
+    ]
+
+    def reader(**kwargs):
+        return _membership_ok(1, head, members=members)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "layer-position-occupied"
+
+
+def test_stack_gate_layer_position_free_passes(tmp_path, monkeypatch):
+  # bite-axis: claimed layerPosition absent from membership passes when layer below agrees
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    members = [
+        {"position": 1, "number": 1352, "headRefOid": head, "headRefName": "b1", "baseRefName": "main"},
+    ]
+
+    def reader(**kwargs):
+        return _membership_ok(1, head, members=members)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=7, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["stackGate"]["applied"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def _gate_graphql_member(position, number, head_oid, head_name=None):
+    return {
+        "position": position,
+        "pullRequest": {
+            "number": number,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": head_name or ("branch-%d" % position),
+            "headRefOid": head_oid,
+            "baseRefName": "main",
+        },
+    }
+
+
+def _gate_graphql_pull_request(pr_number, position, stack_number, stack_size, nodes, head_oid):
+    return {
+        "number": pr_number,
+        "baseRefName": "main",
+        "headRefName": "branch-%d" % position,
+        "headRefOid": head_oid,
+        "stackEntry": {
+            "position": position,
+            "stack": {
+                "number": stack_number,
+                "size": stack_size,
+                "baseRefName": "main",
+                "entries": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": nodes,
+                },
+            },
+        },
+    }
+
+
+def _gate_graphql_ok(pull_request):
+    from types import SimpleNamespace
+    payload = {"data": {"repository": {"pullRequest": pull_request}}}
+    return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+
+def _gate_graphql_run(handlers):
+    queues = {key: [value, value] for key, value in handlers.items()}
+
+    def run(argv, **kwargs):
+        key = tuple(argv)
+        if key not in queues or not queues[key]:
+            raise AssertionError("unexpected gh argv: %r" % (argv,))
+        return queues[key].pop(0)
+
+    return run
+
+
+def test_stack_gate_real_membership_reader_end_to_end(tmp_path, monkeypatch):
+  # bite-axis: gate agrees with real stack_check.read_membership via stub run= transport
+    sc = L.stack_check
+    monkeypatch.setattr(sc.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    pr_number = 1352
+    stack_number = 7
+    page_size = sc.DEFAULT_PAGE_SIZE
+    owner, name = "owner", "repo"
+    argv_key = tuple(sc._graphql_argv(owner, name, pr_number, page_size))
+
+    pass_page = _gate_graphql_pull_request(
+        pr_number,
+        1,
+        stack_number,
+        1,
+        [_gate_graphql_member(1, pr_number, head)],
+        head,
+    )
+    pass_run = _gate_graphql_run({argv_key: _gate_graphql_ok(pass_page)})
+
+    def pass_reader(**kwargs):
+        return sc.read_membership(run=pass_run, **kwargs)
+
+    pass_result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=stack_number, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(pr=pr_number, repo="owner/repo"),
+        membership_reader=pass_reader,
+    )
+    assert pass_result["ok"] is True
+    assert pass_result["stackGate"]["applied"] is True
+    try:
+        os.kill(pass_result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+    refuse_page = _gate_graphql_pull_request(
+        pr_number,
+        1,
+        stack_number,
+        2,
+        [
+            _gate_graphql_member(1, pr_number, head),
+            _gate_graphql_member(2, 9999, "b" * 40),
+        ],
+        head,
+    )
+    refuse_run = _gate_graphql_run({argv_key: _gate_graphql_ok(refuse_page)})
+
+    def refuse_reader(**kwargs):
+        return sc.read_membership(run=refuse_run, **kwargs)
+
+    refuse_result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=stack_number, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(pr=pr_number, repo="owner/repo"),
+        membership_reader=refuse_reader,
+    )
+    assert refuse_result["ok"] is False
+    assert refuse_result["reason"] == "layer-position-occupied"
 
 
 def test_stack_gate_full_agreement_proceeds(tmp_path, monkeypatch):

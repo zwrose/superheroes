@@ -3530,6 +3530,143 @@ def test_register_check_vocabulary_completeness():
     )
 
 
+_REGISTER_CHECK_VERIFICATION_SENTENCE_CLAUSE = (
+    "the `result` line, or `pass` together with `requiredEntries` "
+    "and `registerCopy`/`registerRef` — not merely a claim that it ran."
+)
+
+_REGISTER_CHECK_VERIFICATION_SENTENCE_COPY_HOLDERS = {
+    "skills/workhorse/SKILL.md": 1,
+    "skills/showrunner/SKILL.md": 2,
+    "skills/showrunner/reference/register-check.md": 3,
+}
+
+_REGISTER_CHECK_VERIFICATION_SENTENCE_RE = re.compile(
+    r"the `result` line, or `pass` together\s+with `requiredEntries`"
+    r"(?: and `registerCopy`/`registerRef`)?"
+    r" — not merely a claim that it ran\.",
+)
+
+
+def _register_check_verification_sentence_occurrences(text):
+    text_norm = _anchor_whitespace_normalize(text)
+    return list(_REGISTER_CHECK_VERIFICATION_SENTENCE_RE.finditer(text_norm))
+
+
+def test_register_check_verification_sentence_pinned_across_copy_holders():
+    """Register-check pass evidence sentence is identical in every enumerated copy-holder."""
+    pinned_norm = _anchor_whitespace_normalize(
+        _REGISTER_CHECK_VERIFICATION_SENTENCE_CLAUSE
+    )
+    for rel, expected_count in _REGISTER_CHECK_VERIFICATION_SENTENCE_COPY_HOLDERS.items():
+        path = os.path.normpath(os.path.join(PLUGIN, rel))
+        assert os.path.isfile(path), (
+            "%s: copy-holder missing or unreadable — expected file at %s"
+            % (rel, path)
+        )
+        text = _read(rel)
+        matches = _register_check_verification_sentence_occurrences(text)
+        assert len(matches) == expected_count, (
+            "%s: expected exactly %d verification-sentence occurrence(s), found %d"
+            % (rel, expected_count, len(matches))
+        )
+        for match in matches:
+            clause = match.group(0)
+            clause_norm = _anchor_whitespace_normalize(clause)
+            assert clause_norm == pinned_norm, (
+                "%s: verification-sentence clause drift — expected %r, found %r"
+                % (rel, pinned_norm, clause_norm)
+            )
+            assert "`requiredEntries`" in clause, (
+                "%s: verification-sentence missing `requiredEntries`" % rel
+            )
+            assert "`registerCopy`" in clause, (
+                "%s: verification-sentence missing `registerCopy`" % rel
+            )
+            assert "`registerRef`" in clause, (
+                "%s: verification-sentence missing `registerRef`" % rel
+            )
+
+
+# --- Cluster: launcher stack-gate refusal tokens (launcher → doc copies) -----
+
+import ast as _ast  # noqa: E402 — cluster-local; keeps AST helpers scoped here
+
+_LAUNCHER_PY = os.path.join(PLUGIN, "lib", "launcher.py")
+_LAUNCHER_STACK_GATE_REFUSAL_FUNCTIONS = (
+    "validate_premise",
+    "_lookup_stack_entry_pr",
+    "_apply_stack_gate",
+)
+_LAUNCHER_STACK_GATE_REFUSAL_TOKEN_COPY_HOLDERS = (
+    "rubric/launch-doctrine.md",
+    "rubric/native-stacks.md",
+    "skills/showrunner-resume/SKILL.md",
+    "TRANSITION.md",
+)
+
+
+def _launcher_dict_refusal_reason(node):
+    if not isinstance(node, _ast.Dict):
+        return None
+    fields = {}
+    for key, val in zip(node.keys, node.values):
+        if isinstance(key, _ast.Constant):
+            fields[key.value] = val
+    ok_val = fields.get("ok")
+    if not isinstance(ok_val, _ast.Constant) or ok_val.value is not False:
+        return None
+    reason = fields.get("reason")
+    if isinstance(reason, _ast.Constant) and isinstance(reason.value, str):
+        return reason.value
+    return None
+
+
+def _launcher_stack_gate_refusal_tokens_from_home():
+    with open(_LAUNCHER_PY, encoding="utf-8") as fh:
+        tree = _ast.parse(fh.read(), filename=_LAUNCHER_PY)
+    funcs = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, _ast.FunctionDef)
+    }
+    tokens = set()
+    for fname in _LAUNCHER_STACK_GATE_REFUSAL_FUNCTIONS:
+        func_node = funcs.get(fname)
+        assert func_node is not None, (
+            "launcher.py: %s not found — rename/refactor?" % fname
+        )
+        for node in _ast.walk(func_node):
+            reason = _launcher_dict_refusal_reason(node)
+            if reason is not None:
+                tokens.add(reason)
+                continue
+            if not isinstance(node, _ast.Call):
+                continue
+            callee = node.func
+            if isinstance(callee, _ast.Name) and callee.id == "_fail":
+                if node.args and isinstance(node.args[0], _ast.Constant):
+                    val = node.args[0].value
+                    if isinstance(val, str) and val.startswith("premise-stack-"):
+                        tokens.add(val)
+    assert tokens, (
+        "launcher.py: stack-gate refusal census parsed to zero tokens"
+    )
+    return tokens
+
+
+def test_launcher_stack_gate_refusal_tokens_in_copy_holders():
+    """§11: every enumerated doc/skill copy restates launcher's stack-gate refusal tokens."""
+    home = _launcher_stack_gate_refusal_tokens_from_home()
+    for rel in _LAUNCHER_STACK_GATE_REFUSAL_TOKEN_COPY_HOLDERS:
+        doc = _read(rel)
+        missing = sorted(token for token in home if token not in doc)
+        assert not missing, (
+            "%s: missing launcher stack-gate refusal token(s) %r"
+            % (rel, missing)
+        )
+
+
 # --- Cluster: R5 weight vocabulary + R7 park surface (pinned register literals) ---
 
 # The epic register is the home of record for these sentences. lib/tests/ ships inside the
