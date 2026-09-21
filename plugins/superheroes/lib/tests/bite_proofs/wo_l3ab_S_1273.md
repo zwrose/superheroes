@@ -1,5 +1,12 @@
 # WO-L3AB-S (#1273) bite-proof — stdout completion stamp
 
+**Superseded by `wo_l3ab_r4_A_1273.md`.** This record was produced at `8aac8f93`, against the
+two-reader shape of `_observe_stdout_completion`. That shape is gone: the producer is now a single
+incremental reader, and `_stdout_last_line_is_result_event` — the subject of BP-S2 below — no longer
+exists. The record is kept because it is the receipt for the head it was taken at, and because the
+elements it names are re-proved against the current shape in `wo_l3ab_r4_A_1273.md`. **Neither proof
+below can be re-run at the current head**, and neither is claimed as a live receipt.
+
 **Provenance:** cursor / composer-2.5 (implementer).
 
 ## Guarded elements
