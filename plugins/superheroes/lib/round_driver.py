@@ -6124,6 +6124,214 @@ def _next_response(pending, expected_hash):
     }
 
 
+def _serialize_meta_json(meta_obj):
+    return (json.dumps(meta_obj, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _relocate_recorded_head(meta, state):
+    """Resolve the recorded head for relocate checks — (head_sha, ambiguous)."""
+    cfg = state.get("config") if isinstance(state, dict) else None
+    cfg = cfg if isinstance(cfg, dict) else {}
+    meta_key = meta.get(FIX_FOLD_HEAD_KEY) if isinstance(meta, dict) else None
+    cfg_key = cfg.get(FIX_FOLD_HEAD_KEY)
+    meta_has = isinstance(meta_key, str) and meta_key
+    cfg_has = isinstance(cfg_key, str) and cfg_key
+    if meta_has != cfg_has:
+        return None, True
+    if meta_has and cfg_has and meta_key != cfg_key:
+        return None, True
+    if meta_has:
+        return meta_key, False
+    head = meta.get("headSha") if isinstance(meta, dict) else None
+    if not isinstance(head, str) or not head:
+        return None, True
+    return head, False
+
+
+def _relocate_path_inside(child, parent):
+    try:
+        return (os.path.commonpath([os.path.realpath(child), os.path.realpath(parent)])
+                == os.path.realpath(parent))
+    except ValueError:
+        return False
+
+
+def _retire_relocate_marker(old_root, session_dir):
+    try:
+        if not isinstance(old_root, str) or not old_root or not os.path.exists(old_root):
+            return "absent"
+        gitdir = store_core.get_worktree_gitdir(old_root)
+    except store_core.RepoRootUnavailable:
+        return "absent"
+    except Exception:
+        return "failed"
+    marker_path = os.path.join(gitdir, SIDECAR_DIRNAME, _REVIEW_SESSION_MARKER)
+    if not os.path.isfile(marker_path):
+        return "absent"
+    try:
+        with open(marker_path, encoding="utf-8") as fh:
+            marker = json.load(fh)
+        if not isinstance(marker, dict):
+            return "not-ours"
+        if marker.get("sessionDir") != os.path.realpath(session_dir):
+            return "not-ours"
+        os.remove(marker_path)
+        return "retired"
+    except Exception:
+        return "failed"
+
+
+def cmd_relocate(session_dir, target_root, by):
+    """Relocate a parked review session to a different checkout at the same head and base."""
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, "relocate")
+            if refusal is not None:
+                return refusal
+            return _cmd_relocate_locked(session_dir, target_root, by)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, "relocate", held)
+
+
+def _cmd_relocate_locked(session_dir, target_root, by):
+    ok_meta, meta_or_detail = review_base_guard.read_meta(session_dir)
+    if not ok_meta:
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
+                           detail=meta_or_detail)
+    meta = meta_or_detail
+    ok_state, loaded = load_state(session_dir)
+    if not ok_state or loaded is None:
+        detail = loaded if not ok_state else "loop-state.json missing — call next first"
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable", detail=detail)
+    state = loaded
+    if state.get("terminal"):
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-terminal")
+    top_res = store_core.run_git_result(target_root, "rev-parse", "--show-toplevel")
+    if top_res.status == store_core.GIT_UNAVAILABLE:
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
+                           detail="git never ran")
+    if top_res.status != store_core.GIT_OK or not top_res.out:
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
+                           detail="git rev-parse --show-toplevel failed")
+    target_toplevel = os.path.realpath(top_res.out)
+    if target_toplevel != os.path.realpath(target_root):
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
+                           detail="target_root is not a git toplevel")
+    old_root = meta.get("repoRoot")
+    old_root_rp = os.path.realpath(old_root) if isinstance(old_root, str) and old_root else None
+    old_session_dir = meta.get("sessionDir") if "sessionDir" in meta else session_dir
+    old_session_rp = os.path.realpath(old_session_dir)
+    if (old_root_rp is not None and target_toplevel == old_root_rp
+            and os.path.realpath(session_dir) == old_session_rp):
+        return _refuse_cmd(session_dir, "relocate", "relocate-same-checkout")
+    cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
+    base_repo = cfg.get("baseRepo")
+    if not isinstance(base_repo, str) or not base_repo:
+        return _refuse_cmd(session_dir, "relocate", "relocate-repo-unverifiable")
+    live_origin = review_base_guard.origin_repo(target_toplevel)
+    if live_origin is None or live_origin.casefold() != base_repo.casefold():
+        return _refuse_cmd(session_dir, "relocate", "relocate-repo-mismatch",
+                           detail="origin %r does not match recorded baseRepo %r"
+                           % (live_origin, base_repo))
+    meta_base = meta.get("baseRef")
+    cfg_base = cfg.get("baseRef")
+    if meta_base != cfg_base:
+        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch",
+                           detail="meta.baseRef does not match config.baseRef")
+    resolved_pin, pin_reason = review_base_guard._resolve_commit_reason(
+        meta_base, target_toplevel, store_core.run_git)
+    if resolved_pin is None:
+        detail = ("baseRef does not resolve in target: %s" % pin_reason
+                  if pin_reason else "baseRef does not resolve in target")
+        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch", detail=detail)
+    if not isinstance(meta_base, str) or resolved_pin != meta_base.lower():
+        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch",
+                           detail="resolved pin %r does not match meta.baseRef %r"
+                           % (resolved_pin, meta_base))
+    recorded_head, head_ambiguous = _relocate_recorded_head(meta, state)
+    if head_ambiguous:
+        return _refuse_cmd(session_dir, "relocate", "relocate-head-ambiguous")
+    head_res = store_core.run_git_result(target_toplevel, "rev-parse", "HEAD")
+    if head_res.status != store_core.GIT_OK or not head_res.out:
+        return _refuse_cmd(session_dir, "relocate", "relocate-head-mismatch",
+                           detail="HEAD unresolvable in target")
+    if head_res.out.lower() != recorded_head.lower():
+        return _refuse_cmd(session_dir, "relocate", "relocate-head-mismatch",
+                           detail="target HEAD %r does not match recorded head %r"
+                           % (head_res.out, recorded_head))
+    records_path = cfg.get("recordsPath")
+    if isinstance(records_path, str) and old_root_rp is not None:
+        if _relocate_path_inside(records_path, old_root_rp):
+            return _refuse_cmd(session_dir, "relocate", "relocate-records-path-bound",
+                               detail="recordsPath lies inside old repo root")
+    old_branch = meta.get("branch")
+    if not isinstance(old_branch, str):
+        old_branch_res = store_core.run_git_result(old_root_rp, "rev-parse", "--abbrev-ref", "HEAD")
+        old_branch = (old_branch_res.out if old_branch_res.status == store_core.GIT_OK
+                      else None)
+    branch_res = store_core.run_git_result(target_toplevel, "rev-parse", "--abbrev-ref", "HEAD")
+    new_branch = branch_res.out if branch_res.status == store_core.GIT_OK else "HEAD"
+    rewritten = []
+    new_meta = dict(meta)
+    new_meta["repoRoot"] = target_toplevel
+    new_meta["branch"] = new_branch
+    rewritten.append("meta.repoRoot")
+    rewritten.append("meta.branch")
+    had_session_dir = "sessionDir" in meta
+    if had_session_dir:
+        new_meta["sessionDir"] = os.path.realpath(session_dir)
+        rewritten.append("meta.sessionDir")
+    new_state = json.loads(_canonical(state))
+    new_cfg = new_state.get("config") if isinstance(new_state.get("config"), dict) else {}
+    if "repoRoot" in new_cfg:
+        new_cfg["repoRoot"] = target_toplevel
+        new_state["config"] = new_cfg
+        rewritten.append("state.config.repoRoot")
+    pending = new_state.get("pending") if isinstance(new_state.get("pending"), dict) else None
+    payload = pending.get("payload") if isinstance(pending, dict) else None
+    verify = payload.get("verify") if isinstance(payload, dict) else None
+    if isinstance(verify, dict) and "landingPath" in verify:
+        verify_round = verify.get("round")
+        verify_attempt = verify.get("attempt")
+        if isinstance(verify_round, int) and isinstance(verify_attempt, int):
+            verify["landingPath"] = round_records.bare_payload_path(
+                session_dir, verify_round, P_VERIFY,
+                round_records.storage_key("verify"), verify_attempt)
+            rewritten.append("state.pending.payload.verify.landingPath")
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    journal_fields = {
+        "oldRoot": old_root_rp,
+        "newRoot": target_toplevel,
+        "oldBranch": old_branch,
+        "newBranch": new_branch,
+        "oldSessionDir": old_session_rp,
+        "newSessionDir": os.path.realpath(session_dir),
+        "head": recorded_head,
+        "base": resolved_pin,
+        "by": by,
+        "at": at,
+        "rewritten": sorted(rewritten),
+    }
+    journal_entry = _journal_entry_for_commit(session_dir, "relocate", "relocated", **journal_fields)
+    try:
+        c = round_commit.begin(session_dir, "relocate")
+        c.add_replace_file(os.path.join(session_dir, round_records.META_FILE),
+                           _serialize_meta_json(new_meta))
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(new_state).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, "relocate", exc)
+    _bootstrap_review_session_marker(session_dir)
+    marker_outcome = _retire_relocate_marker(old_root_rp, session_dir)
+    _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
+                                  "result": marker_outcome, "phase": None, "round": None,
+                                  "attempt": None})
+    relocated = dict(journal_fields)
+    return {"ok": True, "relocated": relocated, "markerRetirement": marker_outcome}
+
+
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
                _pending_policy_applied=None, _durable_record=None, _policy_journal_entry=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
@@ -10382,6 +10590,11 @@ def build_parser():
     pc = sub.add_parser("checkpoint")
     cli_contract.add_argument(pc, "--session-dir", contract="existing-directory", required=True)
     pc.add_argument("--stop-reason", required=True, choices=list(CHECKPOINT_STOP_REASONS))
+
+    prl = sub.add_parser("relocate")
+    cli_contract.add_argument(prl, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(prl, "--repo-root", contract="repo-root", required=True)
+    cli_contract.add_argument(prl, "--by", contract="free-text", required=True)
     return parser
 
 
@@ -10567,6 +10780,10 @@ def _dispatch(args):
         out = cmd_attest(args.session_dir, args.failure, args.note)
     elif args.cmd == "checkpoint":
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
+    elif args.cmd == "relocate":
+        out = cmd_relocate(args.session_dir, args.repo_root, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
     else:
         try:
             with open(args.artifact, encoding="utf-8") as fh:
