@@ -12,6 +12,10 @@ Guarded-element set, declared before review:
 | E3 | text around the template is still graded | an authored placeholder refuses, named by its own name | `test_authored_placeholder_refuses_and_names_the_authored_line`, `test_fixer_door_refuses_authored_placeholder` |
 | E4 | unreadable template ⇒ nothing masked | the order is graded whole (fail closed) | `test_unreadable_template_masks_nothing` |
 | E5 | `round_driver._order_lint_text` masks before its quoted-data elision | the fixer door grades the template like the CLI | `test_fixer_door_passes_charter_shaped_order` |
+| E6 | `mask_template` folds CRLF to LF before matching | a CRLF order is graded the same through both doors | `test_crlf_charter_shaped_order_passes_both_doors` |
+
+E2 is also proven through the fixer door by `test_fixer_door_refuses_placeholder_in_altered_template_copy`
+(added in review; see the re-run section at the end).
 
 Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-1373-probe -p no:cacheprovider`,
 single-node `::test_*` selection. Every neutralization was applied and reverted by targeted edits;
@@ -117,3 +121,49 @@ FAILED ...::test_fixer_door_passes_charter_shaped_order
 plugins/superheroes/lib/round_driver.py` empty.
 
 **Green:** `1 passed in 2.47s`
+
+## Re-run by the adopting session (r2)
+
+**Provenance:** orchestrator-typed (light lane), claude Opus 5, the adopting session; own detached
+probe worktree, same normalization (pycache prefix `/private/tmp/superheroes-pyc-1373r2bp`).
+
+**E1–E5 at `ed694e53`, re-run before any new work:** each neutralization above re-applied by a
+targeted edit and reverted by its inverse edit; every red reproduced with the same failing tests
+and error lines as recorded above, every restore left `git status --porcelain` empty, every green
+passed (E1 `2 passed in 1.88s`, E2 `1 passed in 0.13s`, E3 `2 passed in 2.22s`, E4 `1 passed in
+0.14s`, E5 `1 passed in 5.03s`).
+
+The following proofs ran at `c299511d` (the review-fix commit).
+
+## E6 — CRLF is folded before the match
+
+**Neutralization:** in `mask_template`, delete `text = text.replace("\r\n", "\n")`.
+
+**Red:**
+```
+E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-placeholder-unfilled:NAME
+FAILED ...::test_crlf_charter_shaped_order_passes_both_doors
+1 failed in 5.84s
+```
+
+**Restore:** inverse edit. **Restore receipt:** after the restore, `git diff --stat` showed only the
+next plant's two lines, and it was empty once that plant was reverted.
+
+**Green:** within the full-file run below.
+
+## E2 through the fixer door
+
+**Neutralization:** the E2 too-wide mask above (opening-line anchored), inserted after the CRLF fold.
+
+**Red:**
+```
+E           Failed: DID NOT RAISE <class 'ValueError'>
+E       assert True is False
+FAILED ...::test_fixer_door_refuses_placeholder_in_altered_template_copy
+FAILED ...::test_placeholder_planted_in_an_altered_template_copy_refuses
+2 failed in 5.19s
+```
+
+**Restore:** inverse edit. **Restore receipt:** `git status --porcelain` empty.
+
+**Green:** `9 passed in 11.42s` (the whole of `test_order_lint_template.py`).
