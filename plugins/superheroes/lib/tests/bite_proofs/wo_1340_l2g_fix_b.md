@@ -276,6 +276,8 @@ FAILED .../test_builder_exited_makes_zero_gh_run_calls
 
 ## C-2 — stack-state vocabulary bound to wave-watch.md
 
+**Retracted (FIX-D):** the detector this record proves was deleted; CONVENTIONS §11.2 closes the copy-plus-drift-test pattern, and wave-watch.md now names the constants instead of spelling their values.
+
 **neutralization:** change `STACK_STATE_COMPLETE` value in `wave_watch.py`:
 
 ```python

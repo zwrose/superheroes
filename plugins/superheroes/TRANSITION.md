@@ -77,9 +77,14 @@ a strict key enumeration must accept the two new ones.
 `wave_watch.py` gains a new event, `stack-state-changed`, at precedence rank four — immediately
 above `pr-set-changed` and below `builder-exited`. Its payload carries `stacks` (one entry per
 stack the batch's launches name, each with `stack`, `state`, `layersPlanned`, `missingPositions`,
-and `reason`) and `flags` (today only `idle-seat-launchable-child`, naming `stack`, `position`, and
-`flag`). The event is not suppressible per lane through `--ignore-event`; naming it refuses
-`ignore-event-invalid`. Within one `loop` invocation the stack-state baseline threads across timer arms, so a stack that becomes complete between arms is reported once; each new invocation starts without one, so a watch armed on a batch whose stack is already complete, or that already carries an `idle-seat-launchable-child` flag, reports `stack-state-changed` on its first arm.
+and `reason`) and `flags` (today only the idle-seat flag — `FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` in
+`lib/wave_watch.py` — naming `stack`, `position`, and `flag`). The event is not suppressible per
+lane through `--ignore-event`; naming it refuses `ignore-event-invalid`. Within one `loop`
+invocation the stack-state baseline threads across timer arms, so a stack that becomes complete
+between arms is reported once; each new invocation starts without one, so a watch armed on a batch
+whose stack is already complete, or that already carries the idle-seat flag
+(`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` in `lib/wave_watch.py`), reports `stack-state-changed` on its
+first arm.
 
 ### Launcher premise `dependency` field
 

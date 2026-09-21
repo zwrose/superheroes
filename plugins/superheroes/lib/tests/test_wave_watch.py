@@ -144,6 +144,18 @@ def _with_loop_budget(monotonic_fn, budget=_DEADLINE_LOOP_BUDGET):
     return bounded
 
 
+def _advancing_monotonic(step=0.1):
+    """Monotonic callable that advances by step on every read, starting at 0.0."""
+    value = [0.0]
+
+    def mono():
+        current = value[0]
+        value[0] += step
+        return current
+
+    return mono
+
+
 def _fake_gh_cli_env(tmp_path):
     shim_dir = tmp_path / "gh-shim"
     shim_dir.mkdir()
@@ -338,18 +350,15 @@ def test_lane_terminal_makes_zero_gh_run_calls(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="handback")
     gh_calls = [0]
-    clock = [0.0]
 
     def counting_gh_run(argv, **kwargs):
         gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
-    def mono():
-        return clock[0]
-
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
-        monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
+        monotonic=_advancing_monotonic(), sleep=lambda _d: None,
+        gh_run=counting_gh_run,
     )
     assert result["event"] == "lane-terminal"
     # axis: no gh child on a tick whose event is a lane event
@@ -360,18 +369,15 @@ def test_lane_blocked_makes_zero_gh_run_calls(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="blocked")
     gh_calls = [0]
-    clock = [0.0]
 
     def counting_gh_run(argv, **kwargs):
         gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
-    def mono():
-        return clock[0]
-
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
-        monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
+        monotonic=_advancing_monotonic(), sleep=lambda _d: None,
+        gh_run=counting_gh_run,
     )
     assert result["event"] == "lane-blocked"
     # axis: no gh child on a tick whose event is a lane event
@@ -383,18 +389,15 @@ def test_builder_exited_makes_zero_gh_run_calls(tmp_path, monkeypatch):
     dead_pid = 999999999
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
     gh_calls = [0]
-    clock = [0.0]
 
     def counting_gh_run(argv, **kwargs):
         gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
-    def mono():
-        return clock[0]
-
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
-        monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
+        monotonic=_advancing_monotonic(), sleep=lambda _d: None,
+        gh_run=counting_gh_run,
     )
     assert result["event"] == "builder-exited"
     # axis: no gh child on a tick whose event is a lane event
@@ -407,7 +410,6 @@ def test_suppressed_terminal_lane_polls_prs_for_pr_set_changed(tmp_path, monkeyp
         repo, tmp_path, monkeypatch, stamp_state="handback", pid=os.getpid(),
     )
     pr_list_calls = [0]
-    clock = [0.0]
 
     def counting_gh_run(argv, **kwargs):
         if argv[:3] == ["gh", "pr", "list"]:
@@ -418,12 +420,10 @@ def test_suppressed_terminal_lane_polls_prs_for_pr_set_changed(tmp_path, monkeyp
             )
         return _noop_gh_run(argv, **kwargs)
 
-    def mono():
-        return clock[0]
-
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
-        monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
+        monotonic=_advancing_monotonic(), sleep=lambda _d: None,
+        gh_run=counting_gh_run,
         pr_state=[{1, 2}],
         ignore_events=(("lane-a", ww.EVENT_LANE_TERMINAL),),
     )

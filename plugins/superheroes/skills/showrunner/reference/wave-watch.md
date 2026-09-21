@@ -258,24 +258,35 @@ When **`stack-state-changed`** fires, the payload carries one entry per stack th
 launches name, plus a `flags` list:
 
 - `stacks` — one object per distinct stack number stamped on any lane in the batch, sorted by
-  `stack`: `stack` (the stack number), `state` (`stack-complete` or `stack-incomplete`),
-  `layersPlanned` (the agreed layer count when known, else `null`), `missingPositions` (sorted
-  positions still incomplete — empty when `state` is `stack-complete`), and `reason`
-  (`layers-planned-unknown`, `layers-planned-disagreed`, or `membership-unresolved` when the stack
-  could not be evaluated; otherwise `null` — a complete stack, or an incomplete one whose
-  `missingPositions` name the layers not yet READY).
-- `flags` — observations that ride with the snapshot; today the only flag is
-  `idle-seat-launchable-child`, each entry naming `stack`, `position` (the vetted layer), and
-  `flag`.
+  `stack`: `stack` (the stack number), `state` (complete — `STACK_STATE_COMPLETE` — or incomplete
+  — `STACK_STATE_INCOMPLETE`), `layersPlanned` (the agreed layer count when known, else `null`),
+  `missingPositions` (sorted positions still incomplete — empty when the state is complete), and
+  `reason` (planned count unknown — `STACK_REASON_LAYERS_PLANNED_UNKNOWN`, planned count disagreed
+  — `STACK_REASON_LAYERS_PLANNED_DISAGREED`, or membership unresolved —
+  `STACK_REASON_MEMBERSHIP_UNRESOLVED` when the stack could not be evaluated; otherwise `null` — a
+  complete stack, or an incomplete one whose `missingPositions` name the layers not yet READY).
+- `flags` — observations that ride with the snapshot; today the only flag is the idle-seat flag —
+  `FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` — each entry naming `stack`, `position` (the vetted layer),
+  and `flag`.
 
-**Complete** means every position from `1` through `layersPlanned` has a stack member whose vet
-reads READY at that pull request's **current** head. A position the watcher could not read — its
-read budget ran out, or a pull-request or verdict read was refused — counts as not READY, and the
-result's `degraded` list carries `stack-signal-unavailable`. **Everything else is incomplete** — a member
-whose vet could not be read, membership that could not be resolved, a disagreed `layersPlanned`
-across the batch's lanes, or `layersPlanned` absent entirely. **`idle-seat-launchable-child`**
-observes a vetted layer whose next planned position (`position + 1`) is within `layersPlanned` but
-no launch in the batch occupies it — a seat the wave could fill without waiting for a merge.
+The wire values for `state`, `reason`, and `flag` are the constants in `lib/wave_watch.py` and are
+deliberately not restated here.
+
+**Complete** (`STACK_STATE_COMPLETE`) means every position from `1` through `layersPlanned` has a
+stack member whose vet reads READY at that pull request's **current** head — the stack goes on the
+click list whole, and the advisor stops watching that batch. A position the watcher could not read
+— its read budget ran out, or a pull-request or verdict read was refused — counts as not READY,
+and the result's `degraded` list carries `stack-signal-unavailable`. **Incomplete**
+(`STACK_STATE_INCOMPLETE`) with `reason` null means `missingPositions` names the layers not yet
+READY — keep watching; those layers are still owed. **Planned count unknown**
+(`STACK_REASON_LAYERS_PLANNED_UNKNOWN`) means no lane in the batch recorded `layersPlanned` —
+completion cannot be judged; fix the launch premise. **Planned count disagreed**
+(`STACK_REASON_LAYERS_PLANNED_DISAGREED`) means the batch's lanes recorded different
+`layersPlanned` — reconcile the premises before trusting completion. **Membership unresolved**
+(`STACK_REASON_MEMBERSHIP_UNRESOLVED`) means the stack's membership could not be read — verify the
+stack link (GraphQL `stackEntry`) before acting. **`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD`** observes a
+vetted layer whose next planned position (`position + 1`) is within `layersPlanned` but no launch
+in the batch occupies it — a seat the wave could fill now, without waiting for a merge.
 
 When **`pr-set-changed`** fires, the payload carries the open PR set plus what moved:
 
@@ -372,7 +383,8 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 - **Stack-state baseline:** within one `loop` invocation, the stack-state baseline threads across
   timer arms, so a stack that becomes complete between arms is reported once. Each new invocation
   starts without one: a watch armed on a batch whose stack is already complete, or that already
-  carries an `idle-seat-launchable-child` flag, returns `stack-state-changed` on its first arm,
+  carries the idle-seat flag (`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD`), returns `stack-state-changed`
+  on its first arm,
   and every re-arm reports it again until the stack merges.
   Once the stack is on the click list, stop watching that batch.
 - **A mistyped batch id is indistinguishable from a quiet batch** — but the verb matters. Bare
