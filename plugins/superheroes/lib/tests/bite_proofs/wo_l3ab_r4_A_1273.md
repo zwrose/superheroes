@@ -14,7 +14,7 @@ complete.
 
 | ID | Guarded element | Axis | Proving test |
 |---|---|---|---|
-| BP-1 | `_observe_stdout_completion` terminal path | terminal observation drains and parses unconditionally | `test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal` |
+| BP-1 | `_observe_stdout_completion` terminal path | terminal observation parses the trailing unterminated line | `test_completion_stdout_unterminated_final_result_stamps_at_terminal` |
 | BP-2 | `_process_stdout_completion_line` replace | newer complete result event replaces the held stamp | `test_completion_stdout_two_results_admits_last_stamp_and_materialized` |
 | BP-3 | `_drain_stdout_completion_bytes` line bound | line bound drops an over-bound line whole and never stamps it | `test_completion_stdout_over_bound_line_forfeits_unrecorded` |
 | BP-4 | poll-loop terminal placement | single terminal observation sits after writers are reaped | `test_completion_stdout_grace_window_second_result_stamps_last` |
@@ -24,14 +24,17 @@ complete.
 
 ---
 
-## BP-1 — unconditional terminal observation
+## BP-1 — terminal leftover-line parse
 
-- **axis:** terminal observation must retain the stamp produced during the terminal drain
+- **axis:** the terminal observation parses the trailing unterminated line, so a final result event with no newline is still stamped
 
 **neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_observe_stdout_completion` terminal block):
 
 before:
 ```python
+            if not overflow and buf:
+                line_start = offset - len(buf)
+                _process_stdout_completion_line(obs_state, buf, line_start)
             obs_state["buf"] = b""
             obs_state["overflow"] = False
 ```
@@ -40,27 +43,25 @@ after:
 ```python
             obs_state["buf"] = b""
             obs_state["overflow"] = False
-            obs_state["stamp"] = None
-            obs_state["stamp_line_start"] = None
 ```
 
 **command:**
 ```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal -q -p no:randomly
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_unterminated_final_result_stamps_at_terminal -q -p no:randomly
 ```
 
 **raw red** (exit 1):
 ```
 F                                                                        [100%]
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_unterminated_final_result_stamps_at_terminal
 1 failed in 2.38s
 ```
-(assertion: `assert key in ended` / `assert 'resultCompleteAt' in ended`)
+(assertion: `assert key in ended` / `assert ERC.FIELD_RESULT_COMPLETE_AT in ended`)
 
-**restore** (`plugins/superheroes/lib/engine_dispatch.py`, `_observe_stdout_completion` terminal block): remove the two `obs_state["stamp"] = None` / `stamp_line_start` lines.
+**restore** (`plugins/superheroes/lib/engine_dispatch.py`, `_observe_stdout_completion` terminal block): reinstate the `if not overflow and buf:` branch that calls `_process_stdout_completion_line`.
 
-**restore receipt:** post-restore `git status --porcelain` empty.
+**restore receipt:** post-restore `git status --porcelain` shows only `plugins/superheroes/lib/tests/test_engine_dispatch.py` and `plugins/superheroes/lib/tests/bite_proofs/wo_l3ab_r4_A_1273.md` modified.
 
 **raw green** (exit 0):
 ```

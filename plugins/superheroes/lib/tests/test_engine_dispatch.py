@@ -17113,6 +17113,30 @@ def _run_claude_stdout_review_script(tmp_path, monkeypatch, script_body, *, time
     return run_dir, state, ended, stdout_path
 
 
+def test_completion_stdout_unterminated_final_result_stamps_at_terminal(
+        tmp_path, monkeypatch,
+):
+    """axis: terminal observation parses the trailing unterminated line.
+
+    Red edit: remove the leftover-line parse in _observe_stdout_completion's
+    terminal block (the ``if not overflow and buf:`` branch).
+    """
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream = _claude_event_stream(result=structured).rstrip("\n")
+    assert not stream.endswith("\n")
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir, state, ended, stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    with open(stdout_path, "rb") as fh:
+        stdout_bytes = fh.read()
+    assert stdout_bytes[-1:] != b"\n"
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
 def test_completion_stdout_two_results_admits_last_stamp_and_materialized(
         tmp_path, monkeypatch,
 ):
