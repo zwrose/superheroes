@@ -630,6 +630,49 @@ def test_relocate_target_marker_idempotent_retry(tmp_path, capsys):
     assert out["ok"] is True
     marker = json.load(open(marker_path, encoding="utf-8"))
     assert marker["sessionDir"] == os.path.realpath(session_dir)
+    assert marker["branch"] == "mobility-retry"
+
+
+def test_relocate_target_marker_stale_branch_refreshed(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    subprocess.check_call(["git", "-C", repo["root_b"], "checkout", "-q", "-b", "branch-a"])
+    marker_path = _marker_path(repo["root_b"])
+    stale = RD._relocate_target_marker_content(session_dir, repo["root_b"], "branch-a")
+    os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+    with open(marker_path, "w", encoding="utf-8") as fh:
+        json.dump(stale, fh)
+    subprocess.check_call(["git", "-C", repo["root_b"], "checkout", "-q", "-b", "branch-b"])
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 0
+    assert out["ok"] is True
+    marker = json.load(open(marker_path, encoding="utf-8"))
+    assert marker["branch"] == "branch-b"
+    assert marker["repoRoot"] == repo["root_b"]
+
+
+def test_relocate_claim_write_failure_leaves_no_marker(tmp_path, monkeypatch):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    marker_path = _marker_path(repo["root_b"])
+    branch = subprocess.check_output(
+        ["git", "-C", repo["root_b"], "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+    content = RD._relocate_target_marker_content(session_dir, repo["root_b"], branch)
+    real_open = open
+
+    def failing_open(path, *args, **kwargs):
+        if str(path).endswith(".claim.tmp"):
+            raise OSError("simulated write failure")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", failing_open)
+    ok, created, reason = RD._relocate_claim_target_marker(marker_path, content,
+                                                           os.path.realpath(session_dir))
+    assert not ok
+    assert reason == "unwritable"
+    assert not os.path.lexists(marker_path)
 
 
 def test_relocate_commit_refused_removes_claimed_marker(tmp_path, capsys, monkeypatch):
@@ -733,6 +776,67 @@ def test_relocate_refuses_none_session_dir(tmp_path, capsys):
     assert out["reason"] == "relocate-session-unreadable"
     assert _read_bytes(meta_path) == meta_before
     assert _read_bytes(state_path) == state_before
+
+
+def test_relocate_marker_retirement_survives_interleaved_replacement(tmp_path, monkeypatch):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    other_dir = str(tmp_path / "other_session")
+    os.makedirs(other_dir, exist_ok=True)
+    marker_a = _marker_path(repo["root_a"])
+    ours = RD._relocate_target_marker_content(session_dir, repo["root_a"], repo["branch"])
+    os.makedirs(os.path.dirname(marker_a), exist_ok=True)
+    with open(marker_a, "w", encoding="utf-8") as fh:
+        json.dump(ours, fh)
+    real_rename = os.rename
+
+    def racing_rename(src, dst):
+        result = real_rename(src, dst)
+        if src == marker_a and dst == marker_a + ".retire.tmp":
+            replacement = {
+                "schema": "review-session/1",
+                "sessionDir": os.path.realpath(other_dir),
+                "startedAt": "2026-01-01T00:00:00Z",
+                "repoRoot": repo["root_a"],
+                "branch": repo["branch"],
+            }
+            RD.round_commit.atomic_write_bytes(
+                marker_a, RD._canonical(replacement).encode("utf-8"))
+        return result
+
+    monkeypatch.setattr(os, "rename", racing_rename)
+    outcome = RD._retire_relocate_marker(repo["root_a"], session_dir)
+    assert outcome == "not-ours"
+    surviving = json.load(open(marker_a, encoding="utf-8"))
+    assert surviving["sessionDir"] == os.path.realpath(other_dir)
+
+
+def test_relocate_post_commit_crash_repaired_by_same_target_retry(tmp_path, capsys, monkeypatch):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    subprocess.check_call(["git", "-C", repo["root_b"], "checkout", "-q", "-b", "mobility-repair"])
+    calls = {"n": 0}
+    real_retire = RD._retire_relocate_marker
+
+    def retire_once(old_root, session_dir_arg):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("simulated post-commit crash")
+        return real_retire(old_root, session_dir_arg)
+
+    monkeypatch.setattr(RD, "_retire_relocate_marker", retire_once)
+    with pytest.raises(RuntimeError):
+        RD.cmd_relocate(session_dir, repo["root_b"], "tester")
+    assert os.path.isfile(_marker_path(repo["root_a"]))
+    assert os.path.isfile(_marker_path(repo["root_b"]))
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 0
+    assert out["ok"] is True
+    assert out.get("repaired") is True
+    assert out["markerRetirement"] == "retired"
+    assert not os.path.isfile(_marker_path(repo["root_a"]))
 
 
 # bite-proof: G20 — the not-ours ownership check bites on a foreign marker's sessionDir

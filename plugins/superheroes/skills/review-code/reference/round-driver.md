@@ -580,13 +580,17 @@ new root, branch, the session directory, the head, the base pin, `by`, `at`, and
 rewritten keys. Nothing else in the session changes. The session directory does not move: a session
 invoked from a directory other than the one it recorded is refused. A target checkout whose scope
 marker names another session is refused before anything is written. The target checkout's scope marker
-is claimed atomically before the session commit (`O_CREAT|O_EXCL`); an existing marker naming this
-session is accepted as an idempotent retry. A detached-HEAD target is refused because it cannot carry
-the marker. After the commit, the old checkout's marker is retired only when it names this session.
-Outcomes are journalled as `marker-retirement` (`retired`, `not-ours`, `absent`, `failed`). A crash
-after the session commit but before old-marker retirement leaves the old checkout's marker naming
-this session (fail-closed: that checkout stays gated and other sessions are refused there);
-recovery is removing that file by hand after confirming the journal's `relocated` row.
+is claimed atomically before the session commit: the full canonical marker is written to a temp file
+in the marker's directory, fsynced, then published with an exclusive `os.link`; an existing marker
+naming this session is refreshed atomically so `branch`, `repoRoot`, and `startedAt` match the target
+now. A detached-HEAD target is refused because it cannot carry the marker. After the commit, the old
+checkout's marker is retired with compare-and-delete (rename away, verify ownership, then unlink or
+restore) only when it names this session. Outcomes are journalled as `marker-retirement` (`retired`,
+`not-ours`, `absent`, `failed`). A crash after the session commit but before old-marker retirement
+leaves the old checkout's marker naming this session (fail-closed: that checkout stays gated and
+other sessions are refused there); re-run `relocate` to the recorded checkout when the journal's
+most recent `relocated` row names that checkout and the target marker names this session — the
+driver retires only the old marker and returns `repaired: true`.
 
 **The same head** means the fix-fold head when a fix fold recorded one — both copies must agree —
 otherwise the session's setup head. A session with a pending `dispatch-fixer` phase — fixer dispatched

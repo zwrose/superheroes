@@ -6150,6 +6150,11 @@ def _relocate_read_target_marker(marker_path):
         return None
 
 
+def _relocate_refresh_target_marker(marker_path, marker_content):
+    payload = _canonical(marker_content).encode("utf-8")
+    round_commit.atomic_write_bytes(marker_path, payload)
+
+
 def _relocate_release_target_marker(marker_path, session_rp):
     """Remove the target marker when it still names this session."""
     marker = _relocate_read_target_marker(marker_path)
@@ -6162,29 +6167,44 @@ def _relocate_release_target_marker(marker_path, session_rp):
 
 def _relocate_claim_target_marker(marker_path, marker_content, session_rp):
     """Atomically claim the target checkout marker. Returns (ok, created, reason)."""
+    payload = _canonical(marker_content).encode("utf-8")
     if os.path.lexists(marker_path):
         marker = _relocate_read_target_marker(marker_path)
         if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
             return False, False, "foreign"
+        try:
+            _relocate_refresh_target_marker(marker_path, marker_content)
+        except OSError:
+            return False, False, "unwritable"
         return True, False, None
     parent = os.path.dirname(marker_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    payload = _canonical(marker_content).encode("utf-8")
+    tmp = marker_path + ".claim.tmp"
     try:
-        fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with open(tmp, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
         try:
-            os.write(fd, payload)
-        finally:
-            os.close(fd)
-        return True, True, None
-    except FileExistsError:
-        marker = _relocate_read_target_marker(marker_path)
-        if isinstance(marker, dict) and marker.get("sessionDir") == session_rp:
+            os.link(tmp, marker_path)
+        except FileExistsError:
+            marker = _relocate_read_target_marker(marker_path)
+            if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
+                return False, False, "foreign"
+            try:
+                _relocate_refresh_target_marker(marker_path, marker_content)
+            except OSError:
+                return False, False, "unwritable"
             return True, False, None
-        return False, False, "foreign"
+        return True, True, None
     except OSError:
         return False, False, "unwritable"
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def _relocate_recorded_head(meta, state):
@@ -6227,17 +6247,64 @@ def _retire_relocate_marker(old_root, session_dir):
     marker_path = _review_session_marker_path(gitdir)
     if not os.path.isfile(marker_path):
         return "absent"
+    tmp = marker_path + ".retire.tmp"
+    session_rp = os.path.realpath(session_dir)
     try:
-        with open(marker_path, encoding="utf-8") as fh:
+        os.rename(marker_path, tmp)
+    except OSError:
+        return "failed"
+    try:
+        with open(tmp, encoding="utf-8") as fh:
             marker = json.load(fh)
-        if not isinstance(marker, dict):
+        if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
+            try:
+                os.link(tmp, marker_path)
+            except FileExistsError:
+                pass
+            os.unlink(tmp)
             return "not-ours"
-        if marker.get("sessionDir") != os.path.realpath(session_dir):
-            return "not-ours"
-        os.remove(marker_path)
+        os.unlink(tmp)
         return "retired"
     except Exception:
+        try:
+            if not os.path.lexists(marker_path):
+                os.link(tmp, marker_path)
+        except Exception:
+            pass
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
         return "failed"
+
+
+def _relocate_try_repair_marker_retirement(session_dir, session_rp, target_toplevel):
+    """Repair a crash between session commit and old-marker retirement."""
+    for row in reversed(read_journal(session_dir)):
+        if row.get("outcome") != "relocated":
+            continue
+        if row.get("newRoot") != target_toplevel:
+            continue
+        old_root = row.get("oldRoot")
+        if not isinstance(old_root, str) or not old_root:
+            return None
+        try:
+            target_gitdir = store_core.get_worktree_gitdir(target_toplevel)
+        except Exception:
+            return None
+        marker_path = _review_session_marker_path(target_gitdir)
+        marker = _relocate_read_target_marker(marker_path)
+        if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
+            return None
+        marker_outcome = _retire_relocate_marker(old_root, session_dir)
+        _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
+                                      "result": marker_outcome, "phase": None, "round": None,
+                                      "attempt": None})
+        return {"ok": True, "repaired": True, "markerRetirement": marker_outcome,
+                "relocated": {k: row.get(k) for k in (
+                    "oldRoot", "newRoot", "oldBranch", "newBranch", "sessionDir",
+                    "head", "base", "by", "at", "rewritten")}}
+    return None
 
 
 def cmd_relocate(session_dir, target_root, by):
@@ -6298,6 +6365,10 @@ def _cmd_relocate_locked(session_dir, target_root, by):
                            detail="recorded %r, invoked from %r"
                            % (meta["sessionDir"], session_dir))
     if target_toplevel == old_root_rp:
+        repaired = _relocate_try_repair_marker_retirement(
+            session_dir, os.path.realpath(session_dir), target_toplevel)
+        if repaired is not None:
+            return repaired
         return _refuse_cmd(session_dir, "relocate", "relocate-same-checkout")
     cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
     base_repo = cfg.get("baseRepo")
