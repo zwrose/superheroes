@@ -1608,8 +1608,9 @@ def test_l2f_v31_vet_form_unknown_verdict_refuses(monkeypatch, tmp_path):
 
 def test_l2f_v32_vet_form_duplicate_verdict_refuses(monkeypatch, tmp_path):
     # axis: duplicated verdict value in the form refuses vet-unreadable
-    tokens = list(_VALID_VET_FORM_TOKENS)
-    tokens[2] = {"token": "**Verdict: PARKED**", "verdict": sc.VERDICT_READY}
+    tokens = list(_VALID_VET_FORM_TOKENS) + [
+        {"token": "**Verdict: READY**", "verdict": sc.VERDICT_READY},
+    ]
     _patch_vet_form(monkeypatch, tmp_path, tokens)
     _assert_vet_refusal(
         _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
