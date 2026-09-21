@@ -579,16 +579,15 @@ when present. It does so in one transaction with one `relocated` journal row car
 new root, branch, the session directory, the head, the base pin, `by`, `at`, and the list of
 rewritten keys. Nothing else in the session changes. The session directory does not move: a session
 invoked from a directory other than the one it recorded is refused. A target checkout whose scope
-marker names another session is refused before anything is written. It re-writes the checkout's scope
-marker in the new checkout and removes the old checkout's marker only once the new checkout's marker
-exists and names this session; otherwise retirement is skipped (`kept-no-target-marker`). Outcomes
-are journalled as `marker-retirement` (`retired`, `not-ours`, `absent`, `failed`,
-`kept-no-target-marker`).
+marker names another session is refused before anything is written. The target checkout's scope marker
+is claimed atomically before the session commit (`O_CREAT|O_EXCL`); an existing marker naming this
+session is accepted as an idempotent retry. A detached-HEAD target is refused because it cannot carry
+the marker. After the commit, the old checkout's marker is retired only when it names this session.
+Outcomes are journalled as `marker-retirement` (`retired`, `not-ours`, `absent`, `failed`).
 
 **The same head** means the fix-fold head when a fix fold recorded one — both copies must agree —
-otherwise the session's setup head. A session parked in the middle of a fix — its fixer dispatched
-but not yet folded — can only move to a checkout at the pre-fix head: fold the fixer where it ran
-first, or move onto a checkout at the recorded head.
+otherwise the session's setup head. A session with a pending `dispatch-fixer` phase — fixer dispatched
+or recorded but not yet folded — must fold the fixer in the old checkout before relocating.
 
 | `reason` | condition |
 | --- | --- |
@@ -603,7 +602,10 @@ first, or move onto a checkout at the recorded head.
 | `relocate-head-ambiguous` | the two copies of the fix-fold head disagree, only one exists, or no head is recorded |
 | `relocate-head-mismatch` | the target's HEAD is not the recorded head |
 | `relocate-records-path-bound` | the durable records file lives inside the old checkout |
+| `relocate-target-detached` | the target checkout is on a detached HEAD and cannot carry the scope marker |
 | `relocate-target-marker-foreign` | the target checkout's scope marker names another session or cannot be read |
+| `relocate-target-marker-unwritable` | the target checkout's scope marker could not be claimed |
+| `relocate-inflight-fixer` | the session has a pending `dispatch-fixer` phase that must be folded first |
 | `relocate-locked` | another process holds the session lock |
 
 Orders emitted before the move are not rewritten: they still name the old checkout, so dispatch them only while that checkout stays at the recorded head.

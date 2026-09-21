@@ -6132,6 +6132,61 @@ def _serialize_meta_json(meta_obj):
     return (json.dumps(meta_obj, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
+def _relocate_target_marker_content(session_dir, target_root, branch):
+    return {
+        "schema": _REVIEW_SESSION_SCHEMA,
+        "sessionDir": os.path.realpath(session_dir),
+        "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "repoRoot": os.path.realpath(target_root),
+        "branch": branch,
+    }
+
+
+def _relocate_read_target_marker(marker_path):
+    try:
+        with open(marker_path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _relocate_release_target_marker(marker_path, session_rp):
+    """Remove the target marker when it still names this session."""
+    marker = _relocate_read_target_marker(marker_path)
+    if isinstance(marker, dict) and marker.get("sessionDir") == session_rp:
+        try:
+            os.remove(marker_path)
+        except Exception:
+            pass
+
+
+def _relocate_claim_target_marker(marker_path, marker_content, session_rp):
+    """Atomically claim the target checkout marker. Returns (ok, created, reason)."""
+    if os.path.lexists(marker_path):
+        marker = _relocate_read_target_marker(marker_path)
+        if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
+            return False, False, "foreign"
+        return True, False, None
+    parent = os.path.dirname(marker_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    payload = _canonical(marker_content).encode("utf-8")
+    try:
+        fd = os.open(marker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        return True, True, None
+    except FileExistsError:
+        marker = _relocate_read_target_marker(marker_path)
+        if isinstance(marker, dict) and marker.get("sessionDir") == session_rp:
+            return True, False, None
+        return False, False, "foreign"
+    except OSError:
+        return False, False, "unwritable"
+
+
 def _relocate_recorded_head(meta, state):
     """Resolve the recorded head for relocate checks — (head_sha, ambiguous)."""
     cfg = state.get("config") if isinstance(state, dict) else None
@@ -6209,7 +6264,11 @@ def _cmd_relocate_locked(session_dir, target_root, by):
                            detail="repoRoot")
     old_root_rp = os.path.realpath(old_root)
     session_dir_meta = meta.get("sessionDir")
-    if not isinstance(session_dir_meta, str) or not session_dir_meta:
+    if (not isinstance(session_dir_meta, str) or not session_dir_meta
+            or not session_dir_meta.strip()):
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
+                           detail="sessionDir")
+    if not os.path.isabs(session_dir_meta):
         return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
                            detail="sessionDir")
     ok_state, loaded = load_state(session_dir)
@@ -6219,6 +6278,9 @@ def _cmd_relocate_locked(session_dir, target_root, by):
     state = loaded
     if state.get("terminal"):
         return _refuse_cmd(session_dir, "relocate", "relocate-session-terminal")
+    pending = state.get("pending")
+    if isinstance(pending, dict) and pending.get("phase") == P_FIXER:
+        return _refuse_cmd(session_dir, "relocate", "relocate-inflight-fixer")
     try:
         resolved_root = store_core.repo_root(target_root)
     except store_core.RepoRootUnavailable as exc:
@@ -6304,19 +6366,20 @@ def _cmd_relocate_locked(session_dir, target_root, by):
         return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
                            detail=str(exc))
     target_marker_path = _review_session_marker_path(target_gitdir)
-    if os.path.lexists(target_marker_path):
-        try:
-            with open(target_marker_path, encoding="utf-8") as fh:
-                target_marker = json.load(fh)
-        except Exception as exc:
+    if new_branch == "HEAD":
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-detached")
+    marker_content = _relocate_target_marker_content(session_rp, target_toplevel, new_branch)
+    claimed, marker_created, claim_reason = _relocate_claim_target_marker(
+        target_marker_path, marker_content, session_rp)
+    if not claimed:
+        if claim_reason == "foreign":
+            marker = _relocate_read_target_marker(target_marker_path)
+            detail = ("marker sessionDir %r != %r"
+                      % (marker.get("sessionDir") if isinstance(marker, dict) else marker,
+                         session_rp))
             return _refuse_cmd(session_dir, "relocate", "relocate-target-marker-foreign",
-                               detail=str(exc))
-        if (not isinstance(target_marker, dict)
-                or target_marker.get("sessionDir") != session_rp):
-            return _refuse_cmd(session_dir, "relocate", "relocate-target-marker-foreign",
-                               detail="marker sessionDir %r != %r"
-                               % (target_marker.get("sessionDir") if isinstance(target_marker, dict)
-                                  else target_marker, session_rp))
+                               detail=detail)
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-marker-unwritable")
     journal_fields = {
         "oldRoot": old_root_rp,
         "newRoot": target_toplevel,
@@ -6339,18 +6402,10 @@ def _cmd_relocate_locked(session_dir, target_root, by):
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
+        if marker_created:
+            _relocate_release_target_marker(target_marker_path, session_rp)
         return _commit_refused_response(session_dir, "relocate", exc)
-    _bootstrap_review_session_marker(session_dir)
-    marker_outcome = "kept-no-target-marker"
-    try:
-        if os.path.isfile(target_marker_path):
-            with open(target_marker_path, encoding="utf-8") as fh:
-                target_marker = json.load(fh)
-            if (isinstance(target_marker, dict)
-                    and target_marker.get("sessionDir") == session_rp):
-                marker_outcome = _retire_relocate_marker(old_root_rp, session_rp)
-    except Exception:
-        pass
+    marker_outcome = _retire_relocate_marker(old_root_rp, session_rp)
     _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
                                   "result": marker_outcome, "phase": None, "round": None,
                                   "attempt": None})

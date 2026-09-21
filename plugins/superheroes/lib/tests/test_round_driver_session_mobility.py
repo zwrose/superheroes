@@ -7,11 +7,14 @@ import subprocess
 
 import pytest
 
+RC = None  # set after RD loads
+
 _LIB = os.path.join(os.path.dirname(__file__), os.pardir)
 _SPEC = importlib.util.spec_from_file_location(
     "round_driver", os.path.join(_LIB, "round_driver.py"))
 RD = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(RD)
+RC = RD.round_commit
 
 import round_records as RR  # noqa: E402
 import store_core as SC  # noqa: E402
@@ -38,7 +41,7 @@ def _mobility_repo(tmp_path):
     subprocess.check_call(
         ["git", "-C", root_a, "remote", "add", "origin", "https://github.com/o/r.git"])
     root_b = str(tmp_path / "repo_b")
-    subprocess.check_call(["git", "-C", root_a, "worktree", "add", "-q", "--detach", root_b, "HEAD"])
+    subprocess.check_call(["git", "-C", root_a, "worktree", "add", "-q", "-b", "mobility-b", root_b, "HEAD"])
     toplevel_a = subprocess.check_output(
         ["git", "-C", root_a, "rev-parse", "--show-toplevel"], text=True).strip()
     toplevel_b = subprocess.check_output(
@@ -179,6 +182,51 @@ def _is_driver_scratch_relpath(relpath):
     return False
 
 
+def _stop_at_kind(monkeypatch, kind, stop_at, n=0):
+    real = RD.round_commit.begin
+    counts = {}
+
+    def wrapper(session_dir, commit_kind, **kw):
+        idx = counts.get(commit_kind, 0)
+        if commit_kind == kind and idx == n:
+            kw["stop_at"] = stop_at
+        counts[commit_kind] = idx + 1
+        return real(session_dir, commit_kind, **kw)
+
+    monkeypatch.setattr(RD.round_commit, "begin", wrapper)
+
+
+def _commits_empty(session_dir):
+    root = RC.commits_root(session_dir)
+    return not os.path.exists(root) or os.listdir(root) == []
+
+
+def _snapshot_relocate(session_dir):
+    meta_path = os.path.join(session_dir, "meta.json")
+    state_path = os.path.join(session_dir, RD.STATE_FILE)
+    journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
+    return {
+        "meta": _read_bytes(meta_path),
+        "state": _read_bytes(state_path),
+        "journal": _read_bytes(journal_path),
+    }
+
+
+def _assert_relocate_agree(session_dir, before, relocated_row):
+    snap = _snapshot_relocate(session_dir)
+    assert snap["meta"] != before["meta"]
+    assert snap["state"] != before["state"]
+    assert snap["journal"].startswith(before["journal"])
+    meta = json.load(open(os.path.join(session_dir, "meta.json"), encoding="utf-8"))
+    state = json.load(open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8"))
+    assert meta["repoRoot"] == relocated_row["newRoot"]
+    assert state["config"]["repoRoot"] == relocated_row["newRoot"]
+    row = next(r for r in reversed(_journal_rows(session_dir))
+               if r.get("outcome") == "relocated")
+    for field in _RELOCATED_FIELDS:
+        assert field in row
+
+
 def _seed_pending_verify_landing(session_dir):
     ok, state = RD.load_state(session_dir)
     pending = state.setdefault("pending", {})
@@ -290,6 +338,12 @@ def test_relocate_journal_appended_not_rewritten(tmp_path, capsys):
     ("relocate-session-unreadable", "unreadable_relative_repo_root"),
     # bite-proof: G2 — sessionDir presence/type check bites when sessionDir is missing
     ("relocate-session-unreadable", "unreadable_no_session_dir"),
+    # relative sessionDir must refuse before cwd-dependent binding
+    ("relocate-session-unreadable", "unreadable_relative_session_dir"),
+    # whitespace-only sessionDir
+    ("relocate-session-unreadable", "unreadable_whitespace_session_dir"),
+    # detached target cannot carry the scope marker
+    ("relocate-target-detached", "target_detached"),
     # bite-proof: G15 — target marker foreign bites when the target marker names another session
     ("relocate-target-marker-foreign", "target_marker_foreign"),
     # bite-proof: G16 — target marker unparseable bites on non-JSON marker content
@@ -310,6 +364,9 @@ def test_relocate_journal_appended_not_rewritten(tmp_path, capsys):
     "relocate-session-unreadable-no-repo-root",
     "relocate-session-unreadable-relative-repo-root",
     "relocate-session-unreadable-no-session-dir",
+    "relocate-session-unreadable-relative-session-dir",
+    "relocate-session-unreadable-whitespace-session-dir",
+    "relocate-target-detached",
     "relocate-target-marker-foreign",
     "relocate-target-marker-not-json",
 ])
@@ -387,6 +444,22 @@ def test_relocate_refusal_tokens(tmp_path, capsys, reason, setup):
         meta.pop("sessionDir", None)
         with open(meta_path, "w", encoding="utf-8") as fh:
             json.dump(meta, fh)
+    elif setup == "unreadable_relative_session_dir":
+        meta = json.load(open(meta_path, encoding="utf-8"))
+        meta["sessionDir"] = os.path.basename(session_dir)
+        with open(meta_path, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh)
+    elif setup == "unreadable_whitespace_session_dir":
+        meta = json.load(open(meta_path, encoding="utf-8"))
+        meta["sessionDir"] = "   "
+        with open(meta_path, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh)
+    elif setup == "target_detached":
+        root_c = str(tmp_path / "repo_c")
+        subprocess.check_call(
+            ["git", "-C", repo["root_a"], "worktree", "add", "-q", "--detach", root_c, repo["head"]])
+        target = subprocess.check_output(
+            ["git", "-C", root_c, "rev-parse", "--show-toplevel"], text=True).strip()
     elif setup == "target_marker_foreign":
         other_dir = str(tmp_path / "other_session")
         os.makedirs(other_dir, exist_ok=True)
@@ -505,16 +578,99 @@ def test_relocate_mid_fix_head_mismatch_at_setup_head(tmp_path, capsys):
     assert out["reason"] == "relocate-head-mismatch"
 
 
-# bite-proof: G21 — post-commit gate bites: no retirement unless the target marker names this session
-def test_relocate_marker_kept_when_target_detached(tmp_path, capsys):
+def test_relocate_refuses_inflight_fixer(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
     session_dir = sess["session_dir"]
-    marker_a = _marker_path(repo["root_a"])
-    assert os.path.isfile(marker_a)
-    _, out = _relocate(session_dir, repo["root_b"], capsys)
-    assert out["markerRetirement"] == "kept-no-target-marker"
-    assert os.path.isfile(marker_a)
+    meta_path = os.path.join(session_dir, "meta.json")
+    state_path = os.path.join(session_dir, RD.STATE_FILE)
+    ok, state = RD.load_state(session_dir)
+    state["step"] = RD.P_FIXER
+    state["pending"] = {"action": RD.P_FIXER, "round": 1, "phase": RD.P_FIXER, "attempt": 0,
+                        "payload": {}}
+    RD.save_state(session_dir, state)
+    meta_before = _read_bytes(meta_path)
+    state_before = _read_bytes(state_path)
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 1
+    assert out["reason"] == "relocate-inflight-fixer"
+    assert _read_bytes(meta_path) == meta_before
+    assert _read_bytes(state_path) == state_before
+    assert not os.path.lexists(_marker_path(repo["root_b"]))
+
+
+def test_relocate_target_marker_race_refuses_foreign(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess1 = _mobility_session(tmp_path, repo, session_name="session1")
+    sess2 = _mobility_session(tmp_path, repo, session_name="session2")
+    marker_path = _marker_path(repo["root_b"])
+    os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+    claim = RD._relocate_target_marker_content(
+        sess1["session_dir"], repo["root_b"], "main")
+    with open(marker_path, "w", encoding="utf-8") as fh:
+        json.dump(claim, fh)
+    rc, out = _relocate(sess2["session_dir"], repo["root_b"], capsys)
+    assert rc == 1
+    assert out["reason"] == "relocate-target-marker-foreign"
+
+
+def test_relocate_target_marker_idempotent_retry(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    subprocess.check_call(["git", "-C", repo["root_b"], "checkout", "-q", "-b", "mobility-retry"])
+    marker_path = _marker_path(repo["root_b"])
+    claim = RD._relocate_target_marker_content(
+        session_dir, repo["root_b"], "mobility-retry")
+    os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+    with open(marker_path, "w", encoding="utf-8") as fh:
+        json.dump(claim, fh)
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 0
+    assert out["ok"] is True
+    marker = json.load(open(marker_path, encoding="utf-8"))
+    assert marker["sessionDir"] == os.path.realpath(session_dir)
+
+
+def test_relocate_commit_refused_removes_claimed_marker(tmp_path, capsys, monkeypatch):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    subprocess.check_call(["git", "-C", repo["root_b"], "checkout", "-q", "-b", "mobility-refuse"])
+    marker_path = _marker_path(repo["root_b"])
+
+    def refuse_run(self):
+        raise RD.round_commit.CommitRefused("test-refusal")
+
+    monkeypatch.setattr(RD.round_commit.Commit, "run", refuse_run)
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 1
+    assert not out.get("ok")
+    assert not os.path.lexists(marker_path)
+
+
+@pytest.mark.parametrize("stop_at", ["staged", "sealed", "part:0"])
+def test_relocate_crash_matrix(tmp_path, capsys, monkeypatch, stop_at):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    subprocess.check_call(["git", "-C", repo["root_b"], "checkout", "-q", "-b", "mobility-crash"])
+    before = _snapshot_relocate(session_dir)
+    _stop_at_kind(monkeypatch, "relocate", stop_at)
+    with pytest.raises(RC.StopPoint):
+        RD.cmd_relocate(session_dir, repo["root_b"], "tester")
+    RC.recover(session_dir)
+    if stop_at == "staged":
+        after = _snapshot_relocate(session_dir)
+        assert after == before
+        rc, out = _relocate(session_dir, repo["root_b"], capsys)
+        assert rc == 0
+        assert out["ok"] is True
+    else:
+        _assert_relocate_agree(session_dir, before, {"newRoot": repo["root_b"]})
+    assert _commits_empty(session_dir)
+    rc_after = RD.main(["next", "--session-dir", session_dir, "--repo-root", repo["root_b"]])
+    assert rc_after == 0
 
 
 def test_relocate_marker_retirement(tmp_path, capsys):
