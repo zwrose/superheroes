@@ -2203,6 +2203,17 @@ def _truncation_marker(stream, observed_bytes):
     return "%s%d%s\n" % (prefix, int(observed_bytes), STDOUT_TRUNCATION_MARKER_SUFFIX)
 
 
+# Stampable stdout line bound — one home with MAX_STDOUT_CAPTURE tail-cap semantics.
+_STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES = 10**20 - 1
+_STDOUT_STAMPABLE_LINE_MAX = (
+    MAX_STDOUT_CAPTURE
+    - len(_truncation_marker(
+        CAP_STREAM_STDOUT, _STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES,
+    ).encode("utf-8"))
+)
+# Worst-case reserve: marker length grows with the digit count of observed bytes,
+# so a bound from this poll's file size can be wider than admission's; this cannot drift.
+
 _STDOUT_TRUNCATION_MARKER_RE = re.compile(
     r"^%s(\d+)%s\n" % (
         re.escape(STDOUT_TRUNCATION_MARKER_PREFIX),
@@ -3719,93 +3730,103 @@ def _apply_completion_stamp(ended_record, stamp):
         ended_record.update(stamp)
 
 
-_STDOUT_LINE_SCAN_CHUNK = 65536
+_STDOUT_COMPLETION_READ_CHUNK = 65536
 
 
-def _stdout_last_line_is_result_event(stdout_path):
-    """Return True when the last non-blank stdout line is a complete result event. Never raises."""
-    _ws = b"\r\n \t"
+def _process_stdout_completion_line(obs_state, line_bytes, line_start):
+    """Apply one complete stdout line to the completion stamp. Never raises."""
     try:
-        with open(stdout_path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            file_size = fh.tell()
-            if file_size == 0:
-                return False
-            line_end = file_size
-            while line_end > 0:
-                fh.seek(line_end - 1)
-                if fh.read(1) in _ws:
-                    line_end -= 1
-                else:
-                    break
-            if line_end == 0:
-                return False
-            bound = max(0, file_size - MAX_STDOUT_CAPTURE)
-            line_start = None
-            pos = line_end
-            while pos > bound:
-                scan_from = max(bound, pos - _STDOUT_LINE_SCAN_CHUNK)
-                fh.seek(scan_from)
-                chunk = fh.read(pos - scan_from)
-                idx = chunk.rfind(b"\n")
-                if idx >= 0:
-                    line_start = scan_from + idx + 1
-                    break
-                pos = scan_from
-            if line_start is None:
-                if bound == 0:
-                    line_start = 0
-                else:
-                    return False
-            fh.seek(line_start)
-            line_bytes = fh.read(line_end - line_start)
-            if not line_bytes.strip():
-                return False
-            last = json.loads(line_bytes.decode("utf-8", errors="ignore"))
-            return isinstance(last, dict) and last.get("type") == "result"
+        text = line_bytes.decode("utf-8", errors="ignore").rstrip("\r").strip()
+        if not text:
+            return
+        obj = json.loads(text)
+        if not isinstance(obj, dict) or obj.get("type") != "result":
+            return
+        if obj.get("is_error") is True or "structured_output" not in obj:
+            obs_state["stamp"] = None
+            obs_state["stamp_line_start"] = None
+            return
+        digest = engine_result_channel.canonical_payload_digest(
+            _scrub_native_payload(obj["structured_output"]),
+        )
+        stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
+        if stamp is None or digest is None:
+            obs_state["stamp"] = None
+            obs_state["stamp_line_start"] = None
+            return
+        obs_state["stamp"] = stamp
+        obs_state["stamp_line_start"] = line_start
     except Exception:
-        return False
+        return
+
+
+def _drain_stdout_completion_bytes(obs_state, data, file_offset_before):
+    """Split newly read stdout bytes on newlines and stamp complete result events. Never raises."""
+    buf = obs_state.get("buf", b"")
+    overflow = obs_state.get("overflow", False)
+    line_start = file_offset_before - len(buf)
+    pos = 0
+    while pos < len(data):
+        nl = data.find(b"\n", pos)
+        if nl < 0:
+            tail = data[pos:]
+            if overflow:
+                obs_state["buf"] = b""
+            else:
+                new_buf = buf + tail
+                if len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX:
+                    obs_state["overflow"] = True
+                    obs_state["buf"] = b""
+                else:
+                    obs_state["buf"] = new_buf
+            return
+        segment = data[pos:nl]
+        if not overflow:
+            _process_stdout_completion_line(obs_state, buf + segment, line_start)
+        buf = b""
+        overflow = False
+        line_start = file_offset_before + nl + 1
+        pos = nl + 1
+    obs_state["buf"] = buf
+    obs_state["overflow"] = overflow
 
 
 def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
-    """Stamp stdout delivery completion on first valid observation. Never raises.
+    """Incrementally stamp stdout delivery completion on complete result lines. Never raises.
 
-    Non-terminal polls skip unchanged stdout and require the last line to be a complete
-    result event before parsing. Terminal observation is unconditional except for an
-    existing stamp or missing/empty stdout: it always parses capped stdout so a result
-    event is stamped even when size is unchanged since the prior poll."""
-    if obs_state.get("stamp") is not None:
-        return
+    Each poll reads only new bytes from the stdout file. Non-terminal polls process
+    complete lines only; the terminal call drains remaining bytes and parses any
+    trailing buffered line as final."""
     try:
-        size = os.path.getsize(stdout_path)
-    except OSError:
+        offset = obs_state.get("offset", 0)
+        with open(stdout_path, "rb") as fh:
+            fh.seek(offset)
+            while True:
+                chunk = fh.read(_STDOUT_COMPLETION_READ_CHUNK)
+                if not chunk:
+                    break
+                file_offset_before = offset
+                offset += len(chunk)
+                obs_state["offset"] = offset
+                _drain_stdout_completion_bytes(obs_state, chunk, file_offset_before)
+        if terminal:
+            buf = obs_state.get("buf", b"")
+            overflow = obs_state.get("overflow", False)
+            if not overflow and buf:
+                line_start = offset - len(buf)
+                _process_stdout_completion_line(obs_state, buf, line_start)
+            obs_state["buf"] = b""
+            obs_state["overflow"] = False
+        stamp = obs_state.get("stamp")
+        stamp_line_start = obs_state.get("stamp_line_start")
+        if stamp is not None and stamp_line_start is not None:
+            if offset - stamp_line_start > _STDOUT_STAMPABLE_LINE_MAX:
+                obs_state["stamp"] = None
+                obs_state["stamp_line_start"] = None
+    except (OSError, MemoryError):
         return
-    if size == 0:
-        return
-    prev = obs_state.get("prev_size", 0)
-    if not terminal:
-        if size == prev:
-            return
-        obs_state["prev_size"] = size
-        if not _stdout_last_line_is_result_event(stdout_path):
-            return
-    else:
-        obs_state["prev_size"] = size
-    try:
-        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
     except Exception:
         return
-    env = engine_adapter.claude_result_envelope(stdout)
-    if (not isinstance(env, dict)
-            or env.get("is_error") is True
-            or "structured_output" not in env):
-        return
-    digest = engine_result_channel.canonical_payload_digest(
-        _scrub_native_payload(env["structured_output"]),
-    )
-    stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
-    if stamp is not None:
-        obs_state["stamp"] = stamp
 
 
 def _observe_native_file_completion(
@@ -4091,7 +4112,13 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     activity_stream = None
     prev_stdout = 0
     prev_stderr = 0
-    stdout_completion_obs = {"stamp": None, "prev_size": 0}
+    stdout_completion_obs = {
+        "stamp": None,
+        "offset": 0,
+        "buf": b"",
+        "overflow": False,
+        "stamp_line_start": None,
+    }
     native_completion_obs = {"stamp": None, "prev_size": 0}
     while True:
         _observe_attempt_completions(
@@ -4117,10 +4144,6 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
                 pass
         if rc is not None:
             natural_rc = rc
-            _observe_attempt_completions(
-                delivery, stdout_completion_obs, native_completion_obs,
-                run_dir_real, attempt, stdout_path, terminal=True,
-            )
             break
         if now - start >= timeout:
             timed_out = True
@@ -4128,10 +4151,6 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             # result written during the SIGTERM/SIGKILL grace window can be told apart from
             # one written before the cap (see timeoutAt on the ended record).
             timeout_at = timeout_deadline_wall
-            _observe_attempt_completions(
-                delivery, stdout_completion_obs, native_completion_obs,
-                run_dir_real, attempt, stdout_path, terminal=True,
-            )
             break
         time.sleep(_ATTEMPT_POLL_INTERVAL)
     _terminate_process_group(pgid)
@@ -4139,6 +4158,10 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         proc.wait(timeout=2)
     except Exception:
         pass
+    _observe_attempt_completions(
+        delivery, stdout_completion_obs, native_completion_obs,
+        run_dir_real, attempt, stdout_path, terminal=True,
+    )
     stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
     last_activity_at, silence_seconds, activity_stream = _fold_stream_activity(
         stdout_path, stderr_path, prev_stdout, prev_stderr,

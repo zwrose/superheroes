@@ -266,9 +266,10 @@ could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (t
 prompt's bytes no longer match the digest bound at run-open). For **codex and cursor**, every
 refusal is a forfeit or an attempt refusal — the runner never scans stdout for a result and never
 repairs a malformed file. **Claude print mode** is the exception on the first half: the runner
-reads stdout for the final `{"type":"result"}` envelope, records the completion instant at that
-observation (before the process is terminated), and materializes the typed file from it as a later,
-separate act (above); it still never repairs a malformed file. **Claude background mode** never reads stdout
+incrementally reads stdout for complete `{"type":"result"}` lines, stamps the last admissible one
+at the poll that first sees it complete, drains any trailing bytes once after the process group is
+reaped, and materializes the typed file from capped stdout as a later, separate act (above); it
+still never repairs a malformed file. **Claude background mode** never reads stdout
 for a result — the transcript path above. Claude adds `config-dir-unusable:<why>` at run-open and
 the adapter refusals `unregistered-engine-model`,
 `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
@@ -277,9 +278,9 @@ Completion is engine-owned and recorded as a monotonic instant, not inferred fro
 file mtime: each attempt-ended record carries `resultCompleteAt`, `resultCompleteEpoch`, and
 `resultCompleteSha256` (a digest of the payload complete at that instant). **Codex and cursor**
 stamp the first moment the result file parses as complete JSON; **claude print** stamps when the
-poll loop observes the terminal `{"type":"result"}` event on stdout — on natural exit, timeout,
-and poll-loop breaks, all before termination — and later materialization to the result path is not
-the completion time; **claude background** stamps the supervisor's record of the result's arrival
+poll loop first observes a complete `{"type":"result"}` line on stdout — each poll advances an
+incremental read, with one final drain after the process is reaped — and later materialization to
+the result path is not the completion time; **claude background** stamps the supervisor's record of the result's arrival
 in the transcript rows; the in-process seam stamps its own capture. Every attempt-ended record also
 carries `deadlineMono` and `deadlineEpoch` (the wall cap on that clock, stamped unconditionally at
 attempt end; `timeoutAt` remains for display only on timed-out attempts). Admission compares only
