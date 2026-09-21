@@ -24,7 +24,7 @@ To refresh after any of the above changes, run:
 
 ## Accepted seat shapes
 
-pass --seat as JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"} (the effort key is required; its value may be null; role is required and must not be null). role must be a member of the seat JSON "role" key; valid roles: implementer, code-fixer, doc-reviser, reviewer, reviewer-deep, verifier, brief-check, synthesis, mechanical, pilot
+pass --seat as JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"} (the effort key is required; its value may be null; role is required and must not be null). role must be a member of the seat JSON "role" key; valid roles: implementer, code-fixer, doc-reviser, reviewer, reviewer-deep, verifier, brief-check, synthesis, mechanical, pilot, registration-probe
 
 ## Declared vocabularies
 
