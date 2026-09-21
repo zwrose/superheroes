@@ -6324,7 +6324,7 @@ def _cmd_relocate_locked(session_dir, target_root, by):
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "relocate", exc)
     _bootstrap_review_session_marker(session_dir)
-    marker_outcome = _retire_relocate_marker(old_root_rp, session_dir)
+    marker_outcome = _retire_relocate_marker(old_root_rp, old_session_rp)
     _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
                                   "result": marker_outcome, "phase": None, "round": None,
                                   "attempt": None})

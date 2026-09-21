@@ -330,12 +330,78 @@ def test_relocate_refusal_tokens(tmp_path, capsys, reason, setup):
         assert _read_bytes(state_path) == state_before
 
 
-def test_relocate_mid_fix_head_mismatch(tmp_path, capsys):
+def test_relocate_refuses_target_ahead_of_recorded_head(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
     session_dir = sess["session_dir"]
     subprocess.check_call(["git", "-C", repo["root_b"], "commit", "-q", "--allow-empty", "-m", "fix"])
     rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 1
+    assert out["reason"] == "relocate-head-mismatch"
+
+
+def test_relocate_honors_agreeing_fix_fold_head(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    subprocess.check_call(["git", "-C", repo["root_b"], "commit", "-q", "--allow-empty", "-m", "fix"])
+    h2 = subprocess.check_output(["git", "-C", repo["root_b"], "rev-parse", "HEAD"], text=True).strip()
+    meta_path = os.path.join(session_dir, "meta.json")
+    meta = json.load(open(meta_path, encoding="utf-8"))
+    meta[RD.FIX_FOLD_HEAD_KEY] = h2
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    ok, state = RD.load_state(session_dir)
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = h2
+    RD.save_state(session_dir, state)
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 0
+    assert out["ok"] is True
+    assert out["relocated"]["head"] == h2
+
+
+def test_relocate_refuses_when_fix_fold_head_copies_disagree(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    meta_path = os.path.join(session_dir, "meta.json")
+    state_path = os.path.join(session_dir, RD.STATE_FILE)
+    meta = json.load(open(meta_path, encoding="utf-8"))
+    meta[RD.FIX_FOLD_HEAD_KEY] = repo["head"]
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    ok, state = RD.load_state(session_dir)
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = "a" * 40
+    RD.save_state(session_dir, state)
+    meta_before = _read_bytes(meta_path)
+    state_before = _read_bytes(state_path)
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 1
+    assert out["reason"] == "relocate-head-ambiguous"
+    assert _read_bytes(meta_path) == meta_before
+    assert _read_bytes(state_path) == state_before
+
+
+def test_relocate_mid_fix_head_mismatch_at_setup_head(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    subprocess.check_call(["git", "-C", repo["root_b"], "commit", "-q", "--allow-empty", "-m", "fix"])
+    h2 = subprocess.check_output(["git", "-C", repo["root_b"], "rev-parse", "HEAD"], text=True).strip()
+    root_c = str(tmp_path / "repo_c")
+    subprocess.check_call(
+        ["git", "-C", repo["root_a"], "worktree", "add", "-q", "--detach", root_c, repo["head"]])
+    target = subprocess.check_output(
+        ["git", "-C", root_c, "rev-parse", "--show-toplevel"], text=True).strip()
+    meta_path = os.path.join(session_dir, "meta.json")
+    meta = json.load(open(meta_path, encoding="utf-8"))
+    meta[RD.FIX_FOLD_HEAD_KEY] = h2
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    ok, state = RD.load_state(session_dir)
+    state["config"][RD.FIX_FOLD_HEAD_KEY] = h2
+    RD.save_state(session_dir, state)
+    rc, out = _relocate(session_dir, target, capsys)
     assert rc == 1
     assert out["reason"] == "relocate-head-mismatch"
 
@@ -436,6 +502,41 @@ def test_re_emit_certification_open_close(tmp_path, capsys):
     manifest = json.load(open(manifest_path, encoding="utf-8"))
     expected_slots = len(manifest.get("seats") or {})
     assert len(attempt1_keys) == expected_slots
+
+
+def test_re_emit_late_attempt0_landing_keeps_seat_open(tmp_path, capsys):
+    repo, sess, session_dir = _stale_session(tmp_path, capsys)
+    rnd, phase, old_attempt = 1, "dispatch-panel", 0
+    _re_emit(session_dir, capsys)
+    ok, state = RD.load_state(session_dir)
+    roster, _ = RD._roster_of(session_dir, state, "re-emit", phase, rnd, old_attempt)
+    first_seat = roster[0]
+    slot = RR.storage_key(first_seat, 0)
+    payload_path = RR.bare_payload_path(session_dir, rnd, phase, slot, old_attempt)
+    os.makedirs(os.path.dirname(payload_path), exist_ok=True)
+    with open(payload_path, "w", encoding="utf-8") as fh:
+        fh.write("{}")
+    unclosed, refusal = RC._journal_open_seats(RD.read_journal(session_dir), session_dir)
+    assert refusal is None
+    late_keys = [
+        k for k, _ in unclosed
+        if k[2] == old_attempt and k[0] == phase and k[1] == rnd and k[3] == first_seat
+    ]
+    assert len(late_keys) == 1
+
+
+def test_relocate_same_checkout_moved_session_dir_keeps_marker(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    session_dir2 = str(tmp_path / "session2")
+    shutil.copytree(session_dir, session_dir2)
+    _, out = _relocate(session_dir2, repo["root_a"], capsys)
+    assert out["ok"] is True
+    marker = _marker_path(repo["root_a"])
+    assert os.path.isfile(marker)
+    marker_doc = json.load(open(marker, encoding="utf-8"))
+    assert marker_doc["sessionDir"] == os.path.realpath(session_dir2)
 
 
 def test_re_emit_cli_exit_codes(tmp_path, capsys):

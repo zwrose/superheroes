@@ -102,6 +102,29 @@ storage_key = record_paths.storage_key
 store_path = record_paths.store_path
 round_dir = record_paths.round_dir
 _round_entry_key_allowed = round_entry_key_allowed
+
+
+def _landing_dir(session_dir, rnd, phase):
+    record_paths._require_token("phase", phase)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(round_dir(session_dir, rnd), "landing", phase))
+
+
+def _landing_path(session_dir, rnd, phase, skey, attempt):
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(_landing_dir(session_dir, rnd, phase),
+                     record_paths._seat_filename(skey, attempt)))
+
+
+def _bare_payload_path(session_dir, rnd, phase, skey, attempt):
+    record_paths._require_token("skey", skey)
+    record_paths._require_index("attempt", attempt)
+    return record_paths._guard_within(
+        session_dir,
+        os.path.join(_landing_dir(session_dir, rnd, phase),
+                     "%s.a%d.payload.json" % (skey, attempt)))
 _receipt_round_disclosures = receipt_round_disclosures
 _declared_disclosures = declared_disclosures
 
@@ -789,7 +812,16 @@ def _journal_open_seats(journal, session_dir=None):
     for key, event in opened.items():
         phase_key, rnd_key, attempt_key, sk_key, occ_key = key
         if (phase_key, rnd_key, attempt_key) in superseded:
-            continue
+            if session_dir is not None:
+                skey = storage_key(sk_key, occ_key)
+                landing = _landing_path(session_dir, rnd_key, phase_key, skey, attempt_key)
+                bare = _bare_payload_path(session_dir, rnd_key, phase_key, skey, attempt_key)
+                if os.path.isfile(landing) or os.path.isfile(bare):
+                    pass
+                else:
+                    continue
+            else:
+                continue
         if key not in closed:
             unclosed.append((key, event))
     return unclosed, None
