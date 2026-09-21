@@ -925,6 +925,7 @@ def _position_ready_map(
     for position in sorted(position_map):
         remaining = deadline - monotonic()
         if remaining < _MIN_PR_POLL_SECONDS:
+            degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
             return None
         pr_number = position_map[position]
         state, refusal = pr_vet_reader(
@@ -935,11 +936,13 @@ def _position_ready_map(
             env=_gh_scrub_env(env),
         )
         if refusal is not None:
+            degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
             continue
         verdict, vet_refusal = sc.read_vet_verdict(
             state["body"], state["headRefOid"],
         )
         if vet_refusal is not None:
+            degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
             continue
         if verdict == sc.VERDICT_READY:
             ready[position] = True
@@ -1080,9 +1083,8 @@ def _payload_stack_state_changed(ctx):
         return None
     if baseline is not None and snapshot == baseline:
         return None
-    # run() returns on the first event and loop() re-arms with the same cells,
-    # so a state-change event whose baseline never advanced would fire on every
-    # arm forever and starve every event below it in the precedence order.
+    # The advance serves a caller that threads stack_state across run() calls.
+    # loop() returns on this event, so a new loop invocation starts without one.
     stack_state[0] = snapshot
     payload = dict(snapshot)
     also = _build_also_observed(
