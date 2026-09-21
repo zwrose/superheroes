@@ -741,6 +741,7 @@ def _journal_open_seats(journal, session_dir=None):
     """
     opened = {}
     closed = set()
+    superseded = set()
     for event in journal:
         cmd = event.get("cmd")
         outcome = event.get("outcome")
@@ -748,13 +749,16 @@ def _journal_open_seats(journal, session_dir=None):
         rnd = event.get("round")
         attempt = event.get("attempt")
         seat = event.get("seat")
-        if (cmd in ("next", "advance") and outcome == "orders-emitted"
+        if (cmd in ("next", "advance", "re-emit") and outcome == "orders-emitted"
                 and session_dir is not None):
             roster, refusal = _orders_emitted_roster_or_refusal(session_dir, event)
             if refusal is not None:
                 return None, refusal
             for sk, occ in roster:
                 opened[(phase, rnd, attempt, sk, occ)] = event
+        if cmd == "re-emit" and outcome == "orders-superseded":
+            if phase is not None and rnd is not None and attempt is not None:
+                superseded.add((phase, rnd, attempt))
         if cmd in ("next", "advance") and outcome in ("emitted", "pending", "opened"):
             roster = event.get("roster") or event.get("seats")
             if isinstance(roster, list):
@@ -783,6 +787,9 @@ def _journal_open_seats(journal, session_dir=None):
             )
     unclosed = []
     for key, event in opened.items():
+        phase_key, rnd_key, attempt_key, sk_key, occ_key = key
+        if (phase_key, rnd_key, attempt_key) in superseded:
+            continue
         if key not in closed:
             unclosed.append((key, event))
     return unclosed, None

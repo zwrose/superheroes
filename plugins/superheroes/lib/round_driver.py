@@ -6332,6 +6332,184 @@ def _cmd_relocate_locked(session_dir, target_root, by):
     return {"ok": True, "relocated": relocated, "markerRetirement": marker_outcome}
 
 
+def cmd_re_emit(session_dir, by):
+    """Re-emit a stale pending dispatch order at the current head as a new attempt."""
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, "re-emit")
+            if refusal is not None:
+                return refusal
+            return _cmd_re_emit_locked(session_dir, by)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, "re-emit", held)
+
+
+def _journal_has_orders_emitted(session_dir, rnd, phase, attempt):
+    for event in read_journal(session_dir):
+        if event.get("outcome") != "orders-emitted":
+            continue
+        if (event.get("round") == rnd and event.get("phase") == phase
+                and event.get("attempt") == attempt):
+            return True
+    return False
+
+
+def _re_emit_stale_relocation(journal, rnd, phase, attempt):
+    """The relocated journal row after the last orders-emitted that made the order stale, or None."""
+    last_emit_idx = None
+    for idx, event in enumerate(journal):
+        if (event.get("outcome") == "orders-emitted"
+                and event.get("round") == rnd and event.get("phase") == phase
+                and event.get("attempt") == attempt):
+            last_emit_idx = idx
+    if last_emit_idx is None:
+        return None
+    for event in journal[last_emit_idx + 1:]:
+        if event.get("outcome") != "relocated":
+            continue
+        old_root = event.get("oldRoot")
+        new_root = event.get("newRoot")
+        old_session = event.get("oldSessionDir")
+        new_session = event.get("newSessionDir")
+        if not isinstance(old_root, str) or not isinstance(new_root, str):
+            continue
+        if os.path.realpath(old_root) != os.path.realpath(new_root):
+            return event
+        if isinstance(old_session, str) and isinstance(new_session, str):
+            if os.path.realpath(old_session) != os.path.realpath(new_session):
+                return event
+    return None
+
+
+def _re_emit_attempt_result_names(session_dir, journal, rnd, phase, attempt):
+    names = []
+    for event in journal:
+        if event.get("outcome") != "recorded":
+            continue
+        ident = event.get("recordIdentity")
+        if isinstance(ident, dict):
+            if (event.get("round") == rnd and ident.get("phase") == phase
+                    and ident.get("attempt") == attempt):
+                seat = ident.get("seat") or event.get("seat") or "unknown"
+                names.append("journal:%s" % seat)
+        elif (event.get("round") == rnd and event.get("phase") == phase
+              and event.get("attempt") == attempt):
+            names.append("journal:%s" % (event.get("seat") or "unknown"))
+    needle = ".a%d." % attempt
+    landing = round_records.landing_dir(session_dir, rnd, phase)
+    if os.path.isdir(landing):
+        for name in os.listdir(landing):
+            if needle in name:
+                names.append(name)
+    return names
+
+
+def _cmd_re_emit_locked(session_dir, by):
+    ok, state = load_state(session_dir)
+    if not ok or state is None:
+        detail = state if not ok else "no state"
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-session-unreadable", detail=detail)
+
+    if state.get("terminal"):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
+    pending = state.get("pending")
+    if not isinstance(pending, dict):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
+    phase = pending.get("phase")
+    if not isinstance(phase, str) or not phase.startswith("dispatch-"):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
+    rnd = pending.get("round")
+    old_attempt = pending.get("attempt")
+
+    anchor = _orders_anchor(state, session_dir, rnd, phase, old_attempt)
+    if anchor is None or not _journal_has_orders_emitted(session_dir, rnd, phase, old_attempt):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-anchor",
+                           phase=phase, rnd=rnd, attempt=old_attempt)
+
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir)
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot")
+    if not isinstance(repo_root, str) or not repo_root:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
+                           detail="session repo root is unset")
+    head_res = store_core.run_git_result(repo_root, "rev-parse", "HEAD")
+    if (head_res.status in (store_core.GIT_UNAVAILABLE, store_core.GIT_DECLINED)
+            or not head_res.out):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
+                           detail="HEAD unresolvable in session repo root")
+
+    live_head = head_res.out
+    anchor_head = anchor.get("headSha")
+    if not isinstance(anchor_head, str) or not anchor_head:
+        anchor_head = _session_certified_head(session_dir, state)
+    if not isinstance(anchor_head, str) or not anchor_head:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
+                           detail="no headSha on anchor and no session certified head")
+
+    if anchor_head.lower() != live_head.lower():
+        return _refuse_cmd(
+            session_dir, "re-emit", "re-emit-head-moved",
+            anchorHead=anchor_head, liveHead=live_head,
+            detail=("the head moved outside the loop; a seat recorded at the live head "
+                    "cannot certify while the session's recorded head is the old one; "
+                    "re-emit does not move the session's head"))
+
+    journal = read_journal(session_dir)
+    relocation = _re_emit_stale_relocation(journal, rnd, phase, old_attempt)
+    if relocation is None:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-not-stale",
+                           phase=phase, rnd=rnd, attempt=old_attempt)
+
+    result_names = _re_emit_attempt_result_names(session_dir, journal, rnd, phase, old_attempt)
+    if result_names:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-attempt-has-results",
+                           phase=phase, rnd=rnd, attempt=old_attempt, names=result_names)
+
+    new_attempt = max(_next_dispatch_attempt(session_dir, rnd, phase, state), old_attempt + 1)
+    state["pending"] = dict(pending, attempt=new_attempt)
+
+    roster, roster_refusal = _roster_of(session_dir, state, "re-emit", phase, rnd, new_attempt)
+    if roster_refusal is not None:
+        return roster_refusal
+
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    relocation_fields = {
+        "oldRoot": relocation.get("oldRoot"),
+        "newRoot": relocation.get("newRoot"),
+        "oldSessionDir": relocation.get("oldSessionDir"),
+        "newSessionDir": relocation.get("newSessionDir"),
+    }
+    superseded_row = _journal_entry_for_commit(
+        session_dir, "re-emit", "orders-superseded",
+        phase=phase, round=rnd, attempt=old_attempt, newAttempt=new_attempt,
+        supersededManifestSha256=anchor.get("manifestSha256"),
+        supersededOrderSha256=anchor.get("orders"),
+        head=live_head,
+        relocation=relocation_fields,
+        by=by, at=at)
+
+    try:
+        _emit_orders_manifest(
+            session_dir, state, rnd, phase, new_attempt, roster,
+            journal_cmd="re-emit", pending_payload=state["pending"]["payload"],
+            seat_map=_effective_seat_map(state),
+            extra_journal_entries=[superseded_row])
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, "re-emit", exc, phase=phase,
+                                        rnd=rnd, attempt=new_attempt)
+    except ValueError as exc:
+        return _refuse_cmd(session_dir, "re-emit", "order-render-refused", phase=phase,
+                           rnd=rnd, attempt=new_attempt, detail=str(exc))
+
+    save_state(session_dir, state)
+    response = _next_response(state["pending"], state_hash(state))
+    response["superseded"] = {
+        "attempt": old_attempt,
+        "manifestSha256": anchor.get("manifestSha256"),
+    }
+    return response
+
+
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
                _pending_policy_applied=None, _durable_record=None, _policy_journal_entry=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
@@ -8112,7 +8290,7 @@ def _seat_dispatch_row(state, seat_key, seat_map=None):
 
 
 def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance",
-                          pending_payload=None, seat_map=None):
+                          pending_payload=None, seat_map=None, extra_journal_entries=()):
     """Emit per-slot order prompts, envelope stubs, and the orders manifest for a dispatch phase.
 
     Every roster SLOT is rendered, hashed, and written inside the single `orders-emit` commit
@@ -8237,7 +8415,10 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                                          row, manifest_sha, order_sha, state,
                                          head_sha=certified_head)
             c.add_replace_file(stub_path, round_records.canonical(stub).encode("utf-8"))
-        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        journal_path = os.path.join(session_dir, JOURNAL_FILE)
+        for extra_entry in extra_journal_entries:
+            c.add_journal_append(journal_path, extra_entry)
+        c.add_journal_append(journal_path, journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
         raise exc
@@ -10595,6 +10776,10 @@ def build_parser():
     cli_contract.add_argument(prl, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(prl, "--repo-root", contract="repo-root", required=True)
     cli_contract.add_argument(prl, "--by", contract="free-text", required=True)
+
+    pre = sub.add_parser("re-emit")
+    cli_contract.add_argument(pre, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pre, "--by", contract="free-text", required=True)
     return parser
 
 
@@ -10782,6 +10967,10 @@ def _dispatch(args):
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
     elif args.cmd == "relocate":
         out = cmd_relocate(args.session_dir, args.repo_root, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == "re-emit":
+        out = cmd_re_emit(args.session_dir, args.by)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     else:

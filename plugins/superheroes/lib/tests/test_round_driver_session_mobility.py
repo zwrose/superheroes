@@ -14,6 +14,7 @@ RD = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(RD)
 
 import round_records as RR  # noqa: E402
+import round_certification as RC  # noqa: E402
 import store_core as SC  # noqa: E402
 
 _RELOCATED_FIELDS = (
@@ -90,6 +91,39 @@ def _cli_json(capsys):
 def _relocate(session_dir, repo_root, capsys, by="tester"):
     rc = RD.main(["relocate", "--session-dir", session_dir, "--repo-root", repo_root, "--by", by])
     return rc, _cli_json(capsys)
+
+
+def _re_emit(session_dir, capsys, by="tester"):
+    rc = RD.main(["re-emit", "--session-dir", session_dir, "--by", by])
+    return rc, _cli_json(capsys)
+
+
+def _stale_session(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    _relocate(session_dir, repo["root_b"], capsys)
+    return repo, sess, session_dir
+
+
+def _orders_dir(session_dir, rnd, phase):
+    return os.path.join(session_dir, "round-%d" % rnd, "orders", phase)
+
+
+def _collect_attempt_files(session_dir, rnd, phase, attempt):
+    odir = _orders_dir(session_dir, rnd, phase)
+    needle = ".a%d." % attempt
+    paths = []
+    if os.path.isdir(odir):
+        for name in os.listdir(odir):
+            if needle in name:
+                paths.append(os.path.join(odir, name))
+    return sorted(paths)
+
+
+def _anchor_for(session_dir, rnd, phase, attempt):
+    ok, state = RD.load_state(session_dir)
+    return RD._orders_anchor(state, session_dir, rnd, phase, attempt)
 
 
 def _read_bytes(path):
@@ -342,6 +376,167 @@ def test_relocate_marker_retirement(tmp_path, capsys):
     assert marker["sessionDir"] == os.path.realpath(session_dir)
     assert marker["repoRoot"] == repo["root_b"]
     assert not os.path.isfile(_marker_path(repo["root_a"]))
+
+
+def test_re_emit_positive_after_relocate(tmp_path, capsys):
+    repo, sess, session_dir = _stale_session(tmp_path, capsys)
+    rnd, phase, old_attempt = 1, "dispatch-panel", 0
+    a0_files = {p: _read_bytes(p) for p in _collect_attempt_files(session_dir, rnd, phase, old_attempt)}
+    anchor0_before = _anchor_for(session_dir, rnd, phase, old_attempt)
+    journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
+    journal_before = _read_bytes(journal_path)
+    rc, out = _re_emit(session_dir, capsys)
+    assert rc == 0
+    assert out["ok"] is True
+    assert out["attempt"] == 1
+    ok, state = RD.load_state(session_dir)
+    assert state["pending"]["attempt"] == 1
+    root_b = os.path.realpath(repo["root_b"])
+    root_a = os.path.realpath(repo["root_a"])
+    a1_files = _collect_attempt_files(session_dir, rnd, phase, 1)
+    assert a1_files
+    a1_combined = b"".join(_read_bytes(p) for p in a1_files)
+    assert root_a.encode() not in a1_combined
+    meta = json.load(open(os.path.join(session_dir, "meta.json"), encoding="utf-8"))
+    assert os.path.realpath(meta["repoRoot"]) == root_b
+    a0_md = next(p for p in a0_files if p.endswith(".md"))
+    a1_md = next(p for p in a1_files if p.endswith(".md"))
+    assert _read_bytes(a0_md) != _read_bytes(a1_md)
+    for path, content in a0_files.items():
+        assert _read_bytes(path) == content
+    anchor0_after = _anchor_for(session_dir, rnd, phase, old_attempt)
+    assert json.dumps(anchor0_after, sort_keys=True) == json.dumps(anchor0_before, sort_keys=True)
+    anchor1 = _anchor_for(session_dir, rnd, phase, 1)
+    assert anchor1["headSha"] == repo["head"]
+    rows = _journal_rows(session_dir)
+    superseded_idx = next(i for i, r in enumerate(rows)
+                          if r.get("outcome") == "orders-superseded")
+    emitted_idx = next(i for i, r in enumerate(rows)
+                       if r.get("outcome") == "orders-emitted" and r.get("attempt") == 1
+                       and r.get("cmd") == "re-emit")
+    assert superseded_idx < emitted_idx
+    superseded = rows[superseded_idx]
+    emitted = rows[emitted_idx]
+    assert superseded["supersededManifestSha256"] == anchor0_before["manifestSha256"]
+    assert superseded["supersededOrderSha256"] == anchor0_before["orders"]
+    assert _read_bytes(journal_path).startswith(journal_before)
+
+
+def test_re_emit_certification_open_close(tmp_path, capsys):
+    repo, sess, session_dir = _stale_session(tmp_path, capsys)
+    rnd, phase = 1, "dispatch-panel"
+    _re_emit(session_dir, capsys)
+    unclosed, refusal = RC._journal_open_seats(RD.read_journal(session_dir), session_dir)
+    assert refusal is None
+    attempt0_keys = [k for k, _ in unclosed if k[2] == 0]
+    assert not attempt0_keys
+    attempt1_keys = [k for k, _ in unclosed if k[2] == 1 and k[0] == phase and k[1] == rnd]
+    assert attempt1_keys
+    manifest_path = RD._orders_manifest_path(session_dir, rnd, phase, 1)
+    manifest = json.load(open(manifest_path, encoding="utf-8"))
+    expected_slots = len(manifest.get("seats") or {})
+    assert len(attempt1_keys) == expected_slots
+
+
+def test_re_emit_cli_exit_codes(tmp_path, capsys):
+    repo, sess, session_dir = _stale_session(tmp_path, capsys)
+    rc_ok, out_ok = _re_emit(session_dir, capsys)
+    assert rc_ok == 0 and out_ok["ok"] is True
+    rc_refuse, out_refuse = _re_emit(session_dir, capsys)
+    assert rc_refuse == 1 and out_refuse["ok"] is False
+
+
+@pytest.mark.parametrize("reason,setup", [
+    ("re-emit-not-stale", "not_stale"),
+    ("re-emit-head-moved", "head_moved"),
+    ("re-emit-attempt-has-results", "has_results"),
+    ("re-emit-no-pending-order", "no_pending"),
+    ("re-emit-no-anchor", "no_anchor"),
+    ("re-emit-head-unresolved", "head_unresolved"),
+    ("re-emit-locked", "locked"),
+])
+def test_re_emit_refusal_tokens(tmp_path, capsys, reason, setup):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    meta_path = os.path.join(session_dir, "meta.json")
+    state_path = os.path.join(session_dir, RD.STATE_FILE)
+    if setup == "not_stale":
+        pass
+    elif setup == "head_moved":
+        _relocate(session_dir, repo["root_b"], capsys)
+        subprocess.check_call(
+            ["git", "-C", repo["root_b"], "commit", "-q", "--allow-empty", "-m", "ahead"])
+    elif setup == "has_results":
+        _relocate(session_dir, repo["root_b"], capsys)
+        ok, state = RD.load_state(session_dir)
+        rnd, phase, attempt = state["pending"]["round"], state["pending"]["phase"], 0
+        roster, _ = RD._roster_of(session_dir, state, "re-emit", phase, rnd, attempt)
+        slot = RR.storage_key(roster[0], 0)
+        payload_path = RR.bare_payload_path(session_dir, rnd, phase, slot, attempt)
+        os.makedirs(os.path.dirname(payload_path), exist_ok=True)
+        with open(payload_path, "w", encoding="utf-8") as fh:
+            fh.write("{}")
+    elif setup == "no_pending":
+        ok, state = RD.load_state(session_dir)
+        state["pending"] = None
+        RD.save_state(session_dir, state)
+    elif setup == "no_anchor":
+        _relocate(session_dir, repo["root_b"], capsys)
+        ok, state = RD.load_state(session_dir)
+        rnd, phase, attempt = state["pending"]["round"], state["pending"]["phase"], 0
+        anchors = state.get("_ordersAnchors") or {}
+        anchors.pop(RD._anchor_key(rnd, phase, attempt), None)
+        state["_ordersAnchors"] = anchors
+        RD.save_state(session_dir, state)
+        manifest_path = RD._orders_manifest_path(session_dir, rnd, phase, attempt)
+        aside = manifest_path + ".aside"
+        os.rename(manifest_path, aside)
+    elif setup == "head_unresolved":
+        _relocate(session_dir, repo["root_b"], capsys)
+        subprocess.check_call(["git", "-C", repo["root_a"], "worktree", "remove", "--force",
+                               repo["root_b"]])
+    elif setup == "locked":
+        _relocate(session_dir, repo["root_b"], capsys)
+        RR.atomic_write_json(RR.session_lock_path(session_dir),
+                             {"pid": 424242, "createdAt": "2026-08-07T00:00:00"})
+    meta_before = _read_bytes(meta_path)
+    state_before = _read_bytes(state_path)
+    rc, out = _re_emit(session_dir, capsys)
+    assert rc == 1
+    assert out["ok"] is False
+    assert out["reason"] == reason
+    refused = _last_refused(session_dir, reason)
+    assert refused is not None
+    assert _read_bytes(meta_path) == meta_before
+    assert _read_bytes(state_path) == state_before
+
+
+def test_relocate_invariant_moved_session_dir(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    session_dir2 = str(tmp_path / "session2")
+    shutil.copytree(session_dir, session_dir2)
+    meta2_path = os.path.join(session_dir2, "meta.json")
+    meta2 = json.load(open(meta2_path, encoding="utf-8"))
+    meta2["sessionDir"] = os.path.realpath(session_dir2)
+    with open(meta2_path, "w", encoding="utf-8") as fh:
+        json.dump(meta2, fh)
+    _relocate(session_dir2, repo["root_b"], capsys)
+    old_a = os.path.realpath(repo["root_a"])
+    old_s = os.path.realpath(session_dir)
+    current_s2 = os.path.realpath(session_dir2)
+    state2 = json.load(open(os.path.join(session_dir2, RD.STATE_FILE), encoding="utf-8"))
+    meta2 = json.load(open(meta2_path, encoding="utf-8"))
+    for label, doc in (("meta", meta2), ("state", state2)):
+        for key_path, value in _walk_strings(doc, label):
+            if _anchor_path_allowed(key_path):
+                continue
+            if value == current_s2:
+                continue
+            if value.startswith(old_a) or value.startswith(old_s + os.sep):
+                pytest.fail("old path survived at %s: %s" % (key_path, value))
 
 
 def test_relocate_marker_not_ours_left_alone(tmp_path):
