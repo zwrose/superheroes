@@ -17311,37 +17311,73 @@ def test_completion_stdout_truncated_final_line_forfeits_unrecorded(
     assert detail == ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
 
 
-def test_completion_stdout_over_bound_line_forfeits_unrecorded(tmp_path, monkeypatch):
-    """axis: a result line longer than the stampable bound is dropped whole."""
-    _cap, stampable = _patch_stdout_completion_bounds(monkeypatch, 16384)
+def test_completion_stdout_over_bound_line_bounded_buffer(tmp_path, monkeypatch):
+    """axis: partial-line buffer stays bounded — over-long line is released, not accumulated.
+
+    Calls _observe_stdout_completion directly because the buffer-bound property has no
+    end-to-end expression; the companion e2e block asserts such a line is never stamped.
+    """
+    patched_cap = 16384
+    patched_stampable = 16328
+    patched_chunk = 256
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
+    monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", patched_chunk)
+    max_buf_allowed = patched_stampable + patched_chunk
+    over_body_len = patched_stampable + patched_chunk + 100
+    over_line = ("x" * over_body_len) + "\n"
+    stdout_path = tmp_path / "over-bound-line.stdout"
+    stdout_path.write_bytes(over_line.encode("utf-8"))
+    obs_state = {"offset": 0, "buf": b"", "overflow": False}
+    max_buf_seen = 0
+    overflow_seen = False
+    real_drain = ED._drain_stdout_completion_bytes
+
+    def _tracking_drain(state, data, file_offset_before):
+        real_drain(state, data, file_offset_before)
+        nonlocal max_buf_seen, overflow_seen
+        buflen = len(state.get("buf", b""))
+        if buflen > max_buf_seen:
+            max_buf_seen = buflen
+        if state.get("overflow"):
+            overflow_seen = True
+
+    monkeypatch.setattr(ED, "_drain_stdout_completion_bytes", _tracking_drain)
+    ED._observe_stdout_completion(obs_state, str(stdout_path), terminal=True)
+    assert max_buf_seen <= max_buf_allowed
+    assert overflow_seen is True
+
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    stream, _payload, result_line_bytes = _large_claude_result_stream(
-        structured, min_result_line_bytes=stampable + 1,
-    )
-    assert result_line_bytes > stampable
-    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    script = "import sys\nsys.stdout.write(%r)\n" % over_line
     run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
         tmp_path, monkeypatch, script,
     )
     for key in _COMPLETION_KEYS:
         assert key not in ended
-    grade = ED._grade_review_attempt(run_dir, state, 1)
-    assert grade.get("forfeit") is True
-    assert grade.get("detail") == "result-completion-unrecorded"
 
 
 def test_completion_stdout_at_bound_line_admits(tmp_path, monkeypatch):
-    """axis: a result line just inside the stampable bound is stamped and admitted."""
-    _cap, stampable = _patch_stdout_completion_bounds(monkeypatch, 16384)
+    """axis: a valid result line just inside the stampable bound is stamped and admitted."""
+    patched_cap = 16384
+    patched_stampable = 16328
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    stream, structured, result_line_bytes = _large_claude_result_stream(
-        structured, min_result_line_bytes=max(stampable - 512, 1),
-    )
-    assert result_line_bytes < stampable
+    target = patched_stampable - 1
+    stream = structured = result_line_bytes = None
+    for min_bytes in range(target, max(target - 600, 1), -1):
+        stream, structured, result_line_bytes = _large_claude_result_stream(
+            structured, min_result_line_bytes=min_bytes,
+        )
+        if result_line_bytes < patched_stampable:
+            break
+    assert result_line_bytes < patched_stampable
+    assert result_line_bytes >= target - 512
+    file_bytes = len(stream.encode("utf-8"))
+    assert file_bytes < patched_cap
     script = "import sys\nsys.stdout.write(%r)\n" % stream
     run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
         tmp_path, monkeypatch, script,
     )
+    assert os.path.getsize(_stdout_path) < patched_cap
     _assert_completion_keys(ended, structured)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
@@ -17350,29 +17386,32 @@ def test_completion_stdout_at_bound_line_admits(tmp_path, monkeypatch):
 
 def test_completion_stdout_large_under_cap_still_admits(tmp_path, monkeypatch):
     """axis: stamped result survives when stdout is large but still at or under the cap."""
-    cap, stampable = _patch_stdout_completion_bounds(monkeypatch, 16384)
+    patched_cap = 16384
+    patched_stampable = 16328
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    result_stream = _claude_event_stream(result=structured)
-    filler_line = json.dumps({
-        "type": "assistant",
-        "message": {"content": [{"type": "text", "text": "x" * 400}]},
-    }, separators=(",", ":")) + "\n"
-    filler_bytes = len(filler_line.encode("utf-8"))
+    result_stream, structured, result_line_bytes = _large_claude_result_stream(
+        structured, min_result_line_bytes=1,
+    )
     result_bytes = len(result_stream.encode("utf-8"))
-    filler_count = max(1, (cap - result_bytes - 256) // filler_bytes)
-    total_bytes = result_bytes + filler_count * filler_bytes
-    assert total_bytes <= cap
-    assert total_bytes > result_bytes + filler_bytes
+    pad_bytes = patched_cap - result_bytes
+    assert pad_bytes > 0
+    filler = ("z" * (pad_bytes - 1)) + "\n"
+    assert result_bytes + len(filler.encode("utf-8")) == patched_cap
     script = (
         "import sys\n"
         "sys.stdout.write(%r)\n"
-        "sys.stdout.write(%r * %d)\n"
-        % (result_stream, filler_line, filler_count)
+        "sys.stdout.write(%r)\n"
+        % (result_stream, filler)
     )
-    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+    run_dir, state, ended, stdout_path = _run_claude_stdout_review_script(
         tmp_path, monkeypatch, script,
     )
-    assert os.path.getsize(_stdout_path) <= cap
+    assert os.path.getsize(stdout_path) == patched_cap
+    content_budget = ED._cap_content_budget(
+        patched_cap, ED.CAP_STREAM_STDOUT, patched_cap,
+    )
+    assert patched_cap - 0 > content_budget
     _assert_completion_keys(ended, structured)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
@@ -17383,18 +17422,28 @@ def test_completion_stdout_overflow_does_not_suppress_following_result(
         tmp_path, monkeypatch,
 ):
     """axis: overflow on one over-bound line must not leak into the next valid result line."""
-    _cap, stampable = _patch_stdout_completion_bounds(monkeypatch, 16384)
-    read_chunk = 256
-    monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", read_chunk)
+    patched_cap = 16384
+    patched_stampable = 16328
+    patched_chunk = 256
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
+    monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", patched_chunk)
     structured = _wrap_native_review_result(_native_review_branch("findings"))
-    result_stream = _claude_event_stream(result=structured)
-    result_line = result_stream.rstrip("\n").split("\n")[-1] + "\n"
-    assert len(result_line.encode("utf-8")) < stampable
-    assert len(result_line.encode("utf-8")) > read_chunk
-    over_line = ("x" * (stampable + 1)) + "\n"
-    split_at = read_chunk - (len(over_line.encode("utf-8")) % read_chunk)
-    if split_at <= 0 or split_at >= len(result_line):
-        split_at = read_chunk
+    result_stream, structured, _result_line_bytes = _large_claude_result_stream(
+        structured, min_result_line_bytes=patched_chunk * 2,
+    )
+    result_line = result_stream
+    over_body_len = patched_stampable + 2 * patched_chunk
+    over_line = ("x" * over_body_len) + "\n"
+    over_line_bytes = len(over_line.encode("utf-8"))
+    bound_cross_chunk = (patched_stampable // patched_chunk) + 1
+    assert bound_cross_chunk * patched_chunk > patched_stampable
+    assert bound_cross_chunk * patched_chunk <= over_body_len
+    over_newline_offset = over_body_len
+    over_newline_chunk = over_newline_offset // patched_chunk
+    result_newline_offset = over_line_bytes + len(result_line.encode("utf-8")) - 1
+    result_newline_chunk = result_newline_offset // patched_chunk
+    assert result_newline_chunk > over_newline_chunk
+    split_at = patched_chunk
     head = result_line[:split_at]
     tail = result_line[split_at:]
     script = (
