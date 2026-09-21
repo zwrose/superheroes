@@ -7,12 +7,14 @@ plus FIX-C vet-verdict-form load guards.
 `FileNotFoundError` branch in `_load_vet_verdict_form`; G3/G4/G5 verdict-vocabulary branches
 (unknown, duplicate, missing) in `_load_vet_verdict_form`.
 
-**Provenance:** cursor / composer-2.5.
+**Provenance:** cursor / composer-2.5 (original); FIX-H2 re-run at head below.
 
-**Command** (referred to as *the command* below):
+**Head:** `a394fc2ba355933e27ddde9ae0baabb7115c5ebc`
+
+**Command** (referred to as *the command* below, with `<node-id>` replaced per guard):
 
 ```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py -q -k l2f
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest "<node-id>" -q
 ```
 
 ## Summary table
@@ -20,8 +22,8 @@ plus FIX-C vet-verdict-form load guards.
 | ID | Guarded element (file:line) | Axis | Proving tests | Verdict |
 |---|---|---|---|---|
 | G1 | stack_check.py:702-705 | allowlist membership on state | `test_l2f_read_pr_vet_state_unrecognised_state`, `test_l2f_read_pr_vet_state_lowercase_open_refuses` | proven |
-| G2 | stack_check.py `_load_vet_verdict_form` FileNotFoundError branch | missing form file refuses rather than embedded defaults | `test_l2f_v30_vet_form_missing_refuses` | proven |
-| G3 | stack_check.py:122-126 | unknown verdict in loaded form | `test_l2f_v31_vet_form_unknown_verdict_refuses` | proven |
+| G2 | stack_check.py:74-76 | missing form file refuses rather than embedded defaults | `test_l2f_v30_vet_form_missing_refuses` | proven |
+| G3 | stack_check.py:122-126 | unknown verdict in loaded form | `test_l2f_v31_vet_form_unknown_verdict_refuses` | not independently neutralizable |
 | G4 | stack_check.py:127-131 | duplicated verdict in loaded form | `test_l2f_v32_vet_form_duplicate_verdict_refuses` | proven |
 | G5 | stack_check.py:133-138 | missing verdict in loaded form | `test_l2f_v33_vet_form_missing_verdict_refuses` | proven |
 
@@ -41,14 +43,13 @@ plus FIX-C vet-verdict-form load guards.
     # allowlist neutralized for bite-proof
 ```
 
-**command:**
-```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py -q -k l2f
-```
+**node ids:**
+- `plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_unrecognised_state`
+- `plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_lowercase_open_refuses`
 
 **raw red:**
 ```
-......................................FF..                               [100%]
+FF                                                                       [100%]
 =================================== FAILURES ===================================
 ________________ test_l2f_read_pr_vet_state_unrecognised_state _________________
 
@@ -61,7 +62,7 @@ ________________ test_l2f_read_pr_vet_state_unrecognised_state _________________
 >       assert state is None
 E       AssertionError: assert {'body': '', 'headRefOid': 'abcdef0123456789abcdef0123456789abcdef01', 'isDraft': False, 'number': 701, ...} is None
 
-plugins/superheroes/lib/tests/test_stack_check.py:1713: AssertionError
+plugins/superheroes/lib/tests/test_stack_check.py:1800: AssertionError
 ______________ test_l2f_read_pr_vet_state_lowercase_open_refuses _______________
 
     def test_l2f_read_pr_vet_state_lowercase_open_refuses():
@@ -73,17 +74,17 @@ ______________ test_l2f_read_pr_vet_state_lowercase_open_refuses _______________
 >       assert state is None
 E       AssertionError: assert {'body': '', 'headRefOid': 'abcdef0123456789abcdef0123456789abcdef01', 'isDraft': False, 'number': 701, ...} is None
 
-plugins/superheroes/lib/tests/test_stack_check.py:1725: AssertionError
+plugins/superheroes/lib/tests/test_stack_check.py:1812: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_unrecognised_state
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_lowercase_open_refuses
-2 failed, 40 passed, 82 deselected in 0.16s
+2 failed in 0.14s
 ```
 
 **raw green** after restore:
 ```
-..........................................                               [100%]
-42 passed, 82 deselected in 0.13s
+..                                                                       [100%]
+2 passed in 0.12s
 ```
 
 **restored lines:**
@@ -98,7 +99,7 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_s
 
 ## G2 — fail-closed vet-verdict-form load (FIX-C)
 
-**Guarded element:** `stack_check.py` `_load_vet_verdict_form` FileNotFoundError branch — must refuse `vet-unreadable`, never fall back to a built-in form.
+**Guarded element:** `stack_check.py:74-76` `_load_vet_verdict_form` FileNotFoundError branch — must refuse `vet-unreadable`, never fall back to a built-in form.
 
 **Axis:** missing form file refuses rather than silently using embedded defaults.
 
@@ -124,18 +125,13 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_s
         return _vet_verdict_form, None
 ```
 
-**command:**
-```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v30_vet_form_missing_refuses -q
-```
-
 **raw red:**
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________________ test_l2f_v30_vet_form_missing_refuses _____________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106443370>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x102585370>
 
     def test_l2f_v30_vet_form_missing_refuses(monkeypatch):
         # axis: missing vet-verdict-form.json refuses vet-unreadable, never READY
@@ -147,8 +143,8 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106443370>
             sc.REASON_VET_UNREADABLE,
         )
 
-plugins/superheroes/lib/tests/test_stack_check.py:1565: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+plugins/superheroes/lib/tests/test_stack_check.py:1575: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 body = '<!-- superheroes:advisor-vet -->\n**Verdict: READY** · abcdef0123456789abcdef0123456789abcdef01'
 head_sha = 'abcdef0123456789abcdef0123456789abcdef01', reason = 'vet-unreadable'
@@ -161,13 +157,13 @@ E       AssertionError: assert 'READY' is None
 plugins/superheroes/lib/tests/test_stack_check.py:1373: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v30_vet_form_missing_refuses
-1 failed in 0.11s
+1 failed in 0.13s
 ```
 
 **raw green** after restore:
 ```
 .                                                                        [100%]
-1 passed in 0.09s
+1 passed in 0.11s
 ```
 
 **restored lines:**
@@ -197,62 +193,14 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v30_vet_form_
 ```
 → (deleted)
 
-**command:**
-```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v31_vet_form_unknown_verdict_refuses -q
-```
+**not independently neutralizable:** at this head, deleting the unknown-verdict branch does not redden the proving test. The fixture maps the READY token to verdict `SHIPPED`, so G5's missing-verdict branch (`seen_verdicts != expected_verdicts`, READY absent) still refuses before `read_vet_verdict` returns a verdict. Observed output with only G3 neutralized:
 
-**raw red:**
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-________________ test_l2f_v31_vet_form_unknown_verdict_refuses ___________________
-
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106914e80>
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3662/test_l2f_v31_vet_form_unknown_0')
-
-    def test_l2f_v31_vet_form_unknown_verdict_refuses(monkeypatch, tmp_path):
-        # axis: unknown verdict value in the form refuses vet-unreadable
-        tokens = list(_VALID_VET_FORM_TOKENS)
-        tokens[0] = {"token": "**Verdict: READY**", "verdict": "SHIPPED"}
-        _patch_vet_form(monkeypatch, tmp_path, tokens)
->       _assert_vet_refusal(
-            _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
-            HEAD_SHA,
-            sc.REASON_VET_UNREADABLE,
-        )
-
-plugins/superheroes/lib/tests/test_stack_check.py:1602: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-body = '<!-- superheroes:advisor-vet -->\n**Verdict: READY** · abcdef0123456789abcdef0123456789abcdef01'
-head_sha = 'abcdef0123456789abcdef0123456789abcdef01', reason = 'vet-unreadable'
-
-    def _assert_vet_refusal(body, head_sha, reason):
-        verdict, refusal = sc.read_vet_verdict(body, head_sha)
->       assert verdict is None
-E       AssertionError: assert 'SHIPPED' is None
-
-plugins/superheroes/lib/tests/test_stack_check.py:1373: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v31_vet_form_unknown_verdict_refuses
-1 failed in 0.11s
-```
-
-**raw green** after restore:
 ```
 .                                                                        [100%]
-1 passed in 0.09s
+1 passed in 0.10s
 ```
 
-**restored lines:**
-```python
-        if verdict not in expected_verdicts:
-            _vet_verdict_form_error = (
-                "vet-verdict-form.json verdict %r is not recognised" % verdict
-            )
-            return None, _vet_verdict_form_error
-```
+No green half — guard not proven in isolation.
 
 ---
 
@@ -279,19 +227,14 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v31_vet_form_
         seen_verdicts.add(verdict)
 ```
 
-**command:**
-```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v32_vet_form_duplicate_verdict_refuses -q
-```
-
 **raw red:**
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _______________ test_l2f_v32_vet_form_duplicate_verdict_refuses ________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105f5ea90>
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3677/test_l2f_v32_vet_form_duplicat0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1062e15b0>
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3710/test_l2f_v32_vet_form_duplicat0')
 
     def test_l2f_v32_vet_form_duplicate_verdict_refuses(monkeypatch, tmp_path):
         # axis: duplicated verdict value in the form refuses vet-unreadable
@@ -305,7 +248,7 @@ tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/c
             sc.REASON_VET_UNREADABLE,
         )
 
-plugins/superheroes/lib/tests/test_stack_check.py:1615: 
+plugins/superheroes/lib/tests/test_stack_check.py:1625: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 body = '<!-- superheroes:advisor-vet -->\n**Verdict: READY** · abcdef0123456789abcdef0123456789abcdef01'
@@ -319,13 +262,13 @@ E       AssertionError: assert 'READY' is None
 plugins/superheroes/lib/tests/test_stack_check.py:1373: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v32_vet_form_duplicate_verdict_refuses
-1 failed in 0.20s
+1 failed in 0.12s
 ```
 
 **raw green** after restore:
 ```
 .                                                                        [100%]
-1 passed in 0.15s
+1 passed in 0.11s
 ```
 
 **restored lines:**
@@ -359,19 +302,14 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v32_vet_form_
 ```
 → (deleted)
 
-**command:**
-```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v33_vet_form_missing_verdict_refuses -q
-```
-
 **raw red:**
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ________________ test_l2f_v33_vet_form_missing_verdict_refuses _________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10435af10>
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3670/test_l2f_v33_vet_form_missing_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105b71ee0>
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3712/test_l2f_v33_vet_form_missing_0')
 
     def test_l2f_v33_vet_form_missing_verdict_refuses(monkeypatch, tmp_path):
         # axis: missing member of the verdict vocabulary refuses vet-unreadable
@@ -383,7 +321,7 @@ tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/c
             sc.REASON_VET_UNREADABLE,
         )
 
-plugins/superheroes/lib/tests/test_stack_check.py:1625: 
+plugins/superheroes/lib/tests/test_stack_check.py:1636: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 body = '<!-- superheroes:advisor-vet -->\n**Verdict: READY** · abcdef0123456789abcdef0123456789abcdef01'
@@ -397,13 +335,13 @@ E       AssertionError: assert 'READY' is None
 plugins/superheroes/lib/tests/test_stack_check.py:1373: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v33_vet_form_missing_verdict_refuses
-1 failed in 0.13s
+1 failed in 0.14s
 ```
 
 **raw green** after restore:
 ```
 .                                                                        [100%]
-1 passed in 0.10s
+1 passed in 0.11s
 ```
 
 **restored lines:**
@@ -420,10 +358,10 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v33_vet_form_
 
 ## Restore receipt
 
-Bite-proof neutralizations applied and reverted by inverse edit in the FIX-D worktree.
+All bite-proof neutralizations applied and reverted by inverse edit. No shipped code changes remain.
 
 **`git status --porcelain` after restore:**
 ```
- M plugins/superheroes/TRANSITION.md
  M plugins/superheroes/lib/tests/bite_proofs/wo_1340_l2f_r2_state_allowlist.md
+ M plugins/superheroes/lib/tests/bite_proofs/wo_1340_l2f_r2_fix_a_gate.md
 ```

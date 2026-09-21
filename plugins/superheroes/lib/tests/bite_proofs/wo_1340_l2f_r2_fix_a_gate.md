@@ -5,6 +5,10 @@ draft `dependency-not-ready` arm.
 
 **Register:** 3 guards — closed-unmerged refuses, draft skips verdict, lifecycle fallback refuses.
 
+**Provenance:** cursor / composer-2.5 (original); FIX-H2 re-run at head below.
+
+**Head:** `a394fc2ba355933e27ddde9ae0baabb7115c5ebc`
+
 **Method:** the mutation is the smallest possible edit to the **guarded code** (never to the test),
 applied through the host's edit action and reverted by the inverse edit. Each proving test is selected
 by its **exact node id**, never `-k`.
@@ -45,8 +49,8 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 _________________ test_dependency_gate_closed_unmerged_refuses _________________
 
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3644/test_dependency_gate_closed_un0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106210730>
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3717/test_dependency_gate_closed_un0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105c9f1f0>
 
     def test_dependency_gate_closed_unmerged_refuses(tmp_path, monkeypatch):
       # axis: closed-unmerged dependency refuses dependency-closed-unmerged
@@ -78,16 +82,21 @@ E
 E         - dependency-closed-unmerged
 E         + dependency-read-unavailable
 
-plugins/superheroes/lib/tests/test_launcher.py:7008: AssertionError
+plugins/superheroes/lib/tests/test_launcher.py:7036: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_closed_unmerged_refuses
-1 failed in 0.58s
+1 failed in 1.29s
 ```
 
 **raw green** after the inverse edit:
 ```
 .                                                                        [100%]
-1 passed in 0.55s
+1 passed in 0.69s
+```
+
+**restored lines:**
+```python
+    if pr_lifecycle == "CLOSED":
 ```
 
 ## F2 — draft dependency passes not-ready without consulting verdict
@@ -110,8 +119,8 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 _________________ test_dependency_gate_draft_not_ready_passes __________________
 
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3646/test_dependency_gate_draft_not0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10252e730>
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3719/test_dependency_gate_draft_not0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1036ba790>
 
     def test_dependency_gate_draft_not_ready_passes(tmp_path, monkeypatch):
       # axis: OPEN draft with READY verdict passes dependency-not-ready, not applied
@@ -145,7 +154,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10252e730>
             pr_vet_reader=reader,
         )
 
-plugins/superheroes/lib/tests/test_launcher.py:7071: 
+plugins/superheroes/lib/tests/test_launcher.py:7099: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 plugins/superheroes/lib/launcher.py:1761: in launch_build
     gate_result = _apply_dependency_gate(
@@ -153,23 +162,28 @@ plugins/superheroes/lib/launcher.py:1588: in _apply_dependency_gate
     verdict, vet_refusal = stack_check.read_vet_verdict(
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-args = ('<!-- superheroes:advisor-vet -->\n**Verdict: READY** · ce537c26820ea2de3339ac4823a8415570609d7a', 'ce537c26820ea2de3339ac4823a8415570609d7a')
+args = ('<!-- superheroes:advisor-vet -->\n**Verdict: READY** · 811bb07e6c0a1bd3df31be4999a90656f9139901', '811bb07e6c0a1bd3df31be4999a90656f9139901')
 kwargs = {}
 
     def refusing_vet(*args, **kwargs):
 >       raise AssertionError("draft dependency must not consult verdict")
 E       AssertionError: draft dependency must not consult verdict
 
-plugins/superheroes/lib/tests/test_launcher.py:7063: AssertionError
+plugins/superheroes/lib/tests/test_launcher.py:7091: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_draft_not_ready_passes
-1 failed in 0.46s
+1 failed in 0.57s
 ```
 
 **raw green:**
 ```
 .                                                                        [100%]
-1 passed in 0.98s
+1 passed in 1.19s
+```
+
+**restored lines:**
+```python
+    if pr_state.get("isDraft"):
 ```
 
 ## F3 — unrecognised lifecycle from injected reader refuses
@@ -192,8 +206,8 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ___________ test_dependency_gate_launcher_lifecycle_fallback_refuses ___________
 
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3683/test_dependency_gate_launcher_0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x104823b80>
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3721/test_dependency_gate_launcher_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10583c220>
 
     def test_dependency_gate_launcher_lifecycle_fallback_refuses(tmp_path, monkeypatch):
       # axis: launcher fallback refuses unrecognised lifecycle from injected reader
@@ -224,16 +238,27 @@ E       assert True is False
 plugins/superheroes/lib/tests/test_launcher.py:6965: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher.py::test_dependency_gate_launcher_lifecycle_fallback_refuses
-1 failed in 21.06s
+1 failed in 21.07s
 ```
 
 **raw green** after the inverse edit:
 ```
 .                                                                        [100%]
-1 passed in 0.58s
+1 passed in 0.61s
+```
+
+**restored lines:**
+```python
+    if pr_lifecycle != "OPEN":
 ```
 
 ## Restore receipt
 
 Restored lines quoted above in `_apply_dependency_gate` after each guard (`if pr_lifecycle == "CLOSED":`,
-`if pr_state.get("isDraft"):`, and `if pr_lifecycle != "OPEN":`).
+`if pr_state.get("isDraft"):`, and `if pr_lifecycle != "OPEN":`). No shipped code changes remain.
+
+**`git status --porcelain` after restore:**
+```
+ M plugins/superheroes/lib/tests/bite_proofs/wo_1340_l2f_r2_state_allowlist.md
+ M plugins/superheroes/lib/tests/bite_proofs/wo_1340_l2f_r2_fix_a_gate.md
+```
