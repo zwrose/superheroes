@@ -206,3 +206,76 @@ FAILED ...::test_ordering_axes_carry_through_finalization[newer-record-without-r
   (the existing `test_fold_verify_without_session_dir_records_no_verified_head` and
   `test_run_loop_leg_does_not_synthesize_a_pass_receipt` cover it).
 - Hex digests in the red excerpts are elided with `…`; nothing else was redacted.
+
+---
+
+## Adoption r3 — the advance retry proves the same artifact survives
+
+The review of this layer found that `test_verify_advance_surfaces_the_refusal_as_fold_refused_and_retries`
+wrote the verify payload a second time before the retry, so it stayed green even if the refusal had
+destroyed the original. The test now captures the first payload's path and bytes, asserts both are
+unchanged after the refused `advance`, and retries with no second write. Production code is
+unchanged; four layer 2g tests were also renamed (bodies untouched), and none of them is a detector
+on any bite-proof record.
+
+**Who ran these, and where.** The r3 adoption orchestrator (`launch-93b781943aa4e175`), in two
+dedicated detached probe worktrees cut for this purpose and read by no other session:
+`issue-1272-2h-r3-probe` at **`7b93d0ba`** (the test fix, committed before the first probe) and
+`issue-1272-2h-r3-probe-old` at **`8b82181d`** (the test as it stood before the fix). Same command
+shape as above, pycache prefixes `/private/tmp/superheroes-pyc-r3probe` and
+`…-r3probe-old`; every detector selected by exact node id; every EXIT the runner's own;
+`git status --porcelain` empty after every restore in both trees. The commits after `7b93d0ba`
+touch this record only, so these runs hold for the final head.
+
+**Baseline** at `7b93d0ba`, both BP-2h-b detectors (EXIT=0): `2 passed in 0.31s`. **After the last
+restore**, both detector files (EXIT=0): `35 passed in 4.99s`.
+
+### BP-2h-b re-run — the chokepoint refuses before the fold (a detector changed)
+
+Neutralization unchanged from BP-2h-b: `if phase == P_VERIFY and resolution[1]:` →
+`if False and phase == P_VERIFY and resolution[1]:`.
+
+**Red** (EXIT=1):
+
+```
+>       assert answer1["ok"] is False
+E       assert True is False
+>       assert out1["ok"] is False
+E       assert True is False
+FAILED plugins/superheroes/lib/tests/test_layer2h_verify_submit_refusal_1272.py::test_verify_submit_refuses_an_unresolvable_head_and_accepts_the_same_artifact_after
+FAILED plugins/superheroes/lib/tests/test_layer2h_verify_submit_refusal_1272.py::test_verify_advance_surfaces_the_refusal_as_fold_refused_and_retries
+2 failed in 0.20s
+```
+
+**Restored → green** (EXIT=0): `2 passed in 0.49s`.
+
+### BP-2h-h — the refused advance leaves the artifact for the retry
+
+**Guarded element.** The refusal returns with the verify payload untouched, so the retry folds the
+same artifact rather than one written again.
+
+**Neutralization** (`round_driver.py`, `cmd_submit`, the `verified-head-unresolved` refusal branch,
+one line inserted directly after its journal append):
+`os.remove(round_records.bare_payload_path(session_dir, round_no, phase, round_records.storage_key("verify"), attempt))`
+— the refusal destroys the artifact it promises can be resubmitted.
+
+**Detector.** `test_verify_advance_surfaces_the_refusal_as_fold_refused_and_retries`.
+
+**Red at `7b93d0ba`** (EXIT=1), at the new assertion:
+
+```
+>       assert os.path.isfile(payload_path)
+E       AssertionError: assert False
+plugins/superheroes/lib/tests/test_layer2h_verify_submit_refusal_1272.py:297: AssertionError
+FAILED plugins/superheroes/lib/tests/test_layer2h_verify_submit_refusal_1272.py::test_verify_advance_surfaces_the_refusal_as_fold_refused_and_retries
+1 failed in 0.18s
+```
+
+**Restored → green** (EXIT=0): `1 passed in 0.24s`.
+
+**The same neutralization against the test before the fix** (`8b82181d`, probe tree `…-r3probe-old`)
+— EXIT=0, `1 passed in 0.24s`: the old test rewrote the payload and so could not see the loss. That
+is the review finding, reproduced; restored by the inverse edit, tree clean.
+
+Nothing was redacted in this section; the pytest temp path in the red excerpt is trimmed to the
+assertion line.
