@@ -77,7 +77,21 @@ above, plus the shared native family `native-result-missing`, `native-result-ove
 refusals `unregistered-engine-model`, `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
 
 Not in this release: the launcher's hand-built argv retiring into the adapter, the watcher and
-the steer channel, Astra.
+the steer channel.
+
+### Astra registration probe and codex pin
+
+`gpt-6-astra` is probe-pending in the registry — a consumer meets:
+
+- the `registration-probe` role (the only role that dispatches Astra before registration);
+- `conformance_probe astra-probe` and its refusal token `astra-probe-wave-already-attempted`;
+- pin refusal tokens `pin-probe-pending` and `pin-role-not-eligible`;
+- `seat_map compose` flags `--host-model` and `--implementation-engine` and degradations
+  `host-model-unknown`, `role-pin-not-live`, `role-pin-not-honorable`;
+- `SUPERHEROES_HOST_MODEL`, exported by the session-start hook from the host payload (empty when
+  absent or malformed);
+- the receipt's per-seat `model` field (read from the dispatch record, `null` when unrecorded) and
+  its unprobed-native disclosure line for claude seats with no runner execution evidence.
 
 ### Dispatch CLI arguments
 

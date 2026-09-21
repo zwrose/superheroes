@@ -101,6 +101,21 @@ If the project is **all-Claude** (`engines` comes back empty), this check is **N
 move on. A non-ok result for a configured engine means the CLI is not installed, not
 authenticated, or not answering — fix it with the owner before going further.
 
+### A.2a — Astra registration probe
+
+Run only when this wave's preflight is the moment the owner or advisor chose to spend it — at most
+one attempt per wave. `gpt-6-astra` stays probe-pending until a recorded pass; a pass does not
+register it automatically (a reviewed commit removes `probe-pending` from the registry row).
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "$ROOT_DIR/lib/conformance_probe.py" astra-probe --repo-root <root> --wave <wave-id> --run-dir <dir> [--max-wait S]
+```
+
+Pass = a finding naming the planted file, one planted line, and severity Critical; anything else is
+a miss. Three recorded misses print `ownerProposal: true`, putting the question to the owner. A
+second invocation with a different run dir refuses `astra-probe-wave-already-attempted`.
+
 ### A.3 — `gh`
 
 Confirm sign-in:
