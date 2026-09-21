@@ -4115,7 +4115,14 @@ def _setup_stack_batch(
         if spec.get("started"):
             ll.append(repo, _started(spec["launch_id"], pid=999999999))
         if spec.get("terminal"):
-            ll.append(repo, _outcome(spec["launch_id"]))
+            result = ll.terminalize(
+                repo,
+                spec["launch_id"],
+                child_ever_spawned=True,
+                outcome="handback",
+                evidence="done",
+            )
+            assert result["ok"], result
     return store_root
 
 
@@ -4252,7 +4259,7 @@ def test_stack_complete_fires_on_vet_only_without_pr_set_change(
 
 
 def test_layers_planned_read_from_terminal_launch(tmp_path, monkeypatch):
-    # axis: layersPlanned from terminal launch, not live-lane projection
+    # axis: layersPlanned from terminal launch via all_lanes batch_lanes
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
         repo, tmp_path, monkeypatch,
@@ -4273,9 +4280,16 @@ def test_layers_planned_read_from_terminal_launch(tmp_path, monkeypatch):
             },
         ],
     )
-    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    degraded = set()
+    ledger_observed = [False]
+    batch_lanes, live_lanes, ledger_readable = ww._derive_batch_lanes(
+        repo, "batch-982", None, degraded, set(), ledger_observed,
+    )
+    assert ledger_readable
     assert batch_lanes["lane-live"]["layersPlanned"] is None
+    assert batch_lanes["lane-term"]["terminal"] is True
     assert batch_lanes["lane-term"]["layersPlanned"] == 2
+    assert "lane-term" not in live_lanes
     snapshot, _degraded = _snapshot_stack_state(
         repo,
         batch_lanes,
