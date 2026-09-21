@@ -12,6 +12,7 @@ import itertools
 import math
 
 import liveness_cache
+import model_registry
 from model_registry import family_for, is_allowed, matrix_config, vendors
 
 LIVE_CELLS_SOURCES = liveness_cache.LIVE_CELLS_SOURCES
@@ -57,6 +58,37 @@ DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 _BACKFILL_DOWNGRADE_TO = "reviewer"
 # Tiers _backfill's claude-only fallback rotation tries (#1269).
 _BACKFILL_CLAUDE_ROTATION = (STRONG_TIER_REQUIRED, _BACKFILL_DOWNGRADE_TO)
+
+_PANEL_PIN_TIERS = frozenset({"reviewer", "reviewer-deep"})
+
+
+def _cell(
+    tier: str,
+    vendor: str,
+    role_pins: dict[str, str] | None = None,
+) -> tuple[str | None, str | None, dict[str, object] | None]:
+    """The one resolver from (tier, vendor) to (model, effort) for seating and needed-set.
+
+    For codex at a panel tier with a role pin, returns the pinned cell when dispatch resolves and
+    the pin is on that tier's allowlist; otherwise the matrix cell. The third tuple element
+    describes an attempted role pin: ``{"pin": <model>, "honored": bool}`` or ``None``."""
+    role_pins = role_pins or {}
+    if vendor == "codex" and tier in _PANEL_PIN_TIERS and tier in role_pins:
+        pin = role_pins[tier]
+        resolved = model_registry.resolve_dispatch(tier, "codex", pin, None)
+        if resolved.get("ok"):
+            model = resolved["model_id"]
+            effort = resolved["effort"]
+            if is_allowed(tier, vendor, model, effort):
+                return model, effort, {"pin": pin, "honored": True}
+        cell = matrix_config(tier, vendor)
+        if cell is None:
+            return None, None, {"pin": pin, "honored": False}
+        return cell[0], cell[1], {"pin": pin, "honored": False}
+    cell = matrix_config(tier, vendor)
+    if cell is None:
+        return None, None, None
+    return cell[0], cell[1], None
 
 
 def _backfill_rotation_tiers(primary_tier: str) -> tuple[str, ...]:
@@ -119,6 +151,7 @@ def _synthesize_live_cells(
     live_vendors: list[str],
     roster: tuple[str, ...] | list[str],
     tier_by_seat: dict[str, str] | None,
+    codex_role_pins: dict[str, str] | None = None,
 ) -> set[tuple[str, str, str | None]]:
     tiers_map = dict(DEFAULT_TIER_BY_SEAT)
     if tier_by_seat:
@@ -129,10 +162,9 @@ def _synthesize_live_cells(
         if not isinstance(vendor, str) or not vendor:
             continue
         for tier in tiers_in_play:
-            cell = matrix_config(tier, vendor)
-            if cell is None:
+            model, effort, _pin = _cell(tier, vendor, codex_role_pins)
+            if model is None:
                 continue
-            model, effort = cell
             if is_allowed(tier, vendor, model, effort):
                 cells.add((vendor, model, effort))
     return cells
@@ -194,10 +226,9 @@ def _resolvable_families_for_seat(
                 return None
             live_cell_set.add(normalized)
         for vendor in known_vendors:
-            cell = matrix_config(tier, vendor)
-            if cell is None:
+            model, effort, _pin = _cell(tier, vendor, None)
+            if model is None:
                 continue
-            model, effort = cell
             if (vendor, model, effort) not in live_cell_set:
                 continue
             fam = family_for(tier, vendor)
@@ -205,11 +236,10 @@ def _resolvable_families_for_seat(
                 continue
             families.add(fam)
         # claude is always live and is never probed — count its registry cell at this tier
-        claude_cell = matrix_config(tier, "claude")
-        if claude_cell is not None:
-            model, effort = claude_cell
+        claude_model, claude_effort, _pin = _cell(tier, "claude", None)
+        if claude_model is not None:
             fam = family_for(tier, "claude")
-            if fam is not None and is_allowed(tier, "claude", model, effort):
+            if fam is not None and is_allowed(tier, "claude", claude_model, claude_effort):
                 families.add(fam)
         return families
     if cells_source == liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED:
@@ -221,10 +251,9 @@ def _resolvable_families_for_seat(
             if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
                 return None
         for vendor in live:
-            cell = matrix_config(tier, vendor)
-            if cell is None:
+            model, effort, _pin = _cell(tier, vendor, None)
+            if model is None:
                 continue
-            model, effort = cell
             fam = family_for(tier, vendor)
             if fam is None or not is_allowed(tier, vendor, model, effort):
                 continue
@@ -339,7 +368,13 @@ def normalize_pins(pins):
     return normalized, errors
 
 
-def reachable_configs(configured_vendors, pins, roster=None, tier_by_seat=None):
+def reachable_configs(
+    configured_vendors,
+    pins,
+    roster=None,
+    tier_by_seat=None,
+    codex_role_pins: dict[str, str] | None = None,
+):
     """Pin-constrained needed set: {vendor: [[model, effort], ...]}. Claude is never probed."""
     roster = tuple(roster) if roster else PANEL_ROSTER
     tiers_map = dict(DEFAULT_TIER_BY_SEAT)
@@ -359,9 +394,9 @@ def reachable_configs(configured_vendors, pins, roster=None, tier_by_seat=None):
         )
 
     def _add_cell(vendor: str, tier: str) -> None:
-        cell = matrix_config(tier, vendor)
-        if cell is not None:
-            reachable[vendor].add(cell)
+        model, effort, _pin = _cell(tier, vendor, codex_role_pins)
+        if model is not None:
+            reachable[vendor].add((model, effort))
 
     def _rotate_all(tier: str) -> None:
         for cv in configured_vendors:
@@ -375,15 +410,14 @@ def reachable_configs(configured_vendors, pins, roster=None, tier_by_seat=None):
             if v == "claude":
                 continue
             if v in configured_vendors:
-                cell = matrix_config(tier, v)
-                default_model, default_effort = cell if cell is not None else (None, None)
+                default_model, default_effort, _pin = _cell(tier, v, codex_role_pins)
                 model = pin.get("model", default_model)
                 effort = pin.get("effort", default_effort)
                 pin_model_bad = "model" in pin and not isinstance(pin.get("model"), (str, type(None)))
                 pin_effort_bad = "effort" in pin and not isinstance(pin.get("effort"), (str, type(None)))
                 well_typed = not pin_model_bad and not pin_effort_bad
                 honorable = (
-                    cell is not None
+                    default_model is not None
                     and well_typed
                     and is_allowed(tier, v, model, effort)
                 )
@@ -395,6 +429,13 @@ def reachable_configs(configured_vendors, pins, roster=None, tier_by_seat=None):
                 _rotate_all(tier)
         else:
             _rotate_all(tier)
+
+    if codex_role_pins and "codex" in configured_vendors:
+        for tier in _PANEL_PIN_TIERS:
+            if tier in codex_role_pins:
+                model, effort, pin_info = _cell(tier, "codex", codex_role_pins)
+                if pin_info and pin_info.get("honored"):
+                    reachable["codex"].add((model, effort))
 
     out: dict[str, list] = {}
     for v in configured_vendors:
@@ -422,6 +463,7 @@ def build(
     liveness_pin_scoped: bool = False,
     live_cells: list | None = None,
     live_cells_source: str | None = None,
+    codex_role_pins: dict[str, str] | None = None,
 ) -> dict:
     degradations: list[dict[str, str]] = []
     tier_degraded_seats: set[str] = set()
@@ -430,8 +472,12 @@ def build(
 
     live = [v for v in (live_vendors or []) if isinstance(v, str) and v]
 
+    role_pins = codex_role_pins or {}
+
     if live_cells is None:
-        live_cells_normalized = _synthesize_live_cells(live, roster, tier_by_seat)
+        live_cells_normalized = _synthesize_live_cells(
+            live, roster, tier_by_seat, codex_role_pins=role_pins or None,
+        )
         resolved_cells_source = (
             liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
             if live_cells_source is None
@@ -486,10 +532,39 @@ def build(
         return "reviewer"
 
     def _resolve_at_tier(seat: str, vendor: str, tier: str) -> dict | None:
-        cell = matrix_config(tier, vendor)
-        if cell is None:
+        model, effort, pin_info = _cell(tier, vendor, role_pins or None)
+        if model is None:
             return None
-        model, effort = cell
+        source = "rotated"
+        if pin_info and pin_info.get("honored"):
+            if vendor != "claude" and (vendor, model, effort) not in live_cells_normalized:
+                matrix_model, matrix_effort, _mp = _cell(tier, vendor, None)
+                if matrix_model is None:
+                    return None
+                degradations.append({
+                    "constraint": "role-pin-not-live",
+                    "seat": seat,
+                    "reason": (
+                        "codex role pin %s for %s is not live — the seat fell back to %s"
+                        % (pin_info["pin"], tier, matrix_model)
+                    ),
+                })
+                model, effort = matrix_model, matrix_effort
+            else:
+                source = "role-pinned"
+        elif pin_info and not pin_info.get("honored"):
+            matrix_model, matrix_effort, _mp = _cell(tier, vendor, None)
+            if matrix_model is None:
+                return None
+            degradations.append({
+                "constraint": "role-pin-not-honorable",
+                "seat": seat,
+                "reason": (
+                    "codex role pin %s for %s is not on that tier's allowlist — "
+                    "the seat kept %s" % (pin_info["pin"], tier, matrix_model)
+                ),
+            })
+            model, effort = matrix_model, matrix_effort
         # bite-axis: a seat is refused a cell that is not live — claude is always live, never probed
         if vendor != "claude" and (vendor, model, effort) not in live_cells_normalized:
             return None
@@ -504,7 +579,7 @@ def build(
             "effort": effort,
             "tier": tier,
             "family": fam,
-            "source": "rotated",
+            "source": source,
         }
 
     def _resolve(seat: str, vendor: str) -> dict | None:
@@ -611,8 +686,8 @@ def build(
                 }
             )
             continue
-        cell = matrix_config(tier, pin_vendor)
-        if cell is None:
+        default_model, default_effort, _pin = _cell(tier, pin_vendor, role_pins or None)
+        if default_model is None:
             degradations.append(
                 {
                     "constraint": "pin",
@@ -620,7 +695,6 @@ def build(
                 }
             )
             continue
-        default_model, default_effort = cell
         model = pin.get("model", default_model)
         effort = pin.get("effort", default_effort)
         pin_cell_live = (
@@ -1149,7 +1223,20 @@ def build_parser():
         default=None,
         help="JSON dict of seat pins passed to build()",
     )
+    cc.add_argument(c, "--host-model", contract="free-text", default=None)
+    cc.add_argument(c, "--implementation-engine", contract="free-text", default=None)
     return ap
+
+
+def _panel_codex_role_pins(codex_models: dict | None) -> dict[str, str]:
+    if not isinstance(codex_models, dict):
+        return {}
+    out: dict[str, str] = {}
+    for tier in _PANEL_PIN_TIERS:
+        pin = codex_models.get(tier)
+        if isinstance(pin, str) and pin:
+            out[tier] = pin
+    return out
 
 
 def main(argv):
@@ -1160,7 +1247,10 @@ def main(argv):
     if args.cmd == "compose":
         import time
 
+        import engine_pref
+
         notes: list[dict[str, str]] = []
+        family_degradations: list[dict[str, str]] = []
 
         pins = None
         if args.pins is not None:
@@ -1177,6 +1267,34 @@ def main(argv):
                     print(token, file=sys.stderr)
                 return 1
 
+        prefs = engine_pref.load_engine_prefs(args.repo_root)
+        codex_role_pins = _panel_codex_role_pins(prefs.get("codexModels"))
+
+        author_family = args.author_family
+        narrative_family = args.narrative_family
+        if args.implementation_engine is not None:
+            if args.author_family is not None or args.narrative_family is not None:
+                print("family-flags-conflict", file=sys.stderr)
+                return 1
+            host_model = args.host_model if args.host_model is not None else ""
+            host_fam = model_registry.host_family(host_model)
+            if host_fam is None:
+                family_degradations.append({
+                    "constraint": "host-model-unknown",
+                    "reason": (
+                        "host model unknown — its family is treated as unknown and excludes nothing"
+                    ),
+                })
+            impl_engine = args.implementation_engine
+            if impl_engine == "claude":
+                author_family = host_fam
+            else:
+                author_family = model_registry.family_for("code-fixer", impl_engine)
+                if author_family is None:
+                    print("author-family-unresolved:%s" % impl_engine, file=sys.stderr)
+                    return 1
+            narrative_family = host_fam
+
         live_cells = None
         live_cells_source = None
         if args.live_vendors is not None:
@@ -1189,7 +1307,11 @@ def main(argv):
             import preflight_probe
 
             configured = [e for e in args.configured_engines.split(",") if e]
-            needed_override = reachable_configs(configured, pins) if pins else None
+            needed_override = reachable_configs(
+                configured, pins, codex_role_pins=codex_role_pins or None,
+            )
+            if not pins and not codex_role_pins:
+                needed_override = None
             liveness_pin_scoped = needed_override is not None
             live, live_cells, _liveness, notes, live_cells_source, _cache_provenance = (
                 preflight_probe.live_vendors_for_composition(
@@ -1203,14 +1325,17 @@ def main(argv):
         sm = build(
             PANEL_ROSTER,
             live,
-            args.author_family,
-            args.narrative_family,
+            author_family,
+            narrative_family,
             seed,
             pins=pins,
             liveness_pin_scoped=liveness_pin_scoped,
             live_cells=live_cells,
             live_cells_source=live_cells_source,
+            codex_role_pins=codex_role_pins or None,
         )
+        if family_degradations:
+            sm["degradations"] = list(sm.get("degradations", [])) + family_degradations
         extra_degradations: list[dict[str, str]] = []
         if notes:
             extra_degradations.extend(notes)
