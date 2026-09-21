@@ -35,6 +35,7 @@ reverted by its exact inverse (quoted). Detector node prefix (unless stated othe
 | E10 | `round_certification._journal_open_seats` — superseded filter | a superseded attempt's seats do not count as still-open |
 | E11 | `round_certification._journal_open_seats` — `orders-emitted` cmd tuple | `re-emit`'s own emission opens certification seats |
 | E12 | `cmd_re_emit` — the session lock | a locked session refuses re-emit |
+| E13 | `round_certification._journal_open_seats` — superseded landing `lexists` (envelope arm) | a late full-envelope landing on a superseded attempt keeps the seat open |
 
 ---
 
@@ -1103,6 +1104,43 @@ plugins/superheroes/lib/tests/test_round_driver_session_mobility.py:506: Asserti
 
 ---
 
+## E13 — superseded landing presence (envelope arm in `_journal_open_seats`)
+
+**Neutralization** (`round_certification.py`):
+
+```python
+-            if not os.path.lexists(landing) and not os.path.lexists(bare):
++            if not os.path.lexists(bare):
+                 continue
+```
+
+**Detector:** `test_re_emit_late_attempt0_landing_keeps_seat_open[envelope-file]`
+
+**Raw red:**
+
+```
+>       assert len(late_keys) == 1
+E       assert 0 == 1
+plugins/superheroes/lib/tests/test_round_driver_session_mobility.py:553: AssertionError
+1 failed, 3 passed in 2.90s
+```
+
+**Restore receipt (quoted lines):**
+
+```python
+            if not os.path.lexists(landing) and not os.path.lexists(bare):
+                continue
+```
+
+**Raw green:**
+
+```
+....                                                                     [100%]
+4 passed in 2.88s
+```
+
+---
+
 ## G-a — non-string `sessionDir` refusal (WO-G item 1 / item 8)
 
 **Neutralization:**
@@ -1275,6 +1313,7 @@ failure line and summary):
 | E10 | `assert not [('dispatch-panel', 1, 0, 'architecture-reviewer', 0), …]` | 1 failed |
 | E11 | `assert []` (no attempt-1 seat opened) | 1 failed |
 | E12 | `assert 0 == 1` | 1 failed |
+| E13 | `assert 0 == 1` (envelope-file only; bare and symlink siblings stayed green) | 1 failed, 3 passed |
 
 Where the red is a crash rather than the refusal assertion (R1, R5, E1, E5, E6, E7), the guard's
 absence lets the verb run past it into a `None` it was protecting — the detector still fails, and

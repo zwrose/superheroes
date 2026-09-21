@@ -512,7 +512,22 @@ def test_re_emit_certification_open_close(tmp_path, capsys):
     assert len(attempt1_keys) == expected_slots
 
 
-def test_re_emit_late_attempt0_landing_keeps_seat_open(tmp_path, capsys):
+def _dangling_symlink(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.lexists(path):
+        os.remove(path)
+    os.symlink(path + ".no-such-target", path)
+    assert os.path.lexists(path) and not os.path.exists(path)
+
+
+@pytest.mark.parametrize("landing_shape,landing_kind", [
+    ("envelope", "file"),
+    ("bare", "file"),
+    ("envelope", "dangling_symlink"),
+    ("bare", "dangling_symlink"),
+])
+def test_re_emit_late_attempt0_landing_keeps_seat_open(
+        tmp_path, capsys, landing_shape, landing_kind):
     repo, sess, session_dir = _stale_session(tmp_path, capsys)
     rnd, phase, old_attempt = 1, "dispatch-panel", 0
     _re_emit(session_dir, capsys)
@@ -520,10 +535,15 @@ def test_re_emit_late_attempt0_landing_keeps_seat_open(tmp_path, capsys):
     roster, _ = RD._roster_of(session_dir, state, "re-emit", phase, rnd, old_attempt)
     first_seat = roster[0]
     slot = RR.storage_key(first_seat, 0)
-    payload_path = RR.bare_payload_path(session_dir, rnd, phase, slot, old_attempt)
-    os.makedirs(os.path.dirname(payload_path), exist_ok=True)
-    with open(payload_path, "w", encoding="utf-8") as fh:
-        fh.write("{}")
+    landing_path = RR.landing_path(session_dir, rnd, phase, slot, old_attempt)
+    bare_path = RR.bare_payload_path(session_dir, rnd, phase, slot, old_attempt)
+    target = landing_path if landing_shape == "envelope" else bare_path
+    if landing_kind == "dangling_symlink":
+        _dangling_symlink(target)
+    else:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write("{}")
     unclosed, refusal = RC._journal_open_seats(RD.read_journal(session_dir), session_dir)
     assert refusal is None
     late_keys = [
@@ -531,6 +551,7 @@ def test_re_emit_late_attempt0_landing_keeps_seat_open(tmp_path, capsys):
         if k[2] == old_attempt and k[0] == phase and k[1] == rnd and k[3] == first_seat
     ]
     assert len(late_keys) == 1
+    assert late_keys[0] == (phase, rnd, old_attempt, first_seat, 0)
 
 
 def test_relocate_same_checkout_moved_session_dir_keeps_marker(tmp_path, capsys):

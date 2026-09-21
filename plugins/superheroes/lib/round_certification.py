@@ -796,7 +796,8 @@ def _journal_open_seats(journal, session_dir=None):
             skey = storage_key(sk_key, occ_key)
             landing = record_paths.landing_path(session_dir, rnd_key, phase_key, skey, attempt_key)
             bare = record_paths.bare_payload_path(session_dir, rnd_key, phase_key, skey, attempt_key)
-            if not os.path.isfile(landing) and not os.path.isfile(bare):
+            # `lexists`, never `isfile`: presence is the DIRECTORY ENTRY, not whether its target resolves.
+            if not os.path.lexists(landing) and not os.path.lexists(bare):
                 continue
         if key not in closed:
             unclosed.append((key, event))

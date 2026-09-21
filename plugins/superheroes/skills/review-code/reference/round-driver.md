@@ -627,6 +627,12 @@ the session's recorded head. `re-emit` does not change the session's recorded he
 re-scoped at a head that moved outside the loop could only produce results certification refuses.
 Move the head through the loop's own fix fold, or start a new session.
 
+A result that lands for a superseded attempt after `re-emit` keeps that seat open, so certification
+refuses (`unfetched-findings`) rather than certify past it. Recovery: read the late landing, and if
+it carries findings compare them with the new attempt's result for the same seat (dispatch the new
+attempt if it has not run), then move the late file aside (never delete) — certification then reads
+the slot as superseded.
+
 ## Batch concurrency — an independent batch goes out together
 
 Several `dispatch-` phases hand you a **batch**: `dispatch-panel`'s `payload.dimensions`,
