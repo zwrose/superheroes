@@ -2,6 +2,8 @@ import importlib.util
 import io
 import json
 import os
+import shlex
+import subprocess
 import sys
 
 import pytest
@@ -29,6 +31,26 @@ def _stdin(monkeypatch, payload):
 
 def _stdout_lines(capsys):
     return [ln for ln in capsys.readouterr().out.splitlines() if ln]
+
+
+def _context_from_stdout(capsys):
+    lines = _stdout_lines(capsys)
+    assert len(lines) == 1
+    out = json.loads(lines[0])
+    return out["hookSpecificOutput"]["additionalContext"]
+
+
+def _run_startup(monkeypatch, capsys, payload, env_file=None):
+    mod = _load_hook("session_start_host_model_%s" % id(payload))
+    if env_file is None:
+        monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
+    base = {"source": "startup", "cwd": "/tmp"}
+    base.update(payload)
+    _stdin(monkeypatch, base)
+    rc = mod.main()
+    return rc
 
 
 def _accepted_sources():
@@ -193,3 +215,89 @@ def test_compact_charter_transcript_injects_recovery_in_hook_output(tmp_path, mo
     assert "### Charter recovery" in ctx
     assert skill_path in ctx
     assert "file on disk is the authority" in ctx
+
+
+def test_host_model_string_writes_env_and_context(tmp_path, monkeypatch, capsys):
+    # Axis: string model is quoted into CLAUDE_ENV_FILE and named in bootstrap context.
+    env_file = tmp_path / "session_env.sh"
+    env_file.write_text("", encoding="utf-8")
+    model = "claude-opus-5"
+    assert _run_startup(monkeypatch, capsys, {"model": model}, env_file=env_file) == 0
+    assert env_file.read_text(encoding="utf-8") == (
+        "export SUPERHEROES_HOST_MODEL=%s\n" % shlex.quote(model)
+    )
+    ctx = _context_from_stdout(capsys)
+    assert "### Host model" in ctx
+    assert "Host model (read from the session-start hook payload): %s" % model in ctx
+
+
+def test_host_model_absent_writes_empty_env_and_unknown_context(tmp_path, monkeypatch, capsys):
+    # Axis: missing model key clears SUPERHEROES_HOST_MODEL and discloses unknown in context.
+    env_file = tmp_path / "session_env.sh"
+    env_file.write_text("", encoding="utf-8")
+    assert _run_startup(monkeypatch, capsys, {}, env_file=env_file) == 0
+    assert env_file.read_text(encoding="utf-8") == "export SUPERHEROES_HOST_MODEL=''\n"
+    ctx = _context_from_stdout(capsys)
+    assert "### Host model" in ctx
+    assert "Host model: unknown" in ctx
+    assert "seat composition treats the host family as unknown" in ctx
+
+
+def test_host_model_stale_reset_clears_via_env_file(tmp_path, monkeypatch, capsys):
+    # Axis: model-less start appends empty export so sourcing the file clears a stale value.
+    env_file = tmp_path / "session_env.sh"
+    env_file.write_text("export SUPERHEROES_HOST_MODEL=claude-opus-5\n", encoding="utf-8")
+    assert _run_startup(monkeypatch, capsys, {}, env_file=env_file) == 0
+    lines = env_file.read_text(encoding="utf-8").splitlines()
+    assert lines[-1] == "export SUPERHEROES_HOST_MODEL=''"
+    proc = subprocess.run(
+        ["/bin/sh", "-c", ". %s; printf %%s \"$SUPERHEROES_HOST_MODEL\"" % shlex.quote(str(env_file))],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout == ""
+    _context_from_stdout(capsys)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-5; rm -rf /",
+        {"id": 123},
+        {"display_name": "Opus"},
+        "",
+        " " * 5,
+    ],
+)
+def test_host_model_malformed_or_injection_writes_empty(tmp_path, monkeypatch, capsys, model):
+    # Axis: values outside the allowed shape are rejected and written as empty.
+    env_file = tmp_path / "session_env.sh"
+    env_file.write_text("", encoding="utf-8")
+    assert _run_startup(monkeypatch, capsys, {"model": model}, env_file=env_file) == 0
+    assert env_file.read_text(encoding="utf-8") == "export SUPERHEROES_HOST_MODEL=''\n"
+    ctx = _context_from_stdout(capsys)
+    assert "Host model: unknown" in ctx
+
+
+def test_host_model_dict_id_writes_env_and_context(tmp_path, monkeypatch, capsys):
+    # Axis: dict payload with string id uses the id after shape check.
+    env_file = tmp_path / "session_env.sh"
+    env_file.write_text("", encoding="utf-8")
+    model_id = "claude-opus-5[1m]"
+    payload_model = {"id": model_id, "display_name": "Opus"}
+    assert _run_startup(monkeypatch, capsys, {"model": payload_model}, env_file=env_file) == 0
+    assert env_file.read_text(encoding="utf-8") == (
+        "export SUPERHEROES_HOST_MODEL=%s\n" % shlex.quote(model_id)
+    )
+    ctx = _context_from_stdout(capsys)
+    assert "Host model (read from the session-start hook payload): %s" % model_id in ctx
+
+
+def test_host_model_skipped_when_claude_env_file_unset(tmp_path, monkeypatch, capsys):
+    # Axis: without CLAUDE_ENV_FILE the hook must not create or touch an env file.
+    env_file = tmp_path / "never_created.sh"
+    monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
+    assert _run_startup(monkeypatch, capsys, {"model": "claude-opus-5"}) == 0
+    assert not env_file.exists()
+    _context_from_stdout(capsys)
