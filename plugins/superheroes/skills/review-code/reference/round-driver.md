@@ -5,6 +5,7 @@
 - [checkpoint](#checkpoint)
 - [Durable-record path](#durable-record-path)
 - [Base guard](#base-guard)
+- [Moving a session — relocate](#moving-a-session--relocate)
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Round economy](#round-economy)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
@@ -543,7 +544,9 @@ field.
 - **Base / pin / repo / checkout** (`base-meta-unreadable`, `base-not-pinned`, `base-unresolved`,
   `base-pin-moved`, `base-repo-root-mismatch`, `pr-base-repo-unresolved`, `origin-unresolved`):
   re-run Setup's resolve block and check `origin`; confirm `meta.json` has a full commit pin and
-  `repoRoot` matches this checkout.
+  `repoRoot` matches this checkout. When the session belongs to another checkout of the same
+  repository at the same head and base, `relocate` moves it (see [Moving a session —
+  relocate](#moving-a-session--relocate)) instead of starting over.
 - **Diff artifact** (`round-diff-required`, `round-diff-unreadable`, `round-diff-empty`,
   `round-diff-malformed`, `round-diff-base-mismatch`, `round-diff-base-unverifiable`,
   `diff-path-not-fresh-state`): fix the diff step and do not proceed with review if the diff
@@ -557,6 +560,53 @@ field.
 Git worktrees share one object store, so a pinned base commit can resolve from the *wrong* worktree
 while `origin` still matches there; `meta.repoRoot` lets the driver refuse `base-repo-root-mismatch`
 when the field is absent or disagrees with `--repo-root`.
+
+## Moving a session — relocate
+
+A review session is bound to the checkout that created it — `meta.repoRoot`, which the base guard
+compares (`base-repo-root-mismatch`). Starting a fresh session in a new checkout discards its rounds
+and findings. `relocate` moves the session instead.
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" relocate --session-dir "$SESSION_DIR" --repo-root "$NEW_CHECKOUT" --by "<who>"
+```
+
+The command prints its JSON result on stdout and exits **1** on any refusal (the same convention
+as the base guard's refusals), **0** on success.
+
+**relocate** rewrites `meta.json` `repoRoot` and `branch`, and `loop-state.json` `config.repoRoot`
+when present. It does so in one transaction with one `relocated` journal row carrying the old and
+new root, branch, the session directory, the head, the base pin, `by`, `at`, and the list of
+rewritten keys. Nothing else in the session changes. The session directory does not move: a session
+invoked from a directory other than the one it recorded is refused. A target checkout whose scope
+marker names another session is refused before anything is written. It re-writes the checkout's scope
+marker in the new checkout and removes the old checkout's marker only once the new checkout's marker
+exists and names this session; otherwise retirement is skipped (`kept-no-target-marker`). Outcomes
+are journalled as `marker-retirement` (`retired`, `not-ours`, `absent`, `failed`,
+`kept-no-target-marker`).
+
+**The same head** means the fix-fold head when a fix fold recorded one — both copies must agree —
+otherwise the session's setup head. A session parked in the middle of a fix — its fixer dispatched
+but not yet folded — can only move to a checkout at the pre-fix head: fold the fixer where it ran
+first, or move onto a checkout at the recorded head.
+
+| `reason` | condition |
+| --- | --- |
+| `relocate-session-unreadable` | meta or loop state missing/unparseable, the recorded root or session directory missing or not an absolute path, or the session never ran `next` |
+| `relocate-session-terminal` | the session is terminal |
+| `relocate-target-not-toplevel` | the target is not a git checkout's top directory |
+| `relocate-session-dir-moved` | the session directory is not the one it recorded |
+| `relocate-same-checkout` | the target is the recorded checkout |
+| `relocate-repo-unverifiable` | the session recorded no origin repository |
+| `relocate-repo-mismatch` | the target's `origin` is a different repository |
+| `relocate-base-mismatch` | the base pin differs between meta and loop state or does not resolve to itself in the target |
+| `relocate-head-ambiguous` | the two copies of the fix-fold head disagree, only one exists, or no head is recorded |
+| `relocate-head-mismatch` | the target's HEAD is not the recorded head |
+| `relocate-records-path-bound` | the durable records file lives inside the old checkout |
+| `relocate-target-marker-foreign` | the target checkout's scope marker names another session or cannot be read |
+| `relocate-locked` | another process holds the session lock |
+
+Orders emitted before the move are not rewritten: they still name the old checkout, so dispatch them only while that checkout stays at the recorded head.
 
 ## Batch concurrency — an independent batch goes out together
 
