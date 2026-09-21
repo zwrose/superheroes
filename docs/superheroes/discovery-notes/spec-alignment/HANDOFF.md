@@ -90,6 +90,22 @@ Headlines that changed the assistant's thinking:
   definition so the owner checks instances instead of rules.** Caveat: instances of what was
   *built* must come from running the system, not agent narration.
 
+## Light pass on "why" grounding (headline)
+
+Notes at `rationale_grounding_for_builders.md` beside this file. A product-level grounding doc
+is a reasonable bet with a plausible mechanism and no direct disconfirming evidence, but nobody
+has measured it independently. One controlled study on human builders (Falessi et al. 2006,
+unverified raw read) found design rationale improved decision correctness when requirements
+changed. Personas measurably change designers' beliefs, not demonstrably what gets built. For
+agents, the rigorous study (context files on SWE-bench-style tasks) found no resolution gain and
+20%+ cost, but its tasks were precisely specified, the opposite of the case here; its actionable
+finding is that **specific instructions in context files are followed and narrative overviews
+are not**. The one study that tests the hypothesis directly is vendor-authored with no spec-only
+baseline. Design constraint that falls out: a grounding doc written as decisions, constraints and
+non-goals lands; one written as narrative background is the failure mode. Nobody has run the
+obvious natural experiment (same specs, grounding on vs off, scored on choices the spec left
+open); this workflow could run a cheap version of it.
+
 ## Current direction (assistant's proposal, not owner-approved)
 
 The first piece is an **experiment, not a new spec format**: add an instance-based check at the
