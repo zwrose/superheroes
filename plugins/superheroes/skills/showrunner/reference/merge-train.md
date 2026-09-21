@@ -57,7 +57,11 @@ given — so a merge issued against a stack **number** can act on a pull request
 saw. Nothing in the tooling closes that gap; this rule does.
 
 1. **Membership is read from GitHub before any click list is drafted** — the GraphQL read in
-   `rubric/native-stacks.md` § *How membership is verified*. `gh stack view` reads local tracking
+   `rubric/native-stacks.md` § *How membership is verified*. That read is performed by
+   `lib/stack_check.py` as `python3 -B <plugin-root>/lib/stack_check.py list --pr <a member pull
+   request> --repo <owner/name>` — the entry point is **a member pull request** because GitHub's
+   GraphQL schema has no stack-by-number entry point, and `--stack <n>` is available only as a
+   **cross-check** against the stack the read actually enters. `gh stack view` reads local tracking
    state only and is never evidence (see `rubric/native-stacks.md` § *Anti-patterns*). A base-branch chain that was never
    linked is **not** a stack and cannot be merged as one.
 
@@ -73,7 +77,9 @@ saw. Nothing in the tooling closes that gap; this rule does.
    merging a container whose contents changed. Layers **above** the chosen target are outside this
    operation and are not a mismatch. **Full-stack** equality is required only when the merge is
    invoked by **stack number**. This re-read is not optional and is not satisfied by the earlier read
-   at click-list time: the point of it is the window between them.
+   at click-list time: the point of it is the window between them. The re-read is the same
+   `lib/stack_check.py` invocation again; a non-zero exit **refuses** and stops the merge, returning
+   the refusal `reason` from `lib/stack_check.py` (`REASON_*` constants).
 
 4. **One command merges the stack, in order** — `gh stack merge <stack-or-pr> --yes --squash`; every
    member up to and including the chosen pull request. A **direct** merge is atomic (all or nothing);
