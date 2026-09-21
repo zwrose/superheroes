@@ -79,16 +79,7 @@ above `pr-set-changed` and below `builder-exited`. Its payload carries `stacks` 
 stack the batch's launches name, each with `stack`, `state`, `layersPlanned`, `missingPositions`,
 and `reason`) and `flags` (today only `idle-seat-launchable-child`, naming `stack`, `position`, and
 `flag`). The event is not suppressible per lane through `--ignore-event`; naming it refuses
-`ignore-event-invalid`. Within one `loop` invocation the stack-state snapshot baseline threads across
-internal arms and advances when the event fires, so the same snapshot does not re-fire on every arm.
-
-### `launch_ledger.fold` lane `dependency` key
-
-`fold` puts a fourth per-lane premise-derived key on **every** lane record — `dependency` — beside
-the three stack keys. The value is the stamped premise's `dependency` pull-request number when
-present and a positive integer, else `None`. A strict key enumeration must accept it rather than
-refuse. The documented signal is **`None`, never a missing key** — a pre-dependency record, a
-premise that omits `dependency`, and a malformed non-integer value read alike.
+`ignore-event-invalid`. Within one `loop` invocation the stack-state baseline threads across timer arms, so a stack that becomes complete between arms is reported once; each new invocation starts without one, so a watch armed on a batch whose stack is already complete, or that already carries an `idle-seat-launchable-child` flag, reports `stack-state-changed` on its first arm.
 
 ### Launcher premise `dependency` field
 

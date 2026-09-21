@@ -100,4 +100,135 @@ FAILED .../test_ignore_event_invalid_cli[lane-a:stack-state-changed]
 
 ## FIX-B2
 
-Filled by FIX-B2.
+**Register:** 4 guards — **4 proven**, **0 unproven**.
+
+**Provenance:** cursor / composer-2.5 (FIX-B2, layer 2g review round 1)
+
+**Method:** smallest edit to guarded production code (never the test), reverted by the inverse edit.
+
+## B2-1a — open state gate
+
+**neutralization:** drop the `state != "OPEN"` half of the ready check in `_position_ready_map`:
+
+```python
+        if state.get("state") != "OPEN" or state.get("isDraft"):
+            continue
+```
+→
+```python
+        if state.get("isDraft"):
+            continue
+```
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_merged_pr_excluded_from_ready_positions`
+
+**raw red:**
+```
+AssertionError: assert 'stack-complete' == 'stack-incomplete'
+FAILED .../test_merged_pr_excluded_from_ready_positions
+1 failed in 0.50s
+```
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.40s
+```
+
+## B2-1b — not-draft gate
+
+**neutralization:** drop the `isDraft` half of the ready check in `_position_ready_map`:
+
+```python
+        if state.get("state") != "OPEN" or state.get("isDraft"):
+            continue
+```
+→
+```python
+        if state.get("state") != "OPEN":
+            continue
+```
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_draft_pr_excluded_from_ready_positions`
+
+**raw red:**
+```
+AssertionError: assert 'stack-complete' == 'stack-incomplete'
+FAILED .../test_draft_pr_excluded_from_ready_positions
+1 failed in 0.46s
+```
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.43s
+```
+
+## B2-2a — one slug read per tick
+
+**neutralization:** restore the second `_resolve_repo_slug` call inside `_compute_stack_state_snapshot`:
+
+```python
+    _stacks, _ungrouped, membership_by_stack = _resolve_pr_stack_groups(
+        ...
+        repo_slug,
+    )
+
+    for stack_number in _batch_stack_numbers(batch_lanes):
+```
+→
+```python
+    _stacks, _ungrouped, membership_by_stack = _resolve_pr_stack_groups(
+        ...
+        repo_slug,
+    )
+
+    repo_slug, _slug_refusal = _resolve_repo_slug(
+        repo_root, deadline, monotonic, gh_run, env,
+    )
+
+    for stack_number in _batch_stack_numbers(batch_lanes):
+```
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_repo_slug_resolved_once_per_run_tick`
+
+**raw red:**
+```
+assert 2 == 1
+FAILED .../test_repo_slug_resolved_once_per_run_tick
+1 failed in 0.62s
+```
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.47s
+```
+
+## B2-2b — slug-failure degradation
+
+**neutralization:** drop the degradation line in `run()` when slug resolution fails:
+
+```python
+            if repo_slug is None:
+                degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
+```
+→
+```python
+
+```
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_slug_resolution_failure_adds_stack_signal_degradation`
+
+**raw red:**
+```
+AssertionError: assert 'stack-signal-unavailable' in []
+FAILED .../test_slug_resolution_failure_adds_stack_signal_degradation
+1 failed in 2.57s
+```
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 2.48s
+```

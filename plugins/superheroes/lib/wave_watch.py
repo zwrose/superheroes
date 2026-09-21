@@ -222,6 +222,13 @@ DEGRADATION_TRANSCRIPT_AMBIGUOUS = "transcript-ambiguous"
 DEGRADATION_TRANSCRIPT_UNRESOLVED = "transcript-unresolved"
 DEGRADATION_STACK_SIGNAL_UNAVAILABLE = "stack-signal-unavailable"
 
+STACK_STATE_COMPLETE = "stack-complete"
+STACK_STATE_INCOMPLETE = "stack-incomplete"
+STACK_REASON_LAYERS_PLANNED_UNKNOWN = "layers-planned-unknown"
+STACK_REASON_LAYERS_PLANNED_DISAGREED = "layers-planned-disagreed"
+STACK_REASON_MEMBERSHIP_UNRESOLVED = "membership-unresolved"
+FLAG_IDLE_SEAT_LAUNCHABLE_CHILD = "idle-seat-launchable-child"
+
 DEGRADATIONS = frozenset({
     DEGRADATION_LEDGER_TORN_TAIL,
     DEGRADATION_LEDGER_UNREADABLE,
@@ -731,7 +738,7 @@ def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env):
 
 def _resolve_pr_stack_groups(
     repo_root, deadline, monotonic, gh_run, membership_reader, env, degraded,
-    changed_prs,
+    changed_prs, repo_slug,
 ):
     """Group changed PRs into stacks and ungrouped.
 
@@ -744,12 +751,7 @@ def _resolve_pr_stack_groups(
     covered_prs = set()
     stack_position_maps = {}
 
-    repo_slug, slug_refusal = _resolve_repo_slug(
-        repo_root, deadline, monotonic, gh_run, env,
-    )
     if repo_slug is None:
-        if changed_prs:
-            degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
         return stacks, sorted(changed_prs), stack_position_maps
 
     for pr_num in sorted(changed_prs):
@@ -856,7 +858,7 @@ def _poll_open_pr_numbers(
 
 def _evaluate_pr_set_changed(
     open_pr_numbers, pr_state, repo_root, deadline, monotonic, gh_run,
-    membership_reader, env, degraded,
+    membership_reader, env, degraded, repo_slug,
 ):
     if open_pr_numbers is None:
         return None
@@ -872,7 +874,7 @@ def _evaluate_pr_set_changed(
     changed_prs = added + removed
     stacks, ungrouped, _position_maps = _resolve_pr_stack_groups(
         repo_root, deadline, monotonic, gh_run, membership_reader, env,
-        degraded, changed_prs,
+        degraded, changed_prs, repo_slug,
     )
     return {
         "prs": sorted(pr_set),
@@ -938,6 +940,8 @@ def _position_ready_map(
         if refusal is not None:
             degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
             continue
+        if state.get("state") != "OPEN" or state.get("isDraft"):
+            continue
         verdict, vet_refusal = sc.read_vet_verdict(
             state["body"], state["headRefOid"],
         )
@@ -951,7 +955,7 @@ def _position_ready_map(
 
 def _compute_stack_state_snapshot(
     batch_lanes, open_pr_numbers, repo_root, deadline, monotonic, gh_run,
-    membership_reader, env, degraded, pr_vet_reader=None,
+    membership_reader, env, degraded, repo_slug, pr_vet_reader=None,
 ):
     """Compute per-stack completion snapshot and idle-seat flags. Never raises."""
     stacks_out = []
@@ -970,10 +974,7 @@ def _compute_stack_state_snapshot(
         env,
         degraded,
         list(open_pr_numbers),
-    )
-
-    repo_slug, _slug_refusal = _resolve_repo_slug(
-        repo_root, deadline, monotonic, gh_run, env,
+        repo_slug,
     )
 
     for stack_number in _batch_stack_numbers(batch_lanes):
@@ -985,13 +986,13 @@ def _compute_stack_state_snapshot(
             "reason": None,
         }
         if not layers_values:
-            entry["state"] = "stack-incomplete"
-            entry["reason"] = "layers-planned-unknown"
+            entry["state"] = STACK_STATE_INCOMPLETE
+            entry["reason"] = STACK_REASON_LAYERS_PLANNED_UNKNOWN
             stacks_out.append(entry)
             continue
         if len(layers_values) > 1:
-            entry["state"] = "stack-incomplete"
-            entry["reason"] = "layers-planned-disagreed"
+            entry["state"] = STACK_STATE_INCOMPLETE
+            entry["reason"] = STACK_REASON_LAYERS_PLANNED_DISAGREED
             stacks_out.append(entry)
             continue
 
@@ -1002,8 +1003,8 @@ def _compute_stack_state_snapshot(
         for position, number in membership_by_stack.get(stack_number, ()):
             position_map[position] = number
         if not position_map or repo_slug is None:
-            entry["state"] = "stack-incomplete"
-            entry["reason"] = "membership-unresolved"
+            entry["state"] = STACK_STATE_INCOMPLETE
+            entry["reason"] = STACK_REASON_MEMBERSHIP_UNRESOLVED
             stacks_out.append(entry)
             continue
 
@@ -1018,7 +1019,7 @@ def _compute_stack_state_snapshot(
             pr_vet_reader=pr_vet_reader,
         )
         if ready_positions is None:
-            entry["state"] = "stack-incomplete"
+            entry["state"] = STACK_STATE_INCOMPLETE
             entry["missingPositions"] = list(range(1, layers_planned + 1))
             stacks_out.append(entry)
             continue
@@ -1031,7 +1032,7 @@ def _compute_stack_state_snapshot(
                 and next_position not in occupied
             ):
                 flags.append({
-                    "flag": "idle-seat-launchable-child",
+                    "flag": FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
                     "stack": stack_number,
                     "position": position,
                 })
@@ -1041,12 +1042,12 @@ def _compute_stack_state_snapshot(
             if position not in position_map or position not in ready_positions:
                 missing.append(position)
         if missing:
-            entry["state"] = "stack-incomplete"
+            entry["state"] = STACK_STATE_INCOMPLETE
             entry["missingPositions"] = missing
             stacks_out.append(entry)
             continue
 
-        entry["state"] = "stack-complete"
+        entry["state"] = STACK_STATE_COMPLETE
         stacks_out.append(entry)
 
     return {"stacks": stacks_out, "flags": flags}
@@ -1055,7 +1056,7 @@ def _compute_stack_state_snapshot(
 def _stack_state_fires(snapshot, baseline):
     if baseline is None:
         return any(
-            entry["state"] == "stack-complete" for entry in snapshot["stacks"]
+            entry["state"] == STACK_STATE_COMPLETE for entry in snapshot["stacks"]
         ) or bool(snapshot.get("flags"))
     return snapshot != baseline
 
@@ -1074,6 +1075,7 @@ def _payload_stack_state_changed(ctx):
         ctx["membership_reader"],
         ctx["env"],
         ctx["degraded"],
+        ctx["repo_slug"],
         pr_vet_reader=ctx.get("pr_vet_reader"),
     )
     stack_state = ctx["stack_state"]
@@ -1182,6 +1184,7 @@ def _payload_pr_set_changed(ctx):
         ctx["membership_reader"],
         ctx["env"],
         ctx["degraded"],
+        ctx["repo_slug"],
     )
     if pr_change is None:
         return None
@@ -1391,6 +1394,22 @@ def run(
                 pr_sampled,
             )
 
+            needs_repo_slug = bool(_batch_stack_numbers(batch_lanes))
+            if (
+                not needs_repo_slug
+                and open_pr_numbers is not None
+                and pr_state[0] is not None
+            ):
+                needs_repo_slug = set(open_pr_numbers) != pr_state[0]
+            if needs_repo_slug:
+                repo_slug, _slug_refusal = _resolve_repo_slug(
+                    repo_root, deadline, monotonic, gh_run, env,
+                )
+                if repo_slug is None:
+                    degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
+            else:
+                repo_slug = None
+
             event_ctx = {
                 "terminal_launches": terminal_launches,
                 "blocked_launches": blocked_launches,
@@ -1411,6 +1430,7 @@ def run(
                 "pr_sampled": pr_sampled,
                 "env": env,
                 "membership_reader": membership_reader,
+                "repo_slug": repo_slug,
             }
 
             for event in EVENT_PRECEDENCE:
