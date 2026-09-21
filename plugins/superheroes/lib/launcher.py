@@ -328,6 +328,26 @@ def _read_seat_snapshot(pid):
         return None
 
 
+_CLAUDE_VERSIONED_BINARY_RE = re.compile(
+    r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?",
+)
+
+
+# Structural classification of installer layouts — not an identity proof;
+# the basename "claude" rule was never one either.
+def _is_claude_code_runtime(snapshot):
+    exec_path = snapshot.get("exec_path") if isinstance(snapshot, dict) else None
+    if not isinstance(exec_path, str) or not exec_path:
+        return False
+    if os.path.basename(exec_path) == "claude":
+        return True
+    parent = os.path.basename(os.path.dirname(exec_path))
+    grandparent = os.path.basename(os.path.dirname(os.path.dirname(exec_path)))
+    if parent == "versions" and grandparent == "claude":
+        return bool(_CLAUDE_VERSIONED_BINARY_RE.fullmatch(os.path.basename(exec_path)))
+    return False
+
+
 def _normalized_instance_path(path, home):
     if not isinstance(path, str) or not path.strip():
         return None
@@ -367,8 +387,7 @@ def seat_config_dir(env=None):
     if snapshot is None:
         return {"instance": None, "reason": "seat-snapshot-unreadable"}
 
-    exec_path = snapshot.get("exec_path")
-    if not isinstance(exec_path, str) or os.path.basename(exec_path) != "claude":
+    if not _is_claude_code_runtime(snapshot):
         return {"instance": None, "reason": "seat-not-claude"}
 
     seat_env = snapshot.get("env") or {}
@@ -1410,7 +1429,7 @@ def _lookup_stack_entry_pr(
         number = pr.get("number")
         if pr.get("state") != "OPEN":
             continue
-        if pr.get("headRefOid") != resolved_base_commit:
+        if not stack_check.same_commit(pr.get("headRefOid"), resolved_base_commit):
             continue
         if not isinstance(number, int) or isinstance(number, bool):
             continue
@@ -1494,7 +1513,7 @@ def _apply_stack_gate(
     if queried["position"] != layer_pos - 1:
         return {"ok": False, "reason": "base-not-layer-head"}
     # axis: queried headRefOid must equal resolved base commit
-    if queried["headRefOid"] != resolved_base_commit:
+    if not stack_check.same_commit(queried["headRefOid"], resolved_base_commit):
         return {"ok": False, "reason": "base-not-layer-head"}
     return {
         "ok": True,
@@ -1602,7 +1621,7 @@ def _apply_dependency_gate(
         }
     head_sha = pr_state["headRefOid"]
     # axis: READY dependency requires base exactly equal to dependency head
-    if resolved_base_commit == head_sha:
+    if stack_check.same_commit(resolved_base_commit, head_sha):
         return {
             "ok": True,
             "dependencyGate": {

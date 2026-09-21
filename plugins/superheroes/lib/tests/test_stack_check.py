@@ -1342,6 +1342,35 @@ def test_l2d_resolve_repo_slug_run_raises_timeout_expired():
     assert refusal["detail"] == "gh call timed out"
 
 
+# --- WO #1340 layer 2g: same_commit -----------------------------------------------------
+
+
+def test_same_commit_mixed_case_equal():
+    sha = "abcdef0123456789abcdef0123456789abcdef01"
+    assert sc.same_commit(sha, sha.upper()) is True
+
+
+def test_same_commit_different_shas():
+    a = "abcdef0123456789abcdef0123456789abcdef01"
+    b = "1234567890abcdef1234567890abcdef12345678"
+    assert sc.same_commit(a, b) is False
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        (None, "abcdef0123456789abcdef0123456789abcdef01"),
+        ("abcdef0123456789abcdef0123456789abcdef01", None),
+        (42, "abcdef0123456789abcdef0123456789abcdef01"),
+        ("abcdef0123456789abcdef0123456789abcdef01", 42),
+        (b"abcdef0123456789abcdef0123456789abcdef01", "abcdef0123456789abcdef0123456789abcdef01"),
+        ("abcdef0123456789abcdef0123456789abcdef01", b"abcdef0123456789abcdef0123456789abcdef01"),
+    ],
+)
+def test_same_commit_non_str_operand_returns_false(left, right):
+    assert sc.same_commit(left, right) is False
+
+
 # --- WO #1340 layer 2f: read_vet_verdict ------------------------------------------------
 
 

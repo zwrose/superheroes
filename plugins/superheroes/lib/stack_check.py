@@ -826,6 +826,10 @@ def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None,
     return _parse_repo_slug_payload(proc)
 
 
+def same_commit(a, b):
+    return isinstance(a, str) and isinstance(b, str) and a.lower() == b.lower()
+
+
 def _validate_head_sha(head_sha):
     if not isinstance(head_sha, str) or not _SHA40_RE.match(head_sha):
         return _read_refusal(REASON_BAD_ARGUMENT, "head_sha must be a 40-character hex string")
@@ -870,7 +874,7 @@ def _parse_vet_verdict_line(line, head_sha, separator, tokens):
     if after_sha and not after_sha.startswith(" "):
         return VET_NOT_READY
 
-    if sha_part.lower() != head_sha.lower():
+    if not same_commit(sha_part, head_sha):
         return VET_NOT_READY
 
     return matched_verdict
@@ -895,13 +899,8 @@ def read_vet_verdict(body, head_sha):
 
     separator, tokens = form
 
-    marker = grounding_stage.REGION_MARKERS["advisor-vet"]
-    scan = grounding_stage._context_scan(body)
-    try:
-        region_text, _line_count, _region_start_line = grounding_stage._extract_region(
-            body, marker, scan, "advisor-vet",
-        )
-    except grounding_stage._BodyRefusal:
+    region_text, region_refusal = grounding_stage.read_region(body, "advisor-vet")
+    if region_refusal is not None:
         # axis: more than one live advisor-vet marker
         return VET_NOT_READY, None
 
