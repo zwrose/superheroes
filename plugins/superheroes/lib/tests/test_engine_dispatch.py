@@ -16104,8 +16104,15 @@ def _journal_claude_stdout_write_run_for_engine_files(tmp_path, run_dir, prompt_
     return argv
 
 
-def _large_claude_result_stream(result_payload, *, min_result_line_bytes=20000):
-    """Build a claude stdout stream whose final result JSON line meets min size."""
+def _large_claude_result_stream(
+        result_payload, *, min_result_line_bytes=None, max_result_line_bytes=None,
+):
+    """Build a claude stdout stream whose final result JSON line meets size bounds.
+
+    With min_result_line_bytes only (default), pads until the serialized result line is
+    at or above the floor. With max_result_line_bytes, pads to the largest line strictly
+    below that ceiling (binary search on pad length, then one-byte refinement).
+    """
     pad_path = ()
     pad_key = "report"
     if isinstance(result_payload, dict) and "result" in result_payload:
@@ -16126,8 +16133,8 @@ def _large_claude_result_stream(result_payload, *, min_result_line_bytes=20000):
     elif isinstance(result_payload, dict) and "report" in result_payload:
         pad_path = ()
         pad_key = "report"
-    extra = ""
-    while True:
+
+    def _trial_with_extra(extra):
         trial_payload = json.loads(json.dumps(result_payload))
         if pad_path:
             node = trial_payload
@@ -16143,8 +16150,50 @@ def _large_claude_result_stream(result_payload, *, min_result_line_bytes=20000):
             "structured_output": trial_payload,
             "session_id": "sess-1",
         }, separators=(",", ":"))
-        line_bytes = len(line.encode("utf-8"))
-        if line_bytes >= min_result_line_bytes:
+        return trial_payload, line, len(line.encode("utf-8"))
+
+    effective_min = min_result_line_bytes
+    if effective_min is None:
+        effective_min = 20000 if max_result_line_bytes is None else 1
+
+    if max_result_line_bytes is not None:
+        lo, hi = 0, max_result_line_bytes * 2
+        best_extra = ""
+        best = None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            extra = "x" * mid
+            trial_payload, line, line_bytes = _trial_with_extra(extra)
+            if line_bytes < max_result_line_bytes:
+                best_extra = extra
+                best = (trial_payload, line, line_bytes)
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        if best is None:
+            raise ValueError(
+                "cannot build result line below max_result_line_bytes=%s"
+                % max_result_line_bytes
+            )
+        trial_payload, line, line_bytes = best
+        extra = best_extra
+        while True:
+            trial_payload, line, next_bytes = _trial_with_extra(extra + "x")
+            if next_bytes >= max_result_line_bytes:
+                break
+            trial_payload, line, line_bytes = trial_payload, line, next_bytes
+            extra += "x"
+        if line_bytes < effective_min:
+            raise ValueError(
+                "largest line below max_result_line_bytes=%s is %s bytes, below min %s"
+                % (max_result_line_bytes, line_bytes, effective_min)
+            )
+        return _claude_event_stream(result=trial_payload), trial_payload, line_bytes
+
+    extra = ""
+    while True:
+        trial_payload, line, line_bytes = _trial_with_extra(extra)
+        if line_bytes >= effective_min:
             return _claude_event_stream(result=trial_payload), trial_payload, line_bytes
         extra += "x" * 500
 
@@ -17361,16 +17410,10 @@ def test_completion_stdout_at_bound_line_admits(tmp_path, monkeypatch):
     patched_stampable = 16328
     _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    target = patched_stampable - 1
-    stream = structured = result_line_bytes = None
-    for min_bytes in range(target, max(target - 600, 1), -1):
-        stream, structured, result_line_bytes = _large_claude_result_stream(
-            structured, min_result_line_bytes=min_bytes,
-        )
-        if result_line_bytes < patched_stampable:
-            break
+    stream, structured, result_line_bytes = _large_claude_result_stream(
+        structured, max_result_line_bytes=patched_stampable,
+    )
     assert result_line_bytes < patched_stampable
-    assert result_line_bytes >= target - 512
     file_bytes = len(stream.encode("utf-8"))
     assert file_bytes < patched_cap
     script = "import sys\nsys.stdout.write(%r)\n" % stream

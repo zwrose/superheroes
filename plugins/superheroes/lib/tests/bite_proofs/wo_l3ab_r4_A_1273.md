@@ -116,11 +116,11 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_st
 
 ---
 
-## BP-3 — over-bound line dropped whole (**not-red under order neutralization**)
+## BP-3 — partial-line buffer stays bounded
 
-- **axis:** a result line longer than the stampable bound is dropped whole
+- **axis:** an over-long partial line is released, not accumulated — the bound guards memory, not admission-visible stamping (a line longer than the stampable bound necessarily exceeds the retained content budget, so eviction would clear its stamp anyway)
 
-**neutralization attempted** (`plugins/superheroes/lib/engine_dispatch.py`, `_drain_stdout_completion_bytes`):
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_drain_stdout_completion_bytes`):
 
 before:
 ```python
@@ -139,31 +139,29 @@ after:
 
 **command:**
 ```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_over_bound_line_forfeits_unrecorded -q -p no:randomly
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_over_bound_line_bounded_buffer -q -p no:randomly
 ```
 
-**raw result under neutralization** (exit 0 — stayed green):
+**raw red** (exit 1):
 ```
-.                                                                        [100%]
-1 passed in 1.89s
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_over_bound_line_bounded_buffer
+1 failed in 2.29s
 ```
-
-**finding:** removing only the `_STDOUT_STAMPABLE_LINE_MAX` guard does not redden the
-proving test. The over-bound line is still admitted transiently, then the eviction block
-at the end of `_observe_stdout_completion` clears the stamp before the ended record is
-written — the same observable outcome as overflow-forfeit. A stacked experiment (same
-len-guard removal plus eviction-block deletion) did redden (`assert 'resultCompleteAt'
-not in ended` failed), confirming the axis is real but masked by eviction under the
-order's single neutralization.
-
-**normalization disclosure:** test patches `MAX_STDOUT_CAPTURE` and `_STDOUT_STAMPABLE_LINE_MAX`
-to `16384` and derived stampable bound via `_patch_stdout_completion_bounds`. Proof still
-bites on the shipped 8 MiB values because the guarded logic is the len-guard branch in
-`_drain_stdout_completion_bytes`; the pin only shrinks fixtures.
+(assertion: `assert max_buf_seen <= max_buf_allowed` — `16640 <= 16584`)
 
 **restore:** reinstate the `len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX` overflow branch.
 
-**restore receipt:** post-restore `git status --porcelain` empty.
+**restore receipt:** post-restore `git status --porcelain` shows only `plugins/superheroes/lib/tests/test_engine_dispatch.py` modified (bite-proof work in progress).
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 2.11s
+```
+
+**normalization disclosure:** test patches `MAX_STDOUT_CAPTURE`, `_STDOUT_STAMPABLE_LINE_MAX`, and `_STDOUT_COMPLETION_READ_CHUNK` to `16384`, derived stampable (`16328`), and `256` via `_patch_stdout_completion_bounds` plus `monkeypatch.setattr`. Proof still bites on shipped 8 MiB values because the guarded logic is the len-guard branch in `_drain_stdout_completion_bytes`; the pin only shrinks fixtures.
 
 ---
 
@@ -264,49 +262,78 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_st
 
 ---
 
-## BP-6 — eviction never fires below cap (**not-red under order neutralization**)
+## BP-6 — eviction never fires below cap
 
 - **axis:** stamped result survives when stdout is large but still at or under the cap
 
-**neutralizations attempted** (`plugins/superheroes/lib/engine_dispatch.py`, eviction guard):
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_observe_stdout_completion` eviction block):
 
-1. Drop `offset > MAX_STDOUT_CAPTURE and` from the regime guard.
-2. Replace budget comparison with `offset - stamp_line_start > _STDOUT_STAMPABLE_LINE_MAX`.
+before:
+```python
+            if (
+                offset > MAX_STDOUT_CAPTURE
+                and offset - stamp_line_start
+                > _cap_content_budget(MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT, offset)
+            ):
+```
+
+after:
+```python
+            if (
+                offset - stamp_line_start
+                > _cap_content_budget(MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT, offset)
+            ):
+```
 
 **command:**
 ```
 /usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_large_under_cap_still_admits -q -p no:randomly
 ```
 
-**raw result under both neutralizations** (exit 0 — stayed green):
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_large_under_cap_still_admits
+1 failed in 2.26s
+```
+(assertion: `assert key in ended` / `assert 'resultCompleteAt' in ended`)
+
+**restore:** reinstate `offset > MAX_STDOUT_CAPTURE and` in the eviction regime guard.
+
+**restore receipt:** post-restore `git status --porcelain` shows only `plugins/superheroes/lib/tests/test_engine_dispatch.py` modified (bite-proof work in progress).
+
+**raw green** (exit 0):
 ```
 .                                                                        [100%]
-1 passed in 3.61s
+1 passed in 2.00s
 ```
-(and `1 passed in 4.48s` for the guard-drop variant)
 
-**finding:** neither order-listed neutralization reddens the proving test at the patched
-fixture size. An aggressive threshold (`offset - stamp_line_start > 1024`) did redden
-(`assert 'resultCompleteAt' in ended`), confirming the detector bites on eviction timing
-but the order's neutralizations do not shift eviction below the cap for this fixture.
-
-**normalization disclosure:** test patches `MAX_STDOUT_CAPTURE` and `_STDOUT_STAMPABLE_LINE_MAX`
-to `16384` / derived stampable via `_patch_stdout_completion_bounds`. Guarded logic is the
-`offset > MAX_STDOUT_CAPTURE` regime gate plus `_cap_content_budget`; pin shrinks fixtures only.
-
-**restore:** reinstate shipped eviction guard.
-
-**restore receipt:** post-restore `git status --porcelain` empty.
+**normalization disclosure:** test patches `MAX_STDOUT_CAPTURE` and `_STDOUT_STAMPABLE_LINE_MAX` to `16384` / derived stampable (`16328`) via `_patch_stdout_completion_bounds`. Guarded logic is the `offset > MAX_STDOUT_CAPTURE` regime gate plus `_cap_content_budget`; pin shrinks fixtures only.
 
 ---
 
-## BP-7 — overflow scopes to one line (**not-red under order neutralization**)
+## BP-7 — overflow scopes to one line
 
 - **axis:** overflow on one over-bound line must not leak into the next valid result line
 
-**neutralization attempted** (`plugins/superheroes/lib/engine_dispatch.py`, `_drain_stdout_completion_bytes` early-return path):
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_drain_stdout_completion_bytes` — both halves applied together):
 
-before:
+before (exceeds-bound branch):
+```python
+                if len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX:
+                    overflow = True
+                    obs_state["buf"] = b""
+```
+
+after:
+```python
+                if len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX:
+                    obs_state["overflow"] = True
+                    obs_state["buf"] = b""
+```
+
+before (early-return write-back):
 ```python
             obs_state["overflow"] = overflow
             return
@@ -322,22 +349,23 @@ after:
 /usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_overflow_does_not_suppress_following_result -q -p no:randomly
 ```
 
-**raw result under neutralization** (exit 0 — stayed green):
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_overflow_does_not_suppress_following_result
+1 failed in 2.58s
+```
+(assertion: `assert key in ended` / `assert 'resultCompleteAt' in ended`)
+
+**restore:** reinstate `overflow = True` in the exceeds-bound branch and `obs_state["overflow"] = overflow` before early return.
+
+**restore receipt:** post-restore `git status --porcelain` shows only `plugins/superheroes/lib/tests/test_engine_dispatch.py` modified (bite-proof record edit pending).
+
+**raw green** (exit 0):
 ```
 .                                                                        [100%]
-1 passed in 2.51s
+1 passed in 2.49s
 ```
 
-**finding:** removing the overflow write-back on the partial-line early return does not
-redden the proving test — without persisting `overflow=True`, the following valid result
-line is still processed and admitted. The order's neutralization prevents the leak the
-test guards against rather than introducing it.
-
-**normalization disclosure:** test patches `MAX_STDOUT_CAPTURE`, `_STDOUT_STAMPABLE_LINE_MAX`
-to `16384` / derived stampable, and `_STDOUT_COMPLETION_READ_CHUNK` to `256` for readable
-chunk-split fixtures. Guarded logic is the overflow write-back on the early-return path;
-pins shrink fixtures only.
-
-**restore:** reinstate `obs_state["overflow"] = overflow` before early return.
-
-**restore receipt:** post-restore `git status --porcelain` empty.
+**normalization disclosure:** test patches `MAX_STDOUT_CAPTURE`, `_STDOUT_STAMPABLE_LINE_MAX`, and `_STDOUT_COMPLETION_READ_CHUNK` to `16384` / derived stampable (`16328`) / `256` for chunk-split fixtures. Guarded logic is the overflow write-back on the early-return path paired with the exceeds-bound branch; pins shrink fixtures only.
