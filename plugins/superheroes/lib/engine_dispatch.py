@@ -3829,12 +3829,11 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
         stamp = obs_state.get("stamp")
         stamp_line_start = obs_state.get("stamp_line_start")
         if stamp is not None and stamp_line_start is not None:
-            # Retention must match _bounded_stdout_cap_from_file, not the partial-line
-            # buffer bound (MAX_STDOUT_CAPTURE answers a different question).
-            # offset at terminal observation is the final file size (no writer is alive —
-            # this runs after proc.wait), same observed the materializer read uses, so
-            # eviction tracks admission exactly. An earlier poll cannot evict prematurely:
-            # offset - stamp_line_start only grows while the content budget only shrinks.
+            # Retention mirrors _bounded_stdout_cap_from_file's tail rule, so a held event is
+            # always inside the stdout capture _cap_file_tail keeps. At the terminal
+            # observation offset is the final file size (this runs after proc.wait). An
+            # earlier poll cannot evict prematurely: offset - stamp_line_start only grows
+            # while the content budget only shrinks.
             if (
                 offset > MAX_STDOUT_CAPTURE
                 and offset - stamp_line_start
