@@ -167,3 +167,22 @@ FAILED ...::test_placeholder_planted_in_an_altered_template_copy_refuses
 **Restore:** inverse edit. **Restore receipt:** `git status --porcelain` empty.
 
 **Green:** `9 passed in 11.42s` (the whole of `test_order_lint_template.py`).
+
+## E6 — lone CR is folded too (at `3c88349b`, review round 2)
+
+The fold was widened to match the CLI's universal-newline read, and the E6 test was parametrized
+over `\r\n` and `\r`.
+
+**Neutralization:** in `mask_template`, `.replace("\r\n", "\n").replace("\r", "\n")` →
+`.replace("\r\n", "\n")`.
+
+**Red:**
+```
+E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-placeholder-unfilled:NAME
+FAILED ...::test_crlf_charter_shaped_order_passes_both_doors[cr]
+1 failed, 1 passed in 5.02s
+```
+
+**Restore:** inverse edit. **Restore receipt:** `git status --porcelain` empty.
+
+**Green:** `10 passed in 17.77s` (the whole of `test_order_lint_template.py`).
