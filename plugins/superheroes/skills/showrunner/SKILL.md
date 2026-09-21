@@ -573,6 +573,9 @@ above).
      preserve on a body rewrite; that guarantee is prose with no mechanical check, so the backstop
      below is still yours). **Write to the owner-half register:** the **verdict**; **what was checked, in owner terms**;
      **what accepting it means**; and **what is theirs to decide** — plus a pointer to the receipt.
+     **The verdict's form** lives in
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md` spine field 1 —
+     read it there at vet time; a slot not in that form reads NOT-READY by construction.
      Probes, accounting and dispositions are **mechanism**: collapse them inside `<details>` below
      those four, or leave them to the receipt. Consequence up, mechanism down — *an independent
      reader checked this, and this is what they concluded* is the most merge-relevant single fact on
@@ -732,6 +735,14 @@ above).
    or a craft fix with no material consequence keeps the word. That is your judgment, and you say
    it on the owner half. When you cannot place a post-word change on that line with confidence,
    treat it as an [owner call](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#owner-call) and ask.
+   **The stack is the unit of merge** — whole stacks only, never a vetted prefix; see
+   [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack
+   merges and
+   [merge-train.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md)
+   § Merging a stack; do not re-derive it here.
+   **Read this with what puts a PR back outside the word, above:** a later layer joining the stack
+   **still asks again** — it is outside the word that was given — because this rule governs **what may
+   be listed**, never how far a word reaches.
    **Preconditions for executing inside the word.** Three, and none waives: the review and
    verification evidence the PR's lane requires (a READY vet for a full or light lane, or the
    independent reviewer's final-head receipt for a micro lane, which has no advisor vet by

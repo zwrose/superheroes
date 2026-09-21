@@ -90,15 +90,52 @@ saw. Nothing in the tooling closes that gap; this rule does.
    branch-protection evaluation, the history condition each layer must satisfy, and merge-queue
    behaviour live in `rubric/native-stacks.md` § *How a stack merges*.
 
-5. **A stack is brought current by merge, bottom-up** — `gh pr update-branch` on each affected
-   layer starting just above the change, which keeps every layer's own commits; each moved head then
-   takes a fresh remote-head check, CI on the new sha, and a receipt naming that sha
-   (`rubric/native-stacks.md` § *How a stack stays current*). GitHub's cascading rebase (the
-   server-side **Rebase stack** action for a lane; `gh stack rebase` + `gh stack push` only for a
-   local tracked stack an operator owns end to end) is the disclosed alternative when a merge
-   cannot resolve the conflict; it rewrites every commit of every affected layer, so those layers'
-   review and CI receipts are re-taken in full. Never a hand-rebase or force-push of a layer under
-   review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md` § *Anti-patterns*).
+   **The click list names whole stacks.** A stack merges when its **feature** is complete — every
+   layer the issue's plan names, vetted — and never when a vetted prefix exists. **A vetted prefix is
+   never a click.** The click list names whole stacks with their remaining layers, and an incomplete
+   stack is never listed. New scope that a tripwire or a vet discovers **on that feature** joins the
+   stack as a layer rather than becoming a follow-on, while a finding outside the feature's
+   owner-ratified scope stays a follow-up under the existing scope rule. The owner's standing rule is
+   "keep stacks stacks". The doctrine home is `rubric/native-stacks.md` § *How a stack merges*.
+
+   This rule and items 2 and 3 govern different moments, so do not read one against the other. This
+   rule governs what the advisor puts in front of the owner, and an incomplete stack never goes
+   there. Items 2 and 3 govern how a word, once given, is checked against the remote, and that word
+   may still name a prefix because the owner may narrow what the advisor listed. Neither licenses
+   drafting a click list on a prefix.
+
+5. **A stack is brought current by merge, bottom-up** — merge the layer below into each affected
+   layer locally with `--no-ff` and push that merge plainly, starting just above the change, which
+   keeps every layer's own commits (`rubric/native-stacks.md` § *How a stack stays current*, the home
+   of the mechanism). Do not use `gh pr update-branch`. The REST endpoint behind it was **observed**
+   to refuse a stacked pull request with a **403**, which is a field observation on a public-preview
+   feature rather than a documented GitHub rule.
+
+   A bring-current is a **mechanical operation**. Each moved head takes a fresh remote-head check, CI
+   on the new sha, and a receipt re-pinned to that sha **and to the digest of the pull request's
+   diff** — `skills/showrunner/reference/vet-receipt.md` spine field 1 owns the digest and the command
+   that takes it. **Equal digest.** Re-pin the sha in place with a dated line, let CI run on the new
+   head, and re-review nothing. **Unequal, or `digest-unavailable`.** Run `git range-diff` to name the
+   changed commits. A changed hunk takes the **mechanical non-semantic** path — CI and a disclosure
+   line, no reviewer — only when the change is mechanically non-semantic: whitespace, pure
+   formatting, a comment, or a line re-wrap that leaves the rule unchanged. A changed hunk takes this
+   file's existing union-fix floor — [Union fixes ride the last *open* PR,
+   disclosed](#union-fixes-ride-the-last-open-pr-disclosed) plus micro's review floor of one
+   cross-vendor reviewer and an engaged control probe — and not a new loop whenever it changes
+   **behavior-bearing content**: product code; a test's assertions or fixtures' expected values; or any
+   prose that states a rule a session or a gate follows. When it is **not clear** which side a hunk
+   falls on, it takes the reviewer floor.
+
+   GitHub's cascading rebase (the server-side **Rebase stack** action for a lane; `gh stack rebase`
+   + `gh stack push` only for a local tracked stack an operator owns end to end) is the disclosed
+   alternative when a merge cannot resolve the conflict; it rewrites every commit of every affected
+   layer, so every affected layer's head moves. What each moved head then owes is decided by the
+   content pin: recompute the digest, and an **equal digest** re-pins the sha with a dated line and
+   lets CI run on the new head with nothing re-reviewed, while an **unequal digest or
+   `digest-unavailable`** takes the branch the pin defines
+   (`skills/showrunner/reference/vet-receipt.md` spine field 1). Never a hand-rebase or force-push of
+   a layer under review, which the doctrine names as an anti-pattern (`rubric/native-stacks.md`
+   § *Anti-patterns*).
 
 6. **After the merge, report what merged** — each pull request number with the head sha that landed
    — and then this file's existing rules apply unchanged: the train is green when **`main`'s own

@@ -26,7 +26,9 @@ launch is unchanged.
 `rubric/launch-doctrine.md`): `premise-stack-fields-incomplete` when only one of `stack` or
 `layerPosition` is supplied; `premise-stack-field-invalid` when either key is present but not a
 positive integer (`bool` is not an integer here); `premise-stack-layers-planned-incomplete` when
-`layersPlanned` is supplied without both `stack` and `layerPosition`;
+`layersPlanned` is supplied and **both** `stack` and `layerPosition` are absent — the pair check runs
+first, so when exactly one of the pair is present, with or without `layersPlanned`,
+`premise-stack-fields-incomplete` refuses first;
 `premise-stack-layers-planned-invalid` when `layersPlanned` is present but not a positive integer
 (`bool` is not an integer here); `premise-stack-layers-planned-under-position` when `layersPlanned`
 is less than `layerPosition`; `base-not-layer-head` when `layerPosition >= 2` and the resolved base
@@ -38,6 +40,15 @@ with the premise (previously folded into `stack-read-unavailable`, so a consumer
 `stack-read-unavailable` for this case must now also match `order-mismatch`);
 `layer-position-occupied` when the claimed `layerPosition` is already held by an existing member
 (`layerPosition >= 2` only).
+
+### `launch_ledger.fold` lane stack keys
+
+`fold` puts three keys on **every** lane record — `stack`, `layerPosition` and `layersPlanned` —
+derived from that launch's stamped premise, so a strict key enumeration over a lane record must
+accept them rather than refuse. The value is `None` when the premise is absent, omits the key, or
+carries a value that is not a positive integer (`bool` is not an integer here): a non-positive or
+non-integer premise value folds to `None` rather than refusing the fold. The documented signal is
+**`None`, never a missing key** — a pre-stack record and a malformed premise read alike.
 
 ### `wave_watch.py` `pr-set-changed` payload
 

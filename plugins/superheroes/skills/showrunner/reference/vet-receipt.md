@@ -39,6 +39,61 @@ shape is wrong and the thinking wins.
    sha; a run that does not match both is not evidence about this head. The same selection binds
    **any** CI watch on a head you are about to act on — a vet, a wave watch, a merge train — not only
    the one this receipt records.
+
+   **The content pin.** The receipt records the head sha **and the digest of the pull request's
+   diff**. Take the digest from a materialized artifact between the **pinned base commit** and the
+   current head — prefer a **locally generated patch** (`git diff <base>..<head> --patch` or
+   equivalent over the two git objects), which cannot be truncated by a server-side display limit and
+   includes merge-commit resolutions in the final tree. Where `gh pr diff <n> --patch` is used instead,
+   materialize it to a file, check `gh`'s exit status, assert the file is non-empty, and **establish
+   completeness**: the response must not be at or over GitHub's stated diff limits (20,000 lines, 1 MB,
+   300 files) and must carry no truncation marker. Then run `shasum -a 256` over that file. It is not
+   a pipeline, for a reason a careful reader would not guess: a shell pipeline discards `gh`'s exit
+   status, so an auth, network or limit failure hashes **empty input** and two failed reads compare
+   **equal**. That is the fail-open this recipe closes. When completeness **cannot** be established —
+   a read that fails, comes back empty, or is truncated — the result is **`digest-unavailable`**, and
+   `digest-unavailable` is treated **exactly as unequal**, never as equal.
+
+   **The re-pin form.** After a bring-current the lane recomputes the digest. **Equal:** the sha is
+   **re-pinned in place with a dated line**, CI runs on the new head, and **nothing is re-reviewed**.
+   **Unequal, or `digest-unavailable`:** `git range-diff --remerge-diff` names the changed commits
+   (including conflict resolutions in a bring-current merge; plain `range-diff` ignores merge
+   commits). A changed hunk
+   takes the **mechanical non-semantic** path — CI and a disclosure line, **no reviewer** — only when
+   the change is mechanically non-semantic: whitespace, pure formatting, a comment, or a line re-wrap
+   that leaves the rule unchanged. A changed hunk takes the merge train's **existing union-fix floor**
+   — one cross-vendor read plus a control probe, the rule that exists today for merges, **not a loop**,
+   in `skills/showrunner/reference/merge-train.md` — whenever it changes **behavior-bearing content**:
+   product code; a test's assertions or fixtures' expected values; or any prose that states a rule a
+   session or a gate follows. When it is **not clear** which side a hunk falls on, it takes the
+   reviewer floor. **A layer is not rebased while its review loop is open.** The equal branch is
+   scoped to **the layer's own diff**: a moved base still takes CI on the new head, which this field
+   already requires.
+
+   **The verdict form — how the slot is read.** The `## Advisor vet` owner-half slot's verdict is
+   read from **one line**: the **first non-empty line after `<!-- superheroes:advisor-vet -->`**.
+   That line **begins, at its start**, with exactly one of `**Verdict: READY**`,
+   `**Verdict: NOT-READY**`, `**Verdict: PARKED**`, followed by ` · ` and the **full 40-character
+   head sha** the verdict is pinned to. Qualifiers ("as a layer", "held with the stack") follow on
+   that same line and **never replace the token**. **For the purpose of extracting a verdict, every
+   other slot content is non-authoritative** — dispositions, probes, prose, fenced blocks and
+   `<details>` regions are not read for a verdict. That scoping is about **verdict extraction only**.
+   It does not make the owner half's *what accepting it means* or *what is theirs to decide* any less
+   authoritative as **owner** information.
+
+   **Each of these reads NOT-READY by construction:** no marker; no non-empty line after the marker;
+   a first line that does not begin with one of the three tokens; an unknown or negated verdict word;
+   more than one token on the line; a missing head sha, a sha that is not 40 hex characters, or a sha
+   that is not the pull request's current head; more than one advisor-vet marker in the body. **A
+   slot not in this form reads NOT-READY.**
+
+   **Retrofit — a listed edit, not a judgment per pull request.** Every **open** pull request whose
+   body carries the advisor-vet marker is brought to this form by **the advisor**, editing the slot's
+   first line **in place**, before the reader that consumes the form is live. Identify the population
+   **mechanically**: `gh pr list --state open` ∩ advisor-vet marker present. A pull request opened
+   after the reader goes live is in the population **by the rule**. A slot whose currency **cannot be
+   proved** — no verdict line, a dropped write, a sha that is not the current head — **reads
+   NOT-READY**.
 2. **What I probed.** **Distinct from the builder's own receipts** — re-running a green suite the
    builder already ran is not a probe. Say **what bit**: the mutation that made a named test fail, the
    guard you live-fired, the refusal you provoked. Confirm every **probe residue was reverted**. A
@@ -160,7 +215,8 @@ not the owner half."*
 
 Four elements, in this order:
 
-1. **The verdict.**
+1. **The verdict.** Written in the verdict form of spine field 1, which is where that
+   grammar lives: the slot's first line carries the token and the head sha.
 2. **What was checked, in owner terms** — what an independent reader went and looked at, said as
    consequences rather than as mechanism. Not the probe list.
 3. **What accepting it means** — what the owner still carries after merging.
@@ -198,7 +254,7 @@ it:
 - `<!-- superheroes:pending-proposals -->` — immediately above spine field 7's **pending** set (its
   body is the items, or the literal `None`).
 - `<!-- superheroes:advisor-vet -->` — the boundary of your write inside the PR's `## Advisor vet`
-  owner-half slot. **The builder stamps it for you** (workhorse charter §11), together with a
+  owner-half slot. The slot's **first line** is the verdict line, in spine field 1's form. **The builder stamps it for you** (workhorse charter §11), together with a
   reminder comment beneath it; you write **beneath the marker**, and your write **replaces the
   reminder**. The slot is **append-only and yours**: you edit your own prior text in place, never the
   builder's prose — with exactly one exception, **the reminder**, which is the sole piece of
@@ -231,9 +287,12 @@ all the age of a carried item, and the loss of an advisor write.
 
 ## Skeleton
 
+Two artifacts, two skeletons. **The receipt comment:**
+
 ```markdown
 <!-- superheroes:vet-receipt -->
-**Vet — <verdict>** · commit `<sha>` · CI <state> · remote head verified <yes/no>
+**Vet — <verdict>** · commit `<sha>` · diff digest `<sha256 | digest-unavailable>` · CI <state>
+· remote head verified <yes/no>
 
 **What I probed.** <what bit; residue reverted> | `None`
 **Calls accepted.** <call — why> | `None`
@@ -248,4 +307,12 @@ inspection <what you did>; window: <…>
 **Open owner calls at merge.** <…> | `None`
 
 <triggered fields, each only when its trigger is present in the artifacts>
+```
+
+**The owner-half slot's first line** — the `## Advisor vet` slot in the PR body, a different
+artifact from the receipt comment above:
+
+```markdown
+<!-- superheroes:advisor-vet -->
+**Verdict: READY** · <40-character head sha> <qualifier, if any>
 ```
