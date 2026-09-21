@@ -1320,3 +1320,516 @@ def test_l2d_resolve_repo_slug_happy_path():
     assert refusal is None
     assert calls[0] == list(_repo_slug_argv())
     assert run.kw_calls[0]["cwd"] == REPO_ROOT
+
+
+def test_l2d_resolve_repo_slug_gh_not_on_path(monkeypatch):
+    # axis: gh is not on PATH
+    monkeypatch.setattr(sc.shutil, "which", lambda _name: None)
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=lambda *a, **k: None)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert refusal["detail"] == "gh not on PATH"
+
+
+def test_l2d_resolve_repo_slug_run_raises_timeout_expired():
+    # axis: run raises subprocess.TimeoutExpired
+    def _run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=120)
+
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=_run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert refusal["detail"] == "gh call timed out"
+
+
+# --- WO #1340 layer 2f: read_vet_verdict ------------------------------------------------
+
+
+import grounding_stage as gs  # noqa: E402
+
+HEAD_SHA = "abcdef0123456789abcdef0123456789abcdef01"
+OTHER_SHA = "1234567890abcdef1234567890abcdef12345678"
+VET_MARKER = gs.REGION_MARKERS["advisor-vet"]
+
+
+def _vet_body(*lines_after_marker):
+    return VET_MARKER + "\n" + "\n".join(lines_after_marker)
+
+
+def _assert_vet_not_ready(body, head_sha=HEAD_SHA):
+    verdict, refusal = sc.read_vet_verdict(body, head_sha)
+    assert verdict == sc.VET_NOT_READY
+    assert refusal is None
+
+
+def _assert_vet_verdict(body, expected, head_sha=HEAD_SHA):
+    verdict, refusal = sc.read_vet_verdict(body, head_sha)
+    assert verdict == expected
+    assert refusal is None
+
+
+def _assert_vet_refusal(body, head_sha, reason):
+    verdict, refusal = sc.read_vet_verdict(body, head_sha)
+    assert verdict is None
+    _assert_read_refusal(refusal, reason)
+
+
+def test_l2f_v1_no_marker():
+    # axis: no advisor-vet marker in the body at all
+    _assert_vet_not_ready("## Advisor vet\n\nNo marker here.\n")
+
+
+def test_l2f_v2_marker_whitespace_only():
+    # axis: marker present with nothing but whitespace after it
+    _assert_vet_not_ready(_vet_body("", "   ", ""))
+
+
+def test_l2f_v3_marker_prose_line():
+    # axis: marker present, first non-empty line is ordinary prose
+    _assert_vet_not_ready(_vet_body("This PR looks good to merge."))
+
+
+def test_l2f_v4_unknown_verdict_word():
+    # axis: unknown verdict word
+    _assert_vet_not_ready(_vet_body("**Verdict: SHIPPED** · %s" % HEAD_SHA))
+
+
+def test_l2f_v5_negated_verdict_spelling():
+    # axis: space-separated negation
+    _assert_vet_not_ready(_vet_body("**Verdict: NOT READY** · %s" % HEAD_SHA))
+
+
+def test_l2f_v6_two_tokens_on_line():
+    # axis: more than one token on the line
+    _assert_vet_not_ready(
+        _vet_body("**Verdict: READY** · %s **Verdict: PARKED**" % HEAD_SHA)
+    )
+
+
+def test_l2f_v7_well_formed_token_no_sha():
+    # axis: well-formed token with no sha at all
+    _assert_vet_not_ready(_vet_body("**Verdict: READY**"))
+
+
+def test_l2f_v8_sha_39_hex_chars():
+    # axis: sha of 39 hex characters
+    _assert_vet_not_ready(_vet_body("**Verdict: READY** · %s" % HEAD_SHA[:39]))
+
+
+def test_l2f_v9_sha_41_hex_chars():
+    # axis: sha of 41 hex characters
+    _assert_vet_not_ready(_vet_body("**Verdict: READY** · %s0" % HEAD_SHA))
+
+
+def test_l2f_v10_sha_non_hex_char():
+    # axis: 40-character sha containing a non-hex character
+    bad_sha = HEAD_SHA[:39] + "g"
+    _assert_vet_not_ready(_vet_body("**Verdict: READY** · %s" % bad_sha))
+
+
+def test_l2f_v11_sha_differs_from_head():
+    # axis: well-formed line whose sha differs from head_sha
+    _assert_vet_not_ready(_vet_body("**Verdict: READY** · %s" % OTHER_SHA))
+
+
+def test_l2f_v12_duplicated_marker():
+    # axis: two live advisor-vet markers in one body
+    body = (
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA)
+        + "\n\n"
+        + _vet_body("**Verdict: READY** · %s" % HEAD_SHA)
+    )
+    _assert_vet_not_ready(body)
+
+
+def test_l2f_v13_parked_details_ready_bypass():
+    # axis: PARKED slot with READY FOR PR inside details — never VERDICT_READY
+    body = _vet_body(
+        "**Verdict: PARKED** · %s" % HEAD_SHA,
+        "<details>",
+        "<summary>notes</summary>",
+        "READY FOR PR",
+        "</details>",
+    )
+    _assert_vet_verdict(body, sc.VERDICT_PARKED)
+
+
+def test_l2f_v14_fenced_ready_bypass():
+    # axis: well-formed READY line only inside a fenced block
+    body = _vet_body(
+        "~~~",
+        "**Verdict: READY** · %s" % HEAD_SHA,
+        "~~~",
+    )
+    _assert_vet_not_ready(body)
+
+
+def test_l2f_v15_unterminated_fence_bypass():
+    # axis: unterminated fence opener followed by well-formed READY line
+    body = _vet_body(
+        "~~~",
+        "**Verdict: READY** · %s" % HEAD_SHA,
+    )
+    _assert_vet_not_ready(body)
+
+
+def test_l2f_v16_head_sha_only_in_fence():
+    # axis: head sha only inside fenced region, first line carries different sha
+    body = _vet_body(
+        "**Verdict: READY** · %s" % OTHER_SHA,
+        "~~~",
+        HEAD_SHA,
+        "~~~",
+    )
+    _assert_vet_not_ready(body)
+
+
+def test_l2f_v17_token_not_at_line_start():
+    # axis: token preceded by other text on the same line
+    _assert_vet_not_ready(_vet_body("Vetted: **Verdict: READY** · %s" % HEAD_SHA))
+
+
+def test_l2f_v18_wrong_separator():
+    # axis: right token and sha with wrong separator
+    _assert_vet_not_ready(_vet_body("**Verdict: READY** %s" % HEAD_SHA))
+    _assert_vet_not_ready(_vet_body("**Verdict: READY** - %s" % HEAD_SHA))
+
+
+def test_l2f_v19_lowercase_token():
+    # axis: lowercase verdict token
+    _assert_vet_not_ready(_vet_body("**verdict: ready** · %s" % HEAD_SHA))
+
+
+def test_l2f_v20_blockquote_token():
+    # axis: token inside blockquote as first non-empty line
+    _assert_vet_not_ready(_vet_body("> **Verdict: READY** · %s" % HEAD_SHA))
+
+
+def test_l2f_v21_ready_exact():
+    # axis: well-formed READY line pinned to head_sha
+    _assert_vet_verdict(_vet_body("**Verdict: READY** · %s" % HEAD_SHA), sc.VERDICT_READY)
+
+
+def test_l2f_v22_ready_with_qualifiers():
+    # axis: READY with trailing qualifiers on the same line
+    _assert_vet_verdict(
+        _vet_body("**Verdict: READY** · %s as a layer — held with the stack" % HEAD_SHA),
+        sc.VERDICT_READY,
+    )
+
+
+def test_l2f_v23_not_ready_exact():
+    # axis: well-formed NOT-READY line pinned to head_sha
+    _assert_vet_verdict(_vet_body("**Verdict: NOT-READY** · %s" % HEAD_SHA), sc.VERDICT_NOT_READY)
+
+
+def test_l2f_v24_parked_exact():
+    # axis: well-formed PARKED line pinned to head_sha
+    _assert_vet_verdict(_vet_body("**Verdict: PARKED** · %s" % HEAD_SHA), sc.VERDICT_PARKED)
+
+
+def test_l2f_v25_uppercase_sha_matches_lowercase_head():
+    # axis: upper-case-hex sha equal to lower-case-hex head_sha
+    upper_sha = HEAD_SHA.upper()
+    _assert_vet_verdict(
+        _vet_body("**Verdict: READY** · %s" % upper_sha),
+        sc.VERDICT_READY,
+        head_sha=HEAD_SHA.lower(),
+    )
+
+
+def test_l2f_v26_body_none_refuses():
+    # axis: body is None
+    _assert_vet_refusal(None, HEAD_SHA, sc.REASON_VET_UNREADABLE)
+
+
+def test_l2f_v27_body_not_string_refuses():
+    # axis: body is not a string
+    _assert_vet_refusal(123, HEAD_SHA, sc.REASON_VET_UNREADABLE)
+
+
+def test_l2f_v28_head_sha_short_refuses():
+    # axis: head_sha is not 40 hex characters
+    _assert_vet_refusal(_vet_body("**Verdict: READY** · %s" % HEAD_SHA), "short", sc.REASON_BAD_ARGUMENT)
+
+
+def test_l2f_v29_head_sha_none_refuses():
+    # axis: head_sha is None
+    _assert_vet_refusal(_vet_body("**Verdict: READY** · %s" % HEAD_SHA), None, sc.REASON_BAD_ARGUMENT)
+
+
+@pytest.fixture(autouse=True)
+def _vet_verdict_form_cache_reset(request):
+    if "vet_form" in request.node.name:
+        sc._reset_vet_verdict_form_cache()
+        yield
+        sc._reset_vet_verdict_form_cache()
+    else:
+        yield
+
+
+def test_l2f_v30_vet_form_missing_refuses(monkeypatch):
+    # axis: missing vet-verdict-form.json refuses vet-unreadable, never READY
+    monkeypatch.setattr(sc, "_vet_verdict_form_path", lambda: "/nonexistent/vet-verdict-form.json")
+    sc._reset_vet_verdict_form_cache()
+    _assert_vet_refusal(
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
+        HEAD_SHA,
+        sc.REASON_VET_UNREADABLE,
+    )
+
+
+def _write_vet_form(path, tokens):
+    import json
+
+    payload = {
+        "schema": "vet-verdict-form/1",
+        "separator": " · ",
+        "tokens": tokens,
+    }
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+
+_VALID_VET_FORM_TOKENS = [
+    {"token": "**Verdict: READY**", "verdict": sc.VERDICT_READY},
+    {"token": "**Verdict: NOT-READY**", "verdict": sc.VERDICT_NOT_READY},
+    {"token": "**Verdict: PARKED**", "verdict": sc.VERDICT_PARKED},
+]
+
+
+def _patch_vet_form(monkeypatch, tmp_path, tokens):
+    form_path = tmp_path / "vet-verdict-form.json"
+    _write_vet_form(form_path, tokens)
+    monkeypatch.setattr(sc, "_vet_verdict_form_path", lambda: str(form_path))
+    sc._reset_vet_verdict_form_cache()
+
+
+def test_l2f_v31_vet_form_unknown_verdict_refuses(monkeypatch, tmp_path):
+    # axis: unknown verdict value in the form refuses vet-unreadable
+    tokens = list(_VALID_VET_FORM_TOKENS) + [
+        {"token": "**Verdict: SHIPPED**", "verdict": "SHIPPED"},
+    ]
+    _patch_vet_form(monkeypatch, tmp_path, tokens)
+    _assert_vet_refusal(
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
+        HEAD_SHA,
+        sc.REASON_VET_UNREADABLE,
+    )
+
+
+def test_l2f_v32_vet_form_duplicate_verdict_refuses(monkeypatch, tmp_path):
+    # axis: duplicated verdict value in the form refuses vet-unreadable
+    tokens = list(_VALID_VET_FORM_TOKENS) + [
+        {"token": "**Verdict: READY**", "verdict": sc.VERDICT_READY},
+    ]
+    _patch_vet_form(monkeypatch, tmp_path, tokens)
+    _assert_vet_refusal(
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
+        HEAD_SHA,
+        sc.REASON_VET_UNREADABLE,
+    )
+
+
+def test_l2f_v33_vet_form_missing_verdict_refuses(monkeypatch, tmp_path):
+    # axis: missing member of the verdict vocabulary refuses vet-unreadable
+    tokens = _VALID_VET_FORM_TOKENS[:2]
+    _patch_vet_form(monkeypatch, tmp_path, tokens)
+    _assert_vet_refusal(
+        _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
+        HEAD_SHA,
+        sc.REASON_VET_UNREADABLE,
+    )
+
+
+# --- WO #1340 layer 2f: read_pr_vet_state ----------------------------------------------
+
+
+DEP_PR = 701
+
+
+def _pr_vet_argv():
+    return tuple(sc._pr_vet_state_argv(DEP_PR, REPO))
+
+
+def _pr_vet_ok(
+    head_ref_oid=HEAD_SHA,
+    state="OPEN",
+    is_draft=False,
+    body="",
+):
+    return SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({
+            "state": state,
+            "isDraft": is_draft,
+            "headRefOid": head_ref_oid,
+            "body": body,
+        }),
+        stderr="",
+    )
+
+
+def test_l2f_read_pr_vet_state_happy_path():
+    # axis: well-formed payload returns every field
+    body = "vet body"
+    run, calls = _make_run({_pr_vet_argv(): _pr_vet_ok(body=body)})
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert refusal is None
+    assert state == {
+        "number": DEP_PR,
+        "state": "OPEN",
+        "isDraft": False,
+        "headRefOid": HEAD_SHA,
+        "body": body,
+    }
+    assert calls[0] == list(_pr_vet_argv())
+
+
+def test_l2f_read_pr_vet_state_nonzero_exit():
+    # axis: gh exits non-zero
+    run, _calls = _make_run(
+        {_pr_vet_argv(): SimpleNamespace(returncode=1, stdout="", stderr="nope")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_stdout_not_json():
+    # axis: stdout is not JSON
+    run, _calls = _make_run(
+        {_pr_vet_argv(): SimpleNamespace(returncode=0, stdout="not-json", stderr="")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_missing_state_key():
+    # axis: a required key is missing
+    run, _calls = _make_run(
+        {_pr_vet_argv(): SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"isDraft": False, "headRefOid": HEAD_SHA, "body": ""}),
+            stderr="",
+        )}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_is_draft_not_boolean():
+    # axis: isDraft is not a boolean
+    run, _calls = _make_run(
+        {_pr_vet_argv(): SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "state": "OPEN",
+                "isDraft": "false",
+                "headRefOid": HEAD_SHA,
+                "body": "",
+            }),
+            stderr="",
+        )}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_head_ref_oid_not_40_hex():
+    # axis: headRefOid is not 40 hex
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(head_ref_oid="short")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_deadline_exhausted(monkeypatch):
+    # axis: exhausted deadline — no gh call made
+    times = [100.0, 105.0]
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+    fail_calls = []
+
+    def _fail_run(*args, **kwargs):
+        fail_calls.append(list(args))
+        raise AssertionError("gh should not run when deadline is exhausted")
+
+    state, refusal = sc.read_pr_vet_state(
+        DEP_PR, REPO, deadline=5.0, run=_fail_run,
+    )
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert fail_calls == []
+
+
+def test_l2f_read_pr_vet_state_gh_not_on_path(monkeypatch):
+    # axis: gh is not on PATH
+    monkeypatch.setattr(sc.shutil, "which", lambda name: None)
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_timeout_expired():
+    # axis: run raises subprocess.TimeoutExpired
+    def _run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=1)
+
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=_run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2f_read_pr_vet_state_unrecognised_state():
+    # axis: unrecognised state value refuses stack-unreadable
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(state="UNKNOWN")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert "UNKNOWN" in refusal["detail"]
+    assert "enumerated" in refusal["detail"]
+
+
+def test_l2f_read_pr_vet_state_lowercase_open_refuses():
+    # axis: case-sensitive allowlist — lowercase open is not OPEN
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(state="open")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert state is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert "open" in refusal["detail"]
+
+
+def test_l2f_read_pr_vet_state_merged_accepted():
+    # axis: MERGED is a legal GitHub state
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(state="MERGED")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert refusal is None
+    assert state["state"] == "MERGED"
+
+
+def test_l2f_read_pr_vet_state_closed_accepted():
+    # axis: CLOSED is a legal GitHub state
+    run, _calls = _make_run(
+        {_pr_vet_argv(): _pr_vet_ok(state="CLOSED")}
+    )
+    state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
+    assert refusal is None
+    assert state["state"] == "CLOSED"

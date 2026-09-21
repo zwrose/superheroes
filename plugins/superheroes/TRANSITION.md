@@ -13,16 +13,27 @@ belongs to and lists every change with its replacement.
 
 `validate_premise` copies every premise key into the stamped premise. A premise may now carry
 `stack` (the GitHub native stack's number), `layerPosition` (this PR's 1-based position in that
-stack), and optionally `layersPlanned` (the stack's planned layer count). `stack` and
-`layerPosition` are optional together — one without the other refuses; `layersPlanned` requires
-both.
+stack), optionally `layersPlanned` (the stack's planned layer count), and optionally `dependency`
+(the pull request number of an open dependency whose READY vet the launch must be based on).
+`stack` and `layerPosition` are optional together — one without the other refuses; `layersPlanned`
+requires both.
 
 A stacked launch's stamped premise carries `stack` and `layerPosition`, and `layersPlanned` only
 when the launch supplied it — keys a pre-existing consumer never saw; strict key enumeration or
-fixed-schema round-trips must accept up to three new keys rather than exactly three. A non-stacked
-launch is unchanged.
+fixed-schema round-trips must accept up to three new stack-metadata keys (`stack`, `layerPosition`,
+`layersPlanned`); a launch that also names a `dependency` may add a fourth. A launch that names a
+`dependency` carries that key in the stamped premise. A non-stacked launch without a dependency is
+unchanged.
 
-`launcher.py launch` adds nine refusal tokens (see `lib/launcher.py`; rule in
+A successful launch that ran the dependency gate carries `dependencyGate` on its result. Two
+variants: when the gate did not apply, `applied` is `false` and `reason` names why (`dependency-not-open`
+for a merged dependency, `dependency-not-ready` for an open draft dependency, before the vet is read
+at all however that dependency's slot reads, or for an open dependency whose vet is not READY); a
+closed, unmerged dependency refuses the launch with `dependency-closed-unmerged` and carries no
+`dependencyGate`. When the gate applied, `applied` is `true` and the object carries `dependency`,
+`dependencyHead`, and `verdict` with no `reason` field.
+
+`launcher.py launch` adds thirteen refusal tokens (see `lib/launcher.py`; rule in
 `rubric/launch-doctrine.md`): `premise-stack-fields-incomplete` when only one of `stack` or
 `layerPosition` is supplied; `premise-stack-field-invalid` when either key is present but not a
 positive integer (`bool` is not an integer here); `premise-stack-layers-planned-incomplete` when
@@ -39,7 +50,12 @@ never interchanged); `order-mismatch` when the membership read found the stack's
 with the premise (previously folded into `stack-read-unavailable`, so a consumer matching on
 `stack-read-unavailable` for this case must now also match `order-mismatch`);
 `layer-position-occupied` when the claimed `layerPosition` is already held by an existing member
-(`layerPosition >= 2` only).
+(`layerPosition >= 2` only); `premise-dependency-invalid` when `dependency` is present but not a
+positive integer (`bool` is not an integer here); `dependency-closed-unmerged` when the premise
+names a closed, unmerged dependency pull request; `dependency-open-ready-pr` when the premise
+names an open dependency pull request with a READY vet and the resolved base commit is not that pull
+request's current head; `dependency-read-unavailable` when the launcher could not read the
+dependency pull request or its vet and the gate could not run.
 
 ### `launch_ledger.fold` lane stack keys
 

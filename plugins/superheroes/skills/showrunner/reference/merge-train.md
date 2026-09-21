@@ -82,7 +82,11 @@ saw. Nothing in the tooling closes that gap; this rule does.
    the refusal `reason` from `lib/stack_check.py` (`REASON_*` constants).
 
 4. **One command merges the stack, in order** — `gh stack merge <stack-or-pr> --yes --squash`; every
-   member up to and including the chosen pull request. A **direct** merge is atomic (all or nothing);
+   member up to and including the chosen pull request. The argument is `[<stack-number> |
+   <pr-number>]` per `gh stack merge --help` — with no argument the stack of the current branch is
+   used — and a bare number is read first as a stack number, then as a pull request number, so
+   verify that number against the enumeration in item 3 immediately before the command runs. A
+   **direct** merge is atomic (all or nothing);
    a **merge-queue** merge is ordered and best-effort and can leave a merged prefix on the trunk.
    **Never pull request by pull request**: serial merges are the anti-pattern
    (`rubric/native-stacks.md` § *Anti-patterns*), and they leave the trunk holding intermediate
@@ -115,8 +119,11 @@ saw. Nothing in the tooling closes that gap; this rule does.
    on the new sha, and a receipt re-pinned to that sha **and to the digest of the pull request's
    diff** — `skills/showrunner/reference/vet-receipt.md` spine field 1 owns the digest and the command
    that takes it. **Equal digest.** Re-pin the sha in place with a dated line, let CI run on the new
-   head, and re-review nothing. **Unequal, or `digest-unavailable`.** Run `git range-diff` to name the
-   changed commits. A changed hunk takes the **mechanical non-semantic** path — CI and a disclosure
+   head, and re-review nothing. **Unequal, or `digest-unavailable`.** Run `git range-diff --remerge-diff
+   <base-before>..<head-before> <base-after>..<head-after>` to name the changed commits, where
+   **base-before** and **base-after** are the tip of the layer below before and after the
+   bring-current and **head-before** and **head-after** are the layer's head before and after. A
+   changed hunk takes the **mechanical non-semantic** path — CI and a disclosure
    line, no reviewer — only when the change is mechanically non-semantic: whitespace, pure
    formatting, a comment, or a line re-wrap that leaves the rule unchanged. A changed hunk takes this
    file's existing union-fix floor — [Union fixes ride the last *open* PR,

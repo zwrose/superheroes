@@ -1070,6 +1070,21 @@ def test_run_git_result_declined_on_nonzero_exit(tmp_path, monkeypatch):
     assert res.status == sc.GIT_DECLINED
 
 
+def test_run_git_rejects_env_keyword(tmp_path):
+    with pytest.raises(TypeError):
+        sc.run_git(str(tmp_path), "status", env={})
+
+
+def test_get_remote_result_rejects_env_keyword(tmp_path):
+    with pytest.raises(TypeError):
+        sc.get_remote_result(str(tmp_path), env={})
+
+
+def test_repo_root_uncached_rejects_positional_env(tmp_path):
+    with pytest.raises(TypeError):
+        sc._repo_root_uncached(str(tmp_path), {})
+
+
 def test_run_git_wrapper_matches_run_git_result_out(tmp_path, monkeypatch):
     class _Ok:
         returncode = 0

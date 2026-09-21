@@ -6722,3 +6722,591 @@ def test_stack_gate_full_agreement_proceeds(tmp_path, monkeypatch):
         os.kill(result["pid"], signal.SIGTERM)
     except ProcessLookupError:
         pass
+
+
+# --- dependency premise field and gate (I3) ----------------------------------
+
+
+import grounding_stage as gs  # noqa: E402
+
+_VET_MARKER = gs.REGION_MARKERS["advisor-vet"]
+
+
+def _dependency_premise(repo, dependency, **overrides):
+    base = _valid_premise(repo, dependency=dependency)
+    base.update(overrides)
+    return base
+
+
+def _ready_vet_body(head_sha):
+    return _VET_MARKER + "\n**Verdict: READY** · " + head_sha
+
+
+def _pr_vet_state_ok(head_sha, body="", state="OPEN", pr_number=701, is_draft=False):
+    return {
+        "number": pr_number,
+        "state": state,
+        "isDraft": is_draft,
+        "headRefOid": head_sha,
+        "body": body,
+    }
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "3", 3.0])
+def test_premise_dependency_invalid(tmp_path, value):
+  # axis: premise-dependency-invalid
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo, dependency=value)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-dependency-invalid"
+
+
+def test_dependency_gate_without_stack_runs(tmp_path, monkeypatch):
+  # axis: dependency without stack still runs the dependency gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    calls = []
+
+    def reader(pr, repo_name, **kwargs):
+        calls.append((pr, repo_name))
+        return _pr_vet_state_ok(head, _ready_vet_body(head)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert calls == [(701, "owner/repo")]
+    assert result["dependencyGate"]["applied"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_and_stack_gates_dependency_first(tmp_path, monkeypatch):
+  # axis: dependency gate runs before stack gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    order = []
+
+    def dep_reader(pr, repo_name, **kwargs):
+        order.append("dependency")
+        return _pr_vet_state_ok(head, _ready_vet_body(head)), None
+
+    def stack_reader(**kwargs):
+        order.append("stack")
+        return _membership_ok(1, head)
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701, stack=7, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=dep_reader,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=stack_reader,
+    )
+    assert result["ok"] is True
+    assert order == ["dependency", "stack"]
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_absent_skips_reader(tmp_path, monkeypatch):
+  # axis: gate never fires when premise names no dependency
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def reader(*args, **kwargs):
+        raise AssertionError("pr_vet_reader should not run")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert "dependencyGate" not in result
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_deadline_exhausted_refuses(tmp_path, monkeypatch):
+  # axis: deadline exhausted refuses dependency-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        total_deadline_seconds=0,
+        pr_vet_reader=lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("reader should not run"),
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "dependency" for r in refused)
+
+
+def test_dependency_gate_slug_refusal_refuses_with_detail(tmp_path, monkeypatch):
+  # axis: slug resolver refusal refuses dependency-read-unavailable with detail
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def refusing_resolver(*args, **kwargs):
+        return None, {"reason": "stack-unreadable", "detail": "injected slug detail"}
+
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", refusing_resolver)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert result["detail"] == "injected slug detail"
+
+
+def test_dependency_gate_pr_read_refusal_refuses_with_detail(tmp_path, monkeypatch):
+  # axis: dependency read failure refuses dependency-read-unavailable with detail
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def refusing_reader(pr, repo_name, **kwargs):
+        return None, {"reason": "stack-unreadable", "detail": "read failed"}
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=refusing_reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert result["detail"] == "read failed"
+
+
+def test_dependency_gate_launcher_lifecycle_fallback_refuses(tmp_path, monkeypatch):
+  # axis: launcher fallback refuses unrecognised lifecycle from injected reader
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, state="UNKNOWN"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert result["detail"] == "UNKNOWN"
+
+
+def test_dependency_gate_unrecognised_pr_state_refuses(tmp_path, monkeypatch):
+  # axis: unrecognised dependency PR state refuses dependency-read-unavailable
+    from types import SimpleNamespace
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def _gh_run(*args, **kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "state": "UNKNOWN",
+                "isDraft": False,
+                "headRefOid": head,
+                "body": "",
+            }),
+            stderr="",
+        )
+
+    def reader(pr, repo_name, **kwargs):
+        return L.stack_check.read_pr_vet_state(pr, repo_name, run=_gh_run, **kwargs)
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert "UNKNOWN" in result.get("detail", "")
+
+
+def test_dependency_gate_closed_unmerged_refuses(tmp_path, monkeypatch):
+  # axis: closed-unmerged dependency refuses dependency-closed-unmerged
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, state="CLOSED"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-closed-unmerged"
+    assert result["detail"] == "701"
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "dependency" for r in refused)
+
+
+def test_dependency_gate_merged_passes_not_gated(tmp_path, monkeypatch):
+  # axis: merged dependency passes without applying gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, state="MERGED"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": False,
+        "reason": "dependency-not-open",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_draft_not_ready_passes(tmp_path, monkeypatch):
+  # axis: OPEN draft with READY verdict passes dependency-not-ready, not applied
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(
+            head, _ready_vet_body(head), state="OPEN", is_draft=True,
+        ), None
+
+    def refusing_vet(*args, **kwargs):
+        raise AssertionError("draft dependency must not consult verdict")
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+    monkeypatch.setattr(L.stack_check, "read_vet_verdict", refusing_vet)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": False,
+        "reason": "dependency-not-ready",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_vet_refusal_refuses(tmp_path, monkeypatch):
+  # axis: unreadable vet refuses dependency-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, body="no vet marker"), None
+
+    def refusing_vet(body, head_sha):
+        return None, {
+            "reason": L.stack_check.REASON_VET_UNREADABLE,
+            "detail": "vet unreadable",
+        }
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+    monkeypatch.setattr(L.stack_check, "read_vet_verdict", refusing_vet)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert result["detail"] == "vet unreadable"
+
+
+def test_dependency_gate_not_ready_passes(tmp_path, monkeypatch):
+  # axis: VET_NOT_READY passes as dependency-not-ready
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, body="no vet marker"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": False,
+        "reason": "dependency-not-ready",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_ready_base_match_passes(tmp_path, monkeypatch):
+  # axis: READY dependency with matching base passes applied gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, _ready_vet_body(head)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": True,
+        "dependency": 701,
+        "dependencyHead": head,
+        "verdict": L.stack_check.VERDICT_READY,
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_ready_base_mismatch_refuses(tmp_path, monkeypatch):
+  # axis: READY dependency with wrong base refuses dependency-open-ready-pr
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    dep_head = "a" * 40
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(dep_head, _ready_vet_body(dep_head)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-open-ready-pr"
+    assert result["detail"] == dep_head
+
+
+def test_launcher_scrub_env_matches_ledger_default(tmp_path, monkeypatch):
+  # axis: launcher child env removes exactly GIT_SCRUB_VARS and LEDGER_ROOT_ENV
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    captured = []
+    premise = _valid_premise(repo)
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        captured.append(dict(child_env))
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    monkeypatch.setenv("GIT_DIR", "/bogus/nonexistent/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/bogus/nonexistent")
+    monkeypatch.setenv("UNRELATED_KEEP_ME", "stay")
+
+    result = L.launch_build(
+        repo,
+        656,
+        premise,
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    assert len(captured) == 1
+    child_env = captured[0]
+    stripped = set(ll.GIT_SCRUB_VARS) | {ll.LEDGER_ROOT_ENV}
+    for key in stripped:
+        assert key not in child_env, key
+    assert child_env["UNRELATED_KEEP_ME"] == "stay"
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_lookup_stack_entry_pr_slug_refusal_carries_detail(tmp_path):
+  # axis: slug refusal detail passes through stack-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    head = _head_sha(repo)
+
+    def refusing_resolver(*args, **kwargs):
+        return None, {"reason": "stack-unreadable", "detail": "slug detail"}
+
+    original = L.stack_check.resolve_repo_slug
+    L.stack_check.resolve_repo_slug = refusing_resolver
+    try:
+        result = L._lookup_stack_entry_pr(repo, head)
+    finally:
+        L.stack_check.resolve_repo_slug = original
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+    assert result["detail"] == "slug detail"

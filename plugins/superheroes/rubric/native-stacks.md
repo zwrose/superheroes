@@ -59,9 +59,9 @@ position), and optionally `layersPlanned` (the stack's planned layer count). `st
 `layerPosition` are optional together — one without the other is refused at launch; `layersPlanned`
 requires both. For `layerPosition >= 2`, the launcher refuses a base that is not the current head of
 the member at `layerPosition - 1` (the **base-not-layer-head** gate), reading membership through the
-same GraphQL read this section's successor describes. The launcher can emit nine refusal tokens from
-premise validation and the layer gate — each token's meaning is in `lib/launcher.py`; the premise
-shape change is in `TRANSITION.md`:
+same GraphQL read this section's successor describes. The launcher can emit thirteen refusal tokens from
+premise validation and the layer and dependency gates — each token's meaning is in `lib/launcher.py`;
+the premise shape change is in `TRANSITION.md`:
 
 - `premise-stack-fields-incomplete` — only one of `stack` or `layerPosition` was supplied.
 - `premise-stack-field-invalid` — either key is present but not a positive integer (`bool` is not
@@ -72,6 +72,8 @@ shape change is in `TRANSITION.md`:
 - `premise-stack-layers-planned-invalid` — `layersPlanned` is present but not a positive integer
   (`bool` is not an integer here).
 - `premise-stack-layers-planned-under-position` — `layersPlanned` is less than `layerPosition`.
+- `premise-dependency-invalid` — `dependency` is present but not a positive integer (`bool` is not
+  an integer here).
 - `base-not-layer-head` — for `layerPosition >= 2`, the resolved base commit is not the current
   head of the stack member at position `layerPosition - 1`.
 - `stack-read-unavailable` — the launcher could not read stack membership and the gate could not
@@ -79,6 +81,11 @@ shape change is in `TRANSITION.md`:
 - `order-mismatch` — the membership read found the stack's order inconsistent with the premise.
 - `layer-position-occupied` — the claimed `layerPosition` is already held by an existing member
   (`layerPosition >= 2` only).
+- `dependency-closed-unmerged` — the premise names a closed, unmerged dependency pull request.
+- `dependency-open-ready-pr` — the premise names an open dependency pull request with a READY
+  vet and the resolved base commit is not that pull request's current head.
+- `dependency-read-unavailable` — the launcher could not read the dependency pull request or its
+  vet and the gate could not run.
 
 The launcher's `stack-read-unavailable` is its own token, never an alias of the reader's
 `stack-unreadable`. The bottom layer (`layerPosition == 1`) is **not** gated — the launcher reads
@@ -201,7 +208,12 @@ command that takes the digest. **The content pin governs every bring-current**, 
 rebase; any older sentence that reads as an unconditional full re-review is superseded by it. What
 a lane needs here is the consequence. Recompute the digest after the bring-current. **Equal digest**:
 re-pin the sha in place with a dated line, let CI run on the new head, and re-review nothing.
-**Unequal, or `digest-unavailable`**: `git range-diff` names the changed commits. A changed hunk takes
+**Unequal, or `digest-unavailable`**: `git range-diff --remerge-diff <base-before>..<head-before>
+<base-after>..<head-after>` names the changed commits (including conflict resolutions in a
+bring-current merge; plain `range-diff` ignores merge commits), where **base-before** and
+**base-after** are the tip of the layer below before and after the bring-current — the base a
+bring-current moves — and **head-before** and **head-after** are the layer's head before and
+after. A changed hunk takes
 the **mechanical non-semantic** path — CI and a disclosure line, **no reviewer** — only when the
 change is mechanically non-semantic: whitespace, pure formatting, a comment, or a line re-wrap that
 leaves the rule unchanged. A changed hunk takes the merge train's existing union-fix floor whenever

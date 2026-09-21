@@ -12501,6 +12501,23 @@ def test_admit_native_review_nonce_echo_validates_then_refuses(tmp_path):
     assert grade.get("detail") == "native-result-malformed"
 
 
+def test_claude_child_env_scrubs_git_routing_and_journal_not_ledger():
+    import launch_ledger as ll
+
+    base = dict(os.environ)
+    for key in ED._GIT_ROUTING_VARS:
+        base[key] = "probe"
+    base[ED.JOURNAL_ROOT_ENV] = "/tmp/journal"
+    base[ll.LEDGER_ROOT_ENV] = "/tmp/ledger"
+    base["SUPERHEROES_PROBE_KEEP"] = "visible"
+    env, _pins = ED._claude_child_env({"engine": "codex"}, base=base)
+    for key in ED._GIT_ROUTING_VARS:
+        assert key not in env
+    assert ED.JOURNAL_ROOT_ENV not in env
+    assert ll.LEDGER_ROOT_ENV in env
+    assert env["SUPERHEROES_PROBE_KEEP"] == "visible"
+
+
 def test_admit_native_review_semantic_guards_use_adapter_not_scrub_branch(tmp_path):
     # axis: admission path no longer exposes _scrub_native_review_branch
     # axis: hollow finding (whitespace-only substance keys) → native-result-malformed

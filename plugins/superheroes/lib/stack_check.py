@@ -6,11 +6,18 @@ or mixed-time picture. All validation lives in read_membership; the CLI is a thi
 projection."""
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import time
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import grounding_stage  # noqa: E402
 
 GH_TIMEOUT = 120
 DEFAULT_PAGE_SIZE = 50
@@ -21,8 +28,117 @@ REASON_BAD_ARGUMENT = "bad-argument"
 REASON_NOT_LINKED = "not-linked"
 REASON_STACK_UNREADABLE = "stack-unreadable"
 REASON_ORDER_MISMATCH = "order-mismatch"
+REASON_VET_UNREADABLE = "vet-unreadable"
+
+VERDICT_READY = "READY"
+VERDICT_NOT_READY = "NOT-READY"
+VERDICT_PARKED = "PARKED"
+VET_NOT_READY = "vet-not-ready"
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+_SHA40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+PR_VET_STATE_VALUES = frozenset({"OPEN", "CLOSED", "MERGED"})
+
+# Machine-readable home: rubric/vet-verdict-form.json (loaded lazily on first
+# read_vet_verdict call). Human-facing statement: skills/showrunner/reference/vet-receipt.md
+# (verdict-form clause).
+_vet_verdict_form_loaded = False
+_vet_verdict_form = None
+_vet_verdict_form_error = None
+
+
+def _vet_verdict_form_path():
+    return os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rubric", "vet-verdict-form.json")
+    )
+
+
+def _reset_vet_verdict_form_cache():
+    global _vet_verdict_form_loaded, _vet_verdict_form, _vet_verdict_form_error
+    _vet_verdict_form_loaded = False
+    _vet_verdict_form = None
+    _vet_verdict_form_error = None
+
+
+def _load_vet_verdict_form():
+    """Return (form, error_detail) — form is (separator, tokens) or None."""
+    global _vet_verdict_form_loaded, _vet_verdict_form, _vet_verdict_form_error
+    if _vet_verdict_form_loaded:
+        return _vet_verdict_form, _vet_verdict_form_error
+
+    _vet_verdict_form_loaded = True
+    path = _vet_verdict_form_path()
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        _vet_verdict_form_error = "vet-verdict-form.json is missing"
+        return None, _vet_verdict_form_error
+    except OSError as exc:
+        _vet_verdict_form_error = "vet-verdict-form.json is unreadable: %s" % exc
+        return None, _vet_verdict_form_error
+
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _vet_verdict_form_error = "vet-verdict-form.json is not valid JSON"
+        return None, _vet_verdict_form_error
+
+    if not isinstance(data, dict):
+        _vet_verdict_form_error = "vet-verdict-form.json is not an object"
+        return None, _vet_verdict_form_error
+
+    separator = data.get("separator")
+    if not isinstance(separator, str):
+        _vet_verdict_form_error = "vet-verdict-form.json separator is missing or not a string"
+        return None, _vet_verdict_form_error
+
+    tokens_raw = data.get("tokens")
+    if not isinstance(tokens_raw, list):
+        _vet_verdict_form_error = "vet-verdict-form.json tokens is missing or not a list"
+        return None, _vet_verdict_form_error
+    if not tokens_raw:
+        _vet_verdict_form_error = "vet-verdict-form.json tokens is empty"
+        return None, _vet_verdict_form_error
+
+    tokens = []
+    for index, entry in enumerate(tokens_raw):
+        if not isinstance(entry, dict):
+            _vet_verdict_form_error = "vet-verdict-form.json tokens[%d] is not an object" % index
+            return None, _vet_verdict_form_error
+        token = entry.get("token")
+        if not isinstance(token, str):
+            _vet_verdict_form_error = "vet-verdict-form.json tokens[%d].token is missing or not a string" % index
+            return None, _vet_verdict_form_error
+        verdict = entry.get("verdict")
+        if not isinstance(verdict, str):
+            _vet_verdict_form_error = "vet-verdict-form.json tokens[%d].verdict is missing or not a string" % index
+            return None, _vet_verdict_form_error
+        tokens.append((token, verdict))
+
+    expected_verdicts = {VERDICT_READY, VERDICT_NOT_READY, VERDICT_PARKED}
+    seen_verdicts = set()
+    for _token, verdict in tokens:
+        if verdict not in expected_verdicts:
+            _vet_verdict_form_error = (
+                "vet-verdict-form.json verdict %r is not recognised" % verdict
+            )
+            return None, _vet_verdict_form_error
+        if verdict in seen_verdicts:
+            _vet_verdict_form_error = (
+                "vet-verdict-form.json verdict %r is duplicated" % verdict
+            )
+            return None, _vet_verdict_form_error
+        seen_verdicts.add(verdict)
+    if seen_verdicts != expected_verdicts:
+        for missing in expected_verdicts - seen_verdicts:
+            _vet_verdict_form_error = (
+                "vet-verdict-form.json verdict %r is missing" % missing
+            )
+            return None, _vet_verdict_form_error
+
+    _vet_verdict_form = (separator, tuple(tokens))
+    return _vet_verdict_form, None
 
 QUERY = """\
 query($owner:String!,$repo:String!,$pr:Int!,$first:Int!,$after:String){
@@ -557,6 +673,113 @@ def _parse_repo_slug_payload(proc):
     return name, None
 
 
+def _pr_vet_state_argv(pr, repo):
+    return [
+        "gh", "pr", "view", str(pr), "--repo", repo,
+        "--json", "state,isDraft,headRefOid,body",
+    ]
+
+
+def _parse_pr_vet_state_payload(proc, pr):
+    if proc.returncode != 0:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, _proc_output(proc) or "gh pr view failed")
+
+    try:
+        payload = json.loads(proc.stdout or "")
+    except json.JSONDecodeError:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh pr view returned output that is not JSON")
+
+    if not isinstance(payload, dict):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh pr view returned JSON that is not an object")
+
+    state = payload.get("state")
+    if not isinstance(state, str):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "state is missing or not a string")
+    if state not in PR_VET_STATE_VALUES:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE,
+            "state is not one of the enumerated values: %r" % state)
+
+    is_draft = payload.get("isDraft")
+    if not isinstance(is_draft, bool):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "isDraft is missing or not a boolean")
+
+    head_ref_oid = payload.get("headRefOid")
+    if not isinstance(head_ref_oid, str) or not _SHA40_RE.match(head_ref_oid):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE,
+            "headRefOid is missing, not a string, or not 40 hex")
+
+    body = payload.get("body")
+    if not isinstance(body, str):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "body is missing or not a string")
+
+    return {
+        "number": pr,
+        "state": state,
+        "isDraft": is_draft,
+        "headRefOid": head_ref_oid,
+        "body": body,
+    }, None
+
+
+def read_pr_vet_state(pr, repo, *, deadline=None, timeout=GH_TIMEOUT, run=None, env=None):
+    """Return (state, refusal) — exactly one is non-None.
+
+    state: {"number": int, "state": str, "isDraft": bool, "headRefOid": str, "body": str}
+    """
+    if run is None:
+        run = subprocess.run
+
+    if not _is_int(pr):
+        return None, _read_refusal(REASON_BAD_ARGUMENT, "pr must be a positive integer")
+    if pr < 1:
+        return None, _read_refusal(REASON_BAD_ARGUMENT, "pr must be a positive integer")
+    if not isinstance(repo, str) or not _REPO_RE.match(repo):
+        return None, _read_refusal(REASON_BAD_ARGUMENT, "repo must be owner/name")
+
+    arg_refusal = _validate_read_timeout(timeout)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    arg_refusal = _validate_read_deadline(deadline)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    deadline_at = None if deadline is None else time.monotonic() + deadline
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE,
+            "read budget of %g seconds exhausted before gh pr view" % deadline)
+
+    if not shutil.which("gh"):
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh not on PATH")
+
+    effective_timeout = _effective_timeout(timeout, deadline_at)
+    argv = _pr_vet_state_argv(pr, repo)
+    run_kwargs = _run_kwargs(env)
+    try:
+        proc = run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            **run_kwargs,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, str(exc))
+    except subprocess.TimeoutExpired:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
+
+    return _parse_pr_vet_state_payload(proc, pr)
+
+
 def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None, env=None):
     """Return (slug, refusal) — exactly one is non-None."""
     if run is None:
@@ -601,6 +824,97 @@ def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None,
         return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
 
     return _parse_repo_slug_payload(proc)
+
+
+def _validate_head_sha(head_sha):
+    if not isinstance(head_sha, str) or not _SHA40_RE.match(head_sha):
+        return _read_refusal(REASON_BAD_ARGUMENT, "head_sha must be a 40-character hex string")
+    return None
+
+
+def _first_nonempty_line(text):
+    for line in text.splitlines():
+        if line.strip():
+            return line
+    return None
+
+
+def _parse_vet_verdict_line(line, head_sha, separator, tokens):
+    matched_verdict = None
+    matched_token = None
+    for token, verdict in tokens:
+        if line.startswith(token):
+            matched_verdict = verdict
+            matched_token = token
+            break
+    if matched_verdict is None:
+        return VET_NOT_READY
+
+    rest = line[len(matched_token):]
+    for token, _verdict in tokens:
+        if token in rest:
+            return VET_NOT_READY
+
+    if not rest.startswith(separator):
+        return VET_NOT_READY
+
+    after_sep = rest[len(separator):]
+    if len(after_sep) < 40:
+        return VET_NOT_READY
+
+    sha_part = after_sep[:40]
+    after_sha = after_sep[40:]
+    if not _SHA40_RE.match(sha_part):
+        return VET_NOT_READY
+
+    if after_sha and not after_sha.startswith(" "):
+        return VET_NOT_READY
+
+    if sha_part.lower() != head_sha.lower():
+        return VET_NOT_READY
+
+    return matched_verdict
+
+
+def read_vet_verdict(body, head_sha):
+    """Return (verdict, refusal) — exactly one is non-None.
+
+    Consumers test ``verdict == VERDICT_READY`` and nothing else; every other
+    value, ``VET_NOT_READY`` included, is not-ready."""
+    # axis: body is not a str
+    if not isinstance(body, str):
+        return None, _read_refusal(REASON_VET_UNREADABLE, "body is not a string")
+
+    arg_refusal = _validate_head_sha(head_sha)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    form, form_error = _load_vet_verdict_form()
+    if form_error is not None:
+        return None, _read_refusal(REASON_VET_UNREADABLE, form_error)
+
+    separator, tokens = form
+
+    marker = grounding_stage.REGION_MARKERS["advisor-vet"]
+    scan = grounding_stage._context_scan(body)
+    try:
+        region_text, _line_count, _region_start_line = grounding_stage._extract_region(
+            body, marker, scan, "advisor-vet",
+        )
+    except grounding_stage._BodyRefusal:
+        # axis: more than one live advisor-vet marker
+        return VET_NOT_READY, None
+
+    # axis: no advisor-vet marker
+    if region_text is None:
+        return VET_NOT_READY, None
+
+    # axis: marker present with no non-empty line after it
+    line = _first_nonempty_line(region_text)
+    if line is None:
+        return VET_NOT_READY, None
+
+    return _parse_vet_verdict_line(line, head_sha, separator, tokens), None
 
 
 def read_membership(

@@ -90,7 +90,10 @@ both and must be a positive integer at least `layerPosition`
 pair keys are absent, while exactly one pair key present, with or without `layersPlanned`, refuses as
 `premise-stack-fields-incomplete`; for `layerPosition >= 2`, launch refuses unless the
 resolved base commit is the current head of the stack member at position `layerPosition - 1`
-(`base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`, `layer-position-occupied`). **`launch` also refuses a
+(`base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`, `layer-position-occupied`).
+An optional `dependency` names an open pull request whose READY vet the launch must be based on
+(`premise-dependency-invalid`, `dependency-closed-unmerged`, `dependency-open-ready-pr`,
+`dependency-read-unavailable`). **`launch` also refuses a
 `CLAUDE_CONFIG_DIR` pin that is not the calling seat's own instance** (`launch-foreign-instance-pin`
 or `launch-seat-instance-undetermined`) unless the caller passes `--allow-foreign-instance`; **that gate applies only on a Claude Code seat** — it keys on
 `CLAUDE_PID`, so a host with none (Codex, a scripted or cron caller) skips the gate entirely rather

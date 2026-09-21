@@ -5210,7 +5210,7 @@ def test_fold_seat_instance_and_foreign_allowed_are_none_when_omitted():
 # --- public git scrub helpers (#1340 layer 2d) -------------------------------
 
 
-def test_scrub_env_public_name_matches_private_behavior(tmp_path, monkeypatch):
+def test_scrub_env_strips_git_vars_and_ledger_root(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_DIR", "/tmp/bogus/.git")
     monkeypatch.setenv("GIT_WORK_TREE", "/tmp/bogus")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, "/tmp/ledger-root")
@@ -5220,6 +5220,55 @@ def test_scrub_env_public_name_matches_private_behavior(tmp_path, monkeypatch):
         assert key not in scrubbed
     assert ll.LEDGER_ROOT_ENV not in scrubbed
     assert scrubbed["SAFE_VAR"] == "keep"
+
+
+def test_scrub_env_default_removes_exactly_git_scrub_vars_and_ledger_root():
+    # axis: default call removes only the seven GIT_SCRUB_VARS and LEDGER_ROOT_ENV
+    input_env = {
+        "SAFE": "keep",
+        "OTHER": "also-keep",
+        **{key: "strip-me" for key in ll.GIT_SCRUB_VARS},
+        ll.LEDGER_ROOT_ENV: "strip-me-too",
+    }
+    scrubbed = ll.scrub_env(input_env)
+    removed = set(input_env) - set(scrubbed)
+    expected = set(ll.GIT_SCRUB_VARS) | {ll.LEDGER_ROOT_ENV}
+    assert removed == expected
+    assert scrubbed == {"SAFE": "keep", "OTHER": "also-keep"}
+
+
+def test_scrub_env_explicit_keys_replaces_default_set():
+    # axis: keys= replaces the default — vars in default but not in keys survive
+    input_env = {
+        "GIT_DIR": "/tmp/git",
+        "SAFE": "keep",
+    }
+    scrubbed = ll.scrub_env(input_env, keys=("GIT_WORK_TREE",))
+    assert "GIT_DIR" in scrubbed
+    assert "GIT_WORK_TREE" not in scrubbed
+    assert scrubbed["SAFE"] == "keep"
+
+
+def test_scrub_env_explicit_roots_replaces_default_root():
+    # axis: roots= replaces the default — LEDGER_ROOT_ENV survives when not named
+    input_env = {
+        ll.LEDGER_ROOT_ENV: "/tmp/ledger",
+        "CUSTOM_ROOT": "/tmp/custom",
+        "SAFE": "keep",
+    }
+    scrubbed = ll.scrub_env(input_env, roots=("CUSTOM_ROOT",))
+    assert ll.LEDGER_ROOT_ENV in scrubbed
+    assert "CUSTOM_ROOT" not in scrubbed
+    assert scrubbed["SAFE"] == "keep"
+
+
+def test_scrub_env_none_reads_process_environment(monkeypatch):
+    # axis: env=None reads os.environ
+    monkeypatch.setenv("GIT_DIR", "/tmp/bogus")
+    monkeypatch.setenv("SAFE_VAR", "from-process")
+    scrubbed = ll.scrub_env()
+    assert "GIT_DIR" not in scrubbed
+    assert scrubbed["SAFE_VAR"] == "from-process"
 
 
 def test_git_scrub_vars_is_public_tuple():

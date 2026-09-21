@@ -2118,6 +2118,63 @@ def test_round_driver_and_review_base_guard_raw_mode_read_census():
         )
 
 
+def _vet_verdict_form_from_home():
+    """Parse the three verdict tokens and separator from vet-receipt.md's verdict-form clause."""
+    text = _read("skills/showrunner/reference/vet-receipt.md")
+    m = re.search(
+        r"\*\*The verdict form — how the slot is read\.\*\*(.*?)\*\*Each of these reads NOT-READY",
+        text,
+        re.DOTALL,
+    )
+    assert m, "vet-receipt.md verdict-form clause not found (moved or renamed?)"
+    clause = m.group(1)
+    tokens = re.findall(r"`(\*\*Verdict: [^`]+?\*\*)`", clause)
+    assert len(tokens) == 3, "expected three verdict tokens in the home, got %r" % tokens
+    sep_m = re.search(r"followed by `([^`]+)` and the", clause)
+    assert sep_m, "verdict-form separator not found in the home"
+    return tokens, sep_m.group(1)
+
+
+def _vet_verdict_form_from_data():
+    """Load separator and token strings from rubric/vet-verdict-form.json."""
+    raw = _read("rubric/vet-verdict-form.json")
+    data = json.loads(raw)
+    assert isinstance(data, dict), "vet-verdict-form.json is not an object"
+    separator = data.get("separator")
+    assert isinstance(separator, str), "vet-verdict-form.json separator is missing or not a string"
+    tokens_raw = data.get("tokens")
+    assert isinstance(tokens_raw, list) and tokens_raw, (
+        "vet-verdict-form.json tokens is missing, not a list, or empty"
+    )
+    tokens = []
+    for index, entry in enumerate(tokens_raw):
+        assert isinstance(entry, dict), "vet-verdict-form.json tokens[%d] is not an object" % index
+        token = entry.get("token")
+        assert isinstance(token, str), (
+            "vet-verdict-form.json tokens[%d].token is missing or not a string" % index
+        )
+        tokens.append(token)
+    return tokens, separator
+
+
+def test_vet_verdict_form_prose_matches_data_file():
+    """vet-receipt.md prose and vet-verdict-form.json share one verdict form.
+
+    §11: binds the human-facing verdict-form clause to the machine-readable home so a
+    one-sided edit breaks CI rather than letting the copies drift.
+    """
+    home_tokens, home_separator = _vet_verdict_form_from_home()
+    data_tokens, data_separator = _vet_verdict_form_from_data()
+    assert tuple(home_tokens) == tuple(data_tokens), (
+        "vet-receipt.md verdict tokens %r disagree with vet-verdict-form.json %r"
+        % (home_tokens, data_tokens)
+    )
+    assert home_separator == data_separator, (
+        "vet-receipt.md separator %r disagrees with vet-verdict-form.json %r"
+        % (repr(home_separator), repr(data_separator))
+    )
+
+
 def test_vet_receipt_markers_match_conventions_10_7():
     """§11 + §12.3: the vet-receipt marker literals agree across every hand-maintained copy.
 

@@ -168,7 +168,7 @@ def repo_root(cwd, *, env=None):
     return resolved
 
 
-def _repo_root_uncached(cwd, env=None):
+def _repo_root_uncached(cwd, *, env=None):
     if env is None:
         res = run_git_result(cwd, "rev-parse", "--show-toplevel")
     else:
@@ -286,24 +286,21 @@ def run_git_result(cwd, *args, env=None):
     return GitResult(r.stdout.strip(), GIT_OK, None)
 
 
-def run_git(cwd, *args, env=None):
+def run_git(cwd, *args):
     """Run git with an argv array + timeout. Return stdout (stripped) or None.
-    Thin wrapper over `run_git_result` — see it for the failure distinction."""
-    if env is None:
-        return run_git_result(cwd, *args).out
-    return run_git_result(cwd, *args, env=env).out
+    Thin wrapper over `run_git_result` — see it for the failure distinction.
+    For an explicit environment, use ``run_git_result``."""
+    return run_git_result(cwd, *args).out
 
 
-def get_remote_result(cwd, env=None):
+def get_remote_result(cwd):
     """``get_remote`` plus WHY there is no remote — (normalized_remote, status).
 
     ``status`` is the ``run_git_result`` status: ``GIT_OK``/``GIT_DECLINED`` are authoritative
     answers a caller may cache; ``GIT_UNAVAILABLE`` means git never ran, so the "no remote" is
-    unknown, not negative, and must never be memoized as fact."""
-    if env is None:
-        res = run_git_result(cwd, "remote", "get-url", "origin")
-    else:
-        res = run_git_result(cwd, "remote", "get-url", "origin", env=env)
+    unknown, not negative, and must never be memoized as fact.
+    For an explicit environment, use ``run_git_result``."""
+    res = run_git_result(cwd, "remote", "get-url", "origin")
     return normalize_remote(res.out), res.status
 
 
