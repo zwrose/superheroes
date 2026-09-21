@@ -27,7 +27,8 @@ unchanged.
 
 A successful launch that ran the dependency gate carries `dependencyGate` on its result. Two
 variants: when the gate did not apply, `applied` is `false` and `reason` names why (`dependency-not-open`
-for a merged dependency, `dependency-not-ready` for an open dependency whose vet is not READY); a
+for a merged dependency, `dependency-not-ready` for an open draft dependency, before the vet is read
+at all however that dependency's slot reads, or for an open dependency whose vet is not READY); a
 closed, unmerged dependency refuses the launch with `dependency-closed-unmerged` and carries no
 `dependencyGate`. When the gate applied, `applied` is `true` and the object carries `dependency`,
 `dependencyHead`, and `verdict` with no `reason` field.
