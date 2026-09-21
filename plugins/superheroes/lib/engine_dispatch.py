@@ -3775,10 +3775,11 @@ def _drain_stdout_completion_bytes(obs_state, data, file_offset_before):
             else:
                 new_buf = buf + tail
                 if len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX:
-                    obs_state["overflow"] = True
+                    overflow = True
                     obs_state["buf"] = b""
                 else:
                     obs_state["buf"] = new_buf
+            obs_state["overflow"] = overflow
             return
         segment = data[pos:nl]
         if not overflow:
@@ -3820,7 +3821,17 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
         stamp = obs_state.get("stamp")
         stamp_line_start = obs_state.get("stamp_line_start")
         if stamp is not None and stamp_line_start is not None:
-            if offset - stamp_line_start > _STDOUT_STAMPABLE_LINE_MAX:
+            # Retention must match _bounded_stdout_cap_from_file, not the partial-line
+            # buffer bound (_STDOUT_STAMPABLE_LINE_MAX answers a different question).
+            # offset at terminal observation is the final file size (no writer is alive —
+            # this runs after proc.wait), same observed the materializer read uses, so
+            # eviction tracks admission exactly. An earlier poll cannot evict prematurely:
+            # offset - stamp_line_start only grows while the content budget only shrinks.
+            if (
+                offset > MAX_STDOUT_CAPTURE
+                and offset - stamp_line_start
+                > _cap_content_budget(MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT, offset)
+            ):
                 obs_state["stamp"] = None
                 obs_state["stamp_line_start"] = None
     except (OSError, MemoryError):
