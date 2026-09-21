@@ -672,6 +672,10 @@ def _journal_bootstrap_marker_failure(session_dir, reason):
         pass
 
 
+def _review_session_marker_path(gitdir):
+    return os.path.join(gitdir, SIDECAR_DIRNAME, _REVIEW_SESSION_MARKER)
+
+
 def _bootstrap_review_session_marker(session_dir):
     """Write review-session.json scope marker; failures are swallowed (#624 §4)."""
     try:
@@ -697,7 +701,7 @@ def _bootstrap_review_session_marker(session_dir):
             "repoRoot": repo_root,
             "branch": branch,
         }
-        marker_path = os.path.join(super_dir, _REVIEW_SESSION_MARKER)
+        marker_path = _review_session_marker_path(gitdir)
         round_commit.atomic_write_bytes(marker_path, _canonical(marker).encode("utf-8"))
     except Exception as exc:
         _journal_bootstrap_marker_failure(session_dir, str(exc))
@@ -6134,8 +6138,8 @@ def _relocate_recorded_head(meta, state):
     cfg = cfg if isinstance(cfg, dict) else {}
     meta_key = meta.get(FIX_FOLD_HEAD_KEY) if isinstance(meta, dict) else None
     cfg_key = cfg.get(FIX_FOLD_HEAD_KEY)
-    meta_has = isinstance(meta_key, str) and meta_key
-    cfg_has = isinstance(cfg_key, str) and cfg_key
+    meta_has = bool(isinstance(meta_key, str) and meta_key)
+    cfg_has = bool(isinstance(cfg_key, str) and cfg_key)
     if meta_has != cfg_has:
         return None, True
     if meta_has and cfg_has and meta_key != cfg_key:
@@ -6165,7 +6169,7 @@ def _retire_relocate_marker(old_root, session_dir):
         return "absent"
     except Exception:
         return "failed"
-    marker_path = os.path.join(gitdir, SIDECAR_DIRNAME, _REVIEW_SESSION_MARKER)
+    marker_path = _review_session_marker_path(gitdir)
     if not os.path.isfile(marker_path):
         return "absent"
     try:
@@ -6306,7 +6310,7 @@ def _cmd_relocate_locked(session_dir, target_root, by):
         verify_attempt = verify.get("attempt")
         if isinstance(verify_round, int) and isinstance(verify_attempt, int):
             verify["landingPath"] = round_records.bare_payload_path(
-                session_dir, verify_round, P_VERIFY,
+                os.path.realpath(session_dir), verify_round, P_VERIFY,
                 round_records.storage_key("verify"), verify_attempt)
             rewritten.append("state.pending.payload.verify.landingPath")
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -6335,7 +6339,19 @@ def _cmd_relocate_locked(session_dir, target_root, by):
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "relocate", exc)
     _bootstrap_review_session_marker(session_dir)
-    marker_outcome = _retire_relocate_marker(old_root_rp, old_session_rp)
+    session_rp = os.path.realpath(session_dir)
+    marker_outcome = "kept-no-target-marker"
+    try:
+        target_gitdir = store_core.get_worktree_gitdir(target_toplevel)
+        target_marker_path = _review_session_marker_path(target_gitdir)
+        if os.path.isfile(target_marker_path):
+            with open(target_marker_path, encoding="utf-8") as fh:
+                target_marker = json.load(fh)
+            if (isinstance(target_marker, dict)
+                    and target_marker.get("sessionDir") == session_rp):
+                marker_outcome = _retire_relocate_marker(old_root_rp, old_session_rp)
+    except Exception:
+        pass
     _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
                                   "result": marker_outcome, "phase": None, "round": None,
                                   "attempt": None})

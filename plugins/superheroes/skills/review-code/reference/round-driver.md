@@ -580,8 +580,10 @@ as the base guard's refusals), **0** on success.
 the session's current directory. It does so in one transaction with one `relocated` journal row
 carrying the old and new root, branch and session directory, the head, the base pin, `by`, `at`, and
 the list of rewritten keys. Nothing else in the session changes. It re-writes the checkout's scope
-marker in the new checkout and removes the old checkout's marker only when that marker names this
-session (the outcome is journalled as `marker-retirement`).
+marker in the new checkout and removes the old checkout's marker only once the new checkout's marker
+exists and names this session; otherwise retirement is skipped (`kept-no-target-marker`). Outcomes
+are journalled as `marker-retirement` (`retired`, `not-ours`, `absent`, `failed`,
+`kept-no-target-marker`).
 
 **The same head** means the fix-fold head when a fix fold recorded one — both copies must agree —
 otherwise the session's setup head. A session parked in the middle of a fix — its fixer dispatched

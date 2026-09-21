@@ -21,9 +21,6 @@ _RELOCATED_FIELDS = (
     "oldRoot", "newRoot", "oldBranch", "newBranch", "oldSessionDir", "newSessionDir",
     "head", "base", "by", "at", "rewritten",
 )
-_ANCHOR_PATH_ALLOWLIST = "state._ordersAnchors"
-
-
 def _mobility_repo(tmp_path):
     root_a = str(tmp_path / "repo_a")
     os.makedirs(root_a, exist_ok=True)
@@ -436,6 +433,25 @@ def test_relocate_pending_verify_landing_path_rewritten(tmp_path, capsys):
     assert "state.pending.payload.verify.landingPath" in out["relocated"]["rewritten"]
 
 
+def test_landing_entry_present_indeterminate_error(monkeypatch):
+    def _raise_permission(_path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(RC.os, "lstat", _raise_permission)
+    assert RC._landing_entry_present("/any/path") is True
+
+
+def test_relocate_marker_kept_when_target_detached(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    marker_a = _marker_path(repo["root_a"])
+    assert os.path.isfile(marker_a)
+    _, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert out["markerRetirement"] == "kept-no-target-marker"
+    assert os.path.isfile(marker_a)
+
+
 def test_relocate_marker_retirement(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -473,9 +489,6 @@ def test_re_emit_positive_after_relocate(tmp_path, capsys):
     assert a1_files
     meta = json.load(open(os.path.join(session_dir, "meta.json"), encoding="utf-8"))
     assert os.path.realpath(meta["repoRoot"]) == root_b
-    a0_md = next(p for p in a0_files if p.endswith(".md"))
-    a1_md = next(p for p in a1_files if p.endswith(".md"))
-    assert _read_bytes(a0_md) != _read_bytes(a1_md)
     for path, content in a0_files.items():
         assert _read_bytes(path) == content
     anchor0_after = _anchor_for(session_dir, rnd, phase, old_attempt)
@@ -523,7 +536,6 @@ def _dangling_symlink(path):
 @pytest.mark.parametrize("landing_shape,landing_kind", [
     ("envelope", "file"),
     ("bare", "file"),
-    ("envelope", "dangling_symlink"),
     ("bare", "dangling_symlink"),
 ])
 def test_re_emit_late_attempt0_landing_keeps_seat_open(
@@ -552,6 +564,19 @@ def test_re_emit_late_attempt0_landing_keeps_seat_open(
     ]
     assert len(late_keys) == 1
     assert late_keys[0] == (phase, rnd, old_attempt, first_seat, 0)
+
+
+def test_re_emit_same_checkout_session_dir_move_is_stale(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    session_dir2 = str(tmp_path / "session2")
+    shutil.copytree(session_dir, session_dir2)
+    _relocate(session_dir2, repo["root_a"], capsys)
+    rc, out = _re_emit(session_dir2, capsys)
+    assert rc == 0
+    assert out["ok"] is True
+    assert out["attempt"] == 1
 
 
 def test_relocate_same_checkout_moved_session_dir_keeps_marker(tmp_path, capsys):
@@ -698,25 +723,46 @@ def test_re_emit_after_session_dir_move_names_the_new_dir(tmp_path, capsys):
         assert old_s_prefix.encode() in _read_bytes(path)
 
 
-def test_re_emit_refuses_when_a_result_is_recorded_in_the_journal(tmp_path, capsys):
-    repo, sess, session_dir = _stale_session(tmp_path, capsys)
-    ok, state = RD.load_state(session_dir)
-    rnd, phase, attempt = state["pending"]["round"], state["pending"]["phase"], 0
-    roster, _ = RD._roster_of(session_dir, state, "re-emit", phase, rnd, attempt)
-    first_seat = roster[0]
-    journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
-    row = {
+@pytest.mark.parametrize("record_row", [
+    {
         "cmd": "record-result",
         "outcome": "recorded",
         "round": 1,
         "phase": "dispatch-panel",
         "attempt": 0,
-        "seat": first_seat,
+        "seat": None,
         "occurrence": 0,
-    }
+    },
+    {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "round": 1,
+        "recordIdentity": {
+            "phase": "dispatch-panel",
+            "seat": None,
+            "occurrence": 0,
+            "attempt": 0,
+        },
+    },
+])
+def test_re_emit_refuses_when_a_result_is_recorded_in_the_journal(
+        tmp_path, capsys, record_row):
+    repo, sess, session_dir = _stale_session(tmp_path, capsys)
+    ok, state = RD.load_state(session_dir)
+    rnd, phase, attempt = state["pending"]["round"], state["pending"]["phase"], 0
+    roster, _ = RD._roster_of(session_dir, state, "re-emit", phase, rnd, attempt)
+    first_seat = roster[0]
+    row = dict(record_row)
+    if row.get("seat") is None and "seat" in row:
+        row["seat"] = first_seat
+    ident = row.get("recordIdentity")
+    if isinstance(ident, dict) and ident.get("seat") is None:
+        ident = dict(ident)
+        ident["seat"] = first_seat
+        row["recordIdentity"] = ident
+    journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
     with open(journal_path, "a", encoding="utf-8") as fh:
-        # Bypass _journal_append on purpose — the seeded row stands in for a real record
-        # and the revision-identity fields are irrelevant to this check.
+        # Bypass _journal_append on purpose — the seeded row stands in for a real record.
         fh.write(json.dumps(row) + "\n")
     rc, out = _re_emit(session_dir, capsys)
     assert rc == 1

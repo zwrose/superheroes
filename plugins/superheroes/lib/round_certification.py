@@ -735,6 +735,19 @@ def _roster_from_orders_emitted(session_dir, event):
     return roster
 
 
+def _landing_entry_present(path):
+    """True when the directory entry exists; indeterminate errors count as present (fail closed)."""
+    try:
+        os.lstat(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except NotADirectoryError:
+        return False
+    except OSError:
+        return True
+
+
 def _journal_open_seats(journal, session_dir=None):
     """Seats opened by advance/next for a dispatch phase but never recorded — incomplete journal.
 
@@ -796,8 +809,8 @@ def _journal_open_seats(journal, session_dir=None):
             skey = storage_key(sk_key, occ_key)
             landing = record_paths.landing_path(session_dir, rnd_key, phase_key, skey, attempt_key)
             bare = record_paths.bare_payload_path(session_dir, rnd_key, phase_key, skey, attempt_key)
-            # `lexists`, never `isfile`: presence is the DIRECTORY ENTRY, not whether its target resolves.
-            if not os.path.lexists(landing) and not os.path.lexists(bare):
+            # Presence is the DIRECTORY ENTRY, not whether its target resolves (`lstat`, not `isfile`).
+            if not _landing_entry_present(landing) and not _landing_entry_present(bare):
                 continue
         if key not in closed:
             unclosed.append((key, event))
