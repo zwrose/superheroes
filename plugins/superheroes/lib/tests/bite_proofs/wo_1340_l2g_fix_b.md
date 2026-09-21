@@ -232,3 +232,73 @@ FAILED .../test_slug_resolution_failure_adds_stack_signal_degradation
 .                                                                        [100%]
 1 passed in 2.48s
 ```
+
+## FIX-C
+
+**Register:** 2 guards — **2 proven**, **0 unproven**.
+
+**Provenance:** cursor / composer-2.5 (FIX-C, layer 2g review round 2)
+
+**Method:** smallest edit to guarded production code (never the test), reverted by the inverse edit.
+
+## C-1 — lane-event tick skips gh poll
+
+**neutralization:** disable the lane-event short-circuit in `run()`:
+
+```python
+            if lane_event_due:
+```
+→
+```python
+            if False:  # bite-proof C-1 neutralization: short-circuit removed
+```
+
+**node ids:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_lane_terminal_makes_zero_gh_run_calls`, `::test_lane_blocked_makes_zero_gh_run_calls`, `::test_builder_exited_makes_zero_gh_run_calls`
+
+**raw red:**
+```
+assert 1 == 0
+FAILED .../test_lane_terminal_makes_zero_gh_run_calls
+assert 1 == 0
+FAILED .../test_lane_blocked_makes_zero_gh_run_calls
+assert 1 == 0
+FAILED .../test_builder_exited_makes_zero_gh_run_calls
+3 failed in 6.96s
+```
+
+**restore:** `if False:  # bite-proof C-1 neutralization: short-circuit removed` → `if lane_event_due:`
+
+**raw green:**
+```
+...                                                                      [100%]
+3 passed in 7.03s
+```
+
+## C-2 — stack-state vocabulary bound to wave-watch.md
+
+**neutralization:** change `STACK_STATE_COMPLETE` value in `wave_watch.py`:
+
+```python
+STACK_STATE_COMPLETE = "stack-complete"
+```
+→
+```python
+STACK_STATE_COMPLETE = "stack-done"
+```
+
+**node id:** `plugins/superheroes/lib/tests/test_ssot_drift.py::test_wave_watch_stack_state_vocabulary_in_wave_watch_doc`
+
+**raw red:**
+```
+AssertionError: wave-watch.md stack-state-changed payload vocabulary drift from wave_watch stack constants — missing from doc paragraph: ['stack-done']
+FAILED .../test_wave_watch_stack_state_vocabulary_in_wave_watch_doc
+1 failed in 1.16s
+```
+
+**restore:** `STACK_STATE_COMPLETE = "stack-done"` → `STACK_STATE_COMPLETE = "stack-complete"`
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.90s
+```
