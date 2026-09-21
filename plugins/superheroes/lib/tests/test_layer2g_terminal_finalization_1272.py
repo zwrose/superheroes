@@ -403,7 +403,7 @@ def test_cli_and_run_loop_legs_share_certified_head_binding(tmp_path):
 
 # --- item 4: residual path (BP-2g-h) ------------------------------------------------
 
-def test_fix_not_at_head_records_residual_without_rebind(tmp_path):
+def test_fix_not_at_head_leaves_the_receipt_unrebound_and_unverified(tmp_path):
     bad_digest = "0" * 64
     _, certified_head = _init_git_repo(tmp_path)
     state = _ledger_only_fixed_state(certified_head)
@@ -435,7 +435,7 @@ def test_fix_not_at_head_records_residual_without_rebind(tmp_path):
 
 # --- item 5: fault path -------------------------------------------------------------
 
-def test_verify_not_pass_records_residual_without_rebind(tmp_path):
+def test_verify_not_pass_leaves_the_receipt_unrebound_and_unverified(tmp_path):
     _, certified_head = _init_git_repo(tmp_path)
     state = _ledger_only_fixed_state(
         certified_head,
@@ -463,7 +463,7 @@ def test_verify_not_pass_records_residual_without_rebind(tmp_path):
     assert receipt.get("verifyResult") is None
 
 
-def test_unchanged_head_with_failed_binding_records_residual(tmp_path):
+def test_unchanged_head_with_failed_binding_leaves_the_receipt_unverified(tmp_path):
     session_dir, certified_head = _certifiable_session(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
@@ -477,7 +477,7 @@ def test_unchanged_head_with_failed_binding_records_residual(tmp_path):
     assert receipt.get("verifyResult") is None
 
 
-def test_fixed_row_without_receipt_records_missing_residual(tmp_path):
+def test_fixed_row_without_receipt_synthesizes_none_and_certification_refuses(tmp_path):
     session_dir, certified_head = _certifiable_session(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)

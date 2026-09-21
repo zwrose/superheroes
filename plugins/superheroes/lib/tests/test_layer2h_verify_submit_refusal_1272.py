@@ -278,20 +278,24 @@ def test_verify_submit_refuses_when_persisting_the_resolved_head_raises(tmp_path
 
 
 def test_verify_advance_surfaces_the_refusal_as_fold_refused_and_retries(tmp_path):
-    """axis: advance surfaces verified-head-unresolved as fold-refused; repair then folds."""
+    """axis: advance surfaces verified-head-unresolved as fold-refused; retry reuses first artifact unchanged."""
     non_git = tmp_path / "not-git"
     non_git.mkdir()
     session_dir = _session_at_pending_verify(
         tmp_path, str(non_git), advance_used=True, post_audits_verify=True,
     )
     _pending_at_run_verify(session_dir)
-    _write_verify_payload(session_dir, {"result": "pass"})
+    payload_path = _write_verify_payload(session_dir, {"result": "pass"})
+    with open(payload_path, "rb") as fh:
+        payload_bytes = fh.read()
     before_state = _state_bytes(session_dir)
     out1 = _advance(session_dir, tmp_path)
     assert out1["ok"] is False
     assert out1["reason"] == "fold-refused"
     assert out1["detail"] == "verified-head-unresolved"
     assert _state_bytes(session_dir) == before_state
+    assert os.path.isfile(payload_path)
+    assert open(payload_path, "rb").read() == payload_bytes
 
     repair = tmp_path / "repair"
     repair.mkdir()
@@ -302,7 +306,6 @@ def test_verify_advance_surfaces_the_refusal_as_fold_refused_and_retries(tmp_pat
     meta["repoRoot"] = repo_root
     with open(meta_path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, sort_keys=True)
-    _write_verify_payload(session_dir, {"result": "pass"})
     out2 = _advance(session_dir, tmp_path)
     assert out2["ok"] is True, out2
     ok, state = RD.load_state(session_dir)
