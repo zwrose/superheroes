@@ -26,6 +26,7 @@ __all__ = (
     "REVIEW_LIST_RESULT_KINDS",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
+    "VERIFIED_HEAD_FIELD",
     "DISPOSITIONS",
     "DISPOSITION_LEDGER_KEY",
     "DISPOSITION_LEDGER_MALFORMED_TOKEN",
@@ -58,6 +59,7 @@ __all__ = (
     "fix_proof_path",
     "fix_still_present_at_head",
     "legacy_disposition_ledger_rows",
+    "verify_result_for_head",
 )
 
 # Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
@@ -82,6 +84,7 @@ HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 HEAD_CONTENT_BLOBS_SCHEMA = "head-content-blobs/2"
 SEAT_MISSING_SCHEMA = "seat-missing/1"
 FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
+VERIFIED_HEAD_FIELD = "verifiedHead"
 FINDING_KEY_FIELD = "findingKey"
 
 DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
@@ -435,4 +438,35 @@ def fix_still_present_at_head(finding, receipt, head, read_outcome, by_key=None)
             "fix-content-reverted",
             "fixed disposition fix is not present in content at the certified head",
         )
+    return None
+
+
+def verify_result_for_head(state, head):
+    """The verify result recorded FOR `head`, or None. The ONE reader of the verified-head fact.
+
+    `_fold_verify` records `verifiedHead` beside `verifyResult` in the round record it writes;
+    this answers "was this head verified, and how" from that record alone. A round record with a
+    `verifyResult` but NO `verifiedHead` reads as NOT VERIFIED (fail-closed) — the verified-head
+    fact is never reconstructed from `verifyResult` plus `fixFoldHead`, which is the class this
+    retires (three passes over that reconstruction each broke a neighbour, #1272 layer 2g)."""
+    if not isinstance(head, str) or not head:
+        return None
+    if not isinstance(state, dict):
+        return None
+    rounds = state.get("rounds")
+    if not isinstance(rounds, dict):
+        return None
+    round_nums = []
+    for key in rounds:
+        try:
+            round_nums.append(int(key))
+        except (TypeError, ValueError):
+            continue
+    for rnd in sorted(round_nums, reverse=True):
+        rec = rounds.get(str(rnd))
+        if not isinstance(rec, dict):
+            continue
+        verified = rec.get(VERIFIED_HEAD_FIELD)
+        if isinstance(verified, str) and verified and verified == head:
+            return rec.get("verifyResult")
     return None

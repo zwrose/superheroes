@@ -1867,6 +1867,7 @@ def _build_receipt_rounds(state, form):
             "seatStatus": rec.get("seatStatus"),
             "blockingCount": rec.get("blockingCount"),
             "verifyResult": rec.get("verifyResult"),
+            "verifiedHead": rec.get("verifiedHead"),
             "audits": rec.get("audits"),
             "auditProvenance": rec.get("auditProvenance"),
             "scopedFinder": rec.get("scopedFinder"),

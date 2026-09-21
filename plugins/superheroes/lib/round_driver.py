@@ -1549,46 +1549,10 @@ def _fix_receipt_content_fields(session_dir, head_sha, file_path):
     return {}
 
 
-def _verify_result_for_disposition(state, round_no, bound_head):
-    """Per-round verify result, or a prior round's only when its fix-fold head matches bound_head."""
-    rounds = state.get("rounds") or {}
-    rec = rounds.get(str(round_no)) or {}
-    val = rec.get("verifyResult")
-    if val is not None:
-        fix_head = rec.get("fixFoldHead")
-        if (
-            isinstance(bound_head, str)
-            and bound_head
-            and isinstance(fix_head, str)
-            and fix_head
-            and fix_head == bound_head
-        ):
-            return val
-    if not isinstance(bound_head, str) or not bound_head:
-        return None
-    prior = []
-    for key in rounds:
-        try:
-            prior.append(int(key))
-        except (TypeError, ValueError):
-            continue
-    for rnd in sorted(prior, reverse=True):
-        if rnd >= round_no:
-            continue
-        prior_rec = rounds.get(str(rnd)) or {}
-        val = prior_rec.get("verifyResult")
-        if val is None:
-            continue
-        prior_head = prior_rec.get("fixFoldHead")
-        if isinstance(prior_head, str) and prior_head and prior_head == bound_head:
-            return val
-    return None
-
-
 def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
     cfg = state.get("config") or {}
     head = cfg.get(FIX_FOLD_HEAD_KEY) if isinstance(cfg, dict) else None
-    verify_result = _verify_result_for_disposition(state, state.get("round"), head)
+    verify_result = session_contract.verify_result_for_head(state, head)
     receipt = {}
     if isinstance(head, str) and head:
         receipt["headSha"] = head
@@ -1653,16 +1617,17 @@ def _fixed_disposition_family_with_receipt(entry, receipt):
     return dict(family, dispositionReceipt=receipt)
 
 
-def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
-    """Stamp verify on fixed receipts when audits folded before verify in the same round."""
-    if verify_result is None:
-        return
+def _backfill_fixed_disposition_verify_receipts(state, round_no):
+    """Stamp verify on fixed receipts keyed on each receipt's own head when audits folded before verify."""
     rows, _by_key, _fault = _fixed_ledger_rows(state)
     for key, entry in rows:
         if entry.get("dispositionRound") != round_no:
             continue
         receipt = entry.get("dispositionReceipt")
         if not isinstance(receipt, dict) or receipt.get("verifyResult") is not None:
+            continue
+        verify_result = session_contract.verify_result_for_head(state, receipt.get("headSha"))
+        if verify_result is None:
             continue
         updated_receipt = dict(receipt)
         updated_receipt["verifyResult"] = verify_result
@@ -2225,7 +2190,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_SCOPED:
         _fold_scoped(state, config, artifact)
     elif phase == P_VERIFY:
-        _fold_verify(state, config, artifact)
+        _fold_verify(state, config, artifact, session_dir=session_dir)
     elif phase == P_FIXER:
         _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir)
     elif phase == P_JUDGMENT:
@@ -3877,7 +3842,7 @@ def _verify_command_configured(config):
     return cmd.strip().lower() not in ("", "none")
 
 
-def _fold_verify(state, config, artifact):
+def _fold_verify(state, config, artifact, session_dir=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
     `fail`, a `timeout`, a missing/None result, any unrecognized value, OR a skip result while a real
@@ -3885,8 +3850,13 @@ def _fold_verify(state, config, artifact):
     names the class — never advances into a delta round that could later certify."""
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
+    verified_head, verified_head_err = _verified_head_at_fold(session_dir, state)
+    if verified_head_err:
+        _record_round(state, "verifiedHeadRefused", verified_head_err)
+    else:
+        _record_round(state, session_contract.VERIFIED_HEAD_FIELD, verified_head)
     if result == "pass":
-        _backfill_fixed_disposition_verify_receipts(state, state["round"], result)
+        _backfill_fixed_disposition_verify_receipts(state, state["round"])
     if result == "fail":
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "verify gate failed"}
@@ -4827,6 +4797,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "seatStatus": rec.get("seatStatus"),
               "blockingCount": rec.get("blockingCount"),
               "verifyResult": rec.get("verifyResult"),
+              "verifiedHead": rec.get("verifiedHead"),
               "audits": rec.get("audits"),
               # The manifest-keyed audit-provenance boundary (LEDGERS §3): a round that ran
               # fix audits records `collection-manifest` here so the boundary — attestation,
@@ -5348,6 +5319,20 @@ def _persist_fix_fold_head_sha(session_dir, state, head):
         (json.dumps(meta_obj, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
+def _verified_head_at_fold(session_dir, state):
+    """The head the verify gate ran against, resolved at verify-fold time. Fail-closed.
+
+    Returns (head, error). With a session dir this is the same resolver the fixer fold uses, so
+    the recorded head is the head the fixer landed at and the gate ran against. WITHOUT one
+    (`run_loop`'s in-process leg passes no session_dir) there is NO fallback: `config["headSha"]`
+    is the session-SETUP head and stamping it could credit a head a fixer seam had already moved
+    past, so this refuses instead. Refusing matches today's behaviour on that leg — `_fold_fixer`
+    also gets no session_dir there, so no head was ever recorded."""
+    if session_dir:
+        return _resolve_fix_fold_head_sha(session_dir, state)
+    return (None, "verified head: no session dir — the in-process leg records no verified head")
+
+
 def _resolve_fix_fold_head_sha(session_dir, state):
     """Resolve the certified head once at fix-fold time — never the session-setup headSha.
 
@@ -5538,10 +5523,19 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
         updated_receipt = dict(original_receipt)
         if not head_unchanged:
             updated_receipt["headSha"] = certified_head
-        verify_result = _verify_result_for_disposition(
-            state, state.get("round"), certified_head
-        )
+        verify_result = session_contract.verify_result_for_head(state, certified_head)
         if verify_result != "pass":
+            if original_receipt.get("verifyResult") is not None:
+                revoked = dict(original_receipt)
+                revoked.pop("verifyResult", None)
+                _record_disposition(
+                    state,
+                    key,
+                    "fixed",
+                    entry.get("dispositionRound"),
+                    **_fixed_disposition_family_with_receipt(entry, revoked),
+                )
+                changed = True
             residuals[key] = FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
             continue
         updated_receipt["verifyResult"] = verify_result
