@@ -1558,6 +1558,16 @@ def test_l2f_v29_head_sha_none_refuses():
     _assert_vet_refusal(_vet_body("**Verdict: READY** · %s" % HEAD_SHA), None, sc.REASON_BAD_ARGUMENT)
 
 
+@pytest.fixture(autouse=True)
+def _vet_verdict_form_cache_reset(request):
+    if "vet_form" in request.node.name:
+        sc._reset_vet_verdict_form_cache()
+        yield
+        sc._reset_vet_verdict_form_cache()
+    else:
+        yield
+
+
 def test_l2f_v30_vet_form_missing_refuses(monkeypatch):
     # axis: missing vet-verdict-form.json refuses vet-unreadable, never READY
     monkeypatch.setattr(sc, "_vet_verdict_form_path", lambda: "/nonexistent/vet-verdict-form.json")
@@ -1749,9 +1759,10 @@ def test_l2f_read_pr_vet_state_deadline_exhausted(monkeypatch):
         return value
 
     monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
-    run, calls = _make_run({_pr_vet_argv(): _pr_vet_ok()})
+    fail_calls = []
 
     def _fail_run(*args, **kwargs):
+        fail_calls.append(list(args))
         raise AssertionError("gh should not run when deadline is exhausted")
 
     state, refusal = sc.read_pr_vet_state(
@@ -1759,7 +1770,7 @@ def test_l2f_read_pr_vet_state_deadline_exhausted(monkeypatch):
     )
     assert state is None
     _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
-    assert calls == []
+    assert fail_calls == []
 
 
 def test_l2f_read_pr_vet_state_gh_not_on_path(monkeypatch):

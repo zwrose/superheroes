@@ -1570,7 +1570,7 @@ def _apply_dependency_gate(
         return {
             "ok": False,
             "reason": "dependency-closed-unmerged",
-            "detail": dependency,
+            "detail": str(dependency),
         }
     # Allowlist guarantees OPEN/MERGED/CLOSED only; any other value refuses.
     if pr_lifecycle != "OPEN":
