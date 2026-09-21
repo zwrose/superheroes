@@ -7,6 +7,7 @@ import sys
 import model_registry
 import pytest
 import record_paths
+import round_driver as RD
 
 import round_certification as RC
 import session_contract
@@ -185,6 +186,131 @@ def write_certifiable_session(tmp_path, **kwargs):
         )
     _write_head_content_blobs(session_dir, blobs)
     return session_dir
+
+
+def _dispatch_evidence_with_engine_model(seat="test-reviewer", *, engine_model="gpt-5.6-sol"):
+    binding = _binding_fields("dispatch-model-nonce", result_digest=DEFAULT_FINDINGS_RESULT_SHA)
+    return {
+        **binding,
+        "read": "engaged",
+        "source": "runner",
+        "telemetry": "tool-calls",
+        "stdoutBytes": 10,
+        "wallSeconds": 1.0,
+        "toolCalls": 1,
+        "engineModel": engine_model,
+    }
+
+
+def _envelope_execution_evidence_from_journal(journal_evidence):
+    observation = {
+        "read": journal_evidence.get("read", "engaged"),
+        "source": journal_evidence.get("source", "runner"),
+        "telemetry": journal_evidence.get("telemetry", "tool-calls"),
+        "stdoutBytes": journal_evidence.get("stdoutBytes", 10),
+        "wallSeconds": journal_evidence.get("wallSeconds", 1.0),
+        "tokens": None,
+        "toolCalls": journal_evidence.get("toolCalls", 1),
+    }
+    out = {
+        key: journal_evidence[key]
+        for key in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
+        if key in journal_evidence
+    }
+    out["observation"] = observation
+    if isinstance(journal_evidence.get("engineModel"), str) and journal_evidence["engineModel"]:
+        out["engineModel"] = journal_evidence["engineModel"]
+    return out
+
+
+def test_journal_execution_evidence_fields_copies_optional_engine_model():
+    evidence = {
+        "source": "runner",
+        "runnerNonce": "nonce-1",
+        "recordDigest": "d" * 64,
+        "resultDigest": "e" * 64,
+        "resultKind": "findings",
+        "observation": {"read": "engaged"},
+        "engineModel": "gpt-5.6-sol",
+    }
+    copied = RD._journal_execution_evidence_fields(evidence)
+    assert copied["engineModel"] == "gpt-5.6-sol"
+    without_optional = dict(evidence)
+    del without_optional["engineModel"]
+    copied_without = RD._journal_execution_evidence_fields(without_optional)
+    assert "engineModel" not in copied_without
+
+
+def test_receipt_seat_model_from_execution_evidence_not_seat_map(tmp_path):
+    seat = "test-reviewer"
+    journal_evidence = _dispatch_evidence_with_engine_model(seat=seat)
+    journal_row = _dispatch_journal_with_binding(
+        seat=seat,
+        nonce="dispatch-model-nonce",
+    )
+    journal_row["executionEvidence"] = journal_evidence
+    seat_cfg = {
+        "vendor": "codex",
+        "model": "gpt-6-astra",
+        "tier": "reviewer-deep",
+    }
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "seatMapReceipts": [{"round": "1", "map": {"seats": {seat: dict(seat_cfg)}}}],
+            "config": {
+                "fixerVendor": "claude",
+                "baseGuard": RC.BASE_GUARD_CHECKED,
+                "seatMap": {"seats": {seat: dict(seat_cfg)}},
+            },
+        },
+        journal_lines=[journal_row],
+        envelopes=[
+            {
+                "seat": seat,
+                "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
+                "executionEvidence": _envelope_execution_evidence_from_journal(journal_evidence),
+            }
+        ],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None, refusal
+    row = next(item for item in receipt["seats"] if item["seat"] == seat)
+    assert row["model"] == "gpt-5.6-sol"
+    assert all(item.get("model") != "gpt-6-astra" for item in receipt["seats"])
+
+
+def test_hand_landed_seat_receipt_model_null(tmp_path):
+    evidence = {
+        **_binding_fields("hand-model-nonce", result_digest=DEFAULT_FINDINGS_RESULT_SHA),
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+            "tokens": None,
+            "toolCalls": 1,
+        },
+    }
+    session_dir = write_certifiable_session(
+        tmp_path,
+        journal_lines=[
+            _hand_landed_binding_journal_row("code-reviewer", DEFAULT_PANEL_PAYLOAD_SHA, evidence)
+        ],
+        envelopes=[
+            {
+                "seat": "code-reviewer",
+                "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": evidence,
+            }
+        ],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None, refusal
+    row = next(item for item in receipt["seats"] if item["seat"] == "code-reviewer")
+    assert row["model"] is None
 
 
 def test_certify_clean_session_returns_receipt(tmp_path):
