@@ -572,6 +572,9 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" relocate --session-dir "$SESSION_DIR"
 python3 -B "$ROOT_DIR/lib/round_driver.py" re-emit --session-dir "$SESSION_DIR" --by "<who>"
 ```
 
+Both commands print their JSON result on stdout and exit **1** on any refusal (the same convention
+as the base guard's refusals), **0** on success.
+
 **relocate** rewrites `meta.json` `repoRoot`, `branch`, and `sessionDir` when present;
 `loop-state.json` `config.repoRoot`; and the pending verify step's `landingPath`, re-derived under
 the session's current directory. It does so in one transaction with one `relocated` journal row

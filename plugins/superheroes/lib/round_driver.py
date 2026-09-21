@@ -6219,7 +6219,14 @@ def _cmd_relocate_locked(session_dir, target_root, by):
                            detail="target_root is not a git toplevel")
     old_root = meta.get("repoRoot")
     old_root_rp = os.path.realpath(old_root) if isinstance(old_root, str) and old_root else None
-    old_session_dir = meta.get("sessionDir") if "sessionDir" in meta else session_dir
+    if "sessionDir" in meta:
+        session_dir_meta = meta.get("sessionDir")
+        if not isinstance(session_dir_meta, str) or not session_dir_meta:
+            return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
+                               detail="sessionDir")
+        old_session_dir = session_dir_meta
+    else:
+        old_session_dir = session_dir
     old_session_rp = os.path.realpath(old_session_dir)
     if (old_root_rp is not None and target_toplevel == old_root_rp
             and os.path.realpath(session_dir) == old_session_rp):
@@ -6238,7 +6245,7 @@ def _cmd_relocate_locked(session_dir, target_root, by):
     if meta_base != cfg_base:
         return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch",
                            detail="meta.baseRef does not match config.baseRef")
-    resolved_pin, pin_reason = review_base_guard._resolve_commit_reason(
+    resolved_pin, pin_reason = review_base_guard.resolve_commit_reason(
         meta_base, target_toplevel, store_core.run_git)
     if resolved_pin is None:
         detail = ("baseRef does not resolve in target: %s" % pin_reason
@@ -6266,9 +6273,12 @@ def _cmd_relocate_locked(session_dir, target_root, by):
                                detail="recordsPath lies inside old repo root")
     old_branch = meta.get("branch")
     if not isinstance(old_branch, str):
-        old_branch_res = store_core.run_git_result(old_root_rp, "rev-parse", "--abbrev-ref", "HEAD")
-        old_branch = (old_branch_res.out if old_branch_res.status == store_core.GIT_OK
-                      else None)
+        if old_root_rp is not None:
+            old_branch_res = store_core.run_git_result(old_root_rp, "rev-parse", "--abbrev-ref", "HEAD")
+            old_branch = (old_branch_res.out if old_branch_res.status == store_core.GIT_OK
+                          else None)
+        else:
+            old_branch = None
     branch_res = store_core.run_git_result(target_toplevel, "rev-parse", "--abbrev-ref", "HEAD")
     new_branch = branch_res.out if branch_res.status == store_core.GIT_OK else "HEAD"
     rewritten = []

@@ -1103,6 +1103,126 @@ plugins/superheroes/lib/tests/test_round_driver_session_mobility.py:506: Asserti
 
 ---
 
+## G-a — non-string `sessionDir` refusal (WO-G item 1 / item 8)
+
+**Neutralization:**
+
+```python
+-    if "sessionDir" in meta:
++    if False and ("sessionDir" in meta):
+         session_dir_meta = meta.get("sessionDir")
+```
+
+**Detector:** `test_relocate_refuses_none_session_dir`
+
+**Raw red:**
+
+```
+>       assert rc == 1
+E       assert 0 == 1
+plugins/superheroes/lib/tests/test_round_driver_session_mobility.py:743: AssertionError
+1 failed in 2.21s
+```
+
+**Restore receipt (quoted lines):**
+
+```python
+    if "sessionDir" in meta:
+        session_dir_meta = meta.get("sessionDir")
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 2.17s
+```
+
+---
+
+## G-b — unresolvable base pin refusal (WO-G item 7)
+
+**Neutralization:** the `resolved_pin is None` branch alone is shadowed by the downstream
+`resolved_pin != meta.baseRef` check; both guards in the failure class are neutralized.
+
+```python
+-    if resolved_pin is None:
++    if False and (resolved_pin is None):
+         detail = ("baseRef does not resolve in target: %s" % pin_reason
+                   if pin_reason else "baseRef does not resolve in target")
+         return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch", detail=detail)
+-    if not isinstance(meta_base, str) or resolved_pin != meta_base.lower():
++    if False and (not isinstance(meta_base, str) or resolved_pin != meta_base.lower()):
+         return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch",
+```
+
+**Detector:** `test_relocate_refuses_a_base_pin_that_does_not_resolve_in_the_target`
+
+**Raw red:**
+
+```
+>       assert rc == 1
+E       assert 0 == 1
+plugins/superheroes/lib/tests/test_round_driver_session_mobility.py:724: AssertionError
+1 failed in 2.53s
+```
+
+**Restore receipt (quoted lines):**
+
+```python
+    if resolved_pin is None:
+        detail = ("baseRef does not resolve in target: %s" % pin_reason
+                  if pin_reason else "baseRef does not resolve in target")
+        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch", detail=detail)
+    if not isinstance(meta_base, str) or resolved_pin != meta_base.lower():
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 2.27s
+```
+
+---
+
+## G-c — exact landing-path rewrite (WO-G item 4)
+
+**Neutralization:**
+
+```python
+-    if isinstance(verify, dict) and "landingPath" in verify:
++    if False and (isinstance(verify, dict) and "landingPath" in verify):
+```
+
+**Detector:** `test_relocate_pending_verify_landing_path_rewritten`
+
+**Raw red:**
+
+```
+>       assert landing == expected
+E       AssertionError: assert '/private/var....payload.json' == '/private/var....payload.json'
+E         - l0/session2/round-1/landing/run-verify/verify-a12dd3a7fd3203a4.a1.payload.json
+E         + l0/session/round-1/landing/run-verify/verify-a12dd3a7fd3203a4.a1.payload.json
+plugins/superheroes/lib/tests/test_round_driver_session_mobility.py:435: AssertionError
+1 failed in 2.23s
+```
+
+**Restore receipt (quoted lines):**
+
+```python
+    if isinstance(verify, dict) and "landingPath" in verify:
+```
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 2.43s
+```
+
+---
+
 ## Whole-file re-run (final head, all elements restored)
 
 ```

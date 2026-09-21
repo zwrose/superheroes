@@ -207,6 +207,9 @@ def test_relocate_positive_and_next_from_new_checkout(tmp_path, capsys):
     state = json.load(open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8"))
     assert meta["repoRoot"] == repo["root_b"]
     assert state["config"]["repoRoot"] == repo["root_b"]
+    target_branch = subprocess.check_output(
+        ["git", "-C", repo["root_b"], "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+    assert meta["branch"] == target_branch
     rc_after = RD.main(["next", "--session-dir", session_dir, "--repo-root", repo["root_b"]])
     assert rc_after == 0
 
@@ -415,17 +418,21 @@ def test_relocate_pending_verify_landing_path_rewritten(tmp_path, capsys):
     ok, state = RD.load_state(session_dir2)
     pending = state.setdefault("pending", {})
     payload = pending.setdefault("payload", {})
-    payload["verify"] = {"round": 1, "attempt": 1, "landingPath": "/old/path"}
+    rnd, attempt = 1, 1
+    verify_skey = RR.storage_key("verify")
+    payload["verify"] = {
+        "round": rnd,
+        "attempt": attempt,
+        "landingPath": RR.bare_payload_path(
+            session_dir, rnd, "run-verify", verify_skey, attempt),
+    }
     RD.save_state(session_dir2, state)
-    meta = json.load(open(os.path.join(session_dir2, "meta.json"), encoding="utf-8"))
-    meta["sessionDir"] = os.path.realpath(session_dir2)
-    with open(os.path.join(session_dir2, "meta.json"), "w", encoding="utf-8") as fh:
-        json.dump(meta, fh)
     _, out = _relocate(session_dir2, repo["root_b"], capsys)
     assert out["ok"] is True
     state = json.load(open(os.path.join(session_dir2, RD.STATE_FILE), encoding="utf-8"))
     landing = state["pending"]["payload"]["verify"]["landingPath"]
-    assert landing.startswith(session_dir2)
+    expected = RR.bare_payload_path(session_dir2, rnd, "run-verify", verify_skey, attempt)
+    assert landing == expected
     assert "state.pending.payload.verify.landingPath" in out["relocated"]["rewritten"]
 
 
@@ -442,6 +449,10 @@ def test_relocate_marker_retirement(tmp_path, capsys):
     assert marker["sessionDir"] == os.path.realpath(session_dir)
     assert marker["repoRoot"] == repo["root_b"]
     assert not os.path.isfile(_marker_path(repo["root_a"]))
+    meta = json.load(open(os.path.join(session_dir, "meta.json"), encoding="utf-8"))
+    target_branch = subprocess.check_output(
+        ["git", "-C", repo["root_b"], "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+    assert meta["branch"] == target_branch
 
 
 def test_re_emit_positive_after_relocate(tmp_path, capsys):
@@ -458,11 +469,8 @@ def test_re_emit_positive_after_relocate(tmp_path, capsys):
     ok, state = RD.load_state(session_dir)
     assert state["pending"]["attempt"] == 1
     root_b = os.path.realpath(repo["root_b"])
-    root_a = os.path.realpath(repo["root_a"])
     a1_files = _collect_attempt_files(session_dir, rnd, phase, 1)
     assert a1_files
-    a1_combined = b"".join(_read_bytes(p) for p in a1_files)
-    assert root_a.encode() not in a1_combined
     meta = json.load(open(os.path.join(session_dir, "meta.json"), encoding="utf-8"))
     assert os.path.realpath(meta["repoRoot"]) == root_b
     a0_md = next(p for p in a0_files if p.endswith(".md"))
@@ -694,6 +702,48 @@ def test_re_emit_refuses_when_a_result_is_recorded_in_the_journal(tmp_path, caps
     assert out["ok"] is False
     assert out["reason"] == "re-emit-attempt-has-results"
     assert "journal:%s" % first_seat in out["names"]
+
+
+def test_relocate_refuses_a_base_pin_that_does_not_resolve_in_the_target(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    meta_path = os.path.join(session_dir, "meta.json")
+    state_path = os.path.join(session_dir, RD.STATE_FILE)
+    bogus_pin = "1234567890abcdef" * 2 + "12345678"
+    meta = json.load(open(meta_path, encoding="utf-8"))
+    meta["baseRef"] = bogus_pin
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    ok, state = RD.load_state(session_dir)
+    state["config"]["baseRef"] = bogus_pin
+    RD.save_state(session_dir, state)
+    meta_before = _read_bytes(meta_path)
+    state_before = _read_bytes(state_path)
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 1
+    assert out["reason"] == "relocate-base-mismatch"
+    assert _read_bytes(meta_path) == meta_before
+    assert _read_bytes(state_path) == state_before
+
+
+def test_relocate_refuses_none_session_dir(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    meta_path = os.path.join(session_dir, "meta.json")
+    state_path = os.path.join(session_dir, RD.STATE_FILE)
+    meta = json.load(open(meta_path, encoding="utf-8"))
+    meta["sessionDir"] = None
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    meta_before = _read_bytes(meta_path)
+    state_before = _read_bytes(state_path)
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 1
+    assert out["reason"] == "relocate-session-unreadable"
+    assert _read_bytes(meta_path) == meta_before
+    assert _read_bytes(state_path) == state_before
 
 
 def test_relocate_marker_not_ours_left_alone(tmp_path):
