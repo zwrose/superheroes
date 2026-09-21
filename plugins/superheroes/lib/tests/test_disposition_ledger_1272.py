@@ -329,7 +329,7 @@ def test_L3_fold_audits_stamps_fixed_on_discharged_only():
     state["round"] = 2
     head = "b" * 40
     state["config"][RD.FIX_FOLD_HEAD_KEY] = head
-    state["rounds"] = {"2": {"verifyResult": "pass", "fixFoldHead": head}}
+    state["rounds"] = {"2": {"verifyResult": "pass", SC.VERIFIED_HEAD_FIELD: head}}
     discharged_f = {"title": "fixed bug", "severity": "Important", "file": "f.py", "line": 1}
     open_f = {"title": "open bug", "severity": "Important", "file": "g.py", "line": 2}
     state["fixBatch"] = [discharged_f, open_f]
@@ -538,7 +538,7 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
     state = RD.new_state(_cfg())
     state["config"]["repoRoot"] = str(repo)
     state["round"] = 1
-    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head1}}
+    state["rounds"] = {"1": {"verifyResult": "pass", SC.VERIFIED_HEAD_FIELD: head1}}
     key, receipt1 = _audit_discharge_fixed(state, head1)
     assert receipt1.get("verifyResult") == "pass"
     assert receipt1.get("headSha") == head1
@@ -549,9 +549,13 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
     assert receipt2.get("headSha") == head2
     assert receipt2.get("verifyResult") is None
 
-    RD._fold_verify(state, state["config"], {"result": "pass"})
-    state["rounds"]["2"]["verifyResult"] = "pass"
-    state["rounds"]["2"]["fixFoldHead"] = head2
+    fold_session = str(tmp_path / "c13-fold")
+    os.makedirs(fold_session, exist_ok=True)
+    RD.save_state(fold_session, state)
+    meta = {"headSha": head2, "repoRoot": str(repo)}
+    with open(os.path.join(fold_session, RR.META_FILE), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    RD._fold_verify(state, state["config"], {"result": "pass"}, session_dir=fold_session)
     entry = _ledger_by_key(state)[key]
     receipt_after = entry.get("dispositionReceipt") or {}
     assert receipt_after.get("verifyResult") == "pass"
@@ -638,7 +642,7 @@ def test_C13_delta_same_head_carries_prior_pass():
     head = "c" * 40
     state = RD.new_state(_cfg())
     state["round"] = 2
-    state["rounds"] = {"2": {"verifyResult": "pass", "fixFoldHead": head}}
+    state["rounds"] = {"2": {"verifyResult": "pass", SC.VERIFIED_HEAD_FIELD: head}}
     _audit_discharge_fixed(state, head)
 
     state["round"] = 3
@@ -845,7 +849,7 @@ def test_bite_verify_backfill_preserves_disposition_family():
     key = "fixed-key"
     state = RD.new_state(_cfg())
     state["round"] = 2
-    state["rounds"] = {"2": {"fixFoldHead": head}}
+    state["rounds"] = {"2": {SC.VERIFIED_HEAD_FIELD: head, "verifyResult": "pass"}}
     state[SC.DISPOSITION_LEDGER_KEY] = [{
         SC.FINDING_KEY_FIELD: key,
         "file": "a.py",
@@ -860,7 +864,7 @@ def test_bite_verify_backfill_preserves_disposition_family():
     }]
     state["findings"] = []
 
-    RD._backfill_fixed_disposition_verify_receipts(state, 2, "pass")
+    RD._backfill_fixed_disposition_verify_receipts(state, 2)
 
     entry = _ledger_by_key(state)[key]
     assert entry["dispositionReceipt"]["verifyResult"] == "pass"
@@ -869,3 +873,45 @@ def test_bite_verify_backfill_preserves_disposition_family():
     assert entry["outOfScopeReason"] == "carried reason"
     assert entry["disposition"] == "fixed"
     assert entry["dispositionRound"] == 2
+
+
+def test_backfill_stamps_only_receipts_bound_to_verified_head():
+    """axis: backfill keys verifyResult on each receipt's own headSha, not one round-wide stamp."""
+    verified_head = "a" * 40
+    other_head = "b" * 40
+    key_verified = "verified-key"
+    key_other = "other-key"
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["rounds"] = {
+        "2": {SC.VERIFIED_HEAD_FIELD: verified_head, "verifyResult": "pass"},
+    }
+    state[SC.DISPOSITION_LEDGER_KEY] = [
+        {
+            SC.FINDING_KEY_FIELD: key_verified,
+            "file": "a.py",
+            "line": 1,
+            "title": "verified",
+            "severity": "Minor",
+            "disposition": "fixed",
+            "dispositionRound": 2,
+            "dispositionReceipt": {"headSha": verified_head},
+        },
+        {
+            SC.FINDING_KEY_FIELD: key_other,
+            "file": "b.py",
+            "line": 2,
+            "title": "other",
+            "severity": "Minor",
+            "disposition": "fixed",
+            "dispositionRound": 2,
+            "dispositionReceipt": {"headSha": other_head},
+        },
+    ]
+    state["findings"] = []
+
+    RD._backfill_fixed_disposition_verify_receipts(state, 2)
+
+    ledger = _ledger_by_key(state)
+    assert ledger[key_verified]["dispositionReceipt"].get("verifyResult") == "pass"
+    assert "verifyResult" not in ledger[key_other]["dispositionReceipt"]

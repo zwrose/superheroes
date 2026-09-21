@@ -124,6 +124,27 @@ def _init_git_repo(tmp_path):
     return str(repo), proc.stdout.strip()
 
 
+def _drive_faithful_two_round_verify(state, config, session_dir, round_n=1):
+    """Round records from real folds: fixFoldHead in round N, verifiedHead in round N+1."""
+    state["round"] = round_n
+    state.setdefault("rounds", {})
+    RD._fold_fixer(state, config, {"fixes": []}, session_dir=session_dir)
+    fix_round = str(round_n)
+    verify_round = str(round_n + 1)
+    fix_rec = state["rounds"].get(fix_round)
+    assert isinstance(fix_rec, dict), state["rounds"]
+    assert fix_rec.get("fixFoldHead")
+    assert SC.VERIFIED_HEAD_FIELD not in fix_rec
+    state["round"] = round_n + 1
+    RD._fold_verify(state, config, {"result": "pass"}, session_dir=session_dir)
+    verify_rec = state["rounds"].get(verify_round)
+    assert isinstance(verify_rec, dict), state["rounds"]
+    assert verify_rec.get(SC.VERIFIED_HEAD_FIELD)
+    assert verify_rec.get("verifyResult") == "pass"
+    assert fix_round != verify_round
+    return fix_rec["fixFoldHead"], verify_rec[SC.VERIFIED_HEAD_FIELD]
+
+
 def _head_content_row(path=FIX_PATH, head=None):
     return {
         "headSha": head,
@@ -180,7 +201,7 @@ def _ledger_only_fixed_state(certified_head, **over):
         "findings": [],
         "_records": [],
         "round": 1,
-        "rounds": {"1": {"verifyResult": "pass", "fixFoldHead": certified_head}},
+        "rounds": {},
         "config": {
             "fixerVendor": "claude",
             "baseGuard": RC.BASE_GUARD_CHECKED,
@@ -201,7 +222,7 @@ def _ledger_only_fixed_state(certified_head, **over):
     return base
 
 
-def _certifiable_session(tmp_path, state=None, **kwargs):
+def _certifiable_session(tmp_path, state=None, drive_faithful=True, **kwargs):
     repo_root, certified_head = _init_git_repo(tmp_path)
     state_obj = state or _ledger_only_fixed_state(certified_head)
     cfg = dict(state_obj.get("config") or {})
@@ -217,6 +238,19 @@ def _certifiable_session(tmp_path, state=None, **kwargs):
         **kwargs,
     )
     _write_head_content_blobs(session_dir, head=certified_head)
+    if drive_faithful:
+        terminal_snapshot = {
+            key: state_obj.get(key)
+            for key in ("step", "terminal", "certification", "decisions", "round")
+        }
+        with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+            loaded = json.load(fh)
+        loaded["config"]["repoRoot"] = repo_root
+        _drive_faithful_two_round_verify(loaded, loaded["config"], session_dir)
+        rounds = loaded["rounds"]
+        loaded.update(terminal_snapshot)
+        loaded["rounds"] = rounds
+        RD.save_state(session_dir, loaded)
     return session_dir, certified_head
 
 
@@ -454,8 +488,10 @@ def test_legacy_ledger_tolerates_malformed_sibling_through_backfill_and_terminal
         state = json.load(fh)
     state.pop("dispositionLedgerOwner", None)
     state["dispositionLedger"].append("not-a-dict")
-    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": certified_head}}
-    RD._backfill_fixed_disposition_verify_receipts(state, 1, "pass")
+    receipt = _ledger_receipt(state)
+    if isinstance(receipt, dict):
+        receipt["headSha"] = certified_head
+    RD._backfill_fixed_disposition_verify_receipts(state, 1)
     receipt = _ledger_receipt(state)
     assert isinstance(receipt, dict)
     assert receipt.get("verifyResult") == "pass"
@@ -475,6 +511,238 @@ def test_unrecognized_owner_terminal_gate_leaves_state_byte_identical(tmp_path):
     RD._finalize_certification_inputs(session_dir, state, head_sha=certified_head)
     assert _state_bytes(state) == before
     assert "_fixedDispositionFinalizationResiduals" not in state
+
+
+# --- verified-head invariant detectors (B1c) ----------------------------------------
+
+def test_verified_post_fix_head_finalizes_and_certifies(tmp_path):
+    """axis: a verified post-fix head finalizes and certifies on the faithful two-round sequence."""
+    session_dir, certified_head = _certifiable_session(tmp_path)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        state = json.load(fh)
+    fix_round = state["rounds"].get("1") or {}
+    verify_round = state["rounds"].get("2") or {}
+    assert fix_round.get("fixFoldHead")
+    assert verify_round.get(SC.VERIFIED_HEAD_FIELD)
+    assert "1" in state["rounds"] and "2" in state["rounds"]
+    fault = RD._terminal_receipt_gate(session_dir, state)
+    assert fault is None, fault
+    cert_receipt, cert_refusal = RC.certify(session_dir)
+    assert cert_refusal is None, cert_refusal
+    head_sha, verify = _cert_receipt_fixed_binding(cert_receipt)
+    assert head_sha == certified_head
+    assert verify == "pass"
+
+
+def test_head_verified_at_h_does_not_credit_h_prime(tmp_path):
+    """axis: a head verified at H does not credit H' at finalization or certification."""
+    repo_root, head1 = _init_git_repo(tmp_path)
+    state = _ledger_only_fixed_state(head1)
+    cfg = dict(state.get("config") or {})
+    cfg["repoRoot"] = repo_root
+    cfg["headSha"] = head1
+    state["config"] = cfg
+    session_dir = write_session(
+        tmp_path,
+        name="two-head",
+        state=state,
+        journal_lines=[_dispatch_journal(head1)],
+        meta={"headSha": head1, "repoRoot": repo_root},
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+        faithful_session=False,
+    )
+    _write_head_content_blobs(session_dir, head=head1)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    loaded["config"]["repoRoot"] = repo_root
+    verified_head, _ = _drive_faithful_two_round_verify(loaded, loaded["config"], session_dir)
+    assert verified_head == head1
+    repo = tmp_path / "repo"
+    subprocess.run(
+        ["git", "commit", "-q", "--allow-empty", "-m", "two"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    head2 = proc.stdout.strip()
+    _write_head_content_blobs(session_dir, head=head2)
+    meta_path = os.path.join(session_dir, "meta.json")
+    with open(meta_path, encoding="utf-8") as fh:
+        meta = json.load(fh)
+    meta["headSha"] = head2
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, sort_keys=True)
+    loaded["config"]["headSha"] = head2
+    RD.save_state(session_dir, loaded)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        state = json.load(fh)
+    state["dispositionLedger"][0]["dispositionReceipt"]["headSha"] = head1
+    RD._finalize_certification_inputs(session_dir, state, head_sha=head2)
+    residuals = state.get("_fixedDispositionFinalizationResiduals") or {}
+    assert residuals.get(FINDING_KEY) == RD.FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
+    receipt = _ledger_receipt(state)
+    assert receipt.get("headSha") == head1
+    assert receipt.get("headSha") != head2
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "verify-not-pass"
+
+
+def test_round_record_lacking_verified_head_refuses(tmp_path):
+    """axis: verifyResult without verifiedHead is fail-closed — accessor and certification refuse."""
+    _, certified_head = _init_git_repo(tmp_path)
+    state = _ledger_only_fixed_state(certified_head)
+    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": certified_head}}
+    state["dispositionLedger"][0]["dispositionReceipt"] = _ledger_fixed_receipt(
+        headSha=certified_head,
+    )
+    assert SC.verify_result_for_head(state, certified_head) is None
+    cfg = dict(state.get("config") or {})
+    cfg["repoRoot"] = str(tmp_path / "repo")
+    cfg["headSha"] = certified_head
+    state["config"] = cfg
+    session_dir = write_session(
+        tmp_path,
+        name="no-verified-head",
+        state=state,
+        journal_lines=[_dispatch_journal(certified_head)],
+        meta={"headSha": certified_head, "repoRoot": str(tmp_path / "repo")},
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+    )
+    _write_head_content_blobs(session_dir, head=certified_head)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
+    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
+    assert residuals.get(FINDING_KEY) == RD.FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "verify-not-pass"
+
+
+def test_stale_pass_stamp_at_certified_head_is_revoked(tmp_path):
+    """axis: a stale verifyResult stamp is revoked when the accessor returns None."""
+    _, certified_head = _init_git_repo(tmp_path)
+    state = _ledger_only_fixed_state(certified_head)
+    state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": certified_head}}
+    row = state["dispositionLedger"][0]
+    row[SC.MERGED_INTO_FIELD] = "representative-key"
+    row["outOfScopeReason"] = "carried reason"
+    row["dispositionReceipt"] = _ledger_fixed_receipt(
+        headSha=certified_head,
+        verifyResult="pass",
+    )
+    state["dispositionLedger"].append({
+        SC.FINDING_KEY_FIELD: "representative-key",
+        "id": "F-representative",
+        "file": FIX_PATH,
+        "line": 2,
+        "title": "representative",
+        "severity": "Important",
+        "disposition": "fixed",
+        "dispositionRound": 1,
+        "dispositionReceipt": _ledger_fixed_receipt(headSha=certified_head),
+    })
+    cfg = dict(state.get("config") or {})
+    cfg["repoRoot"] = str(tmp_path / "repo")
+    cfg["headSha"] = certified_head
+    state["config"] = cfg
+    session_dir = write_session(
+        tmp_path,
+        name="stale-pass",
+        state=state,
+        journal_lines=[_dispatch_journal(certified_head)],
+        meta={"headSha": certified_head, "repoRoot": str(tmp_path / "repo")},
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+        faithful_session=False,
+    )
+    _write_head_content_blobs(session_dir, head=certified_head)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
+    entry = loaded["dispositionLedger"][0]
+    receipt = entry.get("dispositionReceipt")
+    assert isinstance(receipt, dict)
+    assert "verifyResult" not in receipt
+    assert receipt.get("headSha") == certified_head
+    assert entry.get(SC.MERGED_INTO_FIELD) == "representative-key"
+    assert entry.get("outOfScopeReason") == "carried reason"
+    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
+    assert residuals.get(FINDING_KEY) == RD.FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "verify-not-pass"
+
+
+def test_fold_verify_without_session_dir_records_no_verified_head():
+    """axis: _fold_verify with no session_dir refuses verifiedHead — accessor stays None."""
+    state = RD.new_state({"fixerVendor": "claude"})
+    head = "a" * 40
+    state["round"] = 1
+    state["config"]["headSha"] = head
+    RD._fold_verify(state, state["config"], {"result": "pass"}, session_dir=None)
+    rec = state["rounds"].get("1") or {}
+    assert SC.VERIFIED_HEAD_FIELD not in rec
+    assert rec.get("verifiedHeadRefused")
+    assert SC.verify_result_for_head(state, head) is None
+
+
+@pytest.mark.parametrize(
+    "state,head,expected",
+    [
+        ({"rounds": {}}, None, None),
+        ({"rounds": {}}, "", None),
+        ({"rounds": {}}, 123, None),
+        ({"rounds": {}}, "a" * 40, None),
+        (None, "a" * 40, None),
+        ({}, "a" * 40, None),
+        ({"rounds": None}, "a" * 40, None),
+        ({"rounds": {"1": "not-a-dict"}}, "a" * 40, None),
+        (
+            {
+                "rounds": {
+                    "1": {SC.VERIFIED_HEAD_FIELD: "h" * 40, "verifyResult": "fail"},
+                    "2": {SC.VERIFIED_HEAD_FIELD: "h" * 40, "verifyResult": "pass"},
+                },
+            },
+            "h" * 40,
+            "pass",
+        ),
+        (
+            {"rounds": {"bad": {SC.VERIFIED_HEAD_FIELD: "h" * 40, "verifyResult": "pass"}}},
+            "h" * 40,
+            None,
+        ),
+    ],
+    ids=[
+        "head-none",
+        "head-empty",
+        "head-non-str",
+        "no-match",
+        "state-none",
+        "rounds-missing",
+        "rounds-non-dict",
+        "round-record-non-dict",
+        "highest-round-wins",
+        "non-integer-round-key-skipped",
+    ],
+)
+def test_verify_result_for_head_accessor_axes(state, head, expected):
+    """axis: verify_result_for_head is the one fail-closed reader of the verified-head fact."""
+    assert SC.verify_result_for_head(state, head) == expected
 
 
 def test_malformed_ledger_fault_leaves_state_unchanged(tmp_path):
