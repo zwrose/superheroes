@@ -4809,16 +4809,20 @@ def test_baseline_advances_unchanged_complete_does_not_refire(tmp_path, monkeypa
     })
     stack_state = [None]
     run_kwargs = {
-        "max_seconds": 2,
+        "max_seconds": 5,
         "interval_seconds": 1,
         "gh_run": _gh_open_prs([50, 51]),
         "membership_reader": _membership_for_stack([50, 51]),
         "sleep": lambda _d: None,
         "stack_state": stack_state,
     }
-    first = ww.run(repo, "batch-982", **run_kwargs)
+    first = ww.run(
+        repo, "batch-982", **run_kwargs, monotonic=_advancing_monotonic(),
+    )
     assert first["event"] == ww.EVENT_STACK_STATE_CHANGED
-    second = ww.run(repo, "batch-982", **run_kwargs)
+    second = ww.run(
+        repo, "batch-982", **run_kwargs, monotonic=_advancing_monotonic(),
+    )
     assert second["event"] != ww.EVENT_STACK_STATE_CHANGED
 
 

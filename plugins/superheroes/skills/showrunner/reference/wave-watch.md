@@ -274,7 +274,9 @@ deliberately not restated here.
 
 **Complete** (`STACK_STATE_COMPLETE`) means every position from `1` through `layersPlanned` has a
 stack member whose vet reads READY at that pull request's **current** head — the stack goes on the
-click list whole, and the advisor stops watching that batch. A position the watcher could not read
+click list whole. Stop watching the batch only when every stack in the payload is complete; while
+another stack in it is still incomplete, keep watching as the stack-state baseline limit below
+describes. A position the watcher could not read
 — its read budget ran out, or a pull-request or verdict read was refused — counts as not READY,
 and the result's `degraded` list carries `stack-signal-unavailable`. **Incomplete**
 (`STACK_STATE_INCOMPLETE`) with `reason` null means `missingPositions` names the layers not yet
@@ -386,7 +388,11 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
   carries the idle-seat flag (`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD`), returns `stack-state-changed`
   on its first arm,
   and every re-arm reports it again until the stack merges.
-  Once the stack is on the click list, stop watching that batch.
+  Because `loop` ends on this event, a batch that holds more than one stack loses its wait once any
+  stack is complete: the invocation that reported it has exited, and every re-arm reports that
+  stack again at once until it merges. Until then, check the batch with a spot `run` on your own
+  cadence (each result lists every stack's state), and stop watching the batch only when every
+  stack in the payload is complete.
 - **A mistyped batch id is indistinguishable from a quiet batch** — but the verb matters. Bare
   `run` produces a calm `timer`, not a refusal. `loop` treats every `timer` as non-terminal and
   re-arms; with no `--max-total-seconds` bound it produces **nothing on stdout** until something

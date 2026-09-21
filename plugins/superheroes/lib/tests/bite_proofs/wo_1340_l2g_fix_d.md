@@ -8,11 +8,19 @@ Per-guard bite proof for advancing-monotonic clock helper preventing watcher-tes
 
 **Method:** set `payload = None  # bite-proof FIX-D neutralization` in place of the event-payload builder call in `run()`, reverted by the inverse edit.
 
-**Command** (referred to as *the command* below, with `<node-id>` replaced per guard):
+**Command** (one invocation carrying all four node ids; reds and greens below are that invocation's
+combined totals):
 
 ```
-perl -e 'alarm shift; exec @ARGV' 120 /usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest -p no:cacheprovider -q "<node-id>"
+perl -e 'alarm shift; exec @ARGV' 120 /usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest -p no:cacheprovider -q \
+  plugins/superheroes/lib/tests/test_wave_watch.py::test_lane_terminal_makes_zero_gh_run_calls \
+  plugins/superheroes/lib/tests/test_wave_watch.py::test_lane_blocked_makes_zero_gh_run_calls \
+  plugins/superheroes/lib/tests/test_wave_watch.py::test_builder_exited_makes_zero_gh_run_calls \
+  plugins/superheroes/lib/tests/test_wave_watch.py::test_suppressed_terminal_lane_polls_prs_for_pr_set_changed
 ```
+
+Each D-n section quotes that one invocation's assertion line for its test and the invocation's
+shared totals.
 
 ## D-0 — the frozen clock hangs (contrast, orchestrator-run at f4079ccc)
 
