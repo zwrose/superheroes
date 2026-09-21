@@ -599,19 +599,29 @@ def test_relocate_refuses_inflight_fixer(tmp_path, capsys):
     assert not os.path.lexists(_marker_path(repo["root_b"]))
 
 
-def test_relocate_target_marker_race_refuses_foreign(tmp_path, capsys):
+# bite-proof: G15b — a claimed target refuses a second session
+def test_relocate_second_claimant_refused_after_first_claims_the_target(tmp_path, capsys):
+    """Sequential claim-then-claim: the second session is refused and the marker keeps the first. Concurrent claims are not tested (relocate is single-actor)."""
     repo = _mobility_repo(tmp_path)
     sess1 = _mobility_session(tmp_path, repo, session_name="session1")
     sess2 = _mobility_session(tmp_path, repo, session_name="session2")
+    rc1, out1 = _relocate(sess1["session_dir"], repo["root_b"], capsys)
+    assert rc1 == 0
+    assert out1["ok"] is True
     marker_path = _marker_path(repo["root_b"])
-    os.makedirs(os.path.dirname(marker_path), exist_ok=True)
-    claim = RD._relocate_target_marker_content(
-        sess1["session_dir"], repo["root_b"], "main")
-    with open(marker_path, "w", encoding="utf-8") as fh:
-        json.dump(claim, fh)
-    rc, out = _relocate(sess2["session_dir"], repo["root_b"], capsys)
-    assert rc == 1
-    assert out["reason"] == "relocate-target-marker-foreign"
+    marker = json.load(open(marker_path, encoding="utf-8"))
+    assert marker["sessionDir"] == os.path.realpath(sess1["session_dir"])
+    meta_path2 = os.path.join(sess2["session_dir"], "meta.json")
+    state_path2 = os.path.join(sess2["session_dir"], RD.STATE_FILE)
+    meta_before2 = _read_bytes(meta_path2)
+    state_before2 = _read_bytes(state_path2)
+    marker_before = _read_bytes(marker_path)
+    rc2, out2 = _relocate(sess2["session_dir"], repo["root_b"], capsys)
+    assert rc2 == 1
+    assert out2["reason"] == "relocate-target-marker-foreign"
+    assert _read_bytes(marker_path) == marker_before
+    assert _read_bytes(meta_path2) == meta_before2
+    assert _read_bytes(state_path2) == state_before2
 
 
 def test_relocate_target_marker_idempotent_retry(tmp_path, capsys):

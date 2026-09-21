@@ -590,7 +590,7 @@ restore) only when it names this session. Outcomes are journalled as `marker-ret
 leaves the old checkout's marker naming this session (fail-closed: that checkout stays gated and
 other sessions are refused there); re-run `relocate` to the recorded checkout when the journal's
 most recent `relocated` row names that checkout and the target marker names this session — the
-driver retires only the old marker and returns `repaired: true`.
+driver retires only the old marker and returns `repaired: true`. `relocate` is a single-actor step: concurrent relocations into one checkout are not supported.
 
 **The same head** means the fix-fold head when a fix fold recorded one — both copies must agree —
 otherwise the session's setup head. A session with a pending `dispatch-fixer` phase — fixer dispatched

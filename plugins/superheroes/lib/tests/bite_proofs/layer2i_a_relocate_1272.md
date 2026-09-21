@@ -416,6 +416,32 @@ FAILED plugins/superheroes/lib/tests/test_round_driver_session_mobility.py::test
 
 **Green** (EXIT=0): `1 passed in 1.79s`.
 
+## G15b — a claimed target refuses a second session (sequential)
+
+Second detector for the G15 element (same foreign-marker axis, sequential claim-then-claim path).
+
+**Guarded element.** `_relocate_claim_target_marker`,
+`if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:` (line 6173).
+
+**Neutralization:** wrapped the condition in `False and (...)`.
+
+**Detector.** `test_relocate_second_claimant_refused_after_first_claims_the_target`.
+
+**Red** (EXIT=1):
+
+```
+>       assert rc2 == 1
+E       assert 0 == 1
+FAILED plugins/superheroes/lib/tests/test_round_driver_session_mobility.py::test_relocate_second_claimant_refused_after_first_claims_the_target
+1 failed in 26.73s
+```
+
+**Restore.** Inverse edit. **Restore receipt:**
+`git status --porcelain -- plugins/superheroes/lib/round_driver.py` empty;
+`git diff --quiet -- plugins/superheroes/lib/round_driver.py; echo $?` → `0`.
+
+**Green** (EXIT=0): `1 passed in 31.08s`.
+
 ## G16 — target marker unparseable (the `except` around `json.load`)
 
 **Guarded element.** `_cmd_relocate_locked`, the `except Exception as exc:` guarding
