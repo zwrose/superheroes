@@ -6206,14 +6206,15 @@ def _cmd_relocate_locked(session_dir, target_root, by):
     state = loaded
     if state.get("terminal"):
         return _refuse_cmd(session_dir, "relocate", "relocate-session-terminal")
-    top_res = store_core.run_git_result(target_root, "rev-parse", "--show-toplevel")
-    if top_res.status == store_core.GIT_UNAVAILABLE:
+    try:
+        resolved_root = store_core.repo_root(target_root)
+    except store_core.RepoRootUnavailable as exc:
         return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
-                           detail="git never ran")
-    if top_res.status != store_core.GIT_OK or not top_res.out:
+                           detail=str(exc))
+    if not resolved_root:
         return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
                            detail="git rev-parse --show-toplevel failed")
-    target_toplevel = os.path.realpath(top_res.out)
+    target_toplevel = os.path.realpath(resolved_root)
     if target_toplevel != os.path.realpath(target_root):
         return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
                            detail="target_root is not a git toplevel")
