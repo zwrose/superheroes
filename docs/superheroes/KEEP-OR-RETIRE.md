@@ -1197,6 +1197,19 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — owner authority over which model runs which role; the fail-open degrade
   path is deliberate cost control.
 
+#### F2a — Probe-pending registration gate
+
+- **Component.** The probe-pending registration gate: a new model is dispatchable only on the
+  `registration-probe` role while its row is probe-pending; `model_registry.py`'s
+  `registration` field, the `ladder()` / `codex_pin_verdict` filters enforce it.
+- **Condition.** Retires when no registry row carries `registration: "probe-pending"`; re-arms only
+  if a future model is registered that way.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — gates pin eligibility and general dispatch while a row is probe-pending;
+  only a reviewed commit that removes `probe-pending` from the row admits the model.
+
 #### F3 — Doctor/readout/CLI support
 
 - **Component.** F3 is substrate: doctor, readout, CLI contract, identifiers, catalog, core_md, and
