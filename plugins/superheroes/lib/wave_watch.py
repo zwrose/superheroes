@@ -411,12 +411,12 @@ def _derive_batch_lanes(
     all_lanes = {
         lid: info
         for lid, info in folded["launches"].items()
-        if info.get("batchId") == batch_id and lid not in ignore
+        if info.get("batchId") == batch_id
     }
     live_lanes = {
         lid: info
         for lid, info in all_lanes.items()
-        if not info.get("terminal")
+        if not info.get("terminal") and lid not in ignore
     }
     return all_lanes, live_lanes, True
 
@@ -1056,7 +1056,7 @@ def _stack_state_fires(snapshot, baseline):
     if baseline is None:
         return any(
             entry["state"] == "stack-complete" for entry in snapshot["stacks"]
-        )
+        ) or bool(snapshot.get("flags"))
     return snapshot != baseline
 
 
