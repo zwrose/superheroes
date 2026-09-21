@@ -587,3 +587,42 @@ FAILED plugins/superheroes/lib/tests/test_round_driver_session_mobility.py::test
   disclosure is unadjudicated by the party that wrote it.
 - No other element required disclosure; all remaining 20 declared elements produced a clean
   red/green pair.
+
+---
+
+## Orchestrator re-run (independent verification of every element)
+
+Re-run by the build orchestrator in the probe tree `issue-1272-2ia-probe` (detached at `49df56e8`;
+its `round_driver.py` is byte-identical to this record's commit — `git diff --quiet 49df56e8 HEAD --
+plugins/superheroes/lib/round_driver.py` exit 0). Each neutralization applied alone with the host's
+edit action, the detector run by exact node id, the inverse edit applied before the next element.
+
+| Element | Neutralization re-applied | Red (decisive line) |
+|---|---|---|
+| G1a | `(False and (not isinstance(old_root, str) or not old_root)) or not os.path.isabs(old_root)` | `TypeError: expected str, bytes or os.PathLike object, not NoneType` — 1 failed |
+| G1b | `… or (False and not os.path.isabs(old_root))` | `assert 0 == 1` — 1 failed |
+| G2 | `if False and (not isinstance(session_dir_meta, str) or not session_dir_meta):` | `KeyError: 'sessionDir'`; `test_relocate_refuses_none_session_dir` `TypeError` — 2 failed |
+| G3 | `if False and (not ok_state or loaded is None):` | `AttributeError: 'NoneType' object has no attribute 'get'` — 1 failed |
+| G4 | `if False and state.get("terminal"):` | `assert 0 == 1` — 1 failed |
+| G5 | `if False and target_toplevel != os.path.realpath(target_root):` | `assert 0 == 1` — 1 failed |
+| G6 | `if False and os.path.realpath(meta["sessionDir"]) != …:` | `assert 0 == 1` and `assert 'relocate-same-checkout' == 'relocate-session-dir-moved'` — 2 failed |
+| G7 | `if False and target_toplevel == old_root_rp:` | `assert 0 == 1` ×2 — 2 failed |
+| G8 | `if False and (not isinstance(base_repo, str) or not base_repo):` | `AttributeError: 'NoneType' object has no attribute 'casefold'` — 1 failed |
+| G9 | `if False and (live_origin is None or …):` | `assert 0 == 1` — 1 failed |
+| G10 | `if False and meta_base != cfg_base:` | `assert 0 == 1` — 1 failed |
+| G11 | `if False and resolved_pin is None:` | stayed green, `1 passed` — **disclosure accepted**: the check that confirmed it is the next line, `if not isinstance(meta_base, str) or resolved_pin != meta_base.lower():`, which refuses the same `relocate-base-mismatch` whenever `resolved_pin` is `None`; the unresolvable-pin invariant is therefore guarded, only the `detail` wording is unguarded |
+| G12a | `if False and meta_has != cfg_has:` | `assert 0 == 1` — 1 failed |
+| G12b | `if False and (meta_has and cfg_has and meta_key != cfg_key):` | `assert 0 == 1` — 1 failed |
+| G13 | `if False and head_res.out.lower() != recorded_head.lower():` | `assert 0 == 1` on both `…target_ahead…` and `…mid_fix_head_mismatch…` — 2 failed |
+| G14 | `if False and _relocate_path_inside(records_path, old_root_rp):` | `assert 0 == 1` — 1 failed |
+| G15 | `if False and (not isinstance(target_marker, dict) or …):` | `assert 0 == 1` — 1 failed |
+| G16 | `except Exception as exc:` → `except KeyError as exc:` | `json.decoder.JSONDecodeError: Expecting value` — 1 failed |
+| G17 | `except round_records.SessionLockHeld as held:` → `except KeyError as held:` | `round_records.SessionLockHeld: session lock held by pid 424242` — 1 failed |
+| G18 | **stricter than above**: an UNDECLARED extra rewrite, `new_meta["headSha"] = "0" * 40` with no `rewritten.append` | `test_relocate_invariant_no_old_paths_survive`: `'headSha': '9ce9…' != 'headSha': '0000…'` — failed (the snapshot-minus-rewritten comparison bites an undeclared rewrite, not only a declared one) |
+| G19 | `if False and "repoRoot" in new_cfg:` | `assert '…/repo_a' == '…/repo_b'` — 1 failed |
+| G20 | `if False and marker.get("sessionDir") != os.path.realpath(session_dir):` | `assert 'retired' == 'not-ours'` — 1 failed |
+| G21 | inserted `marker_outcome = _retire_relocate_marker(old_root_rp, session_rp)` ahead of the gate | `assert 'retired' == 'kept-no-target-marker'` — 1 failed |
+
+**Restore receipt:** probe tree `git status --porcelain` empty (exit 0) and `git diff --quiet HEAD
+-- plugins/superheroes/lib/round_driver.py` exit 0 after the last inverse edit. **Green:** whole
+file in the probe tree, `33 passed in 16.95s`. Nothing redacted (temporary paths only).
