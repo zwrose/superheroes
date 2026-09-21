@@ -1184,3 +1184,139 @@ def test_deadline_with_timeout_none_returns_dict_not_typeerror():
     )
     assert set(result.keys()) == TOTAL_KEYS
     assert result["ok"] is True
+
+
+# --- layer 2d: resolve_repo_slug ------------------------------------------------
+
+
+REPO_ROOT = "/tmp/example-repo"
+
+
+def _repo_slug_argv():
+    return tuple(sc._repo_slug_argv())
+
+
+def _repo_slug_ok(name_with_owner=REPO):
+    return SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"nameWithOwner": name_with_owner}),
+        stderr="",
+    )
+
+
+def _assert_read_refusal(refusal, reason):
+    assert refusal == {"ok": False, "reason": reason, "detail": refusal["detail"]}
+    assert isinstance(refusal["detail"], str)
+    assert refusal["detail"]
+
+
+def test_l2d_resolve_repo_slug_run_raises():
+    # axis: run raises any exception
+    def _run(*args, **kwargs):
+        raise OSError("boom")
+
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=_run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert refusal["detail"] == "boom"
+
+
+def test_l2d_resolve_repo_slug_nonzero_exit():
+    # axis: non-zero return code
+    run, calls = _make_run({_repo_slug_argv(): SimpleNamespace(returncode=1, stdout="", stderr="nope")})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert "nope" in refusal["detail"]
+    assert calls[0] == list(_repo_slug_argv())
+
+
+def test_l2d_resolve_repo_slug_stdout_not_json():
+    # axis: stdout is not JSON
+    run, _calls = _make_run(
+        {_repo_slug_argv(): SimpleNamespace(returncode=0, stdout="not-json", stderr="")}
+    )
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_resolve_repo_slug_json_not_object():
+    # axis: JSON is not an object
+    run, _calls = _make_run(
+        {_repo_slug_argv(): SimpleNamespace(returncode=0, stdout=json.dumps([]), stderr="")}
+    )
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_resolve_repo_slug_name_with_owner_missing():
+    # axis: nameWithOwner missing, not a string, or empty
+    run, _calls = _make_run(
+        {_repo_slug_argv(): SimpleNamespace(returncode=0, stdout=json.dumps({}), stderr="")}
+    )
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_resolve_repo_slug_name_with_owner_bad_pattern():
+    # axis: nameWithOwner present but not matching _REPO_RE
+    run, _calls = _make_run({_repo_slug_argv(): _repo_slug_ok("bad repo")})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+
+
+def test_l2d_resolve_repo_slug_deadline_exhausted(monkeypatch):
+    # axis: deadline supplied and already exhausted — refuse without calling gh
+    times = [100.0, 105.0]
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+    run, calls = _make_run({_repo_slug_argv(): _repo_slug_ok()})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, deadline=5.0, run=run)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_STACK_UNREADABLE)
+    assert calls == []
+
+
+def test_l2d_resolve_repo_slug_deadline_caps_timeout(monkeypatch):
+    # axis: deadline supplied and smaller than timeout — call uses the smaller value
+    times = [100.0, 100.5, 100.5]
+    index = 0
+
+    def fake_monotonic():
+        nonlocal index
+        value = times[index] if index < len(times) else times[-1]
+        index += 1
+        return value
+
+    monkeypatch.setattr(sc.time, "monotonic", fake_monotonic)
+    run, _calls = _make_run({_repo_slug_argv(): _repo_slug_ok()})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, deadline=2.0, timeout=120.0, run=run)
+    assert slug == REPO
+    assert refusal is None
+    assert run.kw_calls[0]["timeout"] == pytest.approx(1.5)
+
+
+def test_l2d_resolve_repo_slug_bad_repo_root():
+    slug, refusal = sc.resolve_repo_slug("", run=lambda *a, **k: None)
+    assert slug is None
+    _assert_read_refusal(refusal, sc.REASON_BAD_ARGUMENT)
+
+
+def test_l2d_resolve_repo_slug_happy_path():
+    run, calls = _make_run({_repo_slug_argv(): _repo_slug_ok()})
+    slug, refusal = sc.resolve_repo_slug(REPO_ROOT, run=run)
+    assert slug == REPO
+    assert refusal is None
+    assert calls[0] == list(_repo_slug_argv())
+    assert run.kw_calls[0]["cwd"] == REPO_ROOT

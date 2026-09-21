@@ -704,35 +704,30 @@ def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env):
         return None
     timeout = min(30.0, remaining)
     try:
-        proc = gh_run(
-            ["gh", "repo", "view", "--json", "nameWithOwner"],
-            capture_output=True,
-            text=True,
+        slug, refusal = sc.resolve_repo_slug(
+            repo_root,
+            deadline=remaining,
             timeout=timeout,
-            cwd=repo_root,
+            run=gh_run,
             env=_scrub_env(env),
         )
     except Exception:
         return None
-    if proc.returncode != 0:
+    if refusal is not None:
         return None
-    try:
-        parsed = json.loads(proc.stdout)
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    name = parsed.get("nameWithOwner")
-    if not isinstance(name, str) or not name:
-        return None
-    return name
+    return slug
 
 
 def _resolve_pr_stack_groups(
     repo_root, deadline, monotonic, gh_run, membership_reader, env, degraded,
     changed_prs,
 ):
-    """Group changed PRs into stacks and ungrouped. Never raises."""
+    """Group changed PRs into stacks and ungrouped.
+
+    membership_reader refusals degrade; membership_reader may raise AssertionError
+    on a violated internal invariant, which propagates uncaught through this
+    function (run/loop catch it as internal-error).
+    """
     stacks = []
     ungrouped = []
     covered_prs = set()
@@ -805,8 +800,7 @@ def _resolve_pr_stack_groups(
 
 def _evaluate_pr_set_changed(
     repo_root, deadline, monotonic, gh_run, pr_state, degraded, env,
-    pr_sampled=None,
-    membership_reader=None,
+    pr_sampled, membership_reader,
 ):
     remaining = deadline - monotonic()
     if remaining <= 0:
@@ -849,8 +843,6 @@ def _evaluate_pr_set_changed(
     added = sorted(pr_set - pr_baseline)
     removed = sorted(pr_baseline - pr_set)
     changed_prs = added + removed
-    if membership_reader is None:
-        membership_reader = sc.read_membership
     stacks, ungrouped = _resolve_pr_stack_groups(
         repo_root, deadline, monotonic, gh_run, membership_reader, env,
         degraded, changed_prs,
@@ -1235,8 +1227,6 @@ def loop(
             env = os.environ
         if gh_run is None:
             gh_run = subprocess.run
-        if membership_reader is None:
-            membership_reader = sc.read_membership
         if monotonic is None:
             monotonic = time.monotonic
         if sleep is None:

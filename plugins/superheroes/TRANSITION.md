@@ -12,23 +12,32 @@ belongs to and lists every change with its replacement.
 ### Launcher stacked premise
 
 `validate_premise` copies every premise key into the stamped premise. A premise may now carry
-`stack` (the GitHub native stack's number) and `layerPosition` (this PR's 1-based position in that
-stack). Both are optional, and optional together — one without the other refuses.
+`stack` (the GitHub native stack's number), `layerPosition` (this PR's 1-based position in that
+stack), and optionally `layersPlanned` (the stack's planned layer count). `stack` and
+`layerPosition` are optional together — one without the other refuses; `layersPlanned` requires
+both.
 
-A stacked launch's stamped premise carries two keys a pre-existing consumer never saw; strict key
-enumeration or fixed-schema round-trips must accept them. A non-stacked launch is unchanged.
+A stacked launch's stamped premise carries `stack` and `layerPosition`, and `layersPlanned` only
+when the launch supplied it — keys a pre-existing consumer never saw; strict key enumeration or
+fixed-schema round-trips must accept up to three new keys rather than exactly three. A non-stacked
+launch is unchanged.
 
-`launcher.py launch` adds six refusal tokens (see `lib/launcher.py`; rule in
-`rubric/launch-doctrine.md`): `premise-stack-fields-incomplete` when only one key is supplied;
-`premise-stack-field-invalid` when either key is present but not a positive integer (`bool` is not
-an integer here); `base-not-layer-head` when `layerPosition >= 2` and the resolved base commit is
-not the current head of the stack member at position `layerPosition - 1`; `stack-read-unavailable`
-when the launcher could not read stack membership and the gate could not run — the launcher's own
-token, distinct from `stack_check.py`'s `stack-unreadable` (never aliases, never interchanged);
-`order-mismatch` when the membership read found the stack's order inconsistent with the premise
-(previously folded into `stack-read-unavailable`, so a consumer matching on `stack-read-unavailable`
-for this case must now also match `order-mismatch`); `layer-position-occupied` when the claimed
-`layerPosition` is already held by an existing member (`layerPosition >= 2` only).
+`launcher.py launch` adds nine refusal tokens (see `lib/launcher.py`; rule in
+`rubric/launch-doctrine.md`): `premise-stack-fields-incomplete` when only one of `stack` or
+`layerPosition` is supplied; `premise-stack-field-invalid` when either key is present but not a
+positive integer (`bool` is not an integer here); `premise-stack-layers-planned-incomplete` when
+`layersPlanned` is supplied without both `stack` and `layerPosition`;
+`premise-stack-layers-planned-invalid` when `layersPlanned` is present but not a positive integer
+(`bool` is not an integer here); `premise-stack-layers-planned-under-position` when `layersPlanned`
+is less than `layerPosition`; `base-not-layer-head` when `layerPosition >= 2` and the resolved base
+commit is not the current head of the stack member at position `layerPosition - 1`;
+`stack-read-unavailable` when the launcher could not read stack membership and the gate could not
+run — the launcher's own token, distinct from `stack_check.py`'s `stack-unreadable` (never aliases,
+never interchanged); `order-mismatch` when the membership read found the stack's order inconsistent
+with the premise (previously folded into `stack-read-unavailable`, so a consumer matching on
+`stack-read-unavailable` for this case must now also match `order-mismatch`);
+`layer-position-occupied` when the claimed `layerPosition` is already held by an existing member
+(`layerPosition >= 2` only).
 
 ### `wave_watch.py` `pr-set-changed` payload
 

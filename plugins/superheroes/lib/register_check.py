@@ -7,7 +7,6 @@ byte-exactly (modulo line terminators), and every entry whose Consumers line nam
 the child is quoted. Call-site-agnostic — the caller names the register path.
 """
 import argparse
-import contextlib
 import json
 import os
 import re
@@ -107,10 +106,10 @@ def _git_probe_cwd(register_path):
     return os.path.dirname(abs_path)
 
 
-def _repo_root_for_path(register_path):
+def _repo_root_for_path(register_path, git_env=None):
     cwd = _git_probe_cwd(register_path)
     try:
-        root = store_core.repo_root(cwd)
+        root = store_core.repo_root(cwd, env=git_env)
     except store_core.RepoRootUnavailable as exc:
         if exc.git_status == store_core.GIT_UNAVAILABLE:
             return None, f"git unavailable while resolving repo root: {exc}"
@@ -119,8 +118,9 @@ def _repo_root_for_path(register_path):
         in_repo = store_core.git_dot_entry_ancestor(cwd) is not None
     except OSError as exc:
         return None, f"git unavailable while resolving repo root: {exc}"
+    routing_env = git_env if git_env is not None else os.environ
     if not in_repo and not (
-        os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE")
+        routing_env.get("GIT_DIR") or routing_env.get("GIT_WORK_TREE")
     ):
         return None, None
     return root, None
@@ -137,32 +137,20 @@ def _rel_path_in_repo(repo_root, register_path):
 
 def _git_env():
     # bite-axis: ambient git routing must not re-route the main-copy read child.
-    env = launch_ledger._scrub_env(os.environ)
+    env = launch_ledger.scrub_env(os.environ)
     env["LC_ALL"] = "C"
     env["LANGUAGE"] = "C"
     return env
 
 
-@contextlib.contextmanager
-def _isolated_git_routing_env():
-    # bite-axis: main-copy read chokepoint must not inherit ambient git routing.
-    saved = {}
-    for key in launch_ledger._GIT_SCRUB_VARS:
-        if key in os.environ:
-            saved[key] = os.environ.pop(key)
-    try:
-        yield
-    finally:
-        os.environ.update(saved)
-
-
-def _git_show_blob(repo_root, ref, rel_path):
+def _git_show_blob(repo_root, ref, rel_path, env=None):
+    git_env = _git_env() if env is None else env
     try:
         proc = subprocess.run(
             ["git", "-C", repo_root, "show", f"{ref}:{rel_path}"],
             capture_output=True,
             timeout=10,
-            env=_git_env(),
+            env=git_env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return None, f"{type(exc).__name__}: {exc}"
@@ -190,11 +178,14 @@ def _resolve_register_copy_selection(register_path, register_copy):
     return REGISTER_COPY_WORKTREE
 
 
-def _resolve_main_ref(repo_root):
+def _resolve_main_ref(repo_root, env=None):
+    git_env = _git_env() if env is None else env
     for short_ref in MAIN_REFS:
         fq_ref = _MAIN_BRANCH_FQ_REFS[short_ref]
         # bite-axis: only branch refs may satisfy the main copy — never a tag named main.
-        res = store_core.run_git_result(repo_root, "rev-parse", "--verify", fq_ref)
+        res = store_core.run_git_result(
+            repo_root, "rev-parse", "--verify", fq_ref, env=git_env,
+        )
         if res.status == store_core.GIT_UNAVAILABLE:
             return None, None, res.detail
         if res.status == store_core.GIT_OK:
@@ -203,35 +194,35 @@ def _resolve_main_ref(repo_root):
 
 
 def _read_register_lines_from_main(register_path):
-    with _isolated_git_routing_env():
-        repo_root, root_err = _repo_root_for_path(register_path)
-        if root_err is not None:
-            return None, None, root_err
-        if repo_root is None:
-            return None, None, (
-                f"register path {register_path!r} is not inside a git work tree"
-            )
-        rel_path = _rel_path_in_repo(repo_root, register_path)
-        if rel_path is None:
-            return None, None, (
-                f"register path {register_path!r} is outside repo root {repo_root!r}"
-            )
-        main_ref, fq_ref, git_err = _resolve_main_ref(repo_root)
-        if git_err is not None:
-            return None, None, (
-                f"git unavailable while resolving main ref for {rel_path!r}: {git_err}"
-            )
-        if main_ref is None:
-            return None, None, (
-                f"could not read register from main: no ref among "
-                f"{', '.join(MAIN_REFS)} exists for {rel_path!r}"
-            )
-        text, show_err = _git_show_blob(repo_root, fq_ref, rel_path)
-        if text is None:
-            return None, main_ref, (
-                f"could not read register from {main_ref!r} at {rel_path!r}: {show_err}"
-            )
-        return _lines_from_text(text), main_ref, None
+    git_env = _git_env()
+    repo_root, root_err = _repo_root_for_path(register_path, git_env=git_env)
+    if root_err is not None:
+        return None, None, root_err
+    if repo_root is None:
+        return None, None, (
+            f"register path {register_path!r} is not inside a git work tree"
+        )
+    rel_path = _rel_path_in_repo(repo_root, register_path)
+    if rel_path is None:
+        return None, None, (
+            f"register path {register_path!r} is outside repo root {repo_root!r}"
+        )
+    main_ref, fq_ref, git_err = _resolve_main_ref(repo_root, env=git_env)
+    if git_err is not None:
+        return None, None, (
+            f"git unavailable while resolving main ref for {rel_path!r}: {git_err}"
+        )
+    if main_ref is None:
+        return None, None, (
+            f"could not read register from main: no ref among "
+            f"{', '.join(MAIN_REFS)} exists for {rel_path!r}"
+        )
+    text, show_err = _git_show_blob(repo_root, fq_ref, rel_path, env=git_env)
+    if text is None:
+        return None, main_ref, (
+            f"could not read register from {main_ref!r} at {rel_path!r}: {show_err}"
+        )
+    return _lines_from_text(text), main_ref, None
 
 
 def _is_italic_metadata_line(line):
@@ -637,10 +628,10 @@ def check_body(
     register_copy=REGISTER_COPY_AUTO,
 ):
     """Compare a consumer body against a register for the named child token."""
-    selected_copy = _resolve_register_copy_selection(register_path, register_copy)
     register_ref = None
 
     if child is None or not str(child).strip():
+        selected_copy = _resolve_register_copy_selection(register_path, register_copy)
         return _undecided(
             UNDECIDED_USAGE,
             "child token must be a non-empty string",
@@ -869,11 +860,16 @@ class _RegisterCheckArgumentParser(argparse.ArgumentParser):
 
     def _usage_register_copy(self):
         register_path = self._usage_paths["register"]
+        register_copy = self._usage_paths["register_copy"]
+        if register_copy == REGISTER_COPY_WORKTREE:
+            return REGISTER_COPY_WORKTREE
+        if register_copy == REGISTER_COPY_MAIN:
+            return REGISTER_COPY_MAIN
         if register_path is None:
-            return REGISTER_COPY_AUTO
+            return REGISTER_COPY_WORKTREE
         return _resolve_register_copy_selection(
             register_path,
-            self._usage_paths["register_copy"],
+            register_copy,
         )
 
     def error(self, message):
@@ -926,6 +922,11 @@ def main(argv=None):
     parser._usage_paths["register"] = _peek_argv_value(argv, "--register")
     register_copy_peek = _peek_argv_value(argv, "--register-copy")
     if register_copy_peek is not None:
+        if register_copy_peek not in REGISTER_COPY_MODES:
+            parser.error(
+                "argument --register-copy: invalid choice: %r (choose from %s)"
+                % (register_copy_peek, ", ".join(sorted(REGISTER_COPY_MODES)))
+            )
         parser._usage_paths["register_copy"] = register_copy_peek
     parser._usage_paths["body"] = _peek_argv_value(argv, "--body-file")
     sub = parser.add_subparsers(dest="cmd")

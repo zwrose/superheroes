@@ -6079,6 +6079,140 @@ def test_premise_stack_fields_absent_unchanged(tmp_path):
     assert "layerPosition" not in result["premise"]
 
 
+def test_premise_layers_planned_without_stack_pair_refuses(tmp_path):
+  # axis: premise-stack-layers-planned-incomplete
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo, layersPlanned=3)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-layers-planned-incomplete"
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "3", 3.0])
+def test_premise_layers_planned_invalid(tmp_path, value):
+  # axis: premise-stack-layers-planned-invalid
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, layersPlanned=value)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-layers-planned-invalid"
+
+
+def test_premise_layers_planned_under_position_refuses(tmp_path):
+  # axis: premise-stack-layers-planned-under-position
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, stack=1, layerPosition=3, layersPlanned=2)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-layers-planned-under-position"
+
+
+@pytest.mark.parametrize("layers_planned", [3, 5])
+def test_premise_layers_planned_at_or_above_position_passes(tmp_path, layers_planned):
+  # axis: layersPlanned equal to or greater than layerPosition passes validation
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, stack=1, layerPosition=3, layersPlanned=layers_planned)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is True
+
+
+def test_premise_layers_planned_survives_stamp(tmp_path):
+  # axis: layersPlanned copied into stamped premise
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, stack=2, layerPosition=1, layersPlanned=4)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is True
+    assert result["premise"]["layersPlanned"] == 4
+
+
+def test_stack_gate_slug_resolver_refusal_maps_to_stack_read_unavailable(
+    tmp_path, monkeypatch,
+):
+  # axis: resolve_repo_slug refusal maps to stack-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def refusing_resolver(*args, **kwargs):
+        return None, {"reason": "stack-unreadable", "detail": "injected"}
+
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", refusing_resolver)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=gh_run, deadline=deadline,
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+
+
+def test_stack_gate_slug_resolver_receives_scrubbed_env_and_budget(
+    tmp_path, monkeypatch,
+):
+  # axis: resolve_repo_slug receives scrubbed env and remaining gate budget
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    premise = _stack_premise(repo, stack=1, layerPosition=2)
+    captured = []
+
+    def tracking_resolver(repo_root, *, deadline=None, run=None, env=None):
+        captured.append({
+            "repo_root": repo_root,
+            "deadline": deadline,
+            "run": run,
+            "env": env,
+        })
+        return "owner/repo", None
+
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", tracking_resolver)
+    monkeypatch.setenv("GIT_DIR", "/bogus/nonexistent/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/bogus/nonexistent")
+
+    def pr_list_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "pr", "list"]:
+            pr_list = [{"number": 1352, "headRefOid": head, "state": "OPEN"}]
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps(pr_list), "",
+            )
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    result = L.launch_build(
+        repo,
+        656,
+        premise,
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=pr_list_gh_run, deadline=deadline,
+        ),
+        membership_reader=lambda **kwargs: _membership_ok(1, head),
+    )
+    assert result["ok"] is True
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["repo_root"] == repo
+    assert call["deadline"] is not None
+    assert call["deadline"] > 0
+    assert call["env"] is not None
+    for key in ll.GIT_SCRUB_VARS:
+        assert key not in call["env"], key
+    assert ll.LEDGER_ROOT_ENV not in call["env"]
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
 def test_stack_gate_bottom_layer_skips_reader(tmp_path, monkeypatch):
   # axis: bottom layer skips gate without reading GitHub
     repo = _init_repo(tmp_path / "repo")

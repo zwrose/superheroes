@@ -1061,22 +1061,30 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
 
     has_stack = "stack" in premise
     has_layer = "layerPosition" in premise
+    has_layers_planned = "layersPlanned" in premise
     # axis: stack and layerPosition must both be present or both absent
     if has_stack != has_layer:
         return _fail("premise-stack-fields-incomplete")
+    # axis: layersPlanned requires stack and layerPosition
+    if has_layers_planned and not has_stack:
+        return _fail("premise-stack-layers-planned-incomplete")
     if has_stack:
         stack_val = premise["stack"]
         layer_val = premise["layerPosition"]
         # axis: stack and layerPosition must be positive ints (bool is not an int here)
         if (
-            not isinstance(stack_val, int)
-            or isinstance(stack_val, bool)
-            or stack_val < 1
-            or not isinstance(layer_val, int)
-            or isinstance(layer_val, bool)
-            or layer_val < 1
+            not ll.is_positive_premise_int(stack_val)
+            or not ll.is_positive_premise_int(layer_val)
         ):
             return _fail("premise-stack-field-invalid")
+        if has_layers_planned:
+            layers_planned_val = premise["layersPlanned"]
+            # axis: layersPlanned must be a positive int (bool is not an int here)
+            if not ll.is_positive_premise_int(layers_planned_val):
+                return _fail("premise-stack-layers-planned-invalid")
+            # axis: layersPlanned must be at least layerPosition
+            if layers_planned_val < layer_val:
+                return _fail("premise-stack-layers-planned-under-position")
 
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
@@ -1360,31 +1368,16 @@ def _lookup_stack_entry_pr(
     scrubbed = _scrub_env(env)
     if deadline is not None and time.monotonic() >= deadline:
         return {"ok": False, "reason": "stack-read-unavailable"}
-    repo_timeout = 120
+    slug_deadline = None
     if deadline is not None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return {"ok": False, "reason": "stack-read-unavailable"}
-        repo_timeout = min(120, remaining)
-    try:
-        repo_proc = gh_run(
-            ["gh", "repo", "view", "--json", "nameWithOwner"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            env=scrubbed,
-            timeout=repo_timeout,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return {"ok": False, "reason": "stack-read-unavailable"}
-    if repo_proc.returncode != 0:
-        return {"ok": False, "reason": "stack-read-unavailable"}
-    try:
-        repo_data = json.loads(repo_proc.stdout or "")
-        repo_name = repo_data.get("nameWithOwner")
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        return {"ok": False, "reason": "stack-read-unavailable"}
-    if not isinstance(repo_name, str) or not repo_name:
+        slug_deadline = remaining
+    repo_name, slug_refusal = stack_check.resolve_repo_slug(
+        repo_root, deadline=slug_deadline, run=gh_run, env=scrubbed,
+    )
+    if slug_refusal is not None:
         return {"ok": False, "reason": "stack-read-unavailable"}
     if deadline is not None and time.monotonic() >= deadline:
         return {"ok": False, "reason": "stack-read-unavailable"}
@@ -1448,7 +1441,7 @@ def _apply_stack_gate(
     membership_reader,
     deadline=None,
 ):
-    """Run the layer gate when the premise names a stack. Never raises."""
+    """Run the layer gate when the premise names a stack; GitHub-side and argument-side failures return a refusal dict and raise nothing, while a violated internal pair-slot invariant in membership_reader raises AssertionError."""
     stack_num = stamped_premise["stack"]
     layer_pos = stamped_premise["layerPosition"]
     if layer_pos == 1:
@@ -1497,15 +1490,14 @@ def _apply_stack_gate(
     queried = membership["queried"]
     members = membership.get("members", [])
     # axis: claimed layer position is already occupied in the stack
-    if layer_pos >= 2:
-        for member in members:
-            position = member.get("position")
-            if (
-                isinstance(position, int)
-                and not isinstance(position, bool)
-                and position == layer_pos
-            ):
-                return {"ok": False, "reason": "layer-position-occupied"}
+    for member in members:
+        position = member.get("position")
+        if (
+            isinstance(position, int)
+            and not isinstance(position, bool)
+            and position == layer_pos
+        ):
+            return {"ok": False, "reason": "layer-position-occupied"}
     # axis: queried position must equal layerPosition - 1
     if queried["position"] != layer_pos - 1:
         return {"ok": False, "reason": "base-not-layer-head"}

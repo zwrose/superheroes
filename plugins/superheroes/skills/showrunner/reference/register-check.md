@@ -37,7 +37,9 @@ python3 -B "$ROOT_DIR/lib/register_check.py" check \
 `--register-copy` selects **which copy** of the register to read (default: `auto`). `main`
 reads the blob at `<main-ref>:<path-relative-to-repo-root>` where `<main-ref>` is `origin/main`
 when it exists, otherwise `main`. `worktree` reads the file on disk. `auto` chooses `main` when
-the register path resolves inside a git work tree, otherwise `worktree`. **When the selected copy
+the register path resolves inside a git work tree, `worktree` when it resolves outside one, and
+`main` when git cannot run or the repo-root probe fails — a read that could not be made must not
+silently become the worktree copy. **When the selected copy
 is `main` and the blob cannot be resolved or read** — no `origin/main`, no `main`, a shallow
 clone, `git` not on PATH, a non-zero exit, a path not tracked on main — the result is
 `undecided` with reason `register-unreadable` and a detail naming the ref and path tried. The

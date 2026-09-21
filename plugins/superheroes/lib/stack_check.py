@@ -109,6 +109,20 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _is_positive_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _read_refusal(reason, detail):
+    return {"ok": False, "reason": reason, "detail": detail}
+
+
+def _run_kwargs(env):
+    if env is None:
+        return {}
+    return {"env": env}
+
+
 def _proc_output(proc):
     return ((proc.stdout or "") + (proc.stderr or "")).strip()
 
@@ -483,6 +497,112 @@ def _validate_stack_invariants(
         "result": _success(repo, pr, stack, queried, members, pages)}
 
 
+def _repo_slug_argv():
+    return ["gh", "repo", "view", "--json", "nameWithOwner"]
+
+
+def _effective_timeout(timeout, deadline_at):
+    if deadline_at is None:
+        return timeout
+    remaining = deadline_at - time.monotonic()
+    if timeout is None:
+        return remaining
+    return min(timeout, remaining)
+
+
+def _validate_repo_root(repo_root):
+    if not isinstance(repo_root, str) or not repo_root:
+        return _read_refusal(REASON_BAD_ARGUMENT, "repo_root must be a non-empty string")
+    return None
+
+
+def _validate_read_timeout(timeout):
+    if not _is_positive_number(timeout):
+        return _read_refusal(REASON_BAD_ARGUMENT, "timeout must be a positive number of seconds")
+    return None
+
+
+def _validate_read_deadline(deadline):
+    if deadline is None:
+        return None
+    if not _is_positive_number(deadline):
+        return _read_refusal(REASON_BAD_ARGUMENT, "deadline must be a positive number of seconds")
+    return None
+
+
+def _parse_repo_slug_payload(proc):
+    if proc.returncode != 0:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, _proc_output(proc) or "gh repo view failed")
+
+    try:
+        payload = json.loads(proc.stdout or "")
+    except json.JSONDecodeError:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh repo view returned output that is not JSON")
+
+    if not isinstance(payload, dict):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "gh repo view returned JSON that is not an object")
+
+    name = payload.get("nameWithOwner")
+    if not isinstance(name, str) or not name:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "nameWithOwner is missing, not a string, or empty")
+
+    if not _REPO_RE.match(name):
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE, "nameWithOwner is not a valid owner/name slug")
+
+    return name, None
+
+
+def resolve_repo_slug(repo_root, *, deadline=None, timeout=GH_TIMEOUT, run=None, env=None):
+    """Return (slug, refusal) — exactly one is non-None."""
+    if run is None:
+        run = subprocess.run
+
+    arg_refusal = _validate_repo_root(repo_root)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    arg_refusal = _validate_read_timeout(timeout)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    arg_refusal = _validate_read_deadline(deadline)
+    if arg_refusal is not None:
+        return None, arg_refusal
+
+    deadline_at = None if deadline is None else time.monotonic() + deadline
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        return None, _read_refusal(
+            REASON_STACK_UNREADABLE,
+            "read budget of %g seconds exhausted before gh repo view" % deadline)
+
+    if not shutil.which("gh"):
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh not on PATH")
+
+    effective_timeout = _effective_timeout(timeout, deadline_at)
+    argv = _repo_slug_argv()
+    run_kwargs = _run_kwargs(env)
+    try:
+        proc = run(
+            argv,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            **run_kwargs,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, str(exc))
+    except subprocess.TimeoutExpired:
+        return None, _read_refusal(REASON_STACK_UNREADABLE, "gh call timed out")
+
+    return _parse_repo_slug_payload(proc)
+
+
 def read_membership(
     *,
     pr,
@@ -493,7 +613,7 @@ def read_membership(
     deadline=None,
     run=None,
 ):
-    """Return the membership read dict. Never raises."""
+    """Return the membership read dict; GitHub-side and argument-side failures return a refusal dict and raise nothing, while a violated internal pair-slot invariant raises AssertionError."""
     if run is None:
         run = subprocess.run
 

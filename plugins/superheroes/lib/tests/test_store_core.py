@@ -1102,6 +1102,59 @@ def test_not_a_repository_false_on_other_declined():
     assert sc.not_a_repository(sc.GitResult("/repo", sc.GIT_OK, None)) is False
 
 
+def test_run_git_result_env_none_copies_ambient_with_locale_pins(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROBE_ENV_VAR", "visible")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        class _Ok:
+            returncode = 0
+            stdout = "ok\n"
+            stderr = ""
+        return _Ok()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    sc.run_git_result(str(tmp_path), "status")
+    assert captured["env"]["PROBE_ENV_VAR"] == "visible"
+    assert captured["env"]["LC_ALL"] == "C"
+    assert captured["env"]["LANGUAGE"] == "C"
+
+
+def test_run_git_result_explicit_env_replaces_ambient(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROBE_ENV_VAR", "ambient")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        class _Ok:
+            returncode = 0
+            stdout = "ok\n"
+            stderr = ""
+        return _Ok()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    sc.run_git_result(
+        str(tmp_path),
+        "status",
+        env={"PROBE_ENV_VAR": "explicit"},
+    )
+    assert captured["env"]["PROBE_ENV_VAR"] == "explicit"
+    assert "ambient" not in captured["env"].values()
+    assert captured["env"]["LC_ALL"] == "C"
+    assert captured["env"]["LANGUAGE"] == "C"
+
+
+def test_run_git_result_unavailable_with_explicit_env_means_git_never_ran(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no git")),
+    )
+    res = sc.run_git_result(str(tmp_path), "status", env={"HOME": "/tmp"})
+    assert res.out is None
+    assert res.status == sc.GIT_UNAVAILABLE
+
+
 # ---------------------------------------------------------------------------
 # issue #752 — repo_identity_memo / get_remote_result
 # ---------------------------------------------------------------------------
@@ -1130,6 +1183,40 @@ def test_repo_identity_memo_caches_repo_root(tmp_path, monkeypatch):
         after_second = counter["n"]
     assert first == second
     assert after_second == after_first
+
+
+def test_repo_root_with_env_bypasses_cwd_keyed_memo(tmp_path, monkeypatch):
+    cwd = str(tmp_path / "work")
+    os.makedirs(cwd)
+    memo_root = str(tmp_path / "memo-root")
+    env_root = str(tmp_path / "env-root")
+    os.makedirs(memo_root)
+    os.makedirs(env_root)
+    calls = []
+
+    def fake_run_git(cwd_arg, *args, env=None):
+        if args == ("rev-parse", "--show-toplevel"):
+            calls.append(env)
+            if env is not None and env.get("GIT_DIR") == "routed":
+                return sc.GitResult(env_root, sc.GIT_OK, None)
+            return sc.GitResult(memo_root, sc.GIT_OK, None)
+        return sc.run_git_result(cwd_arg, *args, env=env)
+
+    monkeypatch.setattr(sc, "run_git_result", fake_run_git)
+    routed_env = dict(os.environ)
+    routed_env["GIT_DIR"] = "routed"
+    with sc.repo_identity_memo():
+        first = sc.repo_root(cwd)
+        assert first == os.path.realpath(memo_root)
+        assert len(calls) == 1
+        memo = sc._active_repo_identity_memo()
+        assert memo["root"][cwd] == first
+        second = sc.repo_root(cwd, env=routed_env)
+        assert second == os.path.realpath(env_root)
+        assert len(calls) == 2
+        assert calls[1] is not None
+        assert calls[1].get("GIT_DIR") == "routed"
+        assert memo["root"][cwd] == first
 
 
 def test_repo_identity_memo_caches_derive_identifiers(tmp_path, monkeypatch):
