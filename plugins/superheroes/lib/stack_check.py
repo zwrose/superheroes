@@ -39,6 +39,7 @@ _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _SHA40_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 PR_VET_STATE_VALUES = frozenset({"OPEN", "CLOSED", "MERGED"})
 
+# Authoritative home: skills/showrunner/reference/vet-receipt.md (verdict-form clause).
 _VET_SEPARATOR = " · "
 _VET_VERDICT_TOKENS = (
     ("**Verdict: READY**", VERDICT_READY),

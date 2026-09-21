@@ -119,7 +119,7 @@ saw. Nothing in the tooling closes that gap; this rule does.
    on the new sha, and a receipt re-pinned to that sha **and to the digest of the pull request's
    diff** — `skills/showrunner/reference/vet-receipt.md` spine field 1 owns the digest and the command
    that takes it. **Equal digest.** Re-pin the sha in place with a dated line, let CI run on the new
-   head, and re-review nothing. **Unequal, or `digest-unavailable`.** Run `git range-diff
+   head, and re-review nothing. **Unequal, or `digest-unavailable`.** Run `git range-diff --remerge-diff
    <base-before>..<head-before> <base-after>..<head-after>` to name the changed commits, where
    **base-before** and **base-after** are the tip of the layer below before and after the
    bring-current and **head-before** and **head-after** are the layer's head before and after. A
