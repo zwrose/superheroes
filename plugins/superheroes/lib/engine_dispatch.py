@@ -1054,8 +1054,12 @@ def _read_transcript_rows(stdout_path):
     return rows
 
 
-def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
-    """Materialize stdout/transcript delivery to the native result path. (#1273)"""
+def _materialize_stdout_result(
+        run_dir_real, attempt, opened, stdout_path, stdout_event,
+):
+    """Materialize stdout/transcript delivery to the native result path. (#1273)
+
+    The stdout branch materializes the event the caller passes and never reads stdout."""
     delivery = engine_result_channel.result_delivery(
         opened.get("engine"), opened.get("claudeMode"),
     )
@@ -1065,8 +1069,7 @@ def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
     if result_path is None:
         return "error"
     if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
-        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
-        env = engine_adapter.claude_result_envelope(stdout)
+        env = stdout_event
         if (not isinstance(env, dict)
                 or env.get("is_error") is True
                 or "structured_output" not in env):
@@ -2202,17 +2205,6 @@ def _truncation_marker(stream, observed_bytes):
         raise ValueError("unknown cap stream: %r" % (stream,))
     return "%s%d%s\n" % (prefix, int(observed_bytes), STDOUT_TRUNCATION_MARKER_SUFFIX)
 
-
-# Stampable stdout line bound — one home with MAX_STDOUT_CAPTURE tail-cap semantics.
-_STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES = 10**20 - 1
-_STDOUT_STAMPABLE_LINE_MAX = (
-    MAX_STDOUT_CAPTURE
-    - len(_truncation_marker(
-        CAP_STREAM_STDOUT, _STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES,
-    ).encode("utf-8"))
-)
-# Worst-case reserve: marker length grows with the digit count of observed bytes,
-# so a bound from this poll's file size can be wider than admission's; this cannot drift.
 
 _STDOUT_TRUNCATION_MARKER_RE = re.compile(
     r"^%s(\d+)%s\n" % (
@@ -3742,6 +3734,7 @@ def _process_stdout_completion_line(obs_state, line_bytes, line_start):
         obj = json.loads(text)
         if not isinstance(obj, dict) or obj.get("type") != "result":
             return
+        obs_state["event"] = obj
         if obj.get("is_error") is True or "structured_output" not in obj:
             obs_state["stamp"] = None
             obs_state["stamp_line_start"] = None
@@ -3774,7 +3767,7 @@ def _drain_stdout_completion_bytes(obs_state, data, file_offset_before):
                 obs_state["buf"] = b""
             else:
                 new_buf = buf + tail
-                if len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX:
+                if len(new_buf) > MAX_STDOUT_CAPTURE:
                     overflow = True
                     obs_state["buf"] = b""
                 else:
@@ -3798,9 +3791,24 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
     Each poll reads only new bytes from the stdout file. Non-terminal polls process
     complete lines only; the terminal call drains remaining bytes and parses any
     trailing buffered line as final."""
+    if obs_state.get("poisoned"):
+        obs_state["event"] = None
+        obs_state["stamp"] = None
+        obs_state["stamp_line_start"] = None
+        return
     try:
         offset = obs_state.get("offset", 0)
         with open(stdout_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            file_size = fh.tell()
+            if file_size < offset:
+                obs_state["event"] = None
+                obs_state["stamp"] = None
+                obs_state["stamp_line_start"] = None
+                obs_state["buf"] = b""
+                obs_state["overflow"] = False
+                obs_state["poisoned"] = True
+                return
             fh.seek(offset)
             while True:
                 chunk = fh.read(_STDOUT_COMPLETION_READ_CHUNK)
@@ -3822,7 +3830,7 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
         stamp_line_start = obs_state.get("stamp_line_start")
         if stamp is not None and stamp_line_start is not None:
             # Retention must match _bounded_stdout_cap_from_file, not the partial-line
-            # buffer bound (_STDOUT_STAMPABLE_LINE_MAX answers a different question).
+            # buffer bound (MAX_STDOUT_CAPTURE answers a different question).
             # offset at terminal observation is the final file size (no writer is alive —
             # this runs after proc.wait), same observed the materializer read uses, so
             # eviction tracks admission exactly. An earlier poll cannot evict prematurely:
@@ -3834,9 +3842,18 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
             ):
                 obs_state["stamp"] = None
                 obs_state["stamp_line_start"] = None
+                obs_state["event"] = None
     except (OSError, MemoryError):
+        if terminal:
+            obs_state["event"] = None
+            obs_state["stamp"] = None
+            obs_state["stamp_line_start"] = None
         return
     except Exception:
+        if terminal:
+            obs_state["event"] = None
+            obs_state["stamp"] = None
+            obs_state["stamp_line_start"] = None
         return
 
 
@@ -3897,11 +3914,11 @@ def _observe_attempt_completions(
 
 
 def _completion_payload_for_delivery(
-        delivery, run_dir_real, attempt, opened, stdout, stdout_path,
+        delivery, run_dir_real, attempt, opened, stdout_event, stdout_path,
 ):
     """Derive the payload object a delivery stamps, or None. Never raises."""
     if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
-        env = engine_adapter.claude_result_envelope(stdout)
+        env = stdout_event
         if (not isinstance(env, dict)
                 or env.get("is_error") is True
                 or "structured_output" not in env):
@@ -4129,6 +4146,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "buf": b"",
         "overflow": False,
         "stamp_line_start": None,
+        "event": None,
+        "poisoned": False,
     }
     native_completion_obs = {"stamp": None, "prev_size": 0}
     while True:
@@ -4164,6 +4183,10 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             timeout_at = timeout_deadline_wall
             break
         time.sleep(_ATTEMPT_POLL_INTERVAL)
+    _observe_attempt_completions(
+        delivery, stdout_completion_obs, native_completion_obs,
+        run_dir_real, attempt, stdout_path,
+    )
     _terminate_process_group(pgid)
     try:
         proc.wait(timeout=2)
@@ -4180,6 +4203,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     )
     stdout_result = _materialize_stdout_result(
         run_dir_real, attempt, opened, stdout_path,
+        stdout_completion_obs.get("event"),
     )
     _, stdout_observed, stdout_rewrite_failed = _cap_file_tail(
         stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
@@ -4334,15 +4358,18 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         pass
 
     completion_stamp = None
+    stdout_event = None
     try:
         inj_delivery = engine_result_channel.result_delivery(
             opened.get("engine"), opened.get("claudeMode"),
         )
     except (engine_result_channel.UnknownEngineError, ValueError):
         inj_delivery = None
+    if inj_delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        stdout_event = engine_adapter.claude_result_envelope(stdout)
     if inj_delivery is not None:
         inj_payload = _completion_payload_for_delivery(
-            inj_delivery, run_dir_real, attempt, opened, stdout, stdout_path,
+            inj_delivery, run_dir_real, attempt, opened, stdout_event, stdout_path,
         )
         if inj_payload is not None:
             completion_stamp = engine_result_channel.completion_stamp(
@@ -4351,7 +4378,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
             )
 
     stdout_result = _materialize_stdout_result(
-        run_dir_real, attempt, opened, stdout_path,
+        run_dir_real, attempt, opened, stdout_path, stdout_event,
     )
 
     refusal = None

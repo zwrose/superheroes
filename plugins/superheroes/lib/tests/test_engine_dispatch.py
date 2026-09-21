@@ -15070,7 +15070,7 @@ def test_claude_background_materializer_error_when_transcript_unreadable(tmp_pat
         "claudeMode": "background",
     }
     stdout_path = str(tmp_path / "missing-transcript.stdout")
-    assert ED._materialize_stdout_result(run_dir, 1, opened, stdout_path) == "error"
+    assert ED._materialize_stdout_result(run_dir, 1, opened, stdout_path, None) == "error"
 
 
 def test_claude_review_json_schema_argv_text_drift_refuses_coherence(tmp_path, monkeypatch):
@@ -16199,16 +16199,9 @@ def _large_claude_result_stream(
 
 
 def _patch_stdout_completion_bounds(monkeypatch, max_stdout_capture):
-    """Patch stdout cap and derived stampable line bound for readable bound tests."""
+    """Patch the one stdout cap."""
     monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", max_stdout_capture)
-    stampable = (
-        max_stdout_capture
-        - len(ED._truncation_marker(
-            ED.CAP_STREAM_STDOUT, ED._STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES,
-        ).encode("utf-8"))
-    )
-    monkeypatch.setattr(ED, "_STDOUT_STAMPABLE_LINE_MAX", stampable)
-    return max_stdout_capture, stampable
+    return max_stdout_capture, max_stdout_capture
 
 
 def _stdout_last_line_byte_length(stdout_path):
@@ -17391,7 +17384,7 @@ def test_completion_stdout_over_bound_line_bounded_buffer(tmp_path, monkeypatch)
     end-to-end expression; the companion e2e block asserts such a line is never stamped.
     """
     patched_cap = 16384
-    patched_stampable = 16328
+    patched_stampable = patched_cap
     patched_chunk = 256
     _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", patched_chunk)
@@ -17431,7 +17424,7 @@ def test_completion_stdout_over_bound_line_bounded_buffer(tmp_path, monkeypatch)
 def test_completion_stdout_at_bound_line_admits(tmp_path, monkeypatch):
     """axis: a valid result line just inside the stampable bound is stamped and admitted."""
     patched_cap = 16384
-    patched_stampable = 16328
+    patched_stampable = patched_cap
     _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))
     stream, structured, result_line_bytes = _large_claude_result_stream(
@@ -17454,7 +17447,7 @@ def test_completion_stdout_at_bound_line_admits(tmp_path, monkeypatch):
 def test_completion_stdout_large_under_cap_still_admits(tmp_path, monkeypatch):
     """axis: stamped result survives when stdout is large but still at or under the cap."""
     patched_cap = 16384
-    patched_stampable = 16328
+    patched_stampable = patched_cap
     _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))
     result_stream, structured, result_line_bytes = _large_claude_result_stream(
@@ -17490,7 +17483,7 @@ def test_completion_stdout_overflow_does_not_suppress_following_result(
 ):
     """axis: overflow on one over-bound line must not leak into the next valid result line."""
     patched_cap = 16384
-    patched_stampable = 16328
+    patched_stampable = patched_cap
     patched_chunk = 256
     _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", patched_chunk)
