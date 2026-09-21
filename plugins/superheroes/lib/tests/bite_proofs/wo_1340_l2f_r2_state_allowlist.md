@@ -19,7 +19,7 @@ plus FIX-C vet-verdict-form load guards.
 
 | ID | Guarded element (file:line) | Axis | Proving tests | Verdict |
 |---|---|---|---|---|
-| G1 | stack_check.py:608-611 | allowlist membership on state | `test_l2f_read_pr_vet_state_unrecognised_state`, `test_l2f_read_pr_vet_state_lowercase_open_refuses` | proven |
+| G1 | stack_check.py:702-705 | allowlist membership on state | `test_l2f_read_pr_vet_state_unrecognised_state`, `test_l2f_read_pr_vet_state_lowercase_open_refuses` | proven |
 | G2 | stack_check.py `_load_vet_verdict_form` FileNotFoundError branch | missing form file refuses rather than embedded defaults | `test_l2f_v30_vet_form_missing_refuses` | proven |
 | G3 | stack_check.py:122-126 | unknown verdict in loaded form | `test_l2f_v31_vet_form_unknown_verdict_refuses` | proven |
 | G4 | stack_check.py:127-131 | duplicated verdict in loaded form | `test_l2f_v32_vet_form_duplicate_verdict_refuses` | proven |
@@ -264,11 +264,6 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v31_vet_form_
 
 **Proving test:** `plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v32_vet_form_duplicate_verdict_refuses`
 
-**Independence note:** neutralizing only the duplicate branch does not RED this proving test — the
-fixture replaces `PARKED` with a second `READY`, so `seen_verdicts` never gains `PARKED` and the
-missing-completeness branch (G5) refuses instead. The recorded RED run co-neutralizes G5 for the
-duration of this proof only.
-
 **neutralization** (`plugins/superheroes/lib/stack_check.py`):
 ```python
         if verdict in seen_verdicts:
@@ -277,18 +272,11 @@ duration of this proof only.
             )
             return None, _vet_verdict_form_error
         seen_verdicts.add(verdict)
-    if seen_verdicts != expected_verdicts:
-        for missing in expected_verdicts - seen_verdicts:
-            _vet_verdict_form_error = (
-                "vet-verdict-form.json verdict %r is missing" % missing
-            )
-            return None, _vet_verdict_form_error
 ```
 →
 ```python
         # duplicate-check neutralized for bite-proof
         seen_verdicts.add(verdict)
-    # missing-check co-neutralized for bite-proof (fixture leaves seen incomplete)
 ```
 
 **command:**
@@ -302,13 +290,14 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 _______________ test_l2f_v32_vet_form_duplicate_verdict_refuses ________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1021ada60>
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3672/test_l2f_v32_vet_form_duplicat0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105f5ea90>
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-3677/test_l2f_v32_vet_form_duplicat0')
 
     def test_l2f_v32_vet_form_duplicate_verdict_refuses(monkeypatch, tmp_path):
         # axis: duplicated verdict value in the form refuses vet-unreadable
-        tokens = list(_VALID_VET_FORM_TOKENS)
-        tokens[2] = {"token": "**Verdict: PARKED**", "verdict": sc.VERDICT_READY}
+        tokens = list(_VALID_VET_FORM_TOKENS) + [
+            {"token": "**Verdict: READY**", "verdict": sc.VERDICT_READY},
+        ]
         _patch_vet_form(monkeypatch, tmp_path, tokens)
 >       _assert_vet_refusal(
             _vet_body("**Verdict: READY** · %s" % HEAD_SHA),
@@ -316,7 +305,7 @@ tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/c
             sc.REASON_VET_UNREADABLE,
         )
 
-plugins/superheroes/lib/tests/test_stack_check.py:1614: 
+plugins/superheroes/lib/tests/test_stack_check.py:1615: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 body = '<!-- superheroes:advisor-vet -->\n**Verdict: READY** · abcdef0123456789abcdef0123456789abcdef01'
@@ -330,13 +319,13 @@ E       AssertionError: assert 'READY' is None
 plugins/superheroes/lib/tests/test_stack_check.py:1373: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v32_vet_form_duplicate_verdict_refuses
-1 failed in 0.12s
+1 failed in 0.20s
 ```
 
 **raw green** after restore:
 ```
 .                                                                        [100%]
-1 passed in 0.10s
+1 passed in 0.15s
 ```
 
 **restored lines:**
@@ -347,12 +336,6 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_v32_vet_form_
             )
             return None, _vet_verdict_form_error
         seen_verdicts.add(verdict)
-    if seen_verdicts != expected_verdicts:
-        for missing in expected_verdicts - seen_verdicts:
-            _vet_verdict_form_error = (
-                "vet-verdict-form.json verdict %r is missing" % missing
-            )
-            return None, _vet_verdict_form_error
 ```
 
 ---
