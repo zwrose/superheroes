@@ -82,6 +82,21 @@ FAILED .../test_layers_planned_unknown_incomplete
 1 passed in 1.17s
 ```
 
+Re-run after the test restore (WO-T2).
+
+**raw red:**
+```
+AssertionError: assert 'stack-complete' == 'stack-incomplete'
+FAILED .../test_layers_planned_unknown_incomplete
+1 failed in 0.46s
+```
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.70s
+```
+
 ## G2 — layers-planned-disagreed
 
 **neutralization:**
@@ -142,6 +157,21 @@ FAILED .../test_stack_incomplete_membership_unresolved
 ```
 .                                                                        [100%]
 1 passed in 1.14s
+```
+
+Re-run after the test restore (WO-T2).
+
+**raw red:**
+```
+AssertionError: assert 'stack-complete' == 'stack-incomplete'
+FAILED .../test_stack_incomplete_membership_unresolved
+1 failed in 0.92s
+```
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.71s
 ```
 
 ## G4 — every position must be ready

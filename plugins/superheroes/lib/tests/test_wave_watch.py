@@ -4489,6 +4489,35 @@ def test_stack_incomplete_vet_read_refuses(tmp_path, monkeypatch):
 
 
 def test_stack_incomplete_membership_unresolved(tmp_path, monkeypatch):
+    # axis: stack-incomplete when membership cannot be resolved
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[{
+            "launch_id": "lane-a",
+            "stack": _STACK_NUM,
+            "layer_position": 1,
+            "layers_planned": 2,
+        }],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+
+    def refusing_membership(**kwargs):
+        return {"ok": False, "reason": sc.REASON_STACK_UNREADABLE}
+
+    snapshot, degraded = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        refusing_membership,
+        _position_ready_reader({1: 50}, {50: {"state": _pr_vet_state()}}),
+    )
+    entry = snapshot["stacks"][0]
+    assert entry["state"] == "stack-incomplete"
+    assert entry["reason"] == "membership-unresolved"
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded
+
+
+def test_layers_planned_unknown_incomplete(tmp_path, monkeypatch):
     # axis: layers-planned-unknown reads incomplete
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
