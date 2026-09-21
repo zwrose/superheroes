@@ -393,4 +393,187 @@ None — no guarded element proved redundant or unreachable.
 
 ## Event layer (T1b)
 
-Filled by WO-T1b.
+**Register:** 7 event-layer guards + 4 Part-3 guards — **11 proven**, **0 unproven**. Three tests
+rewritten for bite (`test_stack_complete_fires_on_vet_only_without_pr_set_change`,
+`test_incomplete_seeds_silently_complete_fires`, `test_baseline_advances_unchanged_complete_does_not_refire`).
+Two gap tests added (`test_stack_position_ready_budget_exhausted`,
+`test_stack_incomplete_vet_read_refuses`). `test_stack_incomplete_pr_read_refuses` extended for
+`stack-signal-unavailable`.
+
+**Provenance:** cursor / composer-2.5 (WO-T1b, layer 2g)
+
+### Census and summary
+
+| ID | Guarded element (file:line) | Proving test | Outcome |
+|---|---|---|---|
+| E1 | wave_watch.py:1054-1056 | `test_stack_complete_fires_on_vet_only_without_pr_set_change` | test rewritten, proven |
+| E2 | wave_watch.py:1057 | `test_incomplete_seeds_silently_complete_fires` | test rewritten, proven |
+| E3 | wave_watch.py:1078-1080 | `test_incomplete_seeds_silently_complete_fires` | test rewritten, proven |
+| E4 | wave_watch.py:1081-1082 | `test_baseline_advances_unchanged_complete_does_not_refire` | test rewritten, proven |
+| E5 | wave_watch.py:1089 | `test_baseline_advances_unchanged_complete_does_not_refire` | test rewritten, proven |
+| E6 | wave_watch.py:243-248 | `test_precedence_stack_state_over_pr_set_pr_baseline_unchanged` | proven |
+| E7 | wave_watch.py:251-256 | `test_stack_state_not_suppressible_via_ignore_events` | proven |
+| P1 | wave_watch.py:927-929 | `test_stack_position_ready_budget_exhausted` | gap filled, proven |
+| P2 | wave_watch.py:937-939 | `test_stack_incomplete_pr_read_refuses` | proven |
+| P3 | wave_watch.py:945-947 | `test_stack_incomplete_vet_read_refuses` | gap filled, proven |
+| P4 | wave_watch.py:1020-1024 | `test_stack_position_ready_budget_exhausted` | gap filled, proven |
+
+`test_stack_state_watch_read_only_no_store_mutation` guards run() store read-only integration;
+neutralization via `hb.stamp` in `_payload_stack_state_changed` goes red (see E7b below).
+
+### Tests rewritten
+
+**`test_baseline_advances_unchanged_complete_does_not_refire`** — was inert for baseline advance:
+used `loop()` and only asserted one arm. Now calls `run()` twice with the same `stack_state` cell;
+second call must not return `stack-state-changed`.
+
+**`test_stack_complete_fires_on_vet_only_without_pr_set_change`** — added
+`assert ww._stack_state_fires(complete_snapshot, None)` so neutralizing the baseline-`None`
+complete check goes red.
+
+**`test_incomplete_seeds_silently_complete_fires`** — added direct `_stack_state_fires` transition
+asserts and a `_payload_stack_state_changed` seed call asserting `stack_state[0]` is seeded.
+
+### Gap tests added
+
+**`test_stack_position_ready_budget_exhausted`** — ready-walk budget exhausted after membership;
+every position missing, `reason` null, `stack-signal-unavailable` in `degraded`.
+
+**`test_stack_incomplete_vet_read_refuses`** — vet verdict read refusal; position not READY,
+`stack-signal-unavailable` in `degraded`.
+
+### Code removals
+
+None.
+
+---
+
+## E1 — baseline None fires on any complete stack
+
+**neutralization:** `entry["state"] == "stack-complete"` → `False` in `_stack_state_fires`.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_stack_complete_fires_on_vet_only_without_pr_set_change`
+
+**raw red:** `AssertionError` on `assert ww._stack_state_fires(complete_snapshot, None)`
+
+**raw green:** `. [100%] 1 passed`
+
+## E2 — snapshot differs from baseline
+
+**neutralization:** `return snapshot != baseline` → `return False`.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_incomplete_seeds_silently_complete_fires`
+
+**raw red:** `AssertionError` on `assert ww._stack_state_fires(complete_snapshot, incomplete_snapshot)`
+
+**raw green:** `. [100%] 1 passed`
+
+## E3 — incomplete seeds baseline silently
+
+**neutralization:** remove `stack_state[0] = snapshot` on seed path.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_incomplete_seeds_silently_complete_fires`
+
+**raw red:** `AssertionError` on `assert stack_state[0] == incomplete_snapshot`
+
+**raw green:** `. [100%] 1 passed`
+
+## E4 — unchanged snapshot does not refire
+
+**neutralization:** `if baseline is not None and snapshot == baseline: return None` → `if False: return None`.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_baseline_advances_unchanged_complete_does_not_refire`
+
+**raw red:** `AssertionError: assert 'stack-state-changed' != 'stack-state-changed'` on second `run()`
+
+**raw green:** `. [100%] 1 passed`
+
+## E5 — baseline advances on fire
+
+**neutralization:** remove `stack_state[0] = snapshot` on firing path (keep payload build).
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_baseline_advances_unchanged_complete_does_not_refire`
+
+**raw red:** same second-`run()` refire `AssertionError` as E4
+
+**raw green:** `. [100%] 1 passed`
+
+## E6 — stack-state precedes pr-set-changed
+
+**neutralization:** swap `EVENT_STACK_STATE_CHANGED` / `EVENT_PR_SET_CHANGED` in `EVENT_PRECEDENCE`.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_precedence_stack_state_over_pr_set_pr_baseline_unchanged`
+
+**raw red:** `AssertionError: assert 'pr-set-changed' == 'stack-state-changed'`
+
+**raw green:** `. [100%] 1 passed`
+
+## E7 — stack-state-changed not suppressible
+
+**neutralization:** early `return None` from `_payload_stack_state_changed` when `ignore_set` non-empty.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_stack_state_not_suppressible_via_ignore_events`
+
+**raw red:** `AssertionError: assert 'timer' == 'stack-state-changed'`
+
+**raw green:** `. [100%] 1 passed`
+
+## E7b — run() store read-only during stack evaluation
+
+**neutralization:** `hb.stamp(...)` in `_payload_stack_state_changed` before `return payload`.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_stack_state_watch_read_only_no_store_mutation`
+
+**raw red:** `AssertionError: assert before == after` (store files changed)
+
+**raw green:** `. [100%] 1 passed`
+
+## P1 — ready-walk budget adds degradation
+
+**neutralization:** remove `degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)` before budget `return None`.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_stack_position_ready_budget_exhausted`
+
+**raw red:** `AssertionError: assert 'stack-signal-unavailable' in set()`
+
+**raw green:** `. [100%] 1 passed`
+
+## P2 — PR vet read refusal adds degradation
+
+**neutralization:** remove `degraded.add` on PR refusal branch.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_stack_incomplete_pr_read_refuses`
+
+**raw red:** `AssertionError: assert 'stack-signal-unavailable' in set()`
+
+**raw green:** `. [100%] 1 passed`
+
+## P3 — vet verdict read refusal adds degradation
+
+**neutralization:** remove `degraded.add` on vet refusal branch.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_stack_incomplete_vet_read_refuses`
+
+**raw red:** `AssertionError: assert 'stack-signal-unavailable' in set()`
+
+**raw green:** `. [100%] 1 passed`
+
+## P4 — ready_positions None marks all positions missing
+
+**neutralization:** `entry["missingPositions"] = list(...)` → `entry["missingPositions"] = []`.
+
+**node id:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_stack_position_ready_budget_exhausted`
+
+**raw red:** `AssertionError: assert [] == [1, 2]`
+
+**raw green:** `. [100%] 1 passed`
+
+## Doc edits (T1b)
+
+- `wave-watch.md`: stack-state `reason` clause corrected; unread-position sentence under **Complete**;
+  **Stack-state baseline** bullet after **PR-set baseline**.
+- `wave_watch.py`: comment above baseline advance corrected (caller-threaded cell; `loop` returns).
+
+## Command count
+
+30 invocations (budget cap).

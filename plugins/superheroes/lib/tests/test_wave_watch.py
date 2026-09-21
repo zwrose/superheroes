@@ -4235,6 +4235,17 @@ def test_stack_complete_fires_on_vet_only_without_pr_set_change(
 
     monkeypatch.setattr(sc, "read_pr_vet_state", read_pr_vet_state)
     clock = [0.0]
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    complete_snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+        ),
+    )
+    assert ww._stack_state_fires(complete_snapshot, None)
 
     def mono():
         return clock[0]
@@ -4409,7 +4420,7 @@ def test_stack_incomplete_pr_read_refuses(tmp_path, monkeypatch):
         }],
     )
     batch_lanes = _fold_batch_lanes(repo, "batch-982")
-    snapshot, _ = _snapshot_stack_state(
+    snapshot, degraded = _snapshot_stack_state(
         repo, batch_lanes, [50, 51],
         monkeypatch,
         _membership_for_stack([50, 51]),
@@ -4429,10 +4440,11 @@ def test_stack_incomplete_pr_read_refuses(tmp_path, monkeypatch):
     entry = snapshot["stacks"][0]
     assert entry["state"] == "stack-incomplete"
     assert entry["missingPositions"] == [2]
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded
 
 
-def test_stack_incomplete_membership_unresolved(tmp_path, monkeypatch):
-    # axis: stack-incomplete when membership cannot be resolved
+def test_stack_incomplete_vet_read_refuses(tmp_path, monkeypatch):
+    # axis: stack-incomplete when vet verdict read refuses
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
         repo, tmp_path, monkeypatch,
@@ -4444,23 +4456,39 @@ def test_stack_incomplete_membership_unresolved(tmp_path, monkeypatch):
         }],
     )
     batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    vet_calls = [0]
+    original_read_vet = sc.read_vet_verdict
 
-    def refusing_membership(**kwargs):
-        return {"ok": False, "reason": sc.REASON_STACK_UNREADABLE}
+    def read_vet_verdict(body, head):
+        vet_calls[0] += 1
+        if vet_calls[0] == 2:
+            return None, {
+                "ok": False,
+                "reason": sc.REASON_STACK_UNREADABLE,
+            }
+        return original_read_vet(body, head)
 
+    monkeypatch.setattr(sc, "read_vet_verdict", read_vet_verdict)
     snapshot, degraded = _snapshot_stack_state(
         repo, batch_lanes, [50, 51],
         monkeypatch,
-        refusing_membership,
-        _position_ready_reader({1: 50}, {50: {"state": _pr_vet_state()}}),
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {
+                50: {"state": _pr_vet_state()},
+                51: {"state": _pr_vet_state()},
+            },
+        ),
     )
     entry = snapshot["stacks"][0]
     assert entry["state"] == "stack-incomplete"
-    assert entry["reason"] == "membership-unresolved"
+    assert entry["missingPositions"] == [2]
+    assert entry["reason"] is None
     assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded
 
 
-def test_layers_planned_unknown_incomplete(tmp_path, monkeypatch):
+def test_stack_incomplete_membership_unresolved(tmp_path, monkeypatch):
     # axis: layers-planned-unknown reads incomplete
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
@@ -4590,6 +4618,52 @@ def test_incomplete_seeds_silently_complete_fires(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sc, "read_pr_vet_state", read_pr_vet_state)
     clock = [0.0]
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    incomplete_snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {
+                50: {"state": _pr_vet_state()},
+                51: {"state": _pr_vet_state(_vet_not_ready_body())},
+            },
+        ),
+    )
+    complete_snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+        ),
+    )
+    assert not ww._stack_state_fires(incomplete_snapshot, None)
+    assert ww._stack_state_fires(complete_snapshot, incomplete_snapshot)
+    stack_state = [None]
+    seeded = {"stack_state": stack_state, "degraded": set()}
+    seeded_ctx = {
+        "batch_lanes": batch_lanes,
+        "open_pr_numbers": [50, 51],
+        "repo_root": repo,
+        "deadline": time.monotonic() + 30,
+        "monotonic": time.monotonic,
+        "gh_run": _gh_open_prs([50, 51]),
+        "membership_reader": _membership_for_stack([50, 51]),
+        "env": {},
+        "degraded": seeded["degraded"],
+        "pr_vet_reader": read_pr_vet_state,
+        "stack_state": stack_state,
+        "terminal_launches": [],
+        "blocked_launches": [],
+        "exited_launches": [],
+        "stale_live_launches": [],
+    }
+    assert ww._payload_stack_state_changed(seeded_ctx) is None
+    assert stack_state[0] == incomplete_snapshot
+
     stack_state = [None]
 
     def mono():
@@ -4630,29 +4704,19 @@ def test_baseline_advances_unchanged_complete_does_not_refire(tmp_path, monkeypa
         50: {"state": _pr_vet_state()},
         51: {"state": _pr_vet_state()},
     })
-    arm = [0]
-    real_run = ww.run
-
-    def run_fn(repo_root, batch_id, **kwargs):
-        arm[0] += 1
-        call_kwargs = dict(kwargs)
-        call_kwargs["gh_run"] = _gh_open_prs([50, 51])
-        call_kwargs["membership_reader"] = _membership_for_stack([50, 51])
-        call_kwargs["max_seconds"] = 2
-        call_kwargs["interval_seconds"] = 1
-        call_kwargs["sleep"] = lambda _d: None
-        return real_run(repo_root, batch_id, **call_kwargs)
-
-    result = ww.loop(
-        repo,
-        "batch-982",
-        max_seconds=2,
-        interval_seconds=1,
-        sleep=lambda _d: None,
-        run_fn=run_fn,
-    )
-    assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
-    assert arm[0] == 1
+    stack_state = [None]
+    run_kwargs = {
+        "max_seconds": 2,
+        "interval_seconds": 1,
+        "gh_run": _gh_open_prs([50, 51]),
+        "membership_reader": _membership_for_stack([50, 51]),
+        "sleep": lambda _d: None,
+        "stack_state": stack_state,
+    }
+    first = ww.run(repo, "batch-982", **run_kwargs)
+    assert first["event"] == ww.EVENT_STACK_STATE_CHANGED
+    second = ww.run(repo, "batch-982", **run_kwargs)
+    assert second["event"] != ww.EVENT_STACK_STATE_CHANGED
 
 
 def test_precedence_stack_state_over_pr_set_pr_baseline_unchanged(
@@ -5117,6 +5181,52 @@ def test_stack_budget_exhausted_mid_walk_remaining_incomplete(tmp_path, monkeypa
     assert by_stack[100]["state"] == "stack-incomplete"
     assert by_stack[200]["state"] == "stack-incomplete"
     assert by_stack[200]["reason"] == "membership-unresolved"
+
+
+def test_stack_position_ready_budget_exhausted(tmp_path, monkeypatch):
+    # axis: position-ready walk budget exhaustion marks every position missing
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[{
+            "launch_id": "lane-a",
+            "stack": _STACK_NUM,
+            "layer_position": 1,
+            "layers_planned": 2,
+        }],
+    )
+    batch_lanes = _fold_batch_lanes(repo, "batch-982")
+    degraded = set()
+    mono = [1000.0]
+    ready_reads = [0]
+    base_reader = _position_ready_reader(
+        {1: 50, 2: 51},
+        {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+    )
+
+    def pr_vet_reader(pr_number, repo_slug, **kwargs):
+        ready_reads[0] += 1
+        if ready_reads[0] == 1:
+            mono[0] += 4.01
+        return base_reader(pr_number, repo_slug, **kwargs)
+
+    snapshot = ww._compute_stack_state_snapshot(
+        batch_lanes,
+        [50, 51],
+        repo,
+        deadline=1005.0,
+        monotonic=lambda: mono[0],
+        gh_run=_gh_open_prs([50, 51]),
+        membership_reader=_membership_for_stack([50, 51]),
+        env={},
+        degraded=degraded,
+        pr_vet_reader=pr_vet_reader,
+    )
+    entry = snapshot["stacks"][0]
+    assert entry["state"] == "stack-incomplete"
+    assert entry["missingPositions"] == [1, 2]
+    assert entry["reason"] is None
+    assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in degraded
 
 
 def test_stack_state_watch_read_only_no_store_mutation(tmp_path, monkeypatch):
