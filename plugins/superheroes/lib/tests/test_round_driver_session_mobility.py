@@ -519,24 +519,80 @@ def test_relocate_invariant_moved_session_dir(tmp_path, capsys):
     session_dir2 = str(tmp_path / "session2")
     shutil.copytree(session_dir, session_dir2)
     meta2_path = os.path.join(session_dir2, "meta.json")
-    meta2 = json.load(open(meta2_path, encoding="utf-8"))
-    meta2["sessionDir"] = os.path.realpath(session_dir2)
-    with open(meta2_path, "w", encoding="utf-8") as fh:
-        json.dump(meta2, fh)
-    _relocate(session_dir2, repo["root_b"], capsys)
+    _, out = _relocate(session_dir2, repo["root_b"], capsys)
     old_a = os.path.realpath(repo["root_a"])
     old_s = os.path.realpath(session_dir)
     current_s2 = os.path.realpath(session_dir2)
     state2 = json.load(open(os.path.join(session_dir2, RD.STATE_FILE), encoding="utf-8"))
     meta2 = json.load(open(meta2_path, encoding="utf-8"))
+    assert meta2["sessionDir"] == current_s2
+    assert "meta.sessionDir" in out["relocated"]["rewritten"]
     for label, doc in (("meta", meta2), ("state", state2)):
         for key_path, value in _walk_strings(doc, label):
             if _anchor_path_allowed(key_path):
                 continue
             if value == current_s2:
                 continue
-            if value.startswith(old_a) or value.startswith(old_s + os.sep):
+            if value.startswith(old_a) or value.startswith(old_s + os.sep) or value == old_s:
                 pytest.fail("old path survived at %s: %s" % (key_path, value))
+
+
+def test_re_emit_after_session_dir_move_names_the_new_dir(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    session_dir2 = str(tmp_path / "session2")
+    shutil.copytree(session_dir, session_dir2)
+    _relocate(session_dir2, repo["root_b"], capsys)
+    rnd, phase = 1, "dispatch-panel"
+    a0_files_before = {
+        p: _read_bytes(p) for p in _collect_attempt_files(session_dir2, rnd, phase, 0)
+    }
+    rc, out = _re_emit(session_dir2, capsys)
+    assert rc == 0
+    assert out["ok"] is True
+    # Orders embed the bootstrap session path (not always os.path.realpath on macOS).
+    # Prefix with os.sep so a path like /tmp/session does not match /tmp/session2.
+    old_s_prefix = session_dir + os.sep
+    a1_md_files = [p for p in _collect_attempt_files(session_dir2, rnd, phase, 1)
+                   if p.endswith(".md")]
+    assert a1_md_files
+    for path in a1_md_files:
+        content = _read_bytes(path)
+        assert session_dir2.encode() in content
+        assert old_s_prefix.encode() not in content
+    for path, content in a0_files_before.items():
+        assert _read_bytes(path) == content
+    a0_md_files = [p for p in a0_files_before if p.endswith(".md")]
+    for path in a0_md_files:
+        assert old_s_prefix.encode() in _read_bytes(path)
+
+
+def test_re_emit_refuses_when_a_result_is_recorded_in_the_journal(tmp_path, capsys):
+    repo, sess, session_dir = _stale_session(tmp_path, capsys)
+    ok, state = RD.load_state(session_dir)
+    rnd, phase, attempt = state["pending"]["round"], state["pending"]["phase"], 0
+    roster, _ = RD._roster_of(session_dir, state, "re-emit", phase, rnd, attempt)
+    first_seat = roster[0]
+    journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
+    row = {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "round": 1,
+        "phase": "dispatch-panel",
+        "attempt": 0,
+        "seat": first_seat,
+        "occurrence": 0,
+    }
+    with open(journal_path, "a", encoding="utf-8") as fh:
+        # Bypass _journal_append on purpose — the seeded row stands in for a real record
+        # and the revision-identity fields are irrelevant to this check.
+        fh.write(json.dumps(row) + "\n")
+    rc, out = _re_emit(session_dir, capsys)
+    assert rc == 1
+    assert out["ok"] is False
+    assert out["reason"] == "re-emit-attempt-has-results"
+    assert "journal:%s" % first_seat in out["names"]
 
 
 def test_relocate_marker_not_ours_left_alone(tmp_path):
