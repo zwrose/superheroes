@@ -895,13 +895,8 @@ def read_vet_verdict(body, head_sha):
 
     separator, tokens = form
 
-    marker = grounding_stage.REGION_MARKERS["advisor-vet"]
-    scan = grounding_stage._context_scan(body)
-    try:
-        region_text, _line_count, _region_start_line = grounding_stage._extract_region(
-            body, marker, scan, "advisor-vet",
-        )
-    except grounding_stage._BodyRefusal:
+    region_text, region_refusal = grounding_stage.read_region(body, "advisor-vet")
+    if region_refusal is not None:
         # axis: more than one live advisor-vet marker
         return VET_NOT_READY, None
 

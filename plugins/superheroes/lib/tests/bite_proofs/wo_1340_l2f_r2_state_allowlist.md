@@ -47,38 +47,25 @@ plus FIX-C vet-verdict-form load guards.
 - `plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_unrecognised_state`
 - `plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_lowercase_open_refuses`
 
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_unrecognised_state" "plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_lowercase_open_refuses" -q
+```
+
 **raw red:**
 ```
 FF                                                                       [100%]
 =================================== FAILURES ===================================
 ________________ test_l2f_read_pr_vet_state_unrecognised_state _________________
-
-    def test_l2f_read_pr_vet_state_unrecognised_state():
-        # axis: unrecognised state value refuses stack-unreadable
-        run, _calls = _make_run(
-            {_pr_vet_argv(): _pr_vet_ok(state="UNKNOWN")}
-        )
-        state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
 >       assert state is None
 E       AssertionError: assert {'body': '', 'headRefOid': 'abcdef0123456789abcdef0123456789abcdef01', 'isDraft': False, 'number': 701, ...} is None
-
-plugins/superheroes/lib/tests/test_stack_check.py:1800: AssertionError
 ______________ test_l2f_read_pr_vet_state_lowercase_open_refuses _______________
-
-    def test_l2f_read_pr_vet_state_lowercase_open_refuses():
-        # axis: case-sensitive allowlist — lowercase open is not OPEN
-        run, _calls = _make_run(
-            {_pr_vet_argv(): _pr_vet_ok(state="open")}
-        )
-        state, refusal = sc.read_pr_vet_state(DEP_PR, REPO, run=run)
 >       assert state is None
 E       AssertionError: assert {'body': '', 'headRefOid': 'abcdef0123456789abcdef0123456789abcdef01', 'isDraft': False, 'number': 701, ...} is None
-
-plugins/superheroes/lib/tests/test_stack_check.py:1812: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_unrecognised_state
 FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_state_lowercase_open_refuses
-2 failed in 0.14s
+2 failed in 0.13s
 ```
 
 **raw green** after restore:
@@ -86,6 +73,8 @@ FAILED plugins/superheroes/lib/tests/test_stack_check.py::test_l2f_read_pr_vet_s
 ..                                                                       [100%]
 2 passed in 0.12s
 ```
+
+Re-run: 2026-09-21, tree = 5deb9d99 + WO-S working changes (layer 2g); the command above reproduces this receipt as written.
 
 **restored lines:**
 ```python
