@@ -353,6 +353,25 @@ def _filter_suppressed_launches(launches, event, ignore_set):
     ]
 
 
+def _higher_precedence_lane_event_due(
+    terminal_launches, blocked_launches, exited_launches, ignore_set,
+):
+    """True when an unsuppressed lane-terminal, lane-blocked, or builder-exited event is due."""
+    if _filter_suppressed_launches(
+        terminal_launches, EVENT_LANE_TERMINAL, ignore_set,
+    ):
+        return True
+    if _filter_suppressed_launches(
+        blocked_launches, EVENT_LANE_BLOCKED, ignore_set,
+    ):
+        return True
+    if _filter_suppressed_launches(
+        exited_launches, EVENT_BUILDER_EXITED, ignore_set,
+    ):
+        return True
+    return False
+
+
 def _event_result(event, batch_id, degraded, stale_suppressed=None, **payload):
     result = {
         "ok": True,
@@ -712,7 +731,7 @@ def _parse_pr_numbers(stdout):
 
 
 def _resolve_repo_slug(repo_root, deadline, monotonic, gh_run, env):
-    """Return (slug, refusal) — exactly one is non-None. Never raises."""
+    """Return (slug, refusal). Returns (None, None) when budget is below the poll minimum; otherwise exactly one is non-None. Never raises."""
     remaining = deadline - monotonic()
     if remaining < _MIN_PR_POLL_SECONDS:
         return None, None
@@ -1384,31 +1403,41 @@ def run(
                 arm_suppressed.pop(entry["launchId"], None)
             exited_launches = exited[1] if exited is not None else []
 
-            open_pr_numbers, _pr_poll_ok = _poll_open_pr_numbers(
-                repo_root,
-                deadline,
-                monotonic,
-                gh_run,
-                env,
-                degraded,
-                pr_sampled,
+            lane_event_due = _higher_precedence_lane_event_due(
+                terminal_launches,
+                blocked_launches,
+                exited_launches,
+                ignore_set,
             )
-
-            needs_repo_slug = bool(_batch_stack_numbers(batch_lanes))
-            if (
-                not needs_repo_slug
-                and open_pr_numbers is not None
-                and pr_state[0] is not None
-            ):
-                needs_repo_slug = set(open_pr_numbers) != pr_state[0]
-            if needs_repo_slug:
-                repo_slug, _slug_refusal = _resolve_repo_slug(
-                    repo_root, deadline, monotonic, gh_run, env,
-                )
-                if repo_slug is None:
-                    degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
-            else:
+            if lane_event_due:
+                open_pr_numbers = None
                 repo_slug = None
+            else:
+                open_pr_numbers, _pr_poll_ok = _poll_open_pr_numbers(
+                    repo_root,
+                    deadline,
+                    monotonic,
+                    gh_run,
+                    env,
+                    degraded,
+                    pr_sampled,
+                )
+
+                needs_repo_slug = bool(_batch_stack_numbers(batch_lanes))
+                if (
+                    not needs_repo_slug
+                    and open_pr_numbers is not None
+                    and pr_state[0] is not None
+                ):
+                    needs_repo_slug = set(open_pr_numbers) != pr_state[0]
+                if needs_repo_slug:
+                    repo_slug, _slug_refusal = _resolve_repo_slug(
+                        repo_root, deadline, monotonic, gh_run, env,
+                    )
+                    if repo_slug is None:
+                        degraded.add(DEGRADATION_STACK_SIGNAL_UNAVAILABLE)
+                else:
+                    repo_slug = None
 
             event_ctx = {
                 "terminal_launches": terminal_launches,

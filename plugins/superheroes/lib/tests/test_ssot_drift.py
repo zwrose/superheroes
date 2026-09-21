@@ -1377,6 +1377,50 @@ def test_wave_watch_suppressible_events_in_wave_watch_doc():
     )
 
 
+def _wave_watch_stack_state_vocabulary_from_home():
+    """Stack-state-changed payload tokens from wave_watch module constants."""
+    import wave_watch
+
+    return (
+        wave_watch.STACK_STATE_COMPLETE,
+        wave_watch.STACK_STATE_INCOMPLETE,
+        wave_watch.STACK_REASON_LAYERS_PLANNED_UNKNOWN,
+        wave_watch.STACK_REASON_LAYERS_PLANNED_DISAGREED,
+        wave_watch.STACK_REASON_MEMBERSHIP_UNRESOLVED,
+        wave_watch.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
+    )
+
+
+def _wave_watch_stack_state_changed_payload_paragraph(doc):
+    """stack-state-changed payload prose from wave-watch.md — scoped to that section."""
+    m = re.search(
+        r"When \*\*`stack-state-changed`\*\* fires.*?"
+        r"- `flags` — observations that ride with the snapshot.*?"
+        r"`flag`\.\n",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "wave-watch.md: stack-state-changed payload paragraph not found "
+        "(moved or reworded?)"
+    )
+    return m.group(0)
+
+
+def test_wave_watch_stack_state_vocabulary_in_wave_watch_doc():
+    """§11: wave-watch.md restates stack-state-changed payload vocabulary from module constants."""
+    home_values = _wave_watch_stack_state_vocabulary_from_home()
+    doc = _read("skills/showrunner/reference/wave-watch.md")
+    paragraph = _wave_watch_stack_state_changed_payload_paragraph(doc)
+    code_spans = set(re.findall(r"`([^`]+)`", paragraph))
+    missing = [value for value in home_values if value not in code_spans]
+    assert not missing, (
+        "wave-watch.md stack-state-changed payload vocabulary drift from "
+        "wave_watch stack constants — missing from doc paragraph: %r"
+        % missing
+    )
+
+
 # --- Cluster 4: negative drift scans (concrete model ids must not leak) ------
 
 _CONCRETE_MODEL_TOKENS = (

@@ -334,7 +334,7 @@ def test_event_e3_builder_exited(tmp_path, monkeypatch):
     assert result["launches"] == [{"launchId": "lane-a", "pid": dead_pid}]
 
 
-def test_lane_terminal_makes_one_pr_list_call(tmp_path, monkeypatch):
+def test_lane_terminal_makes_zero_gh_run_calls(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="handback")
     gh_calls = [0]
@@ -352,11 +352,11 @@ def test_lane_terminal_makes_one_pr_list_call(tmp_path, monkeypatch):
         monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
     )
     assert result["event"] == "lane-terminal"
-    # axis: one open-PR-list read per tick even when a higher-precedence lane event fires
-    assert gh_calls[0] == 1
+    # axis: no gh child on a tick whose event is a lane event
+    assert gh_calls[0] == 0
 
 
-def test_lane_blocked_makes_one_pr_list_call(tmp_path, monkeypatch):
+def test_lane_blocked_makes_zero_gh_run_calls(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="blocked")
     gh_calls = [0]
@@ -374,11 +374,11 @@ def test_lane_blocked_makes_one_pr_list_call(tmp_path, monkeypatch):
         monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
     )
     assert result["event"] == "lane-blocked"
-    # axis: one open-PR-list read per tick even when a higher-precedence lane event fires
-    assert gh_calls[0] == 1
+    # axis: no gh child on a tick whose event is a lane event
+    assert gh_calls[0] == 0
 
 
-def test_builder_exited_makes_one_pr_list_call(tmp_path, monkeypatch):
+def test_builder_exited_makes_zero_gh_run_calls(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead_pid = 999999999
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
@@ -397,8 +397,39 @@ def test_builder_exited_makes_one_pr_list_call(tmp_path, monkeypatch):
         monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
     )
     assert result["event"] == "builder-exited"
-    # axis: one open-PR-list read per tick even when a higher-precedence lane event fires
-    assert gh_calls[0] == 1
+    # axis: no gh child on a tick whose event is a lane event
+    assert gh_calls[0] == 0
+
+
+def test_suppressed_terminal_lane_polls_prs_for_pr_set_changed(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_live_lane(
+        repo, tmp_path, monkeypatch, stamp_state="handback", pid=os.getpid(),
+    )
+    pr_list_calls = [0]
+    clock = [0.0]
+
+    def counting_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "pr", "list"]:
+            pr_list_calls[0] += 1
+            body = [{"number": n} for n in [1, 3]]
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=json.dumps(body), stderr="",
+            )
+        return _noop_gh_run(argv, **kwargs)
+
+    def mono():
+        return clock[0]
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60,
+        monotonic=mono, sleep=lambda _d: None, gh_run=counting_gh_run,
+        pr_state=[{1, 2}],
+        ignore_events=(("lane-a", ww.EVENT_LANE_TERMINAL),),
+    )
+    assert result["event"] == ww.EVENT_PR_SET_CHANGED
+    assert result["prs"] == [1, 3]
+    assert pr_list_calls[0] == 1
 
 
 def test_event_e4_pr_set_changed(tmp_path, monkeypatch):
@@ -4873,15 +4904,6 @@ def test_precedence_stack_state_over_pr_set_pr_baseline_unchanged(
     )
     assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
     assert pr_state[0] == {50, 51}
-
-
-def test_stack_state_vocabulary_literal_pins():
-    assert ww.STACK_STATE_COMPLETE == "stack-complete"
-    assert ww.STACK_STATE_INCOMPLETE == "stack-incomplete"
-    assert ww.STACK_REASON_LAYERS_PLANNED_UNKNOWN == "layers-planned-unknown"
-    assert ww.STACK_REASON_LAYERS_PLANNED_DISAGREED == "layers-planned-disagreed"
-    assert ww.STACK_REASON_MEMBERSHIP_UNRESOLVED == "membership-unresolved"
-    assert ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD == "idle-seat-launchable-child"
 
 
 def test_draft_pr_excluded_from_ready_positions(tmp_path, monkeypatch):
