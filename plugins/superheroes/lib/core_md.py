@@ -1285,7 +1285,7 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
                     continue
                 engine = engine_pref.resolve_engine_pref_key(pref_key, prefs)
                 if engine != "codex":
-                    if role in seat_map._PANEL_PIN_TIERS:
+                    if role in seat_map.panel_pin_tiers():
                         notes.append(
                             "codexModels.%s applies to the review panel's codex seats; "
                             "the single-seat %s role's engine is %s, so that seat does not use it"
