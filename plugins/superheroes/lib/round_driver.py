@@ -6708,7 +6708,7 @@ def _cmd_re_emit_locked(session_dir, by):
     try:
         _emit_orders_manifest(
             session_dir, state, rnd, phase, new_attempt, roster,
-            journal_cmd="re-emit", pending_payload=state["pending"]["payload"],
+            journal_cmd=RE_EMIT_CMD, pending_payload=state["pending"]["payload"],
             seat_map=_effective_seat_map(state),
             extra_journal_entries=[superseded_row])
     except round_commit.CommitRefused as exc:

@@ -11,6 +11,7 @@ import round_adapters  # noqa: E402
 import round_certification as RC  # noqa: E402
 import record_paths  # noqa: E402
 import round_records as RR  # noqa: E402
+import session_contract  # noqa: E402
 
 import test_round_driver_session_mobility as M  # noqa: E402
 
@@ -164,7 +165,7 @@ def test_re_emit_positive_after_relocate(tmp_path, capsys):
         "at": relocated["at"],
     }
     assert emitted["outcome"] == "orders-emitted"
-    assert emitted["cmd"] == "re-emit"
+    assert emitted["cmd"] == session_contract.RE_EMIT_CMD
     assert emitted["attempt"] == 1
 
 
@@ -392,7 +393,7 @@ def test_certification_late_attempt0_landing_keeps_seat_open(
     rnd, phase, old_attempt = 1, RD.P_PANEL, 0
     _re_emit(session_dir, capsys)
     ok, state = RD.load_state(session_dir)
-    roster, _ = RD._roster_of(session_dir, state, "re-emit", phase, rnd, old_attempt)
+    roster, _ = RD._roster_of(session_dir, state, session_contract.RE_EMIT_CMD, phase, rnd, old_attempt)
     seat, occurrence = _first_seat(roster)
     skey = RR.storage_key(seat, occurrence)
     landing = RR.landing_path(session_dir, rnd, phase, skey, old_attempt)
@@ -422,7 +423,7 @@ def test_certification_lstat_permission_error_keeps_superseded_seat_open(tmp_pat
     rnd, phase, old_attempt = 1, RD.P_PANEL, 0
     _re_emit(session_dir, capsys)
     ok, state = RD.load_state(session_dir)
-    roster, _ = RD._roster_of(session_dir, state, "re-emit", phase, rnd, old_attempt)
+    roster, _ = RD._roster_of(session_dir, state, session_contract.RE_EMIT_CMD, phase, rnd, old_attempt)
     seat, occurrence = _first_seat(roster)
     denied_path = RR.landing_path(session_dir, rnd, phase, RR.storage_key(seat, occurrence), old_attempt)
     real_present = record_paths.landing_entry_present
@@ -443,7 +444,8 @@ def test_certification_legacy_emitted_row_stays_open_without_session_dir():
     journal = [
         {"cmd": "advance", "outcome": "emitted", "phase": RD.P_PANEL, "round": 1, "attempt": 0,
          "roster": [{"seat": "code-reviewer"}]},
-        {"cmd": "re-emit", "outcome": "orders-superseded", "phase": RD.P_PANEL, "round": 1,
+        {"cmd": session_contract.RE_EMIT_CMD, "outcome": session_contract.ORDERS_SUPERSEDED_OUTCOME,
+         "phase": RD.P_PANEL, "round": 1,
          "attempt": 0, "newAttempt": 1},
     ]
     unclosed, refusal = RC._journal_open_seats(journal, session_dir=None)
