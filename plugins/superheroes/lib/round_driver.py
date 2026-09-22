@@ -7020,6 +7020,16 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "echo-mismatch"})
         return {"ok": False, "reason": "phase/attempt echo does not match the pending step"}
+    if (not _via_advance and isinstance(phase, str) and phase.startswith("dispatch-")):
+        # axis: a hand submit of a dispatch phase emitted before the move is refused; the advance-driven fold is not
+        relocation = _relocation_after_emission(
+            read_journal(session_dir), pending.get("round"), phase, attempt)
+        if relocation is not None:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE})
+            return {"ok": False, "reason": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
+                    "detail": RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL}
     # The state-hash echo is the anti-stale/fork fence — REQUIRED (#507 v13). A first-time fold with
     # no hash is refused (a missing hash must never fold fail-open); exact replays are already
     # returned as duplicates above, before this point.
@@ -7043,17 +7053,6 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
         return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
-
-    if (not _via_advance and isinstance(phase, str) and phase.startswith("dispatch-")):
-        # axis: a hand submit of a dispatch phase emitted before the move is refused; the advance-driven fold is not
-        relocation = _relocation_after_emission(
-            read_journal(session_dir), pending.get("round"), phase, attempt)
-        if relocation is not None:
-            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
-                                          "round": pending.get("round"), "attempt": attempt,
-                                          "outcome": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE})
-            return {"ok": False, "reason": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
-                    "detail": RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL}
 
     # #845: the panel seat-key invariant, at the chokepoint. A `seats` map keyed by findings-file
     # stems instead of `payload.dimensions` submits `ok` today and fails phases later with empty

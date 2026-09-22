@@ -588,12 +588,18 @@ def test_relocation_fence_not_fired_when_nothing_new_to_ingest(tmp_path, capsys)
 
 
 def test_relocation_fence_hand_submit_refused_after_relocate(tmp_path, capsys):
-    _repo, _sess, session_dir = _stale_session(tmp_path, capsys)
+    repo = M._mobility_repo(tmp_path)
+    sess = M._mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    ok, state = RD.load_state(session_dir)
+    pre_relocation_hash = RD.state_hash(state)
+    M._relocate(session_dir, repo["root_b"], capsys)
     state_before = M._read_bytes(os.path.join(session_dir, RD.STATE_FILE))
     ok, state = RD.load_state(session_dir)
     pend = state["pending"]
+    assert pre_relocation_hash != RD.state_hash(state)
     out = RD.cmd_submit(session_dir, pend["phase"], pend["attempt"],
-                        RD.state_hash(state), _panel_hand_artifact(session_dir))
+                        pre_relocation_hash, _panel_hand_artifact(session_dir))
     assert out["ok"] is False
     assert out["reason"] == RD.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
     assert any(r.get("outcome") == RD.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
