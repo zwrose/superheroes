@@ -272,38 +272,21 @@ def seat_map_unjudgeable(state):
 def _native_in_session_seats(state, journal):
     if not isinstance(journal, list):
         return []
-    default_round = str(state.get("round") or "1")
-    native = []
-    seen = set()
+    disclosed = set()
     for event in journal:
         if event.get("outcome") != "recorded":
             continue
         seat = event.get("seat")
-        if not isinstance(seat, str) or not seat or seat in seen:
+        if not isinstance(seat, str) or not seat:
             continue
-        if event.get("executionEvidence") is not None:
+        transport = event.get(session_contract.SEAT_TRANSPORT_KEY)
+        if transport in session_contract.SEAT_TRANSPORTS_DISCLOSED:
+            disclosed.add(seat)
+        elif transport in session_contract.SEAT_TRANSPORTS:
             continue
-        event_round = event.get("round")
-        round_label = str(event_round) if event_round is not None else default_round
-        vendor = event.get("vendor")
-        if isinstance(vendor, str) and vendor.strip():
-            vendor = vendor.strip()
         else:
-            vendor = None
-            if event.get("phase") in (None, session_contract.PANEL_PHASE):
-                governing = seat_map_receipts.round_governing_map(state, round_label)
-                map_seats = governing.get("seats") if isinstance(governing, dict) else None
-                if not isinstance(map_seats, dict):
-                    map_seats = {}
-                cfg = map_seats.get(seat)
-                if isinstance(cfg, dict):
-                    panel_vendor = cfg.get("vendor")
-                    if isinstance(panel_vendor, str) and panel_vendor.strip():
-                        vendor = panel_vendor.strip()
-        if vendor == "claude":
-            native.append(seat)
-            seen.add(seat)
-    return sorted(native)
+            disclosed.add(seat)
+    return sorted(disclosed)
 
 
 def build_degraded_prose(state, form, journal=None):
@@ -568,8 +551,9 @@ def build_degraded_prose(state, form, journal=None):
     native_seats = _native_in_session_seats(state, journal)
     if native_seats:
         degraded_out.append(
-            "unprobed native seat(s) %s: native in-session seats run on the host model and are "
-            "declared live, never probed — their engagement rests on the seat's own record"
+            "unprobed native seat(s) %s: seats with no runner execution record — run in-session on "
+            "the host model, fallen open to it, or landed by hand — are declared live, never "
+            "probed; their engagement rests on the seat's own record"
             % ", ".join(native_seats))
     return degraded_out, skipped_blockers
 

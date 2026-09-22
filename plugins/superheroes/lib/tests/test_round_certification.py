@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import sys
@@ -8,6 +9,7 @@ import model_registry
 import pytest
 import record_paths
 import round_driver as RD
+import round_records
 
 import round_certification as RC
 import session_contract
@@ -278,6 +280,120 @@ def test_receipt_seat_model_from_execution_evidence_not_seat_map(tmp_path):
     row = next(item for item in receipt["seats"] if item["seat"] == seat)
     assert row["model"] == "gpt-5.6-sol"
     assert all(item.get("model") != "gpt-6-astra" for item in receipt["seats"])
+
+
+def _integration_helpers():
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "test_round_driver_integration",
+        os.path.join(here, "test_round_driver_integration.py"),
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _driver_panel_recorded_rows(tmp_path, native_seat, runner_seat):
+    """Two panel seats recorded through the real driver path with distinct transports."""
+    tdi = _integration_helpers()
+    import round_adapters
+
+    session_dir, gitdir, head_path = tdi._bootstrap(tmp_path, name="driver-native-boundary")
+    tdi._drive_to_phase(
+        session_dir, gitdir, [tdi._blocking_finding("missing bounds guard", 2)],
+        head_path, RC.PANEL_PHASE,
+    )
+    state = tdi._state(session_dir)
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    assert reason is None
+    slots = tdi._slots_of(roster)
+    tdi._write_dispatch_manifest(session_dir, pend, slots, tdi._auditor_vendor_for(state))
+    store_specs = []
+    stored_by_seat = {}
+    for seat, occurrence in slots:
+        if seat not in (native_seat, runner_seat):
+            continue
+        payload = tdi._payload_for(session_dir, state, pend, seat, [], head_path)
+        if seat == runner_seat:
+            order_path = round_records.order_prompt_path(
+                session_dir, pend["round"], pend["phase"],
+                round_records.storage_key(seat, occurrence), pend["attempt"],
+            )
+            run_dir = tdi._execution_run_dir(tmp_path, order_path, [])
+            tdi._dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
+            out = RD.cmd_record_result(
+                session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
+        else:
+            tdi._land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+            out = RD.cmd_record_result(session_dir, seat, occurrence=occurrence)
+        assert out["ok"], out
+        stored, err = round_records.read_json(out["storePath"])
+        assert err is None
+        if seat == native_seat:
+            evidence = stored.get("executionEvidence")
+            if isinstance(evidence, dict):
+                observation = evidence.get("observation")
+                if isinstance(observation, dict):
+                    stored = dict(stored)
+                    stored["executionEvidence"] = dict(evidence)
+                    stored["executionEvidence"]["observation"] = dict(observation)
+                    stored["executionEvidence"]["observation"]["read"] = "engaged"
+                    stored["executionEvidence"]["observation"]["telemetry"] = "tool-calls"
+                    stored["executionEvidence"]["observation"]["toolCalls"] = 1
+                    stored["envelopeSha256"] = round_records.envelope_sha256(
+                        stored.get("payload"), stored.get("executionEvidence"))
+        stored_by_seat[seat] = stored
+        store_specs.append({"seat": seat, "envelope": stored})
+    journal = RD.read_journal(session_dir)
+    recorded = {
+        row["seat"]: row
+        for row in journal
+        if row.get("outcome") == "recorded" and isinstance(row.get("seat"), str)
+    }
+    native_row = dict(recorded[native_seat])
+    native_row.update(RD._journal_stored_revision(stored_by_seat[native_seat]))
+    runner_row = dict(recorded[runner_seat])
+    runner_row.update(RD._journal_stored_revision(stored_by_seat[runner_seat]))
+    return native_row, runner_row, store_specs
+
+
+def test_unprobed_native_seat_disclosure_at_receipt_boundary(tmp_path):
+    native_seat = "architecture-reviewer"
+    runner_seat = "code-reviewer"
+    native_row, runner_row, envelopes = _driver_panel_recorded_rows(
+        tmp_path, native_seat, runner_seat,
+    )
+    assert native_row[session_contract.SEAT_TRANSPORT_KEY] in (
+        session_contract.SEAT_TRANSPORTS_DISCLOSED)
+    assert runner_row[session_contract.SEAT_TRANSPORT_KEY] == session_contract.SEAT_TRANSPORT_RUNNER
+    runner_row = dict(runner_row)
+    runner_row["headSha"] = HEAD
+    session_dir = write_certifiable_session(
+        tmp_path,
+        name="cert-native-boundary",
+        journal_lines=[runner_row, native_row],
+        envelopes=envelopes,
+    )
+    state = json.load(open(os.path.join(session_dir, RC.STATE_FILE), encoding="utf-8"))
+    disclosure_line = (
+        "unprobed native seat(s) %s: seats with no runner execution record — run in-session on "
+        "the host model, fallen open to it, or landed by hand — are declared live, never "
+        "probed; their engagement rests on the seat's own record"
+    )
+    cert_receipt, refusal = RC.certify(session_dir)
+    assert refusal is None, refusal
+    degraded = cert_receipt.get("degraded") or []
+    assert any(disclosure_line % native_seat in line for line in degraded)
+    assert not any(
+        line.startswith("unprobed native seat(s) %s" % runner_seat) for line in degraded
+    )
+    driver_receipt = RD.build_receipt(state, session_dir)
+    driver_degraded = driver_receipt.get("degraded") or []
+    assert any(disclosure_line % native_seat in line for line in driver_degraded)
+    assert not any(
+        line.startswith("unprobed native seat(s) %s" % runner_seat) for line in driver_degraded
+    )
 
 
 def test_hand_landed_seat_receipt_model_null(tmp_path):

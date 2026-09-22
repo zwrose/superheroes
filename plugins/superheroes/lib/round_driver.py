@@ -6028,21 +6028,20 @@ def _disclose_order_vendor_provenance_gaps(state, gaps):
     _record_round(state, "orderVendorProvenanceGaps", merged)
 
 
-def _journal_recorded_vendor_fields(state, session_dir, phase, seat, occurrence):
-    """Resolved dispatch vendor for a recorded slot — stamped on journal events."""
-    cfg = state.get("config") or {}
-    pending_payload = (
-        (state.get("pending") or {}).get("payload")
-        if isinstance(state.get("pending"), dict) else {}
-    )
-    repo_root = (
-        cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot") or os.getcwd()
-    )
-    row = _seat_transport_row(state, phase, seat, occurrence, cfg, pending_payload, repo_root)
-    vendor = row.get("vendor")
-    if isinstance(vendor, str) and vendor.strip():
-        return {"vendor": vendor.strip()}
-    return {}
+def _journal_transport_fields(envelope):
+    """Transport derived once from a stored seat envelope — the journal chokepoint."""
+    if not isinstance(envelope, dict):
+        return {}
+    phase = envelope.get("phase")
+    provenance = envelope.get("provenance")
+    if (phase == P_FIXER
+            or provenance == round_records.PROVENANCE_ORCHESTRATOR_FULFILLED):
+        return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_ORCHESTRATOR}
+    if provenance == round_records.PROVENANCE_HAND_LANDED:
+        return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_HAND_LANDED}
+    if _journal_execution_evidence_fields(envelope.get("executionEvidence")) is not None:
+        return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_RUNNER}
+    return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_NATIVE}
 
 
 def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root,
@@ -7033,6 +7032,7 @@ def _journal_stored_revision(envelope):
         fields["provenance"] = None
         fields["envelopeSha256"] = None
         fields["executionEvidencePresent"] = False
+    fields.update(_journal_transport_fields(envelope))
     return fields
 
 
@@ -7206,15 +7206,11 @@ def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurren
         return None, why
     journal_entry = None
     if cmd is not None:
-        ok, loaded = load_state(session_dir)
-        vendor_fields = (
-            _journal_recorded_vendor_fields(loaded, session_dir, phase, seat_key, occurrence)
-            if ok and loaded is not None else {}
-        )
+        transport_fields = _journal_transport_fields(stored)
         journal_entry = _journal_entry_for_commit(
             session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence, headDiffRepaired=True,
-            **vendor_fields,
+            **transport_fields,
             **_journal_addressing_fields(expect_round, expect_phase),
             **_journal_identity_fields(phase, seat_key, occurrence, attempt))
     try:
@@ -7501,7 +7497,6 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
         seat=seat, occurrence=occurrence, **_journal_stored_revision(envelope),
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
-        **_journal_recorded_vendor_fields(state, session_dir, phase, seat, occurrence),
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     try:
@@ -7635,7 +7630,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                 journal_entry = _journal_entry_for_commit(
                     session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                     seat=seat, occurrence=occurrence,
-                    **_journal_recorded_vendor_fields(state, session_dir, phase, seat, occurrence),
+                    **_journal_transport_fields(stored),
                     **_journal_addressing_fields(expect_round, expect_phase),
                     **_journal_identity_fields(phase, seat, occurrence, attempt))
                 try:
@@ -7657,8 +7652,6 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                 revision_fields = {"payloadSha256": payload_sha}
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, **revision_fields,
-                           **_journal_recorded_vendor_fields(state, session_dir, phase, seat,
-                                                             occurrence),
                            **_journal_addressing_fields(expect_round, expect_phase),
                            **_journal_identity_fields(phase, seat, occurrence, attempt))
         recorded.append(_slot_label(seat, occurrence))
@@ -8372,7 +8365,6 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
             session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence,
             **_journal_stored_revision(envelope), superseded=False,
-            **_journal_recorded_vendor_fields(state, session_dir, phase, seat_key, occurrence),
             **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
     }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
@@ -8493,15 +8485,10 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
                 stored_envelope, read_err = round_records.read_json(spath)
                 if read_err is None and isinstance(stored_envelope, dict):
                     revision_fields = _journal_stored_revision(stored_envelope)
-        vendor_fields = {}
-        if slot is not None:
-            vendor_fields = _journal_recorded_vendor_fields(
-                state, session_dir, phase, slot[0], slot[1])
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
                        attempt=entry.get("attempt"), seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,
-                       reappended=True, recordIdentity=ident, **revision_fields,
-                       **vendor_fields)
+                       reappended=True, recordIdentity=ident, **revision_fields)
     orphans = rec.get("journalOrphan") or []
     if orphans:
         seats = sorted(set(_seat_for_record_identity(session_dir, ident) or str(ident)

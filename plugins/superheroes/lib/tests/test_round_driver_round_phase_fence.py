@@ -18,6 +18,7 @@ if _LIB not in sys.path:
 import round_adapters  # noqa: E402
 import round_driver  # noqa: E402
 import round_records  # noqa: E402
+import session_contract  # noqa: E402
 
 _SPEC = importlib.util.spec_from_file_location(
     "test_round_driver_integration",
@@ -394,20 +395,69 @@ def test_journal_addressed_true_when_round_phase_echoed(tmp_path):
     assert entry["addressed"] is True
 
 
-def test_record_result_journal_stamps_slot_vendor(tmp_path):
+def test_record_result_journal_stamps_transport(tmp_path):
     session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
     state = _state(session_dir)
     _land(session_dir, state, pend, tid, _audit_payload(tid), occurrence=0)
     out = round_driver.cmd_record_result(session_dir, tid, attempt=pend["attempt"])
     assert out["ok"] is True, out
     entry = _last_journal_recorded(session_dir, "record-result")
-    cfg = state.get("config") or {}
-    pending_payload = (state.get("pending") or {}).get("payload") or {}
-    repo_root = cfg.get("repoRoot") or os.getcwd()
-    expected = round_driver._seat_transport_row(
-        state, pend["phase"], tid, 0, cfg, pending_payload, repo_root,
-    )
-    assert entry.get("vendor") == expected["vendor"]
+    assert entry.get(session_contract.SEAT_TRANSPORT_KEY) == session_contract.SEAT_TRANSPORT_HAND_LANDED
+    assert "vendor" not in entry
+
+
+@pytest.mark.parametrize(
+    "envelope,expected",
+    [
+        (
+            {"phase": P_FIXER, "provenance": round_records.PROVENANCE_DISPATCH_OBSERVED},
+            session_contract.SEAT_TRANSPORT_ORCHESTRATOR,
+        ),
+        (
+            {
+                "phase": round_driver.P_PANEL,
+                "provenance": round_records.PROVENANCE_ORCHESTRATOR_FULFILLED,
+            },
+            session_contract.SEAT_TRANSPORT_ORCHESTRATOR,
+        ),
+        (
+            {"phase": round_driver.P_PANEL, "provenance": round_records.PROVENANCE_HAND_LANDED},
+            session_contract.SEAT_TRANSPORT_HAND_LANDED,
+        ),
+        (
+            {
+                "phase": round_driver.P_PANEL,
+                "provenance": round_records.PROVENANCE_DISPATCH_OBSERVED,
+                "executionEvidence": {
+                    field: "x"
+                    for field in round_records.EXECUTION_EVIDENCE_FIELDS
+                },
+            },
+            session_contract.SEAT_TRANSPORT_RUNNER,
+        ),
+        (
+            {
+                "phase": round_driver.P_PANEL,
+                "provenance": round_records.PROVENANCE_DISPATCH_OBSERVED,
+                "executionEvidence": {
+                    field: "x"
+                    for field in round_records.EXECUTION_EVIDENCE_FIELDS
+                    if field != "observation"
+                },
+            },
+            session_contract.SEAT_TRANSPORT_NATIVE,
+        ),
+        (
+            {"phase": round_driver.P_PANEL, "provenance": round_records.PROVENANCE_DISPATCH_OBSERVED},
+            session_contract.SEAT_TRANSPORT_NATIVE,
+        ),
+    ],
+    ids=["fixer-phase", "orchestrator-provenance", "hand-landed", "runner", "incomplete-evidence",
+         "dispatch-no-evidence"],
+)
+def test_journal_transport_fields_derivations(envelope, expected):
+    stamped = round_driver._journal_transport_fields(envelope)
+    assert stamped == {session_contract.SEAT_TRANSPORT_KEY: expected}
 
 
 def test_journal_addressed_false_when_addressing_omitted(tmp_path):
