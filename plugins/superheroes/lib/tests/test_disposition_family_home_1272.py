@@ -23,6 +23,13 @@ _EXCLUDED_FROM_POPULATION = frozenset({
     "guardian_ledger.py", "guardian_report.py", "package_read_audit.py",
 })
 
+# Layer 2e gate-policy and owner-submit paths test followUp key presence before delegating shape
+# to session_contract.follow_up_shape_fault — not disposition-family membership reads.
+_FOLLOW_UP_PRESENCE_CHOKEPOINTS = frozenset({
+    "review_gate_policy.py",
+    "round_driver.py",
+})
+
 _SESSION_CONTRACT_IMPORT_MARKERS = (
     "import session_contract",
     "from session_contract",
@@ -207,6 +214,14 @@ def test_disposition_family_single_home_census():
         except SyntaxError as exc:
             raise AssertionError("%s failed to parse: %s" % (name, exc)) from exc
         violations.extend(flagged)
+
+    violations = [
+        v for v in violations
+        if not any(
+            v.startswith(module + ":") and "followUp" in v
+            for module in _FOLLOW_UP_PRESENCE_CHOKEPOINTS
+        )
+    ]
 
     assert not violations, "disposition-family member presence outside session_contract:\n" + "\n".join(
         sorted(violations)

@@ -162,13 +162,48 @@ def test_e7_kept_id_member_self_no_fault(tmp_path):
 @pytest.mark.parametrize("artifact", [
     {"grouping": None},
     {"grouping": []},
-    {},
-], ids=["none", "empty-list", "absent"])
+], ids=["none", "empty-list"])
 def test_e8_empty_grouping_no_fault(tmp_path, artifact):
-    # axis: e8 — grouping absent or empty → no fault (unchanged)
+    # axis: e8 — grouping null or empty list → no fault (unchanged)
     d, n = _at(tmp_path, RD.P_SYNTHESIS)
     out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)
     assert out["ok"] is True
+
+
+def test_e8b_missing_grouping_key_refused_at_submit(tmp_path):
+    # axis: e8b — artifact without grouping key refused at payload contract
+    d, n = _at(tmp_path, RD.P_SYNTHESIS)
+    before = _state_bytes(d)
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], {})
+    assert out["ok"] is False
+    assert "grouping" in out["reason"]
+    assert _state_bytes(d) == before
+
+
+def test_e9_synthesis_non_object_artifact_refused_at_submit(tmp_path):
+    # axis: e9 — non-object synthesis artifact refused before staged-id lookup
+    d, n = _at(tmp_path, RD.P_SYNTHESIS)
+    before = _state_bytes(d)
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], [])
+    assert out["ok"] is False
+    assert "synthesis artifact is list" in out["reason"]
+    assert _state_bytes(d) == before
+    journal = RD.read_journal(d)
+    assert journal[-1].get("outcome") == "synthesis-results-shape"
+
+
+def test_e10_synthesis_non_string_member_refused_at_submit(tmp_path):
+    # axis: e10 — non-string member_ids entry refused before staged-id lookup
+    d, n = _at(tmp_path, RD.P_SYNTHESIS)
+    before = _state_bytes(d)
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"],
+        {"grouping": [{"member_ids": [{}]}]})
+    assert out["ok"] is False
+    assert "member_ids[0]" in out["reason"]
+    assert _state_bytes(d) == before
+    journal = RD.read_journal(d)
+    assert journal[-1].get("outcome") == "synthesis-results-shape"
 
 
 def test_author_justified_drop_unresolvable_id_parks_at_fold():

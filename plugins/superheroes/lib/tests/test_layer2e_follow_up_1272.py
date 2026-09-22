@@ -149,9 +149,19 @@ def test_rule_1_not_dict():
     assert fault == (None, "out-of-scope disposition lacks named follow-up item")
 
 
-def test_rule_2_missing_item():
-    # axis: rule 2 — item required
+def test_rule_2_item_absent_passes():
+    # axis: rule 2 — item optional when absent
     fault = SC.follow_up_shape_fault({"revisitTrigger": "later", "classClosure": "none"})
+    assert fault is None
+
+
+def test_rule_2b_present_empty_item_refused():
+    # axis: rule 2b — present-but-empty item refused
+    fault = SC.follow_up_shape_fault({
+        "item": "",
+        "revisitTrigger": "later",
+        "classClosure": "none",
+    })
     assert fault == ("missing-follow-up-item", "out-of-scope follow-up lacks named item")
 
 
@@ -197,22 +207,29 @@ def test_e1_judgment_skip_well_formed_follow_up_folds(tmp_path):
     assert entry["followUp"] == _WELL_FORMED
 
 
-def test_e2_judgment_skip_missing_item_refused_at_submit(tmp_path):
-    # axis: e2 — missing item refused before fold; corrected resubmit folds
+def test_e2_judgment_skip_item_less_follow_up_folds_at_submit(tmp_path):
+    # axis: e2 — item-less followUp with trigger and closure folds
+    session_dir = _parked_judgment_session(tmp_path)
+    artifact = {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "product choice",
+         "followUp": {"revisitTrigger": "later", "classClosure": "none"}}]}
+    out = _pending_submit(session_dir, artifact)
+    assert out["ok"] is True, out
+    entry = _ledger_by_key(_load_state(session_dir))[_TRADEOFF_ID]
+    assert entry["followUp"] == {"revisitTrigger": "later", "classClosure": "none"}
+
+
+def test_e2b_judgment_skip_present_empty_item_refused_at_submit(tmp_path):
+    # axis: e2b — present-but-empty item refused before fold
     session_dir = _parked_judgment_session(tmp_path)
     before = _state_bytes(session_dir)
     bad = {"dispositions": [
         {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "product choice",
-         "followUp": {"revisitTrigger": "later", "classClosure": "none"}}]}
+         "followUp": {"item": "", "revisitTrigger": "later", "classClosure": "none"}}]}
     out = _pending_submit(session_dir, bad)
     assert out["ok"] is False, out
     assert "follow-up-malformed" in out["reason"]
     assert _state_bytes(session_dir) == before
-    good = {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "product choice",
-         "followUp": dict(_WELL_FORMED)}]}
-    out = _pending_submit(session_dir, good)
-    assert out["ok"] is True, out
 
 
 def test_e3_judgment_skip_documented_trigger_refused(tmp_path):
@@ -281,11 +298,25 @@ def test_e8_stall_hold_with_follow_up_not_checked(tmp_path):
     assert _load_state(session_dir)["terminal"] == "held"
 
 
-def test_e9_item_less_persisted_follow_up_refuses_certification(tmp_path):
-    # axis: e9 — resumed ledger without item refused at certification
+def test_e9_item_less_persisted_follow_up_certifies(tmp_path):
+    # axis: e9 — resumed ledger without item certifies when trigger and closure present
     finding = {"file": "o.py", "line": 1, "title": "old", "severity": "Important",
                "disposition": "out-of-scope", "outOfScopeReason": "deferred",
                "followUp": {"revisitTrigger": "later", "classClosure": "none"}}
+    state = RD.new_state(_cfg(baseGuard=RC.BASE_GUARD_CHECKED))
+    state["findings"] = [finding]
+    state["dispositionLedgerOwner"] = "ledger"
+    state["dispositionLedger"] = [dict(finding, dispositionRound=1)]
+    ctx = _cert_ctx(state, tmp_path)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is None
+
+
+def test_e9b_present_empty_item_refused_at_certification(tmp_path):
+    # axis: e9b — present-but-empty item refused at certification
+    finding = {"file": "o.py", "line": 1, "title": "old", "severity": "Important",
+               "disposition": "out-of-scope", "outOfScopeReason": "deferred",
+               "followUp": {"item": "", "revisitTrigger": "later", "classClosure": "none"}}
     state = RD.new_state(_cfg(baseGuard=RC.BASE_GUARD_CHECKED))
     state["findings"] = [finding]
     state["dispositionLedgerOwner"] = "ledger"

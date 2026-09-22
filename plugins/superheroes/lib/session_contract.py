@@ -126,9 +126,10 @@ def follow_up_shape_fault(follow_up):
     """None when followUp is fully shaped; otherwise (binding_failure, detail)."""
     if not isinstance(follow_up, dict):
         return (None, "out-of-scope disposition lacks named follow-up item")
-    item = follow_up.get("item")
-    if not isinstance(item, str) or not item.strip():
-        return ("missing-follow-up-item", "out-of-scope follow-up lacks named item")
+    if "item" in follow_up:
+        item = follow_up.get("item")
+        if not isinstance(item, str) or not item.strip():
+            return ("missing-follow-up-item", "out-of-scope follow-up lacks named item")
     trigger = follow_up.get("revisitTrigger")
     if not isinstance(trigger, str) or not trigger.strip():
         return ("missing-revisit-trigger", "out-of-scope follow-up lacks revisit trigger")

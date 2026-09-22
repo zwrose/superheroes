@@ -3836,6 +3836,25 @@ def _audit_result_entry_fault(entry, index, target_ids):
     return None
 
 
+def synthesis_results_fault(artifact):
+    """None when a synthesis artifact satisfies the declared payload contract; otherwise a reason
+    string naming the offending field.
+
+    `grouping: null` (no merging proposed) is a real answer and is not a fault — only a missing,
+    mis-keyed, or mis-shaped `grouping` is refused at the submit chokepoint."""
+    if not isinstance(artifact, dict):
+        return ("synthesis artifact is %s, not a grouping object; expected {\"grouping\": ...}; "
+                "resubmit the same phase/attempt/state-hash with a corrected artifact"
+                % type(artifact).__name__)
+    if "grouping" not in artifact:
+        return ("synthesis artifact carries no `grouping` key; expected {\"grouping\": ...}; "
+                "resubmit the same phase/attempt/state-hash with a corrected artifact")
+    fault = payload_contracts.payload_fault(payload_contracts.P_SYNTHESIS, artifact, "hand-submit")
+    if fault is not None:
+        return fault
+    return None
+
+
 def verifier_results_fault(artifact):
     """None when a verifiers artifact carries a RECOGNIZED `verdicts` list; otherwise a reason string.
 
@@ -7270,6 +7289,12 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "outcome": "staged-id-unresolvable"})
             return {"ok": False, "reason": fault}
     if phase == P_SYNTHESIS:
+        fault = synthesis_results_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "synthesis-results-shape"})
+            return {"ok": False, "reason": fault}
         fault = synthesis_staged_id_fault(state, artifact)
         if fault:
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
