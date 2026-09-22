@@ -1537,16 +1537,7 @@ def _collect_seats(ctx):
                 engine_model = evidence.get("engineModel")
                 if isinstance(engine_model, str) and engine_model:
                     model = engine_model
-        rows.append({
-            "seat": identity["seat"],
-            "phase": identity["phase"],
-            "round": identity["round"],
-            "attempt": identity["attempt"],
-            "occurrence": identity["occurrence"],
-            "provenance": identity["provenance"],
-            "citedHead": cited_head,
-            "model": model,
-        })
+        rows.append({**identity, "citedHead": cited_head, "model": model})
     return rows
 
 

@@ -273,7 +273,6 @@ def latest_recorded_events(journal):
     if not isinstance(journal, list):
         return []
     latest = {}
-    key_order = []
     for event in journal:
         if not isinstance(event, dict) or event.get("outcome") != "recorded":
             continue
@@ -288,13 +287,10 @@ def latest_recorded_events(journal):
                 seat = ident.get("seat")
                 phase = ident.get("phase", phase)
                 attempt = ident.get("attempt", attempt)
-                provenance = provenance or event.get("provenance")
         if not isinstance(seat, str) or not seat:
             continue
         occurrence = event.get("occurrence", 0)
         key = (phase, rnd, attempt, seat, occurrence)
-        if key not in latest:
-            key_order.append(key)
         identity = {
             "seat": seat,
             "phase": phase,
@@ -304,7 +300,7 @@ def latest_recorded_events(journal):
             "provenance": provenance,
         }
         latest[key] = (identity, event)
-    return [latest[key] for key in key_order]
+    return list(latest.values())
 
 
 def _is_missing_seat_record(event):
