@@ -84,7 +84,11 @@ the steer channel.
 `gpt-6-astra` is probe-pending in the registry — a consumer meets:
 
 - the `registration-probe` role (the only role whose allowlist admits Astra while it is probe-pending);
-- pin refusal tokens `pin-probe-pending` and `pin-role-not-eligible`;
+- `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
+  wave is re-attempted with a different run dir);
+- pin refusal tokens `pin-probe-pending`, `pin-role-not-eligible`, and `pin-not-on-allowlist` (a
+  codex role pin must resolve on its role's own codex allowlist — Terra is refused on
+  `reviewer-deep`, and every codex `pilot` pin is refused);
 - `seat_map compose` flags `--host-model` and `--implementation-engine` and degradations
   `host-model-unknown`, `role-pin-not-live`, `role-pin-not-honorable`;
 - `SUPERHEROES_HOST_MODEL`, exported by the session-start hook from the host payload (empty when

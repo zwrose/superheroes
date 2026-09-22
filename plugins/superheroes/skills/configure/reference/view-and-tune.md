@@ -179,7 +179,10 @@ action that owns it, leaving the rest of the calibration untouched:
   `reviewer`, `reviewer-deep`, `code-fixer`, `implementer`, and `pilot`; valid
   model IDs are `gpt-5.6-terra`, `gpt-5.6-sol`, and `gpt-6-astra` (probe-pending — refused
   `pin-probe-pending` while its registry row is probe-pending; it is eligible only for
-  `reviewer-deep`, and pinning it on any other role is refused `pin-role-not-eligible`).
+  `reviewer-deep`, and pinning it on any other role is refused `pin-role-not-eligible`). A pin must
+  also resolve on its role's own codex allowlist, else it is refused `pin-not-on-allowlist` (Terra
+  on `reviewer-deep`; any model on `pilot`, which has no codex cell — it remains a valid role key
+  but admits no codex model).
   Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol; an unpinned project never
   dispatches Astra and Sol stays the default deep cell. A pinned model runs at the effort its role's
   registry allowlist resolves for it — Sol at `high` on `reviewer`, `code-fixer` and `implementer`
@@ -207,7 +210,8 @@ action that owns it, leaving the rest of the calibration untouched:
   Cursor ignores it. For `reviewer` and `reviewer-deep`, the pin now reaches the review panel's
   codex seat — it no longer only changes the calibration readout; when the pinned cell is not live
   the seat falls back to the default cell with a `role-pin-not-live` degradation, and a pin the
-  tier's allowlist does not admit falls back with `role-pin-not-honorable`. Per-run preflight model
+  tier's allowlist does not admit falls back with `role-pin-not-honorable` carrying the refusal's
+  reason. Per-run preflight model
   overrides have highest precedence, followed by this persistent pin, then the shared-tier GPT-5.6
   mapping.
 

@@ -1201,7 +1201,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** The probe-pending registration gate: a new model is dispatchable only on the
   `registration-probe` role while its row is probe-pending; `model_registry.py`'s
-  `registration` field, the `ladder()` / `codex_pin_verdict` filters enforce it.
+  `registration` field, the `ladder()` / `codex_pin_verdict` filters, and
+  `conformance_probe astra-probe` enforce it.
 - **Condition.** Retires when no registry row carries `registration: "probe-pending"`; re-arms only
   if a future model is registered that way.
 - **Last demonstrated benefit.** unknown.
