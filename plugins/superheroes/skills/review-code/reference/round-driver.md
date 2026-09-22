@@ -616,6 +616,9 @@ or recorded but not yet folded — must fold the fixer in the old checkout befor
 | `relocate-inflight-fixer` | the session has a pending `dispatch-fixer` phase that must be folded first |
 | `relocate-locked` | another process holds the session lock |
 
+Malformed or unreadable relocation evidence in the journal refuses
+`relocation-evidence-indeterminate` rather than treating the move as absent or crashing.
+
 **re-emit** acts only on the pending `dispatch-*` order. An order is stale when a `relocated` row
 whose old and new roots differ comes after that attempt's last `orders-emitted` row (an attempt with
 no `orders-emitted` row counts as stale if any such move exists). The driver opens the next attempt

@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -547,13 +548,13 @@ def test_relocation_fence_refuses_late_landing_at_sweep_decision(tmp_path, capsy
     repo, sess, session_dir = _stale_session(tmp_path, capsys)
     state, pend, roster = _panel_roster(session_dir)
     seat, occurrence = _first_seat(roster)
-    real_scan = RD._relocation_fence_unrecorded_slot
+    real_sweep = RR.sweep_landing
 
-    def _scan_then_land(*args, **kwargs):
+    def _sweep_then_land(*args, **kwargs):
         _land_panel_seat(session_dir, state, pend, seat, occurrence, sess["diff_path"])
-        return real_scan(*args, **kwargs)
+        return real_sweep(*args, **kwargs)
 
-    monkeypatch.setattr(RD, "_relocation_fence_unrecorded_slot", _scan_then_land)
+    monkeypatch.setattr(RR, "sweep_landing", _sweep_then_land)
     out = RD.cmd_record_result(session_dir, sweep=True)
     assert out["ok"] is False
     assert out["reason"] == RD.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
@@ -636,6 +637,188 @@ def test_relocation_after_emission_predicate(tmp_path):
     assert RD._relocation_after_emission(between, rnd, phase, 1) is None
     after = [emit0, moved]
     assert RD._relocation_after_emission(after, rnd, phase, attempt) == moved
+
+
+def _seat_store_tree(session_dir):
+    snap = {}
+    round_root = os.path.join(session_dir, "round-1", "seats")
+    if not os.path.isdir(round_root):
+        return snap
+    for phase in os.listdir(round_root):
+        pdir = os.path.join(round_root, phase)
+        if not os.path.isdir(pdir):
+            continue
+        for name in os.listdir(pdir):
+            path = os.path.join(pdir, name)
+            if os.path.isfile(path):
+                snap[os.path.relpath(path, session_dir)] = M._read_bytes(path)
+    return snap
+
+
+def _relocated_with_landing(tmp_path, capsys):
+    repo = M._mobility_repo(tmp_path)
+    sess = M._mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    ok, state = RD.load_state(session_dir)
+    pre_relocation_hash = RD.state_hash(state)
+    M._relocate(session_dir, repo["root_b"], capsys)
+    state, pend, roster = _panel_roster(session_dir)
+    seat, occurrence = _first_seat(roster)
+    _land_panel_seat(session_dir, state, pend, seat, occurrence, sess["diff_path"])
+    return repo, sess, session_dir, state, pend, roster, seat, occurrence, pre_relocation_hash
+
+
+def _inject_relocation_journal_fault(session_dir, fault_kind, repo):
+    journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
+    if fault_kind == "null":
+        with open(journal_path, "a", encoding="utf-8") as fh:
+            fh.write("null\n")
+    elif fault_kind == "list":
+        with open(journal_path, "a", encoding="utf-8") as fh:
+            fh.write("[]\n")
+    elif fault_kind == "number":
+        with open(journal_path, "a", encoding="utf-8") as fh:
+            fh.write("42\n")
+    elif fault_kind == "string":
+        with open(journal_path, "a", encoding="utf-8") as fh:
+            fh.write('"hello"\n')
+    elif fault_kind == "unparseable":
+        with open(journal_path, "a", encoding="utf-8") as fh:
+            fh.write("{not-json\n")
+    elif fault_kind == "invalid-utf8":
+        with open(journal_path, "ab") as fh:
+            fh.write(b"\xff\n")
+    elif fault_kind == "fault-marker":
+        open(os.path.join(session_dir, RD.JOURNAL_FAULT_FILE), "w", encoding="utf-8").close()
+    elif fault_kind == "bad-relocated-roots":
+        rows = M._journal_rows(session_dir)
+        with open(journal_path, "w", encoding="utf-8") as fh:
+            for row in rows:
+                if row.get("outcome") == "relocated":
+                    row = dict(row, oldRoot=1, newRoot=repo["root_b"])
+                fh.write(json.dumps(row, sort_keys=True) + "\n")
+    else:
+        raise ValueError("unknown fault kind %r" % fault_kind)
+
+
+_RELOCATION_EVIDENCE_CALLERS = (
+    "re-emit",
+    "hand-submit",
+    "record-result",
+    "record-sweep",
+    "advance",
+)
+
+_RELOCATION_EVIDENCE_FAULTS = (
+    "null",
+    "list",
+    "number",
+    "string",
+    "unparseable",
+    "invalid-utf8",
+    "fault-marker",
+    "bad-relocated-roots",
+)
+
+
+@pytest.mark.parametrize("fault_kind", _RELOCATION_EVIDENCE_FAULTS)
+@pytest.mark.parametrize("caller", _RELOCATION_EVIDENCE_CALLERS)
+def test_relocation_evidence_faults_refuse_all_callers(tmp_path, capsys, fault_kind, caller):
+    repo, sess, session_dir, state, pend, roster, seat, occurrence, pre_relocation_hash = (
+        _relocated_with_landing(tmp_path, capsys))
+    _inject_relocation_journal_fault(session_dir, fault_kind, repo)
+    store_before = _seat_store_tree(session_dir)
+    if caller == "re-emit":
+        rc, out = _re_emit(session_dir, capsys)
+        assert rc != 0
+    elif caller == "hand-submit":
+        out = RD.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                            pre_relocation_hash, _panel_hand_artifact(session_dir))
+    elif caller == "record-result":
+        out = RD.cmd_record_result(session_dir, seat, occurrence=occurrence)
+    elif caller == "record-sweep":
+        out = RD.cmd_record_result(session_dir, sweep=True)
+    elif caller == "advance":
+        out = RD.cmd_advance(session_dir)
+    else:
+        raise ValueError(caller)
+    assert out["ok"] is False
+    assert out["reason"] == RD.RELOCATION_EVIDENCE_INDETERMINATE_CAUSE
+    assert _seat_store_tree(session_dir) == store_before
+
+
+def test_read_journal_default_unchanged_on_unparseable_line(tmp_path):
+    session_dir = str(tmp_path / "sess")
+    os.makedirs(session_dir)
+    journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        fh.write('{"cmd":"next","outcome":"ok"}\n')
+        fh.write("{not-json\n")
+        fh.write('{"cmd":"advance","outcome":"ok"}\n')
+    assert RD.read_journal(session_dir) == [
+        {"cmd": "next", "outcome": "ok"},
+        {"cmd": "advance", "outcome": "ok"},
+    ]
+
+
+def test_sweep_landing_fenced_differential(tmp_path, capsys):
+    repo = M._mobility_repo(tmp_path)
+    sess = M._mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    state, pend, roster = _panel_roster(session_dir)
+    slots = list(RR.roster_slots(roster))
+    assert len(slots) >= 2, "panel roster needs at least two seats"
+    (seat_a, occ_a), (seat_b, occ_b) = slots[0], slots[1]
+    _land_panel_seat(session_dir, state, pend, seat_b, occ_b, sess["diff_path"])
+    recorded = RD.cmd_record_result(session_dir, seat_b, occurrence=occ_b)
+    assert recorded["ok"] is True, recorded
+    M._relocate(session_dir, repo["root_b"], capsys)
+    state, pend, roster = _panel_roster(session_dir)
+    _land_panel_seat(session_dir, state, pend, seat_a, occ_a, sess["diff_path"])
+    ldir = RR.landing_dir(session_dir, pend["round"], pend["phase"])
+    stray_name = "stray-seat.a%d.json" % pend["attempt"]
+    stray_path = os.path.join(ldir, stray_name)
+    shutil.copyfile(
+        RR.landing_path(session_dir, pend["round"], pend["phase"],
+                        RR.storage_key(seat_a, occ_a), pend["attempt"]),
+        stray_path,
+    )
+    ok, state = RD.load_state(session_dir)
+    anchor = RD._orders_anchor(state, session_dir, pend["round"], pend["phase"], pend["attempt"])
+    seat_schema = RR.seat_result_schema_for_state_version(state.get("schemaVersion"))
+    unfenced_dir = str(tmp_path / "unfenced")
+    fenced_dir = str(tmp_path / "fenced")
+    store_before = _seat_store_tree(session_dir)
+    shutil.copytree(session_dir, unfenced_dir)
+    shutil.copytree(session_dir, fenced_dir)
+    unfenced = RR.sweep_landing(unfenced_dir, pend["round"], pend["phase"],
+                                current_attempt=pend["attempt"], roster=roster, anchor=anchor,
+                                seat_result_schema=seat_schema, fenced=False)
+    fenced = RR.sweep_landing(fenced_dir, pend["round"], pend["phase"],
+                              current_attempt=pend["attempt"], roster=roster, anchor=anchor,
+                              seat_result_schema=seat_schema, fenced=True)
+    def _would_ingest(result):
+        return result.get("ok") and result.get("reason") not in ("already-stored",)
+
+    for u in unfenced:
+        matches = [f for f in fenced if f.get("storageKey") == u.get("storageKey")
+                   and f.get("reason") == u.get("reason")]
+        if _would_ingest(u):
+            refusal = [f for f in fenced if f.get("storageKey") == u.get("storageKey")]
+            assert len(refusal) == 1
+            assert refusal[0]["ok"] is False
+            assert refusal[0]["reason"] == RR.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
+        elif u.get("reason") == "stale-landing":
+            assert any(f.get("reason") == "stale-landing" for f in fenced)
+        else:
+            assert len(matches) == 1
+            assert matches[0].get("ok") == u.get("ok")
+            assert matches[0].get("reason") == u.get("reason")
+    assert _seat_store_tree(fenced_dir) == store_before
+    out = RD.cmd_record_result(session_dir, sweep=True)
+    assert out["ok"] is False
+    assert out["reason"] == RD.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
+    assert any(r.get("reason") == "stale-landing" for r in fenced)
 
 
 def test_runner_view_record_not_fenced_after_relocate(tmp_path, capsys):
