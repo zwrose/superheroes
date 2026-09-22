@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -247,7 +248,7 @@ def _bootstrap_session_with_repo(tmp_path, repo, head_sha):
     return d
 
 
-def _drive_ceiling_round_two_fixer(tmp_path, cfg, respond, repo, init_head):
+def _drive_ceiling_round_two_fixer(tmp_path, cfg, respond, repo, init_head, *, move_head=True):
     d = _bootstrap_session_with_repo(tmp_path, repo, init_head)
     n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
     assert n["round"] == 1
@@ -260,9 +261,37 @@ def _drive_ceiling_round_two_fixer(tmp_path, cfg, respond, repo, init_head):
     assert ok
     head_a = state["rounds"]["2"].get(SC.VERIFIED_HEAD_FIELD)
     assert head_a
-    head_b = _commit_in_repo(cfg["repoRoot"], "ceiling post-fix head")
-    assert head_b != head_a
+    head_b = head_a
+    if move_head:
+        head_b = _commit_in_repo(cfg["repoRoot"], "ceiling post-fix head")
+        assert head_b != head_a
     return d, n, head_a, head_b
+
+
+# axis: ceiling round reuses the gate when post-fix head matches a prior pass
+def test_t3_ceiling_gate_reused_when_prior_verify_on_same_head(tmp_path):
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo)
+    respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
+    d, n, head_a, _head_b = _drive_ceiling_round_two_fixer(
+        tmp_path, cfg, respond, repo, init_head, move_head=False)
+    s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                      {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]})
+    assert s["ok"], s
+    n3 = RD.cmd_next(d)
+    assert n3["action"] == RD.P_TERMINAL, n3
+    assert n3["payload"]["verdict"] == "halted"
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state["rounds"]["2"]["verifyResult"] == "pass"
+    assert state["rounds"]["2"]["ceilingGateReused"] == head_a
+    assert state["rounds"]["2"][SC.VERIFIED_HEAD_FIELD] == head_a
+    assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
+    verify_nexts = [e for e in RD.read_journal(d)
+                    if e.get("cmd") == "next" and e.get("phase") == RD.P_VERIFY
+                    and e.get("round") == 2]
+    assert len(verify_nexts) == 1
 
 
 # axis: ceiling round runs verify on post-fix head even when concurrent gate already ran
@@ -295,6 +324,33 @@ def test_t3_ceiling_gate_runs_on_post_fix_head_after_prior_verify(tmp_path):
                     if e.get("cmd") == "next" and e.get("phase") == RD.P_VERIFY
                     and e.get("round") == 2]
     assert len(verify_nexts) == 2
+
+
+# axis: unresolvable post-fix head at the ceiling still runs the gate
+def test_t3_ceiling_gate_runs_when_post_fix_head_unresolvable(tmp_path):
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo)
+    respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
+    d, n, head_a, _head_b = _drive_ceiling_round_two_fixer(
+        tmp_path, cfg, respond, repo, init_head)
+    shutil.rmtree(repo)
+    s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                      {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]})
+    assert s["ok"], s
+    n3 = RD.cmd_next(d)
+    assert n3["ok"] and n3["phase"] == RD.P_VERIFY, n3
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state["rounds"]["2"].get("fixFoldHeadRefused")
+    assert "ceilingGateReused" not in state["rounds"]["2"]
+    assert state["rounds"]["2"][SC.VERIFIED_HEAD_FIELD] == head_a
+
+
+def test_t3b_ceiling_gate_reuse_requires_pass():
+    state = {"round": 2, "config": {"maxRoundsAbsolute": 2, "maxRounds": 2},
+             "rounds": {"2": {"verifyResult": "fail", SC.VERIFIED_HEAD_FIELD: "abc" * 13 + "a"}}}
+    assert RD._try_reuse_ceiling_verify_gate(state, state["config"], None) is False
 
 
 # axis: ceiling gate fail on post-fix head halts — never a clean park

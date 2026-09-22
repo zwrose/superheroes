@@ -3796,7 +3796,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     state.pop("_escalatedRung", None)
     state.pop("_fixQueue", None)
     state.pop("_fixBatchIndex", None)
-    _enter_post_fix(state, config)
+    _enter_post_fix(state, config, session_dir=session_dir)
 
 
 _VERIFY_SKIP = ("skipped", "none", "unverified")
@@ -4137,13 +4137,42 @@ def _fold_verify(state, config, artifact, *, resolution):
     _enter_delta_round(state, config)
 
 
-def _enter_post_fix(state, config):
+def _try_reuse_ceiling_verify_gate(state, config, session_dir):
+    """Reuse the round's passing gate at the ceiling when the post-fix head matches.
+
+    A reuse is allowed only when this round already recorded ``verifyResult == "pass"`` and
+    ``verifiedHead`` equals the post-fix head resolved by ``_resolve_fix_fold_head_sha``. Every
+    other case — no prior gate, a non-pass result, a head mismatch, or an unresolvable head —
+    returns False so the ceiling gate runs (fail closed toward running it). On reuse, records
+    ``ceilingGateReused`` and parks ``round-ceiling``."""
+    rnd_key = str(state["round"])
+    rec = (state.get("rounds") or {}).get(rnd_key) or {}
+    if rec.get("verifyResult") != "pass":
+        return False
+    verified_head = rec.get(session_contract.VERIFIED_HEAD_FIELD)
+    if not isinstance(verified_head, str) or not verified_head:
+        return False
+    post_fix_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+    if head_err or not post_fix_head or post_fix_head != verified_head:
+        return False
+    _record_round(state, "ceilingGateReused", post_fix_head)
+    next_round = state["round"] + 1
+    brk = circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config))
+    detail = brk.get("detail") or "round ceiling reached"
+    detail = "%s (ceiling gate reused for post-fix head %s)" % (detail, post_fix_head)
+    _park_round_ceiling(state, detail)
+    return True
+
+
+def _enter_post_fix(state, config, session_dir=None):
     """After the round's last fix-batch slice folds: advance or run the gate at the ceiling."""
     next_round = state["round"] + 1
     if circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config)).get("halt"):
         # The round at the ceiling completes — fix AND gate — before the boundary refuses the next
-        # round. The gate runs on the post-fix head even when the round's gate already ran on an
-        # earlier head; its fold parks.
+        # round. Reuse the gate when it already passed on this post-fix head; otherwise run it on
+        # the post-fix head (including when the round's earlier gate ran on a different head).
+        if _try_reuse_ceiling_verify_gate(state, config, session_dir):
+            return
         state["_verifyThen"] = VERIFY_THEN_CEILING
         state["step"] = P_VERIFY
         return
