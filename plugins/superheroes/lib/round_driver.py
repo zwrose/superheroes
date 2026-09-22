@@ -6539,6 +6539,58 @@ def _relocation_after_emission(journal, rnd, phase, attempt):
     return None
 
 
+def _relocation_fence_unrecorded_slot(session_dir, rnd, phase, attempt, roster):
+    """First roster slot carrying a landing but no store while relocation fence is active."""
+    for seat_key, occurrence in round_records.roster_slots(roster):
+        try:
+            skey = round_records.storage_key(seat_key, occurrence)
+            lpath = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
+            bare_path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+            spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+        except ValueError:
+            continue
+        has_landing = (record_paths.landing_entry_present(lpath)
+                       or record_paths.landing_entry_present(bare_path))
+        if not has_landing:
+            continue
+        present, _present_refusal = round_records._probe_store_entry(spath)
+        if not present:
+            return seat_key, occurrence
+    return None
+
+
+def _relocation_fence_stored_results(session_dir, rnd, phase, attempt, roster):
+    """Report already-stored roster slots without rescanning landings for ingestion."""
+    results = []
+    for seat_key, occurrence in round_records.roster_slots(roster):
+        try:
+            skey = round_records.storage_key(seat_key, occurrence)
+            spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+        except ValueError as exc:
+            results.append({"ok": False, "reason": "bad-argument", "seatKey": seat_key,
+                            "occurrence": occurrence, "message": str(exc)})
+            continue
+        present, present_refusal = round_records._probe_store_entry(spath)
+        if present_refusal is not None:
+            present_refusal.setdefault("seatKey", seat_key)
+            present_refusal.setdefault("storageKey", skey)
+            present_refusal.setdefault("occurrence", occurrence)
+            results.append(present_refusal)
+            continue
+        if not present:
+            continue
+        try:
+            os.stat(spath)
+            results.append({"ok": True, "reason": "already-stored", "seatKey": seat_key,
+                            "storageKey": skey, "storePath": spath, "occurrence": occurrence})
+        except OSError:
+            results.append({"ok": False, "reason": "store-exists", "storePath": spath,
+                            "seatKey": seat_key, "storageKey": skey, "occurrence": occurrence,
+                            "message": ("store entry %r is present but its target does not "
+                                        "resolve" % spath)})
+    return results
+
+
 def _re_emit_recorded_slots(journal, rnd, phase, attempt):
     slots = set()
     for event in journal:
@@ -9355,16 +9407,14 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
         except ValueError:
             continue
+        if relocation_fence is not None:
+            continue
         try:
             bare_path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
         except ValueError:
             bare_path = None
         has_landing = os.path.exists(lpath) or (
             bare_path is not None and os.path.exists(bare_path))
-        if has_landing and not os.path.exists(spath) and relocation_fence is not None:
-            return _refuse_cmd(session_dir, cmd, RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
-                               phase=phase, rnd=rnd, attempt=attempt, seat=seat_key,
-                               detail=RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL)
         if not has_landing or os.path.exists(spath):
             continue
         envelope, _lerr, _ = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
@@ -9377,9 +9427,18 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
     if seat_schema is None:
         return _refuse_cmd(session_dir, cmd, "state-version-unsupported", phase=phase, rnd=rnd,
                            attempt=attempt)
-    results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
-                                          roster=roster, anchor=anchor,
-                                          seat_result_schema=seat_schema)
+    if relocation_fence is not None:
+        blocked = _relocation_fence_unrecorded_slot(session_dir, rnd, phase, attempt, roster)
+        if blocked is not None:
+            seat_key, occurrence = blocked
+            return _refuse_cmd(session_dir, cmd, RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
+                               phase=phase, rnd=rnd, attempt=attempt, seat=seat_key,
+                               detail=RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL)
+        results = _relocation_fence_stored_results(session_dir, rnd, phase, attempt, roster)
+    else:
+        results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
+                                              roster=roster, anchor=anchor,
+                                              seat_result_schema=seat_schema)
     recorded = []
     stale_strays = []
     for result in results:

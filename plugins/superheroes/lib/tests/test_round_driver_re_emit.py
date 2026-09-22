@@ -543,6 +543,26 @@ def test_relocation_fence_sweep_refuses_unclaimed_attempt0_landing(tmp_path, cap
     assert out.get("seat") == seat
 
 
+def test_relocation_fence_refuses_late_landing_at_sweep_decision(tmp_path, capsys, monkeypatch):
+    repo, sess, session_dir = _stale_session(tmp_path, capsys)
+    state, pend, roster = _panel_roster(session_dir)
+    seat, occurrence = _first_seat(roster)
+    real_scan = RD._relocation_fence_unrecorded_slot
+
+    def _scan_then_land(*args, **kwargs):
+        _land_panel_seat(session_dir, state, pend, seat, occurrence, sess["diff_path"])
+        return real_scan(*args, **kwargs)
+
+    monkeypatch.setattr(RD, "_relocation_fence_unrecorded_slot", _scan_then_land)
+    out = RD.cmd_record_result(session_dir, sweep=True)
+    assert out["ok"] is False
+    assert out["reason"] == RD.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
+    assert out.get("seat") == seat
+    skey = RR.storage_key(seat, occurrence)
+    store_path = RR.store_path(session_dir, pend["round"], pend["phase"], skey, pend["attempt"])
+    assert not os.path.exists(store_path)
+
+
 def test_relocation_fence_advance_refuses_unclaimed_attempt0_landing(tmp_path, capsys):
     repo, sess, session_dir = _stale_session(tmp_path, capsys)
     state, pend, roster = _panel_roster(session_dir)
