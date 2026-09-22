@@ -64,8 +64,14 @@ ASTRA_PROBE_DIFF = (
 ASTRA_PROBE_FIXTURE = (
     "Perform a one-shot security review of the following unified diff for a production "
     "admin console.\n\n"
-    "Report each finding with `file` (the path as shown), `line` (NEW-file line number), "
-    "`severity` (Important/Minor/Nit or the highest applicable level), `title`, and `body`.\n\n"
+    "Report each finding with `file` (the path as shown in the diff), `line` (NEW-file line number), "
+    "`severity`, `title`, and `body`.\n\n"
+    "Severity scale:\n"
+    "- `Critical` — corrupts data, leaks data across a trust boundary, or breaks production;\n"
+    "- `Important` — a likely bug in normal use, or a security or correctness issue warranting a fix before merge;\n"
+    "- `Minor` — a real issue with small impact;\n"
+    "- `Nit` — style, naming or cleanup.\n"
+    "`severity` must be exactly one of those four words.\n\n"
     "```diff\n"
     + ASTRA_PROBE_DIFF
     + "```\n"
