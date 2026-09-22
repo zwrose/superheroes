@@ -59,6 +59,11 @@ __all__ = (
     "fix_proof_path",
     "fix_still_present_at_head",
     "legacy_disposition_ledger_rows",
+    "legacy_key_collision",
+    "DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN",
+    "EXECUTION_ONLY_BINDING",
+    "PAYLOAD_BOUND_BINDING",
+    "evidence_binding",
     "verify_result_for_head",
     "RE_EMIT_CMD",
     "ORDERS_SUPERSEDED_OUTCOME",
@@ -69,10 +74,21 @@ __all__ = (
 TRANSIENT_FINDING_FIELDS = frozenset({
     "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
     "disposition", "dispositionReceipt",
+    "dispositionRound", "refutedReason", "outOfScopeReason", "followUp", "mergedInto",
+    "raisedRound",
 })
 
 # Result kind a write run's execution record carries — binds the run's own report, not a payload key.
 WRITE_RESULT_KIND = "evidence"
+EXECUTION_ONLY_BINDING = "execution-only"
+PAYLOAD_BOUND_BINDING = "payload-bound"
+
+
+def evidence_binding(result_kind):
+    """Which binding a result kind carries — the one home for write-run vs payload-bound kinds."""
+    if result_kind == WRITE_RESULT_KIND:
+        return EXECUTION_ONLY_BINDING
+    return PAYLOAD_BOUND_BINDING
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 
@@ -103,6 +119,7 @@ FINDING_KEY_FIELD = "findingKey"
 DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
 DISPOSITION_LEDGER_KEY = "dispositionLedger"
 DISPOSITION_LEDGER_MALFORMED_TOKEN = "disposition-ledger-malformed"
+DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN = "disposition-ledger-legacy-key-collision"
 DISPOSITION_LEDGER_OWNER_FIELD = "dispositionLedgerOwner"
 DISPOSITION_LEDGER_OWNER_VALUE = "ledger"
 DISPOSITION_LEDGER_OWNER_ABSENT = "absent"
@@ -176,6 +193,26 @@ def legacy_disposition_ledger_rows(state):
         key = finding_identity_key(finding)
         if key:
             yield key, finding
+
+
+def legacy_key_collision(rows):
+    """Return (bare_key, minted_key) when a legacy-bare row collides with a minted-key twin."""
+    identity_keys = set()
+    legacy_pairs = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        identity = finding_identity_key(row)
+        bare = location_key(row)
+        minted = minted_identity_key(row)
+        if identity:
+            identity_keys.add(identity)
+        if identity == bare and bare != minted:
+            legacy_pairs.append((bare, minted))
+    for bare, minted in legacy_pairs:
+        if minted in identity_keys:
+            return bare, minted
+    return None
 
 
 def disposition_ledger_owner_classification(state):

@@ -4858,11 +4858,18 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
             if chan in disclosures:
                 rd[chan] = disclosures[chan]
         rounds.append(rd)
-    findings = [{"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
-                 "title": f.get("title"), "severity": f.get("severity"),
-                 "verdict": f.get("verdict"), "challenge": f.get("challenge"),
-                 "unverified": f.get("unverified")}
-                for f in (state.get("findings") or []) if isinstance(f, dict)]
+    findings = []
+    for f in (state.get("findings") or []):
+        if not isinstance(f, dict):
+            continue
+        row = {"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
+               "title": f.get("title"), "severity": f.get("severity"),
+               "verdict": f.get("verdict"), "challenge": f.get("challenge"),
+               "unverified": f.get("unverified")}
+        finding_key = f.get(session_contract.FINDING_KEY_FIELD)
+        if isinstance(finding_key, str) and finding_key:
+            row[session_contract.FINDING_KEY_FIELD] = finding_key
+        findings.append(row)
     cfg = state.get("config") or {}
     degraded, skipped_blockers = build_degraded_prose(state, form)
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
@@ -9100,7 +9107,9 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
         if phase == P_FIXER:
             return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
     envelope_payload = envelope.get("payload")
-    if result_kind == session_contract.WRITE_RESULT_KIND:
+    if session_contract.evidence_binding(result_kind) == session_contract.EXECUTION_ONLY_BINDING:
+        # axis: write-run stamp proves the run happened under this order — no transported payload
+        # is bound; never read it as payload proof
         pass
     else:
         if not isinstance(envelope_payload, dict):

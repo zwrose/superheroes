@@ -73,7 +73,7 @@ REFUSAL_CLASSES = frozenset(
 CERTIFICATION_LIVE_CONTENT_FIELDS = (
     "file", "line", "title", "severity", "verdict", "challenge", "unverified", "id",
 )
-EXECUTION_ONLY_BINDING = "execution-only"
+EXECUTION_ONLY_BINDING = session_contract.EXECUTION_ONLY_BINDING
 
 PANEL_PHASE = session_contract.PANEL_PHASE
 FIXER_PHASE = session_contract.FIXER_PHASE
@@ -377,6 +377,19 @@ def _certification_findings_by_key(state):
                 ledger_fault.detail,
                 binding_failure=ledger_fault.token,
             )
+        branch_rows = list(ledger_rows)
+        for finding in state.get("findings") or []:
+            if isinstance(finding, dict):
+                branch_rows.append(finding)
+        collision = session_contract.legacy_key_collision(branch_rows)
+        if collision is not None:
+            bare_key, minted_key = collision
+            return {}, _refusal(
+                "disposition-without-receipt",
+                STATE_FILE,
+                "legacy bare key %r collides with minted key %r" % (bare_key, minted_key),
+                binding_failure=session_contract.DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN,
+            )
         for finding in ledger_rows:
             key = _finding_identity_key(finding)
             ledger_by_key[key] = finding
@@ -415,6 +428,27 @@ def _certification_findings_by_key(state):
                 )
             by_key[key] = dict(live)
         return by_key, None
+    branch_rows = []
+    for _key, finding in session_contract.legacy_disposition_ledger_rows(state):
+        branch_rows.append(finding)
+    for rec in state.get("_records") or []:
+        if not isinstance(rec, dict):
+            continue
+        for finding in rec.get("findings") or []:
+            if isinstance(finding, dict):
+                branch_rows.append(finding)
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict):
+            branch_rows.append(finding)
+    collision = session_contract.legacy_key_collision(branch_rows)
+    if collision is not None:
+        bare_key, minted_key = collision
+        return {}, _refusal(
+            "disposition-without-receipt",
+            STATE_FILE,
+            "legacy bare key %r collides with minted key %r" % (bare_key, minted_key),
+            binding_failure=session_contract.DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN,
+        )
     for key, finding in session_contract.legacy_disposition_ledger_rows(state):
         by_key[key] = finding
     for rec in state.get("_records") or []:
@@ -1001,7 +1035,7 @@ def _hand_landed_evidence_qualifies(
     if (not isinstance(result_kind, str) or not result_kind
             or not isinstance(result_digest, str) or not result_digest):
         return False, "execution-evidence-binding-incomplete"
-    if result_kind == session_contract.WRITE_RESULT_KIND:
+    if session_contract.evidence_binding(result_kind) == session_contract.EXECUTION_ONLY_BINDING:
         # axis: write-run stamp proves the run happened — binds no payload (execution-only)
         return True, EXECUTION_ONLY_BINDING
     carried, subject = session_contract.evidence_digest_subject(payload, result_kind)
