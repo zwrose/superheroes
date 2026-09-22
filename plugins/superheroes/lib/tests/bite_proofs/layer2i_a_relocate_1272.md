@@ -16,8 +16,8 @@ with EXIT the runner's own exit code, never a pipe's. Every detector was selecte
 node id**, never `-k`.
 
 **The guarded set.** 34 elements — G1a, G1b, G2–G10, G11, G12a, G12b, G13–G15, G15b, G16–G31 —
-in `_cmd_relocate_locked`, `cmd_relocate`, `_relocate_claim_target_marker`, `_relocate_recorded_head`,
-and `_retire_relocate_marker`. One proof per element, except G11 (unproven as placed,
+in `_cmd_relocate_locked`, `cmd_relocate`, `_relocate_claim_target_marker`, `_relocate_read_target_marker`,
+`_relocate_recorded_head`, and `_retire_relocate_marker`. One proof per element, except G11 (unproven as placed,
 disclosed in its entry) and G21 (removed: the code it guarded no longer exists).
 
 The whole-file run at the final head and the orchestrator's independent re-run of every element
@@ -545,9 +545,9 @@ FAILED plugins/superheroes/lib/tests/test_round_driver_session_mobility.py::test
 
 **Green** (EXIT=0): `1 passed in 2.72s`.
 
-## G23 — an existing same-session marker is refreshed idempotently
+## G23 — an existing same-session marker is accepted idempotently
 
-**Guarded element.** `_relocate_claim_target_marker`, `return True, False, None` (after `_relocate_refresh_target_marker` in the `os.path.lexists(marker_path)` branch). **Axis:** an existing same-session marker is refreshed idempotently (idempotent-retry axis).
+**Guarded element.** `_relocate_claim_target_marker`, `return True, False, None` (after `_relocate_refresh_target_marker` in the `os.path.lexists(marker_path)` branch). **Axis:** an existing same-session marker is accepted idempotently; refreshing a stale marker is G24's axis (idempotent-retry axis).
 
 **Neutralization:** `return True, False, None` → `return False, False, "foreign"` (first attempt — wrapping refresh in `if False:` — stayed green because the pre-seeded marker already matched refreshed content; second attempt used the return-value neutralization).
 

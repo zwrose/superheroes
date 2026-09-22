@@ -624,7 +624,7 @@ def test_relocate_second_claimant_refused_after_first_claims_the_target(tmp_path
     assert _read_bytes(state_path2) == state_before2
 
 
-# bite-proof: G23 — an existing same-session marker is refreshed idempotently (idempotent-retry axis)
+# bite-proof: G23 — an existing same-session marker is accepted idempotently (idempotent-retry axis)
 def test_relocate_target_marker_idempotent_retry(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
