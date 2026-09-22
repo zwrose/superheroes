@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Disclosure-channel vocabulary, selection rule, and degraded-prose collector — leaf module."""
 import model_registry
-import round_phases
 import seat_map_receipts
+import session_contract
 
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
@@ -290,7 +290,7 @@ def _native_in_session_seats(state, journal):
             vendor = vendor.strip()
         else:
             vendor = None
-            if event.get("phase") in (None, round_phases.P_PANEL):
+            if event.get("phase") in (None, session_contract.PANEL_PHASE):
                 governing = seat_map_receipts.round_governing_map(state, round_label)
                 map_seats = governing.get("seats") if isinstance(governing, dict) else None
                 if not isinstance(map_seats, dict):
