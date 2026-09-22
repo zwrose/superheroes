@@ -3099,6 +3099,63 @@ def test_no_codex_role_pins_byte_identical_to_default_kwarg():
     assert without == with_none
 
 
+def test_reachable_configs_vendor_pinned_seat_includes_matrix_cell():
+    rc = SM.reachable_configs(
+        ["codex"],
+        {"grounding-seat": "codex"},
+        codex_role_pins={"reviewer": "gpt-5.6-sol"},
+    )
+    assert ["gpt-5.6-terra", "high"] in rc["codex"]
+
+
+def test_reachable_configs_in_play_role_pin_tiers_include_matrix_cells():
+    role_pins = {"reviewer": "gpt-5.6-sol", "reviewer-deep": "gpt-5.6-sol"}
+    vendors = ["codex", "cursor"]
+    in_play_tiers = {SM.DEFAULT_TIER_BY_SEAT[seat] for seat in SM.PANEL_ROSTER}
+    pins = {seat: "codex" for seat in SM.PANEL_ROSTER}
+    for rc in (
+        SM.reachable_configs(vendors, None, codex_role_pins=role_pins),
+        SM.reachable_configs(vendors, pins, codex_role_pins=role_pins),
+    ):
+        for tier in SM._PANEL_PIN_TIERS:
+            if tier in role_pins and tier in in_play_tiers:
+                model, effort, _pin = SM._cell(tier, "codex", None)
+                assert [model, effort] in rc["codex"]
+
+
+def test_codex_role_pin_vendor_pinned_seat_probes_matrix_fallback():
+    pins = {"grounding-seat": {"vendor": "codex"}}
+    needed = SM.reachable_configs(
+        ["codex", "cursor"],
+        pins,
+        codex_role_pins={"reviewer": "gpt-5.6-sol"},
+    )
+    live_cells = [
+        [vendor, model, effort]
+        for vendor, cells in needed.items()
+        for model, effort in cells
+        if not (vendor == "codex" and model == "gpt-5.6-sol" and effort == "high")
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "codex", "cursor"],
+        "xai",
+        "anthropic",
+        0,
+        pins=pins,
+        codex_role_pins={"reviewer": "gpt-5.6-sol"},
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    cfg = m["seats"]["grounding-seat"]
+    assert cfg["vendor"] == "codex"
+    assert cfg["model"] == "gpt-5.6-terra"
+    assert cfg["effort"] == "high"
+    not_live = [d for d in m["degradations"] if d["constraint"] == "role-pin-not-live"]
+    assert len(not_live) == 1
+    assert not_live[0]["seat"] == "grounding-seat"
+
+
 def test_reachable_configs_includes_role_pinned_cell():
     rc = SM.reachable_configs(
         ["codex", "cursor"],

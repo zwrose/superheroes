@@ -25,6 +25,42 @@ def test_record_paths_exports_match_records_and_writer():
             assert getattr(round_certification, name) is getattr(record_paths, name), name
 
 
+def test_native_in_session_disclosure_names_synthesis_with_stamped_vendor():
+    journal = [
+        {
+            "outcome": "recorded",
+            "phase": "dispatch-synthesis",
+            "round": 1,
+            "attempt": 0,
+            "seat": "synthesis",
+            "vendor": "claude",
+        },
+    ]
+    assert receipt_disclosures._native_in_session_seats({}, journal) == ["synthesis"]
+    degraded, _ = receipt_disclosures.build_degraded_prose(
+        {}, receipt_disclosures.RECEIPT_FORM_CERTIFIED, journal=journal,
+    )
+    assert any(line.startswith("unprobed native seat(s) synthesis") for line in degraded)
+
+
+def test_native_in_session_disclosure_ignores_non_claude_stamped_vendor():
+    journal = [
+        {
+            "outcome": "recorded",
+            "phase": "dispatch-fixer",
+            "round": 1,
+            "attempt": 0,
+            "seat": "fixer",
+            "vendor": "cursor",
+        },
+    ]
+    assert receipt_disclosures._native_in_session_seats({}, journal) == []
+    degraded, _ = receipt_disclosures.build_degraded_prose(
+        {}, receipt_disclosures.RECEIPT_FORM_CERTIFIED, journal=journal,
+    )
+    assert not any(line.startswith("unprobed native seat(s)") for line in degraded)
+
+
 def test_native_in_session_disclosure_line_when_claude_seat_has_no_evidence():
     state = {
         "seatMapReceipts": [

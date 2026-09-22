@@ -431,8 +431,10 @@ def reachable_configs(
             _rotate_all(tier)
 
     if codex_role_pins and "codex" in configured_vendors:
+        in_play_tiers = {_tier_for(seat) for seat in roster}
         for tier in _PANEL_PIN_TIERS:
-            if tier in codex_role_pins:
+            if tier in codex_role_pins and tier in in_play_tiers:
+                _add_cell("codex", tier)
                 model, effort, pin_info = _cell(tier, "codex", codex_role_pins)
                 if pin_info and pin_info.get("honored"):
                     reachable["codex"].add((model, effort))

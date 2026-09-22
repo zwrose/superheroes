@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Disclosure-channel vocabulary, selection rule, and degraded-prose collector — leaf module."""
 import model_registry
+import round_phases
 import seat_map_receipts
 
 RECEIPT_FORM_CERTIFIED = "certified"
@@ -284,12 +285,22 @@ def _native_in_session_seats(state, journal):
             continue
         event_round = event.get("round")
         round_label = str(event_round) if event_round is not None else default_round
-        governing = seat_map_receipts.round_governing_map(state, round_label)
-        map_seats = governing.get("seats") if isinstance(governing, dict) else None
-        if not isinstance(map_seats, dict):
-            map_seats = {}
-        cfg = map_seats.get(seat)
-        if isinstance(cfg, dict) and cfg.get("vendor") == "claude":
+        vendor = event.get("vendor")
+        if isinstance(vendor, str) and vendor.strip():
+            vendor = vendor.strip()
+        else:
+            vendor = None
+            if event.get("phase") in (None, round_phases.P_PANEL):
+                governing = seat_map_receipts.round_governing_map(state, round_label)
+                map_seats = governing.get("seats") if isinstance(governing, dict) else None
+                if not isinstance(map_seats, dict):
+                    map_seats = {}
+                cfg = map_seats.get(seat)
+                if isinstance(cfg, dict):
+                    panel_vendor = cfg.get("vendor")
+                    if isinstance(panel_vendor, str) and panel_vendor.strip():
+                        vendor = panel_vendor.strip()
+        if vendor == "claude":
             native.append(seat)
             seen.add(seat)
     return sorted(native)

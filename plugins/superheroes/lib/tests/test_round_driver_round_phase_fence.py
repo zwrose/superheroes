@@ -394,6 +394,22 @@ def test_journal_addressed_true_when_round_phase_echoed(tmp_path):
     assert entry["addressed"] is True
 
 
+def test_record_result_journal_stamps_slot_vendor(tmp_path):
+    session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
+    state = _state(session_dir)
+    _land(session_dir, state, pend, tid, _audit_payload(tid), occurrence=0)
+    out = round_driver.cmd_record_result(session_dir, tid, attempt=pend["attempt"])
+    assert out["ok"] is True, out
+    entry = _last_journal_recorded(session_dir, "record-result")
+    cfg = state.get("config") or {}
+    pending_payload = (state.get("pending") or {}).get("payload") or {}
+    repo_root = cfg.get("repoRoot") or os.getcwd()
+    expected = round_driver._seat_transport_row(
+        state, pend["phase"], tid, 0, cfg, pending_payload, repo_root,
+    )
+    assert entry.get("vendor") == expected["vendor"]
+
+
 def test_journal_addressed_false_when_addressing_omitted(tmp_path):
     """#1177-C bite-proof: unaddressed durable-record calls journal addressed=false."""
     session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
