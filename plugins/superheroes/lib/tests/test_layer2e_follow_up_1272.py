@@ -261,6 +261,22 @@ def test_e4_judgment_skip_null_follow_up_refused(tmp_path):
     assert out["ok"] is False, out
 
 
+def test_e4c_judgment_skip_reasonless_malformed_follow_up_folds_fail_closed(tmp_path):
+    # axis: e4c — reasonless skip with malformed followUp bypasses pre-fold validation
+    session_dir = _parked_judgment_session(tmp_path)
+    artifact = {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "   ",
+         "followUp": None}]}
+    out = _pending_submit(session_dir, artifact)
+    assert out["ok"] is True, out
+    state = _load_state(session_dir)
+    assert state["step"] == RD.P_FIXER
+    batch = state["_fixBatch"]
+    assert len(batch) == 1
+    assert batch[0]["judgmentDisposition"] == "fix-as-suggested"
+    assert batch[0]["judgmentFailClosed"] is True
+
+
 def test_e5_judgment_skip_without_follow_up_folds(tmp_path):
     # axis: e5 — absent followUp key still folds at submit
     session_dir = _parked_judgment_session(tmp_path)

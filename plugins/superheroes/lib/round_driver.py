@@ -7216,6 +7216,10 @@ def judgment_follow_up_fault(artifact):
     for disp in artifact.get("dispositions") or []:
         if not isinstance(disp, dict) or disp.get("disposition") != "skip":
             continue
+        reason = disp.get("reason")
+        if not (isinstance(reason, str) and reason.strip()):
+            # Reasonless skip is not honor-able — let _fold_judgment fail-closed instead.
+            continue
         if "followUp" not in disp:
             continue
         fault = session_contract.follow_up_shape_fault(disp.get("followUp"))
