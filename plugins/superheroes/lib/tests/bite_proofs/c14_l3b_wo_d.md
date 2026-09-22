@@ -196,15 +196,8 @@ E       KeyError: 'reason'
 ```
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_is_rendered_from_the_rubric
 >           assert "`%s` — %s" % (level, definition) in text
-E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.')) in 'Perform a one-shot security review of the following unified diff for a production admin console.
-
-Report each findi... "admin"}
-     if claims.get("role") != "admin":
-         raise Forbidden("not an admin")
-     return claims
-```
-'
-1 failed in 1.14s
+E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.')) in 'Perform a one-shot security review of the following unified diff for a production admin console.\n\nReport each findi... "admin"}\n     if claims.get("role") != "admin":\n         raise Forbidden("not an admin")\n     return claims\n```\n'
+1 failed in 1.78s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
@@ -212,7 +205,7 @@ Report each findi... "admin"}
     return lines, None
 ```
 
-**raw green** (exit 0): `1 passed in 1.27s`
+**raw green** (exit 0): `1 passed in 1.60s`
 
 ---
 
@@ -300,9 +293,7 @@ E        +  where None = <built-in method get of dict object at 0x10723bb00>('la
 
 **neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_astra_probe_prompt`):
 ```python
-        + "
-".join(line for line in scale_lines if not line.startswith("- `Critical`")) + "
-"  # bite-proof BP-P1 neutralization
+        + "\n".join(line for line in scale_lines if not line.startswith("- `Critical`")) + "\n"  # bite-proof BP-P1 neutralization
 ```
 (replaces the `scale_lines` join in the prompt text.)
 
@@ -312,25 +303,16 @@ E        +  where None = <built-in method get of dict object at 0x10723bb00>('la
 ```
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_states_the_full_severity_scale
 >           assert "`%s` — %s" % (level, definition) in text
-E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.')) in 'Perform a one-shot security review of the following unified diff for a production admin console.
-
-Report each findi... "admin"}
-     if claims.get("role") != "admin":
-         raise Forbidden("not an admin")
-     return claims
-```
-'
-1 failed in 0.98s
+E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.')) in 'Perform a one-shot security review of the following unified diff for a production admin console.\n\nReport each findi... "admin"}\n     if claims.get("role") != "admin":\n         raise Forbidden("not an admin")\n     return claims\n```\n'
+1 failed in 0.85s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_astra_probe_prompt`):
 ```python
-        + "
-".join(scale_lines) + "
-"
+        + "\n".join(scale_lines) + "\n"
 ```
 
-**raw green** (exit 0): `1 passed in 0.91s`
+**raw green** (exit 0): `1 passed in 0.74s`
 
 ---
 
