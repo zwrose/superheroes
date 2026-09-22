@@ -18,7 +18,7 @@ import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import engine_result_channel  # noqa: E402
-import launch_ledger  # noqa: E402
+import control_plane  # noqa: E402
 import model_registry  # noqa: E402
 import preflight_probe  # noqa: E402
 import readout  # noqa: E402
@@ -36,7 +36,7 @@ DISPATCHABLE_ENGINES = tuple(
 _LEG_NAMES = ("resultProduction", "completionDetection", "progressTelemetry")
 ASTRA_PROBE_ROLE = "registration-probe"
 ASTRA_PROBE_MODEL = "gpt-6-astra"
-ASTRA_PROBE_EFFORT = "high"
+ASTRA_CLAIM_ABANDON_SECONDS = 86400
 PLANT_FILE = "app/session_guard.py"
 PLANT_LINES = (24, 25)
 PLANT_SEVERITY = "Critical"
@@ -61,6 +61,7 @@ ASTRA_PROBE_DIFF = (
     '         raise Forbidden("not an admin")\n'
     "     return claims\n"
 )
+# Scale frozen on purpose: every wave's attempt sees the same prompt; a test ties level names to the rubric table.
 ASTRA_PROBE_FIXTURE = (
     "Perform a one-shot security review of the following unified diff for a production "
     "admin console.\n\n"
@@ -76,12 +77,6 @@ ASTRA_PROBE_FIXTURE = (
     + ASTRA_PROBE_DIFF
     + "```\n"
 )
-ASTRA_PROBE_SEAT = {
-    "vendor": "codex",
-    "model": ASTRA_PROBE_MODEL,
-    "effort": ASTRA_PROBE_EFFORT,
-    "role": ASTRA_PROBE_ROLE,
-}
 _PROBE_PROMPT = (
     "Verify exactly one claim and respond with exactly one JSON object.\n\n"
     "Claim: The working directory you were given contains at least one regular "
@@ -737,20 +732,17 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
                                    "yes" if impl_on in passing else "no")),
     }, required, failed, sm, wave=wave)
 
-def _conformance_record_dir(repo_root, env=None):
-    """Project store conformance record directory (launch-ledger root + repo id)."""
-    resolved = launch_ledger.resolve_root(repo_root, env=env)
-    if not resolved["ok"]:
-        return None, resolved["reason"]
-    repo_id = launch_ledger.repo_identity(repo_root)
-    if repo_id is None:
-        return None, "ledger-repo-identity-unavailable"
-    ledger_dir = os.path.join(resolved["root"], repo_id)
+def _conformance_record_dir(repo_root):
+    """Project store conformance record directory (live global entry + conformance/)."""
+    entry = store_core.resolve_global(repo_root, control_plane.store_root())
+    if entry is None:
+        return None, "conformance-record-dir-unresolved"
+    record_dir = os.path.join(entry["dir"], "conformance")
     try:
-        os.makedirs(ledger_dir, mode=0o700, exist_ok=True)
+        os.makedirs(record_dir, mode=0o700, exist_ok=True)
     except OSError:
         return None, "conformance-record-dir-unusable"
-    return ledger_dir, None
+    return record_dir, None
 
 def _wave_hash(wave, length):
     return hashlib.sha256(wave.encode("utf-8")).hexdigest()[:length]
@@ -859,7 +851,17 @@ def _write_astra_claim(ledger_dir, wave, run_dir_real):
         raise
     return claim
 
-def _settle_orphan_astra_claims(ledger_dir, current_wave):
+def _claim_is_abandoned(claim, now):
+    claimed_at = _parse_completed_at(claim.get("claimedAt"))
+    if claimed_at is None:
+        return True
+    return (now - claimed_at).total_seconds() > ASTRA_CLAIM_ABANDON_SECONDS
+
+def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None, seat=None):
+    if now is None:
+        now = _now_utc()
+    model = (seat or {}).get("model", ASTRA_PROBE_MODEL)
+    effort = (seat or {}).get("effort")
     attempts = _read_astra_attempts(ledger_dir)
     recorded = {a.get("wave") for a in attempts}
     try:
@@ -875,15 +877,17 @@ def _settle_orphan_astra_claims(ledger_dir, current_wave):
         wave = claim.get("wave")
         if not wave or wave == current_wave or wave in recorded:
             continue
+        if not _claim_is_abandoned(claim, now):
+            continue
         misses = _count_astra_misses(attempts) + 1
         orphan = {
             "ok": False,
             "outcome": "incomplete",
             "wave": wave,
-            "model": ASTRA_PROBE_MODEL,
-            "effort": ASTRA_PROBE_EFFORT,
+            "model": model,
+            "effort": effort,
             "runDir": claim.get("runDir"),
-            "dispatchReason": "incomplete-claim",
+            "dispatchReason": "abandoned-claim",
             "matched": None,
             "returned": [],
             "attempt": 1,
@@ -904,7 +908,7 @@ def _astra_probe_refusal(wave, claim):
         "claimedAt": claim.get("claimedAt"),
     }, 1
 
-def _build_astra_output(wave, run_dir_real, terminal, findings, attempts_before):
+def _build_astra_output(wave, run_dir_real, terminal, findings, attempts_before, seat):
     dispatch_reason = None
     if isinstance(terminal, dict):
         dispatch_reason = terminal.get("reason") or terminal.get("detail")
@@ -918,8 +922,8 @@ def _build_astra_output(wave, run_dir_real, terminal, findings, attempts_before)
         "ok": passed,
         "outcome": "pass" if passed else "miss",
         "wave": wave,
-        "model": ASTRA_PROBE_MODEL,
-        "effort": ASTRA_PROBE_EFFORT,
+        "model": seat["model"],
+        "effort": seat.get("effort"),
         "runDir": run_dir_real,
         "dispatchReason": dispatch_reason,
         "matched": matched,
@@ -944,10 +948,24 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
         run_dir_real = os.path.realpath(run_dir)
     except OSError:
         return {"ok": False, "reason": "run-dir-unresolvable"}, 1
+    resolved = model_registry.resolve_dispatch(
+        ASTRA_PROBE_ROLE, "codex", ASTRA_PROBE_MODEL, None)
+    if not resolved.get("ok"):
+        return {
+            "ok": False,
+            "reason": "astra-probe-seat-unresolved",
+            "detail": resolved.get("reason"),
+        }, 1
+    seat = {
+        "vendor": "codex",
+        "model": resolved["model_id"],
+        "effort": resolved["effort"],
+        "role": ASTRA_PROBE_ROLE,
+    }
     ledger_dir, ledger_err = _conformance_record_dir(repo_real)
     if ledger_err:
         return {"ok": False, "reason": ledger_err}, 1
-    attempts = _settle_orphan_astra_claims(ledger_dir, wave)
+    attempts = _settle_orphan_astra_claims(ledger_dir, wave, seat=seat)
     claim_path = _astra_claim_path(ledger_dir, wave)
     claim = _read_astra_claim(claim_path)
     if claim is None:
@@ -980,7 +998,7 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
         return {"ok": False, "reason": "prompt-write-failed"}, 1
     order_id = "astra-probe-%s" % _wave_hash(wave, 12)
     dispatch_kw = {
-        "seat": dict(ASTRA_PROBE_SEAT),
+        "seat": dict(seat),
         "prompt_path": prompt_path,
         "repo_root": repo_real,
         "run_dir": run_dir,
@@ -1001,13 +1019,20 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
             "detail": "internal-%s" % type(exc).__name__,
         }
     if not terminal.get("terminal"):
-        out = _build_astra_output(wave, run_dir_real, terminal, [], attempts)
-        out["continue"] = True
-        return out, 0
+        misses = _count_astra_misses(attempts)
+        return {
+            "ok": False,
+            "outcome": "pending",
+            "continue": True,
+            "wave": wave,
+            "runDir": run_dir_real,
+            "misses": misses,
+            "ownerProposal": False,
+        }, 0
     findings = terminal.get("findings") if terminal.get("ok") else []
     if not isinstance(findings, list):
         findings = []
-    out = _build_astra_output(wave, run_dir_real, terminal, findings, attempts)
+    out = _build_astra_output(wave, run_dir_real, terminal, findings, attempts, seat)
     _append_astra_attempt(ledger_dir, _ledger_attempt_record(out))
     return out, (0 if out["ok"] else 1)
 

@@ -104,7 +104,7 @@ authenticated, or not answering — fix it with the owner before going further.
 ### A.2a — Astra registration probe
 
 Only at a wave preflight the owner or advisor chose to spend on Astra registration — at most one
-attempt per wave:
+attempt per wave. The durable attempt record lives in the project's store entry (not a temp directory):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

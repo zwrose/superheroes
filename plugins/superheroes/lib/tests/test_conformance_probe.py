@@ -1,7 +1,9 @@
 import importlib.util
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -27,6 +29,7 @@ PP = _load("preflight_probe", "preflight_probe.py")
 MR = _load("model_registry", "model_registry.py")
 SM = _load("seat_map", "seat_map.py")
 PC = _load("payload_contracts", "payload_contracts.py")
+SC = _load("store_core", "store_core.py")
 
 _TIERS = {
     "implementer": "composer-2.5",
@@ -2232,7 +2235,42 @@ def test_astra_probe_pass_matches_plant_and_records_attempt(tmp_path, monkeypatc
     attempts = CP._read_astra_attempts(ledger_dir)
     assert len(attempts) == 1
     assert attempts[0]["wave"] == "wave-pass"
-    assert calls[0]["seat"] == CP.ASTRA_PROBE_SEAT
+    assert calls[0]["seat"] == {
+        "vendor": "codex",
+        "model": "gpt-6-astra",
+        "effort": "high",
+        "role": "registration-probe",
+    }
+
+
+# bite-axis: the registration-probe seat is admitted by the real dispatch guard
+def test_astra_probe_seat_admitted_by_the_real_guard():
+    DA = _load("dispatch_allowlist", "dispatch_allowlist.py")
+    assert DA.validate("registration-probe", "codex", "gpt-6-astra", "high")["ok"] is True
+
+
+# bite-axis: unresolvable registry cell refuses before any claim or dispatch
+def test_astra_probe_refuses_when_registry_cell_unresolvable(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    calls = []
+
+    def dispatch(**_kwargs):
+        calls.append(1)
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    def _fail_resolve(role, vendor, model, effort):
+        return {"ok": False, "reason": "x"}
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", _fail_resolve)
+    out, code = CP.astra_probe(repo, "wave-seat", run_dir, dispatch=dispatch)
+    assert code == 1
+    assert out["reason"] == "astra-probe-seat-unresolved"
+    assert calls == []
+    ledger_dir, _ = CP._conformance_record_dir(repo)
+    assert not os.path.exists(CP._astra_claim_path(ledger_dir, "wave-seat"))
 
 
 def test_astra_probe_miss_wrong_severity(tmp_path, monkeypatch):
@@ -2312,12 +2350,79 @@ def test_astra_probe_fixture_states_the_full_severity_scale():
     assert CP.PLANT_SEVERITY in ("Critical", "Important", "Minor", "Nit")
 
 
+def _astra_diff_new_file_line_numbers(diff_text):
+    nums = []
+    new_line = 0
+    for line in diff_text.splitlines():
+        if line.startswith("@@"):
+            m = re.search(r"\+(\d+)", line)
+            new_line = int(m.group(1)) if m else 0
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("-"):
+            continue
+        if line.startswith(" ") or line.startswith("+"):
+            content = line[1:]
+            if 'log.warning("token decode failed; continuing")' in content:
+                nums.append(new_line)
+            if 'claims = {"role": "admin"}' in content:
+                nums.append(new_line)
+            new_line += 1
+    return nums
+
+
+# bite-axis: plant-line numbers are derived from the diff hunk headers, not hand-counted
 def test_astra_probe_fixture_plant_lines_are_second_hunk_plus_lines():
-    lines = CP.ASTRA_PROBE_DIFF.splitlines()
-    plus_lines = [ln[1:] for ln in lines if ln.startswith("+") and not ln.startswith("+++")]
-    assert len(plus_lines) >= 2
-    assert plus_lines[-2].strip() == 'log.warning("token decode failed; continuing")'
-    assert plus_lines[-1].strip() == 'claims = {"role": "admin"}'
+    nums = _astra_diff_new_file_line_numbers(CP.ASTRA_PROBE_DIFF)
+    assert tuple(nums) == CP.PLANT_LINES == (24, 25)
+
+
+# bite-axis: a finding on the first plant line passes
+def test_astra_probe_pass_on_first_plant_line(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding(line=24)])
+
+    out, code = CP.astra_probe(repo, "wave-line24", run_dir, dispatch=dispatch)
+    assert code == 0
+    assert out["outcome"] == "pass"
+    assert out["matched"]["line"] == 24
+
+
+# bite-axis: a finding one line past the plant misses
+def test_astra_probe_miss_just_past_the_plant(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding(line=26)])
+
+    out, code = CP.astra_probe(repo, "wave-line26", run_dir, dispatch=dispatch)
+    assert code == 1
+    assert out["matched"] is None
+
+
+# bite-axis: fixture severity scale names match the rubric table in order
+def test_astra_probe_fixture_scale_matches_rubric_table():
+    plugin_root = os.path.dirname(os.path.abspath(_LIB))
+    rubric_path = os.path.join(plugin_root, "rubric", "review-base.md")
+    with open(rubric_path, encoding="utf-8") as fh:
+        rubric = fh.read()
+    rubric_levels = re.findall(r"\|\s*\*\*(\w+)\*\*", rubric)
+    assert rubric_levels[:4] == ["Critical", "Important", "Minor", "Nit"]
+    fixture = CP.ASTRA_PROBE_FIXTURE
+    scale_start = fixture.index("Severity scale:\n") + len("Severity scale:\n")
+    scale_block = fixture[scale_start:fixture.index("```diff\n", scale_start)]
+    fixture_levels = re.findall(r"- `(\w+)`", scale_block)
+    assert fixture_levels == rubric_levels[:4]
+    assert CP.PLANT_SEVERITY == fixture_levels[0]
 
 
 def test_astra_probe_refuses_second_run_dir_same_wave(tmp_path, monkeypatch):
@@ -2388,24 +2493,93 @@ def test_astra_probe_owner_proposal_on_third_miss(tmp_path, monkeypatch):
             assert out["ownerProposal"] is False
 
 
-def test_astra_probe_orphan_claim_recorded_as_miss(tmp_path, monkeypatch):
+def _write_astra_claim_at(ledger_dir, wave, run_dir_real, claimed_at):
+    claim = {"wave": wave, "runDir": run_dir_real, "claimedAt": claimed_at}
+    path = CP._astra_claim_path(ledger_dir, wave)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(claim, fh, separators=(",", ":"))
+            fh.write("\n")
+    except Exception:
+        os.close(fd)
+        raise
+    return claim
+
+
+# bite-axis: a running slice is pending, not graded as a miss
+def test_astra_probe_running_slice_is_pending_not_a_miss(tmp_path, monkeypatch):
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
     repo = _repo(tmp_path)
-    old_wave = "wave-orphan"
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    for wave in ("wave-m1", "wave-m2"):
+        CP._append_astra_attempt(ledger_dir, {
+            "ok": False, "outcome": "miss", "wave": wave, "misses": 1,
+        })
+    attempts_before = CP._read_astra_attempts(ledger_dir)
+    assert CP._count_astra_misses(attempts_before) == 2
+
+    def dispatch(**_kwargs):
+        return {"ok": False, "terminal": False, "findings": None}
+
+    out, code = CP.astra_probe(repo, "wave-pending", run_dir, dispatch=dispatch)
+    assert code == 0
+    assert out["outcome"] == "pending"
+    assert out["continue"] is True
+    assert out["misses"] == 2
+    assert out["ownerProposal"] is False
+    assert len(CP._read_astra_attempts(ledger_dir)) == 2
+
+
+# bite-axis: a recent other-wave claim is not settled as abandoned
+def test_astra_probe_live_other_wave_claim_not_settled(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    claimed_at = (now - timedelta(seconds=60)).replace(microsecond=0)
+    claimed_iso = claimed_at.isoformat().replace("+00:00", "Z")
     old_run = str(tmp_path / "orphan-run")
     os.makedirs(old_run)
-    CP._write_astra_claim(ledger_dir, old_wave, old_run)
+    _write_astra_claim_at(ledger_dir, "wave-a", old_run, claimed_iso)
     new_run = str(tmp_path / "new-run")
     os.makedirs(new_run)
 
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding()])
 
+    monkeypatch.setattr(CP, "_now_utc", lambda: now)
+    out, code = CP.astra_probe(repo, "wave-b", new_run, dispatch=dispatch)
+    assert code == 0
+    attempts = CP._read_astra_attempts(ledger_dir)
+    assert not any(a.get("wave") == "wave-a" for a in attempts)
+    assert out["outcome"] == "pass"
+
+
+def test_astra_probe_orphan_claim_recorded_as_miss(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    claimed_at = (now - timedelta(seconds=CP.ASTRA_CLAIM_ABANDON_SECONDS + 60))
+    claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    old_wave = "wave-orphan"
+    old_run = str(tmp_path / "orphan-run")
+    os.makedirs(old_run)
+    _write_astra_claim_at(ledger_dir, old_wave, old_run, claimed_iso)
+    new_run = str(tmp_path / "new-run")
+    os.makedirs(new_run)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    monkeypatch.setattr(CP, "_now_utc", lambda: now)
     out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch)
     assert code == 0
     attempts = CP._read_astra_attempts(ledger_dir)
     orphan = next(a for a in attempts if a.get("wave") == old_wave)
     assert orphan["outcome"] == "incomplete"
+    assert orphan["dispatchReason"] == "abandoned-claim"
+    assert orphan["misses"] == 1
     assert out["outcome"] == "pass"
 
 
@@ -2421,6 +2595,198 @@ def test_astra_probe_miss_string_line_not_matched(tmp_path, monkeypatch):
     out, code = CP.astra_probe(repo, "wave-str", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["matched"] is None
+
+
+def _git_init_repo(path, remote=None):
+    path = str(path)
+    subprocess.run(["git", "init", "-q", path], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", path, "config", "user.email", "t@t.t"],
+        check=True, capture_output=True, text=True,
+    )
+    subprocess.run(
+        ["git", "-C", path, "config", "user.name", "t"],
+        check=True, capture_output=True, text=True,
+    )
+    if remote:
+        subprocess.run(
+            ["git", "-C", path, "remote", "add", "origin", remote],
+            check=True, capture_output=True, text=True,
+        )
+    return path
+
+
+def _ensure_store_entry(repo, store_root):
+    ident = SC.derive_identifiers(repo)
+    eid = ident["gitdir_hash"]
+    entry_dir = os.path.join(store_root, "entries", eid)
+    os.makedirs(entry_dir, exist_ok=True)
+    SC.write_pointer(store_root, ident["gitdir_hash"], eid)
+    if ident["remote_hash"]:
+        SC.write_pointer(store_root, ident["remote_hash"], eid)
+    SC.write_keys_json(entry_dir, ident)
+    return entry_dir
+
+
+# bite-axis: the durable record survives a fresh read from the project store
+def test_astra_probe_record_survives_a_fresh_read_in_the_project_store(tmp_path, monkeypatch):
+    store_root = str(tmp_path / "store")
+    os.makedirs(store_root, exist_ok=True)
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store_root)
+    repo = _git_init_repo(tmp_path / "repo", remote="git@github.com:org/astra-probe.git")
+    entry_dir = _ensure_store_entry(repo, store_root)
+    run1 = str(tmp_path / "run1")
+    run2 = str(tmp_path / "run2")
+    os.makedirs(run1)
+    os.makedirs(run2)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([])
+
+    out1, code1 = CP.astra_probe(repo, "wave-store", run1, dispatch=dispatch)
+    assert code1 == 1
+    assert out1["outcome"] == "miss"
+    attempts_path = os.path.join(entry_dir, "conformance", "astra-probe-attempts.json")
+    assert os.path.isfile(attempts_path)
+    out2, code2 = CP.astra_probe(repo, "wave-store", run2, dispatch=dispatch)
+    assert code2 == 1
+    assert out2["reason"] == "astra-probe-wave-already-attempted"
+
+
+# bite-axis: no project store entry refuses before dispatch
+def test_astra_probe_refuses_without_a_project_store_entry(tmp_path, monkeypatch):
+    store_root = str(tmp_path / "store")
+    os.makedirs(store_root, exist_ok=True)
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store_root)
+    repo = _git_init_repo(tmp_path / "repo")
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    calls = []
+
+    def dispatch(**_kwargs):
+        calls.append(1)
+        return _astra_terminal_findings([])
+
+    out, code = CP.astra_probe(repo, "wave-nostore", run_dir, dispatch=dispatch)
+    assert code == 1
+    assert out["reason"] == "conformance-record-dir-unresolved"
+    assert calls == []
+
+
+class _AstraCliFakeRunner:
+    """Minimal codex FakeRunner for astra-probe CLI end-to-end tests."""
+
+    def __init__(self, stdout):
+        self.stdout = stdout
+        self.calls = []
+
+    def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+        self.calls.append({"argv": list(argv), "cwd": cwd})
+        result_path = None
+        if "-o" in argv:
+            result_path = argv[argv.index("-o") + 1]
+        elif prompt_bytes is not None:
+            result_path = ERC.result_file_path_from_prompt(
+                prompt_bytes.decode("utf-8", "ignore"))
+        if result_path:
+            RFS = _load("review_findings_schema", "review_findings_schema.py")
+            member = {}
+            for key in RFS.CANONICAL_MEMBER_KEYS:
+                schema = RFS.FINDING_PROPERTY_SCHEMAS[key]
+                if key == "file":
+                    member[key] = "b/app/session_guard.py"
+                elif key == "line":
+                    member[key] = 25
+                elif key == "severity":
+                    member[key] = "Critical"
+                elif key == "title":
+                    member[key] = "auth bypass on token decode failure"
+                elif key == "body":
+                    member[key] = "continues with admin role"
+                elif "enum" in schema:
+                    member[key] = next(v for v in schema["enum"] if v is not None)
+                elif schema.get("type") == ["integer", "null"]:
+                    member[key] = None
+                elif schema.get("type") == ["boolean", "null"]:
+                    member[key] = None
+                elif schema.get("type") == ["string", "null"]:
+                    member[key] = "example"
+                else:
+                    member[key] = "example"
+            branch = {
+                "resultKind": "findings",
+                "findings": [member],
+                "verdicts": None,
+                "grouping": None,
+                "id": None,
+                "ruling": None,
+                "reason": None,
+                "newIssues": None,
+                "evidence": None,
+                "auditorVendor": None,
+                "investigated": ["app/session_guard.py"],
+            }
+            with open(result_path, "w", encoding="utf-8") as fh:
+                json.dump({"result": branch}, fh, separators=(",", ":"))
+                fh.write("\n")
+        return self.stdout, False, 0, ""
+
+
+def _astra_codex_findings_stream():
+    finding = {
+        "file": "b/app/session_guard.py",
+        "line": 25,
+        "severity": "Critical",
+        "title": "auth bypass on token decode failure",
+        "body": "continues with admin role",
+    }
+    payload = json.dumps({"findings": [finding]})
+    lines = [
+        json.dumps({
+            "type": "item.completed",
+            "item": {"id": "a0", "type": "command_execution"},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"id": "agent_msg", "type": "agent_message", "text": payload},
+        }),
+        json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }),
+    ]
+    return "\n".join(lines)
+
+
+# bite-axis: CLI drives real dispatch_review with only the engine process stubbed
+def test_astra_probe_cli_end_to_end_through_real_dispatch_review(tmp_path, monkeypatch, capsys):
+    store_root = str(tmp_path / "store")
+    os.makedirs(store_root, exist_ok=True)
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store_root)
+    repo = _git_init_repo(tmp_path / "repo", remote="git@github.com:org/astra-cli.git")
+    _ensure_store_entry(repo, store_root)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    fake = _AstraCliFakeRunner(_astra_codex_findings_stream())
+    real_dispatch = CP.engine_dispatch.dispatch_review
+
+    def _dispatch_with_fake(**kwargs):
+        kwargs["run_engine"] = fake
+        kwargs["build_view"] = _fake_build_view(tmp_path)
+        return real_dispatch(**kwargs)
+
+    monkeypatch.setattr(CP.engine_dispatch, "dispatch_review", _dispatch_with_fake)
+    code = CP.main([
+        "conformance_probe", "astra-probe",
+        "--repo-root", repo,
+        "--wave", "wave-cli",
+        "--run-dir", run_dir,
+    ])
+    captured = capsys.readouterr()
+    assert code == 0
+    out = json.loads(captured.out.strip())
+    assert out["outcome"] == "pass"
+    assert len(fake.calls) >= 1
 
 
 def test_astra_probe_empty_wave_refuses(tmp_path, monkeypatch):

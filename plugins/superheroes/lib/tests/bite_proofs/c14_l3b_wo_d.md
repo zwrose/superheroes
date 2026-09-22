@@ -154,3 +154,171 @@ E       AssertionError: assert 'Critical' in 'Perform a one-shot security review
 ```
 
 **raw green** (exit 0): `1 passed in 0.29s`
+
+---
+
+## BP-R1-1 — seat unresolved refusal
+
+- **axis:** unresolvable registry cell must refuse before claim or dispatch
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
+```python
+    if False and not resolved.get("ok"):  # bite-proof BP-R1-1
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_registry_cell_unresolvable`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_registry_cell_unresolvable
+E       KeyError: 'model_id'
+1 failed in 0.27s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
+```python
+    if not resolved.get("ok"):
+```
+
+**raw green** (exit 0): `1 passed in 0.23s`
+
+---
+
+## BP-R1-2 — pending slice
+
+- **axis:** a non-terminal dispatch is pending, not graded as a miss
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
+```python
+    if not terminal.get("terminal"):
+        out = _build_astra_output(wave, run_dir_real, terminal, [], attempts, seat)  # bite-proof BP-R1-2
+        out["continue"] = True
+        return out, 0
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_running_slice_is_pending_not_a_miss`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_running_slice_is_pending_not_a_miss
+>       assert out["outcome"] == "pending"
+E       AssertionError: assert 'miss' == 'pending'
+1 failed in 0.29s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`): pending branch returns `outcome: "pending"` without calling `_build_astra_output`.
+
+**raw green** (exit 0): `1 passed in 0.23s`
+
+---
+
+## BP-R1-3 — abandon bound
+
+- **axis:** a recent other-wave claim must not be settled as abandoned
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_settle_orphan_astra_claims`): removed the `if not _claim_is_abandoned(claim, now): continue` guard.
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_live_other_wave_claim_not_settled`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_live_other_wave_claim_not_settled
+>       assert not any(a.get("wave") == "wave-a" for a in attempts)
+1 failed in 0.27s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_settle_orphan_astra_claims`):
+```python
+        if not _claim_is_abandoned(claim, now):
+            continue
+```
+
+**raw green** (exit 0): `1 passed in 0.24s`
+
+---
+
+## BP-R1-4 — project-store refusal
+
+- **axis:** no project store entry must refuse before dispatch
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_conformance_record_dir`):
+```python
+    if entry is None:  # bite-proof BP-R1-4 neutralization
+        try:
+            return tempfile.mkdtemp(prefix="conformance-probe-"), None
+        except OSError:
+            return None, "conformance-record-dir-unusable"
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_without_a_project_store_entry`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_without_a_project_store_entry
+>       assert out["reason"] == "conformance-record-dir-unresolved"
+E       KeyError: 'reason'
+1 failed in 0.31s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_conformance_record_dir`):
+```python
+    if entry is None:
+        return None, "conformance-record-dir-unresolved"
+```
+
+**raw green** (exit 0): `1 passed in 0.28s`
+
+---
+
+## BP-R1-5 — plant-line derivation test
+
+- **axis:** `PLANT_LINES` must match diff-derived new-file line numbers
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`):
+```python
+PLANT_LINES = (25, 26)  # bite-proof BP-R1-5
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_plant_lines_are_second_hunk_plus_lines`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_plant_lines_are_second_hunk_plus_lines
+E       AssertionError: assert (24, 25) == (25, 26)
+1 failed in 0.26s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`):
+```python
+PLANT_LINES = (24, 25)
+```
+
+**raw green** (exit 0): `1 passed in 0.23s`
+
+---
+
+## BP-R1-6 — rubric drift test
+
+- **axis:** fixture severity scale names must match the rubric table
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `ASTRA_PROBE_FIXTURE`):
+```python
+    "- `Small` — a real issue with small impact;\n"
+```
+(replaces the `Minor` scale line)
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_scale_matches_rubric_table`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_scale_matches_rubric_table
+E       AssertionError: assert ['Critical', 'Important', 'Small', 'Nit'] == ['Critical', 'Important', 'Minor', 'Nit']
+1 failed in 0.26s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `ASTRA_PROBE_FIXTURE`):
+```python
+    "- `Minor` — a real issue with small impact;\n"
+```
+
+**raw green** (exit 0): `1 passed in 0.23s`
