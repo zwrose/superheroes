@@ -64,6 +64,11 @@ _PANEL_PIN_TIERS = frozenset(model_registry.codex_pin_roles()) & frozenset(
 )
 
 
+def panel_pin_tiers() -> frozenset[str]:
+    """Return panel tier names that participate in codex role-pin seating."""
+    return _PANEL_PIN_TIERS
+
+
 def _cell(
     tier: str,
     vendor: str,

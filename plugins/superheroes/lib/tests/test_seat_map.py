@@ -3222,25 +3222,46 @@ def test_codex_role_pin_no_degradation_when_seat_not_on_codex():
     assert pin_degs == []
 
 
-def test_matrix_config_calls_only_inside_cell():
+def _matrix_config_offenders(source: str) -> list[int]:
     import ast
-    with open(_MOD, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read(), filename=_MOD)
+    tree = ast.parse(source)
     cell_nodes = []
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "_cell":
             cell_nodes.append(node)
     assert len(cell_nodes) == 1
-    cell_node = cell_nodes[0]
     offenders = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Name) and func.id == "matrix_config":
+        is_matrix_config = (
+            isinstance(func, ast.Name) and func.id == "matrix_config"
+        ) or (
+            isinstance(func, ast.Attribute) and func.attr == "matrix_config"
+        )
+        if is_matrix_config:
             if not any(node in ast.walk(cn) for cn in cell_nodes):
                 offenders.append(node.lineno)
-    assert offenders == []
+    return offenders
+
+
+def test_matrix_config_calls_only_inside_cell():
+    with open(_MOD, encoding="utf-8") as fh:
+        source = fh.read()
+    assert _matrix_config_offenders(source) == []
+
+
+def test_matrix_config_offenders_detects_outside_bare_and_qualified():
+    source = """\
+def _cell():
+    matrix_config("reviewer", "codex")
+
+def outside():
+    matrix_config("reviewer", "claude")
+    model_registry.matrix_config("reviewer", "codex")
+"""
+    assert _matrix_config_offenders(source) == [5, 6]
 
 
 def test_cli_compose_host_model_known(capsys):
@@ -3335,17 +3356,30 @@ def test_panel_pin_tiers_derived_from_registry():
     derived = frozenset(MR.codex_pin_roles()) & frozenset(SM.DEFAULT_TIER_BY_SEAT.values())
     assert derived == {"reviewer", "reviewer-deep"}
     assert SM._PANEL_PIN_TIERS == derived
+    assert SM.panel_pin_tiers() == derived
 
 
-def test_panel_pin_tiers_without_reviewer(monkeypatch):
-    import model_registry as MR
-    monkeypatch.setattr(MR, "codex_pin_roles", lambda: ("reviewer-deep", "code-fixer"))
-    derived = frozenset(MR.codex_pin_roles()) & frozenset(SM.DEFAULT_TIER_BY_SEAT.values())
-    assert derived == {"reviewer-deep"}
-    assert "reviewer" not in derived
+def test_compose_role_pin_without_seat_pins_liveness_not_scoped(tmp_path, capsys, monkeypatch):
+    import preflight_probe as pp
 
+    live_vendors = ["claude", "codex", "cursor"]
+    live_cells = [
+        ["claude", "claude-opus-5", "high"],
+        ["codex", "gpt-5.6-sol", "high"],
+        ["cursor", "composer-2.5", "high"],
+    ]
+    probe_calls: list[tuple] = []
 
-def test_compose_role_pin_without_seat_pins_liveness_not_scoped(tmp_path, capsys):
+    def fake_live_vendors_for_composition(*args, **kwargs):
+        probe_calls.append((args, kwargs))
+        return (live_vendors, live_cells, {}, [], "probed", {
+            "servedFromCache": False,
+            "probedAt": None,
+            "remainingTtl": None,
+        })
+
+    monkeypatch.setattr(pp, "live_vendors_for_composition", fake_live_vendors_for_composition)
+
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"codexModels": {"reviewer": "gpt-5.6-sol"}})
     rc = SM.main(
@@ -3366,6 +3400,7 @@ def test_compose_role_pin_without_seat_pins_liveness_not_scoped(tmp_path, capsys
     )
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
+    assert probe_calls
     assert receipt["livenessPinScoped"] is False
 
 
