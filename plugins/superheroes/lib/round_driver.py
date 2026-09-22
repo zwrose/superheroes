@@ -2917,40 +2917,20 @@ def verifier_drop_staged_id_fault(state, artifact):
     return None
 
 
-def _synthesis_grouping_coverage_fault(verified, grouping):
-    """None when a non-empty grouping covers every survivor exactly once; otherwise a refusal."""
-    if not isinstance(grouping, list) or not grouping:
+def _format_grouping_coverage_fault(fault):
+    """Map ``verification.grouping_coverage_fault`` output to a synthesis refusal string."""
+    if not fault:
         return None
-    survivor_ids = [
-        s["id"] for s in verified
-        if isinstance(s, dict) and isinstance(s.get("id"), str)
-    ]
-    expected = set(survivor_ids)
-    seen = []
-    for index, group in enumerate(grouping):
-        if not isinstance(group, dict):
-            continue
-        member_ids = group.get("member_ids")
-        if not isinstance(member_ids, list):
-            continue
-        for member_id in member_ids:
-            if not isinstance(member_id, str):
-                continue
-            if member_id in seen:
-                return "%s: duplicate member %r in grouping[%d]" % (
-                    STAGED_ID_UNRESOLVABLE_CAUSE, member_id, index)
-            seen.append(member_id)
-    seen_set = set(seen)
-    if seen_set != expected or len(seen) != len(expected):
-        missing = expected - seen_set
-        if missing:
-            return "%s: grouping omits staged id %r" % (
-                STAGED_ID_UNRESOLVABLE_CAUSE, sorted(missing)[0])
-        extra = seen_set - expected
-        if extra:
-            return "%s: staged id %r maps to no entry" % (
-                STAGED_ID_UNRESOLVABLE_CAUSE, sorted(extra)[0])
-    return None
+    kind = fault.get("kind")
+    member_id = fault.get("member_id")
+    if kind == "duplicate_member":
+        return "%s: duplicate member %r in grouping[%d]" % (
+            STAGED_ID_UNRESOLVABLE_CAUSE, member_id, fault.get("index"))
+    if kind == "omits":
+        return "%s: grouping omits staged id %r" % (STAGED_ID_UNRESOLVABLE_CAUSE, member_id)
+    if kind == "extra":
+        return "%s: staged id %r maps to no entry" % (STAGED_ID_UNRESOLVABLE_CAUSE, member_id)
+    return "%s: grouping does not cover every survivor exactly once" % STAGED_ID_UNRESOLVABLE_CAUSE
 
 
 def synthesis_staged_id_fault(state, artifact):
@@ -2958,7 +2938,8 @@ def synthesis_staged_id_fault(state, artifact):
     verified = state.get("_verified") or []
     grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
     if isinstance(grouping, list):
-        fault = _synthesis_grouping_coverage_fault(verified, grouping)
+        fault = _format_grouping_coverage_fault(
+            verification.grouping_coverage_fault(verified, grouping))
         if fault:
             return fault
         for group in grouping:
@@ -4145,12 +4126,11 @@ def _try_reuse_ceiling_verify_gate(state, config, session_dir):
     other case — no prior gate, a non-pass result, a head mismatch, or an unresolvable head —
     returns False so the ceiling gate runs (fail closed toward running it). On reuse, records
     ``ceilingGateReused`` and parks ``round-ceiling``."""
-    rnd_key = str(state["round"])
-    rec = (state.get("rounds") or {}).get(rnd_key) or {}
-    if rec.get("verifyResult") != "pass":
+    rnd = state["round"]
+    if session_contract.verify_result_for_round(state, rnd) != "pass":
         return False
-    verified_head = rec.get(session_contract.VERIFIED_HEAD_FIELD)
-    if not isinstance(verified_head, str) or not verified_head:
+    verified_head = session_contract.verified_head_for_round(state, rnd)
+    if not verified_head:
         return False
     post_fix_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
     if head_err or not post_fix_head or post_fix_head != verified_head:
