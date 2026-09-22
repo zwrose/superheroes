@@ -252,8 +252,12 @@ def test_e11_same_bare_and_minted_different_content_not_collision():
     base = dict(long, title=short_title)
     assert SC.location_key(base) == bare
     assert SC.minted_identity_key(base) == bare
-    row_a = dict(base, **{SC.FINDING_KEY_FIELD: bare, "severity": "Important"})
-    row_b = dict(base, **{SC.FINDING_KEY_FIELD: bare, "severity": "Critical"})
+    row_a = dict(base, **{SC.FINDING_KEY_FIELD: bare, "body": "body A", "severity": "Important"})
+    row_b = dict(base, **{
+        SC.FINDING_KEY_FIELD: bare,
+        "body": "body A\n\n---\n\nbody B",
+        "severity": "Critical",
+    })
     rows = [row_a, row_b]
     assert SC.legacy_key_collision(rows) is None
     state = _ledger_owned_state(
