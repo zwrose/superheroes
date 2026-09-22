@@ -84,8 +84,8 @@ def _isolate_store_root(monkeypatch, tmp_path):
     env still wins (applies after this fixture).
 
     #1379: also strip the ambient inputs repository discovery reads — the cwd (moved to tmp_path)
-    and the inherited GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/GIT_INDEX_FILE (dropped) — so a session
-    started without a repoRoot resolves no real checkout's review-scope marker."""
+    and every inherited GIT_* variable (dropped) — so a session started without a repoRoot
+    resolves no real checkout's review-scope marker."""
     monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
     monkeypatch.setenv("WORKHORSE_STORE_ROOT", _isolated_default_store_root_path(tmp_path))
     monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(tmp_path / "_worktrees_isolation"))
@@ -122,11 +122,13 @@ def _isolate_store_root(monkeypatch, tmp_path):
     # (applies after this fixture); _guard_real_review_marker below catches any path that
     # still reaches the real checkout.
     monkeypatch.chdir(tmp_path)
-    # #1379 review-004: git honours an inherited GIT_DIR/GIT_WORK_TREE over the cwd, so a run
-    # launched with them pointing at another checkout resolved THAT checkout and wrote its marker,
-    # which the guard (watching this checkout only) never sees. Strip them so the cwd above is the
-    # only input repository discovery gets. A test that needs one sets its own (applies after).
-    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"):
+    # #1379 review-004 / review-005: git honours inherited GIT_* inputs over the cwd — GIT_DIR and
+    # GIT_WORK_TREE name another checkout outright, GIT_DISCOVERY_ACROSS_FILESYSTEM lets discovery
+    # climb from tmp_path into a checkout on another mount — and the guard (watching this checkout
+    # only) never sees a marker written there. Strip every inherited GIT_* (the same rule
+    # _neutral_git applies to the probes) so the cwd above is the only input repository discovery
+    # gets; no list to extend. A test that needs one sets its own (applies after this fixture).
+    for var in [name for name in os.environ if name.startswith("GIT_")]:
         monkeypatch.delenv(var, raising=False)
 
 
