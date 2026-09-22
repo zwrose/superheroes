@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -10,6 +11,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import heartbeat as _heartbeat  # noqa: E402  (needs the sys.path insert above)
+import round_driver as _round_driver  # noqa: E402
 
 _TMP_BASE = os.path.realpath(tempfile.gettempdir())
 
@@ -108,3 +110,48 @@ def _isolate_store_root(monkeypatch, tmp_path):
     # (it applies after this fixture).
     monkeypatch.delenv(_HEARTBEAT_ROOT_ENV, raising=False)
     monkeypatch.delenv(_LAUNCH_ID_ENV, raising=False)
+    # #1379: the review-session marker bootstrap falls back to the repository of the process cwd
+    # when a session's meta carries no repoRoot, so a test sitting in the real checkout wrote its
+    # marker into that checkout's git-dir. Run every test from its own tmp_path, which is in no
+    # repository, so that fallback resolves nothing. A test that needs another cwd sets its own
+    # (applies after this fixture); _guard_real_review_marker below catches any path that
+    # still reaches the real checkout.
+    monkeypatch.chdir(tmp_path)
+
+
+def _real_review_marker_path():
+    """The review-session marker path of the checkout this suite runs in, or None when this
+    tree is not a git checkout (then no marker can be written into it either)."""
+    proc = subprocess.run(["git", "-C", _LIB, "rev-parse", "--absolute-git-dir"],
+                          capture_output=True, text=True, check=False)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return os.path.join(proc.stdout.strip(), _round_driver.SIDECAR_DIRNAME,
+                        _round_driver._REVIEW_SESSION_MARKER)
+
+
+_REAL_REVIEW_MARKER = _real_review_marker_path()
+
+
+def _read_marker(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _guard_real_review_marker(request):
+    """#1379 detector: fail the test during which the real checkout's review-session marker
+    changed (created, rewritten, or removed). Every test that wrote it is named; under xdist a
+    test on another worker whose window overlapped the write is named too, so read the
+    failures as candidates."""
+    if _REAL_REVIEW_MARKER is None:
+        yield
+        return
+    before = _read_marker(_REAL_REVIEW_MARKER)
+    yield
+    if _read_marker(_REAL_REVIEW_MARKER) != before:
+        pytest.fail("review scope marker of the real checkout (%s) changed during %s"
+                    % (_REAL_REVIEW_MARKER, request.node.nodeid))
