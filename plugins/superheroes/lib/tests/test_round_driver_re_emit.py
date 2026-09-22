@@ -176,6 +176,34 @@ def test_re_emit_cli_success_json(tmp_path, capsys):
     assert out["superseded"]["attempt"] == 0
 
 
+def test_re_emit_blocking_keeps_distinct_tuple_identity(tmp_path):
+    """A recorded (seat, occurrence) must not mask a different slot with the same label."""
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    rnd, phase, attempt = 1, RD.P_PANEL, 0
+    roster = ["finding", "finding", "finding#1"]
+    journal = [{
+        "outcome": "recorded",
+        "round": rnd,
+        "phase": phase,
+        "attempt": attempt,
+        "recordIdentity": {
+            "seat": "finding",
+            "phase": phase,
+            "attempt": attempt,
+            "occurrence": 1,
+        },
+    }]
+    skey = RR.storage_key("finding#1", 0)
+    landing = RR.landing_path(session_dir, rnd, phase, skey, attempt)
+    os.makedirs(os.path.dirname(landing), exist_ok=True)
+    with open(landing, "w", encoding="utf-8") as fh:
+        fh.write("{}")
+    names = RD._re_emit_blocking_result_names(
+        session_dir, journal, rnd, phase, attempt, roster)
+    assert names == ["landing:%s" % skey]
+
+
 def test_re_emit_with_journal_recorded_before_relocate(tmp_path, capsys):
     repo = M._mobility_repo(tmp_path)
     sess = M._mobility_session(tmp_path, repo)

@@ -167,6 +167,8 @@ SCHEMA_VERSION = 2
 STATE_FILE = session_contract.STATE_FILE
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
+RE_EMIT_CMD = session_contract.RE_EMIT_CMD
+ORDERS_SUPERSEDED_OUTCOME = session_contract.ORDERS_SUPERSEDED_OUTCOME
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
@@ -6537,12 +6539,8 @@ def _relocation_after_emission(journal, rnd, phase, attempt):
     return None
 
 
-def _re_emit_recorded_seat_label(seat_key, occurrence):
-    return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
-
-
-def _re_emit_recorded_seat_labels(journal, rnd, phase, attempt):
-    labels = []
+def _re_emit_recorded_slots(journal, rnd, phase, attempt):
+    slots = set()
     for event in journal:
         if event.get("outcome") != "recorded":
             continue
@@ -6551,20 +6549,25 @@ def _re_emit_recorded_seat_labels(journal, rnd, phase, attempt):
             if (event.get("round") == rnd and ident.get("phase") == phase
                     and ident.get("attempt") == attempt):
                 seat = ident.get("seat") or event.get("seat") or "unknown"
-                labels.append(_re_emit_recorded_seat_label(seat, ident.get("occurrence", 0)))
+                slots.add((seat, ident.get("occurrence", 0)))
         elif (event.get("round") == rnd and event.get("phase") == phase
               and event.get("attempt") == attempt):
             seat = event.get("seat") or "unknown"
-            labels.append(_re_emit_recorded_seat_label(seat, event.get("occurrence", 0)))
-    return sorted(set(labels))
+            slots.add((seat, event.get("occurrence", 0)))
+    return slots
+
+
+def _re_emit_recorded_seat_labels(journal, rnd, phase, attempt):
+    return sorted(_slot_label(seat, occurrence)
+                  for seat, occurrence in _re_emit_recorded_slots(journal, rnd, phase, attempt))
 
 
 def _re_emit_blocking_result_names(session_dir, journal, rnd, phase, attempt, roster):
     # axis: a landing or bare entry for an unrecorded old-attempt slot, or one that cannot be checked, blocks re-emit
-    recorded = set(_re_emit_recorded_seat_labels(journal, rnd, phase, attempt))
+    recorded = _re_emit_recorded_slots(journal, rnd, phase, attempt)
     names = []
     for seat_key, occurrence in round_records.roster_slots(roster):
-        if _re_emit_recorded_seat_label(seat_key, occurrence) in recorded:
+        if (seat_key, occurrence) in recorded:
             continue
         skey = round_records.storage_key(seat_key, occurrence)
         landing = record_paths.landing_path(session_dir, rnd, phase, skey, attempt)
@@ -6580,14 +6583,14 @@ def _re_emit_completed_for_attempt(journal, rnd, phase, attempt):
     """Return (superseded_attempt, superseded_row) when re-emit already committed for ``attempt``."""
     superseded_row = None
     for event in journal:
-        if (event.get("cmd") == "re-emit" and event.get("outcome") == "orders-superseded"
+        if (session_contract.journal_is_re_emit_orders_superseded(event)
                 and event.get("round") == rnd and event.get("phase") == phase
                 and event.get("newAttempt") == attempt):
             superseded_row = event
     if superseded_row is None:
         return None
     for event in journal:
-        if (event.get("cmd") == "re-emit" and event.get("outcome") == "orders-emitted"
+        if (event.get("cmd") == RE_EMIT_CMD and event.get("outcome") == "orders-emitted"
                 and event.get("round") == rnd and event.get("phase") == phase
                 and event.get("attempt") == attempt):
             return superseded_row.get("attempt"), superseded_row
@@ -6700,7 +6703,7 @@ def _cmd_re_emit_locked(session_dir, by):
     if recorded_labels:
         superseded_fields["supersededRecords"] = recorded_labels
     superseded_row = _journal_entry_for_commit(
-        session_dir, "re-emit", "orders-superseded", **superseded_fields)
+        session_dir, RE_EMIT_CMD, ORDERS_SUPERSEDED_OUTCOME, **superseded_fields)
 
     try:
         _emit_orders_manifest(

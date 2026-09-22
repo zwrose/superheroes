@@ -60,6 +60,9 @@ __all__ = (
     "fix_still_present_at_head",
     "legacy_disposition_ledger_rows",
     "verify_result_for_head",
+    "RE_EMIT_CMD",
+    "ORDERS_SUPERSEDED_OUTCOME",
+    "journal_is_re_emit_orders_superseded",
 )
 
 # Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
@@ -76,7 +79,17 @@ REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
 JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
+RE_EMIT_CMD = "re-emit"
+ORDERS_SUPERSEDED_OUTCOME = "orders-superseded"
 META_FILE = "meta.json"
+
+
+def journal_is_re_emit_orders_superseded(event):
+    """True when a journal row commits the re-emit supersession protocol."""
+    if not isinstance(event, dict):
+        return False
+    return (event.get("cmd") == RE_EMIT_CMD
+            and event.get("outcome") == ORDERS_SUPERSEDED_OUTCOME)
 PANEL_PHASE = "dispatch-panel"
 FIXER_PHASE = "dispatch-fixer"
 AUDITS_PHASE = "dispatch-audits"
