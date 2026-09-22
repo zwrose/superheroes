@@ -2763,6 +2763,19 @@ def test_write_engine_pref_pins_refused_astra_pin_returns_detail(tmp_path):
     assert res["detail"]["reviewer-deep"].startswith("pin-probe-pending:")
 
 
+def test_write_engine_pref_pins_refuses_pin_off_the_role_allowlist(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_engine_pref_pins(
+        repo, "codexModels", {"reviewer-deep": "gpt-5.6-terra"}, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
+    assert res["detail"]["reviewer-deep"].startswith("pin-not-on-allowlist:")
+    assert "reviewer-deep" in res["detail"]["reviewer-deep"]
+    assert open(path, encoding="utf-8").read() == before
+
+
 def test_write_engine_pref_pins_codex_pin_ignored_note_when_reviewer_engine_claude(tmp_path):
     repo, store = _write_core_for_pin_tests(
         tmp_path, prefs={"reviewer": "claude", "implementation": "claude"})
@@ -2801,8 +2814,8 @@ def test_write_engine_pref_pins_empty_pins_is_noop_byte_identical(tmp_path):
 
 def test_write_engine_pref_pins_delete_entry_and_last_entry_removes_key(tmp_path):
     repo, store = _write_core_for_pin_tests(
-        tmp_path, prefs={"codexModels": {"reviewer": "gpt-5.6-terra", "pilot": "gpt-5.6-sol"}})
-    res = CM.write_engine_pref_pins(repo, "codexModels", {"pilot": None}, root=store)
+        tmp_path, prefs={"codexModels": {"reviewer": "gpt-5.6-terra", "implementer": "gpt-5.6-sol"}})
+    res = CM.write_engine_pref_pins(repo, "codexModels", {"implementer": None}, root=store)
     assert res["action"] == "written"
     got = CM.read(repo, root=store)
     assert got["enginePreferences"]["codexModels"] == {"reviewer": "gpt-5.6-terra"}

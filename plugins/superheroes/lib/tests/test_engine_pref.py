@@ -768,7 +768,7 @@ def test_assert_model_cell_category_rejects_token_on_seatless_role():
         _assert_model_cell_category("composer-2.5", "pilot", "codex")
 
 
-def test_dispatch_calibration_rows_codex_below_seat_pin_passes_sweep_oracle():
+def test_dispatch_calibration_rows_refused_deep_pin_shows_default_cell():
     rows = EP.dispatch_calibration_rows(
         {"reviewer": "codex", "codexModels": {"reviewer-deep": "gpt-5.6-terra"}},
         _CALIBRATION_TIERS,
@@ -776,7 +776,7 @@ def test_dispatch_calibration_rows_codex_below_seat_pin_passes_sweep_oracle():
     review_code = {r["role"]: r for r in rows}["review-code"]["model"]
     parts = _parse_review_code_model_cell(review_code)
     _assert_model_cell_category(parts["reviewer-deep"], "reviewer-deep", "codex")
-    assert parts["reviewer-deep"] == "gpt-5.6-terra"
+    assert parts["reviewer-deep"] == "gpt-5.6-sol"
 
 
 def test_dispatch_calibration_rows_model_cells_are_token_composite_or_marker():
@@ -1021,9 +1021,9 @@ def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_pat
     assert got["codexModels"] == {"reviewer": "gpt-5.6-terra",
                                   "reviewer-deep": "gpt-5.6-sol",
                                   "implementer": "gpt-5.6-sol",
-                                  "code-fixer": "gpt-5.6-terra",
-                                  "pilot": "gpt-5.6-terra"}
+                                  "code-fixer": "gpt-5.6-terra"}
     assert got["invalidCodexModels"]["bogus-role"] == "unknown role 'bogus-role' rejected"
+    assert got["invalidCodexModels"]["pilot"].startswith("pin-not-on-allowlist:")
     invalid_repo = str(tmp_path / "invalid")
     _write_core_with_prefs(invalid_repo, {"codexModels": {"code-fixer": "gpt-5.6-solar"}})
     invalid_got = EP.load_engine_prefs(invalid_repo, root=os.path.join(invalid_repo, "store"))

@@ -3495,6 +3495,37 @@ def test_compose_role_pin_without_seat_pins_liveness_not_scoped(tmp_path, capsys
     assert receipt["livenessPinScoped"] is False
 
 
+def test_compose_terra_deep_pin_refused_with_named_reason(tmp_path, capsys):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"codexModels": {"reviewer-deep": "gpt-5.6-terra"}})
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "cursor",
+            "--host-model",
+            "composer-2.5",
+            "--repo-root",
+            repo,
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    honorable = [
+        d for d in receipt["degradations"] if d["constraint"] == "role-pin-not-honorable"
+    ]
+    assert len(honorable) == 1
+    assert honorable[0]["reason"].startswith("pin-not-on-allowlist:")
+    for seat_cfg in receipt["seats"].values():
+        if isinstance(seat_cfg, dict) and seat_cfg.get("vendor") == "codex":
+            assert seat_cfg.get("model") != "gpt-5.6-terra"
+
+
 def test_compose_invalid_codex_role_pin_disclosed(tmp_path, capsys):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"codexModels": {"reviewer-deep": "gpt-6-astra"}})
