@@ -7196,7 +7196,8 @@ def judgment_follow_up_fault(artifact):
     """Refuse malformed followUp on skip dispositions before fold."""
     if not isinstance(artifact, dict):
         return None
-    for disp in artifact.get("dispositions") or []:
+    raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    for disp in raw:
         if not isinstance(disp, dict) or disp.get("disposition") != "skip":
             continue
         reason = disp.get("reason")

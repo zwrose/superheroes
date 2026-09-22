@@ -348,9 +348,21 @@ def test_t3_ceiling_gate_runs_when_post_fix_head_unresolvable(tmp_path):
 
 
 def test_t3b_ceiling_gate_reuse_requires_pass():
-    state = {"round": 2, "config": {"maxRoundsAbsolute": 2, "maxRounds": 2},
-             "rounds": {"2": {"verifyResult": "fail", SC.VERIFIED_HEAD_FIELD: "abc" * 13 + "a"}}}
+    head = "abc" * 13 + "a"
+    state = {"round": 2,
+             "config": {"maxRoundsAbsolute": 2, "maxRounds": 2, RD.FIX_FOLD_HEAD_KEY: head},
+             "rounds": {"2": {"verifyResult": "fail", SC.VERIFIED_HEAD_FIELD: head}}}
     assert RD._try_reuse_ceiling_verify_gate(state, state["config"], None) is False
+    assert "ceilingGateReused" not in state["rounds"]["2"]
+
+
+def test_t3b_ceiling_gate_reuse_taken_on_pass():
+    head = "abc" * 13 + "a"
+    state = {"round": 2, "decisions": [],
+             "config": {"maxRoundsAbsolute": 2, "maxRounds": 2, RD.FIX_FOLD_HEAD_KEY: head},
+             "rounds": {"2": {"verifyResult": "pass", SC.VERIFIED_HEAD_FIELD: head}}}
+    assert RD._try_reuse_ceiling_verify_gate(state, state["config"], None) is True
+    assert state["rounds"]["2"]["ceilingGateReused"] == head
 
 
 # axis: ceiling gate fail on post-fix head halts — never a clean park

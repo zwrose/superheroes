@@ -425,6 +425,17 @@ def test_e9_layer_identity_sha256_covers_follow_up():
         "default": "park",
         "rules": [dict(base_rule, followUp=dict(_WELL_FORMED, item="other item"))],
     }
-    overlay_a = _overlay(policy_a)
-    overlay_b = _overlay(policy_b)
-    assert overlay_a["identity"]["sha256"] != overlay_b["identity"]["sha256"]
+    a = RGP.parse_overlay(_overlay(policy_a))
+    b = RGP.parse_overlay(_overlay(policy_b))
+    assert a["ok"] and b["ok"]
+    assert a["layer"]["identity"]["sha256"] != b["layer"]["identity"]["sha256"]
+    forged = {"identity": dict(a["layer"]["identity"]), "policy": policy_b}
+    out = RGP.parse_overlay(forged)
+    assert out["ok"] is False, out
+    assert out["reason"] == "overlay-digest-mismatch"
+
+
+def test_judgment_follow_up_fault_nonlist_dispositions():
+    # axis: malformed dispositions must not crash the submit chokepoint
+    assert RD.judgment_follow_up_fault({"dispositions": 1}) is None
+    assert RD.judgment_follow_up_fault({"dispositions": True}) is None
