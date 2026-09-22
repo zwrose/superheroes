@@ -111,9 +111,11 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/conformance_probe.py" astra-probe --repo-root <root> --wave <wave-id> --run-dir <dir> [--max-wait S]
 ```
 
-A non-terminal slice returns `continue: true` — re-invoke with the same `--run-dir`. A pass is one
-finding on the planted file, one planted line, severity Critical; anything else (including a failed
-dispatch) is a miss. A second wave attempt with a different run dir refuses
+A non-terminal slice returns `continue: true` — re-invoke with the same `--run-dir`. A pass is a
+returned finding on the planted file, at one of the planted lines, rated Critical; other findings in
+the same result neither earn nor spoil it. A result with only unrelated findings, or a failed
+dispatch, is a miss. An unreadable attempts ledger refuses `astra-probe-ledger-unreadable` and is
+never overwritten. A second wave attempt with a different run dir refuses
 `astra-probe-wave-already-attempted`; three recorded misses set `ownerProposal: true`. A pass does
 not register Astra — only a reviewed commit removing `probe-pending` from the registry row does.
 

@@ -456,3 +456,304 @@ E       AssertionError: assert ['Critical', 'Important', 'Small', 'Nit'] == ['Cr
 ```
 
 **raw green** (exit 0): `1 passed in 0.23s`
+
+---
+
+## BP-R3-1 — PLANT_SEVERITY membership check
+
+- **axis:** rubric tier table without PLANT_SEVERITY must refuse before claim or dispatch (also covers the empty-table case via `PLANT_SEVERITY not in levels`)
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+    # deleted:
+    if PLANT_SEVERITY not in levels:
+        return None, "astra-probe-scale-unreadable"
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable_table_lacks_the_plant_level`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable_table_lacks_the_plant_level
+>       assert out["reason"] == "astra-probe-scale-unreadable"
+E       KeyError: 'reason'
+1 failed in 0.34s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+    if PLANT_SEVERITY not in levels:
+        return None, "astra-probe-scale-unreadable"
+```
+
+**raw green** (exit 0): `1 passed in 0.78s`
+
+---
+
+## BP-R3-2 — heading stop
+
+- **axis:** parsing must stop at the next markdown heading after the tier table
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+    # deleted:
+        if row.startswith("#"):
+            break
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable_table_empty`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable_table_empty
+>       assert out["reason"] == "astra-probe-scale-unreadable"
+E       KeyError: 'reason'
+1 failed in 0.61s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+        if row.startswith("#"):
+            break
+```
+
+**raw green** (exit 0): `1 passed in 0.61s`
+
+---
+
+## BP-R3-3 — prose stop
+
+- **axis:** parsing must stop at prose after the tier table, before a later unheaded table
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+    # deleted:
+        elif saw_table_row and row.strip() and not row.startswith("#"):
+            break
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_stops_at_the_end_of_the_tier_table`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_stops_at_the_end_of_the_tier_table
+>       assert "Unrelated" not in text
+E       AssertionError: assert 'Unrelated' not in 'Perform a o...laims\n```\n'
+1 failed in 0.67s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+        elif saw_table_row and row.strip() and not row.startswith("#"):
+            break
+```
+
+**raw green** (exit 0): `1 passed in 0.74s`
+
+---
+
+## BP-R3-4 — ledger read
+
+- **axis:** malformed JSON ledger must refuse before claim or dispatch
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_read_astra_attempts`):
+```python
+    except ValueError:
+        return [], None
+```
+(split from the combined `(OSError, ValueError)` refusal handler)
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_unreadable_ledger[{]`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_unreadable_ledger[{]
+>       assert out["reason"] == "astra-probe-ledger-unreadable"
+E       KeyError: 'reason'
+1 failed in 0.67s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_read_astra_attempts`):
+```python
+    except (OSError, ValueError):
+        return None, "astra-probe-ledger-unreadable"
+```
+
+**raw green** (exit 0): `1 passed in 0.79s`
+
+---
+
+## BP-R3-5 — append never overwrites
+
+- **axis:** append on unreadable ledger must not overwrite bytes
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_append_astra_attempt`):
+```python
+    if err:
+        attempts = []
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_append_refuses_unreadable_ledger_without_writing`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_append_refuses_unreadable_ledger_without_writing
+>       assert err == "astra-probe-ledger-unreadable"
+E       AssertionError: assert None == 'astra-probe-ledger-unreadable'
+1 failed in 0.73s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_append_astra_attempt`):
+```python
+    if err:
+        return err
+```
+
+**raw green** (exit 0): `1 passed in 0.57s`
+
+---
+
+## BP-R3-6 — claim unlink
+
+- **axis:** failed claim write must leave no partial claim file
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_write_astra_claim`):
+```python
+    # deleted unlink-on-failure block after O_EXCL create
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_claim_write_failure_leaves_no_claim`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_claim_write_failure_leaves_no_claim
+>       assert not os.path.exists(claim_path)
+E       AssertionError: assert not True
+1 failed in 0.70s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_write_astra_claim`):
+```python
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+```
+
+**raw green** (exit 0): `1 passed in 0.69s`
+
+---
+
+## BP-R3-7 — record-write refusal
+
+- **axis:** terminal append OSError must become a named refusal, not a silent success
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
+```python
+    _append_astra_attempt(ledger_dir, _ledger_attempt_record(out))
+    return out, (0 if out["ok"] else 1)
+```
+(replaces the `append_err` refusal branch)
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_record_write_failure_is_a_named_refusal`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_record_write_failure_is_a_named_refusal
+>       assert code == 1
+E       assert 0 == 1
+1 failed in 0.73s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
+```python
+    append_err = _append_astra_attempt(ledger_dir, _ledger_attempt_record(out))
+    if append_err:
+        refusal = {"ok": False, "reason": append_err, "unrecorded": out}
+        return refusal, 1
+    return out, (0 if out["ok"] else 1)
+```
+
+**raw green** (exit 0): `1 passed in 0.76s`
+
+---
+
+## BP-R3-8 — file leg
+
+- **axis:** right line on wrong file must miss
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_match_astra_finding`):
+```python
+    file_ok = True
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_miss_right_line_wrong_file`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_miss_right_line_wrong_file
+>       assert code == 1
+E       assert 0 == 1
+1 failed in 1.02s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_match_astra_finding`):
+```python
+    file_ok = _normalize_finding_file(finding.get("file")) == PLANT_FILE
+```
+
+**raw green** (exit 0): `1 passed in 0.82s`
+
+---
+
+## BP-R3-9 — grade rule
+
+- **axis:** unrelated findings beside a match must not spoil a pass
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_grade_astra_findings`):
+```python
+    if len(findings or []) != 1:
+        return False, None
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_pass_with_an_unrelated_finding_beside_the_match`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_pass_with_an_unrelated_finding_beside_the_match
+>       assert code == 0
+E       assert 1 == 0
+1 failed in 1.22s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_grade_astra_findings`): removed the `len(findings) != 1` early return.
+
+**raw green** (exit 0): `1 passed in 0.82s`
+
+---
+
+## BP-R3-10 — claim fd closes once
+
+- **axis:** a failed claim write must not call `os.close` on the claim fd after `fdopen`
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_write_astra_claim`):
+```python
+    except BaseException:
+        os.close(fd)  # bite-proof BP-R3-10 neutralization
+        try:
+            os.unlink(path)
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_claim_write_failure_does_not_close_fd_twice`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_claim_write_failure_does_not_close_fd_twice
+>           CP._write_astra_claim(ledger_dir, "wave-claim", str(tmp_path / "run"))
+E       OSError: [Errno 9] Bad file descriptor
+1 failed in 0.81s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_write_astra_claim`): removed the `os.close(fd)` line from the write-failure handler.
+
+**raw green** (exit 0): `1 passed in 0.61s`

@@ -37,7 +37,6 @@ _LEG_NAMES = ("resultProduction", "completionDetection", "progressTelemetry")
 ASTRA_PROBE_ROLE = "registration-probe"
 ASTRA_CLAIM_ABANDON_SECONDS = 86400
 _RUBRIC_PATH = os.path.join(os.path.dirname(_LIB_DIR), "rubric", "review-base.md")
-_EXPECTED_SEVERITY_LEVELS = ("Critical", "Important", "Minor", "Nit")
 PLANT_FILE = "app/session_guard.py"
 PLANT_LINES = (24, 25)
 PLANT_SEVERITY = "Critical"
@@ -96,24 +95,35 @@ def _severity_scale():
             content = fh.read()
     except OSError:
         return None, "astra-probe-scale-unreadable"
+    lines_list = content.splitlines()
+    heading_idx = None
+    for i, line in enumerate(lines_list):
+        if line.strip() == "## Severity tiers":
+            heading_idx = i
+            break
+    if heading_idx is None:
+        return None, "astra-probe-scale-unreadable"
     lines = []
     levels = []
-    for row in content.splitlines():
-        if "|" not in row:
-            continue
-        cells = [c.strip() for c in row.split("|") if c.strip()]
-        if not cells:
-            continue
-        first = cells[0]
-        if first.startswith("**") and first.endswith("**"):
-            level = first.strip("*").strip()
-            if len(cells) < 2:
-                return None, "astra-probe-scale-unreadable"
-            lines.append("- `%s` — %s" % (level, cells[1]))
-            levels.append(level)
-            if len(levels) == 4:
-                break
-    if levels != list(_EXPECTED_SEVERITY_LEVELS):
+    saw_table_row = False
+    for row in lines_list[heading_idx + 1:]:
+        if row.startswith("#"):
+            break
+        if "|" in row:
+            saw_table_row = True
+            cells = [c.strip() for c in row.split("|") if c.strip()]
+            if not cells:
+                continue
+            first = cells[0]
+            if first.startswith("**") and first.endswith("**"):
+                level = first.strip("*").strip()
+                if len(cells) < 2:
+                    return None, "astra-probe-scale-unreadable"
+                lines.append("- `%s` — %s" % (level, cells[1]))
+                levels.append(level)
+        elif saw_table_row and row.strip() and not row.startswith("#"):
+            break
+    if PLANT_SEVERITY not in levels:
         return None, "astra-probe-scale-unreadable"
     return lines, None
 
@@ -128,7 +138,7 @@ def _astra_probe_prompt():
         "`severity`, `title`, and `body`.\n\n"
         "Severity scale:\n"
         + "\n".join(scale_lines) + "\n"
-        "`severity` must be exactly one of those four words.\n\n"
+        "`severity` must be exactly one of those words.\n\n"
         "```diff\n"
         + ASTRA_PROBE_DIFF
         + "```\n"
@@ -792,18 +802,29 @@ def _read_astra_attempts(ledger_dir):
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
     except FileNotFoundError:
-        return []
-    except (OSError, json.JSONDecodeError):
-        return []
-    return data if isinstance(data, list) else []
+        return [], None
+    except (OSError, ValueError):
+        return None, "astra-probe-ledger-unreadable"
+    if not isinstance(data, list):
+        return None, "astra-probe-ledger-unreadable"
+    for item in data:
+        if not isinstance(item, dict):
+            return None, "astra-probe-ledger-unreadable"
+    return data, None
 
 def _append_astra_attempt(ledger_dir, record):
-    attempts = _read_astra_attempts(ledger_dir)
+    attempts, err = _read_astra_attempts(ledger_dir)
+    if err:
+        return err
     attempts.append(record)
-    store_core.atomic_write(
-        _astra_attempts_path(ledger_dir),
-        json.dumps(attempts, separators=(",", ":")) + "\n",
-    )
+    try:
+        store_core.atomic_write(
+            _astra_attempts_path(ledger_dir),
+            json.dumps(attempts, separators=(",", ":")) + "\n",
+        )
+    except OSError:
+        return "astra-probe-record-write-failed"
+    return None
 
 def _ledger_attempt_record(output):
     rec = dict(output)
@@ -876,11 +897,23 @@ def _write_astra_claim(ledger_dir, wave, run_dir_real):
     path = _astra_claim_path(ledger_dir, wave)
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh = os.fdopen(fd, "w", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        raise
+    try:
+        with fh:
             json.dump(claim, fh, separators=(",", ":"))
             fh.write("\n")
-    except Exception:
-        os.close(fd)
+    except BaseException:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
         raise
     return claim
 
@@ -904,12 +937,14 @@ def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None, seat=None):
         now = _now_utc()
     model = (seat or {}).get("model")
     effort = (seat or {}).get("effort")
-    attempts = _read_astra_attempts(ledger_dir)
+    attempts, err = _read_astra_attempts(ledger_dir)
+    if err:
+        return None, err
     recorded = {a.get("wave") for a in attempts}
     try:
         names = os.listdir(ledger_dir)
     except OSError:
-        return attempts
+        return attempts, None
     for name in names:
         if not name.startswith("astra-probe-claim-") or not name.endswith(".json"):
             continue
@@ -936,10 +971,14 @@ def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None, seat=None):
             "misses": misses,
             "ownerProposal": misses >= 3,
         }
-        _append_astra_attempt(ledger_dir, _ledger_attempt_record(orphan))
-        attempts = _read_astra_attempts(ledger_dir)
+        append_err = _append_astra_attempt(ledger_dir, _ledger_attempt_record(orphan))
+        if append_err:
+            return None, append_err
+        attempts, err = _read_astra_attempts(ledger_dir)
+        if err:
+            return None, err
         recorded.add(wave)
-    return attempts
+    return attempts, None
 
 def _astra_probe_refusal(wave, claim):
     return {
@@ -1013,7 +1052,12 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
     ledger_dir, ledger_err = _conformance_record_dir(repo_real)
     if ledger_err:
         return {"ok": False, "reason": ledger_err}, 1
-    attempts = _settle_orphan_astra_claims(ledger_dir, wave, now=now, seat=seat)
+    attempts, ledger_read_err = _read_astra_attempts(ledger_dir)
+    if ledger_read_err:
+        return {"ok": False, "reason": ledger_read_err}, 1
+    attempts, settle_err = _settle_orphan_astra_claims(ledger_dir, wave, now=now, seat=seat)
+    if settle_err:
+        return {"ok": False, "reason": settle_err}, 1
     claim_path = _astra_claim_path(ledger_dir, wave)
     claim = _read_astra_claim(claim_path)
     if claim is None:
@@ -1024,6 +1068,8 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
             claim = _read_astra_claim(claim_path)
             if claim is None:
                 return {"ok": False, "reason": "astra-probe-claim-unreadable"}, 1
+        except OSError:
+            return {"ok": False, "reason": "astra-probe-record-write-failed"}, 1
     if claim is not None:
         claimed_dir = claim.get("runDir")
         try:
@@ -1070,10 +1116,13 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
         if claim is not None:
             refreshed = dict(claim)
             refreshed["lastSeenAt"] = _iso_from_utc(now)
-            store_core.atomic_write(
-                claim_path,
-                json.dumps(refreshed, separators=(",", ":")) + "\n",
-            )
+            try:
+                store_core.atomic_write(
+                    claim_path,
+                    json.dumps(refreshed, separators=(",", ":")) + "\n",
+                )
+            except OSError:
+                return {"ok": False, "reason": "astra-probe-record-write-failed"}, 1
         misses = _count_astra_misses(attempts)
         return {
             "ok": False,
@@ -1090,7 +1139,10 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
         findings = []
     out = _build_astra_output(wave, run_dir_real, terminal, findings, attempts, seat)
     out["promptSha256"] = prompt_sha256
-    _append_astra_attempt(ledger_dir, _ledger_attempt_record(out))
+    append_err = _append_astra_attempt(ledger_dir, _ledger_attempt_record(out))
+    if append_err:
+        refusal = {"ok": False, "reason": append_err, "unrecorded": out}
+        return refusal, 1
     return out, (0 if out["ok"] else 1)
 
 def main(argv):
