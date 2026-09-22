@@ -1,11 +1,18 @@
+import copy
 import importlib.util
 import os
 import re
+import sys
 
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_MOD = os.path.join(_HERE, "..", "model_registry.py")
+_LIB = os.path.join(_HERE, "..")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+_MOD = os.path.join(_LIB, "model_registry.py")
+_DA_MOD = os.path.join(_LIB, "dispatch_allowlist.py")
+_SM_MOD = os.path.join(_LIB, "seat_map.py")
 
 
 def _load():
@@ -15,7 +22,23 @@ def _load():
     return mod
 
 
+def _load_dispatch_allowlist():
+    spec = importlib.util.spec_from_file_location("dispatch_allowlist", _DA_MOD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_seat_map():
+    spec = importlib.util.spec_from_file_location("seat_map", _SM_MOD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 MR = _load()
+DA = _load_dispatch_allowlist()
+SM = _load_seat_map()
 
 _EXPECTED_DEFAULT_CLAUDE_TIERS = {
     "orchestrator": None,
@@ -585,13 +608,55 @@ def test_codex_pin_verdict_astra_on_reviewer_refused_pin_role(monkeypatch):
     assert reason.startswith("pin-role-not-eligible:")
 
 
-def test_codex_pin_verdict_terra_accepted_on_reviewer_deep_and_pilot():
+def test_codex_pin_verdict_refuses_pins_off_the_role_allowlist():
     ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-5.6-terra")
-    assert ok is True
-    assert reason is None
+    assert ok is False
+    assert reason.startswith("pin-not-on-allowlist:")
+    assert "(gpt-5.6-sol, xhigh)" in reason
     ok, reason = MR.codex_pin_verdict("pilot", "gpt-5.6-terra")
-    assert ok is True
-    assert reason is None
+    assert ok is False
+    assert reason.startswith("pin-not-on-allowlist:")
+
+
+@pytest.mark.parametrize("registry_state", ["today", "post-pass"])
+def test_pin_judges_agree_writer_guard_and_composer(monkeypatch, registry_state):
+    # bite-axis: one judge — writer, composer and guard agree on every codex role pin in both registry states
+    if registry_state == "post-pass":
+        models = copy.deepcopy(MR._MODELS)
+        astra = dict(models["codex"]["gpt-6-astra"])
+        astra.pop("registration", None)
+        models["codex"]["gpt-6-astra"] = astra
+        monkeypatch.setattr(MR, "_MODELS", models)
+        monkeypatch.setattr(SM.model_registry, "_MODELS", models)
+        monkeypatch.setattr(DA.model_registry, "_MODELS", models)
+    carve_out_count = 0
+    for role in MR.codex_pin_roles():
+        for model in MR.codex_models():
+            ok, reason = MR.codex_pin_verdict(role, model)
+            guard_accepts = DA.validate(role, "codex", model, None)["ok"]
+            if ok is False and reason.startswith("pin-role-not-eligible:"):
+                carve_out_count += 1
+            else:
+                assert ok == guard_accepts
+            if role in SM.panel_pin_tiers():
+                _m, _e, info = SM._cell(role, "codex", {role: model})
+                assert info["honored"] == ok
+    if registry_state == "today":
+        assert carve_out_count == 0
+        ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+        assert ok is False
+        assert reason.startswith("pin-probe-pending:")
+        model, effort, info = SM._cell("reviewer-deep", "codex", {"reviewer-deep": "gpt-6-astra"})
+        assert (model, effort) == ("gpt-5.6-sol", "xhigh")
+        assert info["honored"] is False
+    else:
+        assert carve_out_count == len(MR.codex_pin_roles()) - 1
+        ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+        assert ok is True
+        assert reason is None
+        model, effort, info = SM._cell("reviewer-deep", "codex", {"reviewer-deep": "gpt-6-astra"})
+        assert (model, effort) == ("gpt-6-astra", "high")
+        assert info["honored"] is True
 
 
 def test_codex_pin_verdict_non_str_inputs():

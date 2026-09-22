@@ -520,7 +520,7 @@ def codex_pin_roles() -> tuple[str, ...]:
 
 
 def codex_pin_verdict(role: object, model: object) -> tuple[bool, str | None]:
-    """The ONLY place a codex per-role pin is judged. Never raises."""
+    """The ONLY place a codex per-role pin is judged. Never raises. The pin must resolve on the role's own codex allowlist so the writer, the composer and the dispatch guard agree."""
     if not _is_str(role):
         return False, "unknown role %r rejected" % role
     if not _is_str(model):
@@ -543,6 +543,13 @@ def codex_pin_verdict(role: object, model: object) -> tuple[bool, str | None]:
         return (
             False,
             "pin-role-not-eligible: %s is a valid pin only for %s" % (model, eligible),
+        )
+    resolved = resolve_dispatch(role, "codex", model, None)
+    if not resolved.get("ok"):
+        return (
+            False,
+            "pin-not-on-allowlist: %s is not on the %s codex allowlist [%s]"
+            % (model, role, _allowlist_park_text(allowlist(role, "codex"))),
         )
     return True, None
 
