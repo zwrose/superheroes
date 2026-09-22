@@ -623,7 +623,7 @@ number, leaves the old attempt's orders, stubs, manifest, and anchor byte-identi
 `orders-superseded` row (old attempt, `newAttempt`, the superseded manifest and order hashes, the
 head, the relocation that made it stale — `oldRoot`, `newRoot`, `oldBranch`, `newBranch`,
 `sessionDir`, `at` — `by`, `at`; when journal `recorded` rows exist for the superseded attempt,
-`sorted supersededRecords` naming those seat labels) followed by the new attempt's `orders-emitted`
+`supersededRecords` (sorted) naming those seat labels) followed by the new attempt's `orders-emitted`
 row. The full roster is re-issued on the new attempt even when only some old-attempt seats were
 recorded. Certification treats a superseded attempt's seat as closed only when neither its landing
 file nor its bare-payload file exists; the new attempt's seats are open. Dispatch the new attempt's
