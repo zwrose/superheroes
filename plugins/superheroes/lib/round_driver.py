@@ -4121,19 +4121,21 @@ def _fold_verify(state, config, artifact, *, resolution):
 def _try_reuse_ceiling_verify_gate(state, config, session_dir):
     """Reuse the round's passing gate at the ceiling when the post-fix head matches.
 
-    A reuse is allowed only when this round already recorded ``verifyResult == "pass"`` and
-    ``verifiedHead`` equals the post-fix head resolved by ``_resolve_fix_fold_head_sha``. Every
-    other case — no prior gate, a non-pass result, a head mismatch, or an unresolvable head —
-    returns False so the ceiling gate runs (fail closed toward running it). On reuse, records
+    A reuse is allowed only when ``verify_result_for_head`` returns ``"pass"`` for the post-fix
+    head resolved by ``_resolve_fix_fold_head_sha`` — the canonical verified-head reader. Every
+    other case — an unresolvable head, a non-pass result, or no prior verification for that head
+    — returns False so the ceiling gate runs (fail closed toward running it). On reuse, records
     ``ceilingGateReused`` and parks ``round-ceiling``."""
-    rnd = state["round"]
-    if session_contract.verify_result_for_round(state, rnd) != "pass":
-        return False
-    verified_head = session_contract.verified_head_for_round(state, rnd)
-    if not verified_head:
-        return False
-    post_fix_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
-    if head_err or not post_fix_head or post_fix_head != verified_head:
+    if session_dir is None:
+        cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
+        post_fix_head = cfg.get(FIX_FOLD_HEAD_KEY)
+        if not (isinstance(post_fix_head, str) and post_fix_head):
+            return False
+    else:
+        post_fix_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+        if head_err or not post_fix_head:
+            return False
+    if session_contract.verify_result_for_head(state, post_fix_head) != "pass":
         return False
     _record_round(state, "ceilingGateReused", post_fix_head)
     next_round = state["round"] + 1
