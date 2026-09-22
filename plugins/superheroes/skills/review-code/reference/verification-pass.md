@@ -147,13 +147,13 @@ print(json.dumps(verification.merge_and_rank(survivors, grouping)))
 " > "$SESSION_DIR/round-<N>/synthesized.json"
 ```
 
-The grouping must account for **every** staged survivor id **exactly once**. When a **present**
-grouping is submitted (a non-null `grouping` key), each survivor id must appear in exactly one
-group's `member_ids`; a grouping that omits any staged id is **refused** with
+The grouping must account for **every** staged survivor id **exactly once** under a **coverage
+guarantee**. When a **non-empty** grouping is submitted, each survivor id must appear in exactly
+one group's `member_ids`; a grouping that omits any staged id is **refused** with
 `staged-id-unresolvable` naming the omitted id — re-emit the grouping with the missing ids as
-singleton groups. An **absent or null** grouping carries no coverage obligation:
-`verification.merge_and_rank(survivors, grouping)` falls open to unmerged survivors; **synthesis
-drops nothing** and synthesis failure never aborts the review. Merged groups combine
+singleton groups. An **absent**, **null**, or **empty-list** grouping carries no coverage
+obligation: `verification.merge_and_rank(survivors, grouping)` falls open to unmerged survivors;
+**synthesis drops nothing** and synthesis failure never aborts the review. Merged groups combine
 bodies and take the highest severity; the merged `verdict` is **CONFIRMED only when a member at
 the merged (highest) severity is CONFIRMED-with-evidence** — computed **order-independently**, so
 model-supplied member order can't flip GATE-eligibility, and carrying that member's receipt (the

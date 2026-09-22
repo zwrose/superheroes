@@ -5075,7 +5075,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                "title": f.get("title"), "severity": f.get("severity"),
                "verdict": f.get("verdict"), "challenge": f.get("challenge"),
                "unverified": f.get("unverified")}
-        if _state_version(state) >= STATE_SCHEMA_VERSION:
+        if (_state_version(state) or 0) >= STATE_SCHEMA_VERSION:
             finding_key = f.get(session_contract.FINDING_KEY_FIELD)
             if isinstance(finding_key, str) and finding_key:
                 row[session_contract.FINDING_KEY_FIELD] = finding_key

@@ -230,6 +230,19 @@ def test_legacy_receipt_omits_finding_key_even_when_state_has_it():
     assert SC.FINDING_KEY_FIELD not in receipt["findings"][0]
 
 
+def test_receipt_with_absent_schema_version_does_not_raise():
+    """axis: absent schemaVersion must not raise on findingKey projection gate."""
+    finding = {"file": "a.py", "line": 1, "title": "Issue", "severity": "Important", "id": "F1"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    state = RD.new_state(_cfg())
+    del state["schemaVersion"]
+    RD._set_findings(state, compiled)
+    state["terminal"] = "converged"
+    state["certification"] = {"shape": "audited-chain"}
+    receipt = RD.build_receipt(state)
+    assert SC.FINDING_KEY_FIELD not in receipt["findings"][0]
+
+
 # --- Part 3: disposition metadata does not move identity --------------------------------
 
 _DISPOSITION_METADATA_VALUES = {

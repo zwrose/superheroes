@@ -236,8 +236,8 @@ def test_e10_synthesis_non_string_member_refused_at_submit(tmp_path):
     assert journal[-1].get("outcome") == "synthesis-results-shape"
 
 
-def test_grouping_absent_falls_open_present_incomplete_refused():
-    """Absent/null grouping falls open; a present but incomplete grouping refuses."""
+def test_grouping_absent_null_empty_falls_open_nonempty_incomplete_refused():
+    """Axis: absent/null/empty grouping falls open; non-empty incomplete grouping refuses."""
     survivors = [
         {"id": "v0", "file": "a.py", "line": 1, "title": "a", "severity": "Important",
          "verdict": "PLAUSIBLE"},
@@ -255,7 +255,7 @@ def test_grouping_absent_falls_open_present_incomplete_refused():
     assert "v2" in fault
     merged = V.merge_and_rank(survivors, incomplete["grouping"])
     assert sorted(f["id"] for f in merged["findings"]) == ["v0", "v1", "v2"]
-    for artifact in ({"grouping": None}, {"grouping": []}):
+    for artifact in ({}, {"grouping": None}, {"grouping": []}):
         assert RD.synthesis_staged_id_fault(state, artifact) is None
         merged_open = V.merge_and_rank(survivors, artifact.get("grouping"))
         assert sorted(f["id"] for f in merged_open["findings"]) == ["v0", "v1", "v2"]
