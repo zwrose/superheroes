@@ -7168,7 +7168,8 @@ def judgment_disposition_collision_fault(artifact):
     if not isinstance(artifact, dict):
         return None
     by_id = {}
-    for disp in artifact.get("dispositions") or []:
+    raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    for disp in raw:
         if not isinstance(disp, dict) or disp.get("id") is None:
             continue
         fid = disp.get("id")
