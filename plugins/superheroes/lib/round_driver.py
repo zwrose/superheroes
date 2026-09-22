@@ -6523,18 +6523,8 @@ def _relocation_after_emission(journal, rnd, phase, attempt):
                 and event.get("round") == rnd and event.get("phase") == phase
                 and event.get("attempt") == attempt):
             last_emit_idx = idx
-    if last_emit_idx is None:
-        for event in journal:
-            if event.get("outcome") != "relocated":
-                continue
-            old_root = event.get("oldRoot")
-            new_root = event.get("newRoot")
-            if not isinstance(old_root, str) or not isinstance(new_root, str):
-                continue
-            if os.path.realpath(old_root) != os.path.realpath(new_root):
-                return event
-        return None
-    for event in journal[last_emit_idx + 1:]:
+    start = 0 if last_emit_idx is None else last_emit_idx + 1
+    for event in journal[start:]:
         if event.get("outcome") != "relocated":
             continue
         old_root = event.get("oldRoot")
@@ -6544,19 +6534,6 @@ def _relocation_after_emission(journal, rnd, phase, attempt):
         if os.path.realpath(old_root) != os.path.realpath(new_root):
             return event
     return None
-
-
-def _landing_entry_present(path):
-    """True when the directory entry exists; indeterminate errors count as present (fail closed)."""
-    try:
-        os.lstat(path)
-        return True
-    except FileNotFoundError:
-        return False
-    except NotADirectoryError:
-        return False
-    except OSError:
-        return True
 
 
 def _re_emit_attempt_result_names(session_dir, journal, rnd, phase, attempt, roster):
@@ -6577,9 +6554,9 @@ def _re_emit_attempt_result_names(session_dir, journal, rnd, phase, attempt, ros
         skey = round_records.storage_key(seat_key, occurrence)
         landing = record_paths.landing_path(session_dir, rnd, phase, skey, attempt)
         bare = record_paths.bare_payload_path(session_dir, rnd, phase, skey, attempt)
-        if _landing_entry_present(landing):
+        if record_paths.landing_entry_present(landing):
             names.append("landing:%s" % skey)
-        if _landing_entry_present(bare):
+        if record_paths.landing_entry_present(bare):
             names.append("bare:%s" % skey)
     return names
 
