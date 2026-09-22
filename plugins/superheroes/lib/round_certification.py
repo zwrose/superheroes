@@ -1594,7 +1594,8 @@ def check_disposition_without_receipt(ctx):
                     fid,
                     "out-of-scope disposition lacks named follow-up item",
                 )
-            shape_fault = session_contract.follow_up_shape_fault(follow_up)
+            # Grades persisted records; some were recorded before item was checked at submit.
+            shape_fault = session_contract.follow_up_shape_fault(follow_up, require_item=False)
             if shape_fault:
                 binding_failure, detail = shape_fault
                 return _refusal(

@@ -122,10 +122,15 @@ DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
 FOLLOW_UP_FIELDS = ("item", "revisitTrigger", "classClosure")
 
 
-def follow_up_shape_fault(follow_up):
-    """None when followUp is fully shaped; otherwise (binding_failure, detail)."""
+def follow_up_shape_fault(follow_up, *, require_item=True):
+    """None when followUp is fully shaped; otherwise (binding_failure, detail).
+
+    With ``require_item=True`` a missing ``item`` is refused; with ``require_item=False`` a missing
+    ``item`` passes, but a present-but-empty or non-string ``item`` is still refused."""
     if not isinstance(follow_up, dict):
         return (None, "out-of-scope disposition lacks named follow-up item")
+    if require_item and "item" not in follow_up:
+        return ("missing-follow-up-item", "out-of-scope follow-up lacks named item")
     if "item" in follow_up:
         item = follow_up.get("item")
         if not isinstance(item, str) or not item.strip():

@@ -149,9 +149,16 @@ def test_rule_1_not_dict():
     assert fault == (None, "out-of-scope disposition lacks named follow-up item")
 
 
-def test_rule_2_item_absent_passes():
-    # axis: rule 2 — item optional when absent
+def test_rule_2_item_absent_refused_when_required():
+    # axis: rule 2 — missing item refused when require_item=True (default)
     fault = SC.follow_up_shape_fault({"revisitTrigger": "later", "classClosure": "none"})
+    assert fault == ("missing-follow-up-item", "out-of-scope follow-up lacks named item")
+
+
+def test_rule_2_legacy_item_absent_passes():
+    # axis: rule 2 legacy — item optional when require_item=False
+    fault = SC.follow_up_shape_fault(
+        {"revisitTrigger": "later", "classClosure": "none"}, require_item=False)
     assert fault is None
 
 
@@ -207,16 +214,17 @@ def test_e1_judgment_skip_well_formed_follow_up_folds(tmp_path):
     assert entry["followUp"] == _WELL_FORMED
 
 
-def test_e2_judgment_skip_item_less_follow_up_folds_at_submit(tmp_path):
-    # axis: e2 — item-less followUp with trigger and closure folds
+def test_e2_judgment_skip_item_less_follow_up_refused_at_submit(tmp_path):
+    # axis: e2 — item-less followUp refused for new submissions
     session_dir = _parked_judgment_session(tmp_path)
+    before = _state_bytes(session_dir)
     artifact = {"dispositions": [
         {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "product choice",
          "followUp": {"revisitTrigger": "later", "classClosure": "none"}}]}
     out = _pending_submit(session_dir, artifact)
-    assert out["ok"] is True, out
-    entry = _ledger_by_key(_load_state(session_dir))[_TRADEOFF_ID]
-    assert entry["followUp"] == {"revisitTrigger": "later", "classClosure": "none"}
+    assert out["ok"] is False, out
+    assert "follow-up-malformed" in out["reason"]
+    assert _state_bytes(session_dir) == before
 
 
 def test_e2b_judgment_skip_present_empty_item_refused_at_submit(tmp_path):
@@ -296,6 +304,22 @@ def test_e8_stall_hold_with_follow_up_not_checked(tmp_path):
     out = _pending_submit(session_dir, artifact)
     assert out["ok"] is True, out
     assert _load_state(session_dir)["terminal"] == "held"
+
+
+def test_e2c_duplicate_skip_conflicting_follow_up_refused_at_submit(tmp_path):
+    # axis: e2c — duplicate skip ids with different followUps refused before fold
+    session_dir = _parked_judgment_session(tmp_path)
+    before = _state_bytes(session_dir)
+    artifact = {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "defer",
+         "followUp": {"item": "first", "revisitTrigger": "M1", "classClosure": "tracked"}},
+        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "defer",
+         "followUp": {"item": "second", "revisitTrigger": "M2", "classClosure": "tracked"}},
+    ]}
+    out = _pending_submit(session_dir, artifact)
+    assert out["ok"] is False, out
+    assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in out["reason"]
+    assert _state_bytes(session_dir) == before
 
 
 def test_e9_item_less_persisted_follow_up_certifies(tmp_path):

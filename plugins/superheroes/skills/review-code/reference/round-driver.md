@@ -785,10 +785,10 @@ certification writer reads it when told to.
   only when the round record shows that same head was verified (`verifiedHead`), and terminal
   finalization revokes a stamp it cannot re-establish; `refuted` carries `refutedReason`;
   `out-of-scope` carries `outOfScopeReason` plus a `followUp` object with shape
-  `{revisitTrigger, classClosure}` and an optional `item` — judged by
-  `session_contract.follow_up_shape_fault` at submit and at certification (binding failures
-  `missing-follow-up-item` when `item` is present but empty or non-string,
-  `missing-revisit-trigger`, `missing-class-closure`).
+  `{item, revisitTrigger, classClosure}` — judged by `session_contract.follow_up_shape_fault`
+  at submit and at certification. A new follow-up must include a nonblank `item`; certification
+  grades persisted records and still accepts item-less follow-ups recorded before that check
+  (binding failures `missing-follow-up-item`, `missing-revisit-trigger`, `missing-class-closure`).
 - Where each is recorded: `fixed` at the audits fold for every target the independent auditor
   discharged; `refuted` at the verifiers fold (the verdict's reason) and at synthesis for an
   author-justified drop (the quoted justification); `out-of-scope` where the owner gives it — an

@@ -243,8 +243,8 @@ def test_e2_stall_accept_risk_follow_up_loads_and_folds(tmp_path, adapters):
     assert SC.follow_up_shape_fault(entries[0].get("followUp")) is None
 
 
-def test_e3_follow_up_item_less_loads_and_writes():
-    # axis: e3 — item-less followUp with trigger and closure loads and writes
+def test_e3_follow_up_item_less_refused_at_load_and_write():
+    # axis: e3 — item-less followUp refused for new gate-policy rules
     cls = sorted(RGP.judgment_finding_classes())[0]
     policy = {
         "schema": RGP.GATE_POLICY_SCHEMA,
@@ -257,12 +257,10 @@ def test_e3_follow_up_item_less_loads_and_writes():
         }],
     }
     loaded = RGP.parse_overlay(_overlay(policy))
-    assert loaded["ok"] is True, loaded
-    assert loaded["layer"]["rules"][0]["followUp"] == {
-        "revisitTrigger": "later",
-        "classClosure": "none",
-    }
-    assert RGP.validate_policy_for_write(policy) is None
+    assert loaded["ok"] is False
+    assert loaded["reason"] == "layer-follow-up-malformed"
+    refusal = RGP.validate_policy_for_write(policy)
+    assert refusal is not None and "rules[0].followUp" in refusal
 
 
 def test_e3b_follow_up_present_empty_item_refused_at_load_and_write():

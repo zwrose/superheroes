@@ -149,14 +149,44 @@ def test_e6_synthesis_one_bad_member_refused_at_submit(tmp_path):
     assert "v99" in out["reason"]
 
 
-def test_e7_kept_id_member_self_no_fault(tmp_path):
-    # axis: e7 — member_id == kept_id stays a no-op (not a fault)
+def test_e7_duplicate_member_id_refused_at_submit(tmp_path):
+    # axis: e7 — duplicate member_ids in one group refused before fold
     d, n = _at(tmp_path, RD.P_SYNTHESIS)
     good_id = _verified_id(d)
+    before = _state_bytes(d)
     out = RD.cmd_submit(
         d, n["phase"], n["attempt"], n["expectedStateHash"],
         {"grouping": [{"group_id": "g", "member_ids": [good_id, good_id]}]})
-    assert out["ok"] is True
+    assert out["ok"] is False
+    assert RD.STAGED_ID_UNRESOLVABLE_CAUSE in out["reason"]
+    assert good_id in out["reason"]
+    assert _state_bytes(d) == before
+    journal = RD.read_journal(d)
+    assert journal[-1].get("outcome") == "staged-id-unresolvable"
+
+
+def test_e7b_grouping_omits_survivor_refused_at_submit(tmp_path):
+    # axis: e7b — grouping that omits a survivor refused before fold
+    d, n = _at(tmp_path, RD.P_SYNTHESIS)
+    ok, state = RD.load_state(d)
+    assert ok
+    verified = state.get("_verified") or []
+    assert len(verified) >= 1
+    ids = [f["id"] for f in verified if isinstance(f, dict) and isinstance(f.get("id"), str)]
+    extra = {"id": "v-extra", "file": "b.py", "line": 2, "title": "other",
+             "severity": "Important", "verdict": "PLAUSIBLE"}
+    state["_verified"] = list(verified) + [extra]
+    RD.save_state(d, state)
+    ids.append("v-extra")
+    n = dict(n, expectedStateHash=RD.state_hash(state))
+    before = _state_bytes(d)
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"],
+        {"grouping": [{"group_id": "g", "member_ids": [ids[0]]}]})
+    assert out["ok"] is False
+    assert RD.STAGED_ID_UNRESOLVABLE_CAUSE in out["reason"]
+    assert "omits staged id" in out["reason"]
+    assert _state_bytes(d) == before
 
 
 @pytest.mark.parametrize("artifact", [

@@ -2917,11 +2917,50 @@ def verifier_drop_staged_id_fault(state, artifact):
     return None
 
 
+def _synthesis_grouping_coverage_fault(verified, grouping):
+    """None when a non-empty grouping covers every survivor exactly once; otherwise a refusal."""
+    if not isinstance(grouping, list) or not grouping:
+        return None
+    survivor_ids = [
+        s["id"] for s in verified
+        if isinstance(s, dict) and isinstance(s.get("id"), str)
+    ]
+    expected = set(survivor_ids)
+    seen = []
+    for index, group in enumerate(grouping):
+        if not isinstance(group, dict):
+            continue
+        member_ids = group.get("member_ids")
+        if not isinstance(member_ids, list):
+            continue
+        for member_id in member_ids:
+            if not isinstance(member_id, str):
+                continue
+            if member_id in seen:
+                return "%s: duplicate member %r in grouping[%d]" % (
+                    STAGED_ID_UNRESOLVABLE_CAUSE, member_id, index)
+            seen.append(member_id)
+    seen_set = set(seen)
+    if seen_set != expected or len(seen) != len(expected):
+        missing = expected - seen_set
+        if missing:
+            return "%s: grouping omits staged id %r" % (
+                STAGED_ID_UNRESOLVABLE_CAUSE, sorted(missing)[0])
+        extra = seen_set - expected
+        if extra:
+            return "%s: staged id %r maps to no entry" % (
+                STAGED_ID_UNRESOLVABLE_CAUSE, sorted(extra)[0])
+    return None
+
+
 def synthesis_staged_id_fault(state, artifact):
     """Refuse synthesis author-justified drops and merge members whose ids do not resolve."""
     verified = state.get("_verified") or []
     grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
     if isinstance(grouping, list):
+        fault = _synthesis_grouping_coverage_fault(verified, grouping)
+        if fault:
+            return fault
         for group in grouping:
             if not isinstance(group, dict):
                 continue
@@ -3475,6 +3514,23 @@ def _fold_judgment(state, config, artifact):
                 prior_s = prior_g.strip() if isinstance(prior_g, str) else ""
                 new_s = new_g.strip() if isinstance(new_g, str) else ""
                 if prior_s != new_s:
+                    _park_cannot_certify(state, "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid))
+                    state.pop("_judgmentFindings", None)
+                    state.pop("_judgmentMechanical", None)
+                    return
+            if prior.get("disposition") == "skip" and d.get("disposition") == "skip":
+                prior_reason = prior.get("reason")
+                new_reason = d.get("reason")
+                prior_rs = prior_reason.strip() if isinstance(prior_reason, str) else ""
+                new_rs = new_reason.strip() if isinstance(new_reason, str) else ""
+                if prior_rs != new_rs:
+                    _park_cannot_certify(state, "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid))
+                    state.pop("_judgmentFindings", None)
+                    state.pop("_judgmentMechanical", None)
+                    return
+                prior_fu = prior.get("followUp") if isinstance(prior.get("followUp"), dict) else None
+                new_fu = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
+                if session_contract.canonical(prior_fu or {}) != session_contract.canonical(new_fu or {}):
                     _park_cannot_certify(state, "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid))
                     state.pop("_judgmentFindings", None)
                     state.pop("_judgmentMechanical", None)
@@ -7083,6 +7139,47 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
         return _lock_held_refusal(session_dir, "submit", held)
 
 
+def _judgment_skip_equiv(prior, new):
+    """True when two skip dispositions carry the same normalized reason and followUp."""
+    prior_reason = prior.get("reason")
+    new_reason = new.get("reason")
+    prior_rs = prior_reason.strip() if isinstance(prior_reason, str) else ""
+    new_rs = new_reason.strip() if isinstance(new_reason, str) else ""
+    if prior_rs != new_rs:
+        return False
+    prior_fu = prior.get("followUp") if isinstance(prior.get("followUp"), dict) else None
+    new_fu = new.get("followUp") if isinstance(new.get("followUp"), dict) else None
+    return session_contract.canonical(prior_fu or {}) == session_contract.canonical(new_fu or {})
+
+
+def judgment_disposition_collision_fault(artifact):
+    """Refuse duplicate judgment ids with conflicting dispositions before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    by_id = {}
+    for disp in artifact.get("dispositions") or []:
+        if not isinstance(disp, dict) or disp.get("id") is None:
+            continue
+        fid = disp.get("id")
+        prior = by_id.get(fid)
+        if prior is not None:
+            if prior.get("disposition") != disp.get("disposition"):
+                return "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid)
+            if prior.get("disposition") == "fix-with-guidance" \
+                    and disp.get("disposition") == "fix-with-guidance":
+                prior_g = prior.get("guidance")
+                new_g = disp.get("guidance")
+                prior_s = prior_g.strip() if isinstance(prior_g, str) else ""
+                new_s = new_g.strip() if isinstance(new_g, str) else ""
+                if prior_s != new_s:
+                    return "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid)
+            if prior.get("disposition") == "skip" and disp.get("disposition") == "skip":
+                if not _judgment_skip_equiv(prior, disp):
+                    return "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid)
+        by_id[fid] = disp
+    return None
+
+
 def judgment_follow_up_fault(artifact):
     """Refuse malformed followUp on skip dispositions before fold."""
     if not isinstance(artifact, dict):
@@ -7339,6 +7436,12 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "outcome": "follow-up-malformed"})
             return {"ok": False, "reason": fault}
     if phase == P_JUDGMENT:
+        fault = judgment_disposition_collision_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": JUDGMENT_DISPOSITION_COLLISION_CAUSE})
+            return {"ok": False, "reason": fault}
         fault = judgment_follow_up_fault(artifact)
         if fault:
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,

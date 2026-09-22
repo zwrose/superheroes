@@ -312,9 +312,9 @@ action that owns it, leaving the rest of the calibration untouched:
   `core.md`'s `reviewGatePolicy` key (a sibling of `enginePreferences`, not inside it). The
   shipped default pre-authorizes nothing — every rule added here is a narrow pre-authorization of
   a gate the driver would otherwise park on. A `skip` (or stall `accept-the-disclosed-risk`) rule
-  may carry an optional `followUp` `{revisitTrigger, classClosure}` with an optional `item`; without
-  one, a review
-  the rule resolves records the disposition and certification refuses it for the missing follow-up.
+  may carry a `followUp` `{item, revisitTrigger, classClosure}`; a new follow-up must include a
+  nonblank `item`. Without a well-formed follow-up, the rule resolves records the disposition and
+  certification refuses it for the missing follow-up.
   Show the resolved policy layers and rule counts first, then merge only the requested overlay
   document. Pass `null` (or empty stdin) to remove the overlay and return to shipped-defaults-only.
 
