@@ -402,7 +402,7 @@ def test_record_result_journal_stamps_transport(tmp_path):
     out = round_driver.cmd_record_result(session_dir, tid, attempt=pend["attempt"])
     assert out["ok"] is True, out
     entry = _last_journal_recorded(session_dir, "record-result")
-    assert entry.get(session_contract.SEAT_TRANSPORT_KEY) == session_contract.SEAT_TRANSPORT_HAND_LANDED
+    assert entry.get("transport") == "hand-landed"
     assert "vendor" not in entry
 
 
@@ -411,18 +411,18 @@ def test_record_result_journal_stamps_transport(tmp_path):
     [
         (
             {"phase": P_FIXER, "provenance": round_records.PROVENANCE_DISPATCH_OBSERVED},
-            session_contract.SEAT_TRANSPORT_ORCHESTRATOR,
+            "orchestrator",
         ),
         (
             {
                 "phase": round_driver.P_PANEL,
                 "provenance": round_records.PROVENANCE_ORCHESTRATOR_FULFILLED,
             },
-            session_contract.SEAT_TRANSPORT_ORCHESTRATOR,
+            "orchestrator",
         ),
         (
             {"phase": round_driver.P_PANEL, "provenance": round_records.PROVENANCE_HAND_LANDED},
-            session_contract.SEAT_TRANSPORT_HAND_LANDED,
+            "hand-landed",
         ),
         (
             {
@@ -433,7 +433,7 @@ def test_record_result_journal_stamps_transport(tmp_path):
                     for field in round_records.EXECUTION_EVIDENCE_FIELDS
                 },
             },
-            session_contract.SEAT_TRANSPORT_RUNNER,
+            "runner",
         ),
         (
             {
@@ -445,11 +445,11 @@ def test_record_result_journal_stamps_transport(tmp_path):
                     if field != "observation"
                 },
             },
-            session_contract.SEAT_TRANSPORT_NATIVE,
+            "native-subagent",
         ),
         (
             {"phase": round_driver.P_PANEL, "provenance": round_records.PROVENANCE_DISPATCH_OBSERVED},
-            session_contract.SEAT_TRANSPORT_NATIVE,
+            "native-subagent",
         ),
     ],
     ids=["fixer-phase", "orchestrator-provenance", "hand-landed", "runner", "incomplete-evidence",
@@ -457,7 +457,7 @@ def test_record_result_journal_stamps_transport(tmp_path):
 )
 def test_journal_transport_fields_derivations(envelope, expected):
     stamped = round_driver._journal_transport_fields(envelope)
-    assert stamped == {session_contract.SEAT_TRANSPORT_KEY: expected}
+    assert stamped == {"transport": expected}
 
 
 def test_journal_addressed_false_when_addressing_omitted(tmp_path):

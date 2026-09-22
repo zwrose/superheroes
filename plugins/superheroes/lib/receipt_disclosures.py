@@ -269,16 +269,50 @@ def seat_map_unjudgeable(state):
     return bool(seat_map_receipts.unjudgeable_receipts(state, author_family(state)))
 
 
-def _native_in_session_seats(state, journal):
+def latest_recorded_events(journal):
     if not isinstance(journal, list):
         return []
-    disclosed = set()
+    latest = {}
+    key_order = []
     for event in journal:
-        if event.get("outcome") != "recorded":
+        if not isinstance(event, dict) or event.get("outcome") != "recorded":
             continue
         seat = event.get("seat")
+        phase = event.get("phase")
+        rnd = event.get("round")
+        attempt = event.get("attempt")
+        provenance = event.get("provenance")
+        if not isinstance(seat, str) or not seat:
+            ident = event.get("recordIdentity")
+            if isinstance(ident, dict):
+                seat = ident.get("seat")
+                phase = ident.get("phase", phase)
+                attempt = ident.get("attempt", attempt)
+                provenance = provenance or event.get("provenance")
         if not isinstance(seat, str) or not seat:
             continue
+        occurrence = event.get("occurrence", 0)
+        key = (phase, rnd, attempt, seat, occurrence)
+        if key not in latest:
+            key_order.append(key)
+        identity = {
+            "seat": seat,
+            "phase": phase,
+            "round": rnd,
+            "attempt": attempt,
+            "occurrence": occurrence,
+            "provenance": provenance,
+        }
+        latest[key] = (identity, event)
+    return [latest[key] for key in key_order]
+
+
+def _native_in_session_seats(journal):
+    disclosed = set()
+    for identity, event in latest_recorded_events(journal):
+        if event.get("cmd") == "record-missing":
+            continue
+        seat = identity["seat"]
         transport = event.get(session_contract.SEAT_TRANSPORT_KEY)
         if transport in session_contract.SEAT_TRANSPORTS_DISCLOSED:
             disclosed.add(seat)
@@ -548,7 +582,7 @@ def build_degraded_prose(state, form, journal=None):
     )
     if _run_unj and seat_map_unjudgeable(state):
         degraded_out.append(_run_unj)
-    native_seats = _native_in_session_seats(state, journal)
+    native_seats = _native_in_session_seats(journal)
     if native_seats:
         degraded_out.append(
             "unprobed native seat(s) %s: seats with no runner execution record — run in-session on "

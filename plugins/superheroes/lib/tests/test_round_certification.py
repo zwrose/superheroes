@@ -250,6 +250,7 @@ def test_receipt_seat_model_from_execution_evidence_not_seat_map(tmp_path):
         seat=seat,
         nonce="dispatch-model-nonce",
     )
+    journal_row["transport"] = "runner"
     journal_row["executionEvidence"] = journal_evidence
     seat_cfg = {
         "vendor": "codex",
@@ -280,6 +281,74 @@ def test_receipt_seat_model_from_execution_evidence_not_seat_map(tmp_path):
     row = next(item for item in receipt["seats"] if item["seat"] == seat)
     assert row["model"] == "gpt-5.6-sol"
     assert all(item.get("model") != "gpt-6-astra" for item in receipt["seats"])
+
+
+def test_receipt_seat_model_none_when_hand_landed_transport(tmp_path):
+    seat = "test-reviewer"
+    journal_evidence = _dispatch_evidence_with_engine_model(seat=seat)
+    journal_row = _dispatch_journal_with_binding(
+        seat=seat,
+        nonce="dispatch-model-nonce",
+    )
+    journal_row["transport"] = "hand-landed"
+    journal_row["provenance"] = RC.PROVENANCE_HAND_LANDED
+    journal_row["executionEvidence"] = journal_evidence
+    seat_cfg = {
+        "vendor": "codex",
+        "model": "gpt-6-astra",
+        "tier": "reviewer-deep",
+    }
+    session_dir = write_certifiable_session(
+        tmp_path,
+        state={
+            "seatMapReceipts": [{"round": "1", "map": {"seats": {seat: dict(seat_cfg)}}}],
+            "config": {
+                "fixerVendor": "claude",
+                "baseGuard": RC.BASE_GUARD_CHECKED,
+                "seatMap": {"seats": {seat: dict(seat_cfg)}},
+            },
+        },
+        journal_lines=[journal_row],
+        envelopes=[
+            {
+                "seat": seat,
+                "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
+                "provenance": RC.PROVENANCE_HAND_LANDED,
+                "executionEvidence": _envelope_execution_evidence_from_journal(journal_evidence),
+            }
+        ],
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None, refusal
+    row = next(item for item in receipt["seats"] if item["seat"] == seat)
+    assert row["model"] is None
+
+
+def test_receipt_seat_model_none_when_transport_absent(tmp_path):
+    seat = "test-reviewer"
+    journal_evidence = _dispatch_evidence_with_engine_model(seat=seat)
+    journal_row = _dispatch_journal_with_binding(
+        seat=seat,
+        nonce="dispatch-model-nonce",
+    )
+    journal_row["executionEvidence"] = journal_evidence
+    ctx, _ = RC._load_context(
+        write_certifiable_session(
+            tmp_path,
+            journal_lines=[journal_row],
+            envelopes=[
+                {
+                    "seat": seat,
+                    "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
+                    "executionEvidence": _envelope_execution_evidence_from_journal(
+                        journal_evidence
+                    ),
+                }
+            ],
+        )
+    )
+    row = RC._collect_seats(ctx)[0]
+    assert row["model"] is None
 
 
 def _integration_helpers():

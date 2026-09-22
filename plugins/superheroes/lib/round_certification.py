@@ -1527,46 +1527,27 @@ def _severity_rank(severity):
 
 
 def _collect_seats(ctx):
-    state = ctx["state"]
-    journal = ctx["journal"]
-    latest = {}
-    for event in journal:
-        if event.get("outcome") != "recorded":
-            continue
-        seat = event.get("seat")
-        phase = event.get("phase")
-        rnd = event.get("round")
-        attempt = event.get("attempt")
-        provenance = event.get("provenance")
-        if not isinstance(seat, str) or not seat:
-            ident = event.get("recordIdentity")
-            if isinstance(ident, dict):
-                seat = ident.get("seat")
-                phase = ident.get("phase", phase)
-                attempt = ident.get("attempt", attempt)
-                provenance = provenance or event.get("provenance")
-        if not isinstance(seat, str) or not seat:
-            continue
-        occurrence = event.get("occurrence", 0)
-        key = (phase, rnd, attempt, seat, occurrence)
+    rows = []
+    for identity, event in receipt_disclosures.latest_recorded_events(ctx["journal"]):
         cited_head = event.get("headSha") or event.get("citedHead")
         model = None
-        evidence = event.get("executionEvidence")
-        if isinstance(evidence, dict):
-            engine_model = evidence.get("engineModel")
-            if isinstance(engine_model, str) and engine_model:
-                model = engine_model
-        latest[key] = {
-            "seat": seat,
-            "phase": phase,
-            "round": rnd,
-            "attempt": attempt,
-            "occurrence": occurrence,
-            "provenance": provenance,
+        if event.get(session_contract.SEAT_TRANSPORT_KEY) == session_contract.SEAT_TRANSPORT_RUNNER:
+            evidence = event.get("executionEvidence")
+            if isinstance(evidence, dict):
+                engine_model = evidence.get("engineModel")
+                if isinstance(engine_model, str) and engine_model:
+                    model = engine_model
+        rows.append({
+            "seat": identity["seat"],
+            "phase": identity["phase"],
+            "round": identity["round"],
+            "attempt": identity["attempt"],
+            "occurrence": identity["occurrence"],
+            "provenance": identity["provenance"],
             "citedHead": cited_head,
             "model": model,
-        }
-    return list(latest.values())
+        })
+    return rows
 
 
 def _terminal_decision_key(state):
