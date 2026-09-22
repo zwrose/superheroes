@@ -225,7 +225,15 @@ def legacy_disposition_ledger_rows(state):
 
 
 def legacy_key_collision(rows):
-    """Return (bare_key, minted_key) when rows sharing a bare key disagree on identity."""
+    """Return (bare_key, minted_key) when legacy identity keys collide.
+
+    Refuses when (1) a legacy bare-keyed row's derived minted key is claimed globally
+    by another row's stored identity, or (2) rows sharing a bare location key include a
+    legacy bare-key claimant whose (stored identity, minted key) pair disagrees with
+    another row at that location. Content drift is not an identity discriminator.
+    """
+    identity_keys = set()
+    legacy_pairs = []
     by_bare = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -235,16 +243,22 @@ def legacy_key_collision(rows):
             continue
         identity = finding_identity_key(row)
         minted = minted_identity_key(row)
-        content = finding_content_canonical(row)
-        by_bare.setdefault(bare, []).append((identity, minted, content, row))
+        if identity:
+            identity_keys.add(identity)
+        if identity == bare and bare != minted:
+            legacy_pairs.append((bare, minted))
+        by_bare.setdefault(bare, []).append((identity, minted))
+    for bare, minted in legacy_pairs:
+        if minted in identity_keys:
+            return bare, minted
     for bare, entries in by_bare.items():
         claimants = [entry for entry in entries if entry[0] == bare]
         if not claimants:
             continue
-        ref = (claimants[0][0], claimants[0][1], claimants[0][2])
-        for identity, minted, content, _row in entries:
-            if (identity, minted, content) != ref:
-                return bare, minted
+        ref_identity, ref_minted = claimants[0]
+        for identity, minted in entries:
+            if (identity, minted) != (ref_identity, ref_minted):
+                return bare, ref_minted
     return None
 
 
