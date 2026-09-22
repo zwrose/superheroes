@@ -8,6 +8,7 @@ import round_certification
 import round_driver
 import round_records
 import session_contract
+from test_round_records import _missing_env
 
 _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -124,6 +125,51 @@ def test_native_in_session_disclosure_record_missing_not_named():
         },
     ]
     assert receipt_disclosures._native_in_session_seats(journal) == []
+
+
+def test_native_in_session_disclosure_reappended_missing_cas_token_not_named():
+    journal = [
+        {
+            "cmd": "advance",
+            "outcome": "recorded",
+            "reappended": True,
+            "seat": "code-reviewer",
+            "casToken": "seat-missing/1",
+            "transport": "native-subagent",
+        },
+    ]
+    assert receipt_disclosures._native_in_session_seats(journal) == []
+
+
+def test_native_in_session_disclosure_journal_stored_revision_missing_not_named():
+    envelope = _missing_env(seat="code-reviewer")
+    fields = round_driver._journal_stored_revision(envelope)
+    assert fields["casToken"] == "seat-missing/1"
+    event = {
+        "cmd": "advance",
+        "outcome": "recorded",
+        "seat": "code-reviewer",
+        **fields,
+    }
+    assert receipt_disclosures._native_in_session_seats([event]) == []
+
+
+def test_native_in_session_disclosure_missing_then_recovered_named():
+    journal = [
+        {
+            "cmd": "advance",
+            "outcome": "recorded",
+            "seat": "code-reviewer",
+            "casToken": "seat-missing/1",
+            "transport": "native-subagent",
+            "phase": "dispatch-panel",
+            "round": 1,
+            "attempt": 0,
+            "occurrence": 0,
+        },
+        _recorded_event("code-reviewer", session_contract.SEAT_TRANSPORT_NATIVE),
+    ]
+    assert receipt_disclosures._native_in_session_seats(journal) == ["code-reviewer"]
 
 
 def test_native_in_session_disclosure_record_missing_last_wins():

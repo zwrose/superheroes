@@ -6,6 +6,7 @@
 | BP-R6A-2 | `receipt_disclosures._native_in_session_seats` | record-missing is never native | `test_native_in_session_disclosure_record_missing_not_named` |
 | BP-R6A-3 | `round_certification._collect_seats` | the one reducer chokepoint | `test_native_in_session_and_collect_seats_share_latest_recorded_events` |
 | BP-R6A-4 | `round_certification._collect_seats` | runner-only model | `test_receipt_seat_model_none_when_hand_landed_transport` |
+| BP-R6A-5 | `receipt_disclosures._is_missing_seat_record` | casToken arm | `test_native_in_session_disclosure_reappended_missing_cas_token_not_named`, `test_native_in_session_disclosure_journal_stored_revision_missing_not_named` |
 
 ## BP-R6A-1
 
@@ -54,3 +55,15 @@
 **Restore:** Restored `if event.get(session_contract.SEAT_TRANSPORT_KEY) == session_contract.SEAT_TRANSPORT_RUNNER:` guard around model extraction.
 
 **Green:** `1 passed`.
+
+## BP-R6A-5
+
+**Axis:** casToken arm.
+
+**Neutralization:** Deleted the `casToken` arm of `_is_missing_seat_record` (kept only `cmd == "record-missing"`).
+
+**Red:** `AssertionError: assert ['code-reviewer'] == []` in `test_native_in_session_disclosure_reappended_missing_cas_token_not_named` and `test_native_in_session_disclosure_journal_stored_revision_missing_not_named`.
+
+**Restore:** Restored `or event.get("casToken") == session_contract.SEAT_MISSING_SCHEMA` in `_is_missing_seat_record`.
+
+**Green:** `2 passed`.

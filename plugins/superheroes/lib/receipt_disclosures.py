@@ -307,10 +307,15 @@ def latest_recorded_events(journal):
     return [latest[key] for key in key_order]
 
 
+def _is_missing_seat_record(event):
+    return (event.get("cmd") == "record-missing"
+            or event.get("casToken") == session_contract.SEAT_MISSING_SCHEMA)
+
+
 def _native_in_session_seats(journal):
     disclosed = set()
     for identity, event in latest_recorded_events(journal):
-        if event.get("cmd") == "record-missing":
+        if _is_missing_seat_record(event):
             continue
         seat = identity["seat"]
         transport = event.get(session_contract.SEAT_TRANSPORT_KEY)
