@@ -120,28 +120,52 @@ def _isolate_store_root(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
 
+def _neutral_git(cwd, *args):
+    """Run git by path discovery alone: the two #1379 probes must see the repository a test's
+    cwd would resolve once a test clears GIT_DIR/GIT_WORK_TREE (some do), so every inherited
+    GIT_* variable is dropped, and LC_ALL=C keeps the not-a-repository message matchable.
+    Returns the CompletedProcess, or None when git is not installed (then nothing can resolve
+    a repository, the marker bootstrap included)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["LC_ALL"] = "C"
+    try:
+        return subprocess.run(["git", "-C", cwd] + list(args), capture_output=True, text=True,
+                              check=False, env=env)
+    except FileNotFoundError:
+        return None
+
+
+def _is_not_a_repository(proc):
+    return proc is None or (proc.returncode != 0 and "not a git repository" in proc.stderr)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _tmp_base_outside_any_repository(tmp_path_factory):
     """#1379: the chdir(tmp_path) above isolates only when pytest's base temp directory has no
     git ancestor. A --basetemp pointing inside a checkout (directly or via PYTEST_ADDOPTS) would
     put every test's cwd back in that repository, so refuse the run before any test executes.
-    Bites on: a base temp directory that git resolves to a repository."""
+    Fails closed: only git's own not-a-repository answer lets the run proceed.
+    Bites on: a base temp directory that git does not answer "not a git repository" for."""
     base = str(tmp_path_factory.getbasetemp())
-    proc = subprocess.run(["git", "-C", base, "rev-parse", "--show-toplevel"],
-                          capture_output=True, text=True, check=False)
-    if proc.returncode == 0 and proc.stdout.strip():
-        pytest.fail("pytest's base temp directory %s is inside the git repository %s, so "
-                    "running tests from tmp_path would not isolate the review scope marker; "
-                    "point --basetemp outside every repository" % (base, proc.stdout.strip()))
+    proc = _neutral_git(base, "rev-parse", "--show-toplevel")
+    if not _is_not_a_repository(proc):
+        pytest.fail("pytest's base temp directory %s is not provably outside every git repository "
+                    "(git rev-parse --show-toplevel: rc=%s, out=%r, err=%r), so running tests from "
+                    "tmp_path would not isolate the review scope marker; point --basetemp outside "
+                    "every repository" % (base, proc.returncode, proc.stdout.strip(),
+                                          proc.stderr.strip()))
 
 
 def _real_review_marker_path():
     """The review-session marker path of the checkout this suite runs in, or None when this
-    tree is not a git checkout (then no marker can be written into it either)."""
-    proc = subprocess.run(["git", "-C", _LIB, "rev-parse", "--absolute-git-dir"],
-                          capture_output=True, text=True, check=False)
-    if proc.returncode != 0 or not proc.stdout.strip():
+    tree is not a git checkout (then no marker can be written into it either). A git failure
+    other than not-a-repository fails the collection rather than silently disarming the guard."""
+    proc = _neutral_git(_LIB, "rev-parse", "--absolute-git-dir")
+    if _is_not_a_repository(proc):
         return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise RuntimeError("cannot resolve the git dir of %s for the review-marker guard: rc=%s "
+                           "err=%r" % (_LIB, proc.returncode, proc.stderr.strip()))
     return os.path.join(proc.stdout.strip(), _round_driver.SIDECAR_DIRNAME,
                         _round_driver._REVIEW_SESSION_MARKER)
 
