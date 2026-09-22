@@ -419,7 +419,7 @@ def reachable_configs(
             if v in configured_vendors:
                 default_model, default_effort, _pin = _cell(tier, v, codex_role_pins)
                 model = pin.get("model", default_model)
-                effort = pin.get("effort", default_effort)
+                effort = pin["effort"] if "effort" in pin else (model_registry.resolve_dispatch(tier, v, model, None).get("effort") if "model" in pin else default_effort)
                 pin_model_bad = "model" in pin and not isinstance(pin.get("model"), (str, type(None)))
                 pin_effort_bad = "effort" in pin and not isinstance(pin.get("effort"), (str, type(None)))
                 well_typed = not pin_model_bad and not pin_effort_bad
@@ -689,7 +689,7 @@ def build(
             )
             continue
         model = pin.get("model", default_model)
-        effort = pin.get("effort", default_effort)
+        effort = pin["effort"] if "effort" in pin else (model_registry.resolve_dispatch(tier, pin_vendor, model, None).get("effort") if "model" in pin else default_effort)
         pin_cell_live = (
             pin_vendor == "claude"
             or (pin_vendor, model, effort) in live_cells_normalized

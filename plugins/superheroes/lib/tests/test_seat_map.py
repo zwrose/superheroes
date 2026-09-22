@@ -3084,6 +3084,94 @@ def test_codex_role_pin_astra_not_live_falls_back_to_matrix(monkeypatch):
     assert not_live
 
 
+# bite-proof axis: a model-only one-run pin seats at its own model's effort, never the role pin's
+def test_one_run_model_pin_takes_own_effort_in_build(monkeypatch):
+    real_cell = SM._cell
+
+    def fake(tier, vendor, role_pins=None):
+        if (tier, vendor) == ("reviewer-deep", "codex"):
+            return ("gpt-6-astra", "high", {"pin": "gpt-6-astra", "honored": True})
+        return real_cell(tier, vendor, role_pins)
+
+    monkeypatch.setattr(SM, "_cell", fake)
+    live_cells = [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "codex", "cursor"],
+        "xai",
+        "anthropic",
+        0,
+        codex_role_pins={"reviewer-deep": "gpt-6-astra"},
+        pins={"architecture-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}},
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    cfg = m["seats"]["architecture-reviewer"]
+    assert cfg["vendor"] == "codex"
+    assert cfg["model"] == "gpt-5.6-sol"
+    assert cfg["effort"] == "xhigh"
+    assert cfg["source"] == "pinned"
+    assert not any(
+        d.get("reason") == "pin architecture-reviewer not honorable — fell back to rotation"
+        for d in m.get("degradations", [])
+    )
+
+
+# bite-proof axis: a model-only one-run pin's needed-set cell uses its own model's effort, never the role pin's
+def test_one_run_model_pin_takes_own_effort_in_reachable_configs(monkeypatch):
+    real_cell = SM._cell
+
+    def fake(tier, vendor, role_pins=None):
+        if (tier, vendor) == ("reviewer-deep", "codex"):
+            return ("gpt-6-astra", "high", {"pin": "gpt-6-astra", "honored": True})
+        return real_cell(tier, vendor, role_pins)
+
+    monkeypatch.setattr(SM, "_cell", fake)
+    result = SM.reachable_configs(
+        ["codex", "cursor"],
+        {"architecture-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}},
+        codex_role_pins={"reviewer-deep": "gpt-6-astra"},
+    )
+    assert ["gpt-5.6-sol", "xhigh"] in result["codex"]
+    assert ["gpt-5.6-sol", "high"] not in result["codex"]
+
+
+def test_one_run_pin_explicit_effort_still_wins(monkeypatch):
+    real_cell = SM._cell
+
+    def fake(tier, vendor, role_pins=None):
+        if (tier, vendor) == ("reviewer-deep", "codex"):
+            return ("gpt-6-astra", "high", {"pin": "gpt-6-astra", "honored": True})
+        return real_cell(tier, vendor, role_pins)
+
+    monkeypatch.setattr(SM, "_cell", fake)
+    live_cells = [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "codex", "cursor"],
+        "xai",
+        "anthropic",
+        0,
+        codex_role_pins={"reviewer-deep": "gpt-6-astra"},
+        pins={
+            "architecture-reviewer": {
+                "vendor": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "xhigh",
+            }
+        },
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    cfg = m["seats"]["architecture-reviewer"]
+    assert cfg["effort"] == "xhigh"
+    assert cfg["source"] == "pinned"
+
+
 def test_no_codex_role_pins_byte_identical_to_default_kwarg():
     kwargs = dict(
         roster=SM.PANEL_ROSTER,
@@ -3401,6 +3489,9 @@ def test_compose_role_pin_without_seat_pins_liveness_not_scoped(tmp_path, capsys
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
     assert probe_calls
+    _, kwargs = probe_calls[0]
+    assert kwargs["needed_override"] is not None
+    assert ["gpt-5.6-sol", "high"] in kwargs["needed_override"]["codex"]
     assert receipt["livenessPinScoped"] is False
 
 
