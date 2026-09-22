@@ -638,12 +638,13 @@ against the old attempt are not carried.
 | `re-emit-attempt-has-results` | a result for the pending attempt is recorded, or a landing/bare-payload file for one of its seats exists or cannot be checked |
 | `re-emit-locked` | another process holds the session lock |
 
-Orders emitted before the move are not rewritten and still name the old checkout, so until `re-emit`
-runs the driver refuses `record-attempt-predates-relocation` for results that would be credited to
-the order's head: a single-seat `record-result` without runner evidence, a `record-result --sweep` or
-an `advance` that would ingest a landing, or a hand `submit` of the phase. Not refused: a result
-recorded with runner evidence (it carries the head the runner saw), an `advance` with nothing new to
-ingest, `record-missing`.
+Orders emitted before the move are not rewritten, and they may already have run in the old checkout —
+a hand-landed result carries no record of where it ran — so until `re-emit` runs the driver refuses
+`record-attempt-predates-relocation` for results that would be credited to the order's head: a
+single-seat `record-result` without runner evidence, a `record-result --sweep` or an `advance` that
+would ingest a landing, or a hand `submit` of the phase. Not refused: a result recorded with runner
+evidence (it carries the head the runner saw), an `advance` with nothing new to ingest,
+`record-missing`.
 
 Every recorded seat cites the head it saw, and certification refuses a seat whose cited head is not
 the session's recorded head; `re-emit` does not change the session's recorded head, so it refuses

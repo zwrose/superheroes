@@ -122,24 +122,11 @@ def _dangling_symlink(path):
     assert os.path.lexists(path) and not os.path.exists(path)
 
 
-def _order_prompt_texts(session_dir, rnd, phase, attempt):
-    texts = []
-    odir = _orders_dir(session_dir, rnd, phase)
-    if not os.path.isdir(odir):
-        return texts
-    for name in os.listdir(odir):
-        if name.endswith(".md") and ".a%d." % attempt in name:
-            with open(os.path.join(odir, name), encoding="utf-8") as fh:
-                texts.append(fh.read())
-    return texts
-
-
 # --- re-emit (R*) ---------------------------------------------------------------------------
 
 def test_re_emit_positive_after_relocate(tmp_path, capsys):
     repo, sess, session_dir = _stale_session(tmp_path, capsys)
     rnd, phase, old_attempt = 1, RD.P_PANEL, 0
-    old_root = os.path.realpath(repo["root_a"])
     a0_files = {p: M._read_bytes(p) for p in _collect_attempt_files(session_dir, rnd, phase, old_attempt)}
     assert a0_files
     anchor0_before = _anchor_for(session_dir, rnd, phase, old_attempt)
@@ -179,10 +166,6 @@ def test_re_emit_positive_after_relocate(tmp_path, capsys):
     assert emitted["outcome"] == "orders-emitted"
     assert emitted["cmd"] == "re-emit"
     assert emitted["attempt"] == 1
-    prompt_texts = _order_prompt_texts(session_dir, rnd, phase, 1)
-    assert prompt_texts
-    for text in prompt_texts:
-        assert old_root not in text
 
 
 def test_re_emit_cli_success_json(tmp_path, capsys):

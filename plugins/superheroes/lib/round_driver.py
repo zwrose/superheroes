@@ -403,7 +403,7 @@ VERIFIED_HEAD_UNRESOLVED_CAUSE = "verified-head-unresolved"
 RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = "record-attempt-predates-relocation"
 RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = (
     "the orders for this attempt were emitted before the session moved checkouts and "
-    "name the old checkout; run `re-emit` and dispatch the new attempt"
+    "may already have run in the old checkout; run `re-emit` and dispatch the new attempt"
 )
 
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
