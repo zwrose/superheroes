@@ -142,3 +142,62 @@ Candidate requirements surfaced but not yet elicited or approved:
    were.
 3. Resume the requirements dialogue (one question at a time) toward a framing for the experiment.
 4. Run the discovery's coverage checklist before the framing gate.
+
+## Session 2 (2026-09-21, local, desktop app, instance -four) — transcript mining and the line
+
+**Owner corrections to the transcript-mining readout (binding):**
+- The owner DOES approve specs without meaningfully reading them: "most of the last few specs
+  i've approved i did not meaningfully read, i trusted the review loop process and the starting
+  point of the design boards, because they were too dense to read thoroughly." The readers'
+  "no rubber-stamps" finding was a method error (they looked for short replies; the approvals
+  look engaged in transcript because discussion is present, but the reading was not).
+- Spec text draws fewer pushbacks probably because advisor chat presents a few concerns at a
+  time, not because specs are better.
+- The split the owner wants is owner decisions vs craft, but "with specs it is much less clear
+  to me what this line actually is" and he cannot articulate it from whole cloth.
+- The Sep 6–7 before/after-by-feature-area format "felt ok at best"; he has no sense of how well
+  those artifacts track the dense underlying specs, and by definition does not know what is
+  lurking in them that he disagrees with. Unlike weekly-eats, on superheroes he has less ability
+  to notice and call foul because of subject matter vs expertise.
+- Too-terse is a real limit but the rare direction; the "one word" complaints were about zero
+  context.
+- Jargon and requirement numbers hurt as much as length: agreed.
+- Instances help only when they look real: agreed.
+- Design-intent-lost-in-build is real but a different issue from spec amendments.
+- The "three shapes" of missing context read as superheroes-only.
+
+**Amendment volume (checked):** weekly-eats verification-strategy spec: 18 numbered amendments
+plus two full re-reads since Aug 28 approval (mostly process churn; the "guards guarding guards"
+spec). Four weekly-eats product specs approved Sep 6: 7, 7, 4, 4 amendments each, nearly all
+ruled "during the owner's walk of the preview". Superheroes front-half core: 7. The approval gate
+is the wrong place to expect disagreements to surface; they surface at first contact with the
+running thing, and the amendments log is the receipt.
+
+**Derived line:** see `OWNER-VS-CRAFT-LINE.md` beside this file (unratified; owner to keep /
+strike / reword). Corpus and labels are local under
+`docs/research/spec-alignment-transcript-mining/line/`.
+
+**Practitioner signal the owner flagged:** a Claude Code team member's post, "I now type 'use
+big pictures and few words' several times a day" (Sep 21). Matches the mixed-media finding.
+
+**Local-only research outputs (gitignored, this Mac, any instance can read):**
+- `docs/research/spec-alignment-transcript-mining/SYNTHESIS.md` (needs the corrections above
+  applied; the rubber-stamp finding there is wrong)
+- `docs/research/spec-alignment-transcript-mining/findings/b0..b10.md` (per-bundle moments with
+  verbatim quotes, session ids, timestamps)
+- `docs/research/spec-alignment-transcript-mining/{BRIEF.md,index.py,extract.py}` (re-runnable)
+- `docs/research/spec-alignment-transcript-mining/line/` (the 234-item corpus and labels)
+- `docs/research/research_notes/Aligning on what to build/` was on the WEB container only and
+  did not travel; the report did (beside this file).
+
+## Next steps (updated)
+
+1. Owner rules on `OWNER-VS-CRAFT-LINE.md`: keep / strike / reword categories, in chat prose.
+2. Then resume the requirements dialogue toward a framing for the first experiment, which now
+   looks like: at the approval gate, an owner-decisions-only walk grouped by area, one concrete
+   instance per decision, craft collapsed, plain words, "not sure" allowed; plus a way to find
+   what is lurking in dense specs the owner did not read (candidate: generate instances from the
+   approved spec and let the owner disagree).
+3. Candidate requirement carried forward: a product-level grounding doc written as decisions,
+   constraints and non-goals (not narrative), routed to builders and reviewers.
+4. Run the discovery coverage checklist before the framing gate.
