@@ -2505,6 +2505,7 @@ def test_astra_probe_refuses_when_rubric_scale_unreadable_table_empty(tmp_path, 
         "| ---- | ---------- |\n"
         "\n"
         "## Other\n\n"
+        "| **Critical** | c |\n"
         "| **Unrelated** | u |\n",
     )
 
@@ -2535,6 +2536,26 @@ def test_astra_probe_scale_reads_only_the_tier_table(tmp_path, monkeypatch):
     assert err is None
     for level in ("Critical", "Important", "Minor", "Nit", "Pre-existing"):
         assert "`%s`" % level in text
+    assert "Unrelated" not in text
+
+
+# bite-axis: prose after the tier table ends scale parsing
+def test_astra_probe_scale_stops_at_the_end_of_the_tier_table(tmp_path, monkeypatch):
+    rubric = (
+        "## Severity tiers\n\n"
+        "| **Critical** | c |\n"
+        "| **Important** | i |\n"
+        "\n"
+        "Text after the table.\n"
+        "\n"
+        "| **Unrelated** | u |\n"
+    )
+    rubric_path = tmp_path / "rubric.md"
+    rubric_path.write_text(rubric, encoding="utf-8")
+    monkeypatch.setattr(CP, "_RUBRIC_PATH", str(rubric_path))
+    text, err = CP._astra_probe_prompt()
+    assert err is None
+    assert "Critical" in text
     assert "Unrelated" not in text
 
 
@@ -2858,6 +2879,35 @@ def test_astra_claim_write_failure_leaves_no_claim(tmp_path, monkeypatch):
     assert not os.path.exists(claim_path)
 
 
+# bite-axis: failed claim write must not close the claim fd twice
+def test_astra_claim_write_failure_does_not_close_fd_twice(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    claim_fd = None
+    close_calls = []
+    real_open = CP.os.open
+    real_close = CP.os.close
+
+    def track_open(*args, **kwargs):
+        nonlocal claim_fd
+        claim_fd = real_open(*args, **kwargs)
+        return claim_fd
+
+    def track_close(fd):
+        close_calls.append(fd)
+        return real_close(fd)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(CP.os, "open", track_open)
+    monkeypatch.setattr(CP.os, "close", track_close)
+    monkeypatch.setattr(CP.json, "dump", boom)
+    with pytest.raises(RuntimeError, match="boom"):
+        CP._write_astra_claim(ledger_dir, "wave-claim", str(tmp_path / "run"))
+    assert claim_fd is not None
+    assert claim_fd not in close_calls
+
+
 # bite-axis: record-write failure after terminal dispatch is a named refusal
 def test_astra_probe_record_write_failure_is_a_named_refusal(tmp_path, monkeypatch):
     _astra_ledger(tmp_path, monkeypatch)
@@ -2909,7 +2959,7 @@ def test_astra_probe_pass_with_dot_slash_prefix(tmp_path, monkeypatch):
     out, code = CP.astra_probe(repo, "wave-dotslash", run_dir, dispatch=dispatch)
     assert code == 0
     assert out["outcome"] == "pass"
-    assert out["matched"]["file"] == "app/session_guard.py"
+    assert out["matched"]["file"] == "./app/session_guard.py"
 
 
 # bite-axis: unrelated findings beside a match do not spoil a pass
@@ -2919,19 +2969,26 @@ def test_astra_probe_pass_with_an_unrelated_finding_beside_the_match(tmp_path, m
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
 
+    planted = _astra_pass_finding(line=24)
+
     def dispatch(**_kwargs):
         return _astra_terminal_findings([
             {
                 "file": "app/unrelated.py", "line": 7, "severity": "Nit",
                 "title": "style", "body": "naming",
             },
-            _astra_pass_finding(line=24),
+            planted,
         ])
 
     out, code = CP.astra_probe(repo, "wave-extra", run_dir, dispatch=dispatch)
     assert code == 0
     assert out["outcome"] == "pass"
-    assert out["matched"]["file"] == "app/session_guard.py"
+    assert out["matched"] == {
+        "file": planted["file"],
+        "line": planted["line"],
+        "severity": planted["severity"],
+        "title": planted["title"],
+    }
 
 
 def _git_init_repo(path, remote=None):

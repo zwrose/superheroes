@@ -121,10 +121,8 @@ def _severity_scale():
                     return None, "astra-probe-scale-unreadable"
                 lines.append("- `%s` — %s" % (level, cells[1]))
                 levels.append(level)
-        elif saw_table_row and row.strip():
+        elif saw_table_row and row.strip() and not row.startswith("#"):
             break
-    if not levels:
-        return None, "astra-probe-scale-unreadable"
     if PLANT_SEVERITY not in levels:
         return None, "astra-probe-scale-unreadable"
     return lines, None
@@ -855,7 +853,7 @@ def _normalize_finding_file(path):
 
 def _finding_summary(finding):
     return {
-        "file": _normalize_finding_file(finding.get("file")),
+        "file": finding.get("file"),
         "line": finding.get("line"),
         "severity": finding.get("severity"),
         "title": finding.get("title"),
@@ -899,19 +897,24 @@ def _write_astra_claim(ledger_dir, wave, run_dir_real):
     path = _astra_claim_path(ledger_dir, wave)
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(claim, fh, separators=(",", ":"))
-            fh.write("\n")
-    except Exception as exc:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        fh = os.fdopen(fd, "w", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
         try:
             os.unlink(path)
         except FileNotFoundError:
             pass
-        raise exc
+        raise
+    try:
+        with fh:
+            json.dump(claim, fh, separators=(",", ":"))
+            fh.write("\n")
+    except BaseException:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        raise
     return claim
 
 def _claim_is_abandoned(claim, now):

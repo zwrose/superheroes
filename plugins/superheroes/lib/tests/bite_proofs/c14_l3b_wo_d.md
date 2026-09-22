@@ -461,7 +461,7 @@ E       AssertionError: assert ['Critical', 'Important', 'Small', 'Nit'] == ['Cr
 
 ## BP-R3-1 — PLANT_SEVERITY membership check
 
-- **axis:** rubric tier table without PLANT_SEVERITY must refuse before claim or dispatch
+- **axis:** rubric tier table without PLANT_SEVERITY must refuse before claim or dispatch (also covers the empty-table case via `PLANT_SEVERITY not in levels`)
 
 **neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
 ```python
@@ -477,7 +477,7 @@ E       AssertionError: assert ['Critical', 'Important', 'Small', 'Nit'] == ['Cr
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable_table_lacks_the_plant_level
 >       assert out["reason"] == "astra-probe-scale-unreadable"
 E       KeyError: 'reason'
-1 failed in 0.33s
+1 failed in 0.34s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
@@ -486,41 +486,69 @@ E       KeyError: 'reason'
         return None, "astra-probe-scale-unreadable"
 ```
 
-**raw green** (exit 0): `1 passed in 0.30s`
+**raw green** (exit 0): `1 passed in 0.78s`
 
 ---
 
-## BP-R3-2 — zero-levels check
+## BP-R3-2 — heading stop
 
-- **axis:** empty tier table must refuse before claim or dispatch
+- **axis:** parsing must stop at the next markdown heading after the tier table
 
 **neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
 ```python
     # deleted:
-    if not levels:
-        return None, "astra-probe-scale-unreadable"
+        if row.startswith("#"):
+            break
 ```
 
 **command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable_table_empty`
 
-**disclosure:** `Unprovable as placed` — with only the zero-levels check removed, `PLANT_SEVERITY not in levels` still refuses an empty table; the red run stayed green (`1 passed in 0.29s`).
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable_table_empty
+>       assert out["reason"] == "astra-probe-scale-unreadable"
+E       KeyError: 'reason'
+1 failed in 0.61s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+        if row.startswith("#"):
+            break
+```
+
+**raw green** (exit 0): `1 passed in 0.61s`
 
 ---
 
-## BP-R3-3 — table bound
+## BP-R3-3 — prose stop
 
-- **axis:** only the Severity tiers table is read for the scale
+- **axis:** parsing must stop at prose after the tier table, before a later unheaded table
 
 **neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
 ```python
     # deleted:
-        elif saw_table_row and row.strip():
+        elif saw_table_row and row.strip() and not row.startswith("#"):
             break
 ```
 
-**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_reads_only_the_tier_table`
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_stops_at_the_end_of_the_tier_table`
 
-**disclosure:** `Unprovable as placed` — the `## Other` heading triggers the `#` break before the unrelated row; removing only the blank-line stop leaves `Unrelated` out of the prompt and the red run stayed green (`1 passed in 0.30s`).
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_stops_at_the_end_of_the_tier_table
+>       assert "Unrelated" not in text
+E       AssertionError: assert 'Unrelated' not in 'Perform a o...laims\n```\n'
+1 failed in 0.67s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+        elif saw_table_row and row.strip() and not row.startswith("#"):
+            break
+```
+
+**raw green** (exit 0): `1 passed in 0.74s`
 
 ---
 
@@ -701,3 +729,31 @@ E       assert 1 == 0
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_grade_astra_findings`): removed the `len(findings) != 1` early return.
 
 **raw green** (exit 0): `1 passed in 0.82s`
+
+---
+
+## BP-R3-10 — claim fd closes once
+
+- **axis:** a failed claim write must not call `os.close` on the claim fd after `fdopen`
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_write_astra_claim`):
+```python
+    except BaseException:
+        os.close(fd)  # bite-proof BP-R3-10 neutralization
+        try:
+            os.unlink(path)
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_claim_write_failure_does_not_close_fd_twice`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_claim_write_failure_does_not_close_fd_twice
+>           CP._write_astra_claim(ledger_dir, "wave-claim", str(tmp_path / "run"))
+E       OSError: [Errno 9] Bad file descriptor
+1 failed in 0.81s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_write_astra_claim`): removed the `os.close(fd)` line from the write-failure handler.
+
+**raw green** (exit 0): `1 passed in 0.61s`
