@@ -2298,10 +2298,18 @@ def test_astra_probe_miss_empty_findings(tmp_path, monkeypatch):
     assert out["returned"] == []
 
 
-def test_astra_probe_fixture_has_no_forbidden_words():
+def test_astra_probe_fixture_has_no_hint_words():
     text = CP.ASTRA_PROBE_FIXTURE.lower()
-    for word in ("planted", "fail-open", "bypass", "vulnerability", "critical"):
+    for word in ("planted", "fail-open", "bypass", "vulnerability"):
         assert word not in text
+
+
+# bite-axis: the prompt names every severity the grader can pass on, so the one passing answer is never steered away
+def test_astra_probe_fixture_states_the_full_severity_scale():
+    fixture = CP.ASTRA_PROBE_FIXTURE
+    for level in ("Critical", "Important", "Minor", "Nit"):
+        assert level in fixture
+    assert CP.PLANT_SEVERITY in ("Critical", "Important", "Minor", "Nit")
 
 
 def test_astra_probe_fixture_plant_lines_are_second_hunk_plus_lines():

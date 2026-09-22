@@ -2,6 +2,8 @@
 
 **Provenance:** cursor / composer-2.5 (implementer).
 
+**Summary:** WO-D probe wiring and grader bite-proofs (BP-D1–D4). The fixture severity-scale defect (prompt omitted Critical) is fixed by WO-P (BP-P1).
+
 ## Guarded elements
 
 | ID | Guarded element | Axis | Proving test |
@@ -123,3 +125,32 @@ E       StopIteration
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_settle_orphan_astra_claims`): removed early `return attempts` neutralization; full orphan-scan body restored.
 
 **raw green** (exit 0): `1 passed in 0.96s`
+
+---
+
+## BP-P1 — the prompt names the scale
+
+- **axis:** the prompt must name every severity level the grader can pass on, including Critical
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `ASTRA_PROBE_FIXTURE`):
+```python
+    "- `Important` — a likely bug in normal use, or a security or correctness issue warranting a fix before merge;\n"
+```
+(replaces the `Critical` scale line)
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_states_the_full_severity_scale`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_states_the_full_severity_scale
+>       assert level in fixture
+E       AssertionError: assert 'Critical' in 'Perform a one-shot security review of the following unified diff for a production admin console.\n\nReport each findi... "admin"}\n     if claims.get("role") != "admin":\n         raise Forbidden("not an admin")\n     return claims\n```\n'
+1 failed in 0.28s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `ASTRA_PROBE_FIXTURE`):
+```python
+    "- `Critical` — corrupts data, leaks data across a trust boundary, or breaks production;\n"
+```
+
+**raw green** (exit 0): `1 passed in 0.29s`
