@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -2337,16 +2338,19 @@ def test_astra_probe_miss_empty_findings(tmp_path, monkeypatch):
 
 
 def test_astra_probe_fixture_has_no_hint_words():
-    text = CP.ASTRA_PROBE_FIXTURE.lower()
+    text, err = CP._astra_probe_prompt()
+    assert err is None
+    text = text.lower()
     for word in ("planted", "fail-open", "bypass", "vulnerability"):
         assert word not in text
 
 
 # bite-axis: the prompt names every severity the grader can pass on, so the one passing answer is never steered away
 def test_astra_probe_fixture_states_the_full_severity_scale():
-    fixture = CP.ASTRA_PROBE_FIXTURE
+    text, err = CP._astra_probe_prompt()
+    assert err is None
     for level in ("Critical", "Important", "Minor", "Nit"):
-        assert level in fixture
+        assert level in text
     assert CP.PLANT_SEVERITY in ("Critical", "Important", "Minor", "Nit")
 
 
@@ -2409,20 +2413,107 @@ def test_astra_probe_miss_just_past_the_plant(tmp_path, monkeypatch):
     assert out["matched"] is None
 
 
-# bite-axis: fixture severity scale names match the rubric table in order
-def test_astra_probe_fixture_scale_matches_rubric_table():
+# bite-axis: severity scale is rendered from the rubric table at call time
+def test_astra_probe_scale_is_rendered_from_the_rubric():
     plugin_root = os.path.dirname(os.path.abspath(_LIB))
     rubric_path = os.path.join(plugin_root, "rubric", "review-base.md")
     with open(rubric_path, encoding="utf-8") as fh:
         rubric = fh.read()
-    rubric_levels = re.findall(r"\|\s*\*\*(\w+)\*\*", rubric)
-    assert rubric_levels[:4] == ["Critical", "Important", "Minor", "Nit"]
-    fixture = CP.ASTRA_PROBE_FIXTURE
-    scale_start = fixture.index("Severity scale:\n") + len("Severity scale:\n")
-    scale_block = fixture[scale_start:fixture.index("```diff\n", scale_start)]
-    fixture_levels = re.findall(r"- `(\w+)`", scale_block)
-    assert fixture_levels == rubric_levels[:4]
-    assert CP.PLANT_SEVERITY == fixture_levels[0]
+    rows = {}
+    for line in rubric.splitlines():
+        if "|" not in line:
+            continue
+        cells = [c.strip() for c in line.split("|") if c.strip()]
+        if not cells:
+            continue
+        first = cells[0]
+        if first.startswith("**") and first.endswith("**"):
+            level = first.strip("*").strip()
+            if len(cells) >= 2:
+                rows[level] = cells[1]
+    text, err = CP._astra_probe_prompt()
+    assert err is None
+    for level in ("Critical", "Important", "Minor", "Nit"):
+        assert "`%s` — %s" % (level, rows[level]) in text
+    assert CP.PLANT_SEVERITY == "Critical"
+
+
+# bite-axis: unreadable rubric scale refuses before claim or dispatch
+def test_astra_probe_refuses_when_rubric_scale_unreadable(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    calls = []
+
+    def dispatch(**_kwargs):
+        calls.append(1)
+        return _astra_terminal_findings([])
+
+    bad_rubric = tmp_path / "bad.md"
+    bad_rubric.write_text(
+        "| **Critical** | x |\n| **Important** | y |\n| **Minor** | z |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(CP, "_RUBRIC_PATH", str(bad_rubric))
+    out, code = CP.astra_probe(repo, "wave-bad", run_dir, dispatch=dispatch)
+    assert code == 1
+    assert out["reason"] == "astra-probe-scale-unreadable"
+    assert calls == []
+    ledger_dir, _ = CP._conformance_record_dir(repo)
+    assert not os.path.exists(CP._astra_claim_path(ledger_dir, "wave-bad"))
+
+
+# bite-axis: the probe seats the registry's own registration-probe cell
+def test_astra_probe_seat_is_the_registry_cell(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    resolve_calls = []
+    seats = []
+
+    def fake_resolve(role, vendor, model, effort):
+        resolve_calls.append((role, vendor, model, effort))
+        return {"ok": True, "model_id": "m-x", "effort": "e-x"}
+
+    def dispatch(**kwargs):
+        seats.append(kwargs["seat"])
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
+    out, code = CP.astra_probe(repo, "wave-seat", run_dir, dispatch=dispatch)
+    assert code == 0
+    assert resolve_calls == [("registration-probe", "codex", None, None)]
+    assert seats[0] == {
+        "vendor": "codex",
+        "model": "m-x",
+        "effort": "e-x",
+        "role": "registration-probe",
+    }
+
+
+# bite-axis: each attempt records the hash of the exact prompt sent
+def test_astra_probe_attempt_records_prompt_hash(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_paths = []
+
+    def dispatch(**kwargs):
+        prompt_paths.append(kwargs["prompt_path"])
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.astra_probe(repo, "wave-hash", run_dir, dispatch=dispatch)
+    assert code == 0
+    with open(prompt_paths[0], encoding="utf-8") as fh:
+        prompt_text = fh.read()
+    expected = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+    assert out["promptSha256"] == expected
+    ledger_dir, _ = CP._conformance_record_dir(repo)
+    attempts = CP._read_astra_attempts(ledger_dir)
+    assert attempts[0]["promptSha256"] == expected
 
 
 def test_astra_probe_refuses_second_run_dir_same_wave(tmp_path, monkeypatch):
@@ -2548,12 +2639,48 @@ def test_astra_probe_live_other_wave_claim_not_settled(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    monkeypatch.setattr(CP, "_now_utc", lambda: now)
-    out, code = CP.astra_probe(repo, "wave-b", new_run, dispatch=dispatch)
+    out, code = CP.astra_probe(repo, "wave-b", new_run, dispatch=dispatch, now=now)
     assert code == 0
     attempts = CP._read_astra_attempts(ledger_dir)
     assert not any(a.get("wave") == "wave-a" for a in attempts)
     assert out["outcome"] == "pass"
+
+
+# bite-axis: a refreshed live claim is not settled as abandoned
+def test_astra_probe_running_wave_claim_refreshed_is_not_settled(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    t0 = datetime(2026, 9, 22, 0, 0, 0, tzinfo=timezone.utc)
+    t0_iso = t0.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    wave_a = "wave-a"
+    run_a = str(tmp_path / "run-a")
+    os.makedirs(run_a)
+    _write_astra_claim_at(ledger_dir, wave_a, run_a, t0_iso)
+
+    def dispatch_pending(**_kwargs):
+        return {"ok": False, "terminal": False, "findings": None}
+
+    now_a = t0 + timedelta(hours=23)
+    out_a, code_a = CP.astra_probe(
+        repo, wave_a, run_a, dispatch=dispatch_pending, now=now_a,
+    )
+    assert code_a == 0
+    assert out_a["outcome"] == "pending"
+    claim = CP._read_astra_claim(CP._astra_claim_path(ledger_dir, wave_a))
+    assert claim.get("lastSeenAt") is not None
+
+    now_b = t0 + timedelta(hours=30)
+    run_b = str(tmp_path / "run-b")
+    os.makedirs(run_b)
+
+    def dispatch_pass(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out_b, code_b = CP.astra_probe(repo, "wave-b", run_b, dispatch=dispatch_pass, now=now_b)
+    assert code_b == 0
+    attempts = CP._read_astra_attempts(ledger_dir)
+    assert not any(a.get("wave") == wave_a for a in attempts)
+    assert out_b["outcome"] == "pass"
 
 
 def test_astra_probe_orphan_claim_recorded_as_miss(tmp_path, monkeypatch):
@@ -2572,8 +2699,7 @@ def test_astra_probe_orphan_claim_recorded_as_miss(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    monkeypatch.setattr(CP, "_now_utc", lambda: now)
-    out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch)
+    out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
     assert code == 0
     attempts = CP._read_astra_attempts(ledger_dir)
     orphan = next(a for a in attempts if a.get("wave") == old_wave)

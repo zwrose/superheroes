@@ -107,7 +107,7 @@ E       assert 0 == 1
 
 **neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_settle_orphan_astra_claims`):
 ```python
-def _settle_orphan_astra_claims(ledger_dir, current_wave):
+def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None, seat=None):
     attempts = _read_astra_attempts(ledger_dir)
     return attempts  # bite-proof BP-D4 neutralization
 ```
@@ -124,7 +124,141 @@ E       StopIteration
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_settle_orphan_astra_claims`): removed early `return attempts` neutralization; full orphan-scan body restored.
 
-**raw green** (exit 0): `1 passed in 0.96s`
+**raw green** (exit 0): `1 passed in 0.26s`
+
+---
+
+## BP-R2-1 — scale fail-closed
+
+- **axis:** unreadable rubric scale must refuse before claim or dispatch
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+    if False and levels != list(_EXPECTED_SEVERITY_LEVELS):  # bite-proof BP-R2-1 neutralization
+        return None, "astra-probe-scale-unreadable"
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable
+>       assert out["reason"] == "astra-probe-scale-unreadable"
+E       KeyError: 'reason'
+1 failed in 0.27s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+    if levels != list(_EXPECTED_SEVERITY_LEVELS):
+        return None, "astra-probe-scale-unreadable"
+```
+
+**raw green** (exit 0): `1 passed in 0.24s`
+
+---
+
+## BP-R2-2 — scale rendered from the rubric
+
+- **axis:** severity scale lines must match the rubric table definitions at call time
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+    return [
+        "- `Critical` — corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.",
+        "- `Important` — Likely bug in normal use, OR a security/correctness issue warranting a fix before merge",
+        "- `Minor` — bite-proof changed definition",  # bite-proof BP-R2-2 neutralization
+        "- `Nit` — Style/naming/cleanup; take-it-or-leave-it",
+    ], None
+```
+(replaces the `return lines, None` at the end of `_severity_scale`)
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_is_rendered_from_the_rubric`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_is_rendered_from_the_rubric
+>           assert "`%s` — %s" % (level, rows[level]) in text
+E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.')) in 'Perform a one-shot security review...
+1 failed in 0.33s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
+```python
+    return lines, None
+```
+
+**raw green** (exit 0): `1 passed in 0.24s`
+
+---
+
+## BP-R2-3 — seat from the cell
+
+- **axis:** the probe must resolve the registry cell with no model argument
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
+```python
+    resolved = model_registry.resolve_dispatch(
+        ASTRA_PROBE_ROLE, "codex", "gpt-6-astra", None)  # bite-proof BP-R2-3 neutralization
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_seat_is_the_registry_cell`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_seat_is_the_registry_cell
+>       assert resolve_calls == [("registration-probe", "codex", None, None)]
+E       AssertionError: assert [('registrati...astra', None)] == [('registrati..., None, None)]
+1 failed in 0.33s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
+```python
+    resolved = model_registry.resolve_dispatch(
+        ASTRA_PROBE_ROLE, "codex", None, None)
+```
+
+**raw green** (exit 0): `1 passed in 0.26s`
+
+---
+
+## BP-R2-4 — claim refresh
+
+- **axis:** a non-terminal slice must refresh `lastSeenAt` on the wave claim
+
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
+```python
+        if False and claim is not None:  # bite-proof BP-R2-4 neutralization
+            refreshed = dict(claim)
+            refreshed["lastSeenAt"] = _iso_from_utc(now)
+            store_core.atomic_write(
+                claim_path,
+                json.dumps(refreshed, separators=(",", ":")) + "\n",
+            )
+```
+
+**command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_running_wave_claim_refreshed_is_not_settled`
+
+**raw red** (exit 1):
+```
+FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_running_wave_claim_refreshed_is_not_settled
+>       assert claim.get("lastSeenAt") is not None
+E       AssertionError: assert None is not None
+1 failed in 0.30s
+```
+
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
+```python
+        if claim is not None:
+            refreshed = dict(claim)
+            refreshed["lastSeenAt"] = _iso_from_utc(now)
+            store_core.atomic_write(
+                claim_path,
+                json.dumps(refreshed, separators=(",", ":")) + "\n",
+            )
+```
+
+**raw green** (exit 0): `1 passed in 0.27s`
 
 ---
 
