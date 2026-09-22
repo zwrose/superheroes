@@ -9948,6 +9948,9 @@ def _judgment_artifact_from_resolution(state, resolution):
         entry = {"id": row_ids[row_index], "disposition": disposition}
         if disposition == review_gate_policy.JUDGMENT_SKIP_DISPOSITION:
             entry["reason"] = _GATE_POLICY_SKIP_REASON
+            follow_up = rule.get("followUp")
+            if follow_up is not None:
+                entry["followUp"] = dict(follow_up)
         dispositions.append(entry)
     return {"dispositions": dispositions}
 
