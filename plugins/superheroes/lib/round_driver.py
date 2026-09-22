@@ -5075,9 +5075,10 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                "title": f.get("title"), "severity": f.get("severity"),
                "verdict": f.get("verdict"), "challenge": f.get("challenge"),
                "unverified": f.get("unverified")}
-        finding_key = f.get(session_contract.FINDING_KEY_FIELD)
-        if isinstance(finding_key, str) and finding_key:
-            row[session_contract.FINDING_KEY_FIELD] = finding_key
+        if _state_version(state) >= STATE_SCHEMA_VERSION:
+            finding_key = f.get(session_contract.FINDING_KEY_FIELD)
+            if isinstance(finding_key, str) and finding_key:
+                row[session_contract.FINDING_KEY_FIELD] = finding_key
         findings.append(row)
     cfg = state.get("config") or {}
     degraded, skipped_blockers = build_degraded_prose(state, form)

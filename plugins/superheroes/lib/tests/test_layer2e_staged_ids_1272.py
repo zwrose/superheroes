@@ -236,6 +236,31 @@ def test_e10_synthesis_non_string_member_refused_at_submit(tmp_path):
     assert journal[-1].get("outcome") == "synthesis-results-shape"
 
 
+def test_grouping_absent_falls_open_present_incomplete_refused():
+    """Absent/null grouping falls open; a present but incomplete grouping refuses."""
+    survivors = [
+        {"id": "v0", "file": "a.py", "line": 1, "title": "a", "severity": "Important",
+         "verdict": "PLAUSIBLE"},
+        {"id": "v1", "file": "b.py", "line": 1, "title": "b", "severity": "Important",
+         "verdict": "PLAUSIBLE"},
+        {"id": "v2", "file": "c.py", "line": 1, "title": "c", "severity": "Important",
+         "verdict": "PLAUSIBLE"},
+    ]
+    state = {"_verified": survivors}
+    incomplete = {"grouping": [{"group_id": "g0", "member_ids": ["v0", "v1"]}]}
+    fault = RD.synthesis_staged_id_fault(state, incomplete)
+    assert fault is not None
+    assert RD.STAGED_ID_UNRESOLVABLE_CAUSE in fault
+    assert "omits staged id" in fault
+    assert "v2" in fault
+    merged = V.merge_and_rank(survivors, incomplete["grouping"])
+    assert sorted(f["id"] for f in merged["findings"]) == ["v0", "v1", "v2"]
+    for artifact in ({"grouping": None}, {"grouping": []}):
+        assert RD.synthesis_staged_id_fault(state, artifact) is None
+        merged_open = V.merge_and_rank(survivors, artifact.get("grouping"))
+        assert sorted(f["id"] for f in merged_open["findings"]) == ["v0", "v1", "v2"]
+
+
 def test_author_justified_drop_unresolvable_id_parks_at_fold():
     """Fold-only guard when submit gate was bypassed (author-justified drops)."""
     finding = {

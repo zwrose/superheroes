@@ -215,6 +215,21 @@ def test_driver_receipt_finding_key_matches_state_row():
     assert projected.get(SC.FINDING_KEY_FIELD) == row.get(SC.FINDING_KEY_FIELD)
 
 
+def test_legacy_receipt_omits_finding_key_even_when_state_has_it():
+    """axis: v2 receipt shape stays byte-for-byte on finding rows — no findingKey key."""
+    finding = {"file": "a.py", "line": 1, "title": "Issue", "severity": "Important", "id": "F1"}
+    compiled, _ = RD.mechanical_compile([finding], None)
+    state = RD.new_state(_cfg())
+    state["schemaVersion"] = 2
+    RD._set_findings(state, compiled)
+    assert state["findings"][0].get(SC.FINDING_KEY_FIELD)
+    state["terminal"] = "converged"
+    state["certification"] = {"shape": "audited-chain"}
+    receipt = RD.build_receipt(state)
+    assert receipt["schemaVersion"] == 2
+    assert SC.FINDING_KEY_FIELD not in receipt["findings"][0]
+
+
 # --- Part 3: disposition metadata does not move identity --------------------------------
 
 _DISPOSITION_METADATA_VALUES = {
