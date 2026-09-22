@@ -35,8 +35,9 @@ DISPATCHABLE_ENGINES = tuple(
     e for e in engine_adapter.BUILD_ARGV_VENDORS if e in engine_result_channel._CHANNEL_BY_ENGINE)
 _LEG_NAMES = ("resultProduction", "completionDetection", "progressTelemetry")
 ASTRA_PROBE_ROLE = "registration-probe"
-ASTRA_PROBE_MODEL = "gpt-6-astra"
 ASTRA_CLAIM_ABANDON_SECONDS = 86400
+_RUBRIC_PATH = os.path.join(os.path.dirname(_LIB_DIR), "rubric", "review-base.md")
+_EXPECTED_SEVERITY_LEVELS = ("Critical", "Important", "Minor", "Nit")
 PLANT_FILE = "app/session_guard.py"
 PLANT_LINES = (24, 25)
 PLANT_SEVERITY = "Critical"
@@ -60,22 +61,6 @@ ASTRA_PROBE_DIFF = (
     '     if claims.get("role") != "admin":\n'
     '         raise Forbidden("not an admin")\n'
     "     return claims\n"
-)
-# Scale frozen on purpose: every wave's attempt sees the same prompt; a test ties level names to the rubric table.
-ASTRA_PROBE_FIXTURE = (
-    "Perform a one-shot security review of the following unified diff for a production "
-    "admin console.\n\n"
-    "Report each finding with `file` (the path as shown in the diff), `line` (NEW-file line number), "
-    "`severity`, `title`, and `body`.\n\n"
-    "Severity scale:\n"
-    "- `Critical` — corrupts data, leaks data across a trust boundary, or breaks production;\n"
-    "- `Important` — a likely bug in normal use, or a security or correctness issue warranting a fix before merge;\n"
-    "- `Minor` — a real issue with small impact;\n"
-    "- `Nit` — style, naming or cleanup.\n"
-    "`severity` must be exactly one of those four words.\n\n"
-    "```diff\n"
-    + ASTRA_PROBE_DIFF
-    + "```\n"
 )
 _PROBE_PROMPT = (
     "Verify exactly one claim and respond with exactly one JSON object.\n\n"
@@ -101,6 +86,54 @@ def _utc_now_iso():
 
 def _now_utc():
     return datetime.now(timezone.utc)
+
+def _iso_from_utc(dt):
+    return dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+def _severity_scale():
+    try:
+        with open(_RUBRIC_PATH, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return None, "astra-probe-scale-unreadable"
+    lines = []
+    levels = []
+    for row in content.splitlines():
+        if "|" not in row:
+            continue
+        cells = [c.strip() for c in row.split("|") if c.strip()]
+        if not cells:
+            continue
+        first = cells[0]
+        if first.startswith("**") and first.endswith("**"):
+            level = first.strip("*").strip()
+            if len(cells) < 2:
+                return None, "astra-probe-scale-unreadable"
+            lines.append("- `%s` — %s" % (level, cells[1]))
+            levels.append(level)
+            if len(levels) == 4:
+                break
+    if levels != list(_EXPECTED_SEVERITY_LEVELS):
+        return None, "astra-probe-scale-unreadable"
+    return lines, None
+
+def _astra_probe_prompt():
+    scale_lines, err = _severity_scale()
+    if err:
+        return None, err
+    text = (
+        "Perform a one-shot security review of the following unified diff for a production "
+        "admin console.\n\n"
+        "Report each finding with `file` (the path as shown in the diff), `line` (NEW-file line number), "
+        "`severity`, `title`, and `body`.\n\n"
+        "Severity scale:\n"
+        + "\n".join(scale_lines) + "\n"
+        "`severity` must be exactly one of those four words.\n\n"
+        "```diff\n"
+        + ASTRA_PROBE_DIFF
+        + "```\n"
+    )
+    return text, None
 
 def _parse_completed_at(value):
     if not isinstance(value, str) or not value.strip():
@@ -853,14 +886,23 @@ def _write_astra_claim(ledger_dir, wave, run_dir_real):
 
 def _claim_is_abandoned(claim, now):
     claimed_at = _parse_completed_at(claim.get("claimedAt"))
-    if claimed_at is None:
+    last_seen_at = _parse_completed_at(claim.get("lastSeenAt"))
+    if claimed_at is None and last_seen_at is None:
         return True
-    return (now - claimed_at).total_seconds() > ASTRA_CLAIM_ABANDON_SECONDS
+    if claimed_at is None:
+        anchor = last_seen_at
+    elif last_seen_at is None:
+        anchor = claimed_at
+    else:
+        anchor = max(claimed_at, last_seen_at)
+    if anchor is None:
+        return True
+    return (now - anchor).total_seconds() > ASTRA_CLAIM_ABANDON_SECONDS
 
 def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None, seat=None):
     if now is None:
         now = _now_utc()
-    model = (seat or {}).get("model", ASTRA_PROBE_MODEL)
+    model = (seat or {}).get("model")
     effort = (seat or {}).get("effort")
     attempts = _read_astra_attempts(ledger_dir)
     recorded = {a.get("wave") for a in attempts}
@@ -934,7 +976,7 @@ def _build_astra_output(wave, run_dir_real, terminal, findings, attempts_before,
     }
     return out
 
-def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=None):
+def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=None, now=None):
     """Run the Astra registration probe for `wave`. Returns (payload, exit code). Never raises."""
     if dispatch is None:
         dispatch = engine_dispatch.dispatch_review
@@ -948,8 +990,12 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
         run_dir_real = os.path.realpath(run_dir)
     except OSError:
         return {"ok": False, "reason": "run-dir-unresolvable"}, 1
+    prompt_text, prompt_err = _astra_probe_prompt()
+    if prompt_err:
+        return {"ok": False, "reason": prompt_err}, 1
+    prompt_sha256 = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     resolved = model_registry.resolve_dispatch(
-        ASTRA_PROBE_ROLE, "codex", ASTRA_PROBE_MODEL, None)
+        ASTRA_PROBE_ROLE, "codex", None, None)
     if not resolved.get("ok"):
         return {
             "ok": False,
@@ -962,10 +1008,12 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
         "effort": resolved["effort"],
         "role": ASTRA_PROBE_ROLE,
     }
+    if now is None:
+        now = _now_utc()
     ledger_dir, ledger_err = _conformance_record_dir(repo_real)
     if ledger_err:
         return {"ok": False, "reason": ledger_err}, 1
-    attempts = _settle_orphan_astra_claims(ledger_dir, wave, seat=seat)
+    attempts = _settle_orphan_astra_claims(ledger_dir, wave, now=now, seat=seat)
     claim_path = _astra_claim_path(ledger_dir, wave)
     claim = _read_astra_claim(claim_path)
     if claim is None:
@@ -993,7 +1041,7 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
     )
     try:
         with open(prompt_path, "w", encoding="utf-8") as fh:
-            fh.write(ASTRA_PROBE_FIXTURE)
+            fh.write(prompt_text)
     except OSError:
         return {"ok": False, "reason": "prompt-write-failed"}, 1
     order_id = "astra-probe-%s" % _wave_hash(wave, 12)
@@ -1019,6 +1067,13 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
             "detail": "internal-%s" % type(exc).__name__,
         }
     if not terminal.get("terminal"):
+        if claim is not None:
+            refreshed = dict(claim)
+            refreshed["lastSeenAt"] = _iso_from_utc(now)
+            store_core.atomic_write(
+                claim_path,
+                json.dumps(refreshed, separators=(",", ":")) + "\n",
+            )
         misses = _count_astra_misses(attempts)
         return {
             "ok": False,
@@ -1028,11 +1083,13 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
             "runDir": run_dir_real,
             "misses": misses,
             "ownerProposal": False,
+            "promptSha256": prompt_sha256,
         }, 0
     findings = terminal.get("findings") if terminal.get("ok") else []
     if not isinstance(findings, list):
         findings = []
     out = _build_astra_output(wave, run_dir_real, terminal, findings, attempts, seat)
+    out["promptSha256"] = prompt_sha256
     _append_astra_attempt(ledger_dir, _ledger_attempt_record(out))
     return out, (0 if out["ok"] else 1)
 
