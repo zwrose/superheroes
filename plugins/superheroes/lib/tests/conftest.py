@@ -113,10 +113,26 @@ def _isolate_store_root(monkeypatch, tmp_path):
     # #1379: the review-session marker bootstrap falls back to the repository of the process cwd
     # when a session's meta carries no repoRoot, so a test sitting in the real checkout wrote its
     # marker into that checkout's git-dir. Run every test from its own tmp_path, which is in no
-    # repository, so that fallback resolves nothing. A test that needs another cwd sets its own
+    # repository, so that fallback resolves nothing (_tmp_base_outside_any_repository below
+    # refuses the session when that does not hold). A test that needs another cwd sets its own
     # (applies after this fixture); _guard_real_review_marker below catches any path that
     # still reaches the real checkout.
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _tmp_base_outside_any_repository(tmp_path_factory):
+    """#1379: the chdir(tmp_path) above isolates only when pytest's base temp directory has no
+    git ancestor. A --basetemp pointing inside a checkout (directly or via PYTEST_ADDOPTS) would
+    put every test's cwd back in that repository, so refuse the run before any test executes.
+    Bites on: a base temp directory that git resolves to a repository."""
+    base = str(tmp_path_factory.getbasetemp())
+    proc = subprocess.run(["git", "-C", base, "rev-parse", "--show-toplevel"],
+                          capture_output=True, text=True, check=False)
+    if proc.returncode == 0 and proc.stdout.strip():
+        pytest.fail("pytest's base temp directory %s is inside the git repository %s, so "
+                    "running tests from tmp_path would not isolate the review scope marker; "
+                    "point --basetemp outside every repository" % (base, proc.stdout.strip()))
 
 
 def _real_review_marker_path():
@@ -144,14 +160,16 @@ def _read_marker(path):
 @pytest.fixture(autouse=True)
 def _guard_real_review_marker(request):
     """#1379 detector: fail the test during which the real checkout's review-session marker
-    changed (created, rewritten, or removed). Every test that wrote it is named; under xdist a
-    test on another worker whose window overlapped the write is named too, so read the
-    failures as candidates."""
+    changed (created, rewritten, or removed). Every test that wrote it is named; so is any test
+    whose window overlapped a write from elsewhere — another xdist worker, or a real review
+    session started in this checkout while the suite ran — so read the failures as candidates.
+    Bites on: any byte-level change (or presence change) of that one marker file."""
     if _REAL_REVIEW_MARKER is None:
         yield
         return
     before = _read_marker(_REAL_REVIEW_MARKER)
     yield
     if _read_marker(_REAL_REVIEW_MARKER) != before:
-        pytest.fail("review scope marker of the real checkout (%s) changed during %s"
+        pytest.fail("review scope marker of the real checkout (%s) changed while %s ran "
+                    "(that test, or a writer overlapping it)"
                     % (_REAL_REVIEW_MARKER, request.node.nodeid))
