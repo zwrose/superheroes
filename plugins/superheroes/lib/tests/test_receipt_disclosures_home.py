@@ -8,6 +8,7 @@ import round_certification
 import round_driver
 import round_records
 import session_contract
+from test_round_records import _missing_env
 
 _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -48,7 +49,7 @@ def test_native_in_session_disclosure_transport_param(transport, named):
     if transport is not None:
         event[session_contract.SEAT_TRANSPORT_KEY] = transport
     journal = [event]
-    seats = receipt_disclosures._native_in_session_seats({}, journal)
+    seats = receipt_disclosures._native_in_session_seats(journal)
     if named:
         assert seats == ["code-reviewer"]
         degraded, _ = receipt_disclosures.build_degraded_prose(
@@ -76,7 +77,164 @@ def test_native_in_session_disclosure_named_when_runner_then_native():
             session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_NATIVE,
         },
     ]
-    assert receipt_disclosures._native_in_session_seats({}, journal) == ["code-reviewer"]
+    assert receipt_disclosures._native_in_session_seats(journal) == ["code-reviewer"]
+
+
+def _recorded_event(seat, transport, *, phase="dispatch-panel", round_num=1, attempt=0,
+                    occurrence=0, cmd="record-result"):
+    event = {
+        "cmd": cmd,
+        "outcome": "recorded",
+        "phase": phase,
+        "round": round_num,
+        "attempt": attempt,
+        "occurrence": occurrence,
+        "seat": seat,
+    }
+    if transport is not None:
+        event[session_contract.SEAT_TRANSPORT_KEY] = transport
+    return event
+
+
+def test_native_in_session_disclosure_not_named_when_runner_replaces_native():
+    journal = [
+        _recorded_event("code-reviewer", session_contract.SEAT_TRANSPORT_NATIVE),
+        _recorded_event("code-reviewer", session_contract.SEAT_TRANSPORT_RUNNER),
+    ]
+    assert receipt_disclosures._native_in_session_seats(journal) == []
+
+
+def test_native_in_session_disclosure_named_when_runner_only_on_other_round():
+    journal = [
+        _recorded_event("code-reviewer", session_contract.SEAT_TRANSPORT_NATIVE, round_num=1),
+        _recorded_event("code-reviewer", session_contract.SEAT_TRANSPORT_RUNNER, round_num=2),
+    ]
+    assert receipt_disclosures._native_in_session_seats(journal) == ["code-reviewer"]
+
+
+def test_native_in_session_disclosure_record_missing_not_named():
+    journal = [
+        {
+            "cmd": "record-missing",
+            "outcome": "recorded",
+            "seat": "code-reviewer",
+            "phase": "dispatch-panel",
+            "round": 1,
+            "attempt": 0,
+            "occurrence": 0,
+        },
+    ]
+    assert receipt_disclosures._native_in_session_seats(journal) == []
+
+
+def test_native_in_session_disclosure_reappended_missing_cas_token_not_named():
+    journal = [
+        {
+            "cmd": "advance",
+            "outcome": "recorded",
+            "reappended": True,
+            "seat": "code-reviewer",
+            "casToken": "seat-missing/1",
+            "transport": "native-subagent",
+        },
+    ]
+    assert receipt_disclosures._native_in_session_seats(journal) == []
+
+
+def test_native_in_session_disclosure_journal_stored_revision_missing_not_named():
+    envelope = _missing_env(seat="code-reviewer")
+    fields = round_driver._journal_stored_revision(envelope)
+    assert fields["casToken"] == "seat-missing/1"
+    event = {
+        "cmd": "advance",
+        "outcome": "recorded",
+        "seat": "code-reviewer",
+        **fields,
+    }
+    assert receipt_disclosures._native_in_session_seats([event]) == []
+
+
+def test_native_in_session_disclosure_missing_then_recovered_named():
+    journal = [
+        {
+            "cmd": "advance",
+            "outcome": "recorded",
+            "seat": "code-reviewer",
+            "casToken": "seat-missing/1",
+            "transport": "native-subagent",
+            "phase": "dispatch-panel",
+            "round": 1,
+            "attempt": 0,
+            "occurrence": 0,
+        },
+        _recorded_event("code-reviewer", session_contract.SEAT_TRANSPORT_NATIVE),
+    ]
+    assert receipt_disclosures._native_in_session_seats(journal) == ["code-reviewer"]
+
+
+def test_native_in_session_disclosure_record_missing_last_wins():
+    journal = [
+        _recorded_event("code-reviewer", session_contract.SEAT_TRANSPORT_NATIVE),
+        _recorded_event("code-reviewer", None, cmd="record-missing"),
+    ]
+    assert receipt_disclosures._native_in_session_seats(journal) == []
+    recovered = [
+        _recorded_event("code-reviewer", None, cmd="record-missing"),
+        _recorded_event("code-reviewer", session_contract.SEAT_TRANSPORT_NATIVE),
+    ]
+    assert receipt_disclosures._native_in_session_seats(recovered) == ["code-reviewer"]
+
+
+def test_latest_recorded_events_resolves_seatless_record_identity():
+    journal = [
+        {
+            "cmd": "record-result",
+            "outcome": "recorded",
+            "phase": "dispatch-panel",
+            "round": 1,
+            "attempt": 0,
+            session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_NATIVE,
+            "recordIdentity": {
+                "phase": "dispatch-panel",
+                "seat": "code-reviewer",
+                "occurrence": 0,
+                "attempt": 0,
+            },
+        },
+    ]
+    pairs = receipt_disclosures.latest_recorded_events(journal)
+    assert len(pairs) == 1
+    identity, _event = pairs[0]
+    assert identity["seat"] == "code-reviewer"
+    assert receipt_disclosures._native_in_session_seats(journal) == ["code-reviewer"]
+
+
+def test_native_in_session_and_collect_seats_share_latest_recorded_events(monkeypatch):
+    calls = []
+    real_latest = receipt_disclosures.latest_recorded_events
+
+    def recording_stub(journal):
+        calls.append(journal)
+        return real_latest(journal)
+
+    monkeypatch.setattr(receipt_disclosures, "latest_recorded_events", recording_stub)
+    journal = [_recorded_event("code-reviewer", session_contract.SEAT_TRANSPORT_NATIVE)]
+    receipt_disclosures._native_in_session_seats(journal)
+    round_certification._collect_seats({"state": {}, "journal": journal})
+    assert len(calls) == 2
+    assert calls[0] is journal
+    assert calls[1] is journal
+
+
+def test_session_contract_transport_literals_pinned():
+    assert session_contract.SEAT_TRANSPORT_KEY == "transport"
+    assert session_contract.SEAT_TRANSPORTS == (
+        "runner",
+        "native-subagent",
+        "hand-landed",
+        "orchestrator",
+    )
+    assert session_contract.SEAT_TRANSPORTS_DISCLOSED == ("native-subagent", "hand-landed")
 
 
 def test_no_pending_registration_disclosure_strings():
