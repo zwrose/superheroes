@@ -2,7 +2,7 @@
 
 **Provenance:** cursor / composer-2.5 (implementer).
 
-**Summary:** WO-D probe wiring and grader bite-proofs (BP-D1–D4). The fixture severity-scale defect (prompt omitted Critical) is fixed by WO-P (BP-P1).
+**Summary:** WO-D probe wiring and grader bite-proofs (BP-D1–D4). The fixture severity-scale defect (prompt omitted Critical) is fixed by WO-P (BP-P1). R4 (2026-09-22): every entry was checked at `8aaa809c`; entries whose code or selector no longer exists are marked superseded, the rest were re-run or rewritten at that head.
 
 ## Guarded elements
 
@@ -16,6 +16,8 @@
 ---
 
 ## BP-D1 — O_EXCL claim run-dir gate
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** different `runDir` for the same wave must refuse before dispatch
 
@@ -32,7 +34,7 @@
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_second_run_dir_same_wave
 >       assert code == 1
 E       assert 0 == 1
-1 failed in 1.28s
+1 failed in 1.64s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
@@ -41,11 +43,13 @@ E       assert 0 == 1
             return _astra_probe_refusal(wave, claim)
 ```
 
-**raw green** (exit 0): `1 passed in 0.93s`
+**raw green** (exit 0): `1 passed in 1.26s`
 
 ---
 
 ## BP-D2 — location grade (line)
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** non-int `line` must not pass location grading
 
@@ -61,7 +65,7 @@ E       assert 0 == 1
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_miss_string_line_not_matched
 >       assert code == 1
 E       assert 0 == 1
-1 failed in 1.30s
+1 failed in 1.48s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_match_astra_finding`):
@@ -69,11 +73,13 @@ E       assert 0 == 1
     line_ok = isinstance(line, int) and line in PLANT_LINES
 ```
 
-**raw green** (exit 0): `1 passed in 0.97s`
+**raw green** (exit 0): `1 passed in 1.21s`
 
 ---
 
 ## BP-D3 — severity grade
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** right location at Important severity must miss
 
@@ -89,7 +95,7 @@ E       assert 0 == 1
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_miss_wrong_severity
 >       assert code == 1
 E       assert 0 == 1
-1 failed in 0.93s
+1 failed in 1.38s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_match_astra_finding`):
@@ -97,19 +103,22 @@ E       assert 0 == 1
     sev_ok = isinstance(severity, str) and severity.lower() == PLANT_SEVERITY.lower()
 ```
 
-**raw green** (exit 0): `1 passed in 0.98s`
+**raw green** (exit 0): `1 passed in 1.18s`
 
 ---
 
 ## BP-D4 — orphan-claim record
 
+> **Rewritten against `8aaa809c` (2026-09-22).** `_read_astra_attempts` now returns a pair and the orphan-scan body follows the error check.
+
 - **axis:** claim without attempt must be settled as incomplete on a new wave
 
 **neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_settle_orphan_astra_claims`):
 ```python
-def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None, seat=None):
-    attempts = _read_astra_attempts(ledger_dir)
-    return attempts  # bite-proof BP-D4 neutralization
+    attempts, err = _read_astra_attempts(ledger_dir)
+    if err:
+        return None, err
+    return attempts, None  # bite-proof BP-D4 neutralization
 ```
 
 **command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_orphan_claim_recorded_as_miss`
@@ -119,16 +128,22 @@ def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None, seat=None):
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_orphan_claim_recorded_as_miss
 >       orphan = next(a for a in attempts if a.get("wave") == old_wave)
 E       StopIteration
-1 failed in 0.97s
+1 failed in 0.93s
 ```
 
-**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_settle_orphan_astra_claims`): removed early `return attempts` neutralization; full orphan-scan body restored.
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_settle_orphan_astra_claims`):
+```python
+    return attempts, None  # bite-proof BP-D4 neutralization
+```
+(deleted line — orphan-scan body follows the error check.)
 
-**raw green** (exit 0): `1 passed in 0.26s`
+**raw green** (exit 0): `1 passed in 0.79s`
 
 ---
 
 ## BP-R2-1 — scale fail-closed
+
+> **Superseded at `8aaa809c` (2026-09-22) by BP-R3-1.** `_EXPECTED_SEVERITY_LEVELS` and selector `test_astra_probe_refuses_when_rubric_scale_unreadable` no longer exist at this head. The body below is kept as history; it does not reproduce at this head.
 
 - **axis:** unreadable rubric scale must refuse before claim or dispatch
 
@@ -160,6 +175,8 @@ E       KeyError: 'reason'
 
 ## BP-R2-2 — scale rendered from the rubric
 
+> **Re-run at `8aaa809c` (2026-09-22).**
+
 - **axis:** severity scale lines must match the rubric table definitions at call time
 
 **neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
@@ -178,9 +195,9 @@ E       KeyError: 'reason'
 **raw red** (exit 1):
 ```
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_is_rendered_from_the_rubric
->           assert "`%s` — %s" % (level, rows[level]) in text
-E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.')) in 'Perform a one-shot security review...
-1 failed in 0.33s
+>           assert "`%s` — %s" % (level, definition) in text
+E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.')) in 'Perform a one-shot security review of the following unified diff for a production admin console.\n\nReport each findi... "admin"}\n     if claims.get("role") != "admin":\n         raise Forbidden("not an admin")\n     return claims\n```\n'
+1 failed in 1.78s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
@@ -188,11 +205,13 @@ E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data acro
     return lines, None
 ```
 
-**raw green** (exit 0): `1 passed in 0.24s`
+**raw green** (exit 0): `1 passed in 1.60s`
 
 ---
 
 ## BP-R2-3 — seat from the cell
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** the probe must resolve the registry cell with no model argument
 
@@ -209,7 +228,8 @@ E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data acro
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_seat_is_the_registry_cell
 >       assert resolve_calls == [("registration-probe", "codex", None, None)]
 E       AssertionError: assert [('registrati...astra', None)] == [('registrati..., None, None)]
-1 failed in 0.33s
+E         
+1 failed in 1.42s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
@@ -218,11 +238,13 @@ E       AssertionError: assert [('registrati...astra', None)] == [('registrati..
         ASTRA_PROBE_ROLE, "codex", None, None)
 ```
 
-**raw green** (exit 0): `1 passed in 0.26s`
+**raw green** (exit 0): `1 passed in 1.28s`
 
 ---
 
 ## BP-R2-4 — claim refresh
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** a non-terminal slice must refresh `lastSeenAt` on the wave claim
 
@@ -244,7 +266,8 @@ E       AssertionError: assert [('registrati...astra', None)] == [('registrati..
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_running_wave_claim_refreshed_is_not_settled
 >       assert claim.get("lastSeenAt") is not None
 E       AssertionError: assert None is not None
-1 failed in 0.30s
+E        +  where None = <built-in method get of dict object at 0x10723bb00>('lastSeenAt')
+1 failed in 1.25s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
@@ -258,40 +281,44 @@ E       AssertionError: assert None is not None
             )
 ```
 
-**raw green** (exit 0): `1 passed in 0.27s`
+**raw green** (exit 0): `1 passed in 1.01s`
 
 ---
 
 ## BP-P1 — the prompt names the scale
 
+> **Rewritten against `8aaa809c` (2026-09-22).** The prompt is built by `_astra_probe_prompt` from `_severity_scale`; `ASTRA_PROBE_FIXTURE` no longer exists.
+
 - **axis:** the prompt must name every severity level the grader can pass on, including Critical
 
-**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `ASTRA_PROBE_FIXTURE`):
+**neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_astra_probe_prompt`):
 ```python
-    "- `Important` — a likely bug in normal use, or a security or correctness issue warranting a fix before merge;\n"
+        + "\n".join(line for line in scale_lines if not line.startswith("- `Critical`")) + "\n"  # bite-proof BP-P1 neutralization
 ```
-(replaces the `Critical` scale line)
+(replaces the `scale_lines` join in the prompt text.)
 
 **command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_states_the_full_severity_scale`
 
 **raw red** (exit 1):
 ```
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_states_the_full_severity_scale
->       assert level in fixture
-E       AssertionError: assert 'Critical' in 'Perform a one-shot security review of the following unified diff for a production admin console.\n\nReport each findi... "admin"}\n     if claims.get("role") != "admin":\n         raise Forbidden("not an admin")\n     return claims\n```\n'
-1 failed in 0.28s
+>           assert "`%s` — %s" % (level, definition) in text
+E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.')) in 'Perform a one-shot security review of the following unified diff for a production admin console.\n\nReport each findi... "admin"}\n     if claims.get("role") != "admin":\n         raise Forbidden("not an admin")\n     return claims\n```\n'
+1 failed in 0.85s
 ```
 
-**restore** (`plugins/superheroes/lib/conformance_probe.py`, `ASTRA_PROBE_FIXTURE`):
+**restore** (`plugins/superheroes/lib/conformance_probe.py`, `_astra_probe_prompt`):
 ```python
-    "- `Critical` — corrupts data, leaks data across a trust boundary, or breaks production;\n"
+        + "\n".join(scale_lines) + "\n"
 ```
 
-**raw green** (exit 0): `1 passed in 0.29s`
+**raw green** (exit 0): `1 passed in 0.74s`
 
 ---
 
 ## BP-R1-1 — seat unresolved refusal
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** unresolvable registry cell must refuse before claim or dispatch
 
@@ -305,8 +332,10 @@ E       AssertionError: assert 'Critical' in 'Perform a one-shot security review
 **raw red** (exit 1):
 ```
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_registry_cell_unresolvable
+>       out, code = CP.astra_probe(repo, "wave-seat", run_dir, dispatch=dispatch)
+>           "model": resolved["model_id"],
 E       KeyError: 'model_id'
-1 failed in 0.27s
+1 failed in 1.23s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`):
@@ -314,11 +343,13 @@ E       KeyError: 'model_id'
     if not resolved.get("ok"):
 ```
 
-**raw green** (exit 0): `1 passed in 0.23s`
+**raw green** (exit 0): `1 passed in 1.01s`
 
 ---
 
 ## BP-R1-2 — pending slice
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** a non-terminal dispatch is pending, not graded as a miss
 
@@ -337,16 +368,19 @@ E       KeyError: 'model_id'
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_running_slice_is_pending_not_a_miss
 >       assert out["outcome"] == "pending"
 E       AssertionError: assert 'miss' == 'pending'
-1 failed in 0.29s
+E         
+1 failed in 1.06s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `astra_probe`): pending branch returns `outcome: "pending"` without calling `_build_astra_output`.
 
-**raw green** (exit 0): `1 passed in 0.23s`
+**raw green** (exit 0): `1 passed in 0.77s`
 
 ---
 
 ## BP-R1-3 — abandon bound
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** a recent other-wave claim must not be settled as abandoned
 
@@ -358,7 +392,9 @@ E       AssertionError: assert 'miss' == 'pending'
 ```
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_live_other_wave_claim_not_settled
 >       assert not any(a.get("wave") == "wave-a" for a in attempts)
-1 failed in 0.27s
+E       assert not True
+E        +  where True = any(<generator object test_astra_probe_live_other_wave_claim_not_settled.<locals>.<genexpr> at 0x1040a6970>)
+1 failed in 1.06s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_settle_orphan_astra_claims`):
@@ -367,11 +403,13 @@ FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe
             continue
 ```
 
-**raw green** (exit 0): `1 passed in 0.24s`
+**raw green** (exit 0): `1 passed in 0.92s`
 
 ---
 
 ## BP-R1-4 — project-store refusal
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** no project store entry must refuse before dispatch
 
@@ -391,7 +429,7 @@ FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_without_a_project_store_entry
 >       assert out["reason"] == "conformance-record-dir-unresolved"
 E       KeyError: 'reason'
-1 failed in 0.31s
+1 failed in 1.00s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_conformance_record_dir`):
@@ -400,11 +438,13 @@ E       KeyError: 'reason'
         return None, "conformance-record-dir-unresolved"
 ```
 
-**raw green** (exit 0): `1 passed in 0.28s`
+**raw green** (exit 0): `1 passed in 1.08s`
 
 ---
 
 ## BP-R1-5 — plant-line derivation test
+
+> **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** `PLANT_LINES` must match diff-derived new-file line numbers
 
@@ -418,8 +458,10 @@ PLANT_LINES = (25, 26)  # bite-proof BP-R1-5
 **raw red** (exit 1):
 ```
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_fixture_plant_lines_are_second_hunk_plus_lines
-E       AssertionError: assert (24, 25) == (25, 26)
-1 failed in 0.26s
+>       assert tuple(nums) == CP.PLANT_LINES == (24, 25)
+E       assert (24, 25) == (25, 26)
+E         
+1 failed in 1.15s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`):
@@ -427,11 +469,13 @@ E       AssertionError: assert (24, 25) == (25, 26)
 PLANT_LINES = (24, 25)
 ```
 
-**raw green** (exit 0): `1 passed in 0.23s`
+**raw green** (exit 0): `1 passed in 0.86s`
 
 ---
 
 ## BP-R1-6 — rubric drift test
+
+> **Superseded at `8aaa809c` (2026-09-22) by BP-R2-2, BP-R3-2, and BP-R3-3.** `ASTRA_PROBE_FIXTURE` and selector `test_astra_probe_fixture_scale_matches_rubric_table` no longer exist at this head. The body below is kept as history; it does not reproduce at this head.
 
 - **axis:** fixture severity scale names must match the rubric table
 
