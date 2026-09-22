@@ -3943,16 +3943,9 @@ def _enter_post_fix(state, config):
     """After the round's last fix-batch slice folds: advance or run the gate at the ceiling."""
     next_round = state["round"] + 1
     if circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config)).get("halt"):
-        rnd_key = str(state["round"])
-        if state.get("rounds", {}).get(rnd_key, {}).get("verifyResult") is not None:
-            _record_round(state, "ceilingGateSkipped",
-                          "the round's gate already ran on an earlier head; the post-fix head is "
-                          "unverified by the loop — certification is withheld at the ceiling regardless")
-            if not _advance_round(state, config, reason="post-fix-advance"):
-                return
-            return
         # The round at the ceiling completes — fix AND gate — before the boundary refuses the next
-        # round (owner ruling 19-c, #1030). The gate runs alone here; its fold parks.
+        # round. The gate runs on the post-fix head even when the round's gate already ran on an
+        # earlier head; its fold parks.
         state["_verifyThen"] = VERIFY_THEN_CEILING
         state["step"] = P_VERIFY
         return
