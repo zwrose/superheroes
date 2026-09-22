@@ -1594,27 +1594,14 @@ def check_disposition_without_receipt(ctx):
                     fid,
                     "out-of-scope disposition lacks named follow-up item",
                 )
-            trigger = follow_up.get("revisitTrigger")
-            if not isinstance(trigger, str) or not trigger.strip():
+            shape_fault = session_contract.follow_up_shape_fault(follow_up)
+            if shape_fault:
+                binding_failure, detail = shape_fault
                 return _refusal(
                     "disposition-without-receipt",
                     fid,
-                    "out-of-scope follow-up lacks revisit trigger",
-                    binding_failure="missing-revisit-trigger",
-                )
-            if "documented" in trigger.lower():
-                return _refusal(
-                    "disposition-without-receipt",
-                    fid,
-                    "revisit trigger must not be the word documented",
-                )
-            closure = follow_up.get("classClosure")
-            if not isinstance(closure, str) or not closure.strip():
-                return _refusal(
-                    "disposition-without-receipt",
-                    fid,
-                    "out-of-scope follow-up lacks class-closure line",
-                    binding_failure="missing-class-closure",
+                    detail,
+                    binding_failure=binding_failure,
                 )
             if _severity_rank(severity) == _severity_rank("Important"):
                 disclosures.append(

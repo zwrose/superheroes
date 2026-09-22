@@ -790,7 +790,7 @@ def test_check_disposition_without_receipt_missing_revisit_trigger_refuses(tmp_p
                     "severity": "Important",
                     "disposition": "out-of-scope",
                     "outOfScopeReason": "deferred",
-                    "followUp": {"classClosure": "tracked in issue-99"},
+                    "followUp": {"item": "deferred work", "classClosure": "tracked in issue-99"},
                 }
             ]
         },
@@ -810,7 +810,7 @@ def test_check_disposition_without_receipt_missing_class_closure_refuses(tmp_pat
                     "severity": "Important",
                     "disposition": "out-of-scope",
                     "outOfScopeReason": "deferred",
-                    "followUp": {"revisitTrigger": "2026-12-01"},
+                    "followUp": {"item": "deferred work", "revisitTrigger": "2026-12-01"},
                 }
             ]
         },
@@ -1012,6 +1012,7 @@ def test_important_out_of_scope_disclosure_is_case_insensitive(tmp_path):
                     "disposition": "out-of-scope",
                     "outOfScopeReason": "follow-on work",
                     "followUp": {
+                        "item": "platform follow-on",
                         "revisitTrigger": "next release",
                         "classClosure": "deferred to platform team",
                     },

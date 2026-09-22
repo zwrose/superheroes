@@ -398,6 +398,7 @@ _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 
 # Named refusal when a submit artifact lists the same judgment id with conflicting dispositions.
 JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
+FOLLOWUP_MALFORMED_CAUSE = "follow-up-malformed"
 
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
@@ -6946,6 +6947,38 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
         return _lock_held_refusal(session_dir, "submit", held)
 
 
+def judgment_follow_up_fault(artifact):
+    """Refuse malformed followUp on skip dispositions before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    for disp in artifact.get("dispositions") or []:
+        if not isinstance(disp, dict) or disp.get("disposition") != "skip":
+            continue
+        if "followUp" not in disp:
+            continue
+        fault = session_contract.follow_up_shape_fault(disp.get("followUp"))
+        if fault:
+            entry_id = disp.get("id") or "?"
+            _binding_failure, detail = fault
+            return "%s: %s: %s" % (FOLLOWUP_MALFORMED_CAUSE, entry_id, detail)
+    return None
+
+
+def stall_follow_up_fault(artifact):
+    """Refuse malformed followUp on accept-the-disclosed-risk before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    if artifact.get("choice") != ACCEPT_RISK_CHOICE:
+        return None
+    if "followUp" not in artifact:
+        return None
+    fault = session_contract.follow_up_shape_fault(artifact.get("followUp"))
+    if fault:
+        _binding_failure, detail = fault
+        return "%s: stall: %s" % (FOLLOWUP_MALFORMED_CAUSE, detail)
+    return None
+
+
 def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
     ok, loaded = load_state(session_dir)
     if not ok:
@@ -7144,6 +7177,19 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": STALL_ACCEPT_RISK_NOT_ELIGIBLE})
             return {"ok": False, "reason": STALL_ACCEPT_RISK_NOT_ELIGIBLE}
+        fault = stall_follow_up_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "follow-up-malformed"})
+            return {"ok": False, "reason": fault}
+    if phase == P_JUDGMENT:
+        fault = judgment_follow_up_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "follow-up-malformed"})
+            return {"ok": False, "reason": fault}
 
     # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.
     # `cmd_submit` never reads the durable store, so `record-result` (or `--sweep`) followed by a

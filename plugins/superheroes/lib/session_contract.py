@@ -28,6 +28,8 @@ __all__ = (
     "TRANSIENT_FINDING_FIELDS",
     "VERIFIED_HEAD_FIELD",
     "DISPOSITIONS",
+    "FOLLOW_UP_FIELDS",
+    "follow_up_shape_fault",
     "DISPOSITION_LEDGER_KEY",
     "DISPOSITION_LEDGER_MALFORMED_TOKEN",
     "DispositionLedgerReadFault",
@@ -117,6 +119,27 @@ VERIFIED_HEAD_FIELD = "verifiedHead"
 FINDING_KEY_FIELD = "findingKey"
 
 DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
+FOLLOW_UP_FIELDS = ("item", "revisitTrigger", "classClosure")
+
+
+def follow_up_shape_fault(follow_up):
+    """None when followUp is fully shaped; otherwise (binding_failure, detail)."""
+    if not isinstance(follow_up, dict):
+        return (None, "out-of-scope disposition lacks named follow-up item")
+    item = follow_up.get("item")
+    if not isinstance(item, str) or not item.strip():
+        return ("missing-follow-up-item", "out-of-scope follow-up lacks named item")
+    trigger = follow_up.get("revisitTrigger")
+    if not isinstance(trigger, str) or not trigger.strip():
+        return ("missing-revisit-trigger", "out-of-scope follow-up lacks revisit trigger")
+    if "documented" in trigger.lower():
+        return (None, "revisit trigger must not be the word documented")
+    closure = follow_up.get("classClosure")
+    if not isinstance(closure, str) or not closure.strip():
+        return ("missing-class-closure", "out-of-scope follow-up lacks class-closure line")
+    return None
+
+
 DISPOSITION_LEDGER_KEY = "dispositionLedger"
 DISPOSITION_LEDGER_MALFORMED_TOKEN = "disposition-ledger-malformed"
 DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN = "disposition-ledger-legacy-key-collision"
