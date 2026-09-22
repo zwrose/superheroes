@@ -66,8 +66,8 @@ def _append_host_model_section(boot, value):
     else:
         line = (
             "Host model: unknown — the session-start hook payload carried no readable model; "
-            "seat composition treats the host family as unknown and excludes nothing "
-            "(disclosed on the seat map)."
+            "seat composition falls back to the claude host's family for the families it cannot "
+            "read and discloses it on the seat map as host-model-unknown."
         )
     return boot + "\n\n### Host model\n" + line
 

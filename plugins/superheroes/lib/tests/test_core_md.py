@@ -2771,7 +2771,9 @@ def test_write_engine_pref_pins_codex_pin_ignored_note_when_reviewer_engine_clau
     assert res["action"] == "written"
     assert "notes" in res
     assert any(
-        "codexModels.reviewer is ignored while the reviewer role's engine is claude"
+        "codexModels.reviewer applies to the review panel's codex seats"
+        in note
+        and "the single-seat reviewer role's engine is claude, so that seat does not use it"
         in note
         for note in res["notes"]
     )

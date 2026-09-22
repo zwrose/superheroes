@@ -181,8 +181,10 @@ action that owns it, leaving the rest of the calibration untouched:
   `pin-probe-pending` while its registry row is probe-pending; it is eligible only for
   `reviewer-deep`, and pinning it on any other role is refused `pin-role-not-eligible`).
   Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol; an unpinned project never
-  dispatches Astra and Sol stays the default deep cell. A pinned model runs at the effort of its own
-  registry rung (Astra `high`, Sol `xhigh`) — the role's `enginePreferences.effort` setting is not
+  dispatches Astra and Sol stays the default deep cell. A pinned model runs at the effort its role's
+  registry allowlist resolves for it — Sol at `high` on `reviewer`, `code-fixer` and `implementer`
+  and `xhigh` on `reviewer-deep`, Terra at `high`, and Astra at `high` once its probe passes — the
+  role's `enginePreferences.effort` setting is not
   consulted for a pinned model. Show the current engine preferences and effective model first, merge
   only the requested role into the existing object, and preserve every sibling key. Before writing,
   validate the selected model with `model_registry.codex_pin_verdict`; reject an invalid model

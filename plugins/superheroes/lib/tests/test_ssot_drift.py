@@ -175,9 +175,8 @@ def test_complete_codex_policy_single_sourced():
                 "skills/configure/reference/set-up.md",
                 "skills/configure/reference/view-and-tune.md"):
         doc = _read(rel)
-        id_pattern = "(?:" + "|".join(
-            re.escape(m) for m in sorted(expected_ids, key=len, reverse=True)) + ")"
-        documented_ids = set(re.findall(id_pattern, doc))
+        id_pattern = r"(?<![A-Za-z0-9._-])gpt-[0-9][A-Za-z0-9._-]*(?![A-Za-z0-9._-])"
+        documented_ids = {m.rstrip(".") for m in re.findall(id_pattern, doc)}
         assert documented_ids == expected_ids, "%s Codex model IDs drifted from model_registry" % rel
         mapping_text = _one(re.findall(r"Codex tier map:\s*([^\n]+(?:\n(?!\s*\n)[^\n]+)?)", doc),
                             "Codex tier map", rel, "tier=model, ...")

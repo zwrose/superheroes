@@ -3282,16 +3282,119 @@ def test_cli_compose_host_model_unknown_degrades(capsys):
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["authorFamily"] == "anthropic"
-    assert receipt["narrativeFamily"] is None
+    assert receipt["narrativeFamily"] == "anthropic"
     host_unknown = [
         d for d in receipt["degradations"] if d["constraint"] == "host-model-unknown"
     ]
     assert len(host_unknown) == 1
-    assert "claude engine" in host_unknown[0]["reason"]
+    assert (
+        "the author and narrative families fell back to the claude host's family (anthropic)"
+        in host_unknown[0]["reason"]
+    )
     assert all(
         seat_cfg.get("family") != "anthropic"
         for seat_cfg in receipt["seats"].values()
     )
+
+
+def test_cli_compose_host_model_unknown_cursor_impl_degrades(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "cursor",
+            "--host-model",
+            "",
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["narrativeFamily"] == "anthropic"
+    assert receipt["authorFamily"] == "xai"
+    host_unknown = [
+        d for d in receipt["degradations"] if d["constraint"] == "host-model-unknown"
+    ]
+    assert len(host_unknown) == 1
+    assert "cursor" in host_unknown[0]["reason"]
+    grounding = receipt["seats"][SM.GROUNDING_SEAT]
+    assert grounding.get("family") not in ("anthropic", "xai")
+
+
+def test_host_family_bracket_suffix():
+    import model_registry as MR
+    assert MR.host_family("claude-opus-5[1m]") == "anthropic"
+
+
+def test_panel_pin_tiers_derived_from_registry():
+    import model_registry as MR
+    derived = frozenset(MR.codex_pin_roles()) & frozenset(SM.DEFAULT_TIER_BY_SEAT.values())
+    assert derived == {"reviewer", "reviewer-deep"}
+    assert SM._PANEL_PIN_TIERS == derived
+
+
+def test_panel_pin_tiers_without_reviewer(monkeypatch):
+    import model_registry as MR
+    monkeypatch.setattr(MR, "codex_pin_roles", lambda: ("reviewer-deep", "code-fixer"))
+    derived = frozenset(MR.codex_pin_roles()) & frozenset(SM.DEFAULT_TIER_BY_SEAT.values())
+    assert derived == {"reviewer-deep"}
+    assert "reviewer" not in derived
+
+
+def test_compose_role_pin_without_seat_pins_liveness_not_scoped(tmp_path, capsys):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"codexModels": {"reviewer": "gpt-5.6-sol"}})
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--configured-engines",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "cursor",
+            "--host-model",
+            "composer-2.5",
+            "--repo-root",
+            repo,
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["livenessPinScoped"] is False
+
+
+def test_compose_invalid_codex_role_pin_disclosed(tmp_path, capsys):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"codexModels": {"reviewer-deep": "gpt-6-astra"}})
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "cursor",
+            "--host-model",
+            "composer-2.5",
+            "--repo-root",
+            repo,
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    honorable = [
+        d for d in receipt["degradations"] if d["constraint"] == "role-pin-not-honorable"
+    ]
+    assert len(honorable) == 1
+    assert honorable[0]["reason"].startswith("pin-probe-pending:")
 
 
 def test_cli_compose_claude_impl_unknown_host_exits_zero(capsys):

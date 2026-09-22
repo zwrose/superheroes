@@ -59,7 +59,9 @@ _BACKFILL_DOWNGRADE_TO = "reviewer"
 # Tiers _backfill's claude-only fallback rotation tries (#1269).
 _BACKFILL_CLAUDE_ROTATION = (STRONG_TIER_REQUIRED, _BACKFILL_DOWNGRADE_TO)
 
-_PANEL_PIN_TIERS = frozenset({"reviewer", "reviewer-deep"})
+_PANEL_PIN_TIERS = frozenset(model_registry.codex_pin_roles()) & frozenset(
+    DEFAULT_TIER_BY_SEAT.values()
+)
 
 
 def _cell(
@@ -1297,6 +1299,14 @@ def main(argv):
 
         prefs = engine_pref.load_engine_prefs(args.repo_root)
         codex_role_pins = _panel_codex_role_pins(prefs.get("codexModels"))
+        invalid_codex = prefs.get("invalidCodexModels")
+        if isinstance(invalid_codex, dict):
+            for tier in _PANEL_PIN_TIERS:
+                if tier in invalid_codex:
+                    family_degradations.append({
+                        "constraint": "role-pin-not-honorable",
+                        "reason": invalid_codex[tier],
+                    })
 
         author_family = args.author_family
         narrative_family = args.narrative_family
@@ -1306,22 +1316,33 @@ def main(argv):
                 return 1
             host_model = args.host_model if args.host_model is not None else ""
             host_fam = model_registry.host_family(host_model)
-            if host_fam is None:
-                family_degradations.append({
-                    "constraint": "host-model-unknown",
-                    "reason": (
-                        "host model unknown — author family fell back to the claude engine's family"
-                    ),
-                })
             impl_engine = args.implementation_engine
+            claude_host_fam = model_registry.family_for("code-fixer", "claude")
             if impl_engine == "claude":
-                author_family = host_fam or model_registry.family_for("code-fixer", "claude")
+                author_family = host_fam or claude_host_fam
             else:
                 author_family = model_registry.family_for("code-fixer", impl_engine)
                 if author_family is None:
                     print("author-family-unresolved:%s" % impl_engine, file=sys.stderr)
                     return 1
-            narrative_family = host_fam
+            narrative_family = host_fam or claude_host_fam
+            if host_fam is None:
+                if impl_engine == "claude":
+                    reason = (
+                        "host model unknown — the author and narrative families fell back to "
+                        "the claude host's family (%s)" % claude_host_fam
+                    )
+                else:
+                    reason = (
+                        "host model unknown — the narrative family fell back to the claude "
+                        "host's family (%s); the author family is the %s implementation "
+                        "engine's (%s)"
+                        % (claude_host_fam, impl_engine, author_family)
+                    )
+                family_degradations.append({
+                    "constraint": "host-model-unknown",
+                    "reason": reason,
+                })
 
         live_cells = None
         live_cells_source = None
@@ -1340,7 +1361,7 @@ def main(argv):
             )
             if not pins and not codex_role_pins:
                 needed_override = None
-            liveness_pin_scoped = needed_override is not None
+            liveness_pin_scoped = bool(pins)
             live, live_cells, _liveness, notes, live_cells_source, _cache_provenance = (
                 preflight_probe.live_vendors_for_composition(
                     configured,

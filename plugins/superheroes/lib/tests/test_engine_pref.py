@@ -1511,10 +1511,7 @@ def test_normalize_codex_pin_map_legacy_alias_and_canonical_wins():
 
 
 def test_normalize_codex_pin_map_pending_astra_rejected():
-    result = EP.normalize_codex_pin_map(
-        {"reviewer-deep": "gpt-6-astra"},
-        {"review-deep": "xhigh"},
-    )
+    result = EP.normalize_codex_pin_map({"reviewer-deep": "gpt-6-astra"})
     assert result["pins"] == {}
     assert "reviewer-deep" in result["invalid"]
     assert result["invalid"]["reviewer-deep"].startswith("pin-probe-pending:")
@@ -1529,10 +1526,7 @@ def test_normalize_codex_pin_map_registered_astra_valid_despite_xhigh_effort(mon
     codex["gpt-6-astra"] = astra
     models["codex"] = codex
     monkeypatch.setattr(MR, "_MODELS", models)
-    result = EP.normalize_codex_pin_map(
-        {"reviewer-deep": "gpt-6-astra"},
-        {"review-deep": "xhigh"},
-    )
+    result = EP.normalize_codex_pin_map({"reviewer-deep": "gpt-6-astra"})
     assert result["pins"] == {"reviewer-deep": "gpt-6-astra"}
     assert result["invalid"] == {}
 

@@ -150,12 +150,10 @@ def canonical_codex_pin_role(role):
     return _LEGACY_CODEX_PIN_ALIAS.get(role, role)
 
 
-def normalize_codex_pin_map(raw, effort_map=None):
+def normalize_codex_pin_map(raw):
     """→ {"pins": {role: model}, "invalid": {role: reason_string}}"""
     if not isinstance(raw, dict):
         return {"pins": {}, "invalid": {}}
-    if not isinstance(effort_map, dict):
-        effort_map = {}
     pins = {}
     invalid = {}
     for role, model in raw.items():
@@ -615,7 +613,7 @@ def _normalize_engine_preferences_block(prefs):
            "effort": dict(effort) if isinstance(effort, dict) else {}}
     codex_models = prefs.get("codexModels")
     if isinstance(codex_models, dict):
-        codex_result = normalize_codex_pin_map(codex_models, out["effort"])
+        codex_result = normalize_codex_pin_map(codex_models)
         if codex_result["pins"]:
             out["codexModels"] = codex_result["pins"]
         if codex_result["invalid"]:

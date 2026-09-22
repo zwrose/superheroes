@@ -1240,9 +1240,7 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
                 set_values[role] = val
         if set_values:
             if key == "codexModels":
-                effort = prefs.get("effort")
-                effort_map = effort if isinstance(effort, dict) else {}
-                norm = engine_pref.normalize_codex_pin_map(set_values, effort_map)
+                norm = engine_pref.normalize_codex_pin_map(set_values)
             else:
                 norm = engine_pref.normalize_seat_pin_map(set_values)
             if norm["invalid"]:
@@ -1279,6 +1277,7 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
         result = {"action": "written"}
         if key == "codexModels" and set_values:
             import model_registry
+            import seat_map
             notes = []
             for role in set_values:
                 pref_key = model_registry.engine_pref_key(role)
@@ -1286,11 +1285,18 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
                     continue
                 engine = engine_pref.resolve_engine_pref_key(pref_key, prefs)
                 if engine != "codex":
-                    notes.append(
-                        "codexModels.%s is ignored while the %s role's engine is %s; "
-                        "it applies when that role routes to codex"
-                        % (role, pref_key, engine)
-                    )
+                    if role in seat_map._PANEL_PIN_TIERS:
+                        notes.append(
+                            "codexModels.%s applies to the review panel's codex seats; "
+                            "the single-seat %s role's engine is %s, so that seat does not use it"
+                            % (role, pref_key, engine)
+                        )
+                    else:
+                        notes.append(
+                            "codexModels.%s is ignored while the %s role's engine is %s; "
+                            "it applies when that role routes to codex"
+                            % (role, pref_key, engine)
+                        )
             if notes:
                 result["notes"] = notes
         return result
