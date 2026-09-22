@@ -176,6 +176,60 @@ def test_re_emit_cli_success_json(tmp_path, capsys):
     assert out["superseded"]["attempt"] == 0
 
 
+def test_re_emit_with_journal_recorded_before_relocate(tmp_path, capsys):
+    repo = M._mobility_repo(tmp_path)
+    sess = M._mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    state, pend, roster = _panel_roster(session_dir)
+    seat, occurrence = _first_seat(roster)
+    _land_panel_seat(session_dir, state, pend, seat, occurrence, sess["diff_path"])
+    recorded = RD.cmd_record_result(session_dir, seat, occurrence=occurrence)
+    assert recorded["ok"] is True, recorded
+    M._relocate(session_dir, repo["root_b"], capsys)
+    rc, out = _re_emit(session_dir, capsys)
+    assert rc == 0
+    assert out["ok"] is True
+    assert out["superseded"]["attempt"] == 0
+    ok, state = RD.load_state(session_dir)
+    assert state["pending"]["attempt"] == 1
+    superseded = next(r for r in M._journal_rows(session_dir)
+                      if r.get("outcome") == "orders-superseded")
+    assert superseded["supersededRecords"] == [seat if not occurrence else "%s#%d" % (seat, occurrence)]
+    unclosed, refusal = RC._journal_open_seats(RD.read_journal(session_dir), session_dir)
+    assert refusal is None
+    assert not [k for k, _ in unclosed if k[2] == 0]
+    manifest = json.load(open(RD._orders_manifest_path(session_dir, pend["round"], pend["phase"], 1),
+                               encoding="utf-8"))
+    attempt1_keys = [k for k, _ in unclosed
+                     if k[2] == 1 and k[0] == pend["phase"] and k[1] == pend["round"]]
+    assert len(attempt1_keys) == len(manifest.get("seats") or {})
+
+
+@pytest.mark.parametrize("stop_at", ["staged", "sealed", "applied", "done"])
+def test_re_emit_orders_emit_crash_matrix(tmp_path, capsys, monkeypatch, stop_at):
+    _repo, _sess, session_dir = _stale_session(tmp_path, capsys)
+    rnd, phase, old_attempt = 1, RD.P_PANEL, 0
+    before = _snapshot_order_bytes(session_dir, rnd, phase)
+    M._stop_at_kind(monkeypatch, "orders-emit", stop_at, n=0)
+    with pytest.raises(RD.round_commit.StopPoint):
+        RD.cmd_re_emit(session_dir, "tester")
+    RD.round_commit.recover(session_dir)
+    if stop_at == "staged":
+        after = _snapshot_order_bytes(session_dir, rnd, phase)
+        assert after == before
+        rc, out = _re_emit(session_dir, capsys)
+        assert rc == 0
+        assert out["ok"] is True
+    else:
+        rc, out = _re_emit(session_dir, capsys)
+        assert rc == 0
+        assert out["ok"] is True
+        assert out["superseded"]["attempt"] == old_attempt
+        ok, state = RD.load_state(session_dir)
+        assert state["pending"]["attempt"] == old_attempt + 1
+    assert M._commits_empty(session_dir)
+
+
 @pytest.mark.parametrize("reason,setup", [
     ("re-emit-session-unreadable", "unreadable"),
     ("re-emit-no-pending-order", "terminal"),
@@ -184,7 +238,6 @@ def test_re_emit_cli_success_json(tmp_path, capsys):
     ("re-emit-head-unresolved", "head_unresolved"),
     ("re-emit-head-moved", "head_moved"),
     ("re-emit-not-stale", "not_stale"),
-    ("re-emit-attempt-has-results", "results_journal"),
     ("re-emit-attempt-has-results", "results_landing"),
     ("re-emit-attempt-has-results", "results_bare"),
     ("re-emit-attempt-has-results", "results_lstat_denied"),
@@ -228,17 +281,6 @@ def test_re_emit_refusal_tokens(tmp_path, capsys, reason, setup, monkeypatch):
             ["git", "-C", repo["root_b"], "commit", "-q", "--allow-empty", "-m", "ahead"])
     elif setup == "not_stale":
         pass
-    elif setup == "results_journal":
-        M._relocate(session_dir, repo["root_b"], capsys)
-        ok, state = RD.load_state(session_dir)
-        pend = state["pending"]
-        journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
-        with open(journal_path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({
-                "cmd": "record-result", "outcome": "recorded",
-                "round": pend["round"], "phase": pend["phase"], "attempt": 0,
-                "seat": "code-reviewer",
-            }) + "\n")
     elif setup == "results_landing":
         M._relocate(session_dir, repo["root_b"], capsys)
         ok, state = RD.load_state(session_dir)

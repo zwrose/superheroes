@@ -6537,8 +6537,12 @@ def _relocation_after_emission(journal, rnd, phase, attempt):
     return None
 
 
-def _re_emit_attempt_result_names(session_dir, journal, rnd, phase, attempt, roster):
-    names = []
+def _re_emit_recorded_seat_label(seat_key, occurrence):
+    return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
+
+
+def _re_emit_recorded_seat_labels(journal, rnd, phase, attempt):
+    labels = []
     for event in journal:
         if event.get("outcome") != "recorded":
             continue
@@ -6547,12 +6551,21 @@ def _re_emit_attempt_result_names(session_dir, journal, rnd, phase, attempt, ros
             if (event.get("round") == rnd and ident.get("phase") == phase
                     and ident.get("attempt") == attempt):
                 seat = ident.get("seat") or event.get("seat") or "unknown"
-                names.append("journal:%s" % seat)
+                labels.append(_re_emit_recorded_seat_label(seat, ident.get("occurrence", 0)))
         elif (event.get("round") == rnd and event.get("phase") == phase
               and event.get("attempt") == attempt):
-            names.append("journal:%s" % (event.get("seat") or "unknown"))
-    # axis: a landing or bare entry for any old-attempt slot, or one that cannot be checked, blocks re-emit
+            seat = event.get("seat") or "unknown"
+            labels.append(_re_emit_recorded_seat_label(seat, event.get("occurrence", 0)))
+    return sorted(set(labels))
+
+
+def _re_emit_blocking_result_names(session_dir, journal, rnd, phase, attempt, roster):
+    # axis: a landing or bare entry for an unrecorded old-attempt slot, or one that cannot be checked, blocks re-emit
+    recorded = set(_re_emit_recorded_seat_labels(journal, rnd, phase, attempt))
+    names = []
     for seat_key, occurrence in round_records.roster_slots(roster):
+        if _re_emit_recorded_seat_label(seat_key, occurrence) in recorded:
+            continue
         skey = round_records.storage_key(seat_key, occurrence)
         landing = record_paths.landing_path(session_dir, rnd, phase, skey, attempt)
         bare = record_paths.bare_payload_path(session_dir, rnd, phase, skey, attempt)
@@ -6561,6 +6574,24 @@ def _re_emit_attempt_result_names(session_dir, journal, rnd, phase, attempt, ros
         if record_paths.landing_entry_present(bare):
             names.append("bare:%s" % skey)
     return names
+
+
+def _re_emit_completed_for_attempt(journal, rnd, phase, attempt):
+    """Return (superseded_attempt, superseded_row) when re-emit already committed for ``attempt``."""
+    superseded_row = None
+    for event in journal:
+        if (event.get("cmd") == "re-emit" and event.get("outcome") == "orders-superseded"
+                and event.get("round") == rnd and event.get("phase") == phase
+                and event.get("newAttempt") == attempt):
+            superseded_row = event
+    if superseded_row is None:
+        return None
+    for event in journal:
+        if (event.get("cmd") == "re-emit" and event.get("outcome") == "orders-emitted"
+                and event.get("round") == rnd and event.get("phase") == phase
+                and event.get("attempt") == attempt):
+            return superseded_row.get("attempt"), superseded_row
+    return None
 
 
 def _cmd_re_emit_locked(session_dir, by):
@@ -6616,6 +6647,17 @@ def _cmd_re_emit_locked(session_dir, by):
     journal = read_journal(session_dir)
     relocation = _relocation_after_emission(journal, rnd, phase, old_attempt)
     if relocation is None:
+        completed = _re_emit_completed_for_attempt(journal, rnd, phase, old_attempt)
+        if completed is not None:
+            superseded_attempt, superseded_row = completed
+            anchor = _orders_anchor(state, session_dir, rnd, phase, superseded_attempt)
+            response = _next_response(state["pending"], state_hash(state))
+            response["superseded"] = {
+                "attempt": superseded_attempt,
+                "manifestSha256": ((anchor or {}).get("manifestSha256")
+                                     or superseded_row.get("supersededManifestSha256")),
+            }
+            return response
         return _refuse_cmd(session_dir, "re-emit", "re-emit-not-stale",
                            phase=phase, rnd=rnd, attempt=old_attempt)
 
@@ -6623,7 +6665,7 @@ def _cmd_re_emit_locked(session_dir, by):
     if roster_refusal is not None:
         return roster_refusal
 
-    result_names = _re_emit_attempt_result_names(
+    result_names = _re_emit_blocking_result_names(
         session_dir, journal, rnd, phase, old_attempt, old_roster)
     if result_names:
         return _refuse_cmd(session_dir, "re-emit", "re-emit-attempt-has-results",
@@ -6646,14 +6688,19 @@ def _cmd_re_emit_locked(session_dir, by):
         "sessionDir": relocation.get("sessionDir"),
         "at": relocation.get("at"),
     }
+    superseded_fields = {
+        "phase": phase, "round": rnd, "attempt": old_attempt, "newAttempt": new_attempt,
+        "supersededManifestSha256": anchor.get("manifestSha256"),
+        "supersededOrderSha256": anchor.get("orders"),
+        "head": live_head,
+        "relocation": relocation_fields,
+        "by": by, "at": at,
+    }
+    recorded_labels = _re_emit_recorded_seat_labels(journal, rnd, phase, old_attempt)
+    if recorded_labels:
+        superseded_fields["supersededRecords"] = recorded_labels
     superseded_row = _journal_entry_for_commit(
-        session_dir, "re-emit", "orders-superseded",
-        phase=phase, round=rnd, attempt=old_attempt, newAttempt=new_attempt,
-        supersededManifestSha256=anchor.get("manifestSha256"),
-        supersededOrderSha256=anchor.get("orders"),
-        head=live_head,
-        relocation=relocation_fields,
-        by=by, at=at)
+        session_dir, "re-emit", "orders-superseded", **superseded_fields)
 
     try:
         _emit_orders_manifest(

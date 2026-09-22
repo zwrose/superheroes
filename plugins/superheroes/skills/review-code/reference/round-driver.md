@@ -622,10 +622,15 @@ no `orders-emitted` row counts as stale if any such move exists). The driver ope
 number, leaves the old attempt's orders, stubs, manifest, and anchor byte-identical, and journals one
 `orders-superseded` row (old attempt, `newAttempt`, the superseded manifest and order hashes, the
 head, the relocation that made it stale — `oldRoot`, `newRoot`, `oldBranch`, `newBranch`,
-`sessionDir`, `at` — `by`, `at`) followed by the new attempt's `orders-emitted` row. Certification
-treats a superseded attempt's seat as closed only when neither its landing file nor its bare-payload
-file exists; the new attempt's seats are open. Dispatch the new attempt's orders; results recorded
-against the old attempt are not carried.
+`sessionDir`, `at` — `by`, `at`; when journal `recorded` rows exist for the superseded attempt,
+`sorted supersededRecords` naming those seat labels) followed by the new attempt's `orders-emitted`
+row. The full roster is re-issued on the new attempt even when only some old-attempt seats were
+recorded. Certification treats a superseded attempt's seat as closed only when neither its landing
+file nor its bare-payload file exists; the new attempt's seats are open. Dispatch the new attempt's
+orders; results recorded against the old attempt are not carried. A retry after a successful re-emit
+(or after crash recovery replays its `orders-emit` transaction) returns the current pending order
+idempotently when the journal already contains the matching `orders-superseded` and `orders-emitted`
+pair for the pending attempt.
 
 | `reason` | condition |
 | --- | --- |
@@ -635,7 +640,7 @@ against the old attempt are not carried.
 | `re-emit-head-unresolved` | the session's checkout does not answer `git rev-parse HEAD`, or no head is anchored or recorded |
 | `re-emit-head-moved` | the checkout's HEAD differs from the head the order was emitted at |
 | `re-emit-not-stale` | no move came after the order was emitted |
-| `re-emit-attempt-has-results` | a result for the pending attempt is recorded, or a landing/bare-payload file for one of its seats exists or cannot be checked |
+| `re-emit-attempt-has-results` | a landing/bare-payload file for an unrecorded seat exists or cannot be checked |
 | `re-emit-locked` | another process holds the session lock |
 
 Orders emitted before the move are not rewritten, and they may already have run in the old checkout —
