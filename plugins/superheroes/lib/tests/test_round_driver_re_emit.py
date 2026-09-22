@@ -630,7 +630,7 @@ def test_relocation_after_emission_predicate(tmp_path):
     emit0 = {"outcome": "orders-emitted", "round": rnd, "phase": phase, "attempt": 0}
     emit1 = {"outcome": "orders-emitted", "round": rnd, "phase": phase, "attempt": 1}
     assert RD._relocation_after_emission([moved], rnd, phase, attempt) == moved
-    assert RD._relocation_after_emission([bad], rnd, phase, attempt) is None
+    assert RD._relocation_after_emission([bad], rnd, phase, attempt) is RD._RELOCATION_EVIDENCE_INDETERMINATE
     assert RD._relocation_after_emission([equal], rnd, phase, attempt) is None
     between = [emit0, moved, emit1]
     assert RD._relocation_after_emission(between, rnd, phase, 1) is None

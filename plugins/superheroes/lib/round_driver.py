@@ -407,6 +407,11 @@ RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = (
     "the orders for this attempt were emitted before the session moved checkouts and "
     "may already have run in the old checkout; run `re-emit` and dispatch the new attempt"
 )
+RELOCATION_EVIDENCE_INDETERMINATE_CAUSE = "relocation-evidence-indeterminate"
+RELOCATION_EVIDENCE_INDETERMINATE_DETAIL = (
+    "relocation evidence in the journal is unreadable or malformed; "
+    "cannot determine whether this attempt predates a checkout move"
+)
 
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
@@ -631,6 +636,29 @@ def read_journal(session_dir):
     except OSError:
         pass
     return out
+
+
+def read_journal_for_relocation(session_dir):
+    """Read the journal for relocation-fence evidence; lossy reads are flagged."""
+    out = []
+    degraded = False
+    path = os.path.join(session_dir, JOURNAL_FILE)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except ValueError:
+                    degraded = True
+    except OSError:
+        degraded = True
+    return out, degraded
+
+
+_RELOCATION_EVIDENCE_INDETERMINATE = object()
 
 
 def read_fault_markers(session_dir):
@@ -6518,7 +6546,11 @@ def _journal_has_orders_emitted(session_dir, rnd, phase, attempt):
 
 
 def _relocation_after_emission(journal, rnd, phase, attempt):
-    """First qualifying relocated row after the attempt's last orders-emitted, or fail-closed."""
+    """First qualifying relocated row after the attempt's last orders-emitted.
+
+    Returns the relocation row, ``None`` when no qualifying move exists, or
+    ``_RELOCATION_EVIDENCE_INDETERMINATE`` when a relocated row is present but
+    unreadable — callers must refuse rather than treat indeterminate as absent."""
     last_emit_idx = None
     for idx, event in enumerate(journal):
         if (event.get("outcome") == "orders-emitted"
@@ -6533,10 +6565,23 @@ def _relocation_after_emission(journal, rnd, phase, attempt):
         old_root = event.get("oldRoot")
         new_root = event.get("newRoot")
         if not isinstance(old_root, str) or not isinstance(new_root, str):
-            continue
+            return _RELOCATION_EVIDENCE_INDETERMINATE
         if os.path.realpath(old_root) != os.path.realpath(new_root):
             return event
     return None
+
+
+def _relocation_lookup(session_dir, rnd, phase, attempt):
+    """Tri-state relocation evidence for fence callers: row, absent, or indeterminate."""
+    journal, degraded = read_journal_for_relocation(session_dir)
+    if degraded:
+        return _RELOCATION_EVIDENCE_INDETERMINATE
+    return _relocation_after_emission(journal, rnd, phase, attempt)
+
+
+def _refuse_relocation_evidence_indeterminate(session_dir, cmd, **kwargs):
+    return _refuse_cmd(session_dir, cmd, RELOCATION_EVIDENCE_INDETERMINATE_CAUSE,
+                       detail=RELOCATION_EVIDENCE_INDETERMINATE_DETAIL, **kwargs)
 
 
 def _relocation_fence_unrecorded_slot(session_dir, rnd, phase, attempt, roster):
@@ -6699,8 +6744,14 @@ def _cmd_re_emit_locked(session_dir, by):
                     "cannot certify while the session's recorded head is the old one; "
                     "re-emit does not move the session's head"))
 
-    journal = read_journal(session_dir)
+    journal, journal_degraded = read_journal_for_relocation(session_dir)
+    if journal_degraded:
+        return _refuse_relocation_evidence_indeterminate(
+            session_dir, "re-emit", phase=phase, rnd=rnd, attempt=old_attempt)
     relocation = _relocation_after_emission(journal, rnd, phase, old_attempt)
+    if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+        return _refuse_relocation_evidence_indeterminate(
+            session_dir, "re-emit", phase=phase, rnd=rnd, attempt=old_attempt)
     if relocation is None:
         completed = _re_emit_completed_for_attempt(journal, rnd, phase, old_attempt)
         if completed is not None:
@@ -7022,8 +7073,13 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         return {"ok": False, "reason": "phase/attempt echo does not match the pending step"}
     if (not _via_advance and isinstance(phase, str) and phase.startswith("dispatch-")):
         # axis: a hand submit of a dispatch phase emitted before the move is refused; the advance-driven fold is not
-        relocation = _relocation_after_emission(
-            read_journal(session_dir), pending.get("round"), phase, attempt)
+        relocation = _relocation_lookup(session_dir, pending.get("round"), phase, attempt)
+        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": RELOCATION_EVIDENCE_INDETERMINATE_CAUSE})
+            return {"ok": False, "reason": RELOCATION_EVIDENCE_INDETERMINATE_CAUSE,
+                    "detail": RELOCATION_EVIDENCE_INDETERMINATE_DETAIL}
         if relocation is not None:
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
@@ -9312,8 +9368,11 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     if (cited_head_source == round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
             and isinstance(phase, str) and phase.startswith("dispatch-")):
         # axis: an order-anchor result for an attempt emitted before the move is refused; a runner-view result is not
-        relocation = _relocation_after_emission(
-            read_journal(session_dir), rnd, phase, cur_attempt)
+        relocation = _relocation_lookup(session_dir, rnd, phase, cur_attempt)
+        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+            return _refuse_relocation_evidence_indeterminate(
+                session_dir, "record-result", phase=phase, rnd=rnd, attempt=cur_attempt,
+                seat=_slot_label(seat, occurrence))
         if relocation is not None:
             return _refuse_cmd(
                 session_dir, "record-result", RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
@@ -9397,8 +9456,10 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
     relocation_fence = None
     if isinstance(phase, str) and phase.startswith("dispatch-"):
         # axis: a sweep or advance that would ingest a landing for an attempt emitted before the move is refused; one with nothing to ingest is not
-        relocation_fence = _relocation_after_emission(
-            read_journal(session_dir), rnd, phase, attempt)
+        relocation_fence = _relocation_lookup(session_dir, rnd, phase, attempt)
+        if relocation_fence is _RELOCATION_EVIDENCE_INDETERMINATE:
+            return _refuse_relocation_evidence_indeterminate(
+                session_dir, cmd, phase=phase, rnd=rnd, attempt=attempt)
     for seat_key, occurrence in round_records.roster_slots(roster):
         try:
             skey = round_records.storage_key(seat_key, occurrence)
