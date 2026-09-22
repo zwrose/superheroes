@@ -579,7 +579,7 @@ when present. It does so in one transaction with one `relocated` journal row car
 new root, branch, the session directory, the head, the base pin, `by`, `at`, and the list of
 rewritten keys. Nothing else in the session changes. The session directory does not move: a session
 invoked from a directory other than the one it recorded is refused. A target checkout whose scope
-marker names another session is refused before anything is written. The target checkout's scope marker
+marker names another session is refused: the refusal appends a `refused` journal row and writes nothing else. The target checkout's scope marker
 is claimed atomically before the session commit: the full canonical marker is written to a temp file
 in the marker's directory, fsynced, then published with an exclusive `os.link`; an existing marker
 naming this session is refreshed atomically so `branch`, `repoRoot`, and `startedAt` match the target

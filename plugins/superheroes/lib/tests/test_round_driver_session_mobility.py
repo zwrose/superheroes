@@ -624,6 +624,7 @@ def test_relocate_second_claimant_refused_after_first_claims_the_target(tmp_path
     assert _read_bytes(state_path2) == state_before2
 
 
+# bite-proof: G23 — an existing same-session marker is refreshed idempotently (idempotent-retry axis)
 def test_relocate_target_marker_idempotent_retry(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -643,6 +644,7 @@ def test_relocate_target_marker_idempotent_retry(tmp_path, capsys):
     assert marker["branch"] == "mobility-retry"
 
 
+# bite-proof: G24 — a stale branch in the target marker is refreshed (branch-refresh axis)
 def test_relocate_target_marker_stale_branch_refreshed(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -662,6 +664,7 @@ def test_relocate_target_marker_stale_branch_refreshed(tmp_path, capsys):
     assert marker["repoRoot"] == repo["root_b"]
 
 
+# bite-proof: G25 — a claim write failure returns unwritable and leaves no marker (no-marker axis)
 def test_relocate_claim_write_failure_leaves_no_marker(tmp_path, monkeypatch):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -685,6 +688,33 @@ def test_relocate_claim_write_failure_leaves_no_marker(tmp_path, monkeypatch):
     assert not os.path.lexists(marker_path)
 
 
+# bite-proof: G22 — an uncreatable marker directory is refused as JSON, never raised (refusal-shape axis)
+def test_relocate_uncreatable_marker_directory_refuses_as_json(tmp_path, capsys):
+    repo = _mobility_repo(tmp_path)
+    sess = _mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    subprocess.check_call(["git", "-C", repo["root_b"], "checkout", "-q", "-b", "mobility-mkdir"])
+    sidecar_parent = os.path.dirname(_marker_path(repo["root_b"]))
+    if os.path.isdir(sidecar_parent):
+        shutil.rmtree(sidecar_parent)
+    sidecar_bytes = b"not-a-directory"
+    with open(sidecar_parent, "wb") as fh:
+        fh.write(sidecar_bytes)
+    meta_path = os.path.join(session_dir, "meta.json")
+    state_path = os.path.join(session_dir, RD.STATE_FILE)
+    meta_before = _read_bytes(meta_path)
+    state_before = _read_bytes(state_path)
+    rc, out = _relocate(session_dir, repo["root_b"], capsys)
+    assert rc == 1
+    assert out["reason"] == "relocate-target-marker-unwritable"
+    assert _last_refused(session_dir, "relocate-target-marker-unwritable") is not None
+    assert _read_bytes(meta_path) == meta_before
+    assert _read_bytes(state_path) == state_before
+    assert os.path.isfile(sidecar_parent)
+    assert _read_bytes(sidecar_parent) == sidecar_bytes
+
+
+# bite-proof: G26 — a refused commit releases a newly claimed marker (marker-release axis)
 def test_relocate_commit_refused_removes_claimed_marker(tmp_path, capsys, monkeypatch):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -702,6 +732,7 @@ def test_relocate_commit_refused_removes_claimed_marker(tmp_path, capsys, monkey
     assert not os.path.lexists(marker_path)
 
 
+# bite-proof: G27 — crash recovery at each stop point leaves a retryable session (crash-matrix axis)
 @pytest.mark.parametrize("stop_at", ["staged", "sealed", "part:0"])
 def test_relocate_crash_matrix(tmp_path, capsys, monkeypatch, stop_at):
     repo = _mobility_repo(tmp_path)
@@ -726,6 +757,7 @@ def test_relocate_crash_matrix(tmp_path, capsys, monkeypatch, stop_at):
     assert rc_after == 0
 
 
+# bite-proof: G28 — post-commit retirement removes the old checkout marker (retirement axis)
 def test_relocate_marker_retirement(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -788,6 +820,7 @@ def test_relocate_refuses_none_session_dir(tmp_path, capsys):
     assert _read_bytes(state_path) == state_before
 
 
+# bite-proof: G29 — retirement survives an interleaved marker replacement (toctou axis)
 def test_relocate_marker_retirement_survives_interleaved_replacement(tmp_path, monkeypatch):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -823,6 +856,7 @@ def test_relocate_marker_retirement_survives_interleaved_replacement(tmp_path, m
     assert not os.path.exists(marker_a + ".retire.tmp")
 
 
+# bite-proof: G30 — a post-commit crash is repaired by retrying the same target (repair axis)
 def test_relocate_post_commit_crash_repaired_by_same_target_retry(tmp_path, capsys, monkeypatch):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)
@@ -905,6 +939,7 @@ def test_relocate_session_dir_moved_refuses_before_same_checkout(tmp_path, capsy
     assert _read_bytes(state_path) == state_before
 
 
+# bite-proof: G31 — relocate rewrites only checkout keys and leaves other session files alone (scope axis)
 def test_relocate_changes_nothing_else_in_the_session(tmp_path, capsys):
     repo = _mobility_repo(tmp_path)
     sess = _mobility_session(tmp_path, repo)

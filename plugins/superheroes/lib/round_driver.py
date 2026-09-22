@@ -6179,7 +6179,10 @@ def _relocate_claim_target_marker(marker_path, marker_content, session_rp):
         return True, False, None
     parent = os.path.dirname(marker_path)
     if parent:
-        os.makedirs(parent, exist_ok=True)
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError:
+            return False, False, "unwritable"
     tmp = marker_path + ".claim.tmp"
     try:
         with open(tmp, "wb") as fh:
@@ -6203,7 +6206,7 @@ def _relocate_claim_target_marker(marker_path, marker_content, session_rp):
     finally:
         try:
             os.unlink(tmp)
-        except FileNotFoundError:
+        except OSError:
             pass
 
 
