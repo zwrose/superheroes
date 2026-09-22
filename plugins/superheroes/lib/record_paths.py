@@ -138,4 +138,5 @@ def landing_entry_present(path):
     except NotADirectoryError:
         return False
     except OSError:
+        # axis: an lstat error other than not-found counts as present
         return True

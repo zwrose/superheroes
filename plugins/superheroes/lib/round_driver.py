@@ -6523,6 +6523,7 @@ def _relocation_after_emission(journal, rnd, phase, attempt):
                 and event.get("round") == rnd and event.get("phase") == phase
                 and event.get("attempt") == attempt):
             last_emit_idx = idx
+    # axis: a dispatch attempt with no emission row counts as stale when any move exists (fail closed)
     start = 0 if last_emit_idx is None else last_emit_idx + 1
     for event in journal[start:]:
         if event.get("outcome") != "relocated":
@@ -6550,6 +6551,7 @@ def _re_emit_attempt_result_names(session_dir, journal, rnd, phase, attempt, ros
         elif (event.get("round") == rnd and event.get("phase") == phase
               and event.get("attempt") == attempt):
             names.append("journal:%s" % (event.get("seat") or "unknown"))
+    # axis: a landing or bare entry for any old-attempt slot, or one that cannot be checked, blocks re-emit
     for seat_key, occurrence in round_records.roster_slots(roster):
         skey = round_records.storage_key(seat_key, occurrence)
         landing = record_paths.landing_path(session_dir, rnd, phase, skey, attempt)
@@ -6627,6 +6629,7 @@ def _cmd_re_emit_locked(session_dir, by):
         return _refuse_cmd(session_dir, "re-emit", "re-emit-attempt-has-results",
                            phase=phase, rnd=rnd, attempt=old_attempt, names=result_names)
 
+    # axis: the new attempt is above the pending one even when nothing was accepted
     new_attempt = max(_next_dispatch_attempt(session_dir, rnd, phase, state), old_attempt + 1)
     state["pending"] = dict(pending, attempt=new_attempt)
 
@@ -6940,6 +6943,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
 
     if (not _via_advance and isinstance(phase, str) and phase.startswith("dispatch-")):
+        # axis: a hand submit of a dispatch phase emitted before the move is refused; the advance-driven fold is not
         relocation = _relocation_after_emission(
             read_journal(session_dir), pending.get("round"), phase, attempt)
         if relocation is not None:
@@ -9206,6 +9210,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                            detail=landing_refusal.get("message") or landing_refusal.get("storePath"))
     if (cited_head_source == round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
             and isinstance(phase, str) and phase.startswith("dispatch-")):
+        # axis: an order-anchor result for an attempt emitted before the move is refused; a runner-view result is not
         relocation = _relocation_after_emission(
             read_journal(session_dir), rnd, phase, cur_attempt)
         if relocation is not None:
@@ -9290,6 +9295,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                                           attempt=attempt, seat=seat_key)
     relocation_fence = None
     if isinstance(phase, str) and phase.startswith("dispatch-"):
+        # axis: a sweep or advance that would ingest a landing for an attempt emitted before the move is refused; one with nothing to ingest is not
         relocation_fence = _relocation_after_emission(
             read_journal(session_dir), rnd, phase, attempt)
     for seat_key, occurrence in round_records.roster_slots(roster):

@@ -794,6 +794,7 @@ def _journal_open_seats(journal, session_dir=None):
                 landing = record_paths.landing_path(session_dir, rnd_key, phase_key, skey, attempt_key)
                 bare = record_paths.bare_payload_path(session_dir, rnd_key, phase_key, skey, attempt_key)
                 # Presence is the DIRECTORY ENTRY, not whether its target resolves (`lstat`, not `isfile`).
+                # axis: a superseded seat closes only when neither entry exists; indeterminate or unknown session dir keeps it open
                 if (not record_paths.landing_entry_present(landing)
                         and not record_paths.landing_entry_present(bare)):
                     continue

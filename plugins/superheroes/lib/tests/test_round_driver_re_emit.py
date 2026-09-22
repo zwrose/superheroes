@@ -128,7 +128,7 @@ def _order_prompt_texts(session_dir, rnd, phase, attempt):
     if not os.path.isdir(odir):
         return texts
     for name in os.listdir(odir):
-        if ".prompt" in name and ".a%d." % attempt in name:
+        if name.endswith(".md") and ".a%d." % attempt in name:
             with open(os.path.join(odir, name), encoding="utf-8") as fh:
                 texts.append(fh.read())
     return texts
@@ -141,6 +141,7 @@ def test_re_emit_positive_after_relocate(tmp_path, capsys):
     rnd, phase, old_attempt = 1, RD.P_PANEL, 0
     old_root = os.path.realpath(repo["root_a"])
     a0_files = {p: M._read_bytes(p) for p in _collect_attempt_files(session_dir, rnd, phase, old_attempt)}
+    assert a0_files
     anchor0_before = _anchor_for(session_dir, rnd, phase, old_attempt)
     journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
     journal_before = M._read_bytes(journal_path)
@@ -178,7 +179,9 @@ def test_re_emit_positive_after_relocate(tmp_path, capsys):
     assert emitted["outcome"] == "orders-emitted"
     assert emitted["cmd"] == "re-emit"
     assert emitted["attempt"] == 1
-    for text in _order_prompt_texts(session_dir, rnd, phase, 1):
+    prompt_texts = _order_prompt_texts(session_dir, rnd, phase, 1)
+    assert prompt_texts
+    for text in prompt_texts:
         assert old_root not in text
 
 
@@ -408,8 +411,59 @@ def test_relocation_fence_hand_record_refused_after_relocate(tmp_path, capsys):
     out = RD.cmd_record_result(session_dir, seat, occurrence=occurrence)
     assert out["ok"] is False
     assert out["reason"] == RD.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
+    assert out["detail"] == RD.RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL
     assert not os.path.exists(store_path)
     assert M._read_bytes(os.path.join(session_dir, RD.STATE_FILE)) == state_before
+
+
+def test_landing_entry_present_lstat_outcomes(tmp_path, monkeypatch):
+    existing = tmp_path / "exists.json"
+    existing.write_text("{}")
+    assert record_paths.landing_entry_present(str(existing)) is True
+
+    dangling = tmp_path / "dangling" / "link.json"
+    _dangling_symlink(str(dangling))
+    assert record_paths.landing_entry_present(str(dangling)) is True
+
+    missing = str(tmp_path / "no-such-path" / "file.json")
+    assert record_paths.landing_entry_present(missing) is False
+
+    regular_file = tmp_path / "not_a_dir"
+    regular_file.write_text("x")
+    under_file = str(regular_file / "child.json")
+    assert record_paths.landing_entry_present(under_file) is False
+
+    denied = tmp_path / "denied" / "target.json"
+    denied.parent.mkdir()
+    denied.write_text("{}")
+    real_lstat = os.lstat
+
+    def _lstat(path, *args, **kwargs):
+        if path == str(denied):
+            raise PermissionError("denied")
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", _lstat)
+    assert record_paths.landing_entry_present(str(denied)) is True
+
+
+def test_relocation_fence_advance_folds_seats_recorded_before_relocate(tmp_path, capsys):
+    repo = M._mobility_repo(tmp_path)
+    sess = M._mobility_session(tmp_path, repo)
+    session_dir = sess["session_dir"]
+    state, pend, roster = _panel_roster(session_dir)
+    for seat, occurrence in RR.roster_slots(roster):
+        _land_panel_seat(session_dir, state, pend, seat, occurrence, sess["diff_path"])
+        recorded = RD.cmd_record_result(session_dir, seat, occurrence=occurrence)
+        assert recorded["ok"] is True, recorded
+    M._relocate(session_dir, repo["root_b"], capsys)
+    out = RD.cmd_advance(session_dir)
+    assert out.get("reason") != RD.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
+    assert not any(
+        r.get("reason") == RD.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
+        or r.get("outcome") == RD.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
+        for r in M._journal_rows(session_dir)
+    )
 
 
 def test_relocation_fence_record_succeeds_for_new_attempt_after_re_emit(tmp_path, capsys):
