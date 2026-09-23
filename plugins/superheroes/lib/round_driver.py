@@ -9582,6 +9582,18 @@ def _runner_shaped_result(phase, result_kind, envelope_payload):
     return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
 
 
+def _record_kind_undeclared_keys(phase, result_kind, payload):
+    """Keys a record-kind landing carries that its payload contract does not declare. The runner
+    hashes its own record (the contract's fields only), and a record kind binds the WHOLE landed
+    payload, so any such key — `investigated` riding beside a ruling is the usual one — is why the
+    digests disagree. Naming them turns a bare mismatch into its repair: land the record verbatim."""
+    if result_kind not in session_contract.RECORD_RESULT_KINDS or not isinstance(payload, dict):
+        return []
+    contract, _ = payload_contracts.payload_contract(phase)
+    declared = set(contract.get("required") or ()) | set(contract.get("optional") or ())
+    return sorted(k for k in payload if k not in declared)
+
+
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_cited_head,
                                 phase):
     """Bind runner telemetry to the driver's order hash.
@@ -9636,9 +9648,13 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
                                                        "subjectDisagreement": True}, None
         payload_digest = round_records.payload_sha256(digest_subject)
         if result_digest != payload_digest:
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "payloadSha256": payload_digest,
-                                                       "resultKind": result_kind}, None
+            extra = {"resultDigest": result_digest, "payloadSha256": payload_digest,
+                     "resultKind": result_kind}
+            undeclared = _record_kind_undeclared_keys(envelope.get("phase"), result_kind,
+                                                      envelope_payload)
+            if undeclared:
+                extra["undeclaredKeys"] = undeclared
+            return None, "evidence-result-mismatch", extra, None
     cited_head_source = None
     view_head = None
     if run_kind == engine_dispatch.RUN_KIND_WRITE:

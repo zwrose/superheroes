@@ -52,8 +52,8 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `baseGuard` | `"checked-stat-bound"` or `"not-checked"` |
 | `terminalState` | `certified`, `cap`, or `cannot-certify` |
 | `terminalCause` | `null` when certified; otherwise `{kind, reason}` from the terminal-cause table |
-| `seats` | Per collected seat: `seat`, `phase`, `round`, `attempt`, `provenance` |
-| `disclosures` | `{importantOutOfScope: [...], survivingNonBlocking: [...]}` — `importantOutOfScope`: Important findings with valid out-of-scope follow-up; `survivingNonBlocking`: surviving Minor or Nit findings without a recorded disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`) |
+| `seats` | Per collected seat: `seat`, `phase`, `round`, `attempt`, `provenance`, and `proof` — what proves the seat ran: `runner-record` (dispatch-observed runner evidence), `hand-landed-evidence`, or `none-host-seat` (see below). An audit row also names the auditor: `vendor` (the runner-recorded vendor, `missing` when none) and `model` (the model the driver seated) |
+| `disclosures` | `{importantOutOfScope: [...], survivingNonBlocking: [...], uncertifiedSeats?: [...]}` — `importantOutOfScope`: Important findings with valid out-of-scope follow-up; `survivingNonBlocking`: surviving Minor or Nit findings without a recorded disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`); `uncertifiedSeats` (present when non-empty): every seat out of the certified panel (`seat`, `phase`, `round`, `attempt`, `vendor`, `proof`) |
 | `provenanceLabels` | `{derived: [...], makerAuthored: [...]}` naming which keys are journal-derived |
 
 Optional keys when present in state: `base` (pinned-base metadata), `policyApplied`.
@@ -72,6 +72,17 @@ Four escape classes (`REFUSAL_CLASSES`). Each refusal is `{class, artifact, deta
 | `same-family-seat` | The seat map records same-family degradation, or registry lookup finds an undeclared seat in the maker's model family | First offending seat key |
 | `unfetched-findings` | Journal seat never closed; envelope missing or unreadable; journal/envelope hash disagreement; unreadable session/journal/state; orchestrator-fulfilled provenance on receipt | Path, seat key, or state file |
 | `disposition-without-receipt` | Base guard did not run; finding without disposition when severity is Critical (`Critical finding may not take the non-blocking path`) or Important (`finding has no disposition recorded`); severity outside the closed contract; fixed/refuted/out-of-scope disposition lacks required proof on certified head; Critical out-of-scope | Finding id or `loop-state.json` |
+
+**Host seats sit out of the certified panel.** A seat the driver dispatched on the host
+(file-landing) channel — a native claude seat — lands a payload no runner observed. When its
+authenticated orders-manifest entry records `channel: "file"` and it carries no execution evidence,
+it is **out of the certified panel**: the three `unrun-review` checks skip it, its receipt row reads
+`proof: none-host-seat`, and `disclosures.uncertifiedSeats` names it. The manifest's channel is the
+only host evidence — a vendor label is not (a defaulted `claude` is rendered on stdout), and a
+manifest without `channel`, or one whose bytes disagree with the journal's `manifestSha256`, exempts
+nothing. Audit and fixer seats are never out. A panel round whose every seat is out refuses
+`unrun-review` with `bindingFailure: no-runner-proven-panel-seat` — exclusion never certifies a round
+on nothing.
 
 A post-shrink escape in any of the four classes is filed as a **misses-log entry on the collector's
 pinned comment**, so the keep-or-retire list reads catches and escapes together.

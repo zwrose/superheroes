@@ -345,3 +345,104 @@ def test_l4a_3_the_seat_map_receipt_names_seats_no_runner_record_can_prove():
     assert receipt["noRunnerRecordSeats"] == ["premortem-reviewer", "test-reviewer"]
     engine_only = {"code-reviewer": seats["code-reviewer"]}
     assert "noRunnerRecordSeats" not in SM.to_receipt({"seats": engine_only}, "anthropic")
+
+
+# --- item 4: the fix-audit ruling carries its runner evidence; the receipt names the auditor ------
+
+import engine_dispatch  # noqa: E402
+
+_SP_SPEC = importlib.util.spec_from_file_location(
+    "test_seat_provenance_for_l4a", os.path.join(_HERE, "test_seat_provenance_1272.py"))
+_SP = importlib.util.module_from_spec(_SP_SPEC)
+_SP_SPEC.loader.exec_module(_SP)
+
+
+def _audit_run(tmp_path):
+    session_dir, _gitdir, _head = _SP._drive_to_audits(tmp_path, name="l4a-ruling")
+    state = _TDI._state(session_dir)
+    pend = state["pending"]
+    seat = _SP._audit_roster(session_dir)[0]
+    order_path = RR.order_prompt_path(session_dir, pend["round"], pend["phase"],
+                                      RR.storage_key(seat), pend["attempt"])
+    run_dir = _SP._audit_execution_run_dir(
+        tmp_path, order_path, seat, view_head_sha=_SP._anchor_head_sha(session_dir) or "abc123fake")
+    journal, _ = engine_dispatch._journal_read(run_dir)
+    parsed = engine_dispatch._parse_review_attempt(run_dir, engine_dispatch._journal_state(journal), 1)
+    assert parsed["ok"] is True, parsed
+    return session_dir, state, pend, seat, run_dir, parsed["ruling"]
+
+
+def test_l4a_4_a_ruling_landed_with_an_undeclared_key_refuses_naming_it(tmp_path):
+    session_dir, state, pend, seat, run_dir, ruling = _audit_run(tmp_path)
+    _TDI._dispatch_observed_land(session_dir, state, pend, seat,
+                                 dict(ruling, investigated=["reviewed.py"]))
+    out = RD.cmd_record_result(session_dir, seat, evidence_run_dir=run_dir)
+    assert out["ok"] is False and out["reason"] == "evidence-result-mismatch", out
+    assert out["undeclaredKeys"] == ["investigated"]
+
+
+def test_l4a_4_the_runners_ruling_landed_verbatim_binds_its_evidence(tmp_path):
+    session_dir, state, pend, seat, run_dir, ruling = _audit_run(tmp_path)
+    _TDI._dispatch_observed_land(session_dir, state, pend, seat, ruling)
+    out = RD.cmd_record_result(session_dir, seat, evidence_run_dir=run_dir)
+    assert out["ok"] is True, out
+    stored, err = RR.read_json(out["storePath"])
+    assert err is None and stored["executionEvidence"]["resultKind"] == "ruling"
+    assert stored["executionEvidence"]["source"] == "codex"
+
+
+def test_l4a_4_a_plain_digest_mismatch_names_no_keys():
+    assert RD._record_kind_undeclared_keys(RD.P_AUDITS, "ruling",
+                                           {"id": "a", "ruling": "discharged", "reason": "r"}) == []
+    assert RD._record_kind_undeclared_keys(RD.P_PANEL, "findings",
+                                           {"findings": [], "investigated": []}) == []
+
+
+def _audit_session(tmp_path, source="codex"):
+    manifest = {"schema": "orders-manifest/1", "session": "test-session-001", "round": 2,
+                "phase": RC.P_AUDITS, "attempt": 0, "orders": "not-emitted",
+                "seats": {"t1-k": {"seat": "t1", "occurrence": 0, "vendor": "codex",
+                                   "model": "gpt-5.6-sol", "engine": None, "channel": "stdout"}}}
+    sha = SC.sha256_text(SC.canonical(manifest))
+    rows = [{"cmd": "next", "outcome": "orders-emitted", "phase": RC.P_AUDITS, "round": 2,
+             "attempt": 0, "manifestSha256": sha},
+            {"cmd": "record-result", "outcome": "recorded", "phase": RC.P_AUDITS, "round": 2,
+             "attempt": 0, "seat": "t1", "occurrence": 0,
+             "provenance": RC.PROVENANCE_DISPATCH_OBSERVED, "headSha": HEAD_SHA,
+             "executionEvidence": {"source": source}}]
+    session_dir = write_session(tmp_path, name="audit-row", journal_lines=rows, envelopes=[])
+    path = RC._orders_manifest_path(session_dir, 2, RC.P_AUDITS, 0)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, sort_keys=True)
+    return session_dir
+
+
+def test_l4a_4_an_audit_receipt_row_names_the_recorded_vendor_and_the_seated_model(tmp_path):
+    session_dir = _audit_session(tmp_path)
+    ctx, refusal = RC._load_context(session_dir)
+    assert refusal is None, refusal
+    [entry] = [s for s in RC._collect_seats(ctx) if s["phase"] == RC.P_AUDITS]
+    row = RC._receipt_seat_row(ctx, entry)
+    assert (row["proof"], row["vendor"], row["model"]) == (
+        RC.SEAT_PROOF_RUNNER_RECORD, "codex", "gpt-5.6-sol")
+
+
+# --- item 5: the scoped finder has a registry role --------------------------------------------------
+
+def test_l4a_5_the_scoped_finder_gates_as_its_own_role_on_the_deep_cells():
+    import model_registry as MR
+    import seat_bundle
+    for vendor in MR.vendors():
+        assert MR.matrix_config("scoped-finder", vendor) == MR.matrix_config("reviewer-deep", vendor)
+        assert MR.family_for("scoped-finder", vendor) == MR.family_for("reviewer-deep", vendor)
+    assert MR.role_read_write("scoped-finder") == "read"
+    assert "scoped-finder" not in MR.model_tier_roles()
+    ok = seat_bundle.resolve_entry(json.dumps({"vendor": "codex", "model": "gpt-5.6-sol",
+                                               "effort": "xhigh", "role": "scoped-finder"}),
+                                   verb="guard-check")
+    assert ok["ok"] is True and ok["allowlistVerdict"]["ok"] is True, ok
+    refused = seat_bundle.resolve_entry(json.dumps({"vendor": "codex", "model": "gpt-5.6-terra",
+                                                    "effort": "high", "role": "scoped-finder"}),
+                                        verb="guard-check")
+    assert refused["ok"] is False

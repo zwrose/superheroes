@@ -100,6 +100,13 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "codex": ("gpt-5.6-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
+    # The scoped confirmation seat of a delta round reads at the deep tier, so it takes the
+    # `reviewer-deep` cells; a named role lets its seat bundle gate as what it is.
+    "scoped-finder": {
+        "claude": ("opus-5", "xhigh"),
+        "codex": ("gpt-5.6-sol", "xhigh"),
+        "cursor": ("cursor-grok-4.6", "xhigh"),
+    },
     "brief-check": {
         "claude": ("opus-5", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
@@ -202,6 +209,14 @@ _ROLE_META: dict[str, dict] = {
         "read_write": None,
         "pin_eligible": True,
         "owner_tunable": True,
+    },
+    "scoped-finder": {
+        "model_tier_role": False,
+        "engine_pref_key": "reviewer",
+        "codex_kind": "review-deep",
+        "read_write": "read",
+        "pin_eligible": False,
+        "owner_tunable": False,
     },
     "brief-check": {
         "model_tier_role": False,
