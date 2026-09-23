@@ -3052,14 +3052,10 @@ def _git_init_repo(path, remote=None):
 
 
 def _ensure_store_entry(repo, store_root):
-    ident = SC.derive_identifiers(repo)
-    eid = ident["gitdir_hash"]
-    entry_dir = os.path.join(store_root, "entries", eid)
+    import mode_registry
+    config_key = mode_registry.config_key(repo)
+    entry_dir = os.path.join(store_root, "projects", config_key)
     os.makedirs(entry_dir, exist_ok=True)
-    SC.write_pointer(store_root, ident["gitdir_hash"], eid)
-    if ident["remote_hash"]:
-        SC.write_pointer(store_root, ident["remote_hash"], eid)
-    SC.write_keys_json(entry_dir, ident)
     return entry_dir
 
 

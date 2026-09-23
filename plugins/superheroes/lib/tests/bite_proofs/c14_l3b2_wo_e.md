@@ -43,3 +43,5 @@ E       AssertionError: assert 'conformance-record-dir-unresolved' is None
 ```
 
 **raw green** (exit 0): `1 passed in 1.09s`
+
+**additional real-layout evidence:** `test_astra_probe_record_survives_a_fresh_read_in_the_project_store` and `test_astra_probe_cli_end_to_end_through_real_dispatch_review` seed the control-plane `projects/<config_key>/` layout via `_ensure_store_entry`.
