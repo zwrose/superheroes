@@ -403,10 +403,6 @@ DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecogn
 # Named refusal when the verify fold cannot resolve the repository head before mutating state.
 VERIFIED_HEAD_UNRESOLVED_CAUSE = "verified-head-unresolved"
 
-FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE = (
-    "fixed-disposition-finalization-verify-not-pass"
-)
-
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
 POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
@@ -5501,9 +5497,9 @@ def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None
 
 
 def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
-    """Re-bind fixed ledger receipts to the certified head when provable; record residuals otherwise.
+    """Re-bind fixed ledger receipts to the certified head when provable.
 
-    Returns True when ``state`` was mutated (re-bind, residual, or verify stamp)."""
+    Returns True when ``state`` was mutated (re-bind or verify-stamp revoke only)."""
     rows, by_key, fault = _fixed_ledger_rows(state)
     if fault is not None:
         return False
@@ -5519,11 +5515,9 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
     if not isinstance(certified_head, str) or not certified_head:
         return False
     read_outcome = _read_head_content_blobs_file(session_dir, normalized=True)
-    residuals = {}
     changed = False
     for key, entry, original_receipt in pending:
         if entry is None:
-            residuals[key] = "fix-content-missing"
             continue
         existing_head = original_receipt.get("headSha")
         head_unchanged = (
@@ -5536,8 +5530,6 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
             entry, probe_receipt, certified_head, read_outcome, by_key=by_key
         )
         if binding_failure:
-            token = binding_failure[0] if isinstance(binding_failure, tuple) else binding_failure
-            residuals[key] = token
             continue
         updated_receipt = dict(original_receipt)
         if not head_unchanged:
@@ -5555,7 +5547,6 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
                     **_fixed_disposition_family_with_receipt(entry, revoked),
                 )
                 changed = True
-            residuals[key] = FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
             continue
         updated_receipt["verifyResult"] = verify_result
         _record_disposition(
@@ -5565,9 +5556,6 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
             entry.get("dispositionRound"),
             **_fixed_disposition_family_with_receipt(entry, updated_receipt),
         )
-        changed = True
-    if residuals:
-        state["_fixedDispositionFinalizationResiduals"] = residuals
         changed = True
     return changed
 

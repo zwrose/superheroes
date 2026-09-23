@@ -64,3 +64,102 @@ E       store_core.RepoRootUnavailable: injected for test
 **Restore:** re-added `except store_core.RepoRootUnavailable as exc:` block with `VerifiedHeadRefusal` re-raise
 
 **Green:** `1 passed in 11.81s`
+
+## BP-4 — resolve before provenance (detector: WO-A ordering)
+
+**guarded element:** `round_driver.py:2192-2196` — `_verified_head_for_fold` runs before `_record_adapter_provenance`
+**axis:** verify submit preserves `provenance` on the submitted artifact when head resolution refuses
+
+**Neutralization:** moved `if phase == P_VERIFY: verified_head = _verified_head_for_fold(...)` to after `_record_adapter_provenance`
+
+**Red** (`test_t2_refusal_leaves_state_intact`):
+```
+E       AssertionError: assert {'result': 'pass'} == {'provenance': ... 'result': 'pass'}
+```
+
+**Restore:** moved verified-head resolution back before `_record_adapter_provenance`
+
+**Green:** `1 passed in 18.72s`
+
+**git status --porcelain after restore:** ` M plugins/superheroes/lib/round_driver.py`
+
+## BP-5 — verifiedHead write (detector 2)
+
+**guarded element:** `round_driver.py:3870` — `_fold_verify` records `verifiedHead` when resolved
+**axis:** positive certification through the real loop refuses when verified head is not recorded
+
+**Neutralization:**
+```python
+    if False:
+        _record_round(state, session_contract.VERIFIED_HEAD_FIELD, verified_head)
+```
+
+**Red** (`test_verified_post_fix_head_finalizes_and_certifies`):
+```
+E       AssertionError: {'bindingFailure': 'verify-not-pass', 'class': 'disposition-without-receipt', ...}
+```
+
+**Restore:**
+```python
+    if isinstance(verified_head, str) and verified_head:
+        _record_round(state, session_contract.VERIFIED_HEAD_FIELD, verified_head)
+```
+
+**Green:** `1 passed in 9.00s`
+
+**git status --porcelain after restore:** clean on neutralized line
+
+## BP-6 — head binding at certify (detector 3)
+
+**guarded element:** `round_certification.py:1502` — fixed disposition head must match certified head
+**axis:** moved head with fix-fold head cleared refuses `verify-not-on-head`
+
+**Neutralization:**
+```python
+            if False:
+                return _refusal(..., binding_failure="verify-not-on-head")
+```
+
+**Red** (`test_head_verified_at_h_does_not_credit_h_prime`):
+```
+E       AssertionError: assert 'verify-not-pass' == 'verify-not-on-head'
+```
+
+**Restore:**
+```python
+            if certified_head and head != certified_head:
+```
+
+**Green:** `1 passed in 0.69s`
+
+## BP-7 — newest round wins (detector 4, older-pass/newer-fail)
+
+**guarded element:** `session_contract.py:465` — `verify_result_for_head` iterates newest-first
+**axis:** older pass does not credit a head whose newer record says fail
+
+**Neutralization:** `sorted(round_nums, reverse=True)` → `sorted(round_nums)`
+
+**Red** (`test_verify_result_for_head_accessor_axes[older-pass-newer-fail]`):
+```
+E       AssertionError: assert 'pass' == 'fail'
+```
+
+**Restore:** `sorted(round_nums, reverse=True)`
+
+**Green:** `2 passed in 0.59s`
+
+## BP-8 — absent verifyResult (detector 4, newer-without-result)
+
+**guarded element:** `session_contract.py:470` — match condition on verified-head records
+**axis:** newer record without `verifyResult` does not inherit an older pass
+
+**Neutralization:** added `and rec.get("verifyResult") is not None` to the match condition
+
+**Red** (`test_verify_result_for_head_accessor_axes[newer-record-without-result]`):
+```
+E       AssertionError: assert 'pass' == None
+```
+
+**Restore:** removed the extra `verifyResult is not None` guard
+
+**Green:** `2 passed in 0.56s`
