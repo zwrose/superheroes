@@ -11,6 +11,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
@@ -51,11 +53,11 @@ def _point_meta_at(session_dir, repo_root):
         json.dump(meta, fh, sort_keys=True)
 
 
-def _pending_verify(tmp_path, repo_root):
+def _pending_verify(tmp_path, repo_root, cfg=None):
     """A session at its pending verify step whose head must be resolved from `repo_root`: meta
     points there and the fix-fold pin is cleared from meta and config, so no persisted value
     answers for it. Returns (session_dir, the `next` answer carrying the current state hash)."""
-    session_dir, _ = _TRD._at(tmp_path / "session", RD.P_VERIFY)
+    session_dir, _ = _TRD._at(tmp_path / "session", RD.P_VERIFY, cfg)
     _point_meta_at(session_dir, repo_root)
     ok, state = RD.load_state(session_dir)
     assert ok, state
@@ -145,6 +147,75 @@ def test_halting_verify_result_with_unresolvable_head_still_halts(tmp_path):
     assert state["terminal"] == "halted"
     assert rec.get("verifyResult") == "fail"
     assert RD.session_contract.VERIFIED_HEAD_FIELD not in rec
+
+
+@pytest.mark.parametrize("skip_token", sorted(RD._VERIFY_SKIP))
+def test_skip_result_with_no_verify_command_advances_so_it_is_refused(tmp_path, skip_token):
+    """axis: an explicit skip ADVANCES when no verify command is configured — so with no
+    resolvable head it is refused like `pass`, before anything mutates."""
+    not_a_repo = str(tmp_path / "not-a-repo")
+    os.makedirs(not_a_repo)
+    session_dir, nxt = _pending_verify(tmp_path, not_a_repo)
+    before = _state_bytes(session_dir)
+
+    out = _submit(session_dir, nxt, {"result": skip_token})
+
+    assert out["ok"] is False, out
+    assert out["reason"] == RD.VERIFIED_HEAD_UNRESOLVED_CAUSE
+    assert _state_bytes(session_dir) == before
+
+
+@pytest.mark.parametrize("skip_token", sorted(RD._VERIFY_SKIP))
+def test_skip_result_with_a_configured_verify_command_halts_unrefused(tmp_path, skip_token):
+    """axis: an explicit skip HALTS when a verify command is configured — so an unresolvable head
+    never refuses it; it folds, halts `verify-skip-but-configured`, and records no head."""
+    not_a_repo = str(tmp_path / "not-a-repo")
+    os.makedirs(not_a_repo)
+    session_dir, nxt = _pending_verify(tmp_path, not_a_repo,
+                                       cfg=_TRD._cfg(verifyCommand="make check"))
+
+    out = _submit(session_dir, nxt, {"result": skip_token})
+
+    assert out["ok"] is True, out
+    state, rec = _verify_record(session_dir, nxt)
+    assert state["terminal"] == "halted"
+    assert [d["kind"] for d in state["decisions"]][-1] == "verify-skip-but-configured"
+    assert rec.get("verifyResult") == skip_token
+    assert RD.session_contract.VERIFIED_HEAD_FIELD not in rec
+
+
+def test_run_loop_leg_records_no_verified_head_through_the_real_fold(monkeypatch):
+    """axis: the in-process `run_loop` leg reaches `_fold_verify` through `_fold`'s verify arm and
+    records NO verified head — never the session-setup `headSha` — so nothing credits a pass to
+    it, in the round records or on any fixed receipt."""
+    setup_head = "c" * 40
+    box = {}
+    real_receipt = RD._run_loop_certified_receipt
+
+    def capture(state, invocations):
+        box["state"] = state
+        return real_receipt(state, invocations)
+
+    monkeypatch.setattr(RD, "_run_loop_certified_receipt", capture)
+    finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}
+    seams = _TRD._seams(
+        reviewer=lambda dim, tier, rnd, ctx: [dict(finding)]
+        if (rnd == 1 and dim == "code-reviewer") else [])
+
+    RD.run_loop(seams, _TRD._cfg(headSha=setup_head))
+
+    state = box["state"]
+    verify_recs = [rec for rec in state["rounds"].values()
+                   if isinstance(rec, dict) and rec.get("verifyResult") == "pass"]
+    assert verify_recs, "the loop must fold at least one passing verify step"
+    for rec in verify_recs:
+        assert RD.session_contract.VERIFIED_HEAD_FIELD not in rec
+        assert "verifiedHeadRefused" not in rec
+    assert RD.session_contract.verify_result_for_head(state, setup_head) is None
+    for row in (state.get("dispositionLedger") or []) + (state.get("findings") or []):
+        receipt = row.get("dispositionReceipt") if isinstance(row, dict) else None
+        if isinstance(receipt, dict) and receipt.get("verifyResult") == "pass":
+            assert receipt.get("headSha") != setup_head, row
 
 
 def test_resolver_raise_maps_to_the_structured_refusal(tmp_path, monkeypatch):
