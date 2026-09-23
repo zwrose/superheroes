@@ -18,7 +18,7 @@ import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
 import engine_result_channel  # noqa: E402
-import control_plane  # noqa: E402
+import mode_registry  # noqa: E402
 import model_registry  # noqa: E402
 import preflight_probe  # noqa: E402
 import readout  # noqa: E402
@@ -776,11 +776,14 @@ def preflight_entry(repo_root, result_paths, launch_without=(), owner_words=(),
     }, required, failed, sm, wave=wave)
 
 def _conformance_record_dir(repo_root):
-    """Project store conformance record directory (live global entry + conformance/)."""
-    entry = store_core.resolve_global(repo_root, control_plane.store_root())
-    if entry is None:
+    """Project store conformance record directory (control-plane project store + conformance/)."""
+    try:
+        project_store = mode_registry.project_store_dir(repo_root)
+    except Exception:
         return None, "conformance-record-dir-unresolved"
-    record_dir = os.path.join(entry["dir"], "conformance")
+    if not os.path.isdir(project_store):
+        return None, "conformance-record-dir-unresolved"
+    record_dir = os.path.join(project_store, "conformance")
     try:
         os.makedirs(record_dir, mode=0o700, exist_ok=True)
     except OSError:
