@@ -210,6 +210,10 @@ def test_e1_judgment_skip_follow_up_loads_and_folds(tmp_path, adapters):
     d = _judgment_session_with_repo(tmp_path, adapters, repo)
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
+    # the rule's followUp reaches the fold through matches[].rule only, never action.dispositions
+    assert out["policyApplied"]["action"]["dispositions"] == [
+        {"findingClass": "judgment:important", "disposition": "skip"}]
+    assert out["policyApplied"]["matches"][0]["rule"]["followUp"] == _WELL_FORMED
     state = _state(d)
     assert state["terminal"] == "converged"
     entries = list(_ledger_by_key(state).values())

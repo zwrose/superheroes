@@ -315,9 +315,10 @@ action that owns it, leaving the rest of the calibration untouched:
   may carry a `followUp` `{item, revisitTrigger, classClosure}`; a new follow-up must include a
   nonblank `item`. A `followUp` that is present but malformed, or present on any other
   disposition, is refused when calibration is written and again when the overlay loads (a refused
-  overlay is set aside and the gate parks on the shipped default). Only a rule with **no**
-  `followUp` resolves without one: the disposition is recorded and certification refuses it for the
-  missing follow-up.
+  overlay is set aside and the gate parks on the shipped default). A `skip` or
+  `accept-the-disclosed-risk` rule with **no** `followUp` still resolves: the out-of-scope
+  disposition is recorded and certification refuses it until a follow-up is supplied. Rules with
+  any other disposition need no `followUp`.
   Show the resolved policy layers and rule counts first, then merge only the requested overlay
   document. Pass `null` (or empty stdin) to remove the overlay and return to shipped-defaults-only.
 
