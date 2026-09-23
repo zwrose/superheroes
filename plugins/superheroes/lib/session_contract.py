@@ -67,6 +67,7 @@ __all__ = (
     "FINDING_KEY_FOREIGN",
     "classify_finding_key",
     "finding_key_claimants",
+    "legacy_key_admitted",
     "legacy_key_collision",
     "DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN",
     "EXECUTION_ONLY_BINDING",
@@ -271,6 +272,12 @@ def finding_key_claimants(classified):
     return claimants
 
 
+def legacy_key_admitted(claimants, legacy_key):
+    """True when ``legacy_key`` has exactly one claimant — the one threshold for keeping a legacy
+    bare key; the key writer keeps it and certification admits it on this answer alone."""
+    return len(claimants.get(legacy_key, ())) == 1
+
+
 def legacy_key_collision(rows):
     """Return (bare_key, minted_key) when a legacy-bare row cannot be joined to one finding.
 
@@ -285,7 +292,7 @@ def legacy_key_collision(rows):
     for _row, kind, minted, bare in classified:
         if kind != FINDING_KEY_LEGACY_OWNED:
             continue
-        if minted in identity_keys or len(claimants.get(bare, ())) > 1:
+        if minted in identity_keys or not legacy_key_admitted(claimants, bare):
             return bare, minted
     return None
 

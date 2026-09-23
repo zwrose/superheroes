@@ -1342,7 +1342,7 @@ def _mint_finding_keys(findings):
                            if kind == session_contract.FINDING_KEY_LEGACY_OWNED and lk]
             # Parent build minted list-wide-unique keys; two bare legacy rows cannot come from
             # stored state — this branch is fail-closed hardening when claims collide.
-            if legacy_keys and len(claimants.get(legacy_keys[0], set())) == 1:
+            if legacy_keys and session_contract.legacy_key_admitted(claimants, legacy_keys[0]):
                 chosen_key = legacy_keys[0]
             else:
                 chosen_key = identity
