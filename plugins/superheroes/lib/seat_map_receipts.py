@@ -228,10 +228,6 @@ def round_governing_unjudgeable(state, round_id, driver_author_family=None):
     round_label = str(round_id)
     selected_map = round_governing_map(state, round_id)
     selected_round_label = round_label
-    for entry in reversed(receipts(state)):
-        if str(entry.get("round", "")) == round_label:
-            selected_round_label = str(entry.get("round", ""))
-            break
     if not isinstance(selected_map, dict) or not selected_map:
         return []
     basis = seat_map.violation_basis(selected_map, driver_author_family)

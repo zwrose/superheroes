@@ -1929,6 +1929,108 @@ def test_resolvable_families_unknown_live_cells_source_returns_none(cells_source
     assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
 
 
+# axis: probed family check resolves codex cells through codexRolePins on the seat map.
+def test_resolvable_families_reads_codex_role_pin():
+    seat_map = {
+        "liveCellsSource": "probed",
+        "liveCells": [["codex", "gpt-6-astra", "high"]],
+        "degradations": [],
+        "livenessPinScoped": False,
+        "codexRolePins": {"reviewer-deep": "gpt-6-astra"},
+    }
+    cfg = {"tier": "reviewer-deep"}
+    fams = SM._resolvable_families_for_seat(
+        seat_map, "security-reviewer", cfg, tier="reviewer-deep",
+    )
+    assert "openai" in fams
+
+
+@pytest.mark.parametrize(
+    "bad_pins",
+    [
+        pytest.param("x", id="non-dict"),
+        pytest.param({"not-a-role": "gpt-6-astra"}, id="unknown-role"),
+        pytest.param({"reviewer-deep": ""}, id="empty-value"),
+        pytest.param({"reviewer-deep": 7}, id="non-string-value"),
+    ],
+)
+def test_resolvable_families_malformed_role_pins_unusable(bad_pins):
+    # axis: malformed codexRolePins makes family evidence unusable without raising
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    seat_map["codexRolePins"] = bad_pins
+    assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
+
+
+# axis: build omits codexRolePins when no pins are configured.
+def test_build_records_codex_role_pins_only_when_present():
+    live_cells = [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    kwargs = dict(
+        roster=SM.PANEL_ROSTER,
+        live_vendors=THREE_VENDORS,
+        author_family="xai",
+        narrative_family="anthropic",
+        seed=0,
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    without = SM.build(**kwargs, codex_role_pins={})
+    assert "codexRolePins" not in without
+    with_pin = SM.build(**kwargs, codex_role_pins={"reviewer-deep": "gpt-6-astra"})
+    assert with_pin["codexRolePins"] == {"reviewer-deep": "gpt-6-astra"}
+
+
+def test_compose_receipt_carries_codex_role_pins(tmp_path, capsys, monkeypatch):
+    # axis: compose receipt carries codexRolePins and family check reads it back
+    import preflight_probe as pp
+
+    live_vendors = ["claude", "codex", "cursor"]
+    live_cells = [
+        ["codex", "gpt-6-astra", "high"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+
+    def fake_live_vendors_for_composition(*args, **kwargs):
+        return (live_vendors, live_cells, {}, [], "probed", {
+            "servedFromCache": False,
+            "probedAt": None,
+            "remainingTtl": None,
+        })
+
+    monkeypatch.setattr(pp, "live_vendors_for_composition", fake_live_vendors_for_composition)
+
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"codexModels": {"reviewer-deep": "gpt-6-astra"}})
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--configured-engines",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "cursor",
+            "--host-model",
+            "composer-2.5",
+            "--repo-root",
+            repo,
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["codexRolePins"] == {"reviewer-deep": "gpt-6-astra"}
+    seat_map = dict(receipt)
+    seat_map["livenessPinScoped"] = False
+    cfg = {"tier": "reviewer-deep"}
+    fams = SM._resolvable_families_for_seat(
+        seat_map, "security-reviewer", cfg, tier="reviewer-deep",
+    )
+    assert "openai" in fams
+
+
 def test_live_cells_sources_closed_set_membership():
     # axis: recognizer keys on the closed tuple — member changes must update this pin
     assert SM.LIVE_CELLS_SOURCES == ("probed", "synthesized", "unprobed")
