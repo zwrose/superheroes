@@ -175,6 +175,17 @@ def test_marker_certification_refuses_null_owner_via_findings_by_key():
     assert "legacy-key" not in by_key
 
 
+def _pending_echo(session_dir):
+    """The pending step's echo read straight from state. Since layer 4a `next` refuses to hand a
+    step out under an unrecognized owner, so these submit-preflight tests (defence in depth behind
+    that refusal) take the echo from disk rather than from a `next` that no longer answers."""
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    pend = state["pending"]
+    return {"phase": pend["phase"], "attempt": pend["attempt"],
+            "expectedStateHash": RD.state_hash(state)}
+
+
 def test_marker_driver_submit_refuses_null_owner(tmp_path):
     session_dir = str(tmp_path)
     n = RD.cmd_next(session_dir, _cfg())
@@ -183,8 +194,7 @@ def test_marker_driver_submit_refuses_null_owner(tmp_path):
     assert ok and state is not None
     state["dispositionLedgerOwner"] = None
     RD.save_state(session_dir, state)
-    n = RD.cmd_next(session_dir)
-    assert n["ok"], n
+    n = _pending_echo(session_dir)
     before = _state_bytes(session_dir)
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
                         _panel_artifact())
@@ -213,8 +223,7 @@ def test_marker_driver_submit_refuses_unrecognized(tmp_path):
     assert ok and state is not None
     state["dispositionLedgerOwner"] = "ledger-v2"
     RD.save_state(session_dir, state)
-    n = RD.cmd_next(session_dir)
-    assert n["ok"], n
+    n = _pending_echo(session_dir)
     before = _state_bytes(session_dir)
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
                         _panel_artifact())
@@ -380,8 +389,7 @@ def test_bite_bp2f_b_driver_submit_preflight_refusal(tmp_path):
     ok, state = RD.load_state(session_dir)
     state["dispositionLedgerOwner"] = "ledger-v2"
     RD.save_state(session_dir, state)
-    n = RD.cmd_next(session_dir)
-    assert n["ok"], n
+    n = _pending_echo(session_dir)
     before = _state_bytes(session_dir)
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
                         _panel_artifact())
