@@ -1329,48 +1329,17 @@ def _mint_finding_keys(findings):
     """Stamp findingKey on dict findings that lack a non-empty one; ensure list-wide uniqueness."""
     if not isinstance(findings, list):
         return findings
-    entries = []
-    for f in findings:
-        if not isinstance(f, dict):
-            continue
-        minted = session_contract.minted_identity_key(f)
-        bare = session_contract.location_key(f)
-        preset_raw = f.get(session_contract.FINDING_KEY_FIELD)
-        preset = preset_raw if isinstance(preset_raw, str) and preset_raw else None
-        if preset is None:
-            kind = "unkeyed"
-            identity = minted
-            legacy_key = None
-        elif preset == minted:
-            kind = "loop-owned"
-            identity = minted
-            legacy_key = None
-        elif preset == bare and minted != bare:
-            kind = "legacy-owned"
-            identity = minted
-            legacy_key = preset
-        else:
-            kind = "foreign"
-            identity = preset
-            legacy_key = None
-        entries.append((f, kind, identity, legacy_key))
+    entries = [(f,) + session_contract.classify_finding_key(f)
+               for f in findings if isinstance(f, dict)]
     by_identity = {}
     for idx, (f, kind, identity, legacy_key) in enumerate(entries):
         by_identity.setdefault(identity, []).append((idx, f, kind, legacy_key))
-    claimants = {}
+    claimants = session_contract.finding_key_claimants(entries)
     for identity, group in by_identity.items():
-        for _, f, kind, legacy_key in group:
-            bare = session_contract.location_key(f)
-            if kind in ("unkeyed", "loop-owned") and identity == bare:
-                claimants.setdefault(bare, set()).add(identity)
-            elif kind == "foreign":
-                claimants.setdefault(identity, set()).add(identity)
-            elif kind == "legacy-owned" and legacy_key:
-                claimants.setdefault(legacy_key, set()).add(identity)
-    for identity, group in by_identity.items():
-        has_foreign = any(kind == "foreign" for _, _, kind, _ in group)
+        has_foreign = any(kind == session_contract.FINDING_KEY_FOREIGN for _, _, kind, _ in group)
         if not has_foreign:
-            legacy_keys = [lk for _, _, kind, lk in group if kind == "legacy-owned" and lk]
+            legacy_keys = [lk for _, _, kind, lk in group
+                           if kind == session_contract.FINDING_KEY_LEGACY_OWNED and lk]
             # Parent build minted list-wide-unique keys; two bare legacy rows cannot come from
             # stored state — this branch is fail-closed hardening when claims collide.
             if legacy_keys and len(claimants.get(legacy_keys[0], set())) == 1:

@@ -21,6 +21,7 @@ def _load(name):
 
 SC = _load("session_contract")
 RC = _load("round_certification")
+RD = _load("round_driver")
 RGP = _load("review_gate_policy")
 FI = _load("finding_identity")
 
@@ -88,6 +89,22 @@ def test_same_finding_duplicate_under_bare_key_admitted():
     by_key, refusal = RC._certification_findings_by_key(state)
     assert refusal is None
     assert by_key[bare]["disposition"] == "refuted"
+
+
+def test_key_writer_and_certifier_agree_on_the_bare_key():
+    # axis: the writer keeps a legacy bare key exactly when certification admits it — one rule
+    long, short, bare, minted = _clamp_pair()
+    cases = {
+        "clamp-exact pair": [_legacy_row(long, bare), dict(short)],
+        "same-finding copy": [_legacy_row(long, bare), dict(long, **{SC.FINDING_KEY_FIELD: bare})],
+        "legacy alone": [_legacy_row(long, bare)],
+    }
+    for name, rows in cases.items():
+        written = RD._mint_finding_keys([dict(r) for r in rows])
+        writer_keeps_bare = written[0][SC.FINDING_KEY_FIELD] == bare
+        certifier_admits = SC.legacy_key_collision(rows) is None
+        assert writer_keeps_bare == certifier_admits, name
+    assert SC.legacy_key_collision(cases["clamp-exact pair"]) == (bare, minted)
 
 
 # --- gate-policy follow-up: the write path and the resolved action ---------------------------------

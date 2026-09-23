@@ -61,6 +61,12 @@ __all__ = (
     "fix_proof_path",
     "fix_still_present_at_head",
     "legacy_disposition_ledger_rows",
+    "FINDING_KEY_UNKEYED",
+    "FINDING_KEY_LOOP_OWNED",
+    "FINDING_KEY_LEGACY_OWNED",
+    "FINDING_KEY_FOREIGN",
+    "classify_finding_key",
+    "finding_key_claimants",
     "legacy_key_collision",
     "DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN",
     "EXECUTION_ONLY_BINDING",
@@ -224,30 +230,62 @@ def legacy_disposition_ledger_rows(state):
             yield key, finding
 
 
+FINDING_KEY_UNKEYED = "unkeyed"
+FINDING_KEY_LOOP_OWNED = "loop-owned"
+FINDING_KEY_LEGACY_OWNED = "legacy-owned"
+FINDING_KEY_FOREIGN = "foreign"
+
+
+def classify_finding_key(finding):
+    """``(kind, identity, legacy_key)`` for a finding's preset key — the one classification.
+
+    ``legacy-owned``: preset is the bare location key while the title mints a longer key; the
+    identity is the minted key and ``legacy_key`` the bare key it still claims."""
+    minted = minted_identity_key(finding)
+    bare = location_key(finding)
+    preset_raw = finding.get(FINDING_KEY_FIELD)
+    preset = preset_raw if isinstance(preset_raw, str) and preset_raw else None
+    if preset is None:
+        return FINDING_KEY_UNKEYED, minted, None
+    if preset == minted:
+        return FINDING_KEY_LOOP_OWNED, minted, None
+    if preset == bare and minted != bare:
+        return FINDING_KEY_LEGACY_OWNED, minted, preset
+    return FINDING_KEY_FOREIGN, preset, None
+
+
+def finding_key_claimants(classified):
+    """``{key: {identities claiming it}}`` over ``(finding, kind, identity, legacy_key)`` rows.
+
+    A legacy bare key may stand for its finding only while its claimant set has exactly one
+    identity — the key writer and the certification check both read that from here."""
+    claimants = {}
+    for finding, kind, identity, legacy_key in classified:
+        if kind in (FINDING_KEY_UNKEYED, FINDING_KEY_LOOP_OWNED):
+            if identity == location_key(finding):
+                claimants.setdefault(identity, set()).add(identity)
+        elif kind == FINDING_KEY_FOREIGN:
+            claimants.setdefault(identity, set()).add(identity)
+        elif kind == FINDING_KEY_LEGACY_OWNED and legacy_key:
+            claimants.setdefault(legacy_key, set()).add(identity)
+    return claimants
+
+
 def legacy_key_collision(rows):
     """Return (bare_key, minted_key) when a legacy-bare row cannot be joined to one finding.
 
     A legacy row is keyed by its bare location key although its title mints a longer key. It
-    collides when a row is keyed by its minted key (its twin under the new key), or when another
-    row claims the same bare key with a different minted identity — the clamp-exact case, where a
-    distinct finding's title is exactly the legacy title's clamped form. Rows of the same finding
-    under the same key are one claimant and pass."""
-    identity_keys = set()
-    claimants = {}
-    legacy_pairs = []
-    for row in rows:
-        if not isinstance(row, dict):
+    collides when a row is keyed by its minted key (its twin under the new key), or when the bare
+    key has more than one claimant — the clamp-exact case, where a distinct finding's title is
+    exactly the legacy title's clamped form. Rows of the same finding under the same key are one
+    claimant and pass."""
+    classified = [(row,) + classify_finding_key(row) for row in rows if isinstance(row, dict)]
+    identity_keys = {finding_identity_key(row) for row, _k, _i, _l in classified}
+    claimants = finding_key_claimants(classified)
+    for _row, kind, minted, bare in classified:
+        if kind != FINDING_KEY_LEGACY_OWNED:
             continue
-        identity = finding_identity_key(row)
-        bare = location_key(row)
-        minted = minted_identity_key(row)
-        if identity:
-            identity_keys.add(identity)
-            claimants.setdefault(identity, set()).add(minted)
-        if identity == bare and bare != minted:
-            legacy_pairs.append((bare, minted))
-    for bare, minted in legacy_pairs:
-        if minted in identity_keys or len(claimants[bare]) > 1:
+        if minted in identity_keys or len(claimants.get(bare, ())) > 1:
             return bare, minted
     return None
 
