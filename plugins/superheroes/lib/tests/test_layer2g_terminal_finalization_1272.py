@@ -32,6 +32,13 @@ SC = _load("session_contract")
 RC = _load("round_certification")
 RD = _load("round_driver")
 
+import round_adapters  # noqa: E402
+
+_TDI_SPEC = importlib.util.spec_from_file_location(
+    "test_round_driver_integration", os.path.join(_HERE, "test_round_driver_integration.py"))
+_TDI = importlib.util.module_from_spec(_TDI_SPEC)
+_TDI_SPEC.loader.exec_module(_TDI)
+
 OLD_HEAD = "b" * 40
 FINDING_KEY = "fix@L1"
 FIX_PATH = "src/guard.py"
@@ -124,25 +131,74 @@ def _init_git_repo(tmp_path):
     return str(repo), proc.stdout.strip()
 
 
-def _drive_faithful_two_round_verify(state, config, session_dir, round_n=1):
-    """Round records from real folds: fixFoldHead in round N, verifiedHead in round N+1."""
-    state["round"] = round_n
-    state.setdefault("rounds", {})
-    RD._fold_fixer(state, config, {"fixes": []}, session_dir=session_dir)
-    fix_round = str(round_n)
-    verify_round = str(round_n + 1)
-    fix_rec = state["rounds"].get(fix_round)
-    assert isinstance(fix_rec, dict), state["rounds"]
-    assert fix_rec.get("fixFoldHead")
-    assert SC.VERIFIED_HEAD_FIELD not in fix_rec
-    state["round"] = round_n + 1
-    RD._fold_verify(state, config, {"result": "pass"}, session_dir=session_dir)
-    verify_rec = state["rounds"].get(verify_round)
-    assert isinstance(verify_rec, dict), state["rounds"]
-    assert verify_rec.get(SC.VERIFIED_HEAD_FIELD)
-    assert verify_rec.get("verifyResult") == "pass"
-    assert fix_round != verify_round
-    return fix_rec["fixFoldHead"], verify_rec[SC.VERIFIED_HEAD_FIELD]
+_REVIEWED_DIFF = ("diff --git a/%s b/%s\n" % (FIX_PATH, FIX_PATH)
+                  + "index 1111111..2222222 100644\n"
+                  + "--- a/%s\n" % FIX_PATH
+                  + "+++ b/%s\n" % FIX_PATH
+                  + "@@ -0,0 +1 @@\n"
+                  + "+broken guard\n")
+_HEAD_DIFF = _REVIEWED_DIFF.replace("+broken guard", "+fix still present")
+_FIX_LEG = [RD.P_FIXER, RD.P_AUDITS, RD.P_VERIFY]
+
+
+def _seed_fix_leg(session_dir):
+    """The fixture's ONE seeded position: round 1 with its fix leg pending over the fixed ledger
+    row's finding. Nothing terminal is seeded — the loop reaches its own terminal from here."""
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    for key in ("terminal", "certification", "pending"):
+        state.pop(key, None)
+    for key, value in RD.new_state(dict(state["config"])).items():
+        state.setdefault(key, value)
+    state.update(round=1, step=RD.P_FIXER, decisions=[], reviewedDiff=_REVIEWED_DIFF)
+    state["_fixBatch"] = [{"file": FIX_PATH, "line": 1, "id": "F-ledger-only",
+                           SC.FINDING_KEY_FIELD: FINDING_KEY, "title": "guard issue",
+                           "severity": "Important"}]
+    RD.save_state(session_dir, state)
+
+
+def _fix_leg_payload(state, phase, seat):
+    if phase == RD.P_FIXER:
+        return {"fixes": [{"file": FIX_PATH, "summary": "guard restored"}], "escalated": False,
+                "headDiff": _HEAD_DIFF}
+    if phase == RD.P_AUDITS:
+        return {"id": seat, "ruling": "discharged",
+                "auditorVendor": _TDI._auditor_vendor_for(state)(seat),
+                "reason": "re-read the fixed hunk; the cited defect is gone"}
+    if phase == RD.P_VERIFY:
+        return {"result": "pass"}
+    raise AssertionError("the fix leg does not reach phase %r" % phase)
+
+
+def _drive_fix_leg_to_terminal(session_dir, gitdir, max_steps=8):
+    """Land, record and `advance` each pending step until the loop reaches its own terminal.
+    `advance` folds through `cmd_submit`, so every fold runs the real submit chokepoint."""
+    folded = []
+    for _ in range(max_steps):
+        ok, state = RD.load_state(session_dir)
+        assert ok, state
+        if state.get("terminal"):
+            return folded
+        nxt = RD.cmd_next(session_dir)
+        assert nxt["ok"], nxt
+        ok, state = RD.load_state(session_dir)
+        pend = state["pending"]
+        roster, reason = round_adapters.roster_for(pend["phase"], state, state["config"])
+        assert reason is None, (pend["phase"], reason)
+        slots = _TDI._slots_of(roster)
+        _TDI._write_dispatch_manifest(session_dir, pend, slots, _TDI._auditor_vendor_for(state))
+        for seat, occurrence in slots:
+            _TDI._land(session_dir, state, pend, seat,
+                       _fix_leg_payload(state, pend["phase"], seat),
+                       occurrence=occurrence, evidence_read="engaged")
+            out = _TDI._record(session_dir, seat, occurrence=occurrence)
+            assert out["ok"], (pend["phase"], seat, out)
+        out = RD.cmd_advance(session_dir, git=_TDI._fake_git(gitdir))
+        assert out["ok"], (pend["phase"], out)
+        assert out["folded"]["phase"] == pend["phase"], out
+        folded.append(pend["phase"])
+    raise AssertionError("the fix leg did not reach a terminal in %d steps: %s"
+                         % (max_steps, folded))
 
 
 def _head_content_row(path=FIX_PATH, head=None):
@@ -222,15 +278,20 @@ def _ledger_only_fixed_state(certified_head, **over):
     return base
 
 
-def _certifiable_session(tmp_path, state=None, drive_faithful=True, **kwargs):
+def _certifiable_session(tmp_path, name="session", **kwargs):
+    """A session that reached its terminal THROUGH THE REAL LOOP: seeded at round 1's fix leg,
+    then fixer → audits → verify folded by `advance` → `cmd_submit` to the converged terminal,
+    whose terminal gate finalized and certified. No terminal field is ever restored by hand."""
     repo_root, certified_head = _init_git_repo(tmp_path)
-    state_obj = state or _ledger_only_fixed_state(certified_head)
+    state_obj = _ledger_only_fixed_state(certified_head)
     cfg = dict(state_obj.get("config") or {})
     cfg["repoRoot"] = repo_root
     cfg["headSha"] = certified_head
+    cfg["diff"] = _REVIEWED_DIFF
     state_obj["config"] = cfg
     session_dir = write_session(
         tmp_path,
+        name=name,
         state=state_obj,
         journal_lines=[_dispatch_journal(certified_head)],
         meta={"headSha": certified_head, "repoRoot": repo_root},
@@ -238,19 +299,9 @@ def _certifiable_session(tmp_path, state=None, drive_faithful=True, **kwargs):
         **kwargs,
     )
     _write_head_content_blobs(session_dir, head=certified_head)
-    if drive_faithful:
-        terminal_snapshot = {
-            key: state_obj.get(key)
-            for key in ("step", "terminal", "certification", "decisions", "round")
-        }
-        with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
-            loaded = json.load(fh)
-        loaded["config"]["repoRoot"] = repo_root
-        _drive_faithful_two_round_verify(loaded, loaded["config"], session_dir)
-        rounds = loaded["rounds"]
-        loaded.update(terminal_snapshot)
-        loaded["rounds"] = rounds
-        RD.save_state(session_dir, loaded)
+    _seed_fix_leg(session_dir)
+    folded = _drive_fix_leg_to_terminal(session_dir, str(tmp_path / (name + "-gitdir")))
+    assert folded == _FIX_LEG, folded
     return session_dir, certified_head
 
 
@@ -360,7 +411,9 @@ def test_cli_and_run_loop_legs_share_certified_head_binding(tmp_path):
 
 # --- item 4: residual path (BP-2g-h) ------------------------------------------------
 
-def test_fix_not_at_head_records_residual_without_rebind(tmp_path):
+def test_fix_not_at_head_leaves_receipt_unbound(tmp_path):
+    """R28 re-pin: the retired residuals field is no longer the observable — the untouched receipt
+    is, and it is what certification reads."""
     bad_digest = "0" * 64
     _, certified_head = _init_git_repo(tmp_path)
     state = _ledger_only_fixed_state(certified_head)
@@ -384,16 +437,16 @@ def test_fix_not_at_head_records_residual_without_rebind(tmp_path):
         loaded = json.load(fh)
     before_receipt = dict(_ledger_receipt(loaded))
     RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
-    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
-    assert FINDING_KEY in residuals
-    assert residuals[FINDING_KEY] == "fix-content-reverted"
     after_receipt = _ledger_receipt(loaded)
-    assert after_receipt.get("headSha") == before_receipt.get("headSha")
+    assert after_receipt == before_receipt
+    assert after_receipt.get("headSha") == OLD_HEAD
+    assert "verifyResult" not in after_receipt
 
 
 # --- item 5: fault path -------------------------------------------------------------
 
-def test_verify_not_pass_records_residual_without_rebind(tmp_path):
+def test_verify_not_pass_leaves_receipt_unbound(tmp_path):
+    """R28 re-pin: observed through the untouched receipt, not the retired residuals field."""
     _, certified_head = _init_git_repo(tmp_path)
     state = _ledger_only_fixed_state(
         certified_head,
@@ -414,14 +467,15 @@ def test_verify_not_pass_records_residual_without_rebind(tmp_path):
     _write_head_content_blobs(session_dir, head=certified_head)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
-    before_head = _ledger_receipt(loaded).get("headSha")
+    before_receipt = dict(_ledger_receipt(loaded))
     RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
-    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
-    assert residuals.get(FINDING_KEY) == RD.FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
-    assert _ledger_receipt(loaded).get("headSha") == before_head == OLD_HEAD
+    assert _ledger_receipt(loaded) == before_receipt
+    assert before_receipt.get("headSha") == OLD_HEAD
+    assert "verifyResult" not in before_receipt
 
 
-def test_unchanged_head_with_failed_binding_records_residual(tmp_path):
+def test_unchanged_head_with_failed_binding_stamps_no_verify(tmp_path):
+    """R28 re-pin: observed through the receipt, not the retired residuals field."""
     session_dir, certified_head = _certifiable_session(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
@@ -430,20 +484,20 @@ def test_unchanged_head_with_failed_binding_records_residual(tmp_path):
         fixContentDigest="0" * 64,
     )
     RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
-    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
-    assert residuals.get(FINDING_KEY) == "fix-content-reverted"
     receipt = _ledger_receipt(loaded)
+    assert receipt == _ledger_fixed_receipt(headSha=certified_head, fixContentDigest="0" * 64)
     assert receipt.get("verifyResult") is None
 
 
-def test_fixed_row_without_receipt_records_missing_residual(tmp_path):
+def test_fixed_row_without_receipt_stays_receiptless(tmp_path):
+    """R28 re-pin: finalization synthesizes no receipt; certification refuses the row."""
     session_dir, certified_head = _certifiable_session(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
     loaded["dispositionLedger"][0].pop("dispositionReceipt", None)
     RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
-    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
-    assert residuals.get(FINDING_KEY) == "fix-content-missing"
+    assert _ledger_receipt(loaded) is None
+    assert "_fixedDispositionFinalizationResiduals" not in loaded
 
 
 def test_run_loop_leg_does_not_synthesize_a_pass_receipt(tmp_path):
@@ -510,53 +564,52 @@ def test_unrecognized_owner_terminal_gate_leaves_state_byte_identical(tmp_path):
     before = _state_bytes(state)
     RD._finalize_certification_inputs(session_dir, state, head_sha=certified_head)
     assert _state_bytes(state) == before
-    assert "_fixedDispositionFinalizationResiduals" not in state
 
 
 # --- verified-head invariant detectors (B1c) ----------------------------------------
 
 def test_verified_post_fix_head_finalizes_and_certifies(tmp_path):
-    """axis: a verified post-fix head finalizes and certifies on the faithful two-round sequence."""
+    """axis: the positive certification fixture reaches its terminal THROUGH THE REAL LOOP.
+
+    The fix leg's fixer, audits and verify steps fold through `advance` → `cmd_submit`; the loop
+    enters its own converged terminal and its terminal gate writes the certification receipt. The
+    terminal round is the round holding the latest evidence — nothing restored a snapshot over it."""
     session_dir, certified_head = _certifiable_session(tmp_path)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         state = json.load(fh)
-    fix_round = state["rounds"].get("1") or {}
-    verify_round = state["rounds"].get("2") or {}
-    assert fix_round.get("fixFoldHead")
-    assert verify_round.get(SC.VERIFIED_HEAD_FIELD)
-    assert "1" in state["rounds"] and "2" in state["rounds"]
-    fault = RD._terminal_receipt_gate(session_dir, state)
-    assert fault is None, fault
+    assert state["terminal"] == "converged", state.get("certification")
+    assert state["step"] == RD.P_TERMINAL
+    assert state["round"] == 2
+    assert sorted(state["rounds"], key=int)[-1] == "2"
+    assert state["rounds"]["1"].get("fixFoldHead") == certified_head
+    verify_round = state["rounds"]["2"]
+    assert verify_round.get("verifyResult") == "pass"
+    assert verify_round.get(SC.VERIFIED_HEAD_FIELD) == certified_head
+    accepted = [row for row in RD.read_journal(session_dir)
+                if row.get("cmd") == "submit" and row.get("outcome") == "accepted"]
+    assert [row.get("phase") for row in accepted] == _FIX_LEG
+    cert_path = os.path.join(session_dir, RD.CERTIFICATION_RECEIPT_FILE)
+    assert os.path.isfile(cert_path), "the loop's terminal gate must write the receipt"
+    with open(cert_path, encoding="utf-8") as fh:
+        loop_receipt = json.load(fh)
+    assert _cert_receipt_fixed_binding(loop_receipt) == (certified_head, "pass")
     cert_receipt, cert_refusal = RC.certify(session_dir)
     assert cert_refusal is None, cert_refusal
-    head_sha, verify = _cert_receipt_fixed_binding(cert_receipt)
-    assert head_sha == certified_head
-    assert verify == "pass"
+    assert _cert_receipt_fixed_binding(cert_receipt) == (certified_head, "pass")
 
 
 def test_head_verified_at_h_does_not_credit_h_prime(tmp_path):
-    """axis: a head verified at H does not credit H' at finalization or certification."""
-    repo_root, head1 = _init_git_repo(tmp_path)
-    state = _ledger_only_fixed_state(head1)
-    cfg = dict(state.get("config") or {})
-    cfg["repoRoot"] = repo_root
-    cfg["headSha"] = head1
-    state["config"] = cfg
-    session_dir = write_session(
-        tmp_path,
-        name="two-head",
-        state=state,
-        journal_lines=[_dispatch_journal(head1)],
-        meta={"headSha": head1, "repoRoot": repo_root},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
-        faithful_session=False,
-    )
-    _write_head_content_blobs(session_dir, head=head1)
+    """axis: a head verified at H does not credit H' at finalization or certification.
+
+    R28 re-pin: the head moves AND the persisted `fixFoldHeadSha` pin is cleared from meta and
+    config, so certification binds to H' itself — and refuses `verify-not-on-head`. With the pin
+    left standing the certified head silently stayed H and the old `verify-not-pass` expectation
+    never exercised a moved certified head at all."""
+    session_dir, head1 = _certifiable_session(tmp_path, name="two-head")
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
-    loaded["config"]["repoRoot"] = repo_root
-    verified_head, _ = _drive_faithful_two_round_verify(loaded, loaded["config"], session_dir)
-    assert verified_head == head1
+    assert loaded["rounds"]["2"][SC.VERIFIED_HEAD_FIELD] == head1
+    assert _ledger_receipt(loaded).get("headSha") == head1
     repo = tmp_path / "repo"
     subprocess.run(
         ["git", "commit", "-q", "--allow-empty", "-m", "two"],
@@ -577,24 +630,24 @@ def test_head_verified_at_h_does_not_credit_h_prime(tmp_path):
     with open(meta_path, encoding="utf-8") as fh:
         meta = json.load(fh)
     meta["headSha"] = head2
+    assert meta.pop(RD.FIX_FOLD_HEAD_KEY) == head1
     with open(meta_path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, sort_keys=True)
     loaded["config"]["headSha"] = head2
+    assert loaded["config"].pop(RD.FIX_FOLD_HEAD_KEY) == head1
     RD.save_state(session_dir, loaded)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         state = json.load(fh)
-    state["dispositionLedger"][0]["dispositionReceipt"]["headSha"] = head1
     RD._finalize_certification_inputs(session_dir, state, head_sha=head2)
-    residuals = state.get("_fixedDispositionFinalizationResiduals") or {}
-    assert residuals.get(FINDING_KEY) == RD.FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
     receipt = _ledger_receipt(state)
     assert receipt.get("headSha") == head1
-    assert receipt.get("headSha") != head2
+    assert "verifyResult" not in receipt
     ctx, err = RC._load_context(session_dir)
     assert err is None
+    assert RC._certified_head_sha(ctx) == head2
     refusal = RC.check_disposition_without_receipt(ctx)
     assert refusal is not None
-    assert refusal["bindingFailure"] == "verify-not-pass"
+    assert refusal["bindingFailure"] == "verify-not-on-head"
 
 
 def test_round_record_lacking_verified_head_refuses(tmp_path):
@@ -622,8 +675,6 @@ def test_round_record_lacking_verified_head_refuses(tmp_path):
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
     RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
-    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
-    assert residuals.get(FINDING_KEY) == RD.FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
     ctx, err = RC._load_context(session_dir)
     assert err is None
     refusal = RC.check_disposition_without_receipt(ctx)
@@ -678,8 +729,6 @@ def test_stale_pass_stamp_at_certified_head_is_revoked(tmp_path):
     assert receipt.get("headSha") == certified_head
     assert entry.get(SC.MERGED_INTO_FIELD) == "representative-key"
     assert entry.get("outOfScopeReason") == "carried reason"
-    residuals = loaded.get("_fixedDispositionFinalizationResiduals") or {}
-    assert residuals.get(FINDING_KEY) == RD.FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE
     ctx, err = RC._load_context(session_dir)
     assert err is None
     refusal = RC.check_disposition_without_receipt(ctx)
@@ -687,16 +736,19 @@ def test_stale_pass_stamp_at_certified_head_is_revoked(tmp_path):
     assert refusal["bindingFailure"] == "verify-not-pass"
 
 
-def test_fold_verify_without_session_dir_records_no_verified_head():
-    """axis: _fold_verify with no session_dir refuses verifiedHead — accessor stays None."""
+def test_fold_verify_without_a_resolved_head_records_no_verified_head():
+    """axis: the in-process leg hands `_fold_verify` no head — none is recorded, the accessor stays
+    None, and no refusal record is written (R28 re-pin: `verifiedHeadRefused` is retired, because a
+    refusal record followed by an advance is exactly what the submit-side refusal forbids)."""
     state = RD.new_state({"fixerVendor": "claude"})
     head = "a" * 40
     state["round"] = 1
     state["config"]["headSha"] = head
-    RD._fold_verify(state, state["config"], {"result": "pass"}, session_dir=None)
+    RD._fold_verify(state, state["config"], {"result": "pass"})
     rec = state["rounds"].get("1") or {}
+    assert rec.get("verifyResult") == "pass"
     assert SC.VERIFIED_HEAD_FIELD not in rec
-    assert rec.get("verifiedHeadRefused")
+    assert "verifiedHeadRefused" not in rec
     assert SC.verify_result_for_head(state, head) is None
 
 
@@ -722,6 +774,26 @@ def test_fold_verify_without_session_dir_records_no_verified_head():
             "pass",
         ),
         (
+            {
+                "rounds": {
+                    "1": {SC.VERIFIED_HEAD_FIELD: "h" * 40, "verifyResult": "pass"},
+                    "2": {SC.VERIFIED_HEAD_FIELD: "h" * 40, "verifyResult": "fail"},
+                },
+            },
+            "h" * 40,
+            "fail",
+        ),
+        (
+            {
+                "rounds": {
+                    "1": {SC.VERIFIED_HEAD_FIELD: "h" * 40, "verifyResult": "pass"},
+                    "2": {SC.VERIFIED_HEAD_FIELD: "h" * 40},
+                },
+            },
+            "h" * 40,
+            None,
+        ),
+        (
             {"rounds": {"bad": {SC.VERIFIED_HEAD_FIELD: "h" * 40, "verifyResult": "pass"}}},
             "h" * 40,
             None,
@@ -737,12 +809,44 @@ def test_fold_verify_without_session_dir_records_no_verified_head():
         "rounds-non-dict",
         "round-record-non-dict",
         "highest-round-wins",
+        "older-pass-newer-fail",
+        "newer-record-without-a-result",
         "non-integer-round-key-skipped",
     ],
 )
 def test_verify_result_for_head_accessor_axes(state, head, expected):
     """axis: verify_result_for_head is the one fail-closed reader of the verified-head fact."""
     assert SC.verify_result_for_head(state, head) == expected
+
+
+@pytest.mark.parametrize(
+    "newer_record",
+    [{"verifyResult": "fail"}, {}],
+    ids=["older-pass-newer-fail", "newer-record-without-a-result"],
+)
+def test_ordering_axis_carried_through_finalization(tmp_path, newer_record):
+    """axis: the NEWEST verify record for the certified head decides — an older pass never
+    outlives a newer fail or a newer record that carries no result. Carried through terminal
+    finalization (the stamped pass is revoked) and certification (`verify-not-pass`)."""
+    session_dir, certified_head = _certifiable_session(tmp_path)
+    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
+        state = json.load(fh)
+    assert state["rounds"]["2"][SC.VERIFIED_HEAD_FIELD] == certified_head
+    assert state["rounds"]["2"]["verifyResult"] == "pass"
+    assert _ledger_receipt(state).get("verifyResult") == "pass"
+    newer = {SC.VERIFIED_HEAD_FIELD: certified_head}
+    newer.update(newer_record)
+    state["rounds"]["3"] = newer
+    RD.save_state(session_dir, state)
+    RD._finalize_certification_inputs(session_dir, state, head_sha=certified_head)
+    receipt = _ledger_receipt(state)
+    assert receipt.get("headSha") == certified_head
+    assert "verifyResult" not in receipt
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["bindingFailure"] == "verify-not-pass"
 
 
 def test_malformed_ledger_fault_leaves_state_unchanged(tmp_path):
@@ -766,7 +870,6 @@ def test_malformed_ledger_fault_leaves_state_unchanged(tmp_path):
     before = _state_bytes(loaded)
     RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
     assert _state_bytes(loaded) == before
-    assert "_fixedDispositionFinalizationResiduals" not in loaded
     by_key, refusal = RC._certification_findings_by_key(loaded)
     assert by_key == {}
     assert refusal is not None
