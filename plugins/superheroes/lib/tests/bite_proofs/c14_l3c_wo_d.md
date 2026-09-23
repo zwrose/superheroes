@@ -25,16 +25,16 @@
 
 - **axis:** probed family check resolves codex cells through `codexRolePins` on the seat map
 
-**neutralization** (`plugins/superheroes/lib/seat_map.py`, probed-cells loop):
+**neutralization** (`plugins/superheroes/lib/seat_map.py`, probed-cells loop — the `if cells_source == liveness_cache.LIVE_CELLS_SOURCE_PROBED:` branch, not the synthesized branch below it):
 
 before:
 ```python
-            model, effort, _pin = _cell(tier, vendor, pin_arg)
+            model, effort, pin_info = _cell(tier, vendor, pin_arg)
 ```
 
 after:
 ```python
-            model, effort, _pin = _cell(tier, vendor, None)
+            model, effort, pin_info = _cell(tier, vendor, None)
 ```
 
 **command:**

@@ -115,7 +115,7 @@ _PRE_CHILD_HEAD = "aaf27b8089159c2ea4020b03ccbddcd263c57e8a"
 ## BP-C5
 
 - **axis:** legacy journaled claude label refused at continuation (no translation at chokepoints)
-- **superseded at `7f548494` by BP-C5** — prior entry proved translation; this entry proves its absence.
+- **superseded at `81cc0589` by BP-C5** — prior entry proved translation; this entry proves its absence.
 
 **neutralization** (`plugins/superheroes/lib/engine_dispatch.py` — re-add translation in `_continuation_seat_tuple`):
 ```python
