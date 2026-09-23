@@ -5,19 +5,19 @@ Advisor-ordered fail receipts for a test-only layer; not bite-proofs.
 ## R-C1 — test_astra_probe_refuses_when_rubric_scale_unreadable_heading_absent
 
 - **axis:** absent ## Severity tiers heading refuses before claim or dispatch
-- **broken subject** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`): `if heading_idx is None:` → `if heading_idx is None and False:  # fail-receipt R-C1`
+- **broken subject** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`, the heading match): `if line.strip() == "## Severity tiers":` → `if line.strip().startswith("## Severity"):  # fail-receipt R-C1`
 - **command:** `/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-l3b3-C -m pytest plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_refuses_when_rubric_scale_unreadable_heading_absent -q -p no:xdist`
-- **raw red** (exit 1): red-for-the-receipt — `_severity_scale` crashes with `TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'` at `lines_list[heading_idx + 1:]` instead of refusing with `astra-probe-scale-unreadable`; C1's assertion on that token is never reached.
+- **raw red** (exit 1):
 
 ```
->       for row in lines_list[heading_idx + 1:]:
-E       TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'
-plugins/superheroes/lib/conformance_probe.py:109: TypeError
-1 failed in 0.83s
+>       assert out["reason"] == "astra-probe-scale-unreadable"
+E       KeyError: 'reason'
+plugins/superheroes/lib/tests/test_conformance_probe.py:2541: KeyError
+1 failed in 1.69s
 ```
 
-- **restore:** `if heading_idx is None and False:  # fail-receipt R-C1` → `if heading_idx is None:`
-- **raw green** (exit 0): `1 passed in 1.66s`
+- **restore:** `if line.strip().startswith("## Severity"):  # fail-receipt R-C1` → `if line.strip() == "## Severity tiers":`
+- **raw green** (exit 0): `1 passed in 1.62s`
 
 ## R-C2 — test_astra_record_dir_refuses_when_store_lookup_raises
 
