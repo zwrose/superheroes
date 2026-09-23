@@ -354,6 +354,19 @@ def _out_of_scope_follow_up(finding):
     return None
 
 
+def _legacy_key_collision_refusal(rows):
+    """The one refusal for a legacy bare-key row that cannot be joined — both read branches."""
+    collision = session_contract.legacy_key_collision(rows)
+    if collision is None:
+        return None
+    return _refusal(
+        "disposition-without-receipt",
+        STATE_FILE,
+        collision.detail,
+        binding_failure=session_contract.DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN,
+    )
+
+
 def _certification_findings_by_key(state):
     """Keyed findings for disposition checks — ledger owner uses ledger + live only."""
     classification = session_contract.disposition_ledger_owner_classification(state)
@@ -381,15 +394,9 @@ def _certification_findings_by_key(state):
         for finding in state.get("findings") or []:
             if isinstance(finding, dict):
                 branch_rows.append(finding)
-        collision = session_contract.legacy_key_collision(branch_rows)
-        if collision is not None:
-            bare_key, minted_key = collision
-            return {}, _refusal(
-                "disposition-without-receipt",
-                STATE_FILE,
-                "legacy bare key %r collides with minted key %r" % (bare_key, minted_key),
-                binding_failure=session_contract.DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN,
-            )
+        collision_refusal = _legacy_key_collision_refusal(branch_rows)
+        if collision_refusal is not None:
+            return {}, collision_refusal
         for finding in ledger_rows:
             key = _finding_identity_key(finding)
             ledger_by_key[key] = finding
@@ -440,15 +447,9 @@ def _certification_findings_by_key(state):
     for finding in state.get("findings") or []:
         if isinstance(finding, dict):
             branch_rows.append(finding)
-    collision = session_contract.legacy_key_collision(branch_rows)
-    if collision is not None:
-        bare_key, minted_key = collision
-        return {}, _refusal(
-            "disposition-without-receipt",
-            STATE_FILE,
-            "legacy bare key %r collides with minted key %r" % (bare_key, minted_key),
-            binding_failure=session_contract.DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN,
-        )
+    collision_refusal = _legacy_key_collision_refusal(branch_rows)
+    if collision_refusal is not None:
+        return {}, collision_refusal
     for key, finding in session_contract.legacy_disposition_ledger_rows(state):
         by_key[key] = finding
     for rec in state.get("_records") or []:

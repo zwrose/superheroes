@@ -62,13 +62,12 @@ __all__ = (
     "fix_still_present_at_head",
     "legacy_disposition_ledger_rows",
     "legacy_key_collision",
+    "LegacyKeyCollision",
     "DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN",
     "EXECUTION_ONLY_BINDING",
     "PAYLOAD_BOUND_BINDING",
     "evidence_binding",
     "verify_result_for_head",
-    "verified_head_for_round",
-    "verify_result_for_round",
     "RE_EMIT_CMD",
     "ORDERS_SUPERSEDED_OUTCOME",
     "journal_is_re_emit_orders_superseded",
@@ -226,9 +225,31 @@ def legacy_disposition_ledger_rows(state):
             yield key, finding
 
 
+@dataclass(frozen=True)
+class LegacyKeyCollision:
+    """A legacy bare-key row whose key cannot be joined safely — refused, never repaired here."""
+    bare_key: str
+    minted_key: str
+    claimant_key: Optional[str] = None
+
+    @property
+    def detail(self):
+        if self.claimant_key is None:
+            return "legacy bare key %r collides with minted key %r" % (self.bare_key, self.minted_key)
+        return ("legacy bare key %r (minted %r) is also claimed by a different finding minted %r"
+                % (self.bare_key, self.minted_key, self.claimant_key))
+
+
 def legacy_key_collision(rows):
-    """Return (bare_key, minted_key) when a legacy-bare row collides with a minted-key twin."""
+    """Return a ``LegacyKeyCollision`` when a legacy bare-key row cannot be joined safely.
+
+    A legacy row is one stored under its bare location key while its content mints a longer key.
+    Two shapes refuse: the same finding held under both its bare and its minted key, and a
+    different finding (the clamp-exact short title) whose own key IS that bare key. Claimants are
+    tracked per effective key by minted identity, so a legacy row beside a copy of itself under the
+    same bare key is one finding and joins as before."""
     identity_keys = set()
+    claimants = {}
     legacy_pairs = []
     for row in rows:
         if not isinstance(row, dict):
@@ -238,11 +259,15 @@ def legacy_key_collision(rows):
         minted = minted_identity_key(row)
         if identity:
             identity_keys.add(identity)
+            claimants.setdefault(identity, set()).add(minted)
         if identity == bare and bare != minted:
             legacy_pairs.append((bare, minted))
     for bare, minted in legacy_pairs:
         if minted in identity_keys:
-            return bare, minted
+            return LegacyKeyCollision(bare, minted)
+        others = sorted(claimants[bare] - {minted})
+        if others:
+            return LegacyKeyCollision(bare, minted, others[0])
     return None
 
 
@@ -520,45 +545,6 @@ def fix_still_present_at_head(finding, receipt, head, read_outcome, by_key=None)
             "fixed disposition fix is not present in content at the certified head",
         )
     return None
-
-
-def _round_record(state, round_num):
-    if not isinstance(state, dict):
-        return None
-    rounds = state.get("rounds")
-    if not isinstance(rounds, dict):
-        return None
-    try:
-        key = str(int(round_num))
-    except (TypeError, ValueError):
-        return None
-    rec = rounds.get(key)
-    return rec if isinstance(rec, dict) else None
-
-
-def verified_head_for_round(state, round_num):
-    """The verified head recorded on round ``round_num``, or None (fail-closed)."""
-    rec = _round_record(state, round_num)
-    if rec is None:
-        return None
-    verified = rec.get(VERIFIED_HEAD_FIELD)
-    if isinstance(verified, str) and verified:
-        return verified
-    return None
-
-
-def verify_result_for_round(state, round_num):
-    """The verify result recorded on round ``round_num``, or None (fail-closed).
-
-    Returns None when the round record is missing or when ``verifiedHead`` is absent or not a
-    non-empty string — the verified-head fact is never inferred from other fields."""
-    rec = _round_record(state, round_num)
-    if rec is None:
-        return None
-    verified = rec.get(VERIFIED_HEAD_FIELD)
-    if not isinstance(verified, str) or not verified:
-        return None
-    return rec.get("verifyResult")
 
 
 def verify_result_for_head(state, head):

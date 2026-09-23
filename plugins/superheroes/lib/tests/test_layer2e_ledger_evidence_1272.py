@@ -192,12 +192,99 @@ def test_e8_non_dict_rows_skipped_by_helper():
         dict(long, **{SC.FINDING_KEY_FIELD: bare}),
         dict(long, **{SC.FINDING_KEY_FIELD: minted}),
     ]
-    assert SC.legacy_key_collision(rows) == (bare, minted)
+    assert SC.legacy_key_collision(rows) == SC.LegacyKeyCollision(bare, minted)
     state = _ledger_owned_state(dispositionLedger=["not-a-dict"])
     by_key, refusal = RC._certification_findings_by_key(state)
     assert by_key == {}
     assert refusal is not None
     assert refusal["bindingFailure"] == SC.DISPOSITION_LEDGER_MALFORMED_TOKEN
+
+
+# --- Part 1b: the clamp-exact pair — a different finding claims the legacy bare key ---------
+
+def _clamp_exact_pair():
+    """A long title and the short title equal to its clamp: one bare key, two minted identities."""
+    long = _long_finding()
+    short = dict(long, title=SC.clamp_title(long["title"]))
+    bare, minted = _bare_minted(long)
+    assert SC.location_key(short) == bare
+    assert SC.minted_identity_key(short) == bare
+    assert minted != bare
+    return long, short, bare, minted
+
+
+def _assert_clamp_exact_refusal(by_key, refusal, bare, minted):
+    assert by_key == {}
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+    assert refusal["bindingFailure"] == SC.DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN
+    assert refusal["detail"] == (
+        "legacy bare key %r (minted %r) is also claimed by a different finding minted %r"
+        % (bare, minted, bare))
+
+
+def test_e9_helper_refuses_clamp_exact_pair_in_either_order():
+    """axis: a legacy bare row and a short-title row minting the same bare key collide."""
+    long, short, bare, minted = _clamp_exact_pair()
+    legacy = dict(long, **{SC.FINDING_KEY_FIELD: bare})
+    claimant = dict(short, **{SC.FINDING_KEY_FIELD: bare})
+    expected = SC.LegacyKeyCollision(bare, minted, bare)
+    assert SC.legacy_key_collision([legacy, claimant]) == expected
+    assert SC.legacy_key_collision([claimant, legacy]) == expected
+
+
+def test_e10_ledger_owned_clamp_exact_stale_disposition_refused_never_joined():
+    """axis: ledger-owned read refuses the legacy disposition rather than join it to the short finding."""
+    long, short, bare, minted = _clamp_exact_pair()
+    state = _ledger_owned_state(
+        dispositionLedger=[dict(long, **{
+            SC.FINDING_KEY_FIELD: bare,
+            "disposition": "fixed",
+            "dispositionRound": 1,
+        })],
+        findings=[dict(short, **{SC.FINDING_KEY_FIELD: bare})],
+    )
+    by_key, refusal = RC._certification_findings_by_key(state)
+    _assert_clamp_exact_refusal(by_key, refusal, bare, minted)
+
+
+def test_e11_legacy_branch_clamp_exact_stale_disposition_refused_never_joined():
+    """axis: the legacy (non-owner) read refuses the same pair from _records plus live findings."""
+    long, short, bare, minted = _clamp_exact_pair()
+    state = _legacy_state(
+        _records=[{"findings": [dict(long, **{
+            SC.FINDING_KEY_FIELD: bare,
+            "disposition": "refuted",
+            "dispositionRound": 1,
+            "refutedReason": "stale",
+        })]}],
+        findings=[dict(short, **{SC.FINDING_KEY_FIELD: bare})],
+    )
+    by_key, refusal = RC._certification_findings_by_key(state)
+    _assert_clamp_exact_refusal(by_key, refusal, bare, minted)
+
+
+def test_e12_legacy_row_beside_its_own_bare_keyed_copy_still_joins():
+    """axis: the same legacy finding in the ledger and live, both under the bare key, is one finding."""
+    long = _long_finding()
+    bare, _minted = _bare_minted(long)
+    assert SC.legacy_key_collision([
+        dict(long, **{SC.FINDING_KEY_FIELD: bare}),
+        dict(long, **{SC.FINDING_KEY_FIELD: bare}),
+    ]) is None
+    state = _ledger_owned_state(
+        dispositionLedger=[dict(long, **{
+            SC.FINDING_KEY_FIELD: bare,
+            "disposition": "fixed",
+            "dispositionRound": 1,
+        })],
+        findings=[dict(long, **{SC.FINDING_KEY_FIELD: bare}, severity="Critical")],
+    )
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert refusal is None
+    assert list(by_key) == [bare]
+    assert by_key[bare]["disposition"] == "fixed"
+    assert by_key[bare]["severity"] == "Critical"
 
 
 # --- Part 2: receipt findingKey projection ----------------------------------------------
