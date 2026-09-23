@@ -1451,6 +1451,8 @@ def _backfill_ledger_from_records(state, ledger, seen):
             if not key:
                 continue
             entry = _strip_disposition_family(dict(finding))
+            entry.pop("raisedSeq", None)
+            entry.pop("dispositionSeq", None)
             if key in preexisting:
                 entry.update(family_snapshots.get(key, {}))
             if key in seen:
@@ -1493,9 +1495,6 @@ def _stage_findings(state, compiled):
             for field in session_contract.DISPOSITION_FAMILY_FIELDS:
                 if field in existing:
                     entry[field] = existing[field]
-            disp_seq = existing.get("dispositionSeq")
-            if isinstance(disp_seq, int) and not isinstance(disp_seq, bool):
-                entry["dispositionSeq"] = disp_seq
         else:
             entry = _strip_disposition_family(entry)
             entry.pop("raisedSeq", None)
@@ -3623,13 +3622,9 @@ def _after_findings_settled(state, config):
     blocking = _blocking(state.get("findings") or [])
     _record_round(state, "blockingCount", len(blocking))
     if blocking:
-        blocking, halted = _prepare_blocking_for_fix_routing(
-            state, config, [dict(f) for f in blocking])
-        if halted:
-            return
         if _route_judgment_blockers(state, blocking):
             return
-        _queue_fix_batch(state, config, blocking)
+        _queue_fix_batch(state, config, [dict(f) for f in blocking])
     else:
         _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
@@ -3687,38 +3682,6 @@ def _filter_excluded_discharged_fixes(state, rows):
     return filtered, None
 
 
-def _filter_and_settle_discharged_exclusion(state, config, rows, *, batch_index=0):
-    """Filter discharged fixes; park on ledger fault or settle an emptied initial batch."""
-    if not rows:
-        return rows, None
-    filtered, ledger_fault = _filter_excluded_discharged_fixes(state, rows)
-    if ledger_fault is not None:
-        _park_cannot_certify(state, ledger_fault.detail)
-        return [], "faulted"
-    if not filtered:
-        rec = state["rounds"].setdefault(str(state["round"]), {})
-        prior = rec.get("fixBatchExcludedByDischarge") or 0
-        _record_round(state, "fixBatchExcludedByDischarge", prior + len(rows))
-        if batch_index == 0:
-            _decision(state, "fix-batch-excluded",
-                      "fix batch emptied by discharged-finding exclusion — "
-                      "without fixer dispatch")
-            _resolve_empty_fix_batch_convergence(state, config)
-        else:
-            _decision(state, "fix-batch-excluded",
-                      "fix batch emptied by discharged-finding exclusion — "
-                      "remaining queue exhausted, the round proceeds to post-fix")
-        return [], "excluded"
-    return filtered, None
-
-
-def _prepare_blocking_for_fix_routing(state, config, rows, *, batch_index=0):
-    """Exclude discharged fixes before the judgment gate or fix-batch dispatch."""
-    filtered, outcome = _filter_and_settle_discharged_exclusion(
-        state, config, rows, batch_index=batch_index)
-    return filtered, outcome is not None
-
-
 def _resolve_empty_fix_batch_convergence(state, config):
     """Route an exclusion-emptied batch through the path's own resolver (A2)."""
     round_rec = state.get("rounds", {}).get(str(state["round"]), {})
@@ -3740,10 +3703,25 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     cap = _fix_batch_cap(config)
     if reset_accumulator:
         state["fixBatch"] = []
-    filtered, outcome = _filter_and_settle_discharged_exclusion(
-        state, config, rows, batch_index=batch_index)
-    if outcome is not None:
-        return outcome
+    offered_nonempty = bool(rows)
+    filtered, ledger_fault = _filter_excluded_discharged_fixes(state, rows)
+    if ledger_fault is not None:
+        _park_cannot_certify(state, ledger_fault.detail)
+        return "faulted"
+    if offered_nonempty and not filtered:
+        rec = state["rounds"].setdefault(str(state["round"]), {})
+        prior = rec.get("fixBatchExcludedByDischarge") or 0
+        _record_round(state, "fixBatchExcludedByDischarge", prior + len(rows))
+        if batch_index == 0:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "without fixer dispatch")
+            _resolve_empty_fix_batch_convergence(state, config)
+        else:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "remaining queue exhausted, the round proceeds to post-fix")
+        return "excluded"
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
     state["_fixBatchIndex"] = batch_index
@@ -4677,9 +4655,6 @@ def _settle_delta(state, config):
         nd_targets = [dict(t) for t in audit_targets
                       if isinstance(t, dict) and t.get("id") in nd_ids]
         batch = _union_open_blockers(new_blocking, nd_targets)
-        batch, halted = _prepare_blocking_for_fix_routing(state, config, batch)
-        if halted:
-            return
         if _route_judgment_blockers(state, batch):
             return
         _queue_fix_batch(state, config, batch)
@@ -4973,9 +4948,6 @@ def _compose_stall_fix_batch(state, breaker):
 def _route_stall_self_recovery(state, config, batch, refusal, breaker):
     """Terminal routing for stall self-recovery — exhaustive over batch/refusal (#1107)."""
     if batch:
-        batch, halted = _prepare_blocking_for_fix_routing(state, config, batch)
-        if halted:
-            return
         if _route_judgment_blockers(state, batch):
             return
         _queue_fix_batch(state, config, batch)

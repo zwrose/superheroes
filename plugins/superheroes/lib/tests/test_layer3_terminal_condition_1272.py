@@ -126,7 +126,8 @@ def test_l3_a1_same_round_reraise_stays_in_batch():
     assert state["step"] == RD.P_FIXER
 
 
-def test_l3_a1_caller_supplied_sequence_stamps_stripped_on_reraise():
+@pytest.mark.parametrize("reraise_round", [1, 2])
+def test_l3_a1_caller_supplied_sequence_stamps_stripped_on_reraise(reraise_round):
     """axis: model-authored raisedSeq/dispositionSeq on re-raise cannot suppress a live blocker."""
     finding = _finding()
     state = RD.new_state(_cfg())
@@ -135,36 +136,64 @@ def test_l3_a1_caller_supplied_sequence_stamps_stripped_on_reraise():
     RD._stage_findings(state, [compiled])
     RD._record_disposition(state, key, "fixed", 1,
                            dispositionReceipt={"headSha": "d" * 40})
-    prior_disp_seq = _ledger_by_key(state)[key]["dispositionSeq"]
+    state["round"] = reraise_round
     poisoned, _ = RD.mechanical_compile(
         [dict(finding, dispositionSeq=999, raisedSeq=888)])
     RD._stage_findings(state, [poisoned[0]])
     entry = _ledger_by_key(state)[key]
-    assert entry["dispositionSeq"] == prior_disp_seq
-    assert entry["dispositionSeq"] != 999
+    assert "dispositionSeq" not in entry
     assert entry["raisedSeq"] != 888
     config = _cfg()
     status = RD._queue_fix_batch(state, config, [_fix_row(poisoned[0])])
-    assert status != "excluded"
+    assert status == "queued"
     assert state.get("_fixBatch")
     assert state["step"] == RD.P_FIXER
 
 
-def test_l3_a1_discharged_tradeoff_skips_judgment_gate():
-    """axis: discharged tradeoff blocker must not route to present-judgment."""
-    finding = {**_finding(), "tradeoff": True, "title": "widen the API"}
+def test_l3_a1_backfill_strips_record_sequence_stamps():
+    """axis: backfill must not retain model-authored raisedSeq/dispositionSeq from _records."""
+    poisoned = {"file": "o", "line": 1, "title": "old", "severity": "Important",
+                "raisedSeq": 888, "dispositionSeq": 999,
+                SC.FINDING_KEY_FIELD: "o::old@L1"}
+    new_raw = {"file": "n", "line": 2, "title": "new", "severity": "Minor"}
+    compiled, _ = RD.mechanical_compile([new_raw], None)
     state = RD.new_state(_cfg())
-    compiled, key = _compile_one(finding)
-    state["round"] = 1
-    RD._stage_findings(state, [compiled])
-    RD._record_disposition(state, key, "fixed", 1,
-                           dispositionReceipt={"headSha": "e" * 40})
-    RD._set_findings(state, [dict(compiled, tradeoff=True)])
+    state["round"] = 2
+    state["_records"] = [{"findings": [poisoned]}]
+    RD._stage_findings(state, compiled)
+    ledger = _ledger_by_key(state)
+    assert "o::old@L1" in ledger
+    entry = ledger["o::old@L1"]
+    assert "dispositionSeq" not in entry
+    assert entry.get("raisedSeq") != 888
+
+
+def test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation():
+    """axis: delta empty-batch exclusion must re-arm when Critical is still owed."""
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["rounds"] = {"2": {"roundKind": "delta"}}
+    state["confirmations"] = 0
+    state["surfacedSinceLastPanel"] = ["Critical"]
+    discharged, discharged_key = _compile_one(
+        {"file": "f.py", "line": 1, "title": "mechanical", "severity": "Important"})
+    RD._stage_findings(state, [discharged])
+    RD._record_disposition(state, discharged_key, "fixed", 2,
+                           dispositionReceipt={"headSha": "f" * 40})
+    tradeoff, tradeoff_key = _compile_one(
+        {"file": "g.py", "line": 2, "title": "widen API", "severity": "Critical",
+         "tradeoff": True})
+    RD._stage_findings(state, [tradeoff])
+    batch = [_fix_row(discharged), _fix_row(tradeoff)]
     config = _cfg()
-    RD._after_findings_settled(state, config)
-    assert state["step"] != RD.P_JUDGMENT
-    assert "_judgmentFindings" not in state
-    assert _ledger_by_key(state)[key]["disposition"] == "fixed"
+    assert RD._route_judgment_blockers(state, batch)
+    row_id = RD._judgment_row_ids(state["_judgmentFindings"])[0]
+    RD._fold_judgment(state, config, {"dispositions": [
+        {"id": row_id, "disposition": "skip", "reason": "owner accepts tradeoff"},
+    ]})
+    assert state["step"] == RD.P_PANEL
+    assert state.get("terminal") is None
+    assert state["rounds"]["2"]["confirmationFollowup"]["rearm"] is True
 
 
 def test_l3_a1_edge_ledger_absent_no_exclusion():

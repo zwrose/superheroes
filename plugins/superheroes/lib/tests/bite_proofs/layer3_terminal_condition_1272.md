@@ -177,3 +177,127 @@ FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::tes
 .                                                                        [100%]
 1 passed in 0.30s
 ```
+
+---
+
+## BP-v0 — delta empty-batch must re-arm confirmation, not terminal-converge
+
+**Neutralization** (`round_driver.py`, `_resolve_empty_fix_batch_convergence` delta branch):
+
+```python
+-        _settle_delta_converged(state, config)
++        _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+```
+
+**Expected red token:** `test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation` fails on `state["step"] == RD.P_PANEL`.
+
+**Raw red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation _______
+
+    def test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation():
+        ...
+>       assert state["step"] == RD.P_PANEL
+E       AssertionError: assert 'terminal' == 'dispatch-panel'
+E         
+E         - dispatch-panel
+E         + terminal
+
+plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:194: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation
+1 failed in 0.17s
+```
+
+**Restore:** `_settle_delta_converged(state, config)`
+
+**Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.16s
+```
+
+---
+
+## BP-v1-stage — same-round dispositionSeq carry must not survive staging
+
+**Neutralization** (`round_driver.py`, `_stage_findings` same-round branch — re-insert carry):
+
+```python
++            disp_seq = existing.get("dispositionSeq")
++            if isinstance(disp_seq, int) and not isinstance(disp_seq, bool):
++                entry["dispositionSeq"] = disp_seq
+```
+
+**Expected red token:** `test_l3_a1_caller_supplied_sequence_stamps_stripped_on_reraise[1]` fails on `"dispositionSeq" not in entry`; `[2]` stays green.
+
+**Raw red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_l3_a1_caller_supplied_sequence_stamps_stripped_on_reraise[1] _______
+
+reraise_round = 1
+    ...
+>       assert "dispositionSeq" not in entry
+E       AssertionError: assert 'dispositionSeq' not in {'classification': 'mechanical', 'disposition': 'fixed', ...}
+
+plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:144: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a1_caller_supplied_sequence_stamps_stripped_on_reraise[1]
+1 failed in 0.17s
+```
+
+**Restore:** delete the three carry lines.
+
+**Raw green:**
+
+```
+....                                                                     [100%]
+4 passed in 0.16s
+```
+
+---
+
+## BP-v1-backfill — record sequence stamps must not survive backfill
+
+**Neutralization** (`round_driver.py`, `_backfill_ledger_from_records` — remove pops):
+
+```python
+-            entry.pop("raisedSeq", None)
+-            entry.pop("dispositionSeq", None)
+```
+
+**Expected red token:** `test_l3_a1_backfill_strips_record_sequence_stamps` fails on `dispositionSeq`.
+
+**Raw red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_l3_a1_backfill_strips_record_sequence_stamps _______________
+
+    def test_l3_a1_backfill_strips_record_sequence_stamps():
+        ...
+>       assert "dispositionSeq" not in entry
+E       AssertionError: assert 'dispositionSeq' not in {'dispositionSeq': 999, 'file': 'o', ...}
+
+plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:167: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a1_backfill_strips_record_sequence_stamps
+1 failed in 0.17s
+```
+
+**Restore:** re-add the two backfill pops after `_strip_disposition_family`.
+
+**Raw green:**
+
+```
+....                                                                     [100%]
+4 passed in 0.16s
+```
