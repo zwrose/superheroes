@@ -1994,7 +1994,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         if not isinstance(f, dict):
             continue
         graded = _effective_certification_finding(f, by_key)
-        if graded.get("disposition") is None:
+        if session_contract.disposition_value(graded) is None:
             rank = _severity_rank(f.get("severity"))
             if rank > _severity_rank("Important"):
                 continue

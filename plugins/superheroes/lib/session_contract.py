@@ -289,6 +289,13 @@ DISPOSITION_FAMILY_FIELDS = (
 )
 
 
+def disposition_value(row):
+    """The graded disposition value on row, or None when absent."""
+    if not isinstance(row, dict):
+        return None
+    return row.get("disposition")
+
+
 def has_disposition_family(row):
     """True when row carries any disposition-family member with a non-None value."""
     if not isinstance(row, dict):
