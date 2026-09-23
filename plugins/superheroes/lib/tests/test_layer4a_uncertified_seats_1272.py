@@ -14,6 +14,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 from round_certification_fixtures import (
+    DEFAULT_FINDINGS_RESULT_SHA,
     DEFAULT_PANEL_PAYLOAD_SHA,
     write_session,
 )
@@ -22,7 +23,9 @@ import round_certification as RC
 import round_phases as RP
 
 from test_round_certification import (
+    _binding_fields,
     _dispatch_journal_with_binding,
+    _hand_landed_binding_journal_row,
     _minimal_orders_manifest,
     _orders_emitted_journal_row,
     _write_orders_manifest,
@@ -416,6 +419,103 @@ def test_l4a_edge10_host_with_telemetry_certified_not_named(tmp_path):
     assert err is None
     assert RC.check_unrun_review(ctx) is None
     assert not (ctx.get("uncertified_seats") or [])
+
+
+# --- T-floor-hand: hand-landed qualifying panel + host uncertified → no floor refusal ----
+
+
+def _panel_hand_landed_plus_host_uncertified_session(tmp_path):
+    hand_seat = "security-reviewer"
+    host_seat = "code-reviewer"
+    evidence = {
+        **_binding_fields("hand-nonce", result_digest=DEFAULT_FINDINGS_RESULT_SHA),
+        "observation": {
+            "read": "engaged",
+            "source": "runner",
+            "telemetry": "tool-calls",
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+        },
+    }
+    hand_row = _hand_landed_binding_journal_row(
+        hand_seat, DEFAULT_PANEL_PAYLOAD_SHA, evidence)
+    host_row = _dispatch_observed_no_telemetry_row(host_seat, RP.P_PANEL)
+    skey_hand, hand_entry = _manifest_seat_entry(hand_seat, "stdout", "codex")
+    skey_host, host_entry = _manifest_seat_entry(host_seat, "file", "claude")
+    manifest = {
+        "schema": "orders-manifest/1",
+        "session": "test-session-001",
+        "round": 1,
+        "phase": RP.P_PANEL,
+        "attempt": 0,
+        "orders": "not-emitted",
+        "seats": {skey_hand: hand_entry, skey_host: host_entry},
+    }
+    manifest_sha = SC.sha256_text(SC.canonical(manifest))
+    envelopes = [
+        {
+            "seat": hand_seat,
+            "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
+            "provenance": "hand-landed",
+            "executionEvidence": evidence,
+        },
+        {"seat": host_seat, "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA},
+    ]
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=[
+            hand_row,
+            host_row,
+            _orders_emitted_journal_row(manifest_sha),
+        ],
+        envelopes=envelopes,
+    )
+    _write_orders_manifest(session_dir, manifest)
+    return session_dir, host_seat
+
+
+def test_l4a_t_floor_hand_landed_qualifying_panel_plus_host_uncertified_no_refusal(tmp_path):
+    session_dir, host_seat = _panel_hand_landed_plus_host_uncertified_session(tmp_path)
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    refusal = RC.check_unrun_review(ctx)
+    assert refusal is None
+    uncertified = ctx.get("uncertified_seats") or []
+    assert len(uncertified) == 1
+    assert uncertified[0]["seat"] == host_seat
+    assert uncertified[0]["phase"] == RP.P_PANEL
+    assert uncertified[0]["channel"] == "file"
+
+
+# --- T-nomutate: _build_receipt must not mutate state seat-map rows ---------------------
+
+
+def test_l4a_t_nomutate_build_receipt_does_not_mutate_state_seat_map_rows(tmp_path):
+    session_dir = _panel_host_uncertified_session(tmp_path)
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    state = ctx["state"]
+    state["seatMapReceipts"] = [{
+        "round": "1",
+        "map": {
+            "seats": {
+                "code-reviewer": {"vendor": "claude", "model": "sonnet"},
+                "security-reviewer": {"vendor": "codex", "model": "gpt"},
+            },
+        },
+    }]
+    assert RC.check_unrun_review(ctx) is None
+    receipt, refusal = RC._build_receipt(ctx, "certified", None)
+    assert refusal is None
+    assert receipt is not None
+    for entry in state.get("seatMapReceipts") or []:
+        seats = (entry.get("map") or {}).get("seats") or {}
+        for row in seats.values():
+            if isinstance(row, dict):
+                assert "certifiedPanel" not in row
+    receipt_seats = (receipt.get("seatMap") or {}).get("seats") or {}
+    assert receipt_seats["code-reviewer"]["certifiedPanel"] is False
+    assert receipt_seats["security-reviewer"]["certifiedPanel"] is True
 
 
 # --- edge 11: malformed receipt additions → validator refuses -----------------------------

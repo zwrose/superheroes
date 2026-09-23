@@ -1182,7 +1182,7 @@ def check_unrun_review(ctx):
     seats = _collect_seats(ctx)
     uncertified_seats = []
     ctx["uncertified_seats"] = uncertified_seats
-    panel_passed_telemetry = False
+    panel_certified = False
     panel_had_uncertified = False
     for seat_entry in seats:
         seat = seat_entry["seat"]
@@ -1249,7 +1249,7 @@ def check_unrun_review(ctx):
                     binding_failure=binding,
                 )
             if phase == PANEL_PHASE:
-                panel_passed_telemetry = True
+                panel_certified = True
         elif provenance == PROVENANCE_HAND_LANDED:
             env, path = _load_envelope(
                 session_dir,
@@ -1287,7 +1287,9 @@ def check_unrun_review(ctx):
                     "hand-landed seat lacks qualifying execution-evidence binding",
                     binding_failure=binding,
                 )
-    if panel_had_uncertified and not panel_passed_telemetry:
+            if phase == PANEL_PHASE:
+                panel_certified = True
+    if panel_had_uncertified and not panel_certified:
         return _refusal(
             "unrun-review",
             JOURNAL_FILE,
@@ -2263,9 +2265,14 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     }
     seat_map_seats = (receipt.get("seatMap") or {}).get("seats")
     if isinstance(seat_map_seats, dict):
-        for seat_name, row in seat_map_seats.items():
-            if isinstance(row, dict):
-                row["certifiedPanel"] = seat_name not in uncertified_panel_seats
+        receipt["seatMap"]["seats"] = {
+            seat_name: (
+                dict(row, certifiedPanel=seat_name not in uncertified_panel_seats)
+                if isinstance(row, dict)
+                else row
+            )
+            for seat_name, row in seat_map_seats.items()
+        }
     return receipt, None
 
 
