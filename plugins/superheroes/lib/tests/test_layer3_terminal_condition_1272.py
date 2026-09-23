@@ -136,7 +136,7 @@ def test_l3_a1_edge_ledger_absent_no_exclusion():
     assert state["step"] == RD.P_FIXER
 
 
-def test_l3_a1_edge_malformed_ledger_no_exclusion():
+def test_l3_a1_edge_malformed_ledger_parks_before_fixer():
     compiled, key = _compile_one()
     state = RD.new_state(_cfg())
     state["round"] = 1
@@ -146,8 +146,10 @@ def test_l3_a1_edge_malformed_ledger_no_exclusion():
     state["dispositionLedger"] = "not-a-list"
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
-    assert state["_fixBatch"]
-    assert state["step"] == RD.P_FIXER
+    assert state.get("_fixBatch") in (None, [])
+    assert state["step"] == RD.P_TERMINAL
+    assert state["terminal"] == "cannot-certify"
+    assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
 
 
 def test_l3_a1_edge_no_identity_key_no_exclusion():

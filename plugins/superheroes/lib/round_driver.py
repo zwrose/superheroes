@@ -3658,17 +3658,21 @@ def _excluded_discharged_fix_row(ledger_by_key, row):
         return False
     disp_seq = entry.get("dispositionSeq")
     raised_seq = entry.get("raisedSeq")
-    if disp_seq is None or raised_seq is None:
+    if (not isinstance(disp_seq, int) or isinstance(disp_seq, bool)
+            or not isinstance(raised_seq, int) or isinstance(raised_seq, bool)):
         return False
     return disp_seq > raised_seq
 
 
 def _filter_excluded_discharged_fixes(state, rows):
     if not rows:
-        return rows
-    ledger_by_key, _fault = _disposition_ledger_by_key(state)
-    return [row for row in rows
-            if not _excluded_discharged_fix_row(ledger_by_key, row)]
+        return rows, None
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return rows, fault
+    filtered = [row for row in rows
+                if not _excluded_discharged_fix_row(ledger_by_key, row)]
+    return filtered, None
 
 
 def _resolve_empty_fix_batch_convergence(state, config):
@@ -3686,7 +3690,10 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if reset_accumulator:
         state["fixBatch"] = []
     offered_nonempty = bool(rows)
-    filtered = _filter_excluded_discharged_fixes(state, rows)
+    filtered, ledger_fault = _filter_excluded_discharged_fixes(state, rows)
+    if ledger_fault is not None:
+        _park_cannot_certify(state, ledger_fault.detail)
+        return
     if offered_nonempty and not filtered:
         _record_round(state, "fixBatchExcludedByDischarge", len(rows))
         _decision(state, "fix-batch-excluded",
