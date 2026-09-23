@@ -200,13 +200,18 @@ def test_e8_empty_grouping_no_fault(tmp_path, artifact):
     assert out["ok"] is True
 
 
+_MISSING_GROUPING_KEY_REASON = (
+    "synthesis artifact carries no `grouping` key; expected {\"grouping\": ...}; "
+    "resubmit the same phase/attempt/state-hash with a corrected artifact")
+
+
 def test_e8b_missing_grouping_key_refused_at_submit(tmp_path):
-    # axis: e8b — artifact without grouping key refused at payload contract
+    # axis: e8b — an absent grouping key is refused by name at the submit gate, never read as null
     d, n = _at(tmp_path, RD.P_SYNTHESIS)
     before = _state_bytes(d)
     out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], {})
     assert out["ok"] is False
-    assert "grouping" in out["reason"]
+    assert out["reason"] == _MISSING_GROUPING_KEY_REASON
     assert _state_bytes(d) == before
 
 
@@ -236,8 +241,8 @@ def test_e10_synthesis_non_string_member_refused_at_submit(tmp_path):
     assert journal[-1].get("outcome") == "synthesis-results-shape"
 
 
-def test_grouping_absent_null_empty_falls_open_nonempty_incomplete_refused():
-    """Axis: absent/null/empty grouping falls open; non-empty incomplete grouping refuses."""
+def test_grouping_absent_refused_null_empty_fall_open_nonempty_incomplete_refused():
+    """Axis: an absent grouping key is refused; null/empty fall open; incomplete non-empty refuses."""
     survivors = [
         {"id": "v0", "file": "a.py", "line": 1, "title": "a", "severity": "Important",
          "verdict": "PLAUSIBLE"},
@@ -255,7 +260,9 @@ def test_grouping_absent_null_empty_falls_open_nonempty_incomplete_refused():
     assert "v2" in fault
     merged = V.merge_and_rank(survivors, incomplete["grouping"])
     assert sorted(f["id"] for f in merged["findings"]) == ["v0", "v1", "v2"]
-    for artifact in ({}, {"grouping": None}, {"grouping": []}):
+    assert RD.synthesis_results_fault({}) == _MISSING_GROUPING_KEY_REASON
+    for artifact in ({"grouping": None}, {"grouping": []}):
+        assert RD.synthesis_results_fault(artifact) is None
         assert RD.synthesis_staged_id_fault(state, artifact) is None
         merged_open = V.merge_and_rank(survivors, artifact.get("grouping"))
         assert sorted(f["id"] for f in merged_open["findings"]) == ["v0", "v1", "v2"]

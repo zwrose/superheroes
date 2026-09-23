@@ -151,9 +151,10 @@ The grouping must account for **every** staged survivor id **exactly once** unde
 guarantee**. When a **non-empty** grouping is submitted, each survivor id must appear in exactly
 one group's `member_ids`; a grouping that omits any staged id is **refused** with
 `staged-id-unresolvable` naming the omitted id — re-emit the grouping with the missing ids as
-singleton groups. An **absent**, **null**, or **empty-list** grouping carries no coverage
-obligation: `verification.merge_and_rank(survivors, grouping)` falls open to unmerged survivors;
-**synthesis drops nothing** and synthesis failure never aborts the review. Merged groups combine
+singleton groups. A **null** or **empty-list** grouping carries no coverage obligation:
+`verification.merge_and_rank(survivors, grouping)` falls open to unmerged survivors; **synthesis
+drops nothing** and synthesis failure never aborts the review. An **absent** `grouping` key is not
+that answer — the driver refuses it at submit (the key is required). Merged groups combine
 bodies and take the highest severity; the merged `verdict` is **CONFIRMED only when a member at
 the merged (highest) severity is CONFIRMED-with-evidence** — computed **order-independently**, so
 model-supplied member order can't flip GATE-eligibility, and carrying that member's receipt (the

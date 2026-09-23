@@ -889,8 +889,11 @@ cannot is an overclaim.
 ### Synthesis coverage (`dispatch-synthesis`)
 
 `verification.grouping_coverage_fault` enforces the synthesis **coverage guarantee**: a grouping
-that is **absent**, **null**, or an **empty list** carries no coverage obligation and falls open
-to unmerged survivors — **synthesis drops nothing** and synthesis failure never aborts the review.
+that is **null** or an **empty list** carries no coverage obligation and falls open to unmerged
+survivors — **synthesis drops nothing** and synthesis failure never aborts the review. An
+**absent** `grouping` key is refused before coverage is judged: `synthesis_results_fault` refuses
+it at submit ("synthesis artifact carries no `grouping` key") and the payload contract's required
+key refuses it on the durable-record path — send `grouping: null` to propose no merging.
 A **non-empty** grouping must account for every staged survivor id exactly once; a grouping that
 omits a staged id is **refused** at submit with `staged-id-unresolvable` naming the omitted id —
 re-emit with the missing ids as singleton groups. Duplicate members and ids that are not survivors
