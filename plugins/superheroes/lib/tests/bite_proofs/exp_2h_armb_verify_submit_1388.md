@@ -13,7 +13,7 @@
 
 **Red** (`test_t1_verify_submit_forwards_resolved_head`):
 ```
-E       AssertionError: assert None == '3021e4a1ef49411f0a04979a2b0d022f84ce04f9'
+E       AssertionError: assert None == '9292457089e1c6499c4d6ec133a86a6d2ed59192'
 ```
 
 **Restore:**
@@ -21,7 +21,7 @@ E       AssertionError: assert None == '3021e4a1ef49411f0a04979a2b0d022f84ce04f9
         _fold_verify(state, config, artifact, verified_head=verified_head)
 ```
 
-**Green:** `1 passed in 21.69s`
+**Green:** `1 passed in 21.13s`
 
 **git status --porcelain after restore:** working tree shows WO-A edits only (round_driver, round_certification, test updates).
 
@@ -47,7 +47,7 @@ E       assert True is False
         raise VerifiedHeadRefusal(err)
 ```
 
-**Green:** `1 passed in 22.45s`
+**Green:** `1 passed in 38.64s`
 
 ## BP-3 — exception normalization (detector: T4)
 
@@ -63,7 +63,7 @@ E       store_core.RepoRootUnavailable: injected for test
 
 **Restore:** re-added `except store_core.RepoRootUnavailable as exc:` block with `VerifiedHeadRefusal` re-raise
 
-**Green:** `1 passed in 11.81s`
+**Green:** `1 passed in 32.74s`
 
 ## BP-4 — resolve before provenance (detector: WO-A ordering)
 
@@ -79,9 +79,9 @@ E       AssertionError: assert {'result': 'pass'} == {'provenance': ... 'result'
 
 **Restore:** moved verified-head resolution back before `_record_adapter_provenance`
 
-**Green:** `1 passed in 18.72s`
+**Green:** `1 passed in 30.42s`
 
-**git status --porcelain after restore:** ` M plugins/superheroes/lib/round_driver.py`
+**git status --porcelain after restore:** (empty)
 
 ## BP-5 — verifiedHead write (detector 2)
 
@@ -121,7 +121,7 @@ E       assert {'artifact': 'v0', 'bindingFailure': 'verify-not-pass', 'class': 
                 return _refusal(..., binding_failure="verify-not-on-head")
 ```
 
-**Red** (`test_head_verified_at_h_does_not_credit_h_prime`):
+**Red** (`test_head_verified_at_h_does_not_credit_h_prime[fix-fold-head-cleared]`):
 ```
 E       AssertionError: assert 'verify-not-pass' == 'verify-not-on-head'
 ```
@@ -131,7 +131,7 @@ E       AssertionError: assert 'verify-not-pass' == 'verify-not-on-head'
             if certified_head and head != certified_head:
 ```
 
-**Green:** `1 passed in 0.69s`
+**Green:** `1 passed in 3.02s`
 
 ## BP-7 — newest round wins (detector 4, older-pass/newer-fail)
 
@@ -164,3 +164,74 @@ E       AssertionError: assert 'pass' is None
 **Restore:** removed the extra `verifyResult is not None` guard
 
 **Green:** `1 passed in 0.33s`
+
+## BP-9 — fix-content binding arm (detector: test_fix_not_at_head_records_residual_without_rebind)
+
+**guarded element:** `round_driver.py:5532` — `_finalize_fixed_disposition_receipts` binding_failure gate
+**axis:** bad fix-content digest blocks re-bind; receipt headSha stays unchanged
+
+**Neutralization:**
+```python
+        if False:
+            continue
+```
+(was `if binding_failure:`)
+
+**Red** (`test_fix_not_at_head_records_residual_without_rebind`):
+```
+E       AssertionError: assert '13fe4835b0ae...78c95bae26991' == 'bbbbbbbbbbbb...bbbbbbbbbbbbb'
+```
+
+**Restore:**
+```python
+        if binding_failure:
+            continue
+```
+
+**Green:** `1 passed in 2.75s`
+
+**git status --porcelain after restore:** (empty)
+
+## BP-10 — OSError normalization (detector: T5)
+
+**guarded element:** `round_driver.py:5344-5345` — `OSError` caught in `_verified_head_for_fold`
+**axis:** meta persistence OSError becomes `verified-head-unresolved`, not a raw escape
+
+**Neutralization:** removed `except OSError as exc:` block
+
+**Red** (`test_t5_meta_persistence_oserror_refusal`):
+```
+E       OSError: injected meta write failure
+```
+
+**Restore:** re-added `except OSError as exc:` block with `VerifiedHeadRefusal` re-raise
+
+**Green:** `1 passed in 25.03s`
+
+**git status --porcelain after restore:** (empty)
+
+## BP-11 — fail-result also resolves (detector: T6)
+
+**guarded element:** `round_driver.py:2189` — `_verified_head_for_fold` runs for every verify submit
+**axis:** fail-result verify submit refuses when head resolution fails
+
+**Neutralization:**
+```python
+    if phase == P_VERIFY and isinstance(artifact, dict) and artifact.get("result") == "pass":
+        verified_head = _verified_head_for_fold(session_dir, state)
+```
+
+**Red** (`test_t6_fail_result_also_refuses_with_unresolvable_head`):
+```
+E       assert True is False
+```
+
+**Restore:**
+```python
+    if phase == P_VERIFY:
+        verified_head = _verified_head_for_fold(session_dir, state)
+```
+
+**Green:** `1 passed in 22.23s`
+
+**git status --porcelain after restore:** (empty)

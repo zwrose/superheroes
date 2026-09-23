@@ -173,13 +173,21 @@ def _clear_persisted_head(session_dir):
 def _open_session_at_verify(tmp_path, repo_root):
     session_dir = str(tmp_path / "session")
     os.makedirs(session_dir, exist_ok=True)
-    cfg = _cfg()
-    n = _drive_to_phase(session_dir, cfg, _responder(), RD.P_VERIFY)
     _merge_meta(session_dir, repoRoot=repo_root)
+    cfg = _cfg(repoRoot=repo_root)
+    n = _drive_to_phase(session_dir, cfg, _responder(), RD.P_VERIFY)
     return session_dir, n
 
 
+def _break_head_resolution_at_verify(session_dir, bad_root):
+    """After a real-repo drive, force verify submit to resolve from a missing repoRoot."""
+    _merge_meta(session_dir, repoRoot=bad_root)
+    _clear_persisted_head(session_dir)
+    return _refresh_verify_pending(session_dir)
+
+
 def test_t1_verify_submit_forwards_resolved_head(tmp_path):
+    """axis: verify submit records verifiedHead equal to repo HEAD when resolution succeeds."""
     repo, expected_head = _init_git_repo(tmp_path)
     session_dir, n = _open_session_at_verify(tmp_path, repo)
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], _GOOD_VERIFY)
@@ -191,8 +199,11 @@ def test_t1_verify_submit_forwards_resolved_head(tmp_path):
 
 
 def test_t2_refusal_leaves_state_intact(tmp_path):
+    """axis: unresolvable head refuses submit with verified-head-unresolved, state bytes unchanged."""
+    repo, _ = _init_git_repo(tmp_path)
     bad_root = str(tmp_path / "missing-repo")
-    session_dir, n = _open_session_at_verify(tmp_path, bad_root)
+    session_dir, _ = _open_session_at_verify(tmp_path, repo)
+    n = _break_head_resolution_at_verify(session_dir, bad_root)
     before = _state_bytes(session_dir)
     ok, state_before = RD.load_state(session_dir)
     assert ok
@@ -214,13 +225,17 @@ def test_t2_refusal_leaves_state_intact(tmp_path):
 
 
 def test_t3_resubmit_after_refusal_accepts_same_artifact(tmp_path):
+    """axis: after verified-head-unresolved refusal, resubmit with a resolvable repoRoot succeeds."""
     repo, expected_head = _init_git_repo(tmp_path)
     bad_root = str(tmp_path / "missing-repo")
-    session_dir, n = _open_session_at_verify(tmp_path, bad_root)
+    session_dir, _ = _open_session_at_verify(tmp_path, repo)
+    n = _break_head_resolution_at_verify(session_dir, bad_root)
     artifact = copy.deepcopy(_VERIFY_WITH_PROV)
     refused = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], artifact)
     assert refused["ok"] is False
     _merge_meta(session_dir, repoRoot=repo)
+    _clear_persisted_head(session_dir)
+    n = _refresh_verify_pending(session_dir)
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], artifact)
     assert out["ok"] is True, out
     ok, state = RD.load_state(session_dir)
@@ -230,6 +245,7 @@ def test_t3_resubmit_after_refusal_accepts_same_artifact(tmp_path):
 
 
 def test_t4_repo_discovery_refusal(tmp_path, monkeypatch):
+    """axis: repo discovery failure becomes verified-head-unresolved, not a raw escape."""
     repo, _ = _init_git_repo(tmp_path)
     session_dir, n = _open_session_at_verify(tmp_path, repo)
     _clear_persisted_head(session_dir)
@@ -254,6 +270,7 @@ def test_t4_repo_discovery_refusal(tmp_path, monkeypatch):
 
 
 def test_t5_meta_persistence_oserror_refusal(tmp_path, monkeypatch):
+    """axis: OSError during verified-head persistence refuses before any fold mutation."""
     repo, _ = _init_git_repo(tmp_path)
     session_dir, n = _open_session_at_verify(tmp_path, repo)
     _clear_persisted_head(session_dir)
@@ -274,8 +291,11 @@ def test_t5_meta_persistence_oserror_refusal(tmp_path, monkeypatch):
 
 
 def test_t6_fail_result_also_refuses_with_unresolvable_head(tmp_path):
+    """axis: fail-result verify submit also refuses when head resolution fails."""
+    repo, _ = _init_git_repo(tmp_path)
     bad_root = str(tmp_path / "missing-repo")
-    session_dir, n = _open_session_at_verify(tmp_path, bad_root)
+    session_dir, _ = _open_session_at_verify(tmp_path, repo)
+    n = _break_head_resolution_at_verify(session_dir, bad_root)
     before = _state_bytes(session_dir)
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
                         {"result": "fail"})
@@ -285,6 +305,7 @@ def test_t6_fail_result_also_refuses_with_unresolvable_head(tmp_path):
 
 
 def test_t7_in_process_fold_records_no_verified_head():
+    """axis: in-process verify fold with no session_dir records no verifiedHead."""
     state = RD.new_state({"fixerVendor": "claude"})
     state["round"] = 1
     RD._fold(state, state["config"], RD.P_VERIFY, {"result": "pass"}, session_dir=None)
