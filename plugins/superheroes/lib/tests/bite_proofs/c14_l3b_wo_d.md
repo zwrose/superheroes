@@ -409,6 +409,8 @@ E        +  where True = any(<generator object test_astra_probe_live_other_wave_
 
 ## BP-R1-4 — project-store refusal
 
+> **Superseded at `2ad99e4e` (2026-09-23)** by BP-E1 and BP-E2 in `c14_l3b2_wo_e.md`: order E replaced the legacy lookup this entry neutralizes; the project-store refusal is now the resolver's `os.path.isdir(project_store)` guard (BP-E2) and its store lookup (BP-E1). The test named below still runs and passes at the head.
+
 > **Re-run at `8aaa809c` (2026-09-22).**
 
 - **axis:** no project store entry must refuse before dispatch
