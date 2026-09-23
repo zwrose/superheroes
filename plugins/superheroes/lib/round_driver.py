@@ -9567,14 +9567,25 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
         if phase == P_FIXER:
             return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
     envelope_payload = envelope.get("payload")
+    payload_adopted = False
+    if (result_kind in session_contract.RECORD_RESULT_KINDS
+            and envelope_payload is None):
+        result_content = record.get("resultContent")
+        if isinstance(result_content, dict):
+            envelope_payload = dict(result_content)
+            payload_adopted = True
     if session_contract.evidence_binding(result_kind) == session_contract.EXECUTION_ONLY_BINDING:
         # axis: write-run stamp proves the run happened under this order — no transported payload
         # is bound; never read it as payload proof
         pass
     else:
         if not isinstance(envelope_payload, dict):
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "resultKind": result_kind}, None
+            mismatch_extra = {"resultDigest": result_digest, "resultKind": result_kind}
+            result_content = record.get("resultContent")
+            if isinstance(result_content, dict):
+                mismatch_extra["expectedPayloadSha256"] = round_records.payload_sha256(
+                    result_content)
+            return None, "evidence-result-mismatch", mismatch_extra, None
         shaped = _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload)
         carried, adapter_subject = engine_adapter.review_payload_carried(shaped, result_kind)
         digest_carried, digest_subject = session_contract.evidence_digest_subject(
@@ -9591,9 +9602,14 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
                                                        "subjectDisagreement": True}, None
         payload_digest = round_records.payload_sha256(digest_subject)
         if result_digest != payload_digest:
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "payloadSha256": payload_digest,
-                                                       "resultKind": result_kind}, None
+            mismatch_extra = {"resultDigest": result_digest,
+                              "payloadSha256": payload_digest,
+                              "resultKind": result_kind}
+            result_content = record.get("resultContent")
+            if isinstance(result_content, dict):
+                mismatch_extra["expectedPayloadSha256"] = round_records.payload_sha256(
+                    result_content)
+            return None, "evidence-result-mismatch", mismatch_extra, None
     cited_head_source = None
     view_head = None
     if run_kind == engine_dispatch.RUN_KIND_WRITE:
@@ -9612,7 +9628,12 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
     else:
         return None, "view-head-underivable", {"runKind": run_kind}, None
     evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
+    if "model" in record:
+        evidence["model"] = record["model"]
     out = dict(envelope)
+    if payload_adopted:
+        out["payload"] = envelope_payload
+        out["payloadSha256"] = round_records.payload_sha256(envelope_payload)
     if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
         env_head = envelope.get("headSha")
         if env_head is None:
@@ -9755,7 +9776,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                 return _refuse_cmd(session_dir, "record-result", ev_reason, phase=phase,
                                    rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                                    **ev_extra)
-        fault = _preflight_payload_fault(phase, envelope, seat)
+        preflight_envelope = assembled if assembled is not None else envelope
+        fault = _preflight_payload_fault(phase, preflight_envelope, seat)
         if fault:
             return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
                                rnd=rnd, attempt=cur_attempt, seat=seat, detail=fault)

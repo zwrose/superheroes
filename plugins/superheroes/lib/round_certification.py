@@ -1265,6 +1265,32 @@ def _runner_recorded_vendor_status(obs, session_dir, seat_entry):
     return "missing"
 
 
+def _runner_recorded_model(obs, session_dir, seat_entry):
+    """Return the runner-recorded model from execution evidence, or None when absent."""
+    if isinstance(obs, dict) and "model" in obs:
+        return obs.get("model")
+    provenance = seat_entry.get("provenance")
+    if provenance == PROVENANCE_HAND_LANDED:
+        seat = seat_entry["seat"]
+        phase = seat_entry["phase"]
+        attempt = seat_entry["attempt"]
+        occurrence = seat_entry.get("occurrence", 0)
+        rnd = seat_entry["round"]
+        env, _path = _load_envelope(
+            session_dir,
+            rnd,
+            phase,
+            seat,
+            attempt,
+            occurrence,
+        )
+        if isinstance(env, dict):
+            evidence = env.get("executionEvidence")
+            if isinstance(evidence, dict) and "model" in evidence:
+                return evidence.get("model")
+    return None
+
+
 def check_seat_independence(ctx):
     # axis: the receipt's independence is read from the record — the declared fixer vendor and each
     # audit seat's runner-recorded vendor — and a record that contradicts itself refuses; a record
@@ -1341,12 +1367,14 @@ def _independence_block(ctx):
             continue
         vendor = vendor_status
         fam = model_registry.family_for("verifier", vendor)
+        model = _runner_recorded_model(obs, ctx["session_dir"], seat_entry)
         audit_seats.append(
             {
                 "seat": seat,
                 "round": rnd,
                 "vendor": vendor,
                 "family": fam,
+                "model": model,
             }
         )
     same_family_seats = [
