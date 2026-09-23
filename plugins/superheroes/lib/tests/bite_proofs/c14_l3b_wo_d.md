@@ -175,20 +175,15 @@ E       KeyError: 'reason'
 
 ## BP-R2-2 — scale rendered from the rubric
 
-> **Re-run at `8aaa809c` (2026-09-22).**
+> **Re-run at `1bfb5b58` (2026-09-23); neutralization narrowed to the Minor row.**
 
 - **axis:** severity scale lines must match the rubric table definitions at call time
 
 **neutralization** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
 ```python
-    return [
-        "- `Critical` — corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.",
-        "- `Important` — Likely bug in normal use, OR a security/correctness issue warranting a fix before merge",
-        "- `Minor` — bite-proof changed definition",  # bite-proof BP-R2-2 neutralization
-        "- `Nit` — Style/naming/cleanup; take-it-or-leave-it",
-    ], None
+    lines = ["- `Minor` — bite-proof changed definition" if "`Minor`" in line else line for line in lines]  # bite-proof BP-R2-2 neutralization
 ```
-(replaces the `return lines, None` at the end of `_severity_scale`)
+(inserted on the line directly before `return lines, None` at the end of `_severity_scale`)
 
 **command:** `plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_is_rendered_from_the_rubric`
 
@@ -196,16 +191,17 @@ E       KeyError: 'reason'
 ```
 FAILED plugins/superheroes/lib/tests/test_conformance_probe.py::test_astra_probe_scale_is_rendered_from_the_rubric
 >           assert "`%s` — %s" % (level, definition) in text
-E           assert ('`%s` — %s' % ('Critical', 'Corrupts data, leaks data across a trust boundary, or breaks production. NEVER for tests or style.')) in 'Perform a one-shot security review of the following unified diff for a production admin console.\n\nReport each findi... "admin"}\n     if claims.get("role") != "admin":\n         raise Forbidden("not an admin")\n     return claims\n```\n'
-1 failed in 1.78s
+E           assert ('`%s` — %s' % ('Minor', 'Real issue, small impact')) in 'Perform a one-shot security review of the following unified diff for a production admin console.\n\nReport each findi... "admin"}\n     if claims.get("role") != "admin":\n         raise Forbidden("not an admin")\n     return claims\n```\n'
+1 failed in 1.86s
 ```
 
 **restore** (`plugins/superheroes/lib/conformance_probe.py`, `_severity_scale`):
 ```python
-    return lines, None
+    # deleted:
+    lines = ["- `Minor` — bite-proof changed definition" if "`Minor`" in line else line for line in lines]  # bite-proof BP-R2-2 neutralization
 ```
 
-**raw green** (exit 0): `1 passed in 1.60s`
+**raw green** (exit 0): `1 passed in 1.26s`
 
 ---
 
