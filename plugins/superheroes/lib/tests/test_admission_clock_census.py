@@ -81,11 +81,15 @@ def _admission_closure():
     return funcs, _transitive_closure(funcs, ENTRY_POINTS)
 
 
+def _assert_entry_points_in_closure(closure, entry_points):
+    for name in entry_points:
+        assert name in closure, "entry point %s missing from closure" % name
+
+
 def test_admission_path_closure_covers_entry_points():
     funcs, closure = _admission_closure()
     assert closure, "admission-path closure is empty"
-    for name in ENTRY_POINTS:
-        assert name in closure, "entry point %s missing from closure" % name
+    _assert_entry_points_in_closure(closure, ENTRY_POINTS)
 
 
 def test_admission_path_does_not_read_filesystem_timestamps():
@@ -98,8 +102,7 @@ def test_admission_path_does_not_read_filesystem_timestamps():
 
 
 def test_admission_path_vacuity_guard_fails_on_renamed_entry_point():
-    source = ENGINE_DISPATCH_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(ENGINE_DISPATCH_PATH))
-    funcs = _module_functions(tree)
-    closure = _transitive_closure(funcs, ("_load_native_result_json_typo",))
-    assert "_load_native_result_json" not in closure
+    funcs, closure = _admission_closure()
+    bogus = "_load_native_result_json_typo"
+    with pytest.raises(AssertionError, match="entry point %s missing from closure" % bogus):
+        _assert_entry_points_in_closure(closure, tuple(ENTRY_POINTS) + (bogus,))

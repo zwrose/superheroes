@@ -1,4 +1,6 @@
 """Driver-side receipt boundary tests — writer tests stay driverless in test_round_certification."""
+import importlib.util
+import inspect
 import json
 import os
 import sys
@@ -18,9 +20,35 @@ from round_certification_fixtures import (
     write_certifiable_session,
 )
 
-import test_round_driver_integration as tdi
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SPEC = importlib.util.spec_from_file_location(
+    "test_round_driver_integration",
+    os.path.join(_HERE, "test_round_driver_integration.py"),
+)
+tdi = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(tdi)
 
 HEAD = HEAD_SHA
+
+
+def _stored_with_engaged_observation(stored):
+    """Certification refuses before model assertion unless observation.read is engaged."""
+    evidence = stored.get("executionEvidence")
+    if not isinstance(evidence, dict):
+        return stored
+    observation = evidence.get("observation")
+    if not isinstance(observation, dict):
+        return stored
+    out = dict(stored)
+    out["executionEvidence"] = dict(evidence)
+    out["executionEvidence"]["observation"] = dict(observation)
+    out["executionEvidence"]["observation"]["read"] = "engaged"
+    out["executionEvidence"]["observation"]["telemetry"] = "tool-calls"
+    out["executionEvidence"]["observation"]["toolCalls"] = 1
+    out["envelopeSha256"] = round_records.envelope_sha256(
+        out.get("payload"), out.get("executionEvidence"),
+    )
+    return out
 
 
 def test_journal_execution_evidence_fields_copies_optional_engine_model():
@@ -76,18 +104,7 @@ def _driver_panel_recorded_rows(tmp_path, native_seat, runner_seat):
         stored, err = round_records.read_json(out["storePath"])
         assert err is None
         if seat == native_seat:
-            evidence = stored.get("executionEvidence")
-            if isinstance(evidence, dict):
-                observation = evidence.get("observation")
-                if isinstance(observation, dict):
-                    stored = dict(stored)
-                    stored["executionEvidence"] = dict(evidence)
-                    stored["executionEvidence"]["observation"] = dict(observation)
-                    stored["executionEvidence"]["observation"]["read"] = "engaged"
-                    stored["executionEvidence"]["observation"]["telemetry"] = "tool-calls"
-                    stored["executionEvidence"]["observation"]["toolCalls"] = 1
-                    stored["envelopeSha256"] = round_records.envelope_sha256(
-                        stored.get("payload"), stored.get("executionEvidence"))
+            stored = _stored_with_engaged_observation(stored)
         stored_by_seat[seat] = stored
         store_specs.append({"seat": seat, "envelope": stored})
     journal = RD.read_journal(session_dir)
@@ -141,39 +158,51 @@ def test_unprobed_native_seat_disclosure_at_receipt_boundary(tmp_path):
     )
 
 
-def _resolved_inputs_for_runner_seat(tmp_path, seat, order_path):
-    """Mirror dispatch_review's _build_resolved_inputs call site (~6433)."""
+def _resolved_inputs_for_runner_seat(tmp_path, seat):
+    """Mirror engine_dispatch._build_resolved_inputs call site for runner evidence."""
     run_dir = str(tmp_path / "dispatch-evidence-run")
     repo_root = str(tmp_path / "dispatch-evidence-repo")
     staged_prompt = os.path.join(run_dir, engine_dispatch.PROMPT_NAME)
     progress_path = os.path.join(run_dir, "progress.jsonl")
-    return engine_dispatch._build_resolved_inputs(
-        seat=seat,
-        role_kind=engine_dispatch.RUN_KIND_REVIEW,
-        repo_root=repo_root,
-        run_dir_real=run_dir,
-        run_dir_source=riv.RESOLVED,
-        staged_prompt_path=staged_prompt,
-        timeout=30,
-        timeout_source=riv.DEFAULT,
-        retry_timeout=30,
-        retry_timeout_source=riv.DEFAULT,
-        max_wait=None,
-        max_wait_source=riv.DEFAULT,
-        preflight_timeout=None,
-        preflight_timeout_source=riv.DECLARED_NONE,
-        mode="review",
-        mode_source=riv.DEFAULT,
-        expected_result_kind="findings",
-        expected_result_kind_source=riv.CALLER,
-        base_sha=None,
-        base_sha_source=riv.DECLARED_NONE,
-        diff_base=None,
-        diff_base_source=riv.DECLARED_NONE,
-        progress_path=progress_path,
-        progress_path_source=riv.RESOLVED,
-        engine_model_opts={"cwd": repo_root},
+    kwargs = {
+        "seat": seat,
+        "role_kind": engine_dispatch.RUN_KIND_REVIEW,
+        "repo_root": repo_root,
+        "run_dir_real": run_dir,
+        "run_dir_source": riv.RESOLVED,
+        "staged_prompt_path": staged_prompt,
+        "timeout": 30,
+        "timeout_source": riv.DEFAULT,
+        "retry_timeout": 30,
+        "retry_timeout_source": riv.DEFAULT,
+        "max_wait": None,
+        "max_wait_source": riv.DEFAULT,
+        "preflight_timeout": None,
+        "preflight_timeout_source": riv.DECLARED_NONE,
+        "mode": "review",
+        "mode_source": riv.DEFAULT,
+        "expected_result_kind": "findings",
+        "expected_result_kind_source": riv.CALLER,
+        "base_sha": None,
+        "base_sha_source": riv.DECLARED_NONE,
+        "diff_base": None,
+        "diff_base_source": riv.DECLARED_NONE,
+        "progress_path": progress_path,
+        "progress_path_source": riv.RESOLVED,
+        "engine_model_opts": {"cwd": repo_root},
+    }
+    sig = inspect.signature(engine_dispatch._build_resolved_inputs)
+    passed = set(kwargs)
+    required = {
+        name for name, param in sig.parameters.items()
+        if param.default is inspect.Parameter.empty
+    }
+    optional_deliberately_passed = set()
+    assert passed == required | optional_deliberately_passed, (
+        "kwargs %r do not match _build_resolved_inputs signature %r"
+        % (sorted(passed), sorted(sig.parameters))
     )
+    return engine_dispatch._build_resolved_inputs(**kwargs)
 
 
 def _record_runner_seat_with_resolved_inputs(tmp_path, runner_seat):
@@ -204,7 +233,7 @@ def _record_runner_seat_with_resolved_inputs(tmp_path, runner_seat):
             session_dir, pend["round"], pend["phase"],
             round_records.storage_key(seat, occurrence), pend["attempt"],
         )
-        snapshot = _resolved_inputs_for_runner_seat(tmp_path, seat_spec, order_path)
+        snapshot = _resolved_inputs_for_runner_seat(tmp_path, seat_spec)
         assert snapshot["engineModel"] == "gpt-5.6-sol"
         run_dir = tdi._execution_run_dir(
             tmp_path, order_path, [], resolved_inputs=snapshot,
@@ -299,19 +328,7 @@ def test_receipt_seat_model_none_for_hand_landed_record_carrying_a_model(tmp_pat
     assert recorded_row["executionEvidence"]["engineModel"] == "gpt-6-astra"
     durable, err = round_records.read_json(out["storePath"])
     assert err is None
-    evidence = durable.get("executionEvidence")
-    if isinstance(evidence, dict):
-        observation = evidence.get("observation")
-        if isinstance(observation, dict):
-            durable = dict(durable)
-            durable["executionEvidence"] = dict(evidence)
-            durable["executionEvidence"]["observation"] = dict(observation)
-            durable["executionEvidence"]["observation"]["read"] = "engaged"
-            durable["executionEvidence"]["observation"]["telemetry"] = "tool-calls"
-            durable["executionEvidence"]["observation"]["toolCalls"] = 1
-            durable["envelopeSha256"] = round_records.envelope_sha256(
-                durable.get("payload"), durable.get("executionEvidence"),
-            )
+    durable = _stored_with_engaged_observation(durable)
     journal_row = dict(recorded_row)
     journal_row.update(RD._journal_stored_revision(durable))
     journal_row["headSha"] = HEAD
