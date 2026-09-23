@@ -419,13 +419,10 @@ def resolve_judgment(rows: list, overlay: dict | None = None) -> dict:
                 "layer": dict(layer["identity"]),
             }
         )
-        disp = {
+        dispositions.append({
             "findingClass": finding_class,
             "disposition": rule["disposition"],
-        }
-        if "followUp" in rule:
-            disp["followUp"] = dict(rule["followUp"])
-        dispositions.append(disp)
+        })
 
     return {
         "action": {"dispositions": dispositions},

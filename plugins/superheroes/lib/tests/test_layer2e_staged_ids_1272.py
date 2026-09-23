@@ -201,12 +201,13 @@ def test_e8_empty_grouping_no_fault(tmp_path, artifact):
 
 
 def test_e8b_missing_grouping_key_refused_at_submit(tmp_path):
-    # axis: e8b — artifact without grouping key refused at payload contract
+    # axis: e8b — an absent grouping key is refused by synthesis_results_fault's own leg, not only
+    # by the payload contract below it: the specific message is the discriminator.
     d, n = _at(tmp_path, RD.P_SYNTHESIS)
     before = _state_bytes(d)
     out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], {})
     assert out["ok"] is False
-    assert "grouping" in out["reason"]
+    assert "synthesis artifact carries no `grouping` key" in out["reason"]
     assert _state_bytes(d) == before
 
 
@@ -236,8 +237,12 @@ def test_e10_synthesis_non_string_member_refused_at_submit(tmp_path):
     assert journal[-1].get("outcome") == "synthesis-results-shape"
 
 
-def test_grouping_absent_null_empty_falls_open_nonempty_incomplete_refused():
-    """Axis: absent/null/empty grouping falls open; non-empty incomplete grouping refuses."""
+def test_grouping_null_empty_falls_open_nonempty_incomplete_refused():
+    """Axis: null/empty grouping falls open; non-empty incomplete grouping refuses.
+
+    These are helper-level reads of the grouping VALUE. An artifact with no `grouping` key never
+    reaches them — the submit chokepoint refuses it (test_e8b_missing_grouping_key_refused_at_submit).
+    """
     survivors = [
         {"id": "v0", "file": "a.py", "line": 1, "title": "a", "severity": "Important",
          "verdict": "PLAUSIBLE"},
