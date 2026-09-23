@@ -375,6 +375,22 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     return ph
 
 
+def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
+    ph = dict(context.get("placeholders") or {})
+    host_seat = context.get("host_seat") is True
+    if host_seat:
+        ph["FIXER_STEP_5_BLOCK"] = (
+            "5. Report back per the Payload contract section below."
+        )
+    else:
+        ph["FIXER_STEP_5_BLOCK"] = (
+            "5. Report back per the result contract the runner appends at dispatch — "
+            "not a graded shape in this order. The orchestrator derives the `fixes` "
+            "record from git; you are not asked to emit it."
+        )
+    return ph
+
+
 def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     channel = ph.get("CHANNEL", "file")
@@ -416,6 +432,8 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     if phase == round_phases.P_PANEL:
         ph = _panel_derived_placeholders(context)
+    elif phase == round_phases.P_FIXER:
+        ph = _fixer_derived_placeholders(context)
     elif phase in (round_phases.P_VERIFIERS, round_phases.P_SYNTHESIS,
                    round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
         ph = _channel_derived_placeholders(phase, context)

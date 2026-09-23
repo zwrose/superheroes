@@ -410,9 +410,7 @@ def test_template_body_does_not_restate_payload_contract(phase):
     body = _template_body(phase)
     fields, enum_values = _contract_vocabulary(phase)
     violations = []
-    # R28 re-pin (WO-D #1272): dispatch-fixer step 5 names `fixes` only to say the orchestrator
-    # derives that record — not to restate the submit-artifact contract.
-    exempt_fields = {"fixes"} if phase == RP.P_FIXER else set()
+    exempt_fields = set()
     for field in sorted(fields):
         if field in exempt_fields:
             continue

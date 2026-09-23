@@ -8385,6 +8385,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "ROUND",
     "TARGET_ID",
     "GATE_GUIDANCE",
+    "FIXER_STEP_5_BLOCK",
 })
 
 

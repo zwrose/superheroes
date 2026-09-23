@@ -115,6 +115,34 @@ def test_l3_d1_engine_fixer_order_names_no_result_shape():
     assert OL._FIXER_LITERAL not in text
 
 
+def _fixer_step_5(text):
+    start = text.index("4. Commit ALL changes")
+    end = text.index("## Escalation", start)
+    block = text[start:end]
+    for line in block.splitlines():
+        if line.startswith("5."):
+            return line.strip()
+    raise AssertionError("step 5 not found in fixer order")
+
+
+def test_l3_d1_fixer_step_5_matches_rendered_payload_contract_block():
+    # axis: step 5 is derived from host_seat — host cites Payload contract; engine cites runner appendix
+    host_text = _render(RP.P_FIXER, _fixer_placeholders())
+    host_step = _fixer_step_5(host_text)
+    assert "Payload contract section below" in host_step
+    assert "not asked to emit" not in host_step
+    assert _PAYLOAD_HEADING in host_text
+    assert "Required keys: fixes" in host_text
+
+    engine_ctx = _base_context(host_seat=False, placeholders=_fixer_placeholders())
+    engine_text, reason = RO.render_order(RP.P_FIXER, "seat", engine_ctx)
+    assert reason is None, reason
+    engine_step = _fixer_step_5(engine_text)
+    assert "runner appends at dispatch" in engine_step
+    assert "not asked to emit" in engine_step
+    assert _PAYLOAD_HEADING not in engine_text
+
+
 def test_l3_d1_control_other_phase_payload_contract_unchanged():
     # axis: non-fixer phases still render the payload-contract block byte-for-byte in structure
     panel_text = _render(RP.P_PANEL, _panel_placeholders())
