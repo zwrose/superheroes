@@ -2178,7 +2178,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     wires the real git derivation. It is inert for every other phase.
 
     `verified_head` is threaded to the verify fold: the submit path resolves it BEFORE any state
-    mutates (and refuses the submit when it cannot), so the fold never resolves a head itself.
+    mutates (and refuses a pass when it cannot), so the fold never resolves a head itself.
     run_loop passes None — the in-process leg has no head to credit. Inert for every other phase."""
     if session_contract.disposition_ledger_owner_classification(state) == (
         session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
@@ -3859,8 +3859,9 @@ def _fold_verify(state, config, artifact, verified_head=None):
     names the class — never advances into a delta round that could later certify.
 
     `verified_head` is the head the gate ran against, resolved by the submit path before anything
-    mutated — a submit whose head cannot be resolved is refused there and never reaches this fold.
-    None (run_loop's in-process leg) records no `verifiedHead`, so the round credits no head."""
+    mutated — a pass whose head cannot be resolved is refused there and never reaches this fold.
+    None (an unresolvable head on a non-pass result, or run_loop's in-process leg) records no
+    `verifiedHead`, so the round credits no head."""
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
     if isinstance(verified_head, str) and verified_head:
@@ -6493,13 +6494,15 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
 
     # The verify submit resolves the head the gate ran against BEFORE anything mutates — the last
     # fence, so no later refusal can follow a resolution. It is the fixer fold's resolver, so the
-    # recorded head is the head the fixer landed at. A resolution failure refuses the submit with
-    # the pending step and `lastAccepted` intact: the same artifact resubmits once the head resolves.
-    # Never a fallback to `config["headSha"]` — that is the session-SETUP head.
+    # recorded head is the head the fixer landed at. A resolution failure refuses a `pass` with the
+    # pending step and `lastAccepted` intact: the same artifact resubmits once the head resolves.
+    # Only a pass credits a head, so a negative or skip result still folds its own outcome (a halt
+    # stays a halt) with no head recorded. Never a fallback to `config["headSha"]` — that is the
+    # session-SETUP head.
     verified_head = None
     if phase == P_VERIFY:
         verified_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
-        if head_err:
+        if head_err and artifact.get("result") == "pass":
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": VERIFIED_HEAD_UNRESOLVED})

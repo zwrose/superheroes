@@ -1,15 +1,19 @@
 """The verify submit resolves the head BEFORE it mutates anything.
 
-A verify submit whose head cannot be resolved is refused at the submit chokepoint with the pending
-step and `lastAccepted` intact, and the same artifact resubmits once the head resolves — there is
-never a refusal record followed by an advance. Everything here drives the REAL driver and the REAL
-adapters over a real session dir and a real git repository: `advance` folds through `cmd_submit`,
-the one fold chokepoint, so the submit path under test is the path every orchestrator takes.
+A passing verify submit whose head cannot be resolved is refused at the submit chokepoint with the
+pending step and `lastAccepted` intact, and the same artifact resubmits once the head resolves —
+there is never a refusal record followed by an advance. A result that credits no head (fail,
+timeout, skip) folds its own outcome whether or not the head resolves. Everything here drives the
+REAL driver and the REAL adapters over a real session dir and a real git repository: `advance`
+folds through `cmd_submit`, the one fold chokepoint, so the submit path under test is the path
+every orchestrator takes.
 """
 import json
 import os
 import subprocess
 import sys
+
+import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
@@ -109,15 +113,23 @@ def test_verify_submit_records_the_head_it_resolved(tmp_path, monkeypatch):
 
     The P_VERIFY arm of `_fold` is the only wire between the submit's resolution and the fold's
     record. With the wire cut the fold records no `verifiedHead` and this reads None."""
-    session_dir, gitdir, head_path, _repo, head = _real_session(tmp_path, monkeypatch)
+    session_dir, gitdir, head_path, repo, setup_head = _real_session(tmp_path, monkeypatch)
     _drive_to_verify(session_dir, gitdir, head_path)
+    # The head moves after session setup (as a fixer's landed commit moves it); the session-setup
+    # `headSha` does not. The recorded head must be the one the submit resolved, never the setup
+    # head a fallback to `config["headSha"]` would stamp.
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "fixer landed")
+    moved_head = _git(repo, "rev-parse", "HEAD")
+    assert moved_head != setup_head
+    with open(os.path.join(session_dir, round_records.META_FILE), encoding="utf-8") as fh:
+        assert json.load(fh)["headSha"] == setup_head
     phase, out = harness._drive_one_phase(session_dir, gitdir, [_finding()], head_path)
     assert phase == round_driver.P_VERIFY
     assert out["ok"] is True, out
     assert out["folded"]["phase"] == round_driver.P_VERIFY
     rec = _verify_round_record(session_dir)
     assert rec.get("verifyResult") == "pass"
-    assert rec.get(session_contract.VERIFIED_HEAD_FIELD) == head
+    assert rec.get(session_contract.VERIFIED_HEAD_FIELD) == moved_head
     _never_records_a_refusal(harness._state(session_dir))
 
 
@@ -148,7 +160,9 @@ def test_unresolvable_head_refuses_the_verify_submit_and_the_same_artifact_resub
     assert phase == round_driver.P_VERIFY
     assert out["ok"] is False, out
     assert out["reason"] == "fold-refused", out
-    assert out["detail"] == round_driver.VERIFIED_HEAD_UNRESOLVED, out
+    # The refusal token is an external contract: pin the literal, not only the symbol.
+    assert out["detail"] == "verified-head-unresolved", out
+    assert round_driver.VERIFIED_HEAD_UNRESOLVED == "verified-head-unresolved"
     assert _state_bytes(session_dir) == state_before
     after = harness._state(session_dir)
     assert after["pending"] == before["pending"]
@@ -159,7 +173,7 @@ def test_unresolvable_head_refuses_the_verify_submit_and_the_same_artifact_resub
     _never_records_a_refusal(after)
     journal = round_driver.read_journal(session_dir)
     refused = [row for row in journal if row.get("cmd") == "submit"
-               and row.get("outcome") == round_driver.VERIFIED_HEAD_UNRESOLVED]
+               and row.get("outcome") == "verified-head-unresolved"]
     assert len(refused) == 1, journal
     assert refused[0]["phase"] == round_driver.P_VERIFY
 
@@ -171,6 +185,53 @@ def test_unresolvable_head_refuses_the_verify_submit_and_the_same_artifact_resub
     assert rec.get("verifyResult") == "pass"
     assert rec.get(session_contract.VERIFIED_HEAD_FIELD) == head
     _never_records_a_refusal(harness._state(session_dir))
+
+
+@pytest.mark.parametrize(
+    "result,terminal,next_step",
+    [("fail", "halted", round_driver.P_TERMINAL),
+     ("timeout", "halted", round_driver.P_TERMINAL),
+     ("skipped", None, None)],
+    ids=["fail", "timeout", "skipped-no-command"],
+)
+def test_unresolvable_head_never_blocks_a_result_that_credits_no_head(
+        tmp_path, monkeypatch, result, terminal, next_step):
+    """axis: only a pass needs a head — a negative or skip result folds its own outcome anyway.
+
+    The head cannot resolve, yet a `fail` or `timeout` still halts (a refusal here would turn a
+    final negative into something the caller could retry) and a skip with no verify command still
+    advances unverified. None of them records a verified head or a refusal record."""
+    real_payload_for = harness._payload_for
+
+    def payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path):
+        if pend["phase"] == round_driver.P_VERIFY:
+            return {"result": result, "command": "none", "exit": 0}
+        return real_payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
+
+    monkeypatch.setattr(harness, "_payload_for", payload_for)
+    session_dir, gitdir, head_path, _repo, _head = _real_session(tmp_path, monkeypatch)
+    _drive_to_verify(session_dir, gitdir, head_path)
+    not_a_repo = str(tmp_path / "not-a-repo")
+    os.makedirs(not_a_repo)
+    _set_meta_repo_root(session_dir, not_a_repo)
+
+    phase, out = harness._drive_one_phase(session_dir, gitdir, [_finding()], head_path)
+
+    assert phase == round_driver.P_VERIFY
+    assert out["ok"] is True, out
+    assert out["folded"]["phase"] == round_driver.P_VERIFY
+    state = harness._state(session_dir)
+    rec = _verify_round_record(session_dir)
+    assert rec.get("verifyResult") == result
+    assert session_contract.VERIFIED_HEAD_FIELD not in rec
+    _never_records_a_refusal(state)
+    assert state.get("terminal") == terminal
+    if next_step is not None:
+        assert state["step"] == next_step
+    else:
+        assert state["step"] != round_driver.P_VERIFY
+    journal = round_driver.read_journal(session_dir)
+    assert not [row for row in journal if row.get("outcome") == "verified-head-unresolved"]
 
 
 # --- the positive certification fixture, through the real loop ----------------------------
