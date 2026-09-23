@@ -2219,6 +2219,47 @@ def _astra_ledger(tmp_path, monkeypatch):
     return ledger_dir
 
 
+def test_astra_record_dir_resolves_real_control_plane_layout(tmp_path, monkeypatch):
+    import mode_registry
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    key = mode_registry.config_key(str(repo))
+    project_store = home / ".claude" / "superheroes" / "projects" / key
+    project_store.mkdir(parents=True)
+    record_dir, err = CP._conformance_record_dir(str(repo))
+    assert err is None
+    expected = os.path.join(
+        str(home), ".claude", "superheroes", "projects", key, "conformance",
+    )
+    assert os.path.realpath(record_dir) == os.path.realpath(expected)
+    assert os.path.isdir(record_dir)
+    assert not (home / ".claude" / "superheroes" / "keys").exists()
+
+
+def test_astra_record_dir_refuses_unconfigured_project(tmp_path, monkeypatch):
+    import mode_registry
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (home / ".claude" / "superheroes" / "projects").mkdir(parents=True)
+    key = mode_registry.config_key(str(repo))
+    record_dir, err = CP._conformance_record_dir(str(repo))
+    assert record_dir is None
+    assert err == "conformance-record-dir-unresolved"
+    assert not (home / ".claude" / "superheroes" / "projects" / key).exists()
+
+
 def _astra_terminal_findings(findings, **overrides):
     base = {
         "ok": True,
