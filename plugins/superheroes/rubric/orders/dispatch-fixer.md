@@ -62,4 +62,4 @@ Guidance in this section overrides the original suggestion for the named finding
 ## Escalation
 If a finding you were told to auto-fix actually requires a judgment call you
 cannot make (multiple valid approaches, ambiguous intent), do NOT guess.
-Report it for owner escalation (see Payload contract) with the id and why.
+{{FIXER_ESCALATION_BLOCK}}

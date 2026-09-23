@@ -36,7 +36,7 @@
     "retry ONCE. If it still fails, STOP and report CHECK_FAILED",
     "autofix-probe-",
     "Commit ALL changes in ONE commit",
-    "do NOT guess. Report it for owner escalation (see Payload contract)"
+    "do NOT guess. Report it for owner escalation via the runner's native write-result contract"
   ],
   "dispatch-gap-sweep": [
     "You are the gap-sweep finder for a big-diff review round",

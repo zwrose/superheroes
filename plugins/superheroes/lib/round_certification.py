@@ -556,6 +556,11 @@ def _receipt_version(state):
     return SCHEMA_VERSION
 
 
+def _supports_nonblocking_disclosure(state):
+    """Non-blocking Minor/Nit survivors ride the state schema v5 bump (C13 recorded-version boundary)."""
+    return _receipt_version(state) >= STATE_SCHEMA_VERSION
+
+
 def _seat_family(seat, cfg):
     if not isinstance(cfg, dict):
         return None
@@ -1554,6 +1559,12 @@ def check_disposition_without_receipt(ctx):
                     fid,
                     "finding has no disposition recorded",
                 )
+            if not _supports_nonblocking_disclosure(state):
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "finding has no disposition recorded",
+                )
             row = {
                 "id": finding.get("id"),
                 "title": finding.get("title"),
@@ -1970,6 +1981,15 @@ def _build_receipt_rounds(state, form):
 
 
 
+def _receipt_disclosures(ctx, state):
+    disclosures = {
+        "importantOutOfScope": list(ctx.get("important_disclosures") or []),
+    }
+    if _supports_nonblocking_disclosure(state):
+        disclosures["survivingNonBlocking"] = list(ctx.get("nonblocking_disclosures") or [])
+    return disclosures
+
+
 def _build_receipt(ctx, terminal_state, terminal_cause):
     state = ctx["state"]
     journal = ctx["journal"]
@@ -1996,7 +2016,8 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         graded = _effective_certification_finding(f, by_key)
         if session_contract.disposition_value(graded) is None:
             rank = _severity_rank(f.get("severity"))
-            if rank > _severity_rank("Important"):
+            if (_supports_nonblocking_disclosure(state)
+                    and rank > _severity_rank("Important")):
                 continue
         findings.append(_project_finding(f, by_key))
     rounds = _build_receipt_rounds(state, form)
@@ -2037,10 +2058,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         "terminalState": terminal_state,
         "terminalCause": terminal_cause,
         "seats": seat_rows,
-        "disclosures": {
-            "importantOutOfScope": list(ctx.get("important_disclosures") or []),
-            "survivingNonBlocking": list(ctx.get("nonblocking_disclosures") or []),
-        },
+        "disclosures": _receipt_disclosures(ctx, state),
         "independence": _independence_block(ctx),
         "provenanceLabels": {
             "derived": [

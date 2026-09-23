@@ -1451,8 +1451,8 @@ def _backfill_ledger_from_records(state, ledger, seen):
             if not key:
                 continue
             entry = _strip_disposition_family(dict(finding))
-            entry.pop("raisedSeq", None)
-            entry.pop("dispositionSeq", None)
+            entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+            entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
             if key in preexisting:
                 entry.update(family_snapshots.get(key, {}))
             if key in seen:
@@ -1486,8 +1486,8 @@ def _stage_findings(state, compiled):
             continue
         existing = ledger[seen[key]] if key in seen else None
         entry = _strip_disposition_family(dict(finding))
-        entry.pop("raisedSeq", None)
-        entry.pop("dispositionSeq", None)
+        entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+        entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
         if (isinstance(existing, dict)
                 and session_contract.has_disposition_family(existing)
@@ -1497,10 +1497,10 @@ def _stage_findings(state, compiled):
                     entry[field] = existing[field]
         else:
             entry = _strip_disposition_family(entry)
-            entry.pop("raisedSeq", None)
-            entry.pop("dispositionSeq", None)
+            entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+            entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
             entry[session_contract.RAISED_ROUND_FIELD] = round_no
-        entry["raisedSeq"] = _next_disposition_seq(state)
+        entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
         sanitized.append(entry)
         if key in seen:
             ledger[seen[key]] = entry
@@ -1540,14 +1540,14 @@ def _record_disposition(state, key, disposition, round_no, **fields):
         if val is not None:
             family[fname] = val
     _apply_disposition_family(entry, family)
-    entry["dispositionSeq"] = disp_seq
+    entry[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
     if key in seen:
         ledger[seen[key]] = entry
     else:
         ledger.append(entry)
     if live is not None:
         _apply_disposition_family(live, family)
-        live["dispositionSeq"] = disp_seq
+        live[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
 
 
 def _record_merged_into(state, key, into_key):
@@ -3662,8 +3662,8 @@ def _excluded_discharged_fix_row(ledger_by_key, row):
         return False
     if entry.get("disposition") != "fixed":
         return False
-    disp_seq = entry.get("dispositionSeq")
-    raised_seq = entry.get("raisedSeq")
+    disp_seq = entry.get(session_contract.DISPOSITION_SEQ_FIELD)
+    raised_seq = entry.get(session_contract.RAISED_SEQ_FIELD)
     disp_is_int = isinstance(disp_seq, int) and not isinstance(disp_seq, bool)
     raised_is_int = isinstance(raised_seq, int) and not isinstance(raised_seq, bool)
     if disp_is_int and raised_is_int:
@@ -8440,6 +8440,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "TARGET_ID",
     "GATE_GUIDANCE",
     "FIXER_STEP_5_BLOCK",
+    "FIXER_ESCALATION_BLOCK",
 })
 
 

@@ -382,11 +382,20 @@ def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
         ph["FIXER_STEP_5_BLOCK"] = (
             "5. Report back per the Payload contract section below."
         )
+        ph["FIXER_ESCALATION_BLOCK"] = (
+            "Report it for owner escalation (see Payload contract) with the id and why."
+        )
     else:
         ph["FIXER_STEP_5_BLOCK"] = (
             "5. Report back per the result contract the runner appends at dispatch — "
             "not a graded shape in this order. The orchestrator derives the `fixes` "
             "record from git; you are not asked to emit it."
+        )
+        ph["FIXER_ESCALATION_BLOCK"] = (
+            "Report it for owner escalation via the runner's native write-result contract "
+            "the runner appends at dispatch: set `signal` to `needs_context`, name the "
+            "finding id and why in `report`, and write the graded JSON object to the "
+            "result file when the contract names one."
         )
     return ph
 

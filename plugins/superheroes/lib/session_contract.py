@@ -42,6 +42,8 @@ __all__ = (
     "disposition_ledger_owner_classification",
     "MERGED_INTO_FIELD",
     "RAISED_ROUND_FIELD",
+    "RAISED_SEQ_FIELD",
+    "DISPOSITION_SEQ_FIELD",
     "DISPOSITION_FAMILY_FIELDS",
     "has_disposition_family",
     "disposition_family_snapshot",
@@ -73,12 +75,16 @@ __all__ = (
     "journal_is_re_emit_orders_superseded",
 )
 
+RAISED_ROUND_FIELD = "raisedRound"
+RAISED_SEQ_FIELD = "raisedSeq"
+DISPOSITION_SEQ_FIELD = "dispositionSeq"
+
 # Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
 TRANSIENT_FINDING_FIELDS = frozenset({
     "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
     "disposition", "dispositionReceipt",
     "dispositionRound", "refutedReason", "outOfScopeReason", "followUp", "mergedInto",
-    "raisedRound", "raisedSeq", "dispositionSeq",
+    RAISED_ROUND_FIELD, RAISED_SEQ_FIELD, DISPOSITION_SEQ_FIELD,
 })
 
 # Result kind a write run's execution record carries — binds the run's own report, not a payload key.
@@ -282,7 +288,6 @@ def disposition_ledger_owner_classification(state):
     if value == DISPOSITION_LEDGER_OWNER_VALUE:
         return DISPOSITION_LEDGER_OWNER_RECOGNIZED
     return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
-RAISED_ROUND_FIELD = "raisedRound"
 DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
     "outOfScopeReason", "followUp", MERGED_INTO_FIELD,
