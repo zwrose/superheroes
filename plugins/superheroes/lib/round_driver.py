@@ -3690,8 +3690,9 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
 
     May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
     setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
-    the batch was emptied by discharge exclusion and the round was settled, or ``"faulted"`` when
-    a disposition-ledger read fault parked the session.
+    the batch was emptied by discharge exclusion (settling the round only when ``batch_index``
+    is 0; on a continuation the caller enters post-fix), or ``"faulted"`` when a disposition-
+    ledger read fault parked the session.
     """
     cap = _fix_batch_cap(config)
     if reset_accumulator:
@@ -3702,11 +3703,18 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         _park_cannot_certify(state, ledger_fault.detail)
         return "faulted"
     if offered_nonempty and not filtered:
-        _record_round(state, "fixBatchExcludedByDischarge", len(rows))
-        _decision(state, "fix-batch-excluded",
-                  "fix batch emptied by discharged-finding exclusion — "
-                  "without fixer dispatch")
-        _resolve_empty_fix_batch_convergence(state, config)
+        rec = state["rounds"].setdefault(str(state["round"]), {})
+        prior = rec.get("fixBatchExcludedByDischarge") or 0
+        _record_round(state, "fixBatchExcludedByDischarge", prior + len(rows))
+        if batch_index == 0:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "without fixer dispatch")
+            _resolve_empty_fix_batch_convergence(state, config)
+        else:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "remaining queue exhausted, the round proceeds to post-fix")
         return "excluded"
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
@@ -3866,7 +3874,9 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
             _decision(state, "fix-batch-split",
                       "fix batch slice %d of this round dispatched (%d findings; %d queued)"
                       % (index + 1, done, queued))
-        return
+            return
+        if status == "faulted":
+            return
     state.pop("_escalatedRung", None)
     state.pop("_fixQueue", None)
     state.pop("_fixBatchIndex", None)

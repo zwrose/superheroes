@@ -269,7 +269,7 @@ def test_l3_a2_control_open_blocker_reaches_fixer():
     assert state["_fixBatch"]
 
 
-def test_l3_a2_fold_fixer_excluded_continuation_records_no_split():
+def test_l3_a2_excluded_continuation_enters_post_fix_verify_and_audits():
     state = RD.new_state(_cfg())
     discharged, _ = _stage_and_discharge(state)
     open_compiled, _ = _compile_one(
@@ -283,9 +283,66 @@ def test_l3_a2_fold_fixer_excluded_continuation_records_no_split():
     state["decisions"] = []
     config = _cfg()
     RD._fold_fixer(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
+    assert state["step"] == RD.P_AUDITS
+    assert state["round"] == 2
+    assert state["_verifyThen"] == RD.VERIFY_THEN_POST_AUDITS
+    assert state["terminal"] is None
+    assert state["rounds"]["2"]["roundKind"] == "delta"
+    audit_targets = [(t["file"], t["line"]) for t in state["_auditTargets"]]
+    assert audit_targets == [("g.py", 2)]
+    assert not any(d["kind"] == "converged" for d in state["decisions"])
     assert not any(d["kind"] == "fix-batch-split" for d in state["decisions"])
-    assert any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
-    assert state["step"] != RD.P_FIXER
+    excluded = [d for d in state["decisions"] if d["kind"] == "fix-batch-excluded"]
+    assert len(excluded) == 1
+    assert state["rounds"]["1"]["fixBatchExcludedByDischarge"] == 1
+
+
+def test_l3_a2_excluded_count_accumulates_across_slices():
+    state = RD.new_state(_cfg(fixBatchCap=1))
+    discharged_a, _ = _stage_and_discharge(state)
+    discharged_b, key_b = _compile_one(
+        {"file": "h.py", "line": 3, "title": "gone", "severity": "Important"})
+    RD._stage_findings(state, [discharged_b])
+    RD._record_disposition(state, key_b, "fixed", 1,
+                           dispositionReceipt={"headSha": "d" * 40})
+    open_compiled, _ = _compile_one(
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+    RD._stage_findings(state, [open_compiled])
+    state["round"] = 1
+    state["rounds"] = {"1": {}}
+    config = _cfg(fixBatchCap=1)
+    RD._queue_fix_batch(state, config, [_fix_row(discharged_a)])
+    assert state["rounds"]["1"]["fixBatchExcludedByDischarge"] == 1
+    state["terminal"] = None
+    RD._queue_fix_batch(state, config, [_fix_row(open_compiled)])
+    assert state["_fixBatch"] == [_fix_row(open_compiled)]
+    assert state["step"] == RD.P_FIXER
+    state["_fixQueue"] = [_fix_row(discharged_b)]
+    state["_fixBatchIndex"] = 0
+    state["decisions"] = []
+    RD._fold_fixer(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
+    assert state["rounds"]["1"]["fixBatchExcludedByDischarge"] == 2
+
+
+def test_l3_a2_continuation_ledger_fault_parks():
+    state = RD.new_state(_cfg())
+    discharged, _ = _stage_and_discharge(state)
+    open_compiled, _ = _compile_one(
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+    RD._stage_findings(state, [open_compiled])
+    state["round"] = 1
+    state["rounds"] = {"1": {}}
+    state["_fixBatch"] = [_fix_row(open_compiled)]
+    state["_fixQueue"] = [_fix_row(discharged)]
+    state["_fixBatchIndex"] = 0
+    state["dispositionLedger"] = "not-a-list"
+    state["decisions"] = []
+    config = _cfg()
+    RD._fold_fixer(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
+    assert state["step"] == RD.P_TERMINAL
+    assert state["terminal"] == "cannot-certify"
+    assert state["round"] != 2
+    assert state.get("_verifyThen") != RD.VERIFY_THEN_POST_AUDITS
 
 
 def test_l3_a2_fold_fixer_queued_continuation_records_one_split():
@@ -382,6 +439,41 @@ def test_l3_a3_stale_round_baseline_refuses(monkeypatch):
     state["fixBatch"] = _fix_batch()
     RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
     _assert_delta_baseline_refusal(state)
+
+
+def test_l3_a3_non_record_baseline_refuses(monkeypatch):
+    def _split_must_not_run(*_args, **_kwargs):
+        raise AssertionError("split_fix_surface must not run when baseline is not a record")
+
+    monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
+    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    state["round"] = 2
+    state["deltaBaseline"] = ["x"]
+    state["reviewedDiff"] = _HEAD_DIFF
+    state["headDiff"] = _HEAD_DIFF
+    state["fixBatch"] = _fix_batch()
+    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    _assert_delta_baseline_refusal(state)
+
+
+def test_l3_a3_empty_text_baseline_is_a_valid_baseline(monkeypatch):
+    captured = {}
+    real_split = RD.delta_surface.split_fix_surface
+
+    def _capture_split(reviewed, head, fix_batch):
+        captured["reviewed"] = reviewed
+        return real_split(reviewed, head, fix_batch)
+
+    monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _capture_split)
+    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    state["round"] = 2
+    state["deltaBaseline"] = {"round": 2, "diff": ""}
+    state["reviewedDiff"] = _HEAD_DIFF
+    state["headDiff"] = _HEAD_DIFF
+    state["fixBatch"] = _fix_batch()
+    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    assert captured["reviewed"] == ""
+    assert state["rounds"]["2"]["roundKind"] != "full-panel-unknown-surface"
 
 
 def test_l3_a3_non_text_baseline_refuses(monkeypatch):
