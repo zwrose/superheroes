@@ -3662,8 +3662,6 @@ def _excluded_discharged_fix_row(ledger_by_key, row):
     raised_is_int = isinstance(raised_seq, int) and not isinstance(raised_seq, bool)
     if disp_is_int and raised_is_int:
         return disp_seq > raised_seq
-    if disp_seq is None and raised_seq is None:
-        return True
     return False
 
 

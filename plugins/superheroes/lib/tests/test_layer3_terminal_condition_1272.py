@@ -70,6 +70,7 @@ def _stage_and_discharge(state, round_no=1):
 # --- A1: exclusion chokepoint -------------------------------------------------
 
 def test_l3_a1_excludes_discharged_row():
+    """axis: stamped ledger row with dispositionSeq > raisedSeq is excluded."""
     state = RD.new_state(_cfg())
     compiled, key = _stage_and_discharge(state)
     config = _cfg()
@@ -162,6 +163,22 @@ def test_l3_a1_edge_no_identity_key_no_exclusion():
     assert state["step"] == RD.P_FIXER
 
 
+def test_l3_a1_legacy_stamp_less_fixed_row_stays_in_batch():
+    """axis: legacy ledger row with disposition fixed but no sequence stamps stays in batch."""
+    compiled, key = _compile_one()
+    state = RD.new_state(_cfg())
+    state["round"] = 1
+    RD._stage_findings(state, [compiled])
+    entry = _ledger_by_key(state)[key]
+    entry["disposition"] = "fixed"
+    entry.pop("raisedSeq", None)
+    entry.pop("dispositionSeq", None)
+    config = _cfg()
+    RD._queue_fix_batch(state, config, [_fix_row(compiled)])
+    assert state["_fixBatch"]
+    assert state["step"] == RD.P_FIXER
+
+
 def test_l3_a1_edge_disposition_seq_without_raised_seq_no_exclusion():
     compiled, key = _compile_one()
     state = RD.new_state(_cfg())
@@ -250,6 +267,45 @@ def test_l3_a2_control_open_blocker_reaches_fixer():
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
     assert state["step"] == RD.P_FIXER
     assert state["_fixBatch"]
+
+
+def test_l3_a2_fold_fixer_excluded_continuation_records_no_split():
+    state = RD.new_state(_cfg())
+    discharged, _ = _stage_and_discharge(state)
+    open_compiled, _ = _compile_one(
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+    RD._stage_findings(state, [open_compiled])
+    state["round"] = 1
+    state["rounds"] = {"1": {}}
+    state["_fixBatch"] = [_fix_row(open_compiled)]
+    state["_fixQueue"] = [_fix_row(discharged)]
+    state["_fixBatchIndex"] = 0
+    state["decisions"] = []
+    config = _cfg()
+    RD._fold_fixer(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
+    assert not any(d["kind"] == "fix-batch-split" for d in state["decisions"])
+    assert any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
+    assert state["step"] != RD.P_FIXER
+
+
+def test_l3_a2_fold_fixer_queued_continuation_records_one_split():
+    open_a, _ = _compile_one(
+        {"file": "a.py", "line": 1, "title": "a", "severity": "Important"})
+    open_b, _ = _compile_one(
+        {"file": "b.py", "line": 2, "title": "b", "severity": "Important"})
+    state = RD.new_state(_cfg(fixBatchCap=1))
+    state["round"] = 1
+    state["rounds"] = {"1": {}}
+    RD._stage_findings(state, [open_a, open_b])
+    state["_fixBatch"] = [_fix_row(open_a)]
+    state["_fixQueue"] = [_fix_row(open_b)]
+    state["_fixBatchIndex"] = 0
+    state["decisions"] = []
+    config = _cfg(fixBatchCap=1)
+    RD._fold_fixer(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
+    splits = [d for d in state["decisions"] if d["kind"] == "fix-batch-split"]
+    assert len(splits) == 1
+    assert state["step"] == RD.P_FIXER
 
 
 # --- A3: delta split reads per-round reviewed baseline ------------------------
