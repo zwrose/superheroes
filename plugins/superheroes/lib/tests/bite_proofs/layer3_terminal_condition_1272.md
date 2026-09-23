@@ -47,7 +47,8 @@ E        +    where <built-in method get of dict object at 0x102bd77c0> = {'_cha
 plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:78: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a1_excludes_discharged_row
-1 failed in 0.16s```
+1 failed in 0.16s
+```
 
 **Restore (quoted restored lines):**
 
@@ -59,7 +60,8 @@ return disp_seq > raised_seq
 
 ```
 .                                                                        [100%]
-1 passed in 0.15s```
+1 passed in 0.15s
+```
 
 ## A2 — empty-after-filter convergence
 
@@ -102,7 +104,8 @@ E        +    where <built-in method get of dict object at 0x1072f5f40> = {'fixB
 plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:315: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a2_empty_batch_converges_on_the_paths_own_resolver
-1 failed in 0.17s```
+1 failed in 0.17s
+```
 
 **Restore (quoted restored lines):**
 
@@ -118,7 +121,8 @@ if batch_index == 0:
 
 ```
 .                                                                        [100%]
-1 passed in 0.15s```
+1 passed in 0.15s
+```
 
 ## A3 — delta split reads per-round reviewed baseline
 
@@ -173,7 +177,8 @@ E         ...Full output truncated (14 lines hidden), use '-vv' to show
 plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:484: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a3_delta_split_reads_per_round_reviewed_diff
-1 failed in 0.17s```
+1 failed in 0.17s
+```
 
 **Restore (quoted restored lines):**
 
@@ -186,7 +191,8 @@ split = delta_surface.split_fix_surface(
 
 ```
 .                                                                        [100%]
-1 passed in 0.15s```
+1 passed in 0.15s
+```
 
 ## BP-v0 — delta empty-batch must re-arm confirmation, not terminal-converge
 
@@ -241,7 +247,8 @@ E         + terminal
 plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:194: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation
-1 failed in 0.17s```
+1 failed in 0.17s
+```
 
 **Restore (quoted restored lines):**
 
@@ -255,7 +262,8 @@ if round_rec.get("roundKind") == "delta":
 
 ```
 .                                                                        [100%]
-1 passed in 0.15s```
+1 passed in 0.15s
+```
 
 ## BP-v1-stage — same-round dispositionSeq carry must not survive staging
 
@@ -307,7 +315,8 @@ E       AssertionError: assert 'dispositionSeq' not in {'classification': 'mecha
 plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:144: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a1_caller_supplied_sequence_stamps_stripped_on_reraise[1]
-1 failed in 0.16s```
+1 failed in 0.16s
+```
 
 **Restore (quoted restored lines):**
 
@@ -324,7 +333,8 @@ if (isinstance(existing, dict)
 
 ```
 .                                                                        [100%]
-1 passed in 0.15s```
+1 passed in 0.15s
+```
 
 ## BP-v1-backfill — record sequence stamps must not survive backfill
 
@@ -367,7 +377,8 @@ E       AssertionError: assert 'dispositionSeq' not in {'dispositionSeq': 999, '
 plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:167: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a1_backfill_strips_record_sequence_stamps
-1 failed in 0.17s```
+1 failed in 0.17s
+```
 
 **Restore (quoted restored lines):**
 
@@ -382,4 +393,5 @@ entry = _strip_disposition_family(dict(finding))
 
 ```
 .                                                                        [100%]
-1 passed in 0.15s```
+1 passed in 0.15s
+```

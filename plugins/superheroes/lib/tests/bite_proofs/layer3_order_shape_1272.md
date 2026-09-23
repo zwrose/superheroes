@@ -50,7 +50,8 @@ E         ...Full output truncated (14 lines hidden), use '-vv' to show
 plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py:114: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d1_engine_fixer_order_names_no_result_shape
-1 failed in 0.15s```
+1 failed in 0.15s
+```
 
 **Restore (quoted restored lines):**
 
@@ -62,7 +63,8 @@ if phase != round_phases.P_FIXER or context.get("host_seat"):
 
 ```
 .                                                                        [100%]
-1 passed in 0.14s```
+1 passed in 0.14s
+```
 
 ## D1b — host-seat fixer order still carries the payload-contract block
 
@@ -94,7 +96,8 @@ E       AssertionError: assert '## Payload contract' in 'You are the fixer for o
 plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py:104: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d1_host_fixer_order_names_required_payload_shape
-1 failed in 0.15s```
+1 failed in 0.15s
+```
 
 **Restore (quoted restored lines):**
 
@@ -106,7 +109,8 @@ if phase != round_phases.P_FIXER or context.get("host_seat"):
 
 ```
 .                                                                        [100%]
-1 passed in 0.17s```
+1 passed in 0.17s
+```
 
 ## D1c — engine fixer escalation block carries no `see Payload contract`
 
@@ -153,7 +157,8 @@ E         ...Full output truncated (11 lines hidden), use '-vv' to show
 plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py:116: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d1_engine_fixer_order_names_no_result_shape
-1 failed in 0.15s```
+1 failed in 0.15s
+```
 
 **Restore (quoted restored lines):**
 
@@ -170,7 +175,8 @@ ph["FIXER_ESCALATION_BLOCK"] = (
 
 ```
 .                                                                        [100%]
-1 passed in 0.14s```
+1 passed in 0.14s
+```
 
 ## D2 — lint arm fires at production emission (no expect_items)
 
@@ -211,7 +217,8 @@ E       assert True is False
 plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py:166: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d2_production_emission_refuses_the_old_order_text
-1 failed in 0.15s```
+1 failed in 0.15s
+```
 
 **Restore (quoted restored lines):**
 
@@ -228,4 +235,5 @@ if kind == "fixer":
 
 ```
 .                                                                        [100%]
-1 passed in 0.14s```
+1 passed in 0.14s
+```

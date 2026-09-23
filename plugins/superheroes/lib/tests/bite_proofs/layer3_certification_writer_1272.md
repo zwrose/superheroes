@@ -42,7 +42,8 @@ E           assert None is not None
 plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py:126: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py::test_l3_b1_write_stamp_out_of_phase_refused
-1 failed in 0.09s```
+1 failed in 0.09s
+```
 
 **Restore (quoted restored lines):**
 
@@ -55,7 +56,8 @@ if not session_contract.execution_only_admissible_for_phase(phase):
 
 ```
 .                                                                        [100%]
-1 passed in 0.08s```
+1 passed in 0.08s
+```
 
 ## B2 — non-blocking survivor disclosed, not refused
 
@@ -119,7 +121,8 @@ E       AssertionError: assert {'artifact': 'M1', 'bindingFailure': None, 'class
 plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py:233: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py::test_l3_b2_nonblocking_survivor_disclosed_not_refused
-1 failed in 0.09s```
+1 failed in 0.09s
+```
 
 **Restore (quoted restored lines):**
 
@@ -152,7 +155,8 @@ if not _supports_nonblocking_disclosure(state):
 
 ```
 .                                                                        [100%]
-1 passed in 0.08s```
+1 passed in 0.08s
+```
 
 ## B3 — Critical may not take the non-blocking path
 
@@ -193,7 +197,8 @@ E       assert None is not None
 plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py:309: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py::test_l3_b3_critical_may_not_take_the_nonblocking_path
-1 failed in 0.09s```
+1 failed in 0.09s
+```
 
 **Restore (quoted restored lines):**
 
@@ -211,7 +216,8 @@ if severity_rank == _severity_rank("Critical"):
 
 ```
 .                                                                        [100%]
-1 passed in 0.08s```
+1 passed in 0.08s
+```
 
 ## B4 — pre-v5 session refuses undispositioned Minor
 
@@ -260,7 +266,8 @@ E       assert None is not None
 plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py:263: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py::test_l3_b4_pre_v5_session_refuses_undispositioned_minor
-1 failed in 0.09s```
+1 failed in 0.09s
+```
 
 **Restore (quoted restored lines):**
 
@@ -277,7 +284,8 @@ if not _supports_nonblocking_disclosure(state):
 
 ```
 .                                                                        [100%]
-1 passed in 0.08s```
+1 passed in 0.08s
+```
 
 ## B5 — pre-v5 receipt carries no survivingNonBlocking key
 
@@ -340,7 +348,8 @@ E       AssertionError: assert 'survivingNonBlocking' in {'importantOutOfScope':
 plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py:300: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_certification_writer_1272.py::test_l3_b5_pre_v5_receipt_carries_no_surviving_nonblocking
-1 failed in 0.09s```
+1 failed in 0.09s
+```
 
 **Restore (quoted restored lines):**
 
@@ -353,7 +362,8 @@ if _supports_nonblocking_disclosure(state):
 
 ```
 .                                                                        [100%]
-1 passed in 0.09s```
+1 passed in 0.09s
+```
 
 ## Unreachable-guard disclosure — `_build_receipt` findings filter
 
