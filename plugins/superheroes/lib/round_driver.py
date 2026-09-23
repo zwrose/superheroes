@@ -9128,6 +9128,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             "vendor": row["vendor"],
             "model": row["model"],
             "engine": row["engine"],
+            "channel": _seat_channel(phase, row),
             "resultContract": _seat_result_schema(state),
             "orderSha256": order_sha,
             "orderPath": paths["order_path"],
