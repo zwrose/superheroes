@@ -9160,6 +9160,9 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             "vendor": row["vendor"],
             "model": row["model"],
             "engine": row["engine"],
+            # The channel this seat's order was rendered for — the certification writer reads a
+            # host channel here, never a vendor label, as the fact that no runner observed the seat.
+            "channel": _seat_channel(phase, row),
             "resultContract": _seat_result_schema(state),
             "orderSha256": order_sha,
             "orderPath": paths["order_path"],

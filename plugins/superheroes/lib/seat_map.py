@@ -12,6 +12,7 @@ import itertools
 import math
 
 import liveness_cache
+import session_contract
 from model_registry import family_for, is_allowed, matrix_config, vendors
 
 LIVE_CELLS_SOURCES = liveness_cache.LIVE_CELLS_SOURCES
@@ -1112,7 +1113,24 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
     }
+    no_record = no_runner_record_seats(seat_map)
+    if no_record:
+        out["noRunnerRecordSeats"] = no_record
     return out
+
+
+def no_runner_record_seats(seat_map: dict) -> list:
+    """Seats the review driver dispatches on the host channel, so no runner record can prove they
+    ran: a certification never rests on them, and its receipt names each one that lands without
+    execution evidence. A statement of capability, read from the configuration alone."""
+    seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
+    if not isinstance(seats, dict):
+        return []
+    return sorted(
+        seat for seat, cell in seats.items()
+        if isinstance(cell, dict)
+        and not session_contract.runner_record_vendor(cell.get("vendor"), vendors())
+    )
 
 
 def build_parser():

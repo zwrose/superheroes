@@ -87,6 +87,14 @@ ORDERS_DIRNAME = "orders"
 
 BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND = "execution-evidence-head-unbound"
 BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE = "certified-head-unresolvable"
+BINDING_FAILURE_NO_RUNNER_PROVEN_PANEL_SEAT = "no-runner-proven-panel-seat"
+
+# What proves a recorded seat ran, as each receipt seat row names it (#1272 layer 4a).
+SEAT_PROOF_RUNNER_RECORD = "runner-record"
+SEAT_PROOF_HAND_LANDED = "hand-landed-evidence"
+SEAT_PROOF_NONE_HOST_SEAT = "none-host-seat"
+# The driver's host (file-landing) channel as its orders manifest records each seat's channel.
+SEAT_CHANNEL_HOST = "file"
 
 RECEIPT_FORM_CERTIFIED = receipt_disclosures.RECEIPT_FORM_CERTIFIED
 VENDOR_SOURCE_DEFAULTED = "defaulted"
@@ -780,6 +788,84 @@ def _roster_from_orders_emitted(session_dir, event):
     return roster
 
 
+def _manifest_seat_entry(ctx, seat_entry):
+    """The driver-written orders-manifest entry for one recorded seat — authenticated against the
+    last `orders-emitted` journal row for its round, phase and attempt — or None."""
+    phase, rnd, attempt = seat_entry.get("phase"), seat_entry.get("round"), seat_entry.get("attempt")
+    emitted = None
+    for event in ctx["journal"]:
+        if (event.get("outcome") == "orders-emitted" and event.get("phase") == phase
+                and event.get("round") == rnd and event.get("attempt") == attempt):
+            emitted = event
+    if emitted is None or phase is None or rnd is None or attempt is None:
+        return None
+    manifest = _read_json(_orders_manifest_path(ctx["session_dir"], rnd, phase, attempt))
+    if not isinstance(manifest, dict):
+        return None
+    sha = emitted.get("manifestSha256")
+    if not isinstance(sha, str) or sha != session_contract.sha256_text(
+            session_contract.canonical(manifest)):
+        return None
+    seats = manifest.get("seats")
+    for entry in (seats.values() if isinstance(seats, dict) else ()):
+        if (isinstance(entry, dict) and entry.get("seat") == seat_entry.get("seat")
+                and entry.get("occurrence", 0) == seat_entry.get("occurrence", 0)):
+            return entry
+    return None
+
+
+def _seat_carries_execution_evidence(ctx, seat_entry):
+    """False only when a dispatch-observed or hand-landed seat demonstrably carries no execution
+    evidence at all; anything unreadable counts as carrying it, so the evidence checks still run."""
+    provenance = seat_entry.get("provenance")
+    if provenance == PROVENANCE_DISPATCH_OBSERVED:
+        return _journal_observation_for_seat(
+            ctx["journal"], seat_entry["seat"], seat_entry.get("phase"), seat_entry["attempt"],
+            seat_entry.get("occurrence", 0), seat_entry["round"]) is not None
+    if provenance == PROVENANCE_HAND_LANDED:
+        env, _path = _load_envelope(ctx["session_dir"], seat_entry["round"], seat_entry["phase"],
+                                    seat_entry["seat"], seat_entry["attempt"],
+                                    seat_entry.get("occurrence", 0))
+        return not isinstance(env, dict) or "executionEvidence" in env
+    return True
+
+
+def uncertified_host_seat(ctx, seat_entry):
+    """True when a recorded seat sits OUT of the certified panel: the driver handed it the host
+    channel (its authenticated orders manifest says so — a vendor label alone is not host evidence)
+    and it carries no execution evidence. Such a seat proves nothing about having run, so no
+    certification rests on it and the receipt names it. Audits and the fixer are never out: their
+    landings carry their own proof obligations."""
+    # axis: only a manifest-recorded host channel with evidence absent leaves the certified panel
+    if seat_entry.get("phase") in (P_AUDITS, P_FIXER):
+        return False
+    if seat_entry.get("provenance") not in RECEIPT_PROVENANCE:
+        return False
+    if _seat_carries_execution_evidence(ctx, seat_entry):
+        return False
+    entry = _manifest_seat_entry(ctx, seat_entry)
+    return isinstance(entry, dict) and entry.get("channel") == SEAT_CHANNEL_HOST
+
+
+def _panel_round_without_runner_proof(ctx, seats):
+    """A refusal when some panel round's every seat sits out of the certified panel — exclusion
+    never leaves a round certified on nothing."""
+    by_round = {}
+    for seat_entry in seats:
+        if seat_entry.get("phase") == PANEL_PHASE:
+            by_round.setdefault(seat_entry["round"], []).append(seat_entry)
+    for rnd in sorted(by_round, key=str):
+        if all(uncertified_host_seat(ctx, s) for s in by_round[rnd]):
+            return _refusal(
+                "unrun-review",
+                by_round[rnd][0]["seat"],
+                "panel round %s has no seat whose run is proven; every seat is a host seat "
+                "without execution evidence" % (rnd,),
+                binding_failure=BINDING_FAILURE_NO_RUNNER_PROVEN_PANEL_SEAT,
+            )
+    return None
+
+
 def _journal_open_seats(journal, session_dir=None):
     """Seats opened by advance/next for a dispatch phase but never recorded — incomplete journal.
 
@@ -1132,6 +1218,8 @@ def check_unrun_review(ctx):
         slot_nonces = _journal_recorded_runner_nonces_for_slot(
             journal, seat, phase, attempt, occurrence, rnd
         )
+        if uncertified_host_seat(ctx, seat_entry):
+            continue
         if provenance not in RECEIPT_PROVENANCE:
             if provenance == PROVENANCE_ORCHESTRATOR_FULFILLED:
                 return _refusal(
@@ -1208,7 +1296,7 @@ def check_unrun_review(ctx):
                     "hand-landed seat lacks qualifying execution-evidence binding",
                     binding_failure=binding,
                 )
-    return None
+    return _panel_round_without_runner_proof(ctx, seats)
 
 
 def check_same_family_seat(ctx):
@@ -1677,6 +1765,8 @@ def check_hand_landed_read_engaged(ctx):
     for seat_entry in _collect_seats(ctx):
         if seat_entry.get("provenance") != PROVENANCE_HAND_LANDED:
             continue
+        if uncertified_host_seat(ctx, seat_entry):
+            continue
         env, path = _load_envelope(
             session_dir,
             seat_entry["round"],
@@ -1718,6 +1808,8 @@ def check_evidence_head_bound(ctx):
         )
     for seat_entry in _collect_seats(ctx):
         if seat_entry.get("provenance") != PROVENANCE_DISPATCH_OBSERVED:
+            continue
+        if uncertified_host_seat(ctx, seat_entry):
             continue
         cited_head = seat_entry.get("citedHead")
         if cited_head:
@@ -1981,10 +2073,50 @@ def _build_receipt_rounds(state, form):
 
 
 
+def _receipt_seat_row(ctx, seat_entry):
+    """One receipt seat row: where the seat sat, its provenance, and what proves it ran. An audit
+    row also names the auditor — the vendor the runner recorded and the model the driver seated."""
+    row = {
+        "seat": seat_entry["seat"],
+        "phase": seat_entry["phase"],
+        "round": seat_entry["round"],
+        "attempt": seat_entry["attempt"],
+        "provenance": seat_entry.get("provenance"),
+    }
+    if uncertified_host_seat(ctx, seat_entry):
+        row["proof"] = SEAT_PROOF_NONE_HOST_SEAT
+    elif seat_entry.get("provenance") == PROVENANCE_DISPATCH_OBSERVED:
+        row["proof"] = SEAT_PROOF_RUNNER_RECORD
+    elif seat_entry.get("provenance") == PROVENANCE_HAND_LANDED:
+        row["proof"] = SEAT_PROOF_HAND_LANDED
+    if seat_entry.get("phase") == P_AUDITS:
+        obs = _journal_observation_for_seat(
+            ctx["journal"], seat_entry["seat"], seat_entry["phase"], seat_entry["attempt"],
+            seat_entry.get("occurrence", 0), seat_entry["round"])
+        entry = _manifest_seat_entry(ctx, seat_entry) or {}
+        row["vendor"] = _runner_recorded_vendor_status(obs, ctx["session_dir"], seat_entry)
+        row["model"] = entry.get("model")
+    return row
+
+
+def _uncertified_seat_disclosures(ctx):
+    out = []
+    for seat_entry in _collect_seats(ctx):
+        if uncertified_host_seat(ctx, seat_entry):
+            entry = _manifest_seat_entry(ctx, seat_entry) or {}
+            out.append({"seat": seat_entry["seat"], "phase": seat_entry["phase"],
+                        "round": seat_entry["round"], "attempt": seat_entry["attempt"],
+                        "vendor": entry.get("vendor"), "proof": SEAT_PROOF_NONE_HOST_SEAT})
+    return out
+
+
 def _receipt_disclosures(ctx, state):
     disclosures = {
         "importantOutOfScope": list(ctx.get("important_disclosures") or []),
     }
+    uncertified = _uncertified_seat_disclosures(ctx)
+    if uncertified:
+        disclosures["uncertifiedSeats"] = uncertified
     if _supports_nonblocking_disclosure(state):
         disclosures["survivingNonBlocking"] = list(ctx.get("nonblocking_disclosures") or [])
     return disclosures
@@ -1996,16 +2128,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     cfg = state.get("config") or {}
     form = RECEIPT_FORM_CERTIFIED
     seats_info = _collect_seats(ctx)
-    seat_rows = [
-        {
-            "seat": s["seat"],
-            "phase": s["phase"],
-            "round": s["round"],
-            "attempt": s["attempt"],
-            "provenance": s.get("provenance"),
-        }
-        for s in seats_info
-    ]
+    seat_rows = [_receipt_seat_row(ctx, s) for s in seats_info]
     by_key, marker_refusal = _certification_findings_by_key(state)
     if marker_refusal is not None:
         return None, marker_refusal

@@ -198,3 +198,150 @@ def test_l4a_2_a_claude_only_durable_session_refuses_the_audit_order_before_disp
     assert again["ok"] is False and again["detail"] == out["detail"]
     audits_dir = os.path.join(session_dir, "round-%d" % state["round"], "orders", RD.P_AUDITS)
     assert not os.path.exists(audits_dir)
+
+
+# --- item 3: a host seat with no execution evidence sits out of the certified panel ---------------
+
+import round_certification as RC  # noqa: E402
+import round_records as RR  # noqa: E402
+from round_certification_fixtures import (  # noqa: E402
+    DEFAULT_PANEL_PAYLOAD_SHA, HEAD_SHA, _default_journal_row, write_session)
+
+_HOST = "test-reviewer"
+
+
+def _host_envelope():
+    payload = {"findings": []}
+    return {"schema": RR.SEAT_RESULT_SCHEMA_V2, "session": "test-session-001", "round": 1,
+            "phase": RC.PANEL_PHASE, "seat": _HOST, "attempt": 0, "vendor": "claude",
+            "model": "opus-5", "payload": payload, "payloadSha256": RR.payload_sha256(payload),
+            "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+            "envelopeSha256": RR.envelope_sha256(payload, None)}
+
+
+def _host_row(seat=_HOST):
+    return {"cmd": "record-result", "outcome": "recorded", "phase": RC.PANEL_PHASE, "round": 1,
+            "attempt": 0, "seat": seat, "occurrence": 0,
+            "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+            "payloadSha256": RR.payload_sha256({"findings": []}), "headSha": HEAD_SHA,
+            "recordIdentity": {"phase": RC.PANEL_PHASE, "seat": seat, "occurrence": 0,
+                               "attempt": 0}}
+
+
+def _manifest(host_channel="file", drop_channel=False, engine_seat=True):
+    seats = {}
+    if engine_seat:
+        seats["code-reviewer-k"] = {"seat": "code-reviewer", "occurrence": 0, "vendor": "codex",
+                                    "model": "gpt-5.6-sol", "engine": None, "channel": "stdout"}
+    host = {"seat": _HOST, "occurrence": 0, "vendor": "claude", "model": "opus-5",
+            "engine": None, "channel": host_channel}
+    if drop_channel:
+        host.pop("channel")
+    seats[_HOST + "-k"] = host
+    return {"schema": "orders-manifest/1", "session": "test-session-001", "round": 1,
+            "phase": RC.PANEL_PHASE, "attempt": 0, "orders": "not-emitted", "seats": seats}
+
+
+def _session_with_host_seat(tmp_path, name="host", manifest=None, tamper=None,
+                            engine_seat=True):
+    manifest = manifest if manifest is not None else _manifest(engine_seat=engine_seat)
+    sha = SC.sha256_text(SC.canonical(manifest))
+    emitted = {"cmd": "next", "outcome": "orders-emitted", "phase": RC.PANEL_PHASE, "round": 1,
+               "attempt": 0, "manifestSha256": sha}
+    rows = [emitted] + ([_default_journal_row()] if engine_seat else []) + [_host_row()]
+    envelopes = [{"seat": _HOST, "envelope": _host_envelope()}]
+    if engine_seat:
+        envelopes.insert(0, {"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA})
+    session_dir = write_session(tmp_path, name=name, journal_lines=rows, envelopes=envelopes)
+    written = dict(manifest, **(tamper or {}))
+    path = RC._orders_manifest_path(session_dir, 1, RC.PANEL_PHASE, 0)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(written, fh, sort_keys=True)
+    return session_dir
+
+
+def test_l4a_3_a_host_seat_without_evidence_leaves_the_panel_and_the_receipt_names_it(tmp_path):
+    receipt, refusal = RC.certify(_session_with_host_seat(tmp_path))
+    assert refusal is None, refusal
+    rows = {r["seat"]: r for r in receipt["seats"]}
+    assert rows["code-reviewer"]["proof"] == RC.SEAT_PROOF_RUNNER_RECORD
+    assert rows[_HOST]["proof"] == RC.SEAT_PROOF_NONE_HOST_SEAT
+    assert receipt["disclosures"]["uncertifiedSeats"] == [
+        {"seat": _HOST, "phase": RC.PANEL_PHASE, "round": 1, "attempt": 0, "vendor": "claude",
+         "proof": RC.SEAT_PROOF_NONE_HOST_SEAT}]
+
+
+def test_l4a_3_a_vendor_label_without_the_host_channel_still_refuses(tmp_path):
+    # a defaulted claude is rendered on stdout: the label is a guess, not host evidence
+    session_dir = _session_with_host_seat(tmp_path, manifest=_manifest(host_channel="stdout"))
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert (refusal["class"], refusal["artifact"], refusal["bindingFailure"]) == (
+        "unrun-review", _HOST, "execution-evidence-absent")
+
+
+def test_l4a_3_a_manifest_without_a_channel_exempts_nothing(tmp_path):
+    session_dir = _session_with_host_seat(tmp_path, manifest=_manifest(drop_channel=True))
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None and refusal["bindingFailure"] == "execution-evidence-absent"
+
+
+def test_l4a_3_a_manifest_edited_after_emission_exempts_nothing(tmp_path):
+    # hashed with the host seat on stdout, then rewritten to claim the host channel
+    session_dir = _session_with_host_seat(
+        tmp_path, manifest=_manifest(host_channel="stdout"),
+        tamper={"seats": _manifest(host_channel="file")["seats"]})
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None and refusal["class"] in ("unrun-review", "unfetched-findings"), refusal
+
+
+def test_l4a_3_a_panel_round_of_only_host_seats_refuses(tmp_path):
+    session_dir = _session_with_host_seat(tmp_path, engine_seat=False)
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert (refusal["class"], refusal["bindingFailure"]) == (
+        "unrun-review", RC.BINDING_FAILURE_NO_RUNNER_PROVEN_PANEL_SEAT)
+
+
+def test_l4a_3_audit_and_fixer_seats_never_leave_the_certified_panel(tmp_path):
+    session_dir = _session_with_host_seat(tmp_path)
+    ctx, refusal = RC._load_context(session_dir)
+    assert refusal is None
+    base = {"seat": _HOST, "round": 1, "attempt": 0, "occurrence": 0,
+            "provenance": RC.PROVENANCE_DISPATCH_OBSERVED}
+    assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.PANEL_PHASE)) is True
+    assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.P_AUDITS)) is False
+    assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.P_FIXER)) is False
+    assert RC.uncertified_host_seat(
+        ctx, dict(base, phase=RC.PANEL_PHASE, provenance="orchestrator-fulfilled")) is False
+
+
+def test_l4a_3_the_driver_records_each_seats_rendered_channel_in_the_orders_manifest(tmp_path):
+    session_dir = str(tmp_path / "chan")
+    os.makedirs(session_dir)
+    seat_map = {"seats": {dim: dict(cell) for dim, cell in _TDI.SEAT_MAP["seats"].items()}}
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex", "model": "gpt-5.6-sol",
+                                          "engine": "codex"}
+    out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": "d",
+                                    "fixerVendor": "claude", "seatMap": seat_map})
+    assert out["ok"], out
+    with open(RC._orders_manifest_path(session_dir, 1, RD.P_PANEL, 0), encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    channels = {e["seat"]: (e["vendor"], e["channel"]) for e in manifest["seats"].values()}
+    assert channels["code-reviewer"] == ("codex", "stdout")
+    assert channels["test-reviewer"] == ("claude", "file")
+    assert all(
+        ch == ("stdout" if RD._vendor_is_external_engine(v) else "file")
+        for v, ch in channels.values()), channels
+
+
+def test_l4a_3_the_seat_map_receipt_names_seats_no_runner_record_can_prove():
+    import seat_map as SM
+    seats = {"code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"},
+             "test-reviewer": {"vendor": "claude", "model": "opus-5"},
+             "premortem-reviewer": {"vendor": "claude", "model": "opus-5"}}
+    receipt = SM.to_receipt({"seats": seats, "liveVendors": ["claude", "codex"]}, "openai")
+    assert receipt["noRunnerRecordSeats"] == ["premortem-reviewer", "test-reviewer"]
+    engine_only = {"code-reviewer": seats["code-reviewer"]}
+    assert "noRunnerRecordSeats" not in SM.to_receipt({"seats": engine_only}, "anthropic")
