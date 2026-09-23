@@ -42,6 +42,8 @@ _land = _TDI._land
 _record = _TDI._record
 
 _REFUSAL = RD.DISCHARGE_PHASE_NATIVE_SEAT_REFUSAL
+_ADVANCE_REFUSAL = RD.ADVANCE_AUDIT_SEAT_NATIVE_REFUSAL
+_RECOVERY = "drive this session by hand next/submit, or configure a runner-backed auditor vendor"
 _HAND_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
 
 
@@ -116,41 +118,56 @@ def _prepared_latched_claude_audits_emit(tmp_path, name):
     return session_dir, state, seat, cfg, payload, pend, roster
 
 
-def test_edge1_latched_dispatch_audits_claude_refused_via_advance(tmp_path):
+def test_edge1_first_advance_claude_auditor_refused_before_fold(tmp_path):
+    """BP-1386-1: first `advance` refuses before `_advanceUsed` is set or state folds.
+
+    Neutralize `_advance_audit_seat_native_refusal` → red:
+    AssertionError: assert out['reason'] == 'advance-audit-seat-native'
+    (advance folds fixer and later refuses `order-render-refused` instead).
+    """
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="edge1-advance", **_claude_auditor_cfg())
     findings = [_blocking_finding("unchecked index", 2)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_FIXER)
-    manifest_before = _orders_manifest_path(session_dir)
+    before = _state_bytes(session_dir)
     assert not os.path.exists(
         RD._orders_manifest_path(session_dir, _state(session_dir)["round"], RD.P_AUDITS, 0))
     phase, out = _drive_one_phase(session_dir, gitdir, findings, head_path)
     assert phase == RD.P_FIXER
     assert out["ok"] is False
-    assert out["reason"] == "order-render-refused"
-    assert _REFUSAL in (out.get("detail") or "")
+    assert out["reason"] == _ADVANCE_REFUSAL
+    assert _RECOVERY in (out.get("detail") or "")
+    assert _state(session_dir).get("_advanceUsed") is None
+    assert _state_bytes(session_dir) == before
     assert not os.path.exists(
         RD._orders_manifest_path(session_dir, _state(session_dir)["round"], RD.P_AUDITS, 0))
 
 
-def test_edge1b_plain_next_after_refusal_still_refused(tmp_path):
+def test_edge1b_plain_next_after_advance_refusal_still_works(tmp_path):
+    """BP-1386-2: hand `next` after advance refusal is not latched out.
+
+    Neutralize the early refusal → red:
+    AssertionError: assert out['ok'] is True (cmd_next returns order-render-refused).
+    """
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="edge1b", **_claude_auditor_cfg())
     findings = [_blocking_finding("unchecked index", 2)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_FIXER)
     phase, out = _drive_one_phase(session_dir, gitdir, findings, head_path)
     assert phase == RD.P_FIXER
     assert out["ok"] is False
-    assert out["reason"] == "order-render-refused"
-    assert _REFUSAL in (out.get("detail") or "")
-    before = _state_bytes(session_dir)
+    assert out["reason"] == _ADVANCE_REFUSAL
+    assert _state(session_dir).get("_advanceUsed") is None
     out = RD.cmd_next(session_dir)
-    assert out["ok"] is False
-    assert out["reason"] == "order-render-refused"
-    assert _REFUSAL in (out.get("detail") or "")
-    assert _state_bytes(session_dir) == before
+    assert out["ok"] is True, out
+    assert _state(session_dir).get("_advanceUsed") is None
+    assert os.path.isfile(_orders_manifest_path(session_dir))
 
 
 def test_edge1c_re_emit_refused_on_latched_native_audits(tmp_path):
-    """cmd_re_emit and cmd_next both reach the emitter only through _emit_orders_manifest."""
+    """BP-1386-3: render-time backstop still refuses latched native audit seats.
+
+    Neutralize the `_build_order_render_context` guard → red:
+    ValueError not raised from `_emit_orders_manifest` on a latched claude-audits seat.
+    """
     session_dir, state, _seat, _cfg, payload, pend, roster = _prepared_latched_claude_audits_emit(
         tmp_path, "edge1c")
     state["_advanceUsed"] = True
@@ -161,6 +178,7 @@ def test_edge1c_re_emit_refused_on_latched_native_audits(tmp_path):
                                  seat_map=RD._effective_seat_map(state))
     assert "order-render-refused" in str(exc.value)
     assert _REFUSAL in str(exc.value)
+    assert _RECOVERY in str(exc.value)
     control = _state(session_dir)
     control.pop("_advanceUsed", None)
     RD._emit_orders_manifest(session_dir, control, pend["round"], RD.P_AUDITS, pend["attempt"],
@@ -169,6 +187,11 @@ def test_edge1c_re_emit_refused_on_latched_native_audits(tmp_path):
 
 
 def test_edge2_codex_auditor_emits_on_advance_path(tmp_path):
+    """BP-1386-4: runner-backed auditor sessions still fold on first `advance`.
+
+    Neutralize the early refusal for engine-channel auditors → red:
+    AssertionError: assert out['ok'] is True (first advance refused advance-audit-seat-native).
+    """
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="edge2", **_codex_auditor_cfg())
     findings = [_blocking_finding("unchecked index", 2)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_FIXER)

@@ -162,6 +162,27 @@ _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
 _GATE_GUIDANCE_ROW_CARRIED_CHANNEL = "gateGuidanceRowCarried"
 GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
 DISCHARGE_PHASE_NATIVE_SEAT_REFUSAL = "discharge-phase-native-seat"
+ADVANCE_AUDIT_SEAT_NATIVE_REFUSAL = "advance-audit-seat-native"
+
+
+def _discharge_phase_native_seat_recovery_detail(auditor_vendor=None):
+    """Recovery text shared by advance-time and render-time native-auditor refusals."""
+    vendor_bit = ("selected auditor %s is a host seat; " % auditor_vendor
+                  if isinstance(auditor_vendor, str) and auditor_vendor.strip() else "")
+    return ("%sdrive this session by hand next/submit, or configure a runner-backed auditor vendor"
+            % vendor_bit)
+
+
+def _advance_audit_seat_native_refusal(session_dir, config, phase, rnd, attempt):
+    """Refuse the first `advance` when the driver-selected auditor seats on a host channel."""
+    auditor_vendor, _independence = _auditor_vendor(config, config.get("fixerVendor"))
+    row = {"vendor": auditor_vendor, "model": None, "engine": None}
+    if _seat_channel(P_AUDITS, row) != CHANNEL_FILE:
+        return None
+    return _refuse_cmd(session_dir, "advance", ADVANCE_AUDIT_SEAT_NATIVE_REFUSAL,
+                       fault=FAULT_CALLER,
+                       detail=_discharge_phase_native_seat_recovery_detail(auditor_vendor),
+                       phase=phase, rnd=rnd, attempt=attempt)
 
 # --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
@@ -8766,7 +8787,9 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
     if (state.get("_advanceUsed") and phase in round_records.PROVENANCE_RUNNER_RECORD_PHASES
             and host_seat):
         skey = round_records.storage_key(seat_key, occurrence)
-        raise ValueError("order-render-refused:%s:%s" % (skey, DISCHARGE_PHASE_NATIVE_SEAT_REFUSAL))
+        recovery = _discharge_phase_native_seat_recovery_detail(row.get("vendor"))
+        raise ValueError("order-render-refused:%s:%s:%s"
+                         % (skey, DISCHARGE_PHASE_NATIVE_SEAT_REFUSAL, recovery))
     paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
     base_ref = cfg.get("baseRef") or meta.get("baseRef")
     residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
@@ -10640,6 +10663,11 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
     phase, rnd, attempt, refusal = _pending_of(session_dir, state, "advance")
     if refusal is not None:
         return refusal
+    if not state.get("_advanceUsed"):
+        native_refusal = _advance_audit_seat_native_refusal(session_dir, config, phase, rnd,
+                                                            attempt)
+        if native_refusal is not None:
+            return native_refusal
     if owner_artifact_path is not None and phase not in OWNER_GATE_PHASES:
         return _refuse_cmd(session_dir, "advance", "advance-submit-interleaved",
                            fault=FAULT_CALLER, phase=phase, rnd=rnd, attempt=attempt,
