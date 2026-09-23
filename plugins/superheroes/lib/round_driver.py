@@ -404,6 +404,10 @@ FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE = (
     "fixed-disposition-finalization-verify-not-pass"
 )
 
+# Named refusal when a verify submit cannot resolve the head the gate ran against. Recoverable:
+# the pending step survives, so the same artifact resubmits once the head resolves.
+VERIFIED_HEAD_UNRESOLVED = "verified-head-unresolved"
+
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
 POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
@@ -2164,13 +2168,18 @@ def _record_adapter_provenance(state, artifact, phase):
         rec["adapterProvenance"] = {"byPhase": by_phase}
 
 
-def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None):
+def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None,
+          verified_head=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
 
     `changed_subjects_seam` is threaded to the fixer fold: run_loop passes the injected seam (the
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
-    wires the real git derivation. It is inert for every other phase."""
+    wires the real git derivation. It is inert for every other phase.
+
+    `verified_head` is threaded to the verify fold: the submit path resolves it BEFORE any state
+    mutates (and refuses the submit when it cannot), so the fold never resolves a head itself.
+    run_loop passes None — the in-process leg has no head to credit. Inert for every other phase."""
     if session_contract.disposition_ledger_owner_classification(state) == (
         session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
     ):
@@ -2190,7 +2199,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_SCOPED:
         _fold_scoped(state, config, artifact)
     elif phase == P_VERIFY:
-        _fold_verify(state, config, artifact, session_dir=session_dir)
+        _fold_verify(state, config, artifact, verified_head=verified_head)
     elif phase == P_FIXER:
         _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir)
     elif phase == P_JUDGMENT:
@@ -3842,18 +3851,19 @@ def _verify_command_configured(config):
     return cmd.strip().lower() not in ("", "none")
 
 
-def _fold_verify(state, config, artifact, session_dir=None):
+def _fold_verify(state, config, artifact, verified_head=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
     `fail`, a `timeout`, a missing/None result, any unrecognized value, OR a skip result while a real
     verify command IS configured (the command did not actually run) HALTS with an honest reason that
-    names the class — never advances into a delta round that could later certify."""
+    names the class — never advances into a delta round that could later certify.
+
+    `verified_head` is the head the gate ran against, resolved by the submit path before anything
+    mutated — a submit whose head cannot be resolved is refused there and never reaches this fold.
+    None (run_loop's in-process leg) records no `verifiedHead`, so the round credits no head."""
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
-    verified_head, verified_head_err = _verified_head_at_fold(session_dir, state)
-    if verified_head_err:
-        _record_round(state, "verifiedHeadRefused", verified_head_err)
-    else:
+    if isinstance(verified_head, str) and verified_head:
         _record_round(state, session_contract.VERIFIED_HEAD_FIELD, verified_head)
     if result == "pass":
         _backfill_fixed_disposition_verify_receipts(state, state["round"])
@@ -5319,20 +5329,6 @@ def _persist_fix_fold_head_sha(session_dir, state, head):
         (json.dumps(meta_obj, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
-def _verified_head_at_fold(session_dir, state):
-    """The head the verify gate ran against, resolved at verify-fold time. Fail-closed.
-
-    Returns (head, error). With a session dir this is the same resolver the fixer fold uses, so
-    the recorded head is the head the fixer landed at and the gate ran against. WITHOUT one
-    (`run_loop`'s in-process leg passes no session_dir) there is NO fallback: `config["headSha"]`
-    is the session-SETUP head and stamping it could credit a head a fixer seam had already moved
-    past, so this refuses instead. Refusing matches today's behaviour on that leg — `_fold_fixer`
-    also gets no session_dir there, so no head was ever recorded."""
-    if session_dir:
-        return _resolve_fix_fold_head_sha(session_dir, state)
-    return (None, "verified head: no session dir — the in-process leg records no verified head")
-
-
 def _resolve_fix_fold_head_sha(session_dir, state):
     """Resolve the certified head once at fix-fold time — never the session-setup headSha.
 
@@ -5482,12 +5478,15 @@ def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None
 
 
 def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
-    """Re-bind fixed ledger receipts to the certified head when provable; record residuals otherwise.
+    """Re-bind fixed ledger receipts to the certified head when provable; report residuals otherwise.
 
-    Returns True when ``state`` was mutated (re-bind, residual, or verify stamp)."""
+    Returns ``(changed, residuals)``: ``changed`` is True when ``state`` was mutated (re-bind or
+    verify stamp/revocation); ``residuals`` maps each finding key that could not re-bind to its
+    cause. Residuals are returned, never stored — certification refuses those rows on its own
+    checks, so a stored copy would only be a write-only field that a later pass leaves stale."""
     rows, by_key, fault = _fixed_ledger_rows(state)
     if fault is not None:
-        return False
+        return False, {}
     pending = []
     for key, entry in rows:
         receipt = entry.get("dispositionReceipt")
@@ -5496,9 +5495,9 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
             continue
         pending.append((key, entry, dict(receipt)))
     if not pending:
-        return False
+        return False, {}
     if not isinstance(certified_head, str) or not certified_head:
-        return False
+        return False, {}
     read_outcome = _read_head_content_blobs_file(session_dir, normalized=True)
     residuals = {}
     changed = False
@@ -5547,26 +5546,27 @@ def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
             **_fixed_disposition_family_with_receipt(entry, updated_receipt),
         )
         changed = True
-    if residuals:
-        state["_fixedDispositionFinalizationResiduals"] = residuals
-        changed = True
-    return changed
+    return changed, residuals
 
 
 def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
-    """One terminal step: persist head-content blobs, re-bind fixed receipts, save state."""
+    """One terminal step: persist head-content blobs, re-bind fixed receipts, save state.
+
+    Returns the re-bind residuals (finding key -> cause), or None when finalization did not run."""
     if not session_dir:
-        return
+        return None
     if session_contract.disposition_ledger_owner_classification(state) == (
         session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
     ):
-        return
+        return None
     head = head_sha or _session_certified_head(session_dir, state)
     if not isinstance(head, str) or not head:
-        return
+        return None
     _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
-    if _finalize_fixed_disposition_receipts(state, session_dir, head):
+    changed, residuals = _finalize_fixed_disposition_receipts(state, session_dir, head)
+    if changed:
         save_state(session_dir, state)
+    return residuals
 
 
 def _fix_batch_paths(state, artifact=None):
@@ -6173,7 +6173,8 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             round_no = prep["round_no"]
             art_hash = prep["art_hash"]
             try:
-                _fold(state, state["config"], phase, artifact, session_dir=session_dir)
+                _fold(state, state["config"], phase, artifact, session_dir=session_dir,
+                      verified_head=prep.get("verified_head"))
             except DispositionLedgerOwnerRefusal:
                 _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                               "round": round_no, "attempt": attempt,
@@ -6490,6 +6491,20 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                         return {"ok": False, "reason": "record-submit-interleaved", "detail": detail,
                                 "seats": found}
 
+    # The verify submit resolves the head the gate ran against BEFORE anything mutates — the last
+    # fence, so no later refusal can follow a resolution. It is the fixer fold's resolver, so the
+    # recorded head is the head the fixer landed at. A resolution failure refuses the submit with
+    # the pending step and `lastAccepted` intact: the same artifact resubmits once the head resolves.
+    # Never a fallback to `config["headSha"]` — that is the session-SETUP head.
+    verified_head = None
+    if phase == P_VERIFY:
+        verified_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+        if head_err:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": VERIFIED_HEAD_UNRESOLVED})
+            return {"ok": False, "reason": VERIFIED_HEAD_UNRESOLVED, "detail": head_err}
+
     # accept: clear the pending, then fold through cmd_submit (the fold chokepoint).
     round_no = pending.get("round")
     state["pending"] = None
@@ -6498,7 +6513,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         # `advance` from here on. Only stamped on v3 state — a v2 state's dict is never touched.
         state["_submitUsed"] = True
     return {"_fold_ready": True, "state": state, "round_no": round_no, "art_hash": art_hash,
-            "orphan_seats_found": orphan_seats_found}
+            "orphan_seats_found": orphan_seats_found, "verified_head": verified_head}
 
 
 def _write_receipt(session_dir, state):
