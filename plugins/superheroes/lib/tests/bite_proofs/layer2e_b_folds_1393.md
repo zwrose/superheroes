@@ -1,6 +1,7 @@
 # Bite-proof record — the clamp-exact collision, the write-path message, and the three fixture fixes
 
-Every guarded element below was neutralized through the host's edit action on a committed head,
+Every guarded element below was first proven at `0eb14281`/`b89cfd4b` and **re-run at the
+final head `87d874fd`** (section *Final head*, below). Each was neutralized through the host's edit action on a committed head,
 the named detector run, the edit reversed by the inverse edit, `git status --porcelain` read empty,
 and the detector re-run green. Interpreter `/usr/bin/python3 -B -X pycache_prefix=<scratch>`
 (3.9.6), serial runs, `-p no:cacheprovider`. Receipts redacted of nothing (none held secrets).
@@ -14,6 +15,7 @@ and the detector re-run green. Interpreter `/usr/bin/python3 -B -X pycache_prefi
 | **P5** | `validate_policy_for_write` — the follow-up allow-list leg | `review_gate_policy.py` | proven |
 | **P6** | `judgment_follow_up_fault` — the `!= "skip"` exclusion half | `round_driver.py` | proven |
 | **P7** | `stall_follow_up_fault` — the choice operand | `round_driver.py` | proven |
+| **P8** | `_mint_finding_keys` — the writer's call to the shared claimant threshold | `round_driver.py` | proven (final head) |
 
 ---
 
@@ -120,6 +122,26 @@ E       AssertionError: {'ok': False, 'reason': 'follow-up-malformed: stall: out
 **Restore.** Inverse edit; porcelain empty. **Green:** `1 passed, 21 deselected in 15.53s`.
 
 ---
+
+## Final head — `87d874fd`, after the review loop's two fix legs
+
+The review loop moved the claimant rule into one home (`session_contract.classify_finding_key`,
+`finding_key_claimants`, `legacy_key_admitted`), so P1's guarded line changed and P8 is new. Every
+proof was re-run here, one mutation live at a time (`git diff` read before each run), restored by
+the inverse edit, porcelain empty after the last restore, and the three detector files green
+together: **`44 passed in 11.09s`**.
+
+| id | neutralization at the final head | red (EXIT=1) — decisive line |
+|---|---|---|
+| P1 | `if minted in identity_keys or not legacy_key_admitted(claimants, bare):` → `if minted in identity_keys:` | `assert None == ('f.py::word …')`; `assert {…} == {}` ×2; `AssertionError: clamp-exact pair` / `assert False == True` — `4 failed, 3 passed` |
+| P8 | `if legacy_keys and session_contract.legacy_key_admitted(claimants, legacy_keys[0]):` → `if legacy_keys:` | `test_key_writer_and_certifier_agree_on_the_bare_key`: `AssertionError: clamp-exact pair` / `assert True == False` — `1 failed, 6 passed` (the writer keeps a key certification refuses) |
+| P4 | `if "grouping" not in artifact:` → `if False:` | `assert 'synthesis artifact carries no `grouping` key' in '`grouping` is missing'` — `1 failed` |
+| P5 | `if not follow_up_allowed:` → `if False:` | `assert 'layer-follow-up-not-allowed' == "rules[0].fol...as-suggested'"` — `1 failed` |
+| P6 | `or disp.get("disposition") != "skip"` removed | `{'ok': False, 'reason': 'follow-up-malformed: f.py::widen the api@L1: …'}` — `1 failed` |
+| P7 | `if artifact.get("choice") != ACCEPT_RISK_CHOICE:` → `if False:` | `{'ok': False, 'reason': 'follow-up-malformed: stall: …'}` — `1 failed` |
+
+P8's detector is the agreement test: it is the only one that goes red when the writer stops
+consulting the shared threshold, because certification alone is unchanged by that mutation.
 
 ## P2 / P3 — the audit-seat rule: proven, then removed on measured evidence
 
