@@ -555,7 +555,7 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
     meta = {"headSha": head2, "repoRoot": str(repo)}
     with open(os.path.join(fold_session, RR.META_FILE), "w", encoding="utf-8") as fh:
         json.dump(meta, fh)
-    RD._fold_verify(state, state["config"], {"result": "pass"}, session_dir=fold_session)
+    RD._fold(state, state["config"], RD.P_VERIFY, {"result": "pass"}, session_dir=fold_session)
     entry = _ledger_by_key(state)[key]
     receipt_after = entry.get("dispositionReceipt") or {}
     assert receipt_after.get("verifyResult") == "pass"

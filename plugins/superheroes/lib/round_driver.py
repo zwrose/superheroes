@@ -400,6 +400,9 @@ JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
 
+# Named refusal when the verify fold cannot resolve the repository head before mutating state.
+VERIFIED_HEAD_UNRESOLVED_CAUSE = "verified-head-unresolved"
+
 FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE = (
     "fixed-disposition-finalization-verify-not-pass"
 )
@@ -519,6 +522,17 @@ class DispositionLedgerOwnerRefusal(ValueError):
     ``RoundCeilingRefusal``.
 
     Raised only from ``_fold`` — the single chokepoint every fold passes through."""
+    def __init__(self, reason, value=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.value = value
+
+
+class VerifiedHeadRefusal(ValueError):
+    """Fold-time refusal when the verify path cannot resolve the repository head — sibling of
+    ``DispositionLedgerOwnerRefusal``.
+
+    Raised only from ``_fold``'s verify path before any artifact mutation."""
     def __init__(self, reason, value=None):
         super().__init__(reason)
         self.reason = reason
@@ -2175,6 +2189,9 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
         session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
     ):
         raise DispositionLedgerOwnerRefusal(DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE)
+    verified_head = None
+    if phase == P_VERIFY:
+        verified_head = _verified_head_for_fold(session_dir, state)
     artifact = artifact if isinstance(artifact, dict) else {}
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
@@ -2190,7 +2207,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_SCOPED:
         _fold_scoped(state, config, artifact)
     elif phase == P_VERIFY:
-        _fold_verify(state, config, artifact, session_dir=session_dir)
+        _fold_verify(state, config, artifact, verified_head=verified_head)
     elif phase == P_FIXER:
         _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir)
     elif phase == P_JUDGMENT:
@@ -3842,7 +3859,7 @@ def _verify_command_configured(config):
     return cmd.strip().lower() not in ("", "none")
 
 
-def _fold_verify(state, config, artifact, session_dir=None):
+def _fold_verify(state, config, artifact, verified_head=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
     `fail`, a `timeout`, a missing/None result, any unrecognized value, OR a skip result while a real
@@ -3850,10 +3867,7 @@ def _fold_verify(state, config, artifact, session_dir=None):
     names the class — never advances into a delta round that could later certify."""
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
-    verified_head, verified_head_err = _verified_head_at_fold(session_dir, state)
-    if verified_head_err:
-        _record_round(state, "verifiedHeadRefused", verified_head_err)
-    else:
+    if isinstance(verified_head, str) and verified_head:
         _record_round(state, session_contract.VERIFIED_HEAD_FIELD, verified_head)
     if result == "pass":
         _backfill_fixed_disposition_verify_receipts(state, state["round"])
@@ -5319,18 +5333,23 @@ def _persist_fix_fold_head_sha(session_dir, state, head):
         (json.dumps(meta_obj, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
-def _verified_head_at_fold(session_dir, state):
-    """The head the verify gate ran against, resolved at verify-fold time. Fail-closed.
+def _verified_head_for_fold(session_dir, state):
+    """Resolve the verified head for a verify fold before any artifact mutation.
 
-    Returns (head, error). With a session dir this is the same resolver the fixer fold uses, so
-    the recorded head is the head the fixer landed at and the gate ran against. WITHOUT one
-    (`run_loop`'s in-process leg passes no session_dir) there is NO fallback: `config["headSha"]`
-    is the session-SETUP head and stamping it could credit a head a fixer seam had already moved
-    past, so this refuses instead. Refusing matches today's behaviour on that leg — `_fold_fixer`
-    also gets no session_dir there, so no head was ever recorded."""
-    if session_dir:
-        return _resolve_fix_fold_head_sha(session_dir, state)
-    return (None, "verified head: no session dir — the in-process leg records no verified head")
+    With no session dir (`run_loop`'s in-process leg) returns None and never raises. With a
+    session dir delegates to ``_resolve_fix_fold_head_sha``; a returned error or any enumerated
+    resolver exception becomes ``VerifiedHeadRefusal``."""
+    if not session_dir:
+        return None
+    try:
+        head, err = _resolve_fix_fold_head_sha(session_dir, state)
+    except store_core.RepoRootUnavailable as exc:
+        raise VerifiedHeadRefusal(str(exc), value=exc) from exc
+    except OSError as exc:
+        raise VerifiedHeadRefusal(str(exc), value=exc) from exc
+    if err:
+        raise VerifiedHeadRefusal(err)
+    return head
 
 
 def _resolve_fix_fold_head_sha(session_dir, state):
@@ -6179,6 +6198,13 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                                               "round": round_no, "attempt": attempt,
                                               "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
                 return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
+            except VerifiedHeadRefusal as refusal:
+                _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                              "round": round_no, "attempt": attempt,
+                                              "outcome": VERIFIED_HEAD_UNRESOLVED_CAUSE,
+                                              "detail": refusal.reason})
+                return {"ok": False, "reason": VERIFIED_HEAD_UNRESOLVED_CAUSE,
+                        "detail": refusal.reason}
             if _via_advance and _pending_policy_applied is not None:
                 applied = state.get("_policyApplied")
                 if not isinstance(applied, list):

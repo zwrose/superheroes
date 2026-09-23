@@ -136,7 +136,7 @@ def _drive_faithful_two_round_verify(state, config, session_dir, round_n=1):
     assert fix_rec.get("fixFoldHead")
     assert SC.VERIFIED_HEAD_FIELD not in fix_rec
     state["round"] = round_n + 1
-    RD._fold_verify(state, config, {"result": "pass"}, session_dir=session_dir)
+    RD._fold(state, config, RD.P_VERIFY, {"result": "pass"}, session_dir=session_dir)
     verify_rec = state["rounds"].get(verify_round)
     assert isinstance(verify_rec, dict), state["rounds"]
     assert verify_rec.get(SC.VERIFIED_HEAD_FIELD)
@@ -688,15 +688,17 @@ def test_stale_pass_stamp_at_certified_head_is_revoked(tmp_path):
 
 
 def test_fold_verify_without_session_dir_records_no_verified_head():
-    """axis: _fold_verify with no session_dir refuses verifiedHead — accessor stays None."""
+    """axis: _fold with no session_dir records no verifiedHead — accessor stays None.
+
+    re-pinned: verifiedHeadRefused retired; no-session-dir leg records neither head nor refusal."""
     state = RD.new_state({"fixerVendor": "claude"})
     head = "a" * 40
     state["round"] = 1
     state["config"]["headSha"] = head
-    RD._fold_verify(state, state["config"], {"result": "pass"}, session_dir=None)
+    RD._fold(state, state["config"], RD.P_VERIFY, {"result": "pass"}, session_dir=None)
     rec = state["rounds"].get("1") or {}
     assert SC.VERIFIED_HEAD_FIELD not in rec
-    assert rec.get("verifiedHeadRefused")
+    assert "verifiedHeadRefused" not in rec
     assert SC.verify_result_for_head(state, head) is None
 
 
