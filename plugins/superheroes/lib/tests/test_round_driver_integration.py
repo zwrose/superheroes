@@ -784,7 +784,7 @@ def _write_native_review_result(run_dir, repo_root, *, findings=None, panel_find
 
 
 def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-panel-e2e",
-                       telemetry_shape="dispatch-observed"):
+                       telemetry_shape="dispatch-observed", resolved_inputs=None):
     """Build a runner run directory for dispatch-observed evidence tests.
 
     This run directory is a test double for the runner's own record of a real dispatch; the
@@ -828,7 +828,7 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
         timeout=30, retry_timeout=30, prompt_path=order_path, view_path=view_path,
         view_meta=view_meta, fed_prompt=fed_prompt, order_id="panel-e2e-order",
         progress_path=os.path.join(run_dir, "progress.jsonl"), repo_root=repo_root,
-        echo_nonce=echo_nonce, base_prompt=base_prompt,
+        echo_nonce=echo_nonce, base_prompt=base_prompt, resolved_inputs=resolved_inputs,
     )
     assert ok, detail
     if engine == "codex":
