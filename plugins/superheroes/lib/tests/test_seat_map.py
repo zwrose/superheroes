@@ -2991,17 +2991,6 @@ def _write_core_with_prefs(repo, prefs):
     )
 
 
-def _register_astra(monkeypatch):
-    import model_registry as MR
-    models = dict(MR._MODELS)
-    codex = dict(models["codex"])
-    astra = dict(codex["gpt-6-astra"])
-    astra.pop("registration", None)
-    codex["gpt-6-astra"] = astra
-    models["codex"] = codex
-    monkeypatch.setattr(MR, "_MODELS", models)
-
-
 def test_codex_role_pin_sol_seats_deep_at_xhigh():
     live_cells = [
         ["codex", "gpt-5.6-sol", "xhigh"],
@@ -3029,8 +3018,8 @@ def test_codex_role_pin_sol_seats_deep_at_xhigh():
         assert cfg["source"] == "role-pinned"
 
 
-def test_codex_role_pin_astra_registered_seats_at_high(monkeypatch):
-    _register_astra(monkeypatch)
+# axis: registered gpt-6-astra role-pin seats reviewer-deep at high effort from live cells.
+def test_codex_role_pin_astra_registered_seats_at_high():
     live_cells = [
         ["codex", "gpt-6-astra", "high"],
         ["cursor", "cursor-grok-4.6", "xhigh"],
@@ -3057,8 +3046,8 @@ def test_codex_role_pin_astra_registered_seats_at_high(monkeypatch):
         assert cfg["source"] == "role-pinned"
 
 
-def test_codex_role_pin_astra_not_live_falls_back_to_matrix(monkeypatch):
-    _register_astra(monkeypatch)
+# axis: registered gpt-6-astra role-pin falls back to matrix when Astra is not in live cells.
+def test_codex_role_pin_astra_not_live_falls_back_to_matrix():
     live_cells = [
         ["codex", "gpt-5.6-sol", "xhigh"],
         ["cursor", "cursor-grok-4.6", "xhigh"],

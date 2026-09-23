@@ -1511,6 +1511,7 @@ def test_normalize_codex_pin_map_legacy_alias_and_canonical_wins():
     assert "fixer" not in both["pins"]
 
 
+# axis: registered gpt-6-astra is accepted as a reviewer-deep pin against the real registry.
 def test_normalize_codex_pin_map_registered_astra_valid():
     result = EP.normalize_codex_pin_map({"reviewer-deep": "gpt-6-astra"})
     assert result["pins"] == {"reviewer-deep": "gpt-6-astra"}
@@ -1528,20 +1529,6 @@ def test_normalize_codex_pin_map_planted_pending_astra_rejected(monkeypatch):
     assert result["pins"] == {}
     assert "reviewer-deep" in result["invalid"]
     assert result["invalid"]["reviewer-deep"].startswith("pin-probe-pending:")
-
-
-def test_normalize_codex_pin_map_registered_astra_valid_despite_xhigh_effort(monkeypatch):
-    import model_registry as MR
-    models = dict(MR._MODELS)
-    codex = dict(models["codex"])
-    astra = dict(codex["gpt-6-astra"])
-    astra.pop("registration", None)
-    codex["gpt-6-astra"] = astra
-    models["codex"] = codex
-    monkeypatch.setattr(MR, "_MODELS", models)
-    result = EP.normalize_codex_pin_map({"reviewer-deep": "gpt-6-astra"})
-    assert result["pins"] == {"reviewer-deep": "gpt-6-astra"}
-    assert result["invalid"] == {}
 
 
 def test_normalize_seat_pin_map_vendor_only_and_empty_model_rejected():
