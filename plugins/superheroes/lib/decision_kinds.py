@@ -17,6 +17,7 @@ DECISION_KINDS = (
     "capped-with-open-critical",
     "confirmation-rearm",
     "converged",
+    "fix-batch-excluded",
     "fix-batch-split",
     "judgment-fail-closed",
     "judgment-gate",
