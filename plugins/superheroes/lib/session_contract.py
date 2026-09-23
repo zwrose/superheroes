@@ -67,8 +67,6 @@ __all__ = (
     "PAYLOAD_BOUND_BINDING",
     "evidence_binding",
     "verify_result_for_head",
-    "verified_head_for_round",
-    "verify_result_for_round",
     "RE_EMIT_CMD",
     "ORDERS_SUPERSEDED_OUTCOME",
     "journal_is_re_emit_orders_superseded",
@@ -227,8 +225,9 @@ def legacy_disposition_ledger_rows(state):
 
 
 def legacy_key_collision(rows):
-    """Return (bare_key, minted_key) when a legacy-bare row collides with a minted-key twin."""
+    """Return (bare_key, other_key) when a legacy-bare row's bare key collides with a minted twin or another minted identity."""
     identity_keys = set()
+    claimants = {}
     legacy_pairs = []
     for row in rows:
         if not isinstance(row, dict):
@@ -238,11 +237,17 @@ def legacy_key_collision(rows):
         minted = minted_identity_key(row)
         if identity:
             identity_keys.add(identity)
+        if identity and finding_label(row):
+            claimants.setdefault(identity, set()).add(minted)
         if identity == bare and bare != minted:
             legacy_pairs.append((bare, minted))
     for bare, minted in legacy_pairs:
         if minted in identity_keys:
             return bare, minted
+    for bare, minted in legacy_pairs:
+        others = claimants.get(bare, set()) - {minted}
+        if others:
+            return bare, sorted(others)[0]
     return None
 
 
@@ -534,31 +539,6 @@ def _round_record(state, round_num):
         return None
     rec = rounds.get(key)
     return rec if isinstance(rec, dict) else None
-
-
-def verified_head_for_round(state, round_num):
-    """The verified head recorded on round ``round_num``, or None (fail-closed)."""
-    rec = _round_record(state, round_num)
-    if rec is None:
-        return None
-    verified = rec.get(VERIFIED_HEAD_FIELD)
-    if isinstance(verified, str) and verified:
-        return verified
-    return None
-
-
-def verify_result_for_round(state, round_num):
-    """The verify result recorded on round ``round_num``, or None (fail-closed).
-
-    Returns None when the round record is missing or when ``verifiedHead`` is absent or not a
-    non-empty string — the verified-head fact is never inferred from other fields."""
-    rec = _round_record(state, round_num)
-    if rec is None:
-        return None
-    verified = rec.get(VERIFIED_HEAD_FIELD)
-    if not isinstance(verified, str) or not verified:
-        return None
-    return rec.get("verifyResult")
 
 
 def verify_result_for_head(state, head):
