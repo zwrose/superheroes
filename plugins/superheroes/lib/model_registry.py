@@ -270,14 +270,6 @@ CLAUDE_ALIAS_RESOLUTION = {
     },
 }
 
-LEGACY_MODEL_IDS = {"claude": {"opus-5": "opus-5.5", "fable-5": "fable-5.1"}}
-
-
-def current_model_id(vendor: str, model: str) -> str:
-    if not isinstance(vendor, str) or not isinstance(model, str):
-        return model
-    return LEGACY_MODEL_IDS.get(vendor, {}).get(model, model)
-
 FABLE_NEVER_DEFAULT = True
 
 _MODEL_TIER_ROLES = (

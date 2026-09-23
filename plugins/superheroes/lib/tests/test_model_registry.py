@@ -480,8 +480,8 @@ def test_auditor_cells_track_verifier_cells():
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
 
 
-# axis: legacy journaled claude model ids translate before continuation seat comparison
-def test_continuation_accepts_legacy_claude_label():
+# axis: legacy journaled claude model ids are compared exactly — no translation at continuation
+def test_continuation_refuses_legacy_claude_label_mismatch():
     ED = _load_engine_dispatch()
     opened = {
         "resolvedInputs": {
@@ -497,7 +497,7 @@ def test_continuation_accepts_legacy_claude_label():
         "effort": "xhigh",
         "role": "reviewer-deep",
     }
-    assert ED._continuation_seat_mismatch(opened, seat) is None
+    assert ED._continuation_seat_mismatch(opened, seat) == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
     seat_diff = {
         "vendor": "claude",
         "model": "sonnet-5",
@@ -507,7 +507,7 @@ def test_continuation_accepts_legacy_claude_label():
     assert ED._continuation_seat_mismatch(opened, seat_diff) == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
 
 
-# axis: legacy claude model ids stay unregistered — only translation chokepoints honor them
+# axis: legacy claude model ids stay unregistered and honored nowhere
 def test_legacy_claude_model_ids_stay_unregistered():
     assert MR.validate_config("claude", "opus-5", "xhigh")[0] is False
 
@@ -628,12 +628,15 @@ def _load_model_registry_at_sha(sha):
     return mod
 
 
+_LEGACY_MATRIX_MODEL_IDS = {"opus-5": "opus-5.5", "fable-5": "fable-5.1"}
+
+
 def _matrix_cell_after_legacy_translate(vendor, cell):
     if cell is None:
         return None
     model_id, effort = cell
     if vendor == "claude":
-        model_id = MR.current_model_id("claude", model_id)
+        model_id = _LEGACY_MATRIX_MODEL_IDS.get(model_id, model_id)
     return (model_id, effort)
 
 

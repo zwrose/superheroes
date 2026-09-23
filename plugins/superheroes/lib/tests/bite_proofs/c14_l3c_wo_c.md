@@ -10,7 +10,7 @@
 | BP-C2 | `round_driver._auditor_vendor` role read | independence follows auditor role family, not verifier | `test_auditor_vendor_reads_auditor_role` |
 | BP-C3 | `_MATRIX["auditor"]` derivation | auditor row tracks verifier cells | `test_auditor_cells_track_verifier_cells` |
 | BP-C4 | `_PRE_CHILD_HEAD` git-baseline loader | missing commit fails closed with fetch-depth guidance | `test_matrix_cells_reviewer_roles_unchanged_at_base` |
-| BP-C5 | `engine_dispatch._continuation_seat_tuple` translation | legacy journaled claude label continues | `test_continuation_accepts_legacy_claude_label` |
+| BP-C5 | absence of translation at continuation/spawn chokepoints | legacy journaled claude label refused at continuation | `test_continuation_refuses_legacy_claude_label_mismatch` |
 | BP-C6 | `seat_map.normalize_pins` admission | legacy model ids pass through without rewriting | `test_normalize_pins_preserves_legacy_claude_label` |
 | BP-C7 | `validate_config` on legacy ids | legacy ids stay unregistered | `test_legacy_claude_model_ids_stay_unregistered` |
 
@@ -114,16 +114,22 @@ _PRE_CHILD_HEAD = "aaf27b8089159c2ea4020b03ccbddcd263c57e8a"
 
 ## BP-C5
 
-- **axis:** legacy journaled claude label continues
+- **axis:** legacy journaled claude label refused at continuation (no translation at chokepoints)
+- **superseded at `7f548494` by BP-C5** — prior entry proved translation; this entry proves its absence.
 
-**neutralization** (`plugins/superheroes/lib/engine_dispatch.py` — removed translation from `_continuation_seat_tuple`)
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py` — re-add translation in `_continuation_seat_tuple`):
+```python
+    if isinstance(vendor, str) and isinstance(model, str):
+        _LEGACY = {"claude": {"opus-5": "opus-5.5", "fable-5": "fable-5.1"}}
+        model = _LEGACY.get(vendor, {}).get(model, model)
+```
 
 **raw red** (exit 1):
 ```
-E       AssertionError: assert 'run-dir-seat-mismatch' is None
+E       AssertionError: assert None == 'run-dir-seat-mismatch'
 ```
 
-**restore:** re-applied `model_registry.current_model_id` in `_continuation_seat_tuple`.
+**restore:** removed translation from `_continuation_seat_tuple`.
 
 **raw green** (exit 0): `1 passed in 0.19s`
 

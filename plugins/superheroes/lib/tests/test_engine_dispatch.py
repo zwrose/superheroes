@@ -10082,8 +10082,8 @@ def test_spawn_allowlist_verdict_refuses_legacy_unregistered_model():
     assert "opus-5" in (verdict.get("reason") or "")
 
 
-def test_canonical_spawn_argv_translates_legacy_claude_model_id():
-    # axis: spawn argv reconstruction honors legacy journaled model ids like continuation does
+def test_canonical_spawn_argv_refuses_legacy_claude_model_id():
+    # axis: spawn argv reconstruction uses the journaled model exactly — no silent translation
     opened = {
         "engine": "claude",
         "runKind": ED.RUN_KIND_REVIEW,
@@ -10095,9 +10095,10 @@ def test_canonical_spawn_argv_translates_legacy_claude_model_id():
         },
     }
     argv, err = ED._canonical_spawn_argv(opened)
-    assert err is None
-    assert argv is not None
-    assert "opus" in argv
+    assert argv is None
+    assert err is not None
+    assert err.startswith("engine-config:")
+    assert "opus-5.5" not in err
 
 
 def test_spawn_gate_refuses_continuation_with_off_allowlist_snapshot(tmp_path):
