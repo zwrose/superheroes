@@ -357,6 +357,8 @@ _DISPOSITION_METADATA_VALUES = {
     "followUp": {"note": "later"},
     "mergedInto": "other-key",
     "raisedRound": 2,
+    "raisedSeq": 1,
+    "dispositionSeq": 2,
 }
 
 
@@ -377,7 +379,8 @@ def test_foreign_preset_preserved_despite_disposition_metadata_diff():
         SC.FINDING_KEY_FIELD: foreign_key,
     }
     row_a = dict(base)
-    row_b = dict(base, dispositionRound=1, mergedInto="other-key")
+    row_b = dict(base, dispositionRound=1, mergedInto="other-key",
+                 raisedSeq=1, dispositionSeq=2)
     state = RD.new_state(_cfg())
     RD._set_findings(state, [row_a, row_b])
     for row in state["findings"]:
