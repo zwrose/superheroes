@@ -3512,7 +3512,7 @@ def test_native_write_crash_with_valid_result_forfeits(tmp_path, monkeypatch):
     assert ended.get("exit") not in (0, None)
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    assert grade.get("detail") is None
+    assert grade.get("detail") == "nonzero-exit"
     assert grade.get("ok") is not True
 
 
