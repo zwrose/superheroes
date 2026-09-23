@@ -3658,10 +3658,13 @@ def _excluded_discharged_fix_row(ledger_by_key, row):
         return False
     disp_seq = entry.get("dispositionSeq")
     raised_seq = entry.get("raisedSeq")
-    if (not isinstance(disp_seq, int) or isinstance(disp_seq, bool)
-            or not isinstance(raised_seq, int) or isinstance(raised_seq, bool)):
-        return False
-    return disp_seq > raised_seq
+    disp_is_int = isinstance(disp_seq, int) and not isinstance(disp_seq, bool)
+    raised_is_int = isinstance(raised_seq, int) and not isinstance(raised_seq, bool)
+    if disp_is_int and raised_is_int:
+        return disp_seq > raised_seq
+    if disp_seq is None and raised_seq is None:
+        return True
+    return False
 
 
 def _filter_excluded_discharged_fixes(state, rows):
@@ -3685,7 +3688,13 @@ def _resolve_empty_fix_batch_convergence(state, config):
 
 
 def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0):
-    """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap."""
+    """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
+
+    May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
+    setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
+    the batch was emptied by discharge exclusion and the round was settled, or ``"faulted"`` when
+    a disposition-ledger read fault parked the session.
+    """
     cap = _fix_batch_cap(config)
     if reset_accumulator:
         state["fixBatch"] = []
@@ -3693,18 +3702,19 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     filtered, ledger_fault = _filter_excluded_discharged_fixes(state, rows)
     if ledger_fault is not None:
         _park_cannot_certify(state, ledger_fault.detail)
-        return
+        return "faulted"
     if offered_nonempty and not filtered:
         _record_round(state, "fixBatchExcludedByDischarge", len(rows))
         _decision(state, "fix-batch-excluded",
                   "fix batch emptied by discharged-finding exclusion — "
-                  "round converged without fixer dispatch")
+                  "without fixer dispatch")
         _resolve_empty_fix_batch_convergence(state, config)
-        return
+        return "excluded"
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
     state["_fixBatchIndex"] = batch_index
     state["step"] = P_FIXER
+    return "queued"
 
 
 def _subjects_for_dimension(dimension):
@@ -3852,10 +3862,12 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         cap = _fix_batch_cap(config)
         done = len(slice_)
         queued = len(queue) - min(cap, len(queue))
-        _queue_fix_batch(state, config, queue, reset_accumulator=False, batch_index=index + 1)
-        _decision(state, "fix-batch-split",
-                  "fix batch slice %d of this round dispatched (%d findings; %d queued)"
-                  % (index + 1, done, queued))
+        status = _queue_fix_batch(
+            state, config, queue, reset_accumulator=False, batch_index=index + 1)
+        if status == "queued":
+            _decision(state, "fix-batch-split",
+                      "fix batch slice %d of this round dispatched (%d findings; %d queued)"
+                      % (index + 1, done, queued))
         return
     state.pop("_escalatedRung", None)
     state.pop("_fixQueue", None)
@@ -4196,7 +4208,9 @@ def _fold_verify(state, config, artifact, *, resolution):
     # is here — at the ceiling it parks `round-ceiling`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
+    prior_reviewed = state.get("reviewedDiff")
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
+    state["_deltaSplitReviewed"] = prior_reviewed
     _enter_delta_round(state, config)
 
 
@@ -4242,8 +4256,10 @@ def _enter_post_fix(state, config, session_dir=None):
         return
     if not _advance_round(state, config, reason="post-fix-advance"):
         return
+    prior_reviewed = state.get("reviewedDiff")
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
     state["_postFixEntry"] = True
+    state["_deltaSplitReviewed"] = prior_reviewed
     _enter_delta_round(state, config)
 
 
@@ -4275,16 +4291,21 @@ def _enter_delta_round(state, config):
             state["_verifyThen"] = VERIFY_THEN_PANEL
             state["step"] = P_VERIFY
         return
-    base_reviewed = state.get("baseReviewedDiff")
-    if base_reviewed is None:
+    reviewed = state.pop("_deltaSplitReviewed", None)
+    if reviewed is None:
+        reviewed = state.get("reviewedDiff")
+    if reviewed is None:
+        cfg = state.get("config") or {}
+        reviewed = cfg.get("diff")
+    if reviewed is None:
         _schedule_full_panel_unknown(
-            state, "session base reviewed diff unpinned — full reviewer-deep panel")
+            state, "session reviewed diff unpinned — full reviewer-deep panel")
         if post_fix:
             state["_verifyThen"] = VERIFY_THEN_PANEL
             state["step"] = P_VERIFY
         return
     split = delta_surface.split_fix_surface(
-        base_reviewed, state.get("headDiff"), state.get("fixBatch") or [])
+        reviewed, state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
         _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel")
         if post_fix:

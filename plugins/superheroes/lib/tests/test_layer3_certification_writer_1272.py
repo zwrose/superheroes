@@ -233,7 +233,14 @@ def test_l3_b2_nonblocking_survivor_disclosed_not_refused(tmp_path):
     assert refusal is None
     assert receipt is not None
     assert receipt["disclosures"]["survivingNonBlocking"] == [
-        {"id": "M1", "title": "style nit", "severity": "Minor"},
+        {
+            "id": "M1",
+            "findingKey": "a.py::style nit@L1",
+            "file": "a.py",
+            "line": 1,
+            "title": "style nit",
+            "severity": "Minor",
+        },
     ]
     assert not any(f.get("id") == "M1" for f in receipt["findings"])
 

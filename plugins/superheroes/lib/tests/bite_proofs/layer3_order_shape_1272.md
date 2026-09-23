@@ -2,27 +2,30 @@
 
 | ID | guarded element | proving test |
 |---|---|---|
-| D1 | rendered fixer order carries no result-shape section | `test_l3_d1_fixer_order_names_no_result_shape` |
+| D1a | engine-seat fixer order carries no payload-contract block | `test_l3_d1_engine_fixer_order_names_no_result_shape` |
+| D1b | host-seat fixer order still carries the payload-contract block | `test_l3_d1_host_fixer_order_names_required_payload_shape` |
 | D2 | lint arm fires at production emission (no expect_items) | `test_l3_d2_production_emission_refuses_the_old_order_text` |
 
 Normalization: `-B -X pycache_prefix=/private/tmp/superheroes-pyc-woD`, single-node `::test_*`.
 
-## D1 — rendered fixer order carries no result-shape section
+## D1a — engine-seat fixer order carries no payload-contract block
 
-**Axis:** `render_order` for `dispatch-fixer` must not append the payload-contract block.
+**Axis:** `render_order` for `dispatch-fixer` with `host_seat=False` must not append the payload-contract block.
 
-**Neutralization:** at `round_orders.render_order`, replace `if phase != round_phases.P_FIXER:` with `if True:` so every phase including fixer renders `## Payload contract`.
+**Neutralization:** at `round_orders.render_order`, replace `if phase != round_phases.P_FIXER or context.get("host_seat"):` with `if True:` so every phase including engine fixer renders `## Payload contract`.
 
-**Red** — `plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d1_fixer_order_names_no_result_shape`:
+**Red** — `plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d1_engine_fixer_order_names_no_result_shape`:
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_________________ test_l3_d1_fixer_order_names_no_result_shape _________________
+__________ test_l3_d1_engine_fixer_order_names_no_result_shape _________________
 
-    def test_l3_d1_fixer_order_names_no_result_shape():
-        # axis: rendered dispatch-fixer carries no payload-contract heading or fixes literal
-        text = _render(RP.P_FIXER, _fixer_placeholders())
+    def test_l3_d1_engine_fixer_order_names_no_result_shape():
+        # axis: engine dispatch-fixer carries no payload-contract heading or fixes literal
+        ctx = _base_context(host_seat=False, placeholders=_fixer_placeholders())
+        text, reason = RO.render_order(RP.P_FIXER, "seat", ctx)
+        assert reason is None, reason
 >       assert _PAYLOAD_HEADING not in text
 E       AssertionError: assert '## Payload contract' not in 'You are the...yload.json\n'
 E         
@@ -35,22 +38,56 @@ E           ...
 E         
 E         ...Full output truncated (16 lines hidden), use '-vv' to show
 
-plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py:103: AssertionError
+plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py:114: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d1_fixer_order_names_no_result_shape
+FAILED plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d1_engine_fixer_order_names_no_result_shape
 1 failed in 0.18s
 ```
 
-**Restore:** change `if True:` back to `if phase != round_phases.P_FIXER:`.
+**Restore:** change `if True:` back to `if phase != round_phases.P_FIXER or context.get("host_seat"):`.
 
 **Restore receipt (restored lines):**
 ```python
-        if phase != round_phases.P_FIXER:
+        if phase != round_phases.P_FIXER or context.get("host_seat"):
             contract_block, creason = _format_payload_contract(phase)
             if creason:
                 return _refuse(creason)
             blocks.append(contract_block.rstrip())
 ```
+
+**Green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.15s
+```
+
+## D1b — host-seat fixer order still carries the payload-contract block
+
+**Axis:** `render_order` for `dispatch-fixer` with `host_seat=True` must append the payload-contract block.
+
+**Neutralization:** at `round_orders.render_order`, replace `if phase != round_phases.P_FIXER or context.get("host_seat"):` with `if phase != round_phases.P_FIXER:` so host fixer seats skip the payload-contract block.
+
+**Red** — `plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d1_host_fixer_order_names_required_payload_shape`:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_l3_d1_host_fixer_order_names_required_payload_shape ____________
+
+    def test_l3_d1_host_fixer_order_names_required_payload_shape():
+        # axis: host-seat dispatch-fixer carries the payload-contract block with required fixes
+        text = _render(RP.P_FIXER, _fixer_placeholders())
+>       assert _PAYLOAD_HEADING in text
+E       AssertionError: assert '## Payload contract' in 'You are the...yload.json\n'
+
+plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py:104: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d1_host_fixer_order_names_required_payload_shape
+1 failed in 0.16s
+```
+
+**Restore:** change `if phase != round_phases.P_FIXER:` back to `if phase != round_phases.P_FIXER or context.get("host_seat"):`.
 
 **Green:**
 
@@ -87,7 +124,7 @@ tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/c
 >       assert r["ok"] is False
 E       assert True is False
 
-plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py:126: AssertionError
+plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py:165: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d2_production_emission_refuses_the_old_order_text
 1 failed in 0.19s
@@ -98,7 +135,7 @@ FAILED plugins/superheroes/lib/tests/test_layer3_order_shape_1272.py::test_l3_d2
 **Restore receipt (restored lines):**
 ```python
     if kind == "fixer":
-        if _PAYLOAD_CONTRACT_HEADING in text:
+        if not allow_payload_contract and _PAYLOAD_CONTRACT_HEADING in text:
             return _f(TOKEN_RESULT_SHAPE_AUTHORED, "payload-contract-heading")
         if _FIXER_OBJECT.search(text):
             return _f(TOKEN_RESULT_SHAPE_AUTHORED, _FIXER_LITERAL)

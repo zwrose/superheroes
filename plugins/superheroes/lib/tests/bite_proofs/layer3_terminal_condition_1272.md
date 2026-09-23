@@ -8,7 +8,7 @@ production code; detectors are unedited. The same-round re-raise control
 |---|---|---|
 | A1 | `_excluded_discharged_fix_row` exclusion predicate | `test_l3_a1_excludes_discharged_row` |
 | A2 | `_queue_fix_batch` empty-after-filter convergence | `test_l3_a2_empty_batch_converges_on_the_paths_own_resolver` |
-| A3 | `_enter_delta_round` split reviewed side | `test_l3_a3_delta_split_reads_the_pinned_session_base` |
+| A3 | `_enter_delta_round` split reviewed side | `test_l3_a3_delta_split_reads_per_round_reviewed_diff` |
 
 ---
 
@@ -130,54 +130,45 @@ FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::tes
 
 ---
 
-## A3 — delta split reads pinned session base
+## A3 — delta split reads per-round reviewed baseline
 
 **Neutralization** (`round_driver.py`, `_enter_delta_round` split call):
 
 ```python
 -    split = delta_surface.split_fix_surface(
--        base_reviewed, state.get("headDiff"), state.get("fixBatch") or [])
+-        reviewed, state.get("headDiff"), state.get("fixBatch") or [])
 +    split = delta_surface.split_fix_surface(
-+        state.get("reviewedDiff"), state.get("headDiff"), state.get("fixBatch") or [])
++        state.get("baseReviewedDiff"), state.get("headDiff"), state.get("fixBatch") or [])
 ```
 
-**Expected red token:** split reviewed side equals **head** diff rather than base.
+**Expected red token:** split reviewed side equals session **base** diff rather than per-round reviewed.
 
 **Raw red:**
 
 ```
 F.                                                                       [100%]
 =================================== FAILURES ===================================
-_____________ test_l3_a3_delta_split_reads_the_pinned_session_base _____________
+____________ test_l3_a3_delta_split_reads_per_round_reviewed_diff ______________
 
-    def test_l3_a3_delta_split_reads_the_pinned_session_base(monkeypatch):
+    def test_l3_a3_delta_split_reads_per_round_reviewed_diff(monkeypatch):
         ...
         RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
->       assert captured["reviewed"] == _BASE_DIFF
-E       AssertionError: assert 'diff --git a...n+head line\n' == 'diff --git a...\n+new base\n'
-E         
-E           diff --git a/f.py b/f.py
-E         - index 1..2 100644
-E         ?       ^  ^
-E         + index 2..3 100644
-E         ?       ^  ^
-E           --- a/f.py...
-E         
-E         ...Full output truncated (8 lines hidden), use '-vv' to show
+>       assert captured["reviewed"] == _HEAD_DIFF
+E       AssertionError: assert 'diff --git a...\n+new base\n' == 'diff --git a...n+head line\n'
 
-plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:241: AssertionError
+plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py:272: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a3_delta_split_reads_the_pinned_session_base
+FAILED plugins/superheroes/lib/tests/test_layer3_terminal_condition_1272.py::test_l3_a3_delta_split_reads_per_round_reviewed_diff
 1 failed, 1 passed in 0.48s
 ```
 
-**Restore:** `base_reviewed` restored as the split's reviewed argument.
+**Restore:** `reviewed` restored as the split's reviewed argument.
 
 **Restore receipt (quoted lines):**
 
 ```python
     split = delta_surface.split_fix_surface(
-        base_reviewed, state.get("headDiff"), state.get("fixBatch") or [])
+        reviewed, state.get("headDiff"), state.get("fixBatch") or [])
 ```
 
 **Raw green:**

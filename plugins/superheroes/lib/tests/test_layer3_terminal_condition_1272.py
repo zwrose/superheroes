@@ -252,9 +252,22 @@ def test_l3_a2_control_open_blocker_reaches_fixer():
     assert state["_fixBatch"]
 
 
-# --- A3: delta split reads pinned session base ----------------------------------
+# --- A3: delta split reads per-round reviewed baseline ------------------------
 
-def test_l3_a3_delta_split_reads_the_pinned_session_base(monkeypatch):
+def _mk_diff(sections):
+    parts = []
+    for path, body in sections:
+        parts.extend([
+            "diff --git a/%s b/%s" % (path, path),
+            "index 1111111..2222222 100644",
+            "--- a/%s" % path,
+            "+++ b/%s" % path,
+            body,
+        ])
+    return "\n".join(parts) + "\n"
+
+
+def test_l3_a3_delta_split_reads_per_round_reviewed_diff(monkeypatch):
     captured = {}
     real_split = RD.delta_surface.split_fix_surface
 
@@ -269,17 +282,50 @@ def test_l3_a3_delta_split_reads_the_pinned_session_base(monkeypatch):
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = [{"file": "f.py", "line": 1, "title": "bug", "severity": "Important"}]
     RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
-    assert captured["reviewed"] == _BASE_DIFF
-    assert captured["reviewed"] != state["reviewedDiff"]
+    assert captured["reviewed"] == _HEAD_DIFF
+    assert captured["reviewed"] != _BASE_DIFF
 
 
-def test_l3_a3_absent_pin_schedules_full_panel():
+def test_l3_a3_absent_reviewed_diff_falls_back_to_config_diff(monkeypatch):
+    captured = {}
+    real_split = RD.delta_surface.split_fix_surface
+
+    def _capture_split(reviewed, head, fix_batch):
+        captured["reviewed"] = reviewed
+        return real_split(reviewed, head, fix_batch)
+
+    monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _capture_split)
     state = RD.new_state(_cfg(diff=_BASE_DIFF))
-    del state["baseReviewedDiff"]
+    state.pop("reviewedDiff", None)
     state["round"] = 2
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = [{"file": "f.py", "line": 1, "title": "bug", "severity": "Important"}]
-    RD._enter_delta_round(state, _cfg())
-    assert state["step"] == RD.P_PANEL
-    assert state["rounds"]["2"]["roundKind"] == "full-panel-unknown-surface"
-    assert any(d["kind"] == "unknown-surface" for d in state["decisions"])
+    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    assert captured["reviewed"] == _BASE_DIFF
+    assert state["step"] != RD.P_PANEL
+
+
+def test_l3_a3_second_fix_scoped_surface_excludes_first_fix_unchanged_hunk():
+    base = _mk_diff([
+        ("a.py", "@@ -1 +1 @@\n-a\n+b"),
+        ("b.py", "@@ -1 +1 @@\n-x\n+y"),
+    ])
+    after_first_fix = _mk_diff([
+        ("a.py", "@@ -1 +1 @@\n-a\n+fixed-a"),
+        ("b.py", "@@ -1 +1 @@\n-x\n+y"),
+    ])
+    after_second_fix = _mk_diff([
+        ("a.py", "@@ -1 +1 @@\n-a\n+fixed-a"),
+        ("b.py", "@@ -1 +1 @@\n-x\n+fixed-b"),
+    ])
+    state = RD.new_state(_cfg(diff=base))
+    state["round"] = 2
+    state["reviewedDiff"] = after_first_fix
+    state["headDiff"] = after_second_fix
+    state["fixBatch"] = [{"file": "b.py", "line": 1, "title": "bug-b", "severity": "Important"}]
+    RD._enter_delta_round(state, _cfg(diff=base))
+    new_surface = state.get("_newSurface") or {}
+    audit_targets = state.get("_auditTargets") or []
+    assert "a.py" not in new_surface
+    assert not new_surface
+    assert any(t.get("file") == "b.py" for t in audit_targets if isinstance(t, dict))

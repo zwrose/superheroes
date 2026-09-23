@@ -1554,13 +1554,21 @@ def check_disposition_without_receipt(ctx):
                     fid,
                     "finding has no disposition recorded",
                 )
-            nonblocking_disclosures.append(
-                {
-                    "id": finding.get("id"),
-                    "title": finding.get("title"),
-                    "severity": severity,
-                }
-            )
+            row = {
+                "id": finding.get("id"),
+                "title": finding.get("title"),
+                "severity": severity,
+            }
+            finding_key = _finding_identity_key(finding)
+            if finding_key:
+                row[session_contract.FINDING_KEY_FIELD] = finding_key
+            file_loc = finding.get("file")
+            if file_loc is not None:
+                row["file"] = file_loc
+            line_loc = finding.get("line")
+            if line_loc is not None:
+                row["line"] = line_loc
+            nonblocking_disclosures.append(row)
             continue
         if disposition not in session_contract.DISPOSITIONS:
             return _refusal(
