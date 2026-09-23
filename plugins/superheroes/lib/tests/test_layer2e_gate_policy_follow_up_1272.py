@@ -301,6 +301,26 @@ def test_e4_follow_up_on_judgment_fix_not_allowed():
     assert loaded["ok"] is False
 
 
+@pytest.mark.parametrize("gate,finding_class,disposition", [
+    (RGP.GATE_PRESENT_JUDGMENT, sorted(RGP.judgment_finding_classes())[0], "fix-as-suggested"),
+    (RGP.GATE_PRESENT_STALL_MENU, RGP.STALL_CLASS_ELIGIBLE, "hold"),
+])
+def test_e4b_follow_up_not_allowed_refused_at_calibration_write(gate, finding_class, disposition):
+    # axis: e4b — the write path names the allow-list refusal itself, not the load token behind it
+    policy = {
+        "schema": RGP.GATE_POLICY_SCHEMA,
+        "default": "park",
+        "rules": [{
+            "gate": gate,
+            "findingClass": finding_class,
+            "disposition": disposition,
+            "followUp": dict(_WELL_FORMED),
+        }],
+    }
+    assert RGP.validate_policy_for_write(policy) == (
+        "rules[0].followUp: not allowed for disposition %r" % disposition)
+
+
 def test_e5_follow_up_on_stall_hold_not_allowed():
     # axis: e5 — followUp on stall hold rule refused
     policy = {
