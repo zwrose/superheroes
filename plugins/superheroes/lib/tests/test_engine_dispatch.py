@@ -3837,6 +3837,77 @@ def test_native_write_timeout_terminal_refusal_not_reclassified(tmp_path, monkey
     assert "timeout" not in str(grade.get("detail", ""))
 
 
+# axis: a bare non-zero-exit forfeit names its detail token.
+def test_write_grade_nonzero_exit_forfeit_names_detail(tmp_path):
+    run_dir, state, _ended = _codex_native_write_grade_state(
+        tmp_path, str(tmp_path / "nonzero-exit-detail"),
+        ended_overrides={"exit": 1, "timedOut": False},
+    )
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "nonzero-exit"
+
+
+def _marker_write_grade_state(tmp_path, run_dir, *, ended_overrides=None):
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    os.makedirs(run_dir, exist_ok=True)
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _strip_opened_to_marker_channel(run_dir)
+    ended = {
+        "exit": 1, "timedOut": True, "refusal": None,
+        "at": time.time(), "capSeconds": 1,
+    }
+    if ended_overrides:
+        ended.update(ended_overrides)
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state, ended
+
+
+# axis: a timed-out non-native write with nothing admitted names its detail token.
+def test_write_grade_timeout_without_admission_names_detail(tmp_path):
+    run_dir, state, _ended = _marker_write_grade_state(
+        tmp_path, str(tmp_path / "timeout-no-admission-detail"),
+    )
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "timeout-no-admission"
+
+
+# axis: the terminal-refusal fold carries admittedAfterTimeout from the grade.
+def test_write_terminal_refusal_after_timeout_keeps_admitted_after_timeout(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    obj = {
+        "ok": False,
+        "signal": "plan_wrong",
+        "report": "Order premise was wrong.",
+        "evidence": {"testFailed": True, "testPassed": False},
+    }
+
+    def timeout_refusal_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, separators=(",", ":"))
+            fh.write("\n")
+        return "", True, 1, ""
+
+    res = _dispatch_write(
+        tmp_path, FakeRunner([timeout_refusal_runner]), cwd=wt,
+        run_dir=str(tmp_path / "terminal-refusal-after-timeout"),
+    )
+    assert res.get("ok") is False
+    assert res.get("terminal") is True
+    assert res.get("forfeited") is False
+    assert res.get("signal") == "plan_wrong"
+    assert res.get("admittedAfterTimeout") is True
+
+
 _ANT_KEY_A = "sk-ant-api03-" + ("A" * 40)
 _ANT_KEY_B = "sk-ant-api03-" + ("B" * 40)
 
@@ -16653,8 +16724,8 @@ def test_completion_producer_timed_out_foreground_carries_deadline_stamp(tmp_pat
     assert ended["timedOut"] is True
     assert ERC.FIELD_DEADLINE_MONO in ended
     assert ERC.FIELD_DEADLINE_EPOCH in ended
-    if ERC.FIELD_RESULT_COMPLETE_EPOCH in ended:
-        assert ended[ERC.FIELD_DEADLINE_EPOCH] == ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
+    assert ERC.FIELD_RESULT_COMPLETE_EPOCH in ended
+    assert ended[ERC.FIELD_DEADLINE_EPOCH] == ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
 
 
 def test_supervise_bg_budget_exhaustion_carries_deadline_not_completion(tmp_path, monkeypatch):
@@ -17587,6 +17658,44 @@ def _stdout_opened_write_journal(tmp_path, monkeypatch):
     records, _ = ED._journal_read(run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")
     return run_dir, opened
+
+
+# axis: the injected claude print stdout seam parses the envelope exactly once per attempt.
+def test_injected_seam_claude_print_stdout_parses_envelope_once(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "injected-claude-print-once")
+    os.makedirs(run_dir)
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    payload = json.loads(_native_write_result_json())
+    stream = _claude_event_stream(result=payload)
+    envelope_calls = {"count": 0}
+    real_envelope = ED.engine_adapter.claude_result_envelope
+
+    def counting_envelope(stdout):
+        envelope_calls["count"] += 1
+        return real_envelope(stdout)
+
+    monkeypatch.setattr(
+        ED.engine_adapter, "claude_result_envelope", counting_envelope,
+    )
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stream, False, 0, ""
+
+    ok, detail = ED._execute_injected_attempt(run_dir, state, 1, runner)
+    assert ok is True
+    assert detail == ""
+    assert envelope_calls["count"] == 1
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["report"] == payload["report"]
 
 
 def test_stdout_materializer_without_held_event_is_absent_despite_valid_stdout(
