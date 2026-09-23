@@ -14,16 +14,19 @@ import session_contract
 from round_certification_fixtures import (
     DEFAULT_FINDINGS_RESULT_SHA,
     DEFAULT_PANEL_PAYLOAD_SHA,
+    HEAD_SHA,
     MUST_REFUSE_FIXTURES,
     write_session,
     write_certifiable_session,
     _binding_fields,
     _dispatch_journal_with_binding,
+    _FIX_PRESENT_BYTES,
     _hand_landed_binding_journal_row,
+    _head_content_read_row,
     _write_head_content_blobs,
 )
 
-HEAD = "a" * 40
+HEAD = HEAD_SHA
 
 QUALIFICATION_HELPER_CENSUS = (
     "_execution_binding_matches_journal",
@@ -33,7 +36,6 @@ QUALIFICATION_HELPER_CENSUS = (
 )
 
 
-_FIX_PRESENT_BYTES = b"fix present\n"
 _FIX_PRESENT_DIGEST = hashlib.sha256(_FIX_PRESENT_BYTES).hexdigest()
 
 
@@ -45,19 +47,6 @@ def _fix_content_disposition_receipt(**overrides):
     }
     receipt.update(overrides)
     return receipt
-
-
-def _head_content_read_row(path, content_bytes, head=HEAD):
-    digest = hashlib.sha256(content_bytes).hexdigest()
-    return {
-        "headSha": head,
-        "path": path,
-        "contentDigest": digest,
-        "bytes": len(content_bytes),
-        "readAt": "2026-01-01T00:00:00Z",
-        "source": "git-show",
-        "readError": None,
-    }, digest
 
 
 def _envelope_execution_evidence_from_journal(journal_evidence):
