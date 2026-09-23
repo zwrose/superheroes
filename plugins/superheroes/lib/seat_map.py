@@ -368,7 +368,12 @@ def normalize_pins(pins):
     errors: list[str] = []
     for seat, pin in pins.items():
         if isinstance(pin, dict):
-            normalized[seat] = pin
+            entry = dict(pin)
+            vendor = entry.get("vendor")
+            model = entry.get("model")
+            if isinstance(vendor, str) and isinstance(model, str):
+                entry["model"] = model_registry.current_model_id(vendor, model)
+            normalized[seat] = entry
         elif isinstance(pin, str):
             normalized[seat] = {"vendor": pin}
         else:
