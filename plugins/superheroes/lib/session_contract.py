@@ -265,6 +265,8 @@ def legacy_key_collision(rows):
     for bare, minted in legacy_pairs:
         if minted in identity_keys:
             return LegacyKeyCollision(bare, minted)
+        # axis: a different minted identity claiming the legacy row's bare key refuses; the legacy
+        # row's own minted identity never counts against it.
         others = sorted(claimants[bare] - {minted})
         if others:
             return LegacyKeyCollision(bare, minted, others[0])
