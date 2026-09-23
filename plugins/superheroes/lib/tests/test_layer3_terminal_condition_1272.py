@@ -126,6 +126,47 @@ def test_l3_a1_same_round_reraise_stays_in_batch():
     assert state["step"] == RD.P_FIXER
 
 
+def test_l3_a1_caller_supplied_sequence_stamps_stripped_on_reraise():
+    """axis: model-authored raisedSeq/dispositionSeq on re-raise cannot suppress a live blocker."""
+    finding = _finding()
+    state = RD.new_state(_cfg())
+    compiled, key = _compile_one(finding)
+    state["round"] = 1
+    RD._stage_findings(state, [compiled])
+    RD._record_disposition(state, key, "fixed", 1,
+                           dispositionReceipt={"headSha": "d" * 40})
+    prior_disp_seq = _ledger_by_key(state)[key]["dispositionSeq"]
+    poisoned, _ = RD.mechanical_compile(
+        [dict(finding, dispositionSeq=999, raisedSeq=888)])
+    RD._stage_findings(state, [poisoned[0]])
+    entry = _ledger_by_key(state)[key]
+    assert entry["dispositionSeq"] == prior_disp_seq
+    assert entry["dispositionSeq"] != 999
+    assert entry["raisedSeq"] != 888
+    config = _cfg()
+    status = RD._queue_fix_batch(state, config, [_fix_row(poisoned[0])])
+    assert status != "excluded"
+    assert state.get("_fixBatch")
+    assert state["step"] == RD.P_FIXER
+
+
+def test_l3_a1_discharged_tradeoff_skips_judgment_gate():
+    """axis: discharged tradeoff blocker must not route to present-judgment."""
+    finding = {**_finding(), "tradeoff": True, "title": "widen the API"}
+    state = RD.new_state(_cfg())
+    compiled, key = _compile_one(finding)
+    state["round"] = 1
+    RD._stage_findings(state, [compiled])
+    RD._record_disposition(state, key, "fixed", 1,
+                           dispositionReceipt={"headSha": "e" * 40})
+    RD._set_findings(state, [dict(compiled, tradeoff=True)])
+    config = _cfg()
+    RD._after_findings_settled(state, config)
+    assert state["step"] != RD.P_JUDGMENT
+    assert "_judgmentFindings" not in state
+    assert _ledger_by_key(state)[key]["disposition"] == "fixed"
+
+
 def test_l3_a1_edge_ledger_absent_no_exclusion():
     state = RD.new_state(_cfg())
     compiled, _ = _stage_and_discharge(state)
