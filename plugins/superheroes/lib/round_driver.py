@@ -9045,7 +9045,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         if phase == P_FIXER:
             lint_text = _order_lint_text(order_text, context)
             lint = order_lint.check_text(
-                lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer")
+                lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer",
+                allow_payload_contract=context.get("host_seat") is True)
             if not lint.get("ok"):
                 first = (lint.get("findings") or [{}])[0]
                 token = first.get("token") or "unknown"

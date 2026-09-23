@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import core_md  # noqa: E402
 import mode_registry  # noqa: E402
+import order_contract  # noqa: E402
 import round_adapters  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_phases  # noqa: E402
@@ -131,7 +132,7 @@ def _format_payload_contract(phase: str) -> tuple[str | None, str | None]:
     if reason:
         return None, "payload-contract:%s" % reason
     lines = [
-        "## Payload contract",
+        order_contract.PAYLOAD_CONTRACT_HEADING,
         "",
         "Your result must carry a payload matching this shape:",
         "",
@@ -452,7 +453,7 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
             return _refuse("unknown-placeholder-remaining")
 
         blocks = [body.rstrip(), _format_residual_block(context).rstrip()]
-        if phase != round_phases.P_FIXER:
+        if phase != round_phases.P_FIXER or context.get("host_seat"):
             contract_block, creason = _format_payload_contract(phase)
             if creason:
                 return _refuse(creason)

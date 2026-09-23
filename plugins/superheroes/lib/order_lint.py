@@ -47,6 +47,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import guardian_lens_docs  # noqa: E402
+import order_contract  # noqa: E402
 
 TOKEN_UNREADABLE = "order-unreadable"
 TOKEN_REPO_ROOT_UNRESOLVED = "order-repo-root-unresolved"
@@ -95,7 +96,7 @@ def _load_result_vocab():
 
 _WRITE_SENTINEL, _FIXER_LITERAL = _load_result_vocab()
 _FIXER_OBJECT = re.compile(r'\{\s*"' + re.escape(_FIXER_LITERAL[2:].strip('"')) + r'"')
-_PAYLOAD_CONTRACT_HEADING = "## Payload contract"
+_PAYLOAD_CONTRACT_HEADING = order_contract.PAYLOAD_CONTRACT_HEADING
 _STDOUT_PROTOCOL = (_WRITE_SENTINEL, _FIXER_LITERAL)
 
 
@@ -274,14 +275,14 @@ def _placeholders(text):
     return out, len(seen)
 
 
-def _shape(text, expect_items, kind="implementer"):
+def _shape(text, expect_items, kind="implementer", allow_payload_contract=False):
     native = [s for s in _NATIVE if s in text]
     if _WRITE_SENTINEL in text and native:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, "+".join([_WRITE_SENTINEL] + native))
     if _FIXER_OBJECT.search(text) and expect_items:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, _FIXER_LITERAL + "+expect-item")
     if kind == "fixer":
-        if _PAYLOAD_CONTRACT_HEADING in text:
+        if not allow_payload_contract and _PAYLOAD_CONTRACT_HEADING in text:
             return _f(TOKEN_RESULT_SHAPE_AUTHORED, "payload-contract-heading")
         if _FIXER_OBJECT.search(text):
             return _f(TOKEN_RESULT_SHAPE_AUTHORED, _FIXER_LITERAL)
@@ -296,7 +297,8 @@ def _root_ok(path):
     return isinstance(path, str) and path and os.path.isdir(path) and os.access(path, os.R_OK)
 
 
-def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer"):
+def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer",
+               allow_payload_contract=False):
     if not isinstance(text, str):
         return _refuse(kind, TOKEN_UNREADABLE, "not-text")
     if not text.strip():
@@ -325,7 +327,8 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
     findings.extend(ph)
     pf, path_n = _paths(text, expect, roots, skip)
     findings.extend(pf)
-    amb = _shape(text, expect_items, kind=kind)
+    amb = _shape(text, expect_items, kind=kind,
+                 allow_payload_contract=allow_payload_contract)
     if amb:
         findings.append(amb)
     if kind == "implementer" and not _budget_ok(text):
@@ -335,7 +338,8 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
             "vocabSource": "canonical"}
 
 
-def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer"):
+def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer",
+          allow_payload_contract=False):
     try:
         with open(order_path, encoding="utf-8", errors="strict") as fh:
             text = fh.read()
@@ -347,7 +351,8 @@ def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implemente
         return _refuse(kind, TOKEN_UNREADABLE, str(exc))
     if not text.strip():
         return _refuse(kind, TOKEN_UNREADABLE, "empty")
-    return check_text(text, repo_root, expect_items, alt_roots, kind)
+    return check_text(text, repo_root, expect_items, alt_roots, kind,
+                      allow_payload_contract=allow_payload_contract)
 
 
 class _LintArgumentParser(argparse.ArgumentParser):

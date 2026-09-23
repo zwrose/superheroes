@@ -300,7 +300,7 @@ def test_fixer_emission_ignores_lint_triggers_inside_verify_command(tmp_path, mo
     lint = OL.check_text(RD._order_lint_text(order_text, {
         "placeholders": {"VERIFY_BUDGET": budget},
         "verify_command": verify,
-    }), repo, kind="fixer")
+    }), repo, kind="fixer", allow_payload_contract=True)
     assert lint["ok"] is True
 
 

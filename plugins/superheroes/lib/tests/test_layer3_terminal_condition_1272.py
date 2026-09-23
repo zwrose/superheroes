@@ -78,6 +78,35 @@ def test_l3_a1_excludes_discharged_row():
     assert state["step"] != RD.P_FIXER
 
 
+def test_l3_a1_mixed_batch_keeps_the_open_row():
+    state = RD.new_state(_cfg())
+    discharged, _ = _stage_and_discharge(state)
+    open_compiled, _ = _compile_one(
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+    RD._stage_findings(state, [open_compiled])
+    config = _cfg()
+    RD._queue_fix_batch(state, config, [_fix_row(discharged), _fix_row(open_compiled)])
+    assert [r["title"] for r in state["_fixBatch"]] == ["open"]
+    assert state["step"] == RD.P_FIXER
+    assert not any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
+
+
+def test_l3_a1_mixed_batch_continuation_keeps_the_open_row():
+    state = RD.new_state(_cfg())
+    discharged, _ = _stage_and_discharge(state)
+    open_compiled, _ = _compile_one(
+        {"file": "g.py", "line": 2, "title": "open", "severity": "Important"})
+    RD._stage_findings(state, [open_compiled])
+    state["fixBatch"] = [{"title": "prior slice"}]
+    config = _cfg()
+    RD._queue_fix_batch(
+        state, config, [_fix_row(discharged), _fix_row(open_compiled)],
+        reset_accumulator=False, batch_index=1)
+    assert [r["title"] for r in state["_fixBatch"]] == ["open"]
+    assert state["step"] == RD.P_FIXER
+    assert not any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
+
+
 def test_l3_a1_same_round_reraise_stays_in_batch():
     finding = _finding()
     compiled, _ = _compile_one(finding)

@@ -2,6 +2,7 @@
 import os
 import shlex
 
+import order_contract
 import order_lint as OL
 import round_driver as RD
 import round_orders as RO
@@ -12,7 +13,7 @@ _PLUGIN_ROOT = os.path.dirname(os.path.dirname(_TESTS))
 _REPO = "/home/user/proj"
 _SESSION = "/tmp/superheroes-session-wo4-golden"
 _PLUGIN_RUBRIC = os.path.join(_PLUGIN_ROOT, "rubric", "review-base.md")
-_PAYLOAD_HEADING = "## Payload contract"
+_PAYLOAD_HEADING = order_contract.PAYLOAD_CONTRACT_HEADING
 
 
 def _tokens(result):
@@ -97,9 +98,19 @@ def _render(phase, placeholders):
     return text
 
 
-def test_l3_d1_fixer_order_names_no_result_shape():
-    # axis: rendered dispatch-fixer carries no payload-contract heading or fixes literal
+def test_l3_d1_host_fixer_order_names_required_payload_shape():
+    # axis: host-seat dispatch-fixer carries the payload-contract block with required fixes
     text = _render(RP.P_FIXER, _fixer_placeholders())
+    assert _PAYLOAD_HEADING in text
+    assert "Required keys: fixes" in text
+    assert OL._FIXER_LITERAL not in text
+
+
+def test_l3_d1_engine_fixer_order_names_no_result_shape():
+    # axis: engine dispatch-fixer carries no payload-contract heading or fixes literal
+    ctx = _base_context(host_seat=False, placeholders=_fixer_placeholders())
+    text, reason = RO.render_order(RP.P_FIXER, "seat", ctx)
+    assert reason is None, reason
     assert _PAYLOAD_HEADING not in text
     assert OL._FIXER_LITERAL not in text
 
@@ -110,7 +121,7 @@ def test_l3_d1_control_other_phase_payload_contract_unchanged():
     assert _PAYLOAD_HEADING in panel_text
     assert "Required keys:" in panel_text
     fixer_text = _render(RP.P_FIXER, _fixer_placeholders())
-    assert _PAYLOAD_HEADING not in fixer_text
+    assert _PAYLOAD_HEADING in fixer_text
 
 
 def test_l3_d2_production_emission_refuses_the_old_order_text(tmp_path):
