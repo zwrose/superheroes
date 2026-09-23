@@ -101,6 +101,7 @@ SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
 EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind",
                              "observation")
+EXECUTION_EVIDENCE_OPTIONAL_FIELDS = ("model",)
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
@@ -560,7 +561,8 @@ def _execution_evidence_has_pointer(value):
 def _validate_execution_evidence(evidence):
     if not isinstance(evidence, dict):
         return ("execution-evidence-malformed", {})
-    extra_top = set(evidence.keys()) - set(EXECUTION_EVIDENCE_FIELDS)
+    allowed = set(EXECUTION_EVIDENCE_FIELDS) | set(EXECUTION_EVIDENCE_OPTIONAL_FIELDS)
+    extra_top = set(evidence.keys()) - allowed
     if extra_top:
         return ("execution-evidence-unknown-field", {
             "field": sorted(extra_top)[0],
@@ -573,6 +575,10 @@ def _validate_execution_evidence(evidence):
         if field not in _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK:
             return ("execution-evidence-malformed", {})
         if not _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):
+            return ("execution-evidence-malformed", {})
+    if "model" in evidence:
+        model = evidence["model"]
+        if model is not None and (not isinstance(model, str) or not model):
             return ("execution-evidence-malformed", {})
     observation = evidence["observation"]
     if _execution_evidence_has_pointer(evidence):
