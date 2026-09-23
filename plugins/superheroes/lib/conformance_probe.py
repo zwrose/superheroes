@@ -453,6 +453,24 @@ def _probe_one_mode(engine, mode, seat, repo_real, parent_run_dir, prompt_path, 
 def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, build_view=None,
           wave=None):
     """Run the conformance probe for `engine`. Returns (payload, exit code, stderr line). Never raises."""
+    if repo_root is not None:
+        try:
+            repo_root = os.fsdecode(os.fspath(repo_root))
+        except Exception:
+            payload, code, stderr_line = _refuse(engine, "repo-root-invalid", None)
+            payload["repoRoot"] = None
+            return payload, code, stderr_line
+        if not isinstance(repo_root, str) or not repo_root:
+            payload, code, stderr_line = _refuse(engine, "repo-root-invalid", None)
+            payload["repoRoot"] = None
+            return payload, code, stderr_line
+    if run_dir is not None:
+        try:
+            run_dir = os.fsdecode(os.fspath(run_dir))
+        except Exception:
+            return _refuse(engine, "run-dir-invalid", None)
+        if not isinstance(run_dir, str) or not run_dir:
+            return _refuse(engine, "run-dir-invalid", None)
     started_at, t0 = _utc_now_iso(), time.monotonic()
     timeout = timeout if timeout is not None else engine_dispatch.RETRY_MIN_TIMEOUT
     if engine not in DISPATCHABLE_ENGINES:
