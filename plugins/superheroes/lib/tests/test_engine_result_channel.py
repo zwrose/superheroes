@@ -1051,6 +1051,19 @@ def test_canonical_payload_digest_stable_across_key_order():
     assert first == second
 
 
+def test_canonical_payload_digest_literal():
+    # axis: the literal hex is the cross-process contract for canonical_payload_digest
+    payload = {
+        "z": "café",
+        "a": {"nested": True},
+        "m": [1, "two", {"three": 3}],
+        "b": 2,
+    }
+    assert ERC.canonical_payload_digest(payload) == (
+        "2b185d042f72ca66e7d6e6d19e9c6fb8ef2c3f124ab59b41a4ef585fc4814bef"
+    )
+
+
 @pytest.mark.parametrize("bad_obj", [
     [],
     "x",

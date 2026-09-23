@@ -171,6 +171,35 @@ def test_driver_import_census_rejects_qualified_from_import(tmp_path):
 
 
 # axis: writer-side tests and fixtures never import or name the round driver at any depth.
+def _writer_module_import_snippet():
+    import ast
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "test_round_certification.py")
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = ast.parse(source, filename=path)
+    stdlib = frozenset(sys.builtin_module_names) | frozenset((
+        "ast", "base64", "hashlib", "json", "os", "re", "subprocess", "tempfile",
+    ))
+    chunks = []
+    for node in tree.body:
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split(".")[0] for alias in node.names]
+        else:
+            roots = [node.module.split(".")[0]] if node.module else []
+        if any(root == "pytest" for root in roots):
+            continue
+        if roots and all(root in stdlib for root in roots):
+            continue
+        segment = ast.get_source_segment(source, node)
+        if segment:
+            chunks.append(segment.strip())
+    return "\n".join(chunks)
+
+
 def test_writer_tests_run_with_no_driver():
     here = os.path.dirname(os.path.abspath(__file__))
     targets = (
@@ -187,13 +216,12 @@ def test_writer_tests_run_with_no_driver():
 import sys
 sys.path.insert(0, %r)
 sys.path.insert(0, %r)
-import round_certification
-import round_certification_fixtures
+%s
 _forbidden = ("round_" + "driver", "test_round_" + "driver_integration")
 for _name in list(sys.modules):
     if _name.split(".")[-1] in _forbidden:
         raise AssertionError("forbidden driver module loaded: " + _name)
-""" % (lib_dir, tests_dir)
+""" % (lib_dir, tests_dir, _writer_module_import_snippet())
     import subprocess
 
     proc = subprocess.run(
