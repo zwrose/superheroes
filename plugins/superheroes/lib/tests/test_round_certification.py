@@ -141,8 +141,14 @@ def _driver_import_census(path):
                 if alias.name in forbidden or any(part in forbidden for part in alias.name.split(".")):
                     violations.append(alias.name)
         elif isinstance(node, ast.ImportFrom):
-            if node.module in forbidden:
+            if node.module and (
+                node.module in forbidden
+                or any(part in forbidden for part in node.module.split("."))
+            ):
                 violations.append(node.module)
+            for alias in node.names:
+                if alias.name in forbidden:
+                    violations.append(alias.name)
         elif isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name) and func.id in ("import_module", "__import__"):
@@ -161,6 +167,18 @@ def _driver_import_census(path):
             if any(name in node.value for name in forbidden):
                 violations.append(node.value)
     return saw_import, violations
+
+
+def test_driver_import_census_rejects_qualified_from_import(tmp_path):
+    probe = tmp_path / "probe_import.py"
+    driver_name = "round_" + "driver"
+    probe.write_text(
+        "from plugins.superheroes.lib import %s\n" % driver_name,
+        encoding="utf-8",
+    )
+    saw_import, violations = _driver_import_census(str(probe))
+    assert saw_import
+    assert violations, "qualified from-import must be flagged"
 
 
 # axis: writer-side tests and fixtures never import or name the round driver at any depth.
@@ -182,7 +200,10 @@ sys.path.insert(0, %r)
 sys.path.insert(0, %r)
 import round_certification
 import round_certification_fixtures
-assert ("round_" + "driver") not in sys.modules
+_forbidden = ("round_" + "driver", "test_round_" + "driver_integration")
+for _name in list(sys.modules):
+    if _name.split(".")[-1] in _forbidden:
+        raise AssertionError("forbidden driver module loaded: " + _name)
 """ % (lib_dir, tests_dir)
     import subprocess
 
