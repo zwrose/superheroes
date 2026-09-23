@@ -7,6 +7,8 @@ import json
 from dataclasses import dataclass
 from typing import Optional
 
+import model_registry
+
 from finding_identity import clamp_title, finding_identity, finding_label, normalize_title
 
 __all__ = (
@@ -70,6 +72,7 @@ __all__ = (
     "evidence_binding",
     "execution_only_admissible_for_phase",
     "verify_result_for_head",
+    "runner_channel_vendor",
     "RE_EMIT_CMD",
     "ORDERS_SUPERSEDED_OUTCOME",
     "journal_is_re_emit_orders_superseded",
@@ -558,6 +561,18 @@ def fix_still_present_at_head(finding, receipt, head, read_outcome, by_key=None)
             "fixed disposition fix is not present in content at the certified head",
         )
     return None
+
+
+def runner_channel_vendor(vendor):
+    """True when ``vendor`` is a registered non-claude engine (codex/cursor today).
+
+    Unknown vendors fail closed to host transport — they cannot land on the engine stdout branch."""
+    if not isinstance(vendor, str) or not vendor.strip():
+        return False
+    v = vendor.strip()
+    if v == "claude":
+        return False
+    return v in model_registry.vendors()
 
 
 def verify_result_for_head(state, head):

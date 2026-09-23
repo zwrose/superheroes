@@ -407,6 +407,7 @@ VERIFIED_HEAD_UNRESOLVED_CAUSE = "verified-head-unresolved"
 RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
 RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL
 RELOCATION_EVIDENCE_INDETERMINATE_CAUSE = "relocation-evidence-indeterminate"
+AUDITOR_UNSEATABLE_CAUSE = "auditor-unseatable"
 RELOCATION_EVIDENCE_INDETERMINATE_DETAIL = (
     "relocation evidence in the journal is unreadable or malformed; "
     "cannot determine whether this attempt predates a checkout move"
@@ -985,7 +986,7 @@ def author_justification_filter(findings, prior_comments):
 # independence + certification shape
 # =============================================================================================
 
-def _auditor_vendor(config, fixer_vendor):
+def _auditor_vendor(config, fixer_vendor, runner_only=False):
     """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
     on family, not the dispatch CLI). Independence is NEVER satisfied between two cursor first-party
     models (#651, owner-ratified 2026-07-26): composer and grok share the `xai` family, so a
@@ -993,10 +994,16 @@ def _auditor_vendor(config, fixer_vendor):
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
     independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
     rider 4a); see test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry."""
-    vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor)
+    vendor, _fam = receipt_disclosures.independent_auditor(
+        config, fixer_vendor, runner_only=runner_only)
     if vendor is not None:
         return vendor, "independent"
     live = _live_vendors(config)
+    if runner_only:
+        for v in live:
+            if session_contract.runner_channel_vendor(v):
+                return v, "degraded"
+        return None, "unseatable"
     return (live[0] if live else fixer_vendor), "degraded"
 
 
@@ -4353,8 +4360,10 @@ def _audit_targets(state, config, audit_targets_map):
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
     occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
-    auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
-    if independence == "degraded":
+    runner_only = not state.get("_submitUsed")
+    auditor_vendor, independence = _auditor_vendor(
+        config, fixer_vendor, runner_only=runner_only)
+    if independence in ("degraded", "unseatable"):
         state["independenceDegraded"] = True
     targets = []
     seen_keys = set()
@@ -4365,7 +4374,7 @@ def _audit_targets(state, config, audit_targets_map):
         if tid in seen_keys:
             continue
         seen_keys.add(tid)
-        targets.append({
+        row = {
             "id": tid,
             session_contract.FINDING_KEY_FIELD: tid,
             "identity": finding_identity(f),
@@ -4378,11 +4387,13 @@ def _audit_targets(state, config, audit_targets_map):
             "dimension": f.get("dimension"),
             "taxonomy": f.get("taxonomy"),
             "fixerVendor": fixer_vendor,
-            "auditorVendor": auditor_vendor,
             "independence": independence,
             "verdict": f.get("verdict"),
             "evidence": f.get("evidence"),
-        })
+        }
+        if auditor_vendor is not None:
+            row["auditorVendor"] = auditor_vendor
+        targets.append(row)
     return targets
 
 
@@ -8101,12 +8112,28 @@ def _vendor_is_external_engine(vendor):
     """True when ``vendor`` is a registered non-claude engine (codex/cursor today).
 
     Unknown vendors fail closed to host transport — they cannot land on the engine stdout branch."""
-    if not isinstance(vendor, str) or not vendor.strip():
-        return False
-    v = vendor.strip()
-    if v == "claude":
-        return False
-    return v in model_registry.vendors()
+    return session_contract.runner_channel_vendor(vendor)
+
+
+def _auditor_unseatable_refusal(session_dir, state, cmd):
+    if state.get("_submitUsed"):
+        return None
+    cfg = state.get("config") or {}
+    auditor, _independence = _auditor_vendor(cfg, cfg.get("fixerVendor"), runner_only=True)
+    if auditor is not None:
+        return None
+    detail = (
+        "The durable-record path requires a fix auditor dispatched through the runner "
+        "(codex or cursor), but none is among this session's vendors. "
+        "Start a fresh session seeded with --vendors naming a runner vendor "
+        "(for example codex or cursor), or use hand next/submit for the whole session."
+    )
+    return _refuse_cmd(
+        session_dir, cmd, AUDITOR_UNSEATABLE_CAUSE,
+        liveVendors=_live_vendors(cfg),
+        fixerVendor=cfg.get("fixerVendor"),
+        detail=detail,
+    )
 
 
 def _seat_is_engine(row):
@@ -9638,6 +9665,9 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                     "hand-submit fold paths are mutually exclusive per session. For this phase, compile "
                     "the artifact and `submit` — do not use `advance` (this session's latch refuses it) "
                     "or `record-result`."))
+    refusal = _auditor_unseatable_refusal(session_dir, state, "record-result")
+    if refusal is not None:
+        return refusal
     if seat is None and not sweep:
         return _refuse_cmd(session_dir, "record-result", "seat-required")
     phase, rnd, cur_attempt, refusal = _pending_of(
@@ -10034,6 +10064,9 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
                     "hand-submit fold paths are mutually exclusive per session. For this phase, compile "
                     "the artifact and `submit` — do not use `advance` (this session's latch refuses it) "
                     "or `record-missing`."))
+    refusal = _auditor_unseatable_refusal(session_dir, state, "record-missing")
+    if refusal is not None:
+        return refusal
     phase, rnd, cur_attempt, refusal = _pending_of(
         session_dir, state, "record-missing", expect_round=expect_round,
         expect_phase=expect_phase)
@@ -10768,6 +10801,9 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
                                detail=side.get("detail"))
         return {"ok": True, "terminal": state.get("terminal"), "idempotent": True,
                 "sidecar": side.get("path"), "sidecarRepaired": bool(side.get("repaired"))}
+    refusal = _auditor_unseatable_refusal(session_dir, state, "advance")
+    if refusal is not None:
+        return refusal
     if state.get("_submitUsed"):
         return _refuse_cmd(session_dir, "advance", "advance-submit-interleaved")
     phase, rnd, attempt, refusal = _pending_of(session_dir, state, "advance")
