@@ -1948,6 +1948,7 @@ def test_resolvable_families_reads_codex_role_pin():
 @pytest.mark.parametrize(
     "bad_pins",
     [
+        pytest.param(None, id="null"),
         pytest.param("x", id="non-dict"),
         pytest.param({"not-a-role": "gpt-6-astra"}, id="unknown-role"),
         pytest.param({"reviewer-deep": ""}, id="empty-value"),
@@ -2120,13 +2121,13 @@ def test_normalize_pins_absent_map_is_not_a_refusal():
     assert SM.normalize_pins({}) == ({}, [])
 
 
-# axis: stored seat pins naming legacy claude model ids translate to current registry ids
-def test_normalize_pins_translates_legacy_claude_label():
+# axis: pin normalization does not rewrite legacy model ids at the admission boundary
+def test_normalize_pins_preserves_legacy_claude_label():
     normalized, errors = SM.normalize_pins(
-        {"code-reviewer": {"vendor": "claude", "model": "opus-5"}}
+        {"code-reviewer": {"vendor": "claude", "model": "opus-5", "effort": "xhigh"}}
     )
     assert errors == []
-    assert normalized["code-reviewer"]["model"] == "opus-5.5"
+    assert normalized["code-reviewer"]["model"] == "opus-5"
 
 
 def test_build_string_pin_resolves_as_vendor():
@@ -2652,6 +2653,29 @@ def _all_claude_roster_seats():
             cfg["effort"] = "high"
         seats[seat] = cfg
     return seats
+
+
+def test_to_receipt_malformed_codex_role_pins_cannot_excuse_critical_diversity():
+    # axis: malformed codexRolePins survives receipt round-trip and cannot launder violations
+    seat_map = {
+        "seats": _all_claude_roster_seats(),
+        "authorFamily": "xai",
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+        "codexRolePins": {"bad-role": "gpt-6-astra"},
+    }
+    before = SM.classify_violations(seat_map, "xai")
+    assert any(
+        v.get("constraint") == "critical-diversity" for v in before["unexcused"]
+    )
+    receipt = SM.to_receipt(seat_map, "xai")
+    assert receipt["codexRolePins"] == {"bad-role": "gpt-6-astra"}
+    after = SM.classify_violations(receipt, "xai")
+    assert any(
+        v.get("constraint") == "critical-diversity" for v in after["unexcused"]
+    )
+    assert not after["excusedByLiveness"]
 
 
 def test_inv16_a_self_asserted_author_family_basis():

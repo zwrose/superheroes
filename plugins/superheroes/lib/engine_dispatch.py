@@ -790,8 +790,6 @@ def _spawn_allowlist_verdict(opened, *, journal_corrupt=False):
             "allowlist_pairs": [],
         }
     role, vendor, model, effort = seat_tuple
-    if isinstance(vendor, str) and isinstance(model, str):
-        model = model_registry.current_model_id(vendor, model)
     run_kind = opened.get("runKind", RUN_KIND_REVIEW)
     verb = "dispatch-review" if run_kind == RUN_KIND_REVIEW else "dispatch-write"
     mode = opened.get("mode")

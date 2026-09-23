@@ -71,9 +71,11 @@ def panel_pin_tiers() -> frozenset[str]:
 
 def _read_codex_role_pins(seat_map: dict) -> tuple[dict[str, str] | None, bool]:
     """Read ``codexRolePins`` from a seat map — absent, validated mapping, or unusable."""
+    if "codexRolePins" not in seat_map:
+        return None, True
     raw = seat_map.get("codexRolePins")
     if raw is None:
-        return None, True
+        return None, False
     if not isinstance(raw, dict):
         return None, False
     pins: dict[str, str] = {}
@@ -210,6 +212,8 @@ def _live_cells_fields_for_receipt(seat_map: dict) -> tuple[list, object]:
     if isinstance(live, list) and live:
         roster = tuple(seat_map.get("seats", {}).keys()) or PANEL_ROSTER
         role_pins, pins_usable = _read_codex_role_pins(seat_map)
+        if "codexRolePins" in seat_map and not pins_usable:
+            return [], liveness_cache.LIVE_CELLS_SOURCE_UNPROBED
         pin_arg = role_pins if pins_usable and role_pins else None
         synthesized = _synthesize_live_cells(live, roster, None, codex_role_pins=pin_arg)
         return sorted([list(c) for c in synthesized]), receipt_source
@@ -391,12 +395,7 @@ def normalize_pins(pins):
     errors: list[str] = []
     for seat, pin in pins.items():
         if isinstance(pin, dict):
-            entry = dict(pin)
-            vendor = entry.get("vendor")
-            model = entry.get("model")
-            if isinstance(vendor, str) and isinstance(model, str):
-                entry["model"] = model_registry.current_model_id(vendor, model)
-            normalized[seat] = entry
+            normalized[seat] = dict(pin)
         elif isinstance(pin, str):
             normalized[seat] = {"vendor": pin}
         else:
@@ -1255,6 +1254,8 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
     role_pins, pins_usable = _read_codex_role_pins(seat_map)
     if pins_usable and role_pins:
         out["codexRolePins"] = dict(role_pins)
+    elif "codexRolePins" in seat_map:
+        out["codexRolePins"] = seat_map["codexRolePins"]
     return out
 
 

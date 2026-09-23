@@ -10066,6 +10066,22 @@ def test_spawn_gate_refuses_pre_upgrade_journal_without_resolved_inputs(tmp_path
     assert "cannot be established" in detail
 
 
+def test_spawn_allowlist_verdict_refuses_legacy_unregistered_model():
+    # axis: legacy journal model ids are validated exactly as recorded, not translated at admission
+    opened = {
+        "runKind": ED.RUN_KIND_REVIEW,
+        "resolvedInputs": {
+            "engine": "claude",
+            "model": "opus-5",
+            "effort": "xhigh",
+            "role": "reviewer-deep",
+        },
+    }
+    verdict = ED._spawn_allowlist_verdict(opened)
+    assert verdict.get("ok") is False
+    assert "opus-5" in (verdict.get("reason") or "")
+
+
 def test_spawn_gate_refuses_continuation_with_off_allowlist_snapshot(tmp_path):
     # axis: G2 path 6 — continuation spawn reads journal seat, not caller argv
     run_dir = str(tmp_path / "cont-g2")

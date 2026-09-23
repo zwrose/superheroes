@@ -276,6 +276,41 @@ def test_stdout_bytes_changed_reports_dropped_cause(tmp_path, monkeypatch):
     assert grade.get("droppedCause") == "bytes-changed"
 
 
+def test_held_stdout_bytes_unchanged_final_read_failed(tmp_path):
+    """axis: save-time byte check clears held event and records final-read-failed on OSError."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_stream = _claude_event_stream(result=structured)
+    stdout_path = tmp_path / "final-read-failed.stdout"
+    stdout_path.write_text(result_stream, encoding="utf-8")
+    obs = {
+        "offset": 0, "buf": b"", "overflow": False, "poisoned": False, "drop_cause": None,
+    }
+    ED._observe_stdout_completion(obs, str(stdout_path), terminal=True)
+    assert obs.get("event") is not None
+    os.remove(stdout_path)
+    assert ED._held_stdout_bytes_unchanged(obs, str(stdout_path)) is False
+    assert obs.get("event") is None
+    assert obs.get("stamp") is None
+    assert obs.get("drop_cause") == "final-read-failed"
+
+
+def test_held_stdout_bytes_unchanged_missing_digest(tmp_path):
+    """axis: missing held stamp digest metadata drops with bytes-changed."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_stream = _claude_event_stream(result=structured)
+    stdout_path = tmp_path / "missing-digest.stdout"
+    stdout_path.write_text(result_stream, encoding="utf-8")
+    obs = {
+        "offset": 0, "buf": b"", "overflow": False, "poisoned": False, "drop_cause": None,
+    }
+    ED._observe_stdout_completion(obs, str(stdout_path), terminal=True)
+    assert obs.get("event") is not None
+    obs["stamp_line_sha256"] = None
+    assert ED._held_stdout_bytes_unchanged(obs, str(stdout_path)) is False
+    assert obs.get("event") is None
+    assert obs.get("drop_cause") == "bytes-changed"
+
+
 def test_held_stdout_bytes_check_never_reparses(tmp_path):
     """axis: the save-time byte check never calls json.loads."""
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))

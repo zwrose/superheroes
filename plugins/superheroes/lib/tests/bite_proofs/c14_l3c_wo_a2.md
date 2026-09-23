@@ -10,6 +10,8 @@ Stdout drop-cause recording and save-time byte digest check for held claude prin
 | BP-A2-2 | `_observe_stdout_completion` size-regression branch: `_record_stdout_drop_cause(..., "shrunk-below-read")` | stdout shrink reports `stdout-result-dropped` / `shrunk-below-read` at admission | `test_stdout_shrunk_below_read_reports_dropped_cause` |
 | BP-A2-3 | `_held_stdout_bytes_unchanged` digest compare | bytes changed after stamp drop with `bytes-changed` and nothing materialized | `test_stdout_bytes_changed_reports_dropped_cause` |
 | BP-A2-4 | `_held_stdout_bytes_unchanged` body | save-time check never calls `json.loads` | `test_held_stdout_bytes_check_never_reparses` |
+| BP-A2-5 | `_held_stdout_bytes_unchanged` `except OSError` branch | save-time read failure clears held event and records `final-read-failed` | `test_held_stdout_bytes_unchanged_final_read_failed` |
+| BP-A2-6 | `_held_stdout_bytes_unchanged` missing digest branch | absent stamp digest metadata drops with `bytes-changed` | `test_held_stdout_bytes_unchanged_missing_digest` |
 
 ---
 
@@ -134,3 +136,51 @@ assert [1] == []
 .                                                                        [100%]
 1 passed in 0.13s
 ```
+
+---
+
+## BP-A2-5 — save-time OSError
+
+- **axis:** save-time read failure clears held event and records `final-read-failed`
+
+**neutralization** (`engine_dispatch.py`, `_held_stdout_bytes_unchanged` `except OSError`):
+
+replace the branch body with `return True`.
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-l3c-A2 -m pytest plugins/superheroes/lib/tests/test_stdout_read_failures.py::test_held_stdout_bytes_unchanged_final_read_failed -q -p no:xdist
+```
+
+**raw red** (exit 1):
+```
+AssertionError: assert True is False
+```
+
+**restore:** reinstate fail-closed `except OSError` body.
+
+**raw green** (exit 0): `1 passed`
+
+---
+
+## BP-A2-6 — missing digest metadata
+
+- **axis:** absent stamp digest metadata drops with `bytes-changed`
+
+**neutralization** (`engine_dispatch.py`, `_held_stdout_bytes_unchanged` missing-digest branch):
+
+replace the branch body with `return True`.
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-l3c-A2 -m pytest plugins/superheroes/lib/tests/test_stdout_read_failures.py::test_held_stdout_bytes_unchanged_missing_digest -q -p no:xdist
+```
+
+**raw red** (exit 1):
+```
+AssertionError: assert True is False
+```
+
+**restore:** reinstate fail-closed missing-digest branch.
+
+**raw green** (exit 0): `1 passed`

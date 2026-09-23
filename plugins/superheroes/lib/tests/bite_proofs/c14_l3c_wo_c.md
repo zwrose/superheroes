@@ -11,7 +11,7 @@
 | BP-C3 | `_MATRIX["auditor"]` derivation | auditor row tracks verifier cells | `test_auditor_cells_track_verifier_cells` |
 | BP-C4 | `_PRE_CHILD_HEAD` git-baseline loader | missing commit fails closed with fetch-depth guidance | `test_matrix_cells_reviewer_roles_unchanged_at_base` |
 | BP-C5 | `engine_dispatch._continuation_seat_tuple` translation | legacy journaled claude label continues | `test_continuation_accepts_legacy_claude_label` |
-| BP-C6 | `seat_map.normalize_pins` translation | stored pin under legacy label is honored | `test_normalize_pins_translates_legacy_claude_label` |
+| BP-C6 | `seat_map.normalize_pins` admission | legacy model ids pass through without rewriting | `test_normalize_pins_preserves_legacy_claude_label` |
 | BP-C7 | `validate_config` on legacy ids | legacy ids stay unregistered | `test_legacy_claude_model_ids_stay_unregistered` |
 
 ---
@@ -131,16 +131,16 @@ E       AssertionError: assert 'run-dir-seat-mismatch' is None
 
 ## BP-C6
 
-- **axis:** stored pin under legacy label is honored
+- **axis:** legacy model ids pass through pin normalization without rewriting
 
-**neutralization** (`plugins/superheroes/lib/seat_map.py` — removed translation in `normalize_pins`)
+**neutralization** (`plugins/superheroes/lib/seat_map.py` — re-add `current_model_id` in `normalize_pins`)
 
 **raw red** (exit 1):
 ```
-E       AssertionError: assert 'opus-5' == 'opus-5.5'
+E       AssertionError: assert 'opus-5.5' == 'opus-5'
 ```
 
-**restore:** re-applied `current_model_id` translation in `normalize_pins`.
+**restore:** removed `current_model_id` translation from `normalize_pins`.
 
 **raw green** (exit 0): `1 passed in 0.19s`
 
