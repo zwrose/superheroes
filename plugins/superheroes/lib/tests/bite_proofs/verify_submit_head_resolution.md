@@ -364,6 +364,46 @@ After the last restore, in the probe tree at `198448ae`:
   `test_verify_submit_head_resolution.py` + `test_layer2g_terminal_finalization_1272.py` →
   `35 passed in 68.23s`.
 
+---
+
+## Review-fix detectors (added by the review loop's round-1 fix, `115981af`)
+
+The review panel's two confirmed Test findings were fixed with three new detectors in
+`test_verify_submit_head_resolution.py`. Three more guarded elements, one proof each, run in the
+same probe tree moved to **`115981af`** (clean before each neutralization).
+
+| # | Guarded element / axis | Neutralization (quoted) | Detector | Raw red (EXIT=1) | Restore receipt · raw green |
+|---|---|---|---|---|---|
+| E11 | `_verify_result_advances` skip branch — an explicit skip with **no** verify command advances, so an unresolvable head refuses it | `return result in _VERIFY_SKIP and not _verify_command_configured(config)` → `return False  # BP-E11 NEUTRALIZATION: skips never counted as advancing` | `test_skip_result_with_no_verify_command_advances_so_it_is_refused` (all three skip tokens) | `E  AssertionError: {'foldLanded': True, 'nextStep': 'terminal', 'ok': True, 'phase': 'run-verify', ...}` ×3 · `3 failed in 40.34s` | porcelain empty · `3 passed in 45.39s` |
+| E12 | the `not _verify_command_configured(config)` conjunct — a skip **with** a configured command halts and is never refused | same line → `return result in _VERIFY_SKIP  # BP-E12 NEUTRALIZATION: configured command ignored` | `test_skip_result_with_a_configured_verify_command_halts_unrefused` (all three) | `E  AssertionError: {'detail': "fix-fold head: git rev-parse HEAD failed in '…/not-a-repo'", 'ok': False, 'reason': 'verified-head-unresolved'}` ×3 · `3 failed in 72.39s` | porcelain empty · `3 passed in 50.89s` |
+| E13 | `_fold`'s verify arm hands the in-process `run_loop` leg **no** head — never the session-setup `headSha` (the regression the finding named) | `_fold_verify(state, config, artifact, verified_head=verified_head)` → `_fold_verify(state, config, artifact, verified_head=verified_head or config.get("headSha"))  # BP-E13 NEUTRALIZATION` | `test_run_loop_leg_records_no_verified_head_through_the_real_fold` | `E  AssertionError: assert 'verifiedHead' not in {'auditIndependence': 'independent', 'auditProvenance': 'collection-manifest', …}` · `1 failed in 1.14s` | porcelain empty · `1 passed in 0.87s` |
+
+## Final-head re-run — E1–E10 at `115981af`
+
+Production code did not change after `7b805dc3`, but the E1–E5 detector file gained tests in the
+fix commit, so every proof was re-run at the final code head `115981af` (the later commits touch
+only this record). Each neutralization was the one quoted above; before each run `git diff` showed
+**exactly one** active neutralization (the previous one restored by its inverse edit — for E1→E2,
+which share a line, the E1 form was edited straight into the E2 form and `git diff` showed only the
+E2 line). Every red matched the first pass on its axis:
+
+| # | Raw red at `115981af` (EXIT=1) |
+|---|---|
+| E1 | `AssertionError: {'foldLanded': True, 'nextStep': 'terminal', 'ok': True, 'phase': 'run-verify', ...}` |
+| E2 | `AssertionError: {'detail': "fix-fold head: git rev-parse HEAD failed in '…/not-a-repo'", 'ok': False, 'reason': 'verified-head-unresolved'}` |
+| E3 | `OSError: injected meta write failure` |
+| E4 | `AssertionError: assert None == '9f7b85c58ee2731944553174d0e1b6e190e68e42'` (no `verifiedHead`) |
+| E5 | `AssertionError: assert None == 'd3e441b5c8eb0bf7dc6edcde2df9d3d46c2a471f'` (no `verifiedHead`) |
+| E6 | `AssertionError: assert None == '7cd52995f476455141a107cf475a274a48d37d73'` (loop's verify round, no `verifiedHead`) |
+| E7 | `AssertionError: assert 'verify-not-pass' == 'verify-not-on-head'` |
+| E8 | `AssertionError: assert 'verifyResult' not in {…, 'fixContentHeadSha': '916548ea…', …}` |
+| E9 | `AssertionError: assert 'verifyResult' not in {…, 'fixContentHeadSha': '1be7984f…', …}` |
+| E10 | `AssertionError: assert 'verifiedHeadRefused' not in {'verifiedHeadRefused': 'verified head: none', 'verifyResult': 'pass'}` |
+
+**Final close-out** at `115981af` after the last restore: `git status --porcelain` empty before
+and after; both detector files green (EXIT=0) — `42 passed in 100.69s`. That run is the raw green
+for the E1–E10 re-run.
+
 **Disclosures.** None. No proof ran under a normalization, none was unavailable, and none was
 substituted for by a representative. E4 and E5 share one detector by design (two hops of one
 chain); each has its own neutralization and its own red.
