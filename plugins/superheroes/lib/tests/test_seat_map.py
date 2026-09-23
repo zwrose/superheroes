@@ -3181,6 +3181,31 @@ def test_codex_role_pin_astra_registered_seats_at_high():
         assert cfg["source"] == "role-pinned"
 
 
+# axis: probed family check falls back to matrix when honored role pin is not live.
+def test_verify_maker_family_with_unavailable_role_pin_and_live_matrix_cell():
+    kw = dict(
+        roster=SM.PANEL_ROSTER,
+        live_vendors=["claude", "codex"],
+        author_family="anthropic",
+        narrative_family="openai",
+        seed=0,
+        pins={
+            "code-reviewer": {"vendor": "claude"},
+            "test-reviewer": {"vendor": "claude"},
+        },
+        live_cells=[["codex", "gpt-5.6-sol", "xhigh"]],
+        live_cells_source="probed",
+    )
+    without_pin = SM.build(**kw)
+    with_pin = SM.build(**kw, codex_role_pins={"reviewer-deep": "gpt-6-astra"})
+    assert any(
+        v.get("constraint") == "maker-family" for v in SM.verify(without_pin, "anthropic")
+    )
+    assert any(
+        v.get("constraint") == "maker-family" for v in SM.verify(with_pin, "anthropic")
+    )
+
+
 # axis: registered gpt-6-astra role-pin falls back to matrix when Astra is not in live cells.
 def test_codex_role_pin_astra_not_live_falls_back_to_matrix():
     live_cells = [

@@ -441,6 +441,7 @@ def _seat_dict_from_resolved_snapshot(snapshot):
     if seat_tuple is None:
         return None
     role, vendor, model, effort = seat_tuple
+    model = model_registry.current_model_id(vendor, model)
     return {"vendor": vendor, "model": model, "effort": effort, "role": role}
 
 

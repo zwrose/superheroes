@@ -261,11 +261,19 @@ def _resolvable_families_for_seat(
                 return None
             live_cell_set.add(normalized)
         for vendor in known_vendors:
-            model, effort, _pin = _cell(tier, vendor, pin_arg)
+            model, effort, pin_info = _cell(tier, vendor, pin_arg)
             if model is None:
                 continue
             if (vendor, model, effort) not in live_cell_set:
-                continue
+                if pin_info and pin_info.get("honored") and vendor != "claude":
+                    matrix_model, matrix_effort, _mp = _cell(tier, vendor, None)
+                    if matrix_model is None:
+                        continue
+                    model, effort = matrix_model, matrix_effort
+                    if (vendor, model, effort) not in live_cell_set:
+                        continue
+                else:
+                    continue
             fam = family_for(tier, vendor)
             if fam is None or not is_allowed(tier, vendor, model, effort):
                 continue
