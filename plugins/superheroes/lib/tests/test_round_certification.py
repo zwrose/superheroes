@@ -1747,6 +1747,7 @@ def test_hand_landed_write_run_kind_qualifies_without_payload_key():
     ok, failure = RC._hand_landed_evidence_qualifies(
         envelope, HEAD, journal_binding=journal_binding,
         recorded_nonces={"hand-landed-nonce"},
+        phase=RC.FIXER_PHASE,
     )
     assert ok is True
     assert failure == RC.EXECUTION_ONLY_BINDING

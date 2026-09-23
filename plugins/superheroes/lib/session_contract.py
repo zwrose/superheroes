@@ -66,6 +66,7 @@ __all__ = (
     "EXECUTION_ONLY_BINDING",
     "PAYLOAD_BOUND_BINDING",
     "evidence_binding",
+    "execution_only_admissible_for_phase",
     "verify_result_for_head",
     "RE_EMIT_CMD",
     "ORDERS_SUPERSEDED_OUTCOME",
@@ -91,6 +92,15 @@ def evidence_binding(result_kind):
     if result_kind == WRITE_RESULT_KIND:
         return EXECUTION_ONLY_BINDING
     return PAYLOAD_BOUND_BINDING
+
+
+def execution_only_admissible_for_phase(phase):
+    """True when execution-only (write-run) evidence binding is admissible for this phase."""
+    if not isinstance(phase, str) or not phase:
+        return False
+    if phase not in (PANEL_PHASE, FIXER_PHASE, AUDITS_PHASE):
+        return False
+    return phase == FIXER_PHASE
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 

@@ -1024,7 +1024,7 @@ def _observation_qualifies(
 
 
 def _hand_landed_evidence_qualifies(
-    envelope, certified_head, journal_binding=None, recorded_nonces=None
+    envelope, certified_head, journal_binding=None, recorded_nonces=None, phase=None
 ):
     evidence = envelope.get("executionEvidence") if isinstance(envelope, dict) else None
     if not isinstance(evidence, dict):
@@ -1044,6 +1044,8 @@ def _hand_landed_evidence_qualifies(
             or not isinstance(result_digest, str) or not result_digest):
         return False, "execution-evidence-binding-incomplete"
     if session_contract.evidence_binding(result_kind) == session_contract.EXECUTION_ONLY_BINDING:
+        if not session_contract.execution_only_admissible_for_phase(phase):
+            return False, "execution-evidence-write-stamp-out-of-phase"
         # axis: write-run stamp proves the run happened — binds no payload (execution-only)
         return True, EXECUTION_ONLY_BINDING
     carried, subject = session_contract.evidence_digest_subject(payload, result_kind)
@@ -1192,6 +1194,7 @@ def check_unrun_review(ctx):
                 certified_head,
                 journal_binding=journal_binding,
                 recorded_nonces=slot_nonces,
+                phase=phase,
             )
             if not ok:
                 return _refusal(
@@ -1513,6 +1516,7 @@ def check_disposition_without_receipt(ctx):
         )
     certified_head = _certified_head_sha(ctx)
     disclosures = []
+    nonblocking_disclosures = []
     by_key, marker_refusal = _certification_findings_by_key(state)
     if marker_refusal is not None:
         return marker_refusal
@@ -1531,11 +1535,33 @@ def check_disposition_without_receipt(ctx):
         graded = _effective_certification_finding(finding, by_key)
         disposition = graded.get("disposition")
         if disposition is None:
-            return _refusal(
-                "disposition-without-receipt",
-                fid,
-                "finding has no disposition recorded",
+            severity_rank = _severity_rank(severity)
+            if severity_rank == 99:
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "finding severity %r is not in the closed severity contract" % (severity,),
+                )
+            if severity_rank == _severity_rank("Critical"):
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "Critical finding may not take the non-blocking path",
+                )
+            if severity_rank <= _severity_rank("Important"):
+                return _refusal(
+                    "disposition-without-receipt",
+                    fid,
+                    "finding has no disposition recorded",
+                )
+            nonblocking_disclosures.append(
+                {
+                    "id": finding.get("id"),
+                    "title": finding.get("title"),
+                    "severity": severity,
+                }
             )
+            continue
         if disposition not in session_contract.DISPOSITIONS:
             return _refusal(
                 "disposition-without-receipt",
@@ -1622,6 +1648,7 @@ def check_disposition_without_receipt(ctx):
                     }
                 )
     ctx["important_disclosures"] = disclosures
+    ctx["nonblocking_disclosures"] = nonblocking_disclosures
     return None
 
 
@@ -1955,11 +1982,16 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     by_key, marker_refusal = _certification_findings_by_key(state)
     if marker_refusal is not None:
         return None, marker_refusal
-    findings = [
-        _project_finding(f, by_key)
-        for f in by_key.values()
-        if isinstance(f, dict)
-    ]
+    findings = []
+    for f in by_key.values():
+        if not isinstance(f, dict):
+            continue
+        graded = _effective_certification_finding(f, by_key)
+        if graded.get("disposition") is None:
+            rank = _severity_rank(f.get("severity"))
+            if rank > _severity_rank("Important"):
+                continue
+        findings.append(_project_finding(f, by_key))
     rounds = _build_receipt_rounds(state, form)
     degraded, skipped_blockers = build_degraded_prose(state, form)
     base = {
@@ -1998,7 +2030,10 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         "terminalState": terminal_state,
         "terminalCause": terminal_cause,
         "seats": seat_rows,
-        "disclosures": {"importantOutOfScope": list(ctx.get("important_disclosures") or [])},
+        "disclosures": {
+            "importantOutOfScope": list(ctx.get("important_disclosures") or []),
+            "survivingNonBlocking": list(ctx.get("nonblocking_disclosures") or []),
+        },
         "independence": _independence_block(ctx),
         "provenanceLabels": {
             "derived": [
