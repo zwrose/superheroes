@@ -790,6 +790,8 @@ def _spawn_allowlist_verdict(opened, *, journal_corrupt=False):
             "allowlist_pairs": [],
         }
     role, vendor, model, effort = seat_tuple
+    if isinstance(vendor, str) and isinstance(model, str):
+        model = model_registry.current_model_id(vendor, model)
     run_kind = opened.get("runKind", RUN_KIND_REVIEW)
     verb = "dispatch-review" if run_kind == RUN_KIND_REVIEW else "dispatch-write"
     mode = opened.get("mode")
@@ -1704,9 +1706,13 @@ def _resolved_inputs_status_from_opened(opened):
 
 
 def _continuation_seat_tuple(snapshot):
+    vendor = snapshot.get("engine")
+    model = snapshot.get("model")
+    if isinstance(vendor, str) and isinstance(model, str):
+        model = model_registry.current_model_id(vendor, model)
     return (
-        snapshot.get("engine"),
-        snapshot.get("model"),
+        vendor,
+        model,
         snapshot.get("effort"),
         snapshot.get("role"),
     )

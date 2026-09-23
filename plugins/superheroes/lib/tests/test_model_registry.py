@@ -1,6 +1,7 @@
 import copy
 import importlib.abc
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -14,6 +15,8 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 _MOD = os.path.join(_LIB, "model_registry.py")
 _DA_MOD = os.path.join(_LIB, "dispatch_allowlist.py")
+_DG_MOD = os.path.join(_LIB, "dispatch_guard.py")
+_ED_MOD = os.path.join(_LIB, "engine_dispatch.py")
 _SM_MOD = os.path.join(_LIB, "seat_map.py")
 
 
@@ -33,6 +36,13 @@ def _load_dispatch_allowlist():
 
 def _load_seat_map():
     spec = importlib.util.spec_from_file_location("seat_map", _SM_MOD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_engine_dispatch():
+    spec = importlib.util.spec_from_file_location("engine_dispatch", _ED_MOD)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -139,7 +149,7 @@ def test_codex_effort_for_kind_matches_matrix_and_pilot_floor():
 
 
 def test_model_family():
-    assert MR.model_family("claude", "opus-5") == "anthropic"
+    assert MR.model_family("claude", "opus-5.5") == "anthropic"
     assert MR.model_family("codex", "gpt-5.6-sol") == "openai"
     assert MR.model_family("cursor", "composer-2.5") == "xai"
     assert MR.model_family("cursor", "cursor-grok-4.6") == "xai"
@@ -214,10 +224,10 @@ def test_validate_config_cases():
         False,
         "effort 'high' is not valid for model 'cursor-grok-4.6'",
     )
-    ok, reason = MR.validate_config("claude", "fable-5", "high", allow_override_only=False)
+    ok, reason = MR.validate_config("claude", "fable-5.1", "high", allow_override_only=False)
     assert ok is False and "override" in reason.lower()
-    assert MR.validate_config("claude", "fable-5", "high", allow_override_only=True) == (True, None)
-    ok, reason = MR.validate_config("codex", "fable-5", "high")
+    assert MR.validate_config("claude", "fable-5.1", "high", allow_override_only=True) == (True, None)
+    ok, reason = MR.validate_config("codex", "fable-5.1", "high")
     assert ok is False and "not registered" in reason
 
 
@@ -237,24 +247,24 @@ def test_dispatch_token():
 
 
 def test_escalate():
-    assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-5", "high")
+    assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-5.5", "high")
     assert MR.escalate("cursor", "cursor-grok-4.6", "xhigh") == ("claude", "haiku-4.5", "medium")
-    assert MR.escalate("claude", "fable-5", "high") is None
+    assert MR.escalate("claude", "fable-5.1", "high") is None
 
 
 def test_fable_never_default():
-    assert MR._MODELS["claude"]["fable-5"]["override_only"] is True
+    assert MR._MODELS["claude"]["fable-5.1"]["override_only"] is True
     for role in MR.roles():
         for vendor in MR.vendors():
             cell = MR.matrix_config(role, vendor)
             if cell is not None:
-                assert cell[0] != "fable-5"
+                assert cell[0] != "fable-5.1"
     for vendor in MR.vendors():
         for model_id, _ in MR.ladder(vendor):
-            assert model_id != "fable-5"
+            assert model_id != "fable-5.1"
 
 
-_REVIEW_ROLES = ("reviewer", "reviewer-deep", "verifier")
+_REVIEW_ROLES = ("reviewer", "reviewer-deep", "verifier", "auditor")
 
 
 def test_family_for_review_roles():
@@ -300,8 +310,8 @@ def test_is_allowed():
 
 
 def test_parse_dispatch_token_vendors():
-    assert MR.parse_dispatch_token("claude", "opus") == ("opus-5", None)
-    assert MR.parse_dispatch_token("claude", "fable") == ("fable-5", None)
+    assert MR.parse_dispatch_token("claude", "opus") == ("opus-5.5", None)
+    assert MR.parse_dispatch_token("claude", "fable") == ("fable-5.1", None)
     assert MR.parse_dispatch_token("codex", "gpt-5.6-sol") == ("gpt-5.6-sol", None)
     assert MR.parse_dispatch_token("cursor", "composer-2.5") == ("composer-2.5", None)
     assert MR.parse_dispatch_token("cursor", "cursor-grok-4.6-xhigh") == (
@@ -423,7 +433,7 @@ def test_resolve_dispatch_fail_closed_edges():
     )
     assert r["ok"] is False and "conflicts" in r["reason"]
 
-    r = MR.resolve_dispatch("reviewer", "claude", "fable-5", "high")
+    r = MR.resolve_dispatch("reviewer", "claude", "fable-5.1", "high")
     assert r["ok"] is False and r["reason"]
 
     r = MR.resolve_dispatch("reviewer", "claude", "fable", "high")
@@ -453,7 +463,56 @@ def test_claude_alias_resolution_record_matches_registry_ids():
     assert MR.CLAUDE_ALIAS_RESOLUTION["harness"].startswith("claude-code/")
 
 
-def test_verifier_and_code_fixer_families_match_per_vendor():
+# axis: auditor matrix row is derived from verifier, not an independent literal copy
+def test_auditor_cells_track_verifier_cells():
+    for vendor in MR.vendors():
+        assert MR.matrix_config("auditor", vendor) == MR.matrix_config("verifier", vendor)
+    cell = MR.matrix_config("auditor", "codex")
+    assert cell is not None
+    model_id, effort = cell
+    seat = {"vendor": "codex", "model": model_id, "effort": effort, "role": "auditor"}
+    proc = subprocess.run(
+        [sys.executable, _DG_MOD, "check", "--seat", json.dumps(seat)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+
+
+# axis: legacy journaled claude model ids translate before continuation seat comparison
+def test_continuation_accepts_legacy_claude_label():
+    ED = _load_engine_dispatch()
+    opened = {
+        "resolvedInputs": {
+            "engine": "claude",
+            "model": "opus-5",
+            "effort": "xhigh",
+            "role": "reviewer-deep",
+        }
+    }
+    seat = {
+        "vendor": "claude",
+        "model": "opus-5.5",
+        "effort": "xhigh",
+        "role": "reviewer-deep",
+    }
+    assert ED._continuation_seat_mismatch(opened, seat) is None
+    seat_diff = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "xhigh",
+        "role": "reviewer-deep",
+    }
+    assert ED._continuation_seat_mismatch(opened, seat_diff) == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+
+
+# axis: legacy claude model ids stay unregistered — only translation chokepoints honor them
+def test_legacy_claude_model_ids_stay_unregistered():
+    assert MR.validate_config("claude", "opus-5", "xhigh")[0] is False
+
+
+def test_auditor_and_code_fixer_families_match_per_vendor():
     """This invariant is what makes round_driver._auditor_vendor's same-vendor fallback unreachable
     (#652 rider 4a). If a future registry change breaks the invariant, the fallback becomes reachable
     again and the deleted branch must be reconsidered — so this test failing is a design signal,
@@ -462,15 +521,15 @@ def test_verifier_and_code_fixer_families_match_per_vendor():
     assert vendors, "model_registry.vendors() must be non-empty for this invariant"
     for vendor in vendors:
         fixer_fam = MR.family_for("code-fixer", vendor)
-        verifier_fam = MR.family_for("verifier", vendor)
+        auditor_fam = MR.family_for("auditor", vendor)
         assert fixer_fam is not None, (
             f"code-fixer family_for({vendor!r}) returned None — invariant cannot be evaluated"
         )
-        assert verifier_fam is not None, (
-            f"verifier family_for({vendor!r}) returned None — invariant cannot be evaluated"
+        assert auditor_fam is not None, (
+            f"auditor family_for({vendor!r}) returned None — invariant cannot be evaluated"
         )
-        assert verifier_fam == fixer_fam, (
-            vendor, fixer_fam, verifier_fam,
+        assert auditor_fam == fixer_fam, (
+            vendor, fixer_fam, auditor_fam,
         )
 
 
@@ -549,17 +608,33 @@ def _load_model_registry_at_sha(sha):
         capture_output=True,
         text=True,
     ).stdout.strip()
-    proc = subprocess.run(
-        ["git", "-C", toplevel, "show", f"{sha}:{_REGISTRY_PATH}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "-C", toplevel, "show", f"{sha}:{_REGISTRY_PATH}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise AssertionError(
+            "commit %s is not available in this checkout — "
+            "fetch full history (fetch-depth: 0) to run the git-baseline test"
+            % sha
+        ) from exc
     name = f"_model_registry_snapshot_{sha[:12]}"
     spec = importlib.util.spec_from_loader(name, _GitShowLoader(proc.stdout))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _matrix_cell_after_legacy_translate(vendor, cell):
+    if cell is None:
+        return None
+    model_id, effort = cell
+    if vendor == "claude":
+        model_id = MR.current_model_id("claude", model_id)
+    return (model_id, effort)
 
 
 # axis: reviewer-deep, reviewer, and verifier matrix cells at the live registry match the pre-child head baseline.
@@ -568,7 +643,11 @@ def test_matrix_cells_reviewer_roles_unchanged_at_base():
     compared = 0
     for role in ("reviewer-deep", "reviewer", "verifier"):
         for vendor in ("claude", "codex", "cursor"):
-            assert MR.matrix_config(role, vendor) == base.matrix_config(role, vendor)
+            live = MR.matrix_config(role, vendor)
+            baseline = base.matrix_config(role, vendor)
+            assert _matrix_cell_after_legacy_translate(vendor, live) == (
+                _matrix_cell_after_legacy_translate(vendor, baseline)
+            )
             compared += 1
     assert compared == 9
 

@@ -14,8 +14,8 @@ _MODELS: dict[str, dict[str, dict]] = {
     "claude": {
         "haiku-4.5": {"family": "anthropic", "dispatch": "haiku", "override_only": False},
         "sonnet-5": {"family": "anthropic", "dispatch": "sonnet", "override_only": False},
-        "opus-5": {"family": "anthropic", "dispatch": "opus", "override_only": False},
-        "fable-5": {"family": "anthropic", "dispatch": "fable", "override_only": True},
+        "opus-5.5": {"family": "anthropic", "dispatch": "opus", "override_only": False},
+        "fable-5.1": {"family": "anthropic", "dispatch": "fable", "override_only": True},
     },
     "codex": {
         "gpt-5.6-terra": {"family": "openai", "dispatch": "gpt-5.6-terra", "override_only": False},
@@ -62,8 +62,8 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
     "claude": (
         ("haiku-4.5", "medium"),
         ("sonnet-5", "high"),
-        ("opus-5", "high"),
-        ("opus-5", "xhigh"),
+        ("opus-5.5", "high"),
+        ("opus-5.5", "xhigh"),
     ),
     "codex": (
         ("gpt-5.6-terra", "high"),
@@ -89,7 +89,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": ("composer-2.5", None),
     },
     "doc-reviser": {
-        "claude": ("opus-5", "high"),
+        "claude": ("opus-5.5", "high"),
         "codex": ("gpt-5.6-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
@@ -99,22 +99,22 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer-deep": {
-        "claude": ("opus-5", "xhigh"),
+        "claude": ("opus-5.5", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "verifier": {
-        "claude": ("opus-5", "high"),
+        "claude": ("opus-5.5", "high"),
         "codex": ("gpt-5.6-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "brief-check": {
-        "claude": ("opus-5", "xhigh"),
+        "claude": ("opus-5.5", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "synthesis": {
-        "claude": ("opus-5", "high"),
+        "claude": ("opus-5.5", "high"),
         "codex": None,
         "cursor": None,
     },
@@ -134,6 +134,9 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": None,
     },
 }
+
+# auditor seats at the verifier's cells until an owner call separates them
+_MATRIX["auditor"] = dict(_MATRIX["verifier"])
 
 _ROLE_META: dict[str, dict] = {
     "orchestrator": {
@@ -167,6 +170,14 @@ _ROLE_META: dict[str, dict] = {
         "read_write": "read",
         "pin_eligible": False,
         "owner_tunable": True,
+    },
+    "auditor": {
+        "model_tier_role": False,
+        "engine_pref_key": "reviewer",
+        "codex_kind": None,
+        "read_write": "read",
+        "pin_eligible": False,
+        "owner_tunable": False,
     },
     "mechanical": {
         "model_tier_role": True,
@@ -249,15 +260,23 @@ _HOST_MODEL_PREFIX_FAMILY = (("claude-", "anthropic"), ("gpt-", "openai"))
 #
 # Probed live with `claude -p --model <alias>`; re-run and re-stamp on a harness upgrade.
 CLAUDE_ALIAS_RESOLUTION = {
-    "harness": "claude-code/2.1.219",
-    "verified": "2026-07-26",
+    "harness": "claude-code/2.1.280",
+    "verified": "2026-09-23",
     "resolved": {
         "haiku": "claude-haiku-4-5-20251001",
         "sonnet": "claude-sonnet-5",
-        "opus": "claude-opus-5",
-        "fable": "claude-fable-5",
+        "opus": "claude-opus-5-5",
+        "fable": "claude-fable-5-1",
     },
 }
+
+LEGACY_MODEL_IDS = {"claude": {"opus-5": "opus-5.5", "fable-5": "fable-5.1"}}
+
+
+def current_model_id(vendor: str, model: str) -> str:
+    if not isinstance(vendor, str) or not isinstance(model, str):
+        return model
+    return LEGACY_MODEL_IDS.get(vendor, {}).get(model, model)
 
 FABLE_NEVER_DEFAULT = True
 

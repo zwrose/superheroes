@@ -150,7 +150,7 @@ def test_verify_maker_family_violation():
         "seats": {
             "security-reviewer": {
                 "vendor": "claude",
-                "model": "opus-5",
+                "model": "opus-5.5",
                 "effort": "xhigh",
                 "tier": "reviewer-deep",
                 "family": "anthropic",
@@ -258,7 +258,7 @@ def _full_seats_template(**overrides):
         },
         "security-reviewer": {
             "vendor": "claude",
-            "model": "opus-5",
+            "model": "opus-5.5",
             "effort": "xhigh",
             "tier": "reviewer-deep",
             "family": "anthropic",
@@ -306,7 +306,7 @@ def _seats_without_maker_collision(maker_family):
     seats = _full_seats_template()
     anthropic_cfg = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -392,7 +392,7 @@ def test_verify_critical_diversity_violation():
     seats = _full_seats_template()
     seats["security-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -400,7 +400,7 @@ def test_verify_critical_diversity_violation():
     }
     seats["premortem-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -408,7 +408,7 @@ def test_verify_critical_diversity_violation():
     }
     seats["code-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -785,7 +785,7 @@ def test_verify_unknown_liveness_is_a_violation():
     seats = _full_seats_template()
     seats["test-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -853,7 +853,7 @@ def test_verify_malformed_liveness_is_a_violation():
     seats = _full_seats_template()
     seats["code-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -942,7 +942,7 @@ def test_unexcused_maker_family_under_liveness_read_error_degradation():
         "seats": {
             "test-reviewer": {
                 "vendor": "claude",
-                "model": "opus-5",
+                "model": "opus-5.5",
                 "effort": "xhigh",
                 "tier": "reviewer-deep",
                 "family": "anthropic",
@@ -1026,7 +1026,7 @@ def test_legacy_cache_only_constraint_still_marks_liveness_synthesized():
         "seats": {
             "test-reviewer": {
                 "vendor": "claude",
-                "model": "opus-5",
+                "model": "opus-5.5",
                 "effort": "xhigh",
                 "tier": "reviewer-deep",
                 "family": "anthropic",
@@ -1454,7 +1454,7 @@ def test_unexcused_e5_pinned_seat_excuses_strong_tier_via_pin():
     }
     seats["premortem-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -1639,7 +1639,7 @@ def test_unexcused_critical_diversity_pin_not_causal_f3a():
     """FIX-2 F3a: pin on one critical seat does not excuse when diversity was achievable."""
     anthropic_cfg = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -2018,6 +2018,15 @@ def test_normalize_pins_absent_map_is_not_a_refusal():
     assert SM.normalize_pins({}) == ({}, [])
 
 
+# axis: stored seat pins naming legacy claude model ids translate to current registry ids
+def test_normalize_pins_translates_legacy_claude_label():
+    normalized, errors = SM.normalize_pins(
+        {"code-reviewer": {"vendor": "claude", "model": "opus-5"}}
+    )
+    assert errors == []
+    assert normalized["code-reviewer"]["model"] == "opus-5.5"
+
+
 def test_build_string_pin_resolves_as_vendor():
     m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins={"code-reviewer": "claude"})
     assert m["seats"]["code-reviewer"]["source"] == "pinned"
@@ -2213,7 +2222,7 @@ def test_dod_ab3_arm_g_pinned_codex_sol_honored():
 def test_census_seated_cells_appear_in_live_cells():
     # bite-axis: a seated cell absent from the probed live set is caught
     live_cells = [
-        ["claude", "opus-5", "xhigh"],
+        ["claude", "opus-5.5", "xhigh"],
         ["codex", "gpt-5.6-sol", "xhigh"],
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
@@ -2355,7 +2364,7 @@ def test_inv3_canonical_families():
     seats = {
         seat: {
             "vendor": "claude",
-            "model": "opus-5",
+            "model": "opus-5.5",
             "effort": "xhigh",
             "tier": "reviewer-deep",
             "family": f"invented-{i}",
@@ -2526,7 +2535,7 @@ def _all_claude_roster_seats():
     """Every roster seat on claude (anthropic family) — the measured INV-16/A case substrate."""
     anthropic_cfg = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -2578,7 +2587,7 @@ def test_inv16_a_no_author_family_basis():
 @pytest.mark.parametrize("seat", ["test-reviewer", "grounding-seat"])
 def test_inv16_c_unresolvable_vendor_violation_unexcused(seat):
     tier = "reviewer" if seat == "grounding-seat" else "reviewer-deep"
-    model = "sonnet-5" if seat == "grounding-seat" else "opus-5"
+    model = "sonnet-5" if seat == "grounding-seat" else "opus-5.5"
     effort = "high" if seat == "grounding-seat" else "xhigh"
     seats = _full_seats_template()
     seats[seat] = {
@@ -2709,7 +2718,7 @@ def test_assert_side_no_cfg_family_reads_outside_build():
 def _pinned_critical_seats_without_family(seats):
     pin_anthropic = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "source": "pinned",
