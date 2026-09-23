@@ -423,8 +423,6 @@ def resolve_judgment(rows: list, overlay: dict | None = None) -> dict:
             "findingClass": finding_class,
             "disposition": rule["disposition"],
         }
-        if "followUp" in rule:
-            disp["followUp"] = dict(rule["followUp"])
         dispositions.append(disp)
 
     return {

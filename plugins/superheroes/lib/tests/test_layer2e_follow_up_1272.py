@@ -293,7 +293,7 @@ def test_e6_judgment_fix_stray_follow_up_not_checked(tmp_path):
     # axis: e6 — non-skip disposition ignores stray followUp
     session_dir = _parked_judgment_session(tmp_path)
     artifact = {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested",
+        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested", "reason": "fix it",
          "followUp": {"item": "ignored"}}]}
     out = _pending_submit(session_dir, artifact)
     assert out["ok"] is True, out
@@ -312,11 +312,14 @@ def test_e7_stall_accept_risk_malformed_follow_up_refused(tmp_path):
     assert out["ok"] is False, out
 
 
-def test_e8_stall_hold_with_follow_up_not_checked(tmp_path):
-    # axis: e8 — hold choice ignores followUp
+@pytest.mark.parametrize("follow_up", [
+    {"item": "ignored", "revisitTrigger": "x", "classClosure": "y"},
+    {"item": "ignored"},
+])
+def test_e8_stall_hold_with_follow_up_not_checked(tmp_path, follow_up):
+    # axis: e8 — hold choice ignores followUp (well-formed or malformed)
     session_dir = _parked_stall_session(tmp_path, accept_risk=False)
-    artifact = {"choice": RD.HOLD_CHOICE,
-                "followUp": {"item": "ignored", "revisitTrigger": "x", "classClosure": "y"}}
+    artifact = {"choice": RD.HOLD_CHOICE, "followUp": follow_up}
     out = _pending_submit(session_dir, artifact)
     assert out["ok"] is True, out
     assert _load_state(session_dir)["terminal"] == "held"

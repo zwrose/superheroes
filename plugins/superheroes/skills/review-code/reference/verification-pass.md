@@ -151,8 +151,10 @@ The grouping must account for **every** staged survivor id **exactly once** unde
 guarantee**. When a **non-empty** grouping is submitted, each survivor id must appear in exactly
 one group's `member_ids`; a grouping that omits any staged id is **refused** with
 `staged-id-unresolvable` naming the omitted id — re-emit the grouping with the missing ids as
-singleton groups. An **absent**, **null**, or **empty-list** grouping carries no coverage
-obligation: `verification.merge_and_rank(survivors, grouping)` falls open to unmerged survivors;
+singleton groups. A synthesis submit with **no `grouping` key** is **refused** at the submit gate
+with a message beginning ``synthesis artifact carries no `grouping` key``; a **`null`** or
+**empty-list** `grouping` carries no coverage obligation and
+`verification.merge_and_rank(survivors, grouping)` falls open to unmerged survivors;
 **synthesis drops nothing** and synthesis failure never aborts the review. Merged groups combine
 bodies and take the highest severity; the merged `verdict` is **CONFIRMED only when a member at
 the merged (highest) severity is CONFIRMED-with-evidence** — computed **order-independently**, so

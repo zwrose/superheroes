@@ -236,8 +236,8 @@ def test_e10_synthesis_non_string_member_refused_at_submit(tmp_path):
     assert journal[-1].get("outcome") == "synthesis-results-shape"
 
 
-def test_grouping_absent_null_empty_falls_open_nonempty_incomplete_refused():
-    """Axis: absent/null/empty grouping falls open; non-empty incomplete grouping refuses."""
+def test_grouping_null_empty_fall_open_absent_refused_nonempty_incomplete_refused():
+    """Axis: null/empty grouping falls open; absent key refused; non-empty incomplete refuses."""
     survivors = [
         {"id": "v0", "file": "a.py", "line": 1, "title": "a", "severity": "Important",
          "verdict": "PLAUSIBLE"},
@@ -247,6 +247,9 @@ def test_grouping_absent_null_empty_falls_open_nonempty_incomplete_refused():
          "verdict": "PLAUSIBLE"},
     ]
     state = {"_verified": survivors}
+    absent_fault = RD.synthesis_results_fault({})
+    assert absent_fault is not None
+    assert "carries no `grouping` key" in absent_fault
     incomplete = {"grouping": [{"group_id": "g0", "member_ids": ["v0", "v1"]}]}
     fault = RD.synthesis_staged_id_fault(state, incomplete)
     assert fault is not None
@@ -255,10 +258,20 @@ def test_grouping_absent_null_empty_falls_open_nonempty_incomplete_refused():
     assert "v2" in fault
     merged = V.merge_and_rank(survivors, incomplete["grouping"])
     assert sorted(f["id"] for f in merged["findings"]) == ["v0", "v1", "v2"]
-    for artifact in ({}, {"grouping": None}, {"grouping": []}):
+    for artifact in ({"grouping": None}, {"grouping": []}):
         assert RD.synthesis_staged_id_fault(state, artifact) is None
         merged_open = V.merge_and_rank(survivors, artifact.get("grouping"))
         assert sorted(f["id"] for f in merged_open["findings"]) == ["v0", "v1", "v2"]
+
+
+def test_synthesis_absent_grouping_key_refused_at_submit(tmp_path):
+    # axis: D-6 — absent grouping key refused at synthesis submit chokepoint
+    d, n = _at(tmp_path, RD.P_SYNTHESIS)
+    before = _state_bytes(d)
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], {})
+    assert out["ok"] is False
+    assert "carries no `grouping` key" in out["reason"]
+    assert _state_bytes(d) == before
 
 
 def test_author_justified_drop_unresolvable_id_parks_at_fold():
