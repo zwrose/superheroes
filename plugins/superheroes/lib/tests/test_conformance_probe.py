@@ -2260,6 +2260,25 @@ def test_astra_record_dir_refuses_unconfigured_project(tmp_path, monkeypatch):
     assert not (home / ".claude" / "superheroes" / "projects" / key).exists()
 
 
+# axis: store lookup exception refuses before minting conformance dir
+def test_astra_record_dir_refuses_when_store_lookup_raises(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    shutil.rmtree(repo / ".git")
+    (repo / ".git").write_text("gitdir: /nonexistent/path\n", encoding="utf-8")
+    projects_dir = home / ".claude" / "superheroes" / "projects"
+    projects_dir.mkdir(parents=True)
+    record_dir, err = CP._conformance_record_dir(str(repo))
+    assert record_dir is None
+    assert err == "conformance-record-dir-unresolved"
+    assert list(projects_dir.iterdir()) == []
+
+
 def _astra_terminal_findings(findings, **overrides):
     base = {
         "ok": True,
@@ -2555,6 +2574,20 @@ def test_astra_probe_refuses_when_rubric_scale_unreadable_table_empty(tmp_path, 
 def test_astra_probe_refuses_when_rubric_scale_unreadable_rubric_missing(tmp_path, monkeypatch):
     missing = tmp_path / "missing.md"
     _astra_scale_refusal_probe(tmp_path, monkeypatch, "", rubric_path=missing)
+
+
+# axis: absent ## Severity tiers heading refuses before claim or dispatch
+def test_astra_probe_refuses_when_rubric_scale_unreadable_heading_absent(
+    tmp_path, monkeypatch,
+):
+    _astra_scale_refusal_probe(
+        tmp_path, monkeypatch,
+        "## Severity levels\n\n"
+        "| **Critical** | c |\n"
+        "| **Important** | i |\n"
+        "| **Minor** | m |\n"
+        "| **Nit** | n |\n",
+    )
 
 
 # bite-axis: only the Severity tiers table is read for the scale
