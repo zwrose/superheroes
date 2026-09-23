@@ -57,7 +57,8 @@ Guidance in this section overrides the original suggestion for the named finding
    Delete the throwaway before step 4's commit — it must never land in the fix commit.
 4. Commit ALL changes in ONE commit (after the check passes, or immediately when
    unverified): `git commit -m "Auto-fix round {{ROUND}}: <count> findings (<dimensions>)"`
-5. Report back per the Payload contract section below.
+5. Report back per the result contract the runner appends at dispatch — not a graded shape in
+   this order. The orchestrator derives the `fixes` record from git; you are not asked to emit it.
 
 ## Escalation
 If a finding you were told to auto-fix actually requires a judgment call you

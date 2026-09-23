@@ -14,6 +14,8 @@ Tokens (one finding each when triggered):
 - ``order-result-shape-ambiguous`` — the write-report sentinel sits beside a native-typed
   literal (``"resultKind"`` or ``--output-schema``), or the fixer literal ``{"fixes"`` appears
   while ``--expect-item`` declarations were passed.
+- ``order-result-shape-authored`` — a fixer order names a graded result shape in the driver's
+  text (the fixer literal or a ``## Payload contract`` heading).
 - ``order-budget-missing`` — an implementer order lacks a command-budget declaration.
 - ``order-kind-unknown`` — ``--kind`` is not ``implementer`` or ``fixer``.
 Per-kind table:
@@ -24,6 +26,7 @@ Per-kind table:
 | order-path-unresolved | yes | yes |
 | order-placeholder-unfilled | yes | yes |
 | order-result-shape-ambiguous | yes | yes |
+| order-result-shape-authored | no | yes |
 | order-budget-missing | yes | no |
 | order-kind-unknown | other kind; alone | |
 
@@ -50,12 +53,13 @@ TOKEN_REPO_ROOT_UNRESOLVED = "order-repo-root-unresolved"
 TOKEN_PATH_UNRESOLVED = "order-path-unresolved"
 TOKEN_PLACEHOLDER_UNFILLED = "order-placeholder-unfilled"
 TOKEN_RESULT_SHAPE_AMBIGUOUS = "order-result-shape-ambiguous"
+TOKEN_RESULT_SHAPE_AUTHORED = "order-result-shape-authored"
 TOKEN_BUDGET_MISSING = "order-budget-missing"
 TOKEN_KIND_UNKNOWN = "order-kind-unknown"
 TOKENS = (
     TOKEN_UNREADABLE, TOKEN_REPO_ROOT_UNRESOLVED, TOKEN_PATH_UNRESOLVED,
-    TOKEN_PLACEHOLDER_UNFILLED, TOKEN_RESULT_SHAPE_AMBIGUOUS, TOKEN_BUDGET_MISSING,
-    TOKEN_KIND_UNKNOWN,
+    TOKEN_PLACEHOLDER_UNFILLED, TOKEN_RESULT_SHAPE_AMBIGUOUS,
+    TOKEN_RESULT_SHAPE_AUTHORED, TOKEN_BUDGET_MISSING, TOKEN_KIND_UNKNOWN,
 )
 KINDS = ("implementer", "fixer")
 EXTENSIONS = (
@@ -91,6 +95,7 @@ def _load_result_vocab():
 
 _WRITE_SENTINEL, _FIXER_LITERAL = _load_result_vocab()
 _FIXER_OBJECT = re.compile(r'\{\s*"' + re.escape(_FIXER_LITERAL[2:].strip('"')) + r'"')
+_PAYLOAD_CONTRACT_HEADING = "## Payload contract"
 _STDOUT_PROTOCOL = (_WRITE_SENTINEL, _FIXER_LITERAL)
 
 
@@ -269,12 +274,17 @@ def _placeholders(text):
     return out, len(seen)
 
 
-def _shape(text, expect_items):
+def _shape(text, expect_items, kind="implementer"):
     native = [s for s in _NATIVE if s in text]
     if _WRITE_SENTINEL in text and native:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, "+".join([_WRITE_SENTINEL] + native))
     if _FIXER_OBJECT.search(text) and expect_items:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, _FIXER_LITERAL + "+expect-item")
+    if kind == "fixer":
+        if _PAYLOAD_CONTRACT_HEADING in text:
+            return _f(TOKEN_RESULT_SHAPE_AUTHORED, "payload-contract-heading")
+        if _FIXER_OBJECT.search(text):
+            return _f(TOKEN_RESULT_SHAPE_AUTHORED, _FIXER_LITERAL)
     return None
 
 
@@ -315,7 +325,7 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
     findings.extend(ph)
     pf, path_n = _paths(text, expect, roots, skip)
     findings.extend(pf)
-    amb = _shape(text, expect_items)
+    amb = _shape(text, expect_items, kind=kind)
     if amb:
         findings.append(amb)
     if kind == "implementer" and not _budget_ok(text):

@@ -293,12 +293,12 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
             "- Payload landing path: %s" % landing,
         ])
     else:
-        stdout_example, reason = _stdout_payload_example(phase)
-        if reason:
-            return None, reason
-        if phase == round_phases.P_PANEL:
+        if phase in (round_phases.P_PANEL, round_phases.P_FIXER):
             lines.extend([_RESULT_CHANNEL_NEUTRAL_DELIVERY])
         else:
+            stdout_example, reason = _stdout_payload_example(phase)
+            if reason:
+                return None, reason
             lines.extend([_result_channel_neutral_delivery(stdout_example)])
     return "\n".join(lines), None
 
@@ -451,16 +451,18 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         if _PLACEHOLDER_RE.search(body):
             return _refuse("unknown-placeholder-remaining")
 
-        contract_block, creason = _format_payload_contract(phase)
-        if creason:
-            return _refuse(creason)
+        blocks = [body.rstrip(), _format_residual_block(context).rstrip()]
+        if phase != round_phases.P_FIXER:
+            contract_block, creason = _format_payload_contract(phase)
+            if creason:
+                return _refuse(creason)
+            blocks.append(contract_block.rstrip())
         landing_block, lreason = _format_landing_block(context, phase)
         if lreason:
             return _refuse(lreason)
-        residual_block = _format_residual_block(context)
+        blocks.append(landing_block.rstrip())
 
-        order = "\n\n".join([body.rstrip(), residual_block.rstrip(),
-                             contract_block.rstrip(), landing_block.rstrip()]) + "\n"
+        order = "\n\n".join(blocks) + "\n"
 
         if _PLACEHOLDER_RE.search(order):
             return _refuse("post-condition-placeholder-leak")

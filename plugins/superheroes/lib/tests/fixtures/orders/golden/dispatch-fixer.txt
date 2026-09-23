@@ -57,7 +57,8 @@ Guidance in this section overrides the original suggestion for the named finding
    Delete the throwaway before step 4's commit — it must never land in the fix commit.
 4. Commit ALL changes in ONE commit (after the check passes, or immediately when
    unverified): `git commit -m "Auto-fix round 2: <count> findings (<dimensions>)"`
-5. Report back per the Payload contract section below.
+5. Report back per the result contract the runner appends at dispatch — not a graded shape in
+   this order. The orchestrator derives the `fixes` record from git; you are not asked to emit it.
 
 ## Escalation
 If a finding you were told to auto-fix actually requires a judgment call you
@@ -73,19 +74,6 @@ A finding that reduces wholly to a recorded residual below is a non-blocking res
 -----
 - Flaky integration test in CI lane B is accepted
 -----
-
-## Payload contract
-
-Your result must carry a payload matching this shape:
-
-Required keys: fixes
-Optional keys: escalated, headDiff, headDiffPath, coverageDecisions
-coverageDecisions type: list-of-objects
-escalated type: boolean
-fixes type: list
-headDiff type: string
-headDiffPath type: absolute-path
-Also enforced — head-diff-store-path-driver-owned: headDiffStorePath is driver-owned at record boundary
 
 ## Return your result
 
