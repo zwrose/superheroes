@@ -161,6 +161,7 @@ GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP = 200
 _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
 _GATE_GUIDANCE_ROW_CARRIED_CHANNEL = "gateGuidanceRowCarried"
 GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
+DISCHARGE_PHASE_NATIVE_SEAT_REFUSAL = "discharge-phase-native-seat"
 
 # --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
@@ -8762,6 +8763,10 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
     # both consumers (`host_seat` here, the `CHANNEL` placeholder below).
     channel = _seat_channel(phase, row)
     host_seat = channel == CHANNEL_FILE
+    if (state.get("_advanceUsed") and phase in round_records.PROVENANCE_RUNNER_RECORD_PHASES
+            and host_seat):
+        skey = round_records.storage_key(seat_key, occurrence)
+        raise ValueError("order-render-refused:%s:%s" % (skey, DISCHARGE_PHASE_NATIVE_SEAT_REFUSAL))
     paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
     base_ref = cfg.get("baseRef") or meta.get("baseRef")
     residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
