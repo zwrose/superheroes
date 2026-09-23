@@ -5216,7 +5216,11 @@ def _grade_write_attempt(run_dir_real, state, attempt):
         return result
 
     if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
-        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "nonzero-exit",
+        }
 
     admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
@@ -5244,6 +5248,7 @@ def _grade_write_attempt(run_dir_real, state, attempt):
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "timeout-no-admission",
         }
 
     return _marker_arm_retired_grade()
@@ -5724,6 +5729,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                     if "report" in grade:
                         result["report"] = grade["report"]
+                    if grade.get("admittedAfterTimeout"):
+                        result["admittedAfterTimeout"] = True
                     return _fold_run(run_dir_real, state, result)
 
                 if grade.get("guard_refusal"):
