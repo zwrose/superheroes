@@ -1724,10 +1724,9 @@ def check_evidence_head_bound(ctx):
 
 
 def _severity_rank(severity):
-    tier = circuit_breaker.canonical_severity(severity)
-    if tier is None:
+    if severity not in circuit_breaker.SEVERITY_TIERS:
         return 99
-    return circuit_breaker.SEVERITY_TIERS.index(tier)
+    return circuit_breaker.SEVERITY_TIERS.index(severity)
 
 
 def _collect_seats(ctx):
@@ -1995,7 +1994,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         if not isinstance(f, dict):
             continue
         graded = _effective_certification_finding(f, by_key)
-        if not session_contract.has_disposition_family(graded):
+        if graded.get("disposition") is None:
             rank = _severity_rank(f.get("severity"))
             if rank > _severity_rank("Important"):
                 continue

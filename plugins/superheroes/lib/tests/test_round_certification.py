@@ -1001,7 +1001,7 @@ def test_journal_evidence_scoped_by_round_refuses_cross_round_substitution(tmp_p
     assert "journal payload hash disagrees" in refusal["detail"]
 
 
-def test_important_out_of_scope_disclosure_is_case_insensitive(tmp_path):
+def test_important_out_of_scope_miscased_severity_refuses(tmp_path):
     session_dir = write_certifiable_session(
         tmp_path,
         state={
@@ -1022,15 +1022,10 @@ def test_important_out_of_scope_disclosure_is_case_insensitive(tmp_path):
         envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
     )
     receipt, refusal = RC.certify(session_dir)
-    assert refusal is None
-    assert receipt["disclosures"]["importantOutOfScope"] == [
-        {
-            "id": "I1",
-            "title": None,
-            "severity": "important",
-            "reason": "follow-on work",
-        }
-    ]
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+    assert "not in the closed severity contract" in refusal["detail"]
 
 
 def test_fixed_disposition_missing_fix_commit_row_uses_missing_token(tmp_path):

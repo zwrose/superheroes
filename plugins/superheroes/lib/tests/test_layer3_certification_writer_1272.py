@@ -273,6 +273,17 @@ def test_l3_b2_edge_severity_outside_contract_refuses(tmp_path):
     assert "not in the closed severity contract" in refusal["detail"]
 
 
+@pytest.mark.parametrize("severity", ["minor", " Nit ", " minor "])
+def test_l3_b2_edge_severity_case_or_whitespace_variant_refuses(tmp_path, severity):
+    ctx = _ctx_for_state(
+        {"findings": [{"id": "X1", "severity": severity, "title": "malformed"}]},
+        tmp_path,
+    )
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert "not in the closed severity contract" in refusal["detail"]
+
+
 def test_l3_b2_edge_important_without_disposition_refuses(tmp_path):
     ctx = _ctx_for_state(
         {"findings": [{"id": "I1", "severity": "Important", "title": "must fix"}]},
@@ -323,3 +334,30 @@ def test_l3_b2_edge_merged_into_resolves_before_disclosure(tmp_path):
     ctx = _ctx_for_state({"findings": [rep, member]}, tmp_path)
     assert RC.check_disposition_without_receipt(ctx) is None
     assert ctx.get("nonblocking_disclosures") in (None, [])
+
+
+def test_l3_b2_edge_merged_nonblocking_members_omitted_from_receipt(tmp_path):
+    rep = {
+        "id": "R1",
+        "file": "m.py",
+        "line": 1,
+        "title": "root",
+        "severity": "Minor",
+    }
+    member = {
+        "id": "M2",
+        "file": "m.py",
+        "line": 2,
+        "title": "member",
+        "severity": "Minor",
+        SC.MERGED_INTO_FIELD: SC.finding_identity_key(rep),
+    }
+    session_dir = _certifiable_session(tmp_path, {"findings": [rep, member]})
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None
+    assert receipt is not None
+    receipt_ids = {f.get("id") for f in receipt["findings"]}
+    assert "R1" not in receipt_ids
+    assert "M2" not in receipt_ids
+    disclosed_ids = {row.get("id") for row in receipt["disclosures"]["survivingNonBlocking"]}
+    assert disclosed_ids == {"R1", "M2"}
