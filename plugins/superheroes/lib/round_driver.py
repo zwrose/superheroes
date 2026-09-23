@@ -985,7 +985,7 @@ def author_justification_filter(findings, prior_comments):
 # independence + certification shape
 # =============================================================================================
 
-def _auditor_vendor(config, fixer_vendor):
+def _auditor_vendor(config, fixer_vendor, runner_record_only=False):
     """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
     on family, not the dispatch CLI). Independence is NEVER satisfied between two cursor first-party
     models (#651, owner-ratified 2026-07-26): composer and grok share the `xai` family, so a
@@ -993,11 +993,26 @@ def _auditor_vendor(config, fixer_vendor):
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
     independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
     rider 4a); see test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry."""
-    vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor)
+    vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor,
+                                                           runner_record_only)
     if vendor is not None:
         return vendor, "independent"
-    live = _live_vendors(config)
-    return (live[0] if live else fixer_vendor), "degraded"
+    live = receipt_disclosures.auditor_candidates(config, runner_record_only)
+    if live:
+        return live[0], "degraded"
+    # No candidate at all: keep today's fallback so the seat-time refusal names the vendor.
+    fallback = _live_vendors(config)
+    return (fallback[0] if fallback else fixer_vendor), "degraded"
+
+
+def _audit_landing_requires_runner_record(state):
+    """True on a durable-record session: seat records are `seat-result/2` and the session folds
+    through `advance`, never hand `submit` (the two latch each other out). There an audit landing
+    refuses at `record-result` without a runner record, so the auditor must be seated on a vendor
+    that can produce one. A library-driven loop (`run_loop`) folds its seams directly and never
+    records a landing, so it keeps today's selection."""
+    return (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
+            and bool(state.get("_advanceUsed")) and not state.get("_submitUsed"))
 
 
 # Seat-map receipt projections (#681) — leaf module ``seat_map_receipts``; thin aliases for in-module
@@ -4353,9 +4368,13 @@ def _audit_targets(state, config, audit_targets_map):
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
     occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
-    auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
+    auditor_vendor, independence = _auditor_vendor(
+        config, fixer_vendor, _audit_landing_requires_runner_record(state))
     if independence == "degraded":
         state["independenceDegraded"] = True
+    # Audits stay at the `verifier` role; the seated cell is what the order names and the receipt
+    # reports beside the runner-recorded vendor.
+    auditor_cell = model_registry.matrix_config("verifier", auditor_vendor) or (None, None)
     targets = []
     seen_keys = set()
     for f in state.get("fixBatch") or []:
@@ -4379,6 +4398,8 @@ def _audit_targets(state, config, audit_targets_map):
             "taxonomy": f.get("taxonomy"),
             "fixerVendor": fixer_vendor,
             "auditorVendor": auditor_vendor,
+            "auditorModel": auditor_cell[0],
+            "auditorEffort": auditor_cell[1],
             "independence": independence,
             "verdict": f.get("verdict"),
             "evidence": f.get("evidence"),
@@ -8118,12 +8139,7 @@ def _vendor_is_external_engine(vendor):
     """True when ``vendor`` is a registered non-claude engine (codex/cursor today).
 
     Unknown vendors fail closed to host transport — they cannot land on the engine stdout branch."""
-    if not isinstance(vendor, str) or not vendor.strip():
-        return False
-    v = vendor.strip()
-    if v == "claude":
-        return False
-    return v in model_registry.vendors()
+    return session_contract.runner_record_vendor(vendor, model_registry.vendors())
 
 
 def _seat_is_engine(row):
@@ -8272,7 +8288,8 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
             targets = []
         for target in targets:
             if isinstance(target, dict) and target.get("id") == seat_key:
-                return {"vendor": target.get("auditorVendor"), "model": None, "engine": None}
+                return {"vendor": target.get("auditorVendor"),
+                        "model": target.get("auditorModel"), "engine": None}
         return {"vendor": None, "model": None, "engine": None}
     if phase == P_SYNTHESIS:
         # Synthesis is Claude-only ($SYNTH_MODEL); never route through external reviewer engines.
@@ -8283,11 +8300,19 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
     return {"vendor": None, "model": None, "engine": None}
 
 
-def _seat_transport_fault(row, seat_key):
-    """Refuse when a seat names a vendor the driver does not recognise.
+def _seat_transport_fault(row, seat_key, phase=None, state=None):
+    """Refuse when a seat names a vendor the driver does not recognise, or — at seat time, before
+    any dispatch — when a durable-record session's audit seat is on a vendor that cannot produce
+    the runner record its landing will need.
 
-    Vendor absent is the normal unknowable-vendor case — not a refusal."""
+    Vendor absent is the normal unknowable-vendor case — not a refusal (except on that audit seat,
+    where an absent vendor cannot produce the record either)."""
     vendor = row.get("vendor")
+    # axis: a durable-record audit seat off the runner refuses here, never at record-result
+    if (phase == P_AUDITS and isinstance(state, dict)
+            and _audit_landing_requires_runner_record(state)
+            and not _vendor_is_external_engine(vendor)):
+        return "auditor-no-runner-record:%s" % (_label(vendor),)
     if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
         return None
     if not isinstance(vendor, str):
@@ -8908,7 +8933,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
     cfg = state.get("config") or {}
     meta = _session_meta(session_dir)
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
-    transport_fault = _seat_transport_fault(row, seat_key)
+    transport_fault = _seat_transport_fault(row, seat_key, phase, state)
     if transport_fault is not None:
         skey = round_records.storage_key(seat_key, occurrence)
         raise ValueError("order-render-refused:%s:%s" % (skey, transport_fault))

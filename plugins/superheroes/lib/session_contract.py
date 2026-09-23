@@ -24,6 +24,8 @@ __all__ = (
     "WRITE_RESULT_KIND",
     "RECORD_RESULT_KINDS",
     "REVIEW_LIST_RESULT_KINDS",
+    "HOST_SEAT_VENDORS",
+    "runner_record_vendor",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
     "VERIFIED_HEAD_FIELD",
@@ -109,6 +111,23 @@ def execution_only_admissible_for_phase(phase):
     return phase == FIXER_PHASE
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
+
+# The review driver hands a seat of these vendors the host (file-landing) channel, so the seat lands
+# a payload no runner observed and can never carry a runner record. Every other registered vendor
+# is an external engine the orchestrator dispatches through the runner. Routing claude seats through
+# the runner (the C14 stack) changes exactly this set.
+HOST_SEAT_VENDORS = frozenset(("claude",))
+
+
+def runner_record_vendor(vendor, registered):
+    """True when a seat of ``vendor`` is dispatched through the runner on the driver path, so it can
+    carry a runner record. ``registered`` is the registry's vendor list; an unknown vendor is not
+    one. Never raises."""
+    if not isinstance(vendor, str) or not vendor.strip():
+        return False
+    vendor = vendor.strip()
+    return vendor in tuple(registered or ()) and vendor not in HOST_SEAT_VENDORS
+
 
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"

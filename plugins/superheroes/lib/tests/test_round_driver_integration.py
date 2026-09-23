@@ -91,7 +91,10 @@ def _blocking_finding(title, line):
 # =============================================================================================
 
 def _cfg(**over):
-    base = {"leg": "code", "vendors": ["claude"], "diff": REVIEWED_DIFF, "fixerVendor": "claude",
+    # A runner vendor is live beside claude: on the durable-record path an auditor must be seated on
+    # a vendor that can produce a runner record (#1272 layer 4a), and claude seats are host seats.
+    base = {"leg": "code", "vendors": ["claude", "codex"], "diff": REVIEWED_DIFF,
+            "fixerVendor": "claude",
             "verifyCommand": "none", "seatMap": SEAT_MAP}
     base.update(over)
     return base

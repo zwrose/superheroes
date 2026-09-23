@@ -305,8 +305,10 @@ def test_bite_bp2f_b_submit_preflight_journals_unrecognized_owner(tmp_path):
     assert ok and state is not None
     state["dispositionLedgerOwner"] = "ledger-v2"
     RD.save_state(session_dir, state)
-    n = RD.cmd_next(session_dir)
-    assert n["ok"], n
+    # Since layer 4a `next` refuses to hand the step out under an unrecognized owner; this
+    # submit-preflight proof (defence in depth behind that refusal) takes the echo from disk.
+    n = {"phase": state["pending"]["phase"], "attempt": state["pending"]["attempt"],
+         "expectedStateHash": RD.state_hash(state)}
     before_state = _session_state_bytes(session_dir)
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
                         _panel_artifact())

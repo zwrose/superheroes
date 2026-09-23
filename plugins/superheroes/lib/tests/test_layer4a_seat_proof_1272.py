@@ -118,3 +118,83 @@ def test_l4a_1_census_the_step_echo_has_one_builder():
                     and isinstance(node.ctx, ast.Store)):
                 owners.append(fn.name)
     assert owners == ["_next_response"], owners
+
+
+# --- item 2: an audit seat that cannot produce a runner record refuses at seat time ---------------
+
+import importlib.util  # noqa: E402
+
+import receipt_disclosures  # noqa: E402
+
+_TDI_SPEC = importlib.util.spec_from_file_location(
+    "test_round_driver_integration_for_l4a", os.path.join(_HERE, "test_round_driver_integration.py"))
+_TDI = importlib.util.module_from_spec(_TDI_SPEC)
+_TDI_SPEC.loader.exec_module(_TDI)
+
+
+def _durable_state(**cfg):
+    state = RD.new_state(dict({"leg": "code", "diff": "d"}, **cfg))
+    state["_advanceUsed"] = True
+    return state
+
+
+def test_l4a_2_durable_selection_skips_host_vendors_for_an_independent_engine():
+    # the 2g r2 shape: claude listed first, fixer on cursor — today's rule seats claude
+    cfg = {"vendors": ["claude", "codex", "cursor"], "fixerVendor": "cursor"}
+    assert RD._auditor_vendor(cfg, "cursor") == ("claude", "independent")
+    assert RD._auditor_vendor(cfg, "cursor", True) == ("codex", "independent")
+
+
+def test_l4a_2_durable_selection_degrades_inside_the_runner_set_never_to_a_host():
+    cfg = {"vendors": ["claude", "codex"], "fixerVendor": "codex"}
+    assert RD._auditor_vendor(cfg, "codex") == ("claude", "independent")
+    assert RD._auditor_vendor(cfg, "codex", True) == ("codex", "degraded")
+
+
+def test_l4a_2_audit_targets_carry_the_seated_verifier_cell():
+    state = _durable_state(vendors=["claude", "codex"], fixerVendor="claude")
+    state["fixBatch"] = [{"file": "f.py", "line": 3, "title": "bug", "severity": "Important"}]
+    targets = RD._audit_targets(state, state["config"], {})
+    assert [(t["auditorVendor"], t["auditorModel"], t["auditorEffort"]) for t in targets] == [
+        ("codex",) + tuple(RD.model_registry.matrix_config("verifier", "codex"))]
+
+
+def test_l4a_2_transport_fault_refuses_a_durable_audit_seat_off_the_runner():
+    state = _durable_state(vendors=["claude"], fixerVendor="claude")
+    for vendor in ("claude", None, ""):
+        assert RD._seat_transport_fault({"vendor": vendor}, "t1", RD.P_AUDITS, state) == (
+            "auditor-no-runner-record:%s" % (vendor if isinstance(vendor, str) else repr(vendor)))
+    for vendor in ("codex", "cursor"):
+        assert RD._seat_transport_fault({"vendor": vendor}, "t1", RD.P_AUDITS, state) is None
+
+
+def test_l4a_2_transport_fault_leaves_other_phases_and_hand_sessions_alone():
+    durable = _durable_state(vendors=["claude"], fixerVendor="claude")
+    hand = dict(durable, _submitUsed=True)
+    library = dict(durable, _advanceUsed=False)
+    assert RD._seat_transport_fault({"vendor": "claude"}, "s", RD.P_PANEL, durable) is None
+    assert RD._seat_transport_fault({"vendor": "claude"}, "t1", RD.P_AUDITS, hand) is None
+    assert RD._seat_transport_fault({"vendor": "claude"}, "t1", RD.P_AUDITS, library) is None
+
+
+def test_l4a_2_a_claude_only_durable_session_refuses_the_audit_order_before_dispatch(tmp_path):
+    # axis: the refusal lands when the audit order is emitted — nothing to record, nothing lost
+    session_dir, gitdir, head_path = _TDI._bootstrap(tmp_path, name="claude-only",
+                                                     vendors=["claude"], fixerVendor="claude")
+    findings = [_TDI._blocking_finding("unchecked index", 2)]
+    try:
+        _TDI._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_AUDITS)
+    except AssertionError as exc:
+        seen, out = exc.args[0]
+    else:
+        raise AssertionError("the claude-only durable session reached dispatch-audits")
+    assert seen == RD.P_FIXER
+    assert out["ok"] is False and out["reason"] == "order-render-refused"
+    assert out["detail"].endswith(":auditor-no-runner-record:claude"), out
+    state = _TDI._state(session_dir)
+    # the fixer folded; the audit step was never handed out, and asking again refuses again
+    assert state.get("pending") is None and state["step"] == RD.P_AUDITS
+    again = RD.cmd_next(session_dir)
+    assert again["ok"] is False and again["detail"] == out["detail"]
+    audits_dir = os.path.join(session_dir, "round-%d" % state["round"], "orders", RD.P_AUDITS)
+    assert not os.path.exists(audits_dir)

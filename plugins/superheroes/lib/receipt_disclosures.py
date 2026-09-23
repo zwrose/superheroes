@@ -2,6 +2,7 @@
 """Disclosure-channel vocabulary, selection rule, and degraded-prose collector — leaf module."""
 import model_registry
 import seat_map_receipts
+import session_contract
 
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
@@ -182,11 +183,21 @@ def live_vendors(config):
     return out
 
 
-def independent_auditor(config, fixer_vendor):
+def auditor_candidates(config, runner_record_only=False):
+    """Live vendors an auditor may be seated on. On a durable-record session an audit landing must
+    carry a runner record, so only vendors the driver dispatches through the runner are candidates."""
+    live = live_vendors(config)
+    if not runner_record_only:
+        return live
+    registered = model_registry.vendors()
+    return [v for v in live if session_contract.runner_record_vendor(v, registered)]
+
+
+def independent_auditor(config, fixer_vendor, runner_record_only=False):
     fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
     if fixer_fam is None:
         return None, None
-    for v in live_vendors(config):
+    for v in auditor_candidates(config, runner_record_only):
         if v != fixer_vendor:
             cand_fam = model_registry.family_for("verifier", v)
             if cand_fam is not None and cand_fam != fixer_fam:

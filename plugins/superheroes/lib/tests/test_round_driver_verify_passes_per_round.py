@@ -74,7 +74,7 @@ def _terminal_receipt(session_dir):
 
 
 def _cfg(**over):
-    base = {"leg": "code", "vendors": ["claude"], "diff": _TDI.REVIEWED_DIFF,
+    base = {"leg": "code", "vendors": ["claude", "codex"], "diff": _TDI.REVIEWED_DIFF,
             "fixerVendor": "claude", "verifyCommand": "none", "seatMap": _TDI.SEAT_MAP}
     base.update(over)
     return base
