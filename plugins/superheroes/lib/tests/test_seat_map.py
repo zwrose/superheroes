@@ -3528,7 +3528,7 @@ def test_compose_terra_deep_pin_refused_with_named_reason(tmp_path, capsys):
 
 def test_compose_invalid_codex_role_pin_disclosed(tmp_path, capsys):
     repo = str(tmp_path)
-    _write_core_with_prefs(repo, {"codexModels": {"reviewer-deep": "gpt-6-astra"}})
+    _write_core_with_prefs(repo, {"codexModels": {"reviewer": "gpt-6-astra"}})
     rc = SM.main(
         [
             "x",
@@ -3551,7 +3551,7 @@ def test_compose_invalid_codex_role_pin_disclosed(tmp_path, capsys):
         d for d in receipt["degradations"] if d["constraint"] == "role-pin-not-honorable"
     ]
     assert len(honorable) == 1
-    assert honorable[0]["reason"].startswith("pin-probe-pending:")
+    assert honorable[0]["reason"].startswith("pin-role-not-eligible:")
 
 
 def test_cli_compose_claude_impl_unknown_host_exits_zero(capsys):

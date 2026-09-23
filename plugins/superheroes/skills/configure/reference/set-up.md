@@ -247,7 +247,7 @@ Follow-up: `/superheroes:configure`.
    `codex`** (the cross-vendor default — a brief-check on the host model is a disclosed degradation).
    When Codex is selected and no concrete model pin exists, explain the effective GPT-5.6 defaults.
    Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
-   A `reviewer-deep` Codex pin may also name `gpt-6-astra`; it is refused `pin-probe-pending` while its registry row is probe-pending.
+   A `reviewer-deep` Codex pin may also name `gpt-6-astra`; it is valid for `reviewer-deep` only, at effort `high`.
    `max` effort is owner opt-in only (never a default).
 
 3. **Show the build authorization — never apply it (FR-13).** If an external **implementation** engine

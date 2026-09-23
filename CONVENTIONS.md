@@ -627,7 +627,7 @@ actually runs; the adapter and `engine_pref` re-derive from it.
 
 Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
 An optional per-role `enginePreferences.codexModels` pin may select one of those
-canonical IDs (plus `gpt-6-astra` for `reviewer-deep` only, refused `pin-probe-pending` while its registry row is probe-pending); a pinned model runs at the effort
+canonical IDs (plus `gpt-6-astra` for `reviewer-deep` only, at effort `high`); a pinned model runs at the effort
 of its own registry rung, not the role's configured effort. A one-run preflight pin wins over the
 persistent pin, which wins over tier mapping. The provider-specific pin is carried separately from the shared
 tier so a failed Codex dispatch falls directly open to the host model with a valid native

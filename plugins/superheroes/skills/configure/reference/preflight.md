@@ -117,7 +117,8 @@ the same result neither earn nor spoil it. A result with only unrelated findings
 dispatch, is a miss. An unreadable attempts ledger refuses `astra-probe-ledger-unreadable` and is
 never overwritten. A second wave attempt with a different run dir refuses
 `astra-probe-wave-already-attempted`; three recorded misses set `ownerProposal: true`. A pass does
-not register Astra — only a reviewed commit removing `probe-pending` from the registry row does.
+not register a model by itself — a reviewed commit removing `probe-pending` from its registry row
+does; Astra's row no longer carries it.
 
 ### A.3 — `gh`
 

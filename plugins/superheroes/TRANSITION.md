@@ -79,16 +79,17 @@ refusals `unregistered-engine-model`, `fable-unrunnable`, `invalid-model-effort`
 Not in this release: the launcher's hand-built argv retiring into the adapter, the watcher and
 the steer channel.
 
-### Astra (probe-pending) and the codex role pin
+### Astra and the codex role pin
 
-`gpt-6-astra` is probe-pending in the registry — a consumer meets:
+`gpt-6-astra` is registered as the codex top rung and a valid `reviewer-deep` pin at effort `high`.
+A consumer meets:
 
-- the `registration-probe` role (the only role whose allowlist admits Astra while it is probe-pending);
+- the `registration-probe` role (for a future probe-pending model);
 - `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
   wave is re-attempted with a different run dir);
-- pin refusal tokens `pin-probe-pending`, `pin-role-not-eligible`, and `pin-not-on-allowlist` (a
-  codex role pin must resolve on its role's own codex allowlist — Terra is refused on
-  `reviewer-deep`, and every codex `pilot` pin is refused);
+- pin refusal tokens `pin-probe-pending` (for a future probe-pending model), `pin-role-not-eligible`,
+  and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — Terra
+  is refused on `reviewer-deep`, and every codex `pilot` pin is refused);
 - `seat_map compose` flags `--host-model` and `--implementation-engine` and degradations
   `host-model-unknown`, `role-pin-not-live`, `role-pin-not-honorable`;
 - `SUPERHEROES_HOST_MODEL`, exported by the session-start hook from the host payload (empty when

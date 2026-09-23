@@ -2753,14 +2753,21 @@ def test_write_engine_pref_pins_refused_invalid_pin_byte_identical(tmp_path):
     assert open(path, encoding="utf-8").read() == before
 
 
-def test_write_engine_pref_pins_refused_astra_pin_returns_detail(tmp_path):
+def test_write_engine_pref_pins_refused_astra_on_non_deep_role_returns_detail(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    res = CM.write_engine_pref_pins(
+        repo, "codexModels", {"reviewer": "gpt-6-astra"}, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
+    assert "reviewer" in res["detail"]
+    assert res["detail"]["reviewer"].startswith("pin-role-not-eligible:")
+
+
+def test_write_engine_pref_pins_registered_astra_on_reviewer_deep_succeeds(tmp_path):
     repo, store = _write_core_for_pin_tests(tmp_path)
     res = CM.write_engine_pref_pins(
         repo, "codexModels", {"reviewer-deep": "gpt-6-astra"}, root=store)
-    assert res["action"] == "refused"
-    assert res["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
-    assert "reviewer-deep" in res["detail"]
-    assert res["detail"]["reviewer-deep"].startswith("pin-probe-pending:")
+    assert res["action"] == "written"
 
 
 def test_write_engine_pref_pins_refuses_pin_off_the_role_allowlist(tmp_path):

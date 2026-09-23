@@ -547,47 +547,58 @@ def test_matrix_cells_reviewer_roles_unchanged_at_base():
     assert MR.matrix_config("verifier", "cursor") == _VERIFIER_CURSOR
 
 
-def test_pending_astra_hidden_from_allowlist_but_probe_role_admits():
-    assert MR.allowlist("reviewer-deep", "codex") == ((_REVIEWER_DEEP_CODEX[0], _REVIEWER_DEEP_CODEX[1]),)
+def _plant_probe_pending_astra(monkeypatch):
+    models = copy.deepcopy(MR._MODELS)
+    astra = dict(models["codex"]["gpt-6-astra"])
+    astra["registration"] = "probe-pending"
+    models["codex"]["gpt-6-astra"] = astra
+    monkeypatch.setattr(MR, "_MODELS", models)
+
+
+def test_registered_astra_on_reviewer_deep_allowlist_and_probe_role_admits():
+    assert MR.allowlist("reviewer-deep", "codex") == (
+        (_REVIEWER_DEEP_CODEX[0], _REVIEWER_DEEP_CODEX[1]),
+        ("gpt-6-astra", "high"),
+    )
     assert MR.allowlist("registration-probe", "codex") == (("gpt-6-astra", "high"),)
+    assert MR.ladder("codex")[-1] == ("gpt-6-astra", "high")
     assert MR.codex_effort_for_kind("review") == MR.matrix_config("reviewer", "codex")[1]
     r = MR.resolve_dispatch("registration-probe", "codex")
     assert r["ok"] is True
     assert r["effort"] == "high"
 
 
-def test_pending_astra_rejected_on_reviewer_deep_explicit_dispatch():
+def test_registered_astra_accepted_on_reviewer_deep_explicit_dispatch():
     r = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-6-astra", None)
-    assert r["ok"] is False
+    assert r["ok"] is True
+    assert r["effort"] == "high"
+    assert r["effort_source"] == "resolved-unique"
 
 
-def test_escalate_from_sol_xhigh_does_not_return_pending_astra():
+def test_escalate_from_sol_xhigh_returns_registered_astra():
     result = MR.escalate("codex", "gpt-5.6-sol", "xhigh")
-    assert result is not None
-    assert result[1] != "gpt-6-astra"
+    assert result == ("codex", "gpt-6-astra", "high")
 
 
-def test_codex_pin_verdict_pending_astra_on_reviewer_deep():
+def test_planted_probe_pending_astra_hidden_from_ladder_and_allowlist(monkeypatch):
+    _plant_probe_pending_astra(monkeypatch)
+    assert ("gpt-6-astra", "high") not in MR.ladder("codex")
+    assert MR.allowlist("reviewer-deep", "codex") == (
+        (_REVIEWER_DEEP_CODEX[0], _REVIEWER_DEEP_CODEX[1]),
+    )
+
+
+def test_codex_pin_verdict_planted_pending_astra_on_reviewer_deep(monkeypatch):
+    _plant_probe_pending_astra(monkeypatch)
     ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
     assert ok is False
     assert reason.startswith("pin-probe-pending:")
 
 
-def test_codex_pin_verdict_registered_astra_on_reviewer_deep(monkeypatch):
-    models = dict(MR._MODELS)
-    codex = dict(models["codex"])
-    astra = dict(codex["gpt-6-astra"])
-    astra.pop("registration", None)
-    codex["gpt-6-astra"] = astra
-    models["codex"] = codex
-    monkeypatch.setattr(MR, "_MODELS", models)
+def test_codex_pin_verdict_registered_astra_on_reviewer_deep():
     ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
     assert ok is True
     assert reason is None
-    r = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-6-astra", None)
-    assert r["ok"] is True
-    assert r["effort"] == "high"
-    assert r["effort_source"] == "resolved-unique"
     ok_sol, _ = MR.codex_pin_verdict("reviewer-deep", "gpt-5.6-sol")
     assert ok_sol is True
     r_sol = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-5.6-sol", None)
@@ -595,14 +606,7 @@ def test_codex_pin_verdict_registered_astra_on_reviewer_deep(monkeypatch):
     assert r_sol["effort"] == "xhigh"
 
 
-def test_codex_pin_verdict_astra_on_reviewer_refused_pin_role(monkeypatch):
-    models = dict(MR._MODELS)
-    codex = dict(models["codex"])
-    astra = dict(codex["gpt-6-astra"])
-    astra.pop("registration", None)
-    codex["gpt-6-astra"] = astra
-    models["codex"] = codex
-    monkeypatch.setattr(MR, "_MODELS", models)
+def test_codex_pin_verdict_astra_on_reviewer_refused_pin_role():
     ok, reason = MR.codex_pin_verdict("reviewer", "gpt-6-astra")
     assert ok is False
     assert reason.startswith("pin-role-not-eligible:")
@@ -618,13 +622,13 @@ def test_codex_pin_verdict_refuses_pins_off_the_role_allowlist():
     assert reason.startswith("pin-not-on-allowlist:")
 
 
-@pytest.mark.parametrize("registry_state", ["today", "post-pass"])
+@pytest.mark.parametrize("registry_state", ["registered-astra", "planted-probe-pending"])
 def test_pin_judges_agree_writer_guard_and_composer(monkeypatch, registry_state):
     # bite-axis: one judge — writer, composer and guard agree on every codex role pin in both registry states
-    if registry_state == "post-pass":
+    if registry_state == "planted-probe-pending":
         models = copy.deepcopy(MR._MODELS)
         astra = dict(models["codex"]["gpt-6-astra"])
-        astra.pop("registration", None)
+        astra["registration"] = "probe-pending"
         models["codex"]["gpt-6-astra"] = astra
         monkeypatch.setattr(MR, "_MODELS", models)
         monkeypatch.setattr(SM.model_registry, "_MODELS", models)
@@ -641,7 +645,7 @@ def test_pin_judges_agree_writer_guard_and_composer(monkeypatch, registry_state)
             if role in SM.panel_pin_tiers():
                 _m, _e, info = SM._cell(role, "codex", {role: model})
                 assert info["honored"] == ok
-    if registry_state == "today":
+    if registry_state == "planted-probe-pending":
         assert carve_out_count == 0
         ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
         assert ok is False
