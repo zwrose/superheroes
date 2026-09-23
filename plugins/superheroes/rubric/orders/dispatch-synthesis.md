@@ -24,10 +24,10 @@ Your groups must account for **every** staged survivor id **exactly once** under
 guarantee**. When you submit a **non-empty** group list, each survivor id must appear in exactly
 one group's `member_ids`; a group list that omits any staged id is **refused** with
 `staged-id-unresolvable` naming the omitted id — re-emit with the missing ids as singleton groups.
-A `grouping` of **null** or an **empty list** carries no coverage obligation: the driver falls
-open to unmerged survivors. An artifact with **no `grouping` key at all** is **refused** at submit —
-emit `{"grouping": null}` when you propose no merges; **synthesis drops nothing** and synthesis failure never aborts the
-review. `verification.merge_and_rank` applies accepted groups mechanically; merged groups combine bodies and take
+A **null** or **empty-list** group list carries no coverage obligation: the driver falls open to
+unmerged survivors. An artifact that **omits the group-list key entirely** is **refused** at submit —
+send an explicit null when you propose no merges; **synthesis drops nothing** and synthesis failure
+never aborts the review. `verification.merge_and_rank` applies accepted groups mechanically; merged groups combine bodies and take
 the highest severity; the merged `verdict` is **CONFIRMED only when a member at the merged
 (highest) severity is CONFIRMED-with-evidence** — computed **order-independently**, so
 model-supplied member order can't flip GATE-eligibility, and carrying that member's receipt (the

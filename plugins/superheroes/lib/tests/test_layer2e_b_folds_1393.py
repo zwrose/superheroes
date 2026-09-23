@@ -1,5 +1,5 @@
-"""#1393 — the clamp-exact legacy-key collision, the audit seat on a discharge-bearing phase, and the
-gate-policy write path for a follow-up on a rule that may not carry one."""
+"""#1393 — the clamp-exact legacy-key collision and the gate-policy write path for a follow-up on a
+rule that may not carry one."""
 import hashlib
 import importlib.util
 import json
@@ -21,7 +21,6 @@ def _load(name):
 
 SC = _load("session_contract")
 RC = _load("round_certification")
-RD = _load("round_driver")
 RGP = _load("review_gate_policy")
 FI = _load("finding_identity")
 
@@ -89,44 +88,6 @@ def test_same_finding_duplicate_under_bare_key_admitted():
     by_key, refusal = RC._certification_findings_by_key(state)
     assert refusal is None
     assert by_key[bare]["disposition"] == "refuted"
-
-
-# --- the audit seat on a discharge-bearing phase --------------------------------------------------
-
-def _audit_state(vendors, fixer, advance_used):
-    state = RD.new_state({"leg": "code", "vendors": vendors, "fixerVendor": fixer, "diff": "d"})
-    state["fixBatch"] = [{"file": "a.py", "line": 1, "title": "bug", "severity": "Important"}]
-    if advance_used:
-        state["_advanceUsed"] = True
-    return state
-
-
-def test_durable_path_seats_runner_backed_auditor_never_native():
-    # axis: on the durable-record path a native vendor listed first is skipped for an engine
-    state = _audit_state(["claude", "codex", "cursor"], "cursor", advance_used=True)
-    targets = RD._audit_targets(state, state["config"], {})
-    assert [t["auditorVendor"] for t in targets] == ["codex"]
-    assert targets[0]["independence"] == "independent"
-
-
-def test_hand_submit_path_keeps_its_auditor_choice():
-    # axis: without the advance latch the choice is unchanged (a claude auditor is valid there)
-    state = _audit_state(["claude", "codex", "cursor"], "cursor", advance_used=False)
-    targets = RD._audit_targets(state, state["config"], {})
-    assert [t["auditorVendor"] for t in targets] == ["claude"]
-
-
-def test_durable_path_with_no_engine_parks_at_compose(monkeypatch):
-    # axis: no runner-backed vendor live → the compose refuses by name, nothing is seated
-    state = _audit_state(["claude"], "claude", advance_used=True)
-    monkeypatch.setattr(RD.delta_surface, "split_fix_surface",
-                        lambda *a, **k: {"unknown": False, "auditTargets": {}, "newSurface": {}})
-    state["headDiff"] = "d"
-    RD._enter_delta_round(state, state["config"])
-    assert state["step"] == RD.P_TERMINAL
-    assert state["terminal"] == "cannot-certify"
-    assert RD.AUDIT_SEAT_NATIVE_CAUSE in state["certification"]["reason"]
-    assert "_auditTargets" not in state or not state["_auditTargets"]
 
 
 # --- gate-policy follow-up: the write path and the resolved action ---------------------------------

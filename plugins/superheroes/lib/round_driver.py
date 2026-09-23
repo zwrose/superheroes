@@ -400,8 +400,6 @@ _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 FOLLOWUP_MALFORMED_CAUSE = "follow-up-malformed"
 STAGED_ID_UNRESOLVABLE_CAUSE = "staged-id-unresolvable"
-# Named refusal when dispatch-audits would be composed onto a native seat on the durable path.
-AUDIT_SEAT_NATIVE_CAUSE = "audit-seat-native-on-discharge-phase"
 
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
@@ -987,23 +985,14 @@ def author_justification_filter(findings, prior_comments):
 # independence + certification shape
 # =============================================================================================
 
-def _auditor_vendor(config, fixer_vendor, runner_backed=False):
+def _auditor_vendor(config, fixer_vendor):
     """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
     on family, not the dispatch CLI). Independence is NEVER satisfied between two cursor first-party
     models (#651, owner-ratified 2026-07-26): composer and grok share the `xai` family, so a
     cursor-grok auditor is NOT independent of a cursor-composer fix. When no family-independent
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
     independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
-    rider 4a); see test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry.
-
-    With ``runner_backed`` (the durable-record path) the candidates are external engines only: an
-    audit is discharge-bearing and its provenance must come from a runner record, which a native
-    seat cannot produce. No engine live → ``(None, None)``; the caller refuses at compose."""
-    if runner_backed:
-        engines = [v for v in _live_vendors(config) if _vendor_is_external_engine(v)]
-        if not engines:
-            return None, None
-        config = dict(config, vendors=engines)
+    rider 4a); see test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry."""
     vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor)
     if vendor is not None:
         return vendor, "independent"
@@ -4217,15 +4206,7 @@ def _enter_delta_round(state, config):
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
     state["fullPanelRan"] = False
-    targets = _audit_targets(state, config, split.get("auditTargets") or {})
-    if targets is None:
-        # axis: a discharge-bearing phase is never composed onto a native seat — refuse here, by
-        # name, rather than seat it and have every landing refused `provenance-underivable`.
-        _park_cannot_certify(state, "%s: dispatch-audits on the durable-record path needs a "
-                             "runner-backed auditor; live vendors %r include no external engine"
-                             % (AUDIT_SEAT_NATIVE_CAUSE, _live_vendors(config)))
-        return
-    state["_auditTargets"] = targets
+    state["_auditTargets"] = _audit_targets(state, config, split.get("auditTargets") or {})
     state["_newSurface"] = split.get("newSurface") or {}
     _record_round(state, "roundKind", "delta")
     if post_fix:
@@ -4237,15 +4218,9 @@ def _audit_targets(state, config, audit_targets_map):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
-    occurrence wins. A re-queued target keys by its findingKey marker, never by id. None when the
-    durable-record path has a target but no runner-backed auditor to seat on it."""
+    occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
-    auditor_vendor, independence = _auditor_vendor(
-        config, fixer_vendor, runner_backed=bool(state.get("_advanceUsed")))
-    if auditor_vendor is None:
-        if any(isinstance(f, dict) for f in state.get("fixBatch") or []):
-            return None
-        return []
+    auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
     if independence == "degraded":
         state["independenceDegraded"] = True
     targets = []
