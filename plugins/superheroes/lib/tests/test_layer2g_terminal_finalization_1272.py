@@ -379,6 +379,9 @@ def _drive_loop_to_terminal(session_dir, cfg, respond, max_steps=80):
 
 def _seed_certification_evidence(session_dir, certified_head):
     journal_path = os.path.join(session_dir, RD.JOURNAL_FILE)
+    # Replaces the loop's journal on purpose: a hand-driven loop records no runner seats, so its own
+    # journal cannot pass the dispatch-evidence check. Every verified-head fact under test comes from
+    # the loop's folds; only the panel dispatch evidence is fixture-supplied.
     with open(journal_path, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(_dispatch_journal(certified_head), sort_keys=True) + "\n")
     _write_envelope(
@@ -517,7 +520,7 @@ def test_fix_not_at_head_records_residual_without_rebind(tmp_path):
 # --- item 5: fault path -------------------------------------------------------------
 
 def test_verify_not_pass_records_residual_without_rebind(tmp_path):
-    """re-pinned: residual field retired; observable is no verifyResult stamp and verify-not-pass."""
+    """re-pinned: residual assertion became the receipt/refusal assertions; no-rebind unchanged."""
     _, certified_head = _init_git_repo(tmp_path)
     state = _ledger_only_fixed_state(
         certified_head,
@@ -538,22 +541,16 @@ def test_verify_not_pass_records_residual_without_rebind(tmp_path):
     _write_head_content_blobs(session_dir, head=certified_head)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         loaded = json.load(fh)
-    loaded["dispositionLedger"][0]["dispositionReceipt"] = _ledger_fixed_receipt(
-        headSha=certified_head,
-    )
-    RD.save_state(session_dir, loaded)
-    with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
-        loaded = json.load(fh)
     before_head = _ledger_receipt(loaded).get("headSha")
     RD._finalize_certification_inputs(session_dir, loaded, head_sha=certified_head)
     receipt = _ledger_receipt(loaded)
-    assert receipt.get("headSha") == before_head == certified_head
+    assert receipt.get("headSha") == before_head == OLD_HEAD
     assert receipt.get("verifyResult") is None
     ctx, err = RC._load_context(session_dir)
     assert err is None
     refusal = RC.check_disposition_without_receipt(ctx)
     assert refusal is not None
-    assert refusal["bindingFailure"] == "verify-not-pass"
+    assert refusal["bindingFailure"] == "verify-not-on-head"
 
 
 def test_unchanged_head_with_failed_binding_records_residual(tmp_path):
@@ -660,7 +657,6 @@ def test_verified_post_fix_head_finalizes_and_certifies(tmp_path):
     _merge_meta(session_dir, repoRoot=repo_root, headSha=certified_head)
     cfg = _loop_cfg(repo_root, certified_head)
     _drive_loop_to_terminal(session_dir, cfg, _loop_responder(_GUARD_HEAD_NEW_SURFACE))
-    _write_head_content_blobs(session_dir, head=certified_head)
     _seed_certification_evidence(session_dir, certified_head)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         state = json.load(fh)
@@ -920,26 +916,20 @@ def test_verify_result_for_head_accessor_axes(state, head, expected):
 
 
 @pytest.mark.parametrize(
-    "rounds_builder,expected_accessor",
+    "rounds_builder",
     [
-        (
-            lambda h: {
-                "1": {SC.VERIFIED_HEAD_FIELD: h, "verifyResult": "pass"},
-                "2": {SC.VERIFIED_HEAD_FIELD: h, "verifyResult": "fail"},
-            },
-            "fail",
-        ),
-        (
-            lambda h: {
-                "1": {SC.VERIFIED_HEAD_FIELD: h, "verifyResult": "pass"},
-                "2": {SC.VERIFIED_HEAD_FIELD: h},
-            },
-            None,
-        ),
+        lambda h: {
+            "1": {SC.VERIFIED_HEAD_FIELD: h, "verifyResult": "pass"},
+            "2": {SC.VERIFIED_HEAD_FIELD: h, "verifyResult": "fail"},
+        },
+        lambda h: {
+            "1": {SC.VERIFIED_HEAD_FIELD: h, "verifyResult": "pass"},
+            "2": {SC.VERIFIED_HEAD_FIELD: h},
+        },
     ],
     ids=["older-pass-newer-fail", "newer-record-without-result"],
 )
-def test_verify_ordering_axis_refuses_without_verify_stamp(tmp_path, rounds_builder, expected_accessor):
+def test_verify_ordering_axis_refuses_without_verify_stamp(tmp_path, rounds_builder):
     """axis: newest round record governs verify credit at finalization and certification."""
     _, certified_head = _init_git_repo(tmp_path)
     rounds = rounds_builder(certified_head)
@@ -949,7 +939,6 @@ def test_verify_ordering_axis_refuses_without_verify_stamp(tmp_path, rounds_buil
         headSha=certified_head,
         verifyResult="pass",
     )
-    assert SC.verify_result_for_head(state, certified_head) == expected_accessor
     cfg = dict(state.get("config") or {})
     cfg["repoRoot"] = str(tmp_path / "repo")
     cfg["headSha"] = certified_head

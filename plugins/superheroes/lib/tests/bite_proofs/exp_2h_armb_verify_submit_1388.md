@@ -96,7 +96,8 @@ E       AssertionError: assert {'result': 'pass'} == {'provenance': ... 'result'
 
 **Red** (`test_verified_post_fix_head_finalizes_and_certifies`):
 ```
-E       AssertionError: {'bindingFailure': 'verify-not-pass', 'class': 'disposition-without-receipt', ...}
+E       AssertionError: {'artifact': 'v0', 'bindingFailure': 'verify-not-pass', 'class': 'disposition-without-receipt', 'detail': 'fixed disposition verification receipt did not pass'}
+E       assert {'artifact': 'v0', 'bindingFailure': 'verify-not-pass', 'class': 'disposition-without-receipt', 'detail': 'fixed disposition verification receipt did not pass'} is None
 ```
 
 **Restore:**
@@ -105,7 +106,7 @@ E       AssertionError: {'bindingFailure': 'verify-not-pass', 'class': 'disposit
         _record_round(state, session_contract.VERIFIED_HEAD_FIELD, verified_head)
 ```
 
-**Green:** `1 passed in 9.00s`
+**Green:** `1 passed in 8.09s`
 
 **git status --porcelain after restore:** clean on neutralized line
 
@@ -139,14 +140,14 @@ E       AssertionError: assert 'verify-not-pass' == 'verify-not-on-head'
 
 **Neutralization:** `sorted(round_nums, reverse=True)` → `sorted(round_nums)`
 
-**Red** (`test_verify_result_for_head_accessor_axes[older-pass-newer-fail]`):
+**Red** (`test_verify_ordering_axis_refuses_without_verify_stamp[older-pass-newer-fail]`):
 ```
-E       AssertionError: assert 'pass' == 'fail'
+E       AssertionError: assert 'pass' is None
 ```
 
 **Restore:** `sorted(round_nums, reverse=True)`
 
-**Green:** `2 passed in 0.59s`
+**Green:** `1 passed in 0.64s`
 
 ## BP-8 — absent verifyResult (detector 4, newer-without-result)
 
@@ -155,11 +156,11 @@ E       AssertionError: assert 'pass' == 'fail'
 
 **Neutralization:** added `and rec.get("verifyResult") is not None` to the match condition
 
-**Red** (`test_verify_result_for_head_accessor_axes[newer-record-without-result]`):
+**Red** (`test_verify_ordering_axis_refuses_without_verify_stamp[newer-record-without-result]`):
 ```
-E       AssertionError: assert 'pass' == None
+E       AssertionError: assert 'pass' is None
 ```
 
 **Restore:** removed the extra `verifyResult is not None` guard
 
-**Green:** `2 passed in 0.56s`
+**Green:** `1 passed in 0.33s`
