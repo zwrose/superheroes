@@ -160,7 +160,6 @@ def _seed_for_faithful_terminal_chain(loaded):
     loaded["_auditOutcome"] = {"notDischarged": [], "discharged": []}
     loaded.pop("_newSurface", None)
     loaded["reviewedDiff"] = _POST_FIX_DIFF
-    loaded["baseReviewedDiff"] = _POST_FIX_DIFF
     loaded["_fixBatch"] = [_fix_batch_entry()]
     loaded["_changedSubjects"] = []
     loaded["_changedSubjectsSincePanel"] = []

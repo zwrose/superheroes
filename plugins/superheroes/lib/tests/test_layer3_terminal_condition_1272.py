@@ -323,6 +323,18 @@ def _mk_diff(sections):
     return "\n".join(parts) + "\n"
 
 
+def _fix_batch():
+    return [{"file": "f.py", "line": 1, "title": "bug", "severity": "Important"}]
+
+
+def _assert_delta_baseline_refusal(state):
+    assert state["rounds"]["2"]["roundKind"] == "full-panel-unknown-surface"
+    assert state["step"] == RD.P_PANEL
+    unknown = [d for d in state["decisions"] if d["kind"] == "unknown-surface"]
+    assert len(unknown) == 1
+    assert unknown[0]["detail"].startswith(RD.DELTA_BASELINE_ABSENT)
+
+
 def test_l3_a3_delta_split_reads_per_round_reviewed_diff(monkeypatch):
     captured = {}
     real_split = RD.delta_surface.split_fix_surface
@@ -334,15 +346,78 @@ def test_l3_a3_delta_split_reads_per_round_reviewed_diff(monkeypatch):
     monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _capture_split)
     state = RD.new_state(_cfg(diff=_BASE_DIFF))
     state["round"] = 2
+    state["deltaBaseline"] = {"round": 2, "diff": _HEAD_DIFF}
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
-    state["fixBatch"] = [{"file": "f.py", "line": 1, "title": "bug", "severity": "Important"}]
+    state["fixBatch"] = _fix_batch()
     RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
     assert captured["reviewed"] == _HEAD_DIFF
     assert captured["reviewed"] != _BASE_DIFF
 
 
-def test_l3_a3_absent_reviewed_diff_falls_back_to_config_diff(monkeypatch):
+def test_l3_a3_absent_baseline_refuses_to_scope_with_named_reason(monkeypatch):
+    def _split_must_not_run(*_args, **_kwargs):
+        raise AssertionError("split_fix_surface must not run when baseline is absent")
+
+    monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
+    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    state["round"] = 2
+    state["reviewedDiff"] = _HEAD_DIFF
+    state["headDiff"] = _HEAD_DIFF
+    state["fixBatch"] = _fix_batch()
+    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    _assert_delta_baseline_refusal(state)
+
+
+def test_l3_a3_stale_round_baseline_refuses(monkeypatch):
+    def _split_must_not_run(*_args, **_kwargs):
+        raise AssertionError("split_fix_surface must not run when baseline round is stale")
+
+    monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
+    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    state["round"] = 2
+    state["deltaBaseline"] = {"round": 1, "diff": _BASE_DIFF}
+    state["reviewedDiff"] = _HEAD_DIFF
+    state["headDiff"] = _HEAD_DIFF
+    state["fixBatch"] = _fix_batch()
+    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    _assert_delta_baseline_refusal(state)
+
+
+def test_l3_a3_non_text_baseline_refuses(monkeypatch):
+    def _split_must_not_run(*_args, **_kwargs):
+        raise AssertionError("split_fix_surface must not run when baseline diff is not text")
+
+    monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
+    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    state["round"] = 2
+    state["deltaBaseline"] = {"round": 2, "diff": None}
+    state["reviewedDiff"] = _HEAD_DIFF
+    state["headDiff"] = _HEAD_DIFF
+    state["fixBatch"] = _fix_batch()
+    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    _assert_delta_baseline_refusal(state)
+
+
+def test_l3_a3_post_fix_absent_baseline_runs_verify_then_panel(monkeypatch):
+    def _split_must_not_run(*_args, **_kwargs):
+        raise AssertionError("split_fix_surface must not run when baseline is absent")
+
+    monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
+    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    state["round"] = 2
+    state["reviewedDiff"] = _HEAD_DIFF
+    state["headDiff"] = _HEAD_DIFF
+    state["fixBatch"] = _fix_batch()
+    state["_postFixEntry"] = True
+    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    assert state["step"] == RD.P_VERIFY
+    assert state["_verifyThen"] == RD.VERIFY_THEN_PANEL
+
+
+def test_l3_a3_advance_round_writes_the_baseline_before_the_head_overwrite(monkeypatch):
+    diff_x = _BASE_DIFF
+    diff_y = _HEAD_DIFF
     captured = {}
     real_split = RD.delta_surface.split_fix_surface
 
@@ -351,14 +426,24 @@ def test_l3_a3_absent_reviewed_diff_falls_back_to_config_diff(monkeypatch):
         return real_split(reviewed, head, fix_batch)
 
     monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _capture_split)
-    state = RD.new_state(_cfg(diff=_BASE_DIFF))
-    state.pop("reviewedDiff", None)
-    state["round"] = 2
-    state["headDiff"] = _HEAD_DIFF
-    state["fixBatch"] = [{"file": "f.py", "line": 1, "title": "bug", "severity": "Important"}]
-    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
-    assert captured["reviewed"] == _BASE_DIFF
-    assert state["step"] != RD.P_PANEL
+    state = RD.new_state(_cfg(diff=diff_x))
+    state["round"] = 1
+    state["reviewedDiff"] = diff_x
+    state["headDiff"] = diff_y
+    state["fixBatch"] = _fix_batch()
+    RD._enter_post_fix(state, _cfg(diff=diff_x))
+    assert state["deltaBaseline"] == {"round": 2, "diff": diff_x}
+    assert state["reviewedDiff"] == diff_y
+    assert captured["reviewed"] == diff_x
+    assert state["rounds"]["2"]["roundKind"] == "delta"
+
+
+def test_l3_a3_ceiling_refusal_writes_no_baseline():
+    state = RD.new_state(_cfg(maxRoundsAbsolute=1, maxRounds=1))
+    state["round"] = 1
+    assert RD._advance_round(state, _cfg(maxRoundsAbsolute=1, maxRounds=1),
+                             reason="test-ceiling") is False
+    assert "deltaBaseline" not in state
 
 
 def test_l3_a3_second_fix_scoped_surface_excludes_first_fix_unchanged_hunk():
@@ -376,6 +461,7 @@ def test_l3_a3_second_fix_scoped_surface_excludes_first_fix_unchanged_hunk():
     ])
     state = RD.new_state(_cfg(diff=base))
     state["round"] = 2
+    state["deltaBaseline"] = {"round": 2, "diff": after_first_fix}
     state["reviewedDiff"] = after_first_fix
     state["headDiff"] = after_second_fix
     state["fixBatch"] = [{"file": "b.py", "line": 1, "title": "bug-b", "severity": "Important"}]

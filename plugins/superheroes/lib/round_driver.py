@@ -1141,6 +1141,7 @@ def _fix_batch_cap(config):
 VERIFY_THEN_CEILING = "ceiling"
 VERIFY_THEN_PANEL = "full-panel"
 VERIFY_THEN_POST_AUDITS = "post-audits"
+DELTA_BASELINE_ABSENT = "delta-baseline-absent"
 
 
 def _round_ceiling(config):
@@ -1182,7 +1183,6 @@ def new_state(config=None):
         "seatMapReceipts": ([{"round": "0", "map": dict(seeded_seat_map)}]
                             if isinstance(seeded_seat_map, dict) and seeded_seat_map else []),
         "reviewedDiff": cfg.get("diff"),
-        "baseReviewedDiff": cfg.get("diff"),
         "headDiff": None,
         "dispositionSeqCounter": 0,
         "fixBatch": [],
@@ -4206,9 +4206,7 @@ def _fold_verify(state, config, artifact, *, resolution):
     # is here — at the ceiling it parks `round-ceiling`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
-    prior_reviewed = state.get("reviewedDiff")
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
-    state["_deltaSplitReviewed"] = prior_reviewed
     _enter_delta_round(state, config)
 
 
@@ -4254,10 +4252,8 @@ def _enter_post_fix(state, config, session_dir=None):
         return
     if not _advance_round(state, config, reason="post-fix-advance"):
         return
-    prior_reviewed = state.get("reviewedDiff")
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
     state["_postFixEntry"] = True
-    state["_deltaSplitReviewed"] = prior_reviewed
     _enter_delta_round(state, config)
 
 
@@ -4289,15 +4285,29 @@ def _enter_delta_round(state, config):
             state["_verifyThen"] = VERIFY_THEN_PANEL
             state["step"] = P_VERIFY
         return
-    reviewed = state.pop("_deltaSplitReviewed", None)
-    if reviewed is None:
-        reviewed = state.get("reviewedDiff")
-    if reviewed is None:
-        cfg = state.get("config") or {}
-        reviewed = cfg.get("diff")
-    if reviewed is None:
+    baseline = state.get("deltaBaseline")
+    if not isinstance(baseline, dict):
+        cause = "no baseline record" if baseline is None else "baseline is not a record"
+        _schedule_full_panel_unknown(state, "%s: %s" % (DELTA_BASELINE_ABSENT, cause))
+        if post_fix:
+            state["_verifyThen"] = VERIFY_THEN_PANEL
+            state["step"] = P_VERIFY
+        return
+    stamped_round = baseline.get("round")
+    current_round = state["round"]
+    if (not isinstance(stamped_round, int) or isinstance(stamped_round, bool)
+            or stamped_round != current_round):
         _schedule_full_panel_unknown(
-            state, "session reviewed diff unpinned — full reviewer-deep panel")
+            state, "%s: baseline stamped round %s, current round %s"
+            % (DELTA_BASELINE_ABSENT, stamped_round, current_round))
+        if post_fix:
+            state["_verifyThen"] = VERIFY_THEN_PANEL
+            state["step"] = P_VERIFY
+        return
+    reviewed = baseline.get("diff")
+    if not isinstance(reviewed, str):
+        _schedule_full_panel_unknown(
+            state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT)
         if post_fix:
             state["_verifyThen"] = VERIFY_THEN_PANEL
             state["step"] = P_VERIFY
@@ -4720,11 +4730,13 @@ def _advance_round(state, config, *, reason):
     The ceiling is a BOUNDARY, not a settle-path terminal: the round at the ceiling completes,
     and the loop then refuses to begin the next one. Returns True when the counter advanced,
     False when it parked `round-ceiling` — a False return means the caller must return
-    immediately without any further state mutation."""
+    immediately without any further state mutation. This function is also the one writer of
+    `state["deltaBaseline"]`."""
     next_round = state["round"] + 1
     if _ceiling_blocks(state, config, next_round, reason):
         return False
     state["round"] = next_round
+    state["deltaBaseline"] = {"round": next_round, "diff": state.get("reviewedDiff")}
     return True
 
 
