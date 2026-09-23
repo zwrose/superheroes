@@ -462,6 +462,9 @@ def _assert_delta_baseline_refusal(state):
     assert unknown[0]["detail"].startswith(RD.DELTA_BASELINE_ABSENT)
 
 
+_THIRD_DIFF = _mk_diff([("h.py", "@@ -1 +1 @@\n-third\n+third-edited\n")])
+
+
 def test_l3_a3_delta_split_reads_per_round_reviewed_diff(monkeypatch):
     captured = {}
     real_split = RD.delta_surface.split_fix_surface
@@ -474,12 +477,13 @@ def test_l3_a3_delta_split_reads_per_round_reviewed_diff(monkeypatch):
     state = RD.new_state(_cfg(diff=_BASE_DIFF))
     state["round"] = 2
     state["deltaBaseline"] = {"round": 2, "diff": _HEAD_DIFF}
-    state["reviewedDiff"] = _HEAD_DIFF
+    state["reviewedDiff"] = _THIRD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
     RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
     assert captured["reviewed"] == _HEAD_DIFF
     assert captured["reviewed"] != _BASE_DIFF
+    assert captured["reviewed"] != state["reviewedDiff"]
 
 
 def test_l3_a3_absent_baseline_refuses_to_scope_with_named_reason(monkeypatch):

@@ -245,6 +245,61 @@ def test_l3_b2_nonblocking_survivor_disclosed_not_refused(tmp_path):
     assert not any(f.get("id") == "M1" for f in receipt["findings"])
 
 
+def test_l3_b4_pre_v5_session_refuses_undispositioned_minor(tmp_path):
+    state = {
+        "schemaVersion": 4,
+        "findings": [
+            {
+                "id": "M1",
+                "file": "a.py",
+                "line": 1,
+                "title": "style nit",
+                "severity": "Minor",
+            }
+        ],
+    }
+    ctx = _ctx_for_state(state, tmp_path)
+    refusal = RC.check_disposition_without_receipt(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+
+
+def test_l3_b5_pre_v5_receipt_carries_no_surviving_nonblocking(tmp_path):
+    state_v4 = {
+        "schemaVersion": 4,
+        "findings": [
+            {
+                "id": "M1",
+                "file": "a.py",
+                "line": 1,
+                "title": "style nit",
+                "severity": "Minor",
+                "disposition": "refuted",
+                "refutedReason": "intentional",
+            }
+        ],
+    }
+    ctx_v4 = _ctx_for_state(state_v4, tmp_path / "v4")
+    disclosures_v4 = RC._receipt_disclosures(ctx_v4, ctx_v4["state"])
+    assert "survivingNonBlocking" not in disclosures_v4
+
+    state_v5 = {
+        "schemaVersion": 5,
+        "findings": [
+            {
+                "id": "M1",
+                "file": "a.py",
+                "line": 1,
+                "title": "style nit",
+                "severity": "Minor",
+            }
+        ],
+    }
+    ctx_v5 = _ctx_for_state(state_v5, tmp_path / "v5")
+    disclosures_v5 = RC._receipt_disclosures(ctx_v5, ctx_v5["state"])
+    assert "survivingNonBlocking" in disclosures_v5
+
+
 def test_l3_b3_critical_may_not_take_the_nonblocking_path(tmp_path):
     ctx = _ctx_for_state(
         {"findings": [{"id": "C1", "severity": "Critical", "title": "blocker"}]},

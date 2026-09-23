@@ -113,6 +113,7 @@ def test_l3_d1_engine_fixer_order_names_no_result_shape():
     assert reason is None, reason
     assert _PAYLOAD_HEADING not in text
     assert OL._FIXER_LITERAL not in text
+    assert "see Payload contract" not in text
 
 
 def _fixer_step_5(text):
