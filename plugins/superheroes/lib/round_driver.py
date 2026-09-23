@@ -6357,7 +6357,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fail = _terminal_receipt_gate(session_dir, state)
             if fail:
                 return _receipt_fault_response(fail)
-            return _next_response(pending, state_hash(state))
+            return _next_response(session_dir, state, pending, "next")
     else:
         state = loaded
         if config_overrides and config_overrides.get("recordsPath") is not None:
@@ -6381,7 +6381,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fail = _terminal_receipt_gate(session_dir, state)
             if fail:
                 return _receipt_fault_response(fail)
-            return _next_response(pending, state_hash(state))
+            return _next_response(session_dir, state, pending, "next")
     if state.get("pending"):
         # idempotent re-emit: the state is unchanged since the pending was persisted, so the hash
         # recomputed here equals the one the first `next` returned (the hash is NEVER stored in the
@@ -6399,7 +6399,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fault = _terminal_receipt_gate(session_dir, state)
             if fault:
                 return _receipt_fault_response(fault)
-        return _next_response(pend, state_hash(state))
+        return _next_response(session_dir, state, pend, "next")
     step = _advance(state, state["config"])
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
     pending = {"action": step["action"], "round": step["round"], "phase": step["phase"],
@@ -6441,7 +6441,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         fail = _terminal_receipt_gate(session_dir, state)
         if fail:
             return _receipt_fault_response(fail)
-    return _next_response(pending, state_hash(state))
+    return _next_response(session_dir, state, pending, "next")
 
 
 def _receipt_fault_response(detail):
@@ -6481,7 +6481,17 @@ def _refuse_base_guard(session_dir, reason, detail=None, value=None):
     return 1
 
 
-def _next_response(pending, expected_hash):
+def _next_response(session_dir, state, pending, cmd):
+    action = pending.get("action") if isinstance(pending, dict) else None
+    if (action != P_TERMINAL
+            and session_contract.disposition_ledger_owner_classification(state)
+            == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED):
+        phase = pending.get("phase") if isinstance(pending, dict) else None
+        rnd = pending.get("round") if isinstance(pending, dict) else None
+        attempt = pending.get("attempt") if isinstance(pending, dict) else None
+        return _refuse_cmd(session_dir, cmd, DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE,
+                           phase=phase, rnd=rnd, attempt=attempt)
+    expected_hash = state_hash(state)
     return {
         "ok": True,
         "action": pending["action"],
@@ -7050,7 +7060,7 @@ def _cmd_re_emit_locked(session_dir, by):
         if completed is not None:
             superseded_attempt, superseded_row = completed
             anchor = _orders_anchor(state, session_dir, rnd, phase, superseded_attempt)
-            response = _next_response(state["pending"], state_hash(state))
+            response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
             response["superseded"] = {
                 "attempt": superseded_attempt,
                 "manifestSha256": ((anchor or {}).get("manifestSha256")
@@ -7115,7 +7125,7 @@ def _cmd_re_emit_locked(session_dir, by):
                            rnd=rnd, attempt=new_attempt, detail=str(exc))
 
     save_state(session_dir, state)
-    response = _next_response(state["pending"], state_hash(state))
+    response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
     response["superseded"] = {
         "attempt": old_attempt,
         "manifestSha256": anchor.get("manifestSha256"),
