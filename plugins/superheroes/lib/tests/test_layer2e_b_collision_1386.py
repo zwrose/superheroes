@@ -174,7 +174,10 @@ def test_edge6_legacy_row_alone_admitted():
 
 def test_edge7_short_title_alone_covered_by_e5():
     """edge 7: short-title bare==minted admitted — covered by test_e5_short_title_bare_equals_minted_no_collision."""
-    pass
+    _long, short, bare, _long_minted = _clamp_exact_pair()
+    assert SC.location_key(short) == SC.minted_identity_key(short)
+    row = dict(short, **{SC.FINDING_KEY_FIELD: bare})
+    assert SC.legacy_key_collision([row]) is None
 
 
 def test_edge8_non_dict_rows_skipped_collision_detected():

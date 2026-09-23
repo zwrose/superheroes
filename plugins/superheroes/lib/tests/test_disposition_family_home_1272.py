@@ -28,7 +28,6 @@ _EXCLUDED_FROM_POPULATION = frozenset({
 _FOLLOW_UP_SANCTIONED_LINES = frozenset({
     ("review_gate_policy.py", 'if "followUp" in rule:'),
     ("review_gate_policy.py", 'normalized_rule["followUp"] = dict(follow_up)'),
-    ("review_gate_policy.py", 'disp["followUp"] = dict(rule["followUp"])'),
     ("review_gate_policy.py", 'action["followUp"] = dict(rule["followUp"])'),
     ("round_driver.py", 'entry["followUp"] = dict(follow_up)'),
     ("round_driver.py", 'if "followUp" not in disp:'),
