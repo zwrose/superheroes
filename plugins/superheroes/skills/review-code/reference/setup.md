@@ -120,7 +120,7 @@ PINS_ARGS=()
 # otherwise. Every review-code path dispatches a panel, so there is no receipt-only mode to
 # select: seat_map's `cache-only` probe mode lost its last caller when --post was removed
 # (#1121) and was reaped in #1138.
-SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --implementation-engine "$IMPL_ENGINE" --host-model "${SUPERHEROES_HOST_MODEL:-}" --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT" || { echo "seat map compose failed — see its error above" >&2; exit 1; })
+SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --implementation-engine "$IMPL_ENGINE" --host-model "${SUPERHEROES_HOST_MODEL:-}" --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT") || { echo "seat map compose failed (exit $?) — see its error above" >&2; exit 1; }
 AUTHOR_FAMILY=$(echo "$SEAT_MAP" | jq -r '.authorFamily // empty')
 ```
 

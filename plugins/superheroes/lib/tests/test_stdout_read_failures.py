@@ -235,6 +235,53 @@ def test_stdout_shrunk_below_read_reports_dropped_cause(tmp_path, monkeypatch):
     assert grade.get("droppedCause") == "shrunk-below-read"
 
 
+def test_stdout_bytes_changed_after_stream_sample_reports_dropped_cause(
+        tmp_path, monkeypatch,
+):
+    """axis: bytes changed after stream sampling still drop with bytes-changed."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_stream = _claude_event_stream(result=structured)
+    script = "import sys\nsys.stdout.write(%r)\n" % result_stream
+    real_fold = ED._fold_stream_activity
+    tampered = [False]
+
+    def fold_with_tamper(
+            stdout_path, stderr_path, prev_stdout, prev_stderr,
+            last_activity_at, activity_stream,
+    ):
+        if not tampered[0]:
+            tampered[0] = True
+            obs = {
+                "offset": 0, "buf": b"", "overflow": False, "poisoned": False,
+                "drop_cause": None, "stamp": None, "stamp_line_start": None,
+                "stamp_line_len": None, "stamp_line_sha256": None, "event": None,
+            }
+            ED._observe_stdout_completion(obs, stdout_path, terminal=True)
+            start = obs.get("stamp_line_start")
+            length = obs.get("stamp_line_len")
+            if start is not None and length is not None:
+                with open(stdout_path, "r+b") as fh:
+                    fh.seek(start)
+                    original = fh.read(length)
+                    fh.seek(start)
+                    fh.write(bytes((b ^ 0x01) for b in original))
+        return real_fold(
+            stdout_path, stderr_path, prev_stdout, prev_stderr,
+            last_activity_at, activity_stream,
+        )
+
+    monkeypatch.setattr(ED, "_fold_stream_activity", fold_with_tamper)
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    assert ended.get("stdoutResultDropped") == "bytes-changed"
+    assert ended.get("stdoutResult") == "absent"
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "stdout-result-dropped"
+    assert grade.get("droppedCause") == "bytes-changed"
+
+
 def test_stdout_bytes_changed_reports_dropped_cause(tmp_path, monkeypatch):
     """axis: bytes changed after the held result was stamped drop with bytes-changed."""
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))

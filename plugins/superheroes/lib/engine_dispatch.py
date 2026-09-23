@@ -1057,6 +1057,7 @@ def _read_transcript_rows(stdout_path):
 
 def _materialize_stdout_result(
         run_dir_real, attempt, opened, stdout_path, stdout_event,
+        stdout_obs_state=None,
 ):
     """Materialize stdout/transcript delivery to the native result path. (#1273)
 
@@ -1070,6 +1071,9 @@ def _materialize_stdout_result(
     if result_path is None:
         return "error"
     if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        if stdout_obs_state is not None:
+            _held_stdout_bytes_unchanged(stdout_obs_state, stdout_path)
+            stdout_event = stdout_obs_state.get("event")
         env = stdout_event
         if (not isinstance(env, dict)
                 or env.get("is_error") is True
@@ -4258,8 +4262,6 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         delivery, stdout_completion_obs, native_completion_obs,
         run_dir_real, attempt, stdout_path, terminal=True,
     )
-    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
-        _held_stdout_bytes_unchanged(stdout_completion_obs, stdout_path)
     stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
     last_activity_at, silence_seconds, activity_stream = _fold_stream_activity(
         stdout_path, stderr_path, prev_stdout, prev_stderr,
@@ -4268,6 +4270,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     stdout_result = _materialize_stdout_result(
         run_dir_real, attempt, opened, stdout_path,
         stdout_completion_obs.get("event"),
+        stdout_completion_obs,
     )
     _, stdout_observed, stdout_rewrite_failed = _cap_file_tail(
         stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
