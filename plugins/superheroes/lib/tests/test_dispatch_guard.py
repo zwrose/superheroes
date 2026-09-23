@@ -532,15 +532,8 @@ def test_wo8_edge7_dispatch_guard_check_valid_and_off_allowlist_unchanged():
 
 
 def test_claude_cells_on_allowlist_per_role():
-    # Roles whose codex cell names a probe-pending model have no claude cell (no fall-open path).
-    probe_only = set()
-    for role in MR.roles():
-        codex_cell = MR.matrix_config(role, "codex")
-        if codex_cell is not None:
-            model_id = codex_cell[0]
-            registration = MR._MODELS["codex"].get(model_id, {}).get("registration")
-            if registration == "probe-pending":
-                probe_only.add(role)
+    # registration-probe has no claude cell (no fall-open path).
+    probe_only = {"registration-probe"}
     cells_checked = 0
     for role in MR.roles():
         if role in probe_only:

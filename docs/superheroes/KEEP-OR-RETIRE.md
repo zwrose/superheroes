@@ -1210,6 +1210,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — gates pin eligibility and general dispatch while a row is probe-pending;
   only a reviewed commit that removes `probe-pending` from the row admits the model.
+  Condition met 2026-09-23: Astra's row no longer carries `probe-pending` (layer 3b-2, PR #1382);
+  no row is probe-pending, so the gate retires at the next gardening pass unless a new model is
+  registered that way.
 
 #### F3 — Doctor/readout/CLI support
 

@@ -25,7 +25,6 @@ _MODELS: dict[str, dict[str, dict]] = {
             "dispatch": "gpt-6-astra",
             "override_only": False,
             "efforts": ("high",),
-            "registration": "probe-pending",
             "pin_roles": ("reviewer-deep",),
         },
     },

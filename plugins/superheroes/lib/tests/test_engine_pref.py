@@ -1,3 +1,4 @@
+import copy
 import importlib.util
 import json
 import os
@@ -1510,7 +1511,19 @@ def test_normalize_codex_pin_map_legacy_alias_and_canonical_wins():
     assert "fixer" not in both["pins"]
 
 
-def test_normalize_codex_pin_map_pending_astra_rejected():
+def test_normalize_codex_pin_map_registered_astra_valid():
+    result = EP.normalize_codex_pin_map({"reviewer-deep": "gpt-6-astra"})
+    assert result["pins"] == {"reviewer-deep": "gpt-6-astra"}
+    assert result["invalid"] == {}
+
+
+def test_normalize_codex_pin_map_planted_pending_astra_rejected(monkeypatch):
+    import model_registry as MR
+    models = copy.deepcopy(MR._MODELS)
+    astra = dict(models["codex"]["gpt-6-astra"])
+    astra["registration"] = "probe-pending"
+    models["codex"]["gpt-6-astra"] = astra
+    monkeypatch.setattr(MR, "_MODELS", models)
     result = EP.normalize_codex_pin_map({"reviewer-deep": "gpt-6-astra"})
     assert result["pins"] == {}
     assert "reviewer-deep" in result["invalid"]
