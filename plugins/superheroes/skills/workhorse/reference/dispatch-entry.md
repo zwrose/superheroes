@@ -167,8 +167,8 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--mode` | no | `choices:review,brief-check` | none |  |
 | `--claude-mode` | no | `choices:print,background` | none | background is dispatchable |
 | `--expected-result-kind` | no | `choices:findings,verdicts,grouping,ruling` | none | mechanical pin: refuse attempts whose parsed resultKind differs |
-| `--pr-body-path` | no | `free-text` | none |  |
-| `--session-dir` | no | `existing-directory` | none |  |
+| `--pr-body-path` | no | `free-text` | none | pairs with --session-dir; either alone refuses pr-body-args-unpaired |
+| `--session-dir` | no | `existing-directory` | none | pairs with --pr-body-path; either alone refuses pr-body-args-unpaired |
 
 ### `engine_adapter.py`
 

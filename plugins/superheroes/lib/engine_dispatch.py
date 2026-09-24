@@ -77,6 +77,7 @@ MAX_WAIT_REFUSAL_RANGE = "max-wait-out-of-range"
 MAX_WAIT_REFUSAL_TYPE = "max-wait-not-an-integer"
 MAX_ATTEMPTS = 2                 # unchanged semantics: one tight-inline retry
 SUPERVISOR_POLL_INTERVAL = 0.5
+_ATTEMPT_POLL_INTERVAL = 0.2
 RUN_CHILD_RECORD_WAIT_SECONDS = 10
 RUN_LOCK_TTL = 2 * MAX_SYNC_WAIT
 ABANDON_CONFIRM_SECONDS = 10
@@ -992,15 +993,9 @@ def _read_session_transcript_rows(config_dir, session_id):
 
 
 def _scrub_native_payload(obj):
-    """Scrub string leaves in a native structured-output payload. Never raises."""
+    """Scrub every string key and value in a native structured-output payload. Never raises."""
     try:
-        if isinstance(obj, str):
-            return engine_adapter._scrub(obj)
-        if isinstance(obj, dict):
-            return {k: _scrub_native_payload(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_scrub_native_payload(v) for v in obj]
-        return obj
+        return engine_adapter._scrub_mapping(obj)
     except Exception:
         return obj
 
@@ -1301,6 +1296,8 @@ def _run_engine_files_background(
     dispatch_path = _dispatch_path_from_opened(opened)
     write_progress = _progress_writer(progress_path)
     start = _NOW()
+    start_wall = time.time()
+    timeout_deadline_wall = start_wall + timeout
     deadline = start + timeout
     launch_id = resume_launch_id
     session_id = resume_session_id
@@ -1398,11 +1395,13 @@ def _run_engine_files_background(
     refusal = None
     bg_resumable = False
     timed_out = False
+    timeout_at = None
     wall_cap = _attempt_bg_wall_cap(opened, attempt)
     wall_seconds = round(_NOW() - start, 1) + prior_wall_seconds
 
     if prior_wall_seconds >= wall_cap:
         timed_out = True
+        timeout_at = time.time()
     else:
         while _NOW() < deadline:
             rows, transcript_paths, file_size = _read_session_transcript_rows(
@@ -1487,6 +1486,7 @@ def _run_engine_files_background(
             bg_resumable = True
         else:
             timed_out = True
+            timeout_at = timeout_deadline_wall
 
     if bg_resumable:
         _journal_bg_suspended({
@@ -1522,6 +1522,8 @@ def _run_engine_files_background(
         ended_record["transcriptToolCalls"] = tool_calls
     if bg_stop is not None:
         ended_record["bgStop"] = bg_stop
+    if timed_out:
+        ended_record["timeoutAt"] = timeout_at
     _journal_bg_ended(ended_record)
 
 
@@ -2976,7 +2978,7 @@ def _validate_run_dir(run_dir, *, create=False):
     while path.endswith(os.sep) and len(path) > 1:
         path = path[:-1]
     if os.path.islink(path):
-        return False, "run-dir-is-symlink"
+        return False, dispatch_outcome.DETAIL_RUN_DIR_IS_SYMLINK
     if create and not os.path.exists(path):
         try:
             os.makedirs(path, mode=0o700, exist_ok=True)
@@ -3876,8 +3878,11 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         return
 
     start = time.monotonic()
+    start_wall = time.time()
+    timeout_deadline_wall = start_wall + timeout
     last_beat = start
     timed_out = False
+    timeout_at = None
     natural_rc = None
     # lastActivityAt is accurate to the poll interval (HEARTBEAT_INTERVAL / sleep), not to the byte.
     last_activity_at = None
@@ -3907,8 +3912,12 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             break
         if now - start >= timeout:
             timed_out = True
+            # axis: the wall-cap deadline is stamped BEFORE termination begins, so a native
+            # result written during the SIGTERM/SIGKILL grace window can be told apart from
+            # one written before the cap (see timeoutAt on the ended record).
+            timeout_at = timeout_deadline_wall
             break
-        time.sleep(0.2)
+        time.sleep(_ATTEMPT_POLL_INTERVAL)
     _terminate_process_group(pgid)
     try:
         proc.wait(timeout=2)
@@ -3940,6 +3949,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "capSeconds": timeout,
         "dispatchPath": dispatch_path,
     }
+    if timed_out:
+        ended_record["timeoutAt"] = timeout_at
     if prompt_bytes is not None:
         ended_record["promptBytes"] = prompt_bytes
     if stdout_observed is not None:
@@ -4050,6 +4061,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         write_progress(_a, elapsed, stdout_bytes, stderr_bytes)
 
     t0 = time.monotonic()
+    t0_wall = time.time()
+    timeout_deadline_wall = t0_wall + timeout
     stdout, timed_out, rc, stderr_tail = run_engine(argv, prompt_bytes, timeout, cb, cwd)
     elapsed = time.monotonic() - t0
 
@@ -4091,9 +4104,33 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "activitySource": "injected-seam",
     }
     if stdout_result is not None:
-        ended["stdoutResult"] = stdout_result
+        try:
+            delivery = engine_result_channel.result_delivery(
+                opened.get("engine"), opened.get("claudeMode"),
+            )
+        except (engine_result_channel.UnknownEngineError, ValueError):
+            delivery = None
+        if delivery == engine_result_channel.RESULT_DELIVERY_TRANSCRIPT:
+            ended["transcriptResult"] = stdout_result
+            rows = _read_transcript_rows(stdout_path)
+            if rows is not None and engine_adapter.claude_transcript_turn_ended(rows):
+                tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+                if tool_calls is not None:
+                    ended["transcriptToolCalls"] = tool_calls
+        else:
+            ended["stdoutResult"] = stdout_result
+    if timed_out:
+        ended["timeoutAt"] = timeout_deadline_wall
     _journal_append(run_dir_real, ended)
     return True, ""
+
+
+def _recorded_timeout_deadline(ended):
+    """Return the ended record's persisted wall-cap deadline, or None if unusable."""
+    timeout_at = ended.get("timeoutAt")
+    if isinstance(timeout_at, bool) or not isinstance(timeout_at, (int, float)):
+        return None
+    return float(timeout_at)
 
 
 def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None, resume=False):
@@ -4516,14 +4553,14 @@ def _normalize_native_review_branch_for_parser(branch):
     return branch
 
 
-def _native_review_parser_refusal_forfeit(engagement, envelope, branch):
+def _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce=None):
     """Forfeit a schema-valid native branch the adapter parser refused. Never raises."""
     placeholder_shape = _native_branch_placeholder_shape(branch)
     if placeholder_shape is not None:
         return _native_review_forfeit(
             engagement, "native-result-malformed", payload_shape=placeholder_shape)
     shape = engine_result_channel.native_review_payload_shape(
-        "native-result-malformed-branch", envelope=envelope, branch=branch)
+        "native-result-malformed-branch", envelope=envelope, branch=branch, echo_nonce=echo_nonce)
     return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
 
 
@@ -4549,8 +4586,15 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
     return declared, None
 
 
-def _admit_native_write_result(run_dir_real, attempt, opened):
-    """Single admission authority for the native write channel (codex, cursor). Never raises."""
+def _admit_native_write_result(run_dir_real, attempt, opened, *, timeout_deadline=None):
+    """Single admission authority for the native write channel (codex, cursor). Never raises.
+
+    `timeout_deadline` is the attempt's recorded wall-cap deadline read from the ended record's
+    `timeoutAt` field — not an instant the caller computed. A native result whose file was last
+    written strictly after that instant was produced during the SIGTERM/SIGKILL grace window, not
+    before the cap — the timeout contract promises admission only for a result complete before
+    the wall cap, so such a result is rejected rather than silently admitted.
+    """
     gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
     if gate is not None:
         return gate
@@ -4561,6 +4605,19 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
             "reason": dispatch_outcome.REASON_FORFEITED,
             "detail": detail,
         }
+
+    if timeout_deadline is not None:
+        result_path = _native_result_path(run_dir_real, attempt)
+        try:
+            mtime = os.stat(result_path).st_mtime if result_path else None
+        except OSError:
+            mtime = None
+        if mtime is None or mtime > timeout_deadline:
+            return {
+                "forfeit": True,
+                "reason": dispatch_outcome.REASON_FORFEITED,
+                "detail": "native-result-after-timeout",
+            }
 
     declared, schema_err = _verify_native_schema(opened, RUN_KIND_WRITE)
     if schema_err:
@@ -4661,7 +4718,7 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
     kind = branch.get("resultKind")
     parser = engine_adapter._REVIEW_CONTRACT_PARSERS.get(kind)
     if parser is None:
-        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce)
     normalized = _normalize_native_review_branch_for_parser(branch)
     try:
         if kind == "findings":
@@ -4669,9 +4726,9 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
         else:
             parsed = parser(normalized, None)
     except Exception:
-        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce)
     if not parsed.get("ok"):
-        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce)
     return parsed
 
 
@@ -4846,14 +4903,52 @@ def _grade_write_attempt(run_dir_real, state, attempt):
 
     if ended.get("guardRefusal"):
         return _grade_spawn_guard_refusal(ended)
-    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+    if ended.get("refusal"):
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
-        if ended.get("refusal"):
-            result["detail"] = ended["refusal"]
+        result["detail"] = ended["refusal"]
         return result
 
+    if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+
+    admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        return _admit_native_write_result(run_dir_real, attempt, opened)
+        if ended.get("timedOut"):
+            timeout_deadline = _recorded_timeout_deadline(ended)
+            if timeout_deadline is None:
+                return {
+                    "forfeit": True,
+                    "reason": dispatch_outcome.REASON_FORFEITED,
+                    "detail": "timeout-deadline-unrecorded",
+                }
+        else:
+            timeout_deadline = None
+        admitted = _admit_native_write_result(
+            run_dir_real, attempt, opened, timeout_deadline=timeout_deadline)
+        if not admitted.get("forfeit"):
+            if ended.get("timedOut"):
+                # axis: the process still had to be terminated at the wall cap even though its
+                # result was admitted (written before the deadline) — carry that fact onto the
+                # success so it never reads identical to a clean, un-timed-out exit.
+                return dict(admitted, admittedAfterTimeout=True)
+            return admitted
+
+    if admitted is not None and admitted.get("forfeit"):
+        result = dict(admitted)
+        if ended.get("timedOut"):
+            admission_detail = admitted.get("detail")
+            if admission_detail == "native-result-missing":
+                result["detail"] = "timeout-no-native-result"
+            else:
+                result["detail"] = "timeout-native-result-unadmitted"
+                result["admissionDetail"] = admission_detail
+        return result
+
+    if ended.get("timedOut"):
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+        }
 
     return _marker_arm_retired_grade()
 
@@ -5175,6 +5270,10 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                 ):
                     if _attempt_bg_budget_exhausted(opened, attempts[latest], latest):
                         suspended = (attempts[latest].get("suspended") or {})
+                        # axis: cumulative background budget exhaustion has no per-leg wall
+                        # deadline; record the observation instant before termination begins so
+                        # anything written during or after the stop is refused.
+                        budget_observed_at = time.time()
                         _stop_live_background_sessions(
                             state, opened, run_dir_real=run_dir_real,
                         )
@@ -5182,6 +5281,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             "kind": "attempt-ended", "attempt": latest,
                             "exit": None, "timedOut": True, "signal": None,
                             "refusal": None, "at": time.time(),
+                            "timeoutAt": budget_observed_at,
                             "wallSeconds": suspended.get("wallSeconds"),
                             "capSeconds": _attempt_bg_wall_cap(opened, latest),
                             "launchId": suspended.get("launchId"),
@@ -5271,6 +5371,12 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             result["itemCheck"] = item_check
                         if "report" in grade:
                             result["report"] = grade["report"]
+                        if grade.get("admittedAfterTimeout"):
+                            # axis: a write attempt hit the wall cap but was admitted (its
+                            # result was written before the deadline) — carry that fact onto
+                            # the terminal result so it never reads as a clean, un-timed-out
+                            # success on the receipt.
+                            result["admittedAfterTimeout"] = True
                     else:
                         terminal_ok = {
                             "ok": True, "terminal": True,
@@ -5859,7 +5965,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 if order_id is not None and opened.get("orderId") != order_id:
                     return _finish_preflight_terminal(
                         repo_detail,
-                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": dispatch_outcome.DETAIL_RUN_DIR_REUSED,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=opened.get("argv") or [], engine=engine,
                     )
@@ -5930,7 +6037,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 return _finish_preflight_terminal(
                     repo_detail,
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                     "detail": "run-dir-not-empty-unopened",
+                     "detail": dispatch_outcome.DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, engine=engine,
                 )
@@ -6477,7 +6584,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 )
             if order_id is not None and opened.get("orderId") != order_id:
                 return _write_preflight_terminal(
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": dispatch_outcome.DETAIL_RUN_DIR_REUSED,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
@@ -6581,7 +6689,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
 
             if _run_dir_nonempty(run_dir_real):
                 return _write_preflight_terminal(
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-not-empty-unopened",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": dispatch_outcome.DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
@@ -7232,8 +7341,10 @@ def build_parser():
     cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
-    cc.add_argument(d, "--pr-body-path", contract="free-text", default=None)
-    cc.add_argument(d, "--session-dir", contract="existing-directory", default=None)
+    cc.add_argument(d, "--pr-body-path", contract="free-text", default=None,
+                    help="pairs with --session-dir; either alone refuses pr-body-args-unpaired")
+    cc.add_argument(d, "--session-dir", contract="existing-directory", default=None,
+                    help="pairs with --pr-body-path; either alone refuses pr-body-args-unpaired")
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--seat", contract="free-text", required=True,

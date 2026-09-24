@@ -329,13 +329,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > **`payloadShape` on shape-unreadable forfeit (#687).** When the **last** attempt forfeits because
 > stdout was shape-unreadable, the result may carry `payloadShape`: a mapping with `parsed` (one of
-> `object-without-findings`, `object-both-payload-keys`, `object-findings-not-a-list`,
-> `object-verdicts-not-a-list`, `array-not-all-objects`, `findings-hollow-member`,
-> `verdicts-hollow-member`, `placeholder-literal-refusal`, `no-parseable-json`, `empty-stdout`, or
-> `prompt-echo-only`), `topLevelKeys` (a list of strings,
+> the tokens in `engine_adapter.REVIEW_PAYLOAD_SHAPES` — the one home for this enumeration;
+> read it there rather than a restated list here), `topLevelKeys` (a list of strings,
 > populated only when
-> `parsed` is `object-without-findings` or `object-both-payload-keys`), and `keysTruncated` (bool; signals the key list was
-> capped). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
+> `parsed` is `object-without-findings` or `object-both-payload-keys`), `keysTruncated` (bool; signals the key list was
+> capped), and on hollow-family diagnostics only (the `*-hollow-member` / `*-partial-hollow-member` shapes — read the token enumeration in `engine_adapter.REVIEW_PAYLOAD_SHAPES` rather than a restated list here) `memberShapeWanted` and `memberShapeGot` (each a short bounded token naming the member shape the grader **wanted** and **got**, respectively). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
 > vacuous forfeit and on success.
 >
 > **Originating-verb continuation loop.** Open with `--run-dir` (or omit it for a private temp run dir
