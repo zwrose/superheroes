@@ -314,6 +314,18 @@ def seat_map_unjudgeable(state):
     return bool(seat_map_receipts.unjudgeable_receipts(state, author_family(state)))
 
 
+def _probe_record_only_declared(declared):
+    """#1272 l4b: sampled-probe channels ride rounds[]; never drive degraded prose."""
+    return (
+        declared.get("canaryVerified"),
+        declared.get("canaryUnverified"),
+        declared.get("canaryFailed"),
+        declared.get("canaryOutcomeFailed"),
+        declared.get("canaryPlantUndetected"),
+        declared.get("controlProbe"),
+    )
+
+
 def build_degraded_prose(state, form):
     cfg = state.get("config") or {}
     degraded_out = []
@@ -360,6 +372,7 @@ def build_degraded_prose(state, form):
     for rkey in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
         rrec = state["rounds"][rkey]
         declared = receipt_round_disclosures(rrec, form, state)
+        _probe_record_only_declared(declared)
         for row in (declared.get("fellOpen") or []):
             degraded_out.append(
                 "reviewer-fell-open (round %s): seat %s configured %s forfeited (%s) → re-ran on %s; "
@@ -395,19 +408,6 @@ def build_degraded_prose(state, form):
                 "engaged-artifact-seat (round %s): seat(s) %s produced a review our transport "
                 "could not carry — they do not count toward certification; salvaged artifacts "
                 "are available for independent verification" % (rkey, ", ".join(eng_art)))
-        # Record-only sampled-probe channels (#1272 l4b): ride rounds[]; no degraded prose.
-        if declared.get("canaryVerified") is not None:
-            pass
-        if declared.get("canaryUnverified") is not None:
-            pass
-        if declared.get("canaryFailed") is not None:
-            pass
-        if declared.get("canaryOutcomeFailed") is not None:
-            pass
-        if declared.get("canaryPlantUndetected") is not None:
-            pass
-        if declared.get("controlProbe") is not None:
-            pass
         roi = declared.get("recordOrphansIgnored")
         if roi:
             degraded_out.append(
