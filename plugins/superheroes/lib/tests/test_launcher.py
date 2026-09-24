@@ -7851,6 +7851,23 @@ def test_canary_transcript_truncated_engaged_when_tail_has_tools(tmp_path, monke
     assert result["toolCalls"] == 1
 
 
+def test_canary_launcher_no_private_engine_dispatch_access():
+  # axis: launcher must not touch private engine_dispatch names (E5)
+    import ast
+
+    with open(_MOD, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=_MOD)
+    problems = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        if not isinstance(node.value, ast.Name) or node.value.id != "engine_dispatch":
+            continue
+        if node.attr.startswith("_"):
+            problems.append("launcher-private-engine-dispatch:%d" % node.lineno)
+    assert problems == []
+
+
 def test_cli_canary_lane_unknown(tmp_path, monkeypatch):
   # axis: CLI canary prints JSON refusal and exits 1
     import io

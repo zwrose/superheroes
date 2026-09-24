@@ -2301,36 +2301,6 @@ def count_batch(repo_root, batch_id, env=None):
     return ll.count(repo_root, batch_id, env=env)
 
 
-def _canary_read_transcript_jsonl(transcript_path):
-    """Read capped JSONL rows from one transcript file. Never raises."""
-    rows = []
-    file_size = 0
-    try:
-        with open(transcript_path, "rb") as fh:
-            capped, _truncated, observed = engine_dispatch._bounded_stdout_cap_from_file(
-                fh,
-                engine_dispatch.MAX_STDOUT_CAPTURE,
-                engine_dispatch.CAP_STREAM_STDOUT,
-            )
-            file_size = observed or 0
-        if capped is None:
-            return rows, file_size
-        text = capped.decode("utf-8", errors="ignore")
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except (ValueError, TypeError):
-                continue
-            if isinstance(obj, dict):
-                rows.append(obj)
-    except OSError:
-        pass
-    return rows, file_size
-
-
 def canary(repo_root, launch_id, env=None):
     """Report builder engagement from the lane's own session transcript tool calls."""
     read = ll.read(repo_root, env=env)
@@ -2348,17 +2318,18 @@ def canary(repo_root, launch_id, env=None):
     config_dir = lane.get("configDir")
     if not isinstance(config_dir, str) or not config_dir:
         return _fail("canary-config-dir-absent")
-    paths = engine_dispatch._glob_transcript_paths(config_dir, session_id)
+    rows, paths, size = engine_dispatch.read_session_transcript_rows(
+        config_dir, session_id,
+    )
     if len(paths) == 0:
         return _fail("canary-transcript-missing")
     if len(paths) > 1:
         return _fail("canary-transcript-ambiguous")
-    rows, size = _canary_read_transcript_jsonl(paths[0])
     tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
     if tool_calls is None:
         return _fail("canary-transcript-unreadable")
     truncated = size > engine_dispatch.MAX_STDOUT_CAPTURE
-    if truncated and tool_calls == 0:
+    if size > engine_dispatch.MAX_STDOUT_CAPTURE and tool_calls == 0:
         return _fail("canary-transcript-truncated")
     return {
         "ok": True,
