@@ -11,6 +11,8 @@ __all__ = (
     "JOURNAL_FAULT_FILE",
     "META_FILE",
     "PANEL_PHASE",
+    "FIXER_PHASE",
+    "AUDITS_PHASE",
     "HEAD_CONTENT_BLOBS_FILE",
     "HEAD_CONTENT_BLOBS_SCHEMA",
     "SEAT_MISSING_SCHEMA",
@@ -51,6 +53,8 @@ JOURNAL_FILE = "driver-journal.jsonl"
 JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 META_FILE = "meta.json"
 PANEL_PHASE = "dispatch-panel"
+FIXER_PHASE = "dispatch-fixer"
+AUDITS_PHASE = "dispatch-audits"
 HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 HEAD_CONTENT_BLOBS_SCHEMA = "head-content-blobs/2"
 SEAT_MISSING_SCHEMA = "seat-missing/1"
