@@ -80,18 +80,26 @@ def _list_of_objects(value, field):
 
 # Closed vocabulary for `types` entries in `_PAYLOAD_CONTRACTS`. An unknown token is a declaration
 # defect and must fail loudly — never silently pass.
+LIST_TYPE_TOKEN = "list-of-objects"
+NULLABLE_LIST_TYPE_TOKEN = "nullable-list-of-objects"
+LIST_TYPE_TOKENS = frozenset((LIST_TYPE_TOKEN, NULLABLE_LIST_TYPE_TOKEN))
+
 TYPE_TOKENS = frozenset((
     "string",
     "non-empty-string",
     "boolean",
     "integer",
     "list",
-    "list-of-objects",
-    "nullable-list-of-objects",
+    LIST_TYPE_TOKEN,
+    NULLABLE_LIST_TYPE_TOKEN,
     "absolute-path",
     "object",
     "any",
 ))
+
+
+def is_list_type(token):
+    return token in LIST_TYPE_TOKENS
 
 
 def _assert_type_token(token, where):
@@ -141,9 +149,9 @@ def _check_top_level_type(payload, field, type_token):
     if field not in payload:
         return None
     value = payload.get(field)
-    if type_token == "list-of-objects":
+    if type_token == LIST_TYPE_TOKEN:
         return _check_list_of_objects(value, field)
-    if type_token == "nullable-list-of-objects":
+    if type_token == NULLABLE_LIST_TYPE_TOKEN:
         if value is None:
             return None
         return _check_list_of_objects(value, field)
@@ -250,7 +258,7 @@ def _check_declared(payload, contract, *, record_boundary=False):
         tok = types.get(field)
         if tok is not None:
             _assert_type_token(tok, "types")
-            if tok in ("list-of-objects", "nullable-list-of-objects"):
+            if is_list_type(tok):
                 fault = _check_top_level_type(payload, field, tok)
                 if fault:
                     return fault

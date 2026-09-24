@@ -89,7 +89,7 @@ import session_contract  # noqa: E402
 import session_mode  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
-from finding_identity import finding_identity, normalize_title  # noqa: E402
+from finding_identity import finding_identity, finding_label, normalize_title  # noqa: E402
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
@@ -743,6 +743,20 @@ def _nit_cap(findings):
     return kept
 
 
+def _merge_same_finding(existing, incoming):
+    """Higher severity wins the base dict, dimension unioned, tradeoff OR-ed."""
+    dims = panel_tally._merge_dims(existing, incoming)
+    if circuit_breaker.severity_rank(incoming.get("severity")) \
+            < circuit_breaker.severity_rank(existing.get("severity")):
+        merged = dict(incoming)
+    else:
+        merged = dict(existing)
+    merged["dimension"] = dims
+    merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
+    merged["classification"] = "judgment" if merged["tradeoff"] else "mechanical"
+    return merged
+
+
 def _compile_by_anchor(findings):
     """Dedupe by the binding review workflow's per-LOCATION anchor — (file, line, normalized-title)
     — NOT panel_tally's line-less `file::normalized-title` identity. The line was the DROPPED key:
@@ -755,16 +769,7 @@ def _compile_by_anchor(findings):
     for f in findings:
         key = (f.get("file"), f.get("line"), normalize_title(str(f.get("title") or "")))
         if key in by_anchor:
-            ex = by_anchor[key]
-            dims = panel_tally._merge_dims(ex, f)
-            if circuit_breaker.severity_rank(f.get("severity")) \
-                    < circuit_breaker.severity_rank(ex.get("severity")):
-                merged = dict(f)
-            else:
-                merged = dict(ex)
-            merged["dimension"] = dims
-            merged["tradeoff"] = bool(ex.get("tradeoff") or f.get("tradeoff"))
-            by_anchor[key] = merged
+            by_anchor[key] = _merge_same_finding(by_anchor[key], f)
         else:
             by_anchor[key] = dict(f)
             order.append(key)
@@ -1201,24 +1206,71 @@ def _mint_finding_keys(findings):
     """Stamp findingKey on dict findings that lack a non-empty one; ensure list-wide uniqueness."""
     if not isinstance(findings, list):
         return findings
-    used = set()
+    entries = []
     for f in findings:
         if not isinstance(f, dict):
             continue
-        key = f.get(session_contract.FINDING_KEY_FIELD)
-        if isinstance(key, str) and key:
-            base = key.rsplit("#", 1)[0] if "#" in key else key
+        minted = session_contract.minted_identity_key(f)
+        bare = session_contract.location_key(f)
+        preset_raw = f.get(session_contract.FINDING_KEY_FIELD)
+        preset = preset_raw if isinstance(preset_raw, str) and preset_raw else None
+        if preset is None:
+            kind = "unkeyed"
+            identity = minted
+            legacy_key = None
+        elif preset == minted:
+            kind = "loop-owned"
+            identity = minted
+            legacy_key = None
+        elif preset == bare and minted != bare:
+            kind = "legacy-owned"
+            identity = minted
+            legacy_key = preset
         else:
-            base = session_contract.location_key(f)
-            key = base
-        if key in used:
-            n = 1
-            while "%s#%d" % (base, n) in used:
-                n += 1
-            key = "%s#%d" % (base, n)
-        used.add(key)
-        f[session_contract.FINDING_KEY_FIELD] = key
+            kind = "foreign"
+            identity = preset
+            legacy_key = None
+        entries.append((f, kind, identity, legacy_key))
+    by_identity = {}
+    for idx, (f, kind, identity, legacy_key) in enumerate(entries):
+        by_identity.setdefault(identity, []).append((idx, f, kind, legacy_key))
+    claimants = {}
+    for identity, group in by_identity.items():
+        for _, f, kind, legacy_key in group:
+            bare = session_contract.location_key(f)
+            if kind in ("unkeyed", "loop-owned") and identity == bare:
+                claimants.setdefault(bare, set()).add(identity)
+            elif kind == "foreign":
+                claimants.setdefault(identity, set()).add(identity)
+            elif kind == "legacy-owned" and legacy_key:
+                claimants.setdefault(legacy_key, set()).add(identity)
+    for identity, group in by_identity.items():
+        has_foreign = any(kind == "foreign" for _, _, kind, _ in group)
+        if not has_foreign:
+            legacy_keys = [lk for _, _, kind, lk in group if kind == "legacy-owned" and lk]
+            # Parent build minted list-wide-unique keys; two bare legacy rows cannot come from
+            # stored state — this branch is fail-closed hardening when claims collide.
+            if legacy_keys and len(claimants.get(legacy_keys[0], set())) == 1:
+                chosen_key = legacy_keys[0]
+            else:
+                chosen_key = identity
+            for _, f, _, _ in group:
+                f[session_contract.FINDING_KEY_FIELD] = chosen_key
+        else:
+            contents = {session_contract.finding_content_canonical(f) for _, f, _, _ in group}
+            if len(group) == 1 or len(contents) == 1:
+                for _, f, _, _ in group:
+                    f[session_contract.FINDING_KEY_FIELD] = identity
+            else:
+                for _, f, _, _ in group:
+                    f[session_contract.FINDING_KEY_FIELD] = (
+                        identity + "#" + session_contract.content_hash_suffix(f))
     return findings
+
+
+def _finding_key_of(finding):
+    """Pure read of a finding's identity — the leaf's one derivation."""
+    return session_contract.finding_identity_key(finding)
 
 
 def _archive_disposition_findings(state, departing):
@@ -1255,6 +1307,33 @@ def _set_findings(state, new_findings):
         prior = []
     new_list = list(new_findings) if new_findings is not None else []
     _mint_finding_keys(new_list)
+    merged_by_key = {}
+    for finding in new_list:
+        if not isinstance(finding, dict):
+            continue
+        key = _finding_identity_key(finding)
+        if not key:
+            continue
+        if key in merged_by_key:
+            merged_by_key[key] = _merge_same_finding(merged_by_key[key], finding)
+        else:
+            merged_by_key[key] = finding
+    if merged_by_key:
+        seen_keys = set()
+        compact = []
+        for finding in new_list:
+            if not isinstance(finding, dict):
+                compact.append(finding)
+                continue
+            key = _finding_identity_key(finding)
+            if not key:
+                compact.append(finding)
+                continue
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            compact.append(merged_by_key[key])
+        new_list = compact
     new_keys = set()
     for finding in new_list:
         if isinstance(finding, dict):
@@ -1273,14 +1352,14 @@ def _set_findings(state, new_findings):
 
 
 def _park_finding_key(finding):
-    """Stable dedupe identity for the park-time findings merge — the module's EXISTING per-location
-    key (`_location_id`: `finding_identity` plus line), so two same-title candidates at different
-    lines stay distinct. Returns None when no key can be derived, and an unidentifiable candidate is
-    KEPT rather than dropped: a halted receipt owes over-reporting before under-reporting."""
+    """Stable dedupe identity for the park-time findings merge — the leaf's per-location key, so two
+    same-title candidates at different lines stay distinct. Returns None when no key can be derived,
+    and an unidentifiable candidate is KEPT rather than dropped: a halted receipt owes
+    over-reporting before under-reporting."""
     if not isinstance(finding, dict):
         return None
     try:
-        return _location_id(finding)
+        return session_contract.finding_identity_key(finding)
     except Exception:
         return None
 
@@ -2416,27 +2495,11 @@ def _fold_gapsweep(state, config, artifact):
     _after_findings_settled(state, config)
 
 
-def _location_id(finding):
-    """Per-LOCATION key: line-less `finding_identity` plus line. Two same-title findings at
-    DIFFERENT lines get DISTINCT keys (#507 R2 v5); audit target ids reuse this form with an
-    occurrence suffix when the same file+title+line repeats in one batch."""
-    return session_contract.location_key(finding)
-
-
 def _judgment_row_ids(findings):
-    """Per-row disposition keys for judgment findings. Reuses the audit-target occurrence pattern:
-    the first row at a location gets the bare per-location id; repeats get ``#1``, ``#2``, … so two
-    surviving tradeoff findings at the same location (e.g. different severities) never share one id."""
+    """Per-row disposition keys for judgment findings — each row's minted findingKey."""
     ids = []
-    seen_location = {}
     for f in findings:
-        if not isinstance(f, dict):
-            ids.append(None)
-            continue
-        loc = _location_id(f)
-        n = seen_location.get(loc, 0)
-        seen_location[loc] = n + 1
-        ids.append(loc if n == 0 else "%s#%d" % (loc, n))
+        ids.append(_finding_key_of(f))
     return ids
 
 
@@ -3244,25 +3307,24 @@ def _enter_delta_round(state, config):
 def _audit_targets(state, config, audit_targets_map):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
-    hunks that sit over their lines."""
+    hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
+    occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
     auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
     if independence == "degraded":
         state["independenceDegraded"] = True
     targets = []
-    seen_location = {}
+    seen_keys = set()
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
-        loc = _location_id(f)
-        n = seen_location.get(loc, 0)
-        seen_location[loc] = n + 1
-        # Same ``%s#%d`` format as ``_slot_label`` roster occurrence suffixes; the two namespaces
-        # stay disjoint because audit roster keys are per-location unique (no occurrence suffix)
-        # and pre-change persisted ids carry no ``#``.
-        tid = loc if n == 0 else "%s#%d" % (loc, n)
+        tid = _finding_key_of(f)
+        if tid in seen_keys:
+            continue
+        seen_keys.add(tid)
         targets.append({
             "id": tid,
+            session_contract.FINDING_KEY_FIELD: tid,
             "identity": finding_identity(f),
             "file": f.get("file"), "line": f.get("line"), "title": f.get("title"),
             "severity": f.get("severity"),
@@ -3281,11 +3343,11 @@ def _audit_targets(state, config, audit_targets_map):
     return targets
 
 
-AUDIT_PROVENANCE_RUNNER_RECORD = "runner-record"
-AUDIT_PROVENANCE_HAND_LANDED = "hand-landed-evidence"
-AUDIT_PROVENANCE_MIXED = "mixed-evidence"
-AUDIT_PROVENANCE_COLLECTION_MANIFEST = "collection-manifest"
-_LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST = "dispatch-manifest"
+AUDIT_PROVENANCE_RUNNER_RECORD = round_records.AUDIT_PROVENANCE_RUNNER_RECORD
+AUDIT_PROVENANCE_HAND_LANDED = round_records.AUDIT_PROVENANCE_HAND_LANDED
+AUDIT_PROVENANCE_MIXED = round_records.AUDIT_PROVENANCE_MIXED
+AUDIT_PROVENANCE_COLLECTION_MANIFEST = round_records.AUDIT_PROVENANCE_COLLECTION_MANIFEST
+_LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST = round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST
 
 
 def _audit_adapter_disclosures(state, artifact):
@@ -3339,10 +3401,6 @@ def _audit_provenance_basis(state, artifact):
     return AUDIT_PROVENANCE_MIXED
 
 
-# audits._reject_unauthenticated — missing manifest entry reason prefix.
-_MISSING_MANIFEST_ENTRY_REASON_PREFIX = "no dispatch-manifest entry for this target"
-
-
 def _fold_audits(state, config, artifact):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
@@ -3377,24 +3435,25 @@ def _fold_audits(state, config, artifact):
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
         audit_reason = None
+        audit_cause = None
         for audit in outcome.get("audits", []):
             if isinstance(audit, dict) and audit.get("id") == pid:
                 audit_reason = audit.get("reason")
+                audit_cause = audit.get("unauthenticatedCause")
                 break
-        if isinstance(audit_reason, str) and audit_reason.startswith("the dispatch manifest names"):
+        if audit_cause in (audits.UNAUTHENTICATED_MANIFEST_VENDOR_MISMATCH,
+                           audits.UNAUTHENTICATED_NO_AUDITOR_RECORDED):
             detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
-        elif (isinstance(audit_reason, str)
-              and audit_reason.startswith(_MISSING_MANIFEST_ENTRY_REASON_PREFIX)
-              and (not isinstance(collection_manifest, dict)
-                   or pid not in collection_manifest)):
-            found_keys = (sorted(collection_manifest)
-                          if isinstance(collection_manifest, dict) else [])
-            detail = ("audit result for %s could not be authenticated — expected a "
-                      "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
-                      "found: %s — not-discharged"
-                      % (pid, pid, found_keys))
-        elif isinstance(audit_reason, str) and audit_reason:
-            detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+        elif audit_cause == audits.UNAUTHENTICATED_MANIFEST_ENTRY_MISSING:
+            if isinstance(collection_manifest, dict) and pid in collection_manifest:
+                detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+            else:
+                found_keys = (sorted(collection_manifest)
+                              if isinstance(collection_manifest, dict) else [])
+                detail = ("audit result for %s could not be authenticated — expected a "
+                          "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+                          "found: %s — not-discharged"
+                          % (pid, pid, found_keys))
         else:
             found_keys = (sorted(collection_manifest)
                           if isinstance(collection_manifest, dict) else [])
@@ -3768,39 +3827,23 @@ def _commit_stall_self_recovery(state, config, breaker):
 
 
 def _union_open_blockers(*groups):
-    """Union open blockers into one fix batch — deduped by id when present (#507 R2 residual-3).
+    """Union open blockers into one fix batch — deduped by the leaf's identity key.
 
     First-wins: an admitted entry is never replaced, removed, or downgraded by a later group.
-    Id-bearing audit targets dedupe on ``id`` so occurrence-suffixed siblings at one location stay
-    distinct. An id-less item and any item at the same per-location key (line-less identity + line)
-    represent each other — whichever arrives first is kept. ``_settle_delta`` passes id-less
-    ``new_blocking`` before id-bearing ``nd_targets``; that ordering depends on first-wins."""
+    ``_settle_delta`` passes id-less ``new_blocking`` before id-bearing ``nd_targets``; that
+    ordering depends on first-wins."""
     batch = []
-    seen_ids = set()
-    seen_locs = set()
-    idless_locs = set()
+    seen_keys = set()
     for group in groups:
         for item in group:
             f = dict(item)
-            ident = f.get("identity") or finding_identity(f)
-            if ident is None:
+            key = session_contract.finding_identity_key(f)
+            if key is None:
                 continue
-            loc_key = (ident, f.get("line"))
-            tid = f.get("id")
-            if tid:
-                if tid in seen_ids:
-                    continue
-                if loc_key in idless_locs:
-                    continue
-                batch.append(f)
-                seen_ids.add(tid)
-                seen_locs.add(loc_key)
-            else:
-                if loc_key in seen_locs:
-                    continue
-                batch.append(f)
-                seen_locs.add(loc_key)
-                idless_locs.add(loc_key)
+            if key in seen_keys:
+                continue
+            batch.append(f)
+            seen_keys.add(key)
     return batch
 
 
@@ -7439,8 +7482,8 @@ def _runner_shaped_result(phase, result_kind, envelope_payload):
     types = contract.get("types") or {}
     declared = types.get(result_kind)
     # List kinds wrap under the kind key; scalar kinds land the record itself
-    # (payload_contracts.TYPE_TOKENS: list-of-objects, nullable-list-of-objects).
-    if declared in ("list-of-objects", "nullable-list-of-objects"):
+    # (payload_contracts.is_list_type).
+    if payload_contracts.is_list_type(declared):
         return {"ok": True, "resultKind": result_kind, **envelope_payload}
     return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
 
@@ -7471,13 +7514,21 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
         if not isinstance(envelope_payload, dict):
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "resultKind": result_kind}
-        carried, subject = engine_adapter.review_payload_carried(
-            _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload),
-            result_kind)
-        if not carried:
+        shaped = _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload)
+        carried, adapter_subject = engine_adapter.review_payload_carried(shaped, result_kind)
+        digest_carried, digest_subject = session_contract.evidence_digest_subject(
+            envelope_payload, result_kind)
+        # Leaf rule (session_contract.evidence_digest_subject) is the writer's rule; drift test
+        # pins it equal to review_payload_carried on the runner-shaped result.
+        if not carried or not digest_carried:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "resultKind": result_kind}
-        payload_digest = round_records.payload_sha256(subject)
+        if round_records.payload_sha256(adapter_subject) != round_records.payload_sha256(
+                digest_subject):
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "resultKind": result_kind,
+                                                       "subjectDisagreement": True}
+        payload_digest = round_records.payload_sha256(digest_subject)
         if result_digest != payload_digest:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "payloadSha256": payload_digest,

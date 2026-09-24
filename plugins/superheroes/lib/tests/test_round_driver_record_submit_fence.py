@@ -874,7 +874,7 @@ def _owner_artifact_path_for_phase(session_dir, phase, tmp_path):
     if phase == round_driver.P_JUDGMENT:
         state = _state(session_dir)
         finding = state["_judgmentFindings"][0]
-        artifact = {"dispositions": [{"id": round_driver._location_id(finding),
+        artifact = {"dispositions": [{"id": round_driver._finding_key_of(finding),
                                       "disposition": "fix-as-suggested"}]}
     elif phase == round_driver.P_STALL:
         artifact = {"choice": round_driver.HOLD_CHOICE}
