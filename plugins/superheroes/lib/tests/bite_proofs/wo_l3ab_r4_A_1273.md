@@ -1,0 +1,372 @@
+# WO-L3AB-R4-A (#1273) bite-proof — stdout completion stamp (layer 3ab round 4)
+
+**Covers:** WO-A, WO-A2, WO-B, WO-C (stdout completion producer path, round 4).
+
+**Head:** `1d1f5000b145dbaf42ae2aa010fc06f18a297275`
+
+**Provenance:** cursor / composer-2.5 (implementer).
+
+The completion stamp always describes the LAST complete result event on stdout — the same
+event the runner materializes — and it is taken at the poll that first saw that event
+complete.
+
+## Guarded elements
+
+| ID | Guarded element | Axis | Proving test |
+|---|---|---|---|
+| BP-1 | `_observe_stdout_completion` terminal path | terminal observation parses the trailing unterminated line | `test_completion_stdout_unterminated_final_result_stamps_at_terminal` |
+| BP-2 | `_process_stdout_completion_line` replace | newer complete result event replaces the held stamp | `test_completion_stdout_two_results_admits_last_stamp_and_materialized` |
+| BP-3 | `_drain_stdout_completion_bytes` line bound | line bound drops an over-bound line whole and never stamps it | `test_completion_stdout_over_bound_line_forfeits_unrecorded` |
+| BP-4 | poll-loop terminal placement | single terminal observation sits after writers are reaped | `test_completion_stdout_grace_window_second_result_stamps_last` |
+| BP-5 | `_observe_stdout_completion` eviction block | stamp is cleared once its event leaves the retained tail | `test_completion_stdout_evicted_result_forfeits_unrecorded` |
+| BP-6 | eviction regime guard | eviction never fires below the cap | `test_completion_stdout_large_under_cap_still_admits` |
+| BP-7 | `_drain_stdout_completion_bytes` overflow write-back | overflow scopes to exactly one line | `test_completion_stdout_overflow_does_not_suppress_following_result` |
+
+---
+
+## BP-1 — terminal leftover-line parse
+
+- **axis:** the terminal observation parses the trailing unterminated line, so a final result event with no newline is still stamped
+
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_observe_stdout_completion` terminal block):
+
+before:
+```python
+            if not overflow and buf:
+                line_start = offset - len(buf)
+                _process_stdout_completion_line(obs_state, buf, line_start)
+            obs_state["buf"] = b""
+            obs_state["overflow"] = False
+```
+
+after:
+```python
+            obs_state["buf"] = b""
+            obs_state["overflow"] = False
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_unterminated_final_result_stamps_at_terminal -q -p no:randomly
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_unterminated_final_result_stamps_at_terminal
+1 failed in 2.38s
+```
+(assertion: `assert key in ended` / `assert ERC.FIELD_RESULT_COMPLETE_AT in ended`)
+
+**restore** (`plugins/superheroes/lib/engine_dispatch.py`, `_observe_stdout_completion` terminal block): reinstate the `if not overflow and buf:` branch that calls `_process_stdout_completion_line`.
+
+**restore receipt:** post-restore `git status --porcelain` shows only `plugins/superheroes/lib/tests/test_engine_dispatch.py` and `plugins/superheroes/lib/tests/bite_proofs/wo_l3ab_r4_A_1273.md` modified.
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 2.81s
+```
+
+---
+
+## BP-2 — newer result replaces held stamp
+
+- **axis:** two stdout result events — stamp and materializer must follow the last
+
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_process_stdout_completion_line`):
+
+before:
+```python
+    try:
+        text = line_bytes.decode("utf-8", errors="ignore").rstrip("\r").strip()
+```
+
+after:
+```python
+    try:
+        if obs_state.get("stamp") is not None:
+            return
+        text = line_bytes.decode("utf-8", errors="ignore").rstrip("\r").strip()
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_two_results_admits_last_stamp_and_materialized -q -p no:randomly
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_two_results_admits_last_stamp_and_materialized
+1 failed in 2.05s
+```
+(assertion: `assert ended[ERC.FIELD_RESULT_COMPLETE_SHA256] == ERC.canonical_payload_digest(payload)`)
+
+**restore:** remove the held-stamp early return.
+
+**restore receipt:** post-restore `git status --porcelain` empty.
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 1.84s
+```
+
+---
+
+## BP-3 — partial-line buffer stays bounded
+
+- **axis:** an over-long partial line is released, not accumulated — the bound guards memory, not admission-visible stamping (a line longer than the stampable bound necessarily exceeds the retained content budget, so eviction would clear its stamp anyway)
+
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_drain_stdout_completion_bytes`):
+
+before:
+```python
+                new_buf = buf + tail
+                if len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX:
+                    overflow = True
+                    obs_state["buf"] = b""
+                else:
+                    obs_state["buf"] = new_buf
+```
+
+after:
+```python
+                obs_state["buf"] = buf + tail
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_over_bound_line_bounded_buffer -q -p no:randomly
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_over_bound_line_bounded_buffer
+1 failed in 2.29s
+```
+(assertion: `assert max_buf_seen <= max_buf_allowed` — `16640 <= 16584`)
+
+**restore:** reinstate the `len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX` overflow branch.
+
+**restore receipt:** post-restore `git status --porcelain` shows only `plugins/superheroes/lib/tests/test_engine_dispatch.py` modified (bite-proof work in progress).
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 2.11s
+```
+
+**normalization disclosure:** test patches `MAX_STDOUT_CAPTURE`, `_STDOUT_STAMPABLE_LINE_MAX`, and `_STDOUT_COMPLETION_READ_CHUNK` to `16384`, derived stampable (`16328`), and `256` via `_patch_stdout_completion_bounds` plus `monkeypatch.setattr`. Proof still bites on shipped 8 MiB values because the guarded logic is the len-guard branch in `_drain_stdout_completion_bytes`; the pin only shrinks fixtures.
+
+---
+
+## BP-4 — terminal observation after writers reaped
+
+- **axis:** terminal observation after termination must stamp a grace-window second result
+
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_run_engine_files` poll loop):
+
+before (natural exit path):
+```python
+        if rc is not None:
+            natural_rc = rc
+            break
+...
+    _observe_attempt_completions(..., terminal=True)
+```
+
+after:
+```python
+        if rc is not None:
+            natural_rc = rc
+            _observe_attempt_completions(..., terminal=True)
+            break
+...
+    # post-wait terminal call removed
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_grace_window_second_result_stamps_last -q -p no:randomly
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_grace_window_second_result_stamps_last
+1 failed in 32.20s
+```
+(assertion: `assert ended[ERC.FIELD_RESULT_COMPLETE_SHA256] == ERC.canonical_payload_digest(payload)` — first-result digest retained)
+
+**restore:** move terminal `_observe_attempt_completions` back to after `proc.wait`, remove in-loop terminal call.
+
+**restore receipt:** post-restore `git status --porcelain` empty.
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 35.54s
+```
+
+---
+
+## BP-5 — eviction clears stamp
+
+- **axis:** a stamped result pushed out of the retained tail clears the stamp
+
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_observe_stdout_completion`):
+
+before:
+```python
+        if stamp is not None and stamp_line_start is not None:
+            if (
+                offset > MAX_STDOUT_CAPTURE
+                and offset - stamp_line_start
+                > _cap_content_budget(MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT, offset)
+            ):
+                obs_state["stamp"] = None
+                obs_state["stamp_line_start"] = None
+```
+
+after: eviction block deleted entirely.
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_evicted_result_forfeits_unrecorded -q -p no:randomly
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_evicted_result_forfeits_unrecorded
+1 failed in 4.53s
+```
+(assertion: `assert 'resultCompleteAt' not in ended`)
+
+**restore:** reinstate eviction block.
+
+**restore receipt:** post-restore `git status --porcelain` empty.
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 4.98s
+```
+
+---
+
+## BP-6 — eviction never fires below cap
+
+- **axis:** stamped result survives when stdout is large but still at or under the cap
+
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_observe_stdout_completion` eviction block):
+
+before:
+```python
+            if (
+                offset > MAX_STDOUT_CAPTURE
+                and offset - stamp_line_start
+                > _cap_content_budget(MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT, offset)
+            ):
+```
+
+after:
+```python
+            if (
+                offset - stamp_line_start
+                > _cap_content_budget(MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT, offset)
+            ):
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_large_under_cap_still_admits -q -p no:randomly
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_large_under_cap_still_admits
+1 failed in 2.26s
+```
+(assertion: `assert key in ended` / `assert 'resultCompleteAt' in ended`)
+
+**restore:** reinstate `offset > MAX_STDOUT_CAPTURE and` in the eviction regime guard.
+
+**restore receipt:** post-restore `git status --porcelain` shows only `plugins/superheroes/lib/tests/test_engine_dispatch.py` modified (bite-proof work in progress).
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 2.00s
+```
+
+**normalization disclosure:** test patches `MAX_STDOUT_CAPTURE` and `_STDOUT_STAMPABLE_LINE_MAX` to `16384` / derived stampable (`16328`) via `_patch_stdout_completion_bounds`. Guarded logic is the `offset > MAX_STDOUT_CAPTURE` regime gate plus `_cap_content_budget`; pin shrinks fixtures only.
+
+---
+
+## BP-7 — overflow scopes to one line
+
+- **axis:** overflow on one over-bound line must not leak into the next valid result line
+
+**neutralization** (`plugins/superheroes/lib/engine_dispatch.py`, `_drain_stdout_completion_bytes` — both halves applied together):
+
+before (exceeds-bound branch):
+```python
+                if len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX:
+                    overflow = True
+                    obs_state["buf"] = b""
+```
+
+after:
+```python
+                if len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX:
+                    obs_state["overflow"] = True
+                    obs_state["buf"] = b""
+```
+
+before (early-return write-back):
+```python
+            obs_state["overflow"] = overflow
+            return
+```
+
+after:
+```python
+            return
+```
+
+**command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_overflow_does_not_suppress_following_result -q -p no:randomly
+```
+
+**raw red** (exit 1):
+```
+F                                                                        [100%]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_completion_stdout_overflow_does_not_suppress_following_result
+1 failed in 2.58s
+```
+(assertion: `assert key in ended` / `assert 'resultCompleteAt' in ended`)
+
+**restore:** reinstate `overflow = True` in the exceeds-bound branch and `obs_state["overflow"] = overflow` before early return.
+
+**restore receipt:** post-restore `git status --porcelain` shows only `plugins/superheroes/lib/tests/test_engine_dispatch.py` modified (bite-proof record edit pending).
+
+**raw green** (exit 0):
+```
+.                                                                        [100%]
+1 passed in 2.49s
+```
+
+**normalization disclosure:** test patches `MAX_STDOUT_CAPTURE`, `_STDOUT_STAMPABLE_LINE_MAX`, and `_STDOUT_COMPLETION_READ_CHUNK` to `16384` / derived stampable (`16328`) / `256` for chunk-split fixtures. Guarded logic is the overflow write-back on the early-return path paired with the exceeds-bound branch; pins shrink fixtures only.

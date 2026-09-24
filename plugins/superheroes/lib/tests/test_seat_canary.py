@@ -1162,7 +1162,7 @@ def test_sm5_1269_grounding_reviewer_deep_passes_tier_check():
     assert resolved.get("reason") != "seat-tier-mismatch"
     assert resolved.get("ok") is True
     # Whether claude fallback ought to upgrade a seat above its configured tier is seat_map selection behaviour — out of scope; canary accepts what build emits.
-    claude_cfg = _seat_config("claude", "opus-5", "xhigh", "reviewer-deep")
+    claude_cfg = _seat_config("claude", "opus-5.5", "xhigh", "reviewer-deep")
     out = SC.run_canary("grounding-seat", claude_cfg, repo_root="/r")
     assert out["outcome"] == "unrunnable"
     assert "seat-tier-mismatch" not in out["detail"]

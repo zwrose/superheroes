@@ -971,7 +971,7 @@ def _auditor_vendor(config, fixer_vendor):
     cursor-grok auditor is NOT independent of a cursor-composer fix. When no family-independent
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
     independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
-    rider 4a); see test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry."""
+    rider 4a); see test_auditor_and_code_fixer_families_match_per_vendor in test_model_registry."""
     vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor)
     if vendor is not None:
         return vendor, "independent"
@@ -4845,7 +4845,8 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                  "unverified": f.get("unverified")}
                 for f in (state.get("findings") or []) if isinstance(f, dict)]
     cfg = state.get("config") or {}
-    degraded, skipped_blockers = build_degraded_prose(state, form)
+    journal = read_journal(session_dir) if session_dir else None
+    degraded, skipped_blockers = build_degraded_prose(state, form, journal=journal)
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "baseRepo",
@@ -7010,6 +7011,22 @@ def _disclose_order_vendor_provenance_gaps(state, gaps):
     _record_round(state, "orderVendorProvenanceGaps", merged)
 
 
+def _journal_transport_fields(envelope):
+    """Transport derived once from a stored seat envelope — the journal chokepoint."""
+    if not isinstance(envelope, dict):
+        return {}
+    phase = envelope.get("phase")
+    provenance = envelope.get("provenance")
+    if (phase == P_FIXER
+            or provenance == round_records.PROVENANCE_ORCHESTRATOR_FULFILLED):
+        return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_ORCHESTRATOR}
+    if provenance == round_records.PROVENANCE_HAND_LANDED:
+        return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_HAND_LANDED}
+    if _journal_execution_evidence_fields(envelope.get("executionEvidence")) is not None:
+        return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_RUNNER}
+    return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_NATIVE}
+
+
 def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root,
                         seat_map=None):
     """{vendor, model, engine} for transport — one home keyed to the source that actually knows."""
@@ -8025,6 +8042,13 @@ def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
     return out
 
 
+def _journal_execution_evidence_fields(evidence):
+    """Mandatory execution-evidence members plus each optional field when present. One home:
+    ``round_records.execution_evidence_fields``, shared with ``recorded_row_fields`` and
+    ``_assemble_dispatch_evidence`` so the copies cannot drift."""
+    return round_records.execution_evidence_fields(evidence)
+
+
 def _journal_record_identities(session_dir, rnd, phase):
     """Every record identity this session's journal logged for a phase — `reconcile`'s view of the
     LOG half of the two-commit window. The latest payload hash and CAS token per slot ride with
@@ -8198,9 +8222,11 @@ def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurren
         return None, why
     journal_entry = None
     if cmd is not None:
+        transport_fields = _journal_transport_fields(stored)
         journal_entry = _journal_entry_for_commit(
             session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence, headDiffRepaired=True,
+            **transport_fields,
             **_journal_addressing_fields(expect_round, expect_phase),
             **_journal_identity_fields(phase, seat_key, occurrence, attempt))
     try:
@@ -8373,7 +8399,9 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
         cited_head_source = round_records.CITED_HEAD_SOURCE_RUNNER_VIEW
     else:
         return None, "view-head-underivable", {"runKind": run_kind}, None
-    evidence = {key: record[key] for key in round_records.EXECUTION_EVIDENCE_FIELDS}
+    evidence = _journal_execution_evidence_fields(record)
+    if evidence is None:
+        return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}, None
     out = dict(envelope)
     if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
         env_head = envelope.get("headSha")
@@ -8557,6 +8585,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
         seat=seat, occurrence=occurrence,
         **round_records.recorded_row_fields(envelope, row_cited_head, cited_head_source),
+        **_journal_transport_fields(envelope),
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
@@ -8696,6 +8725,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                 journal_entry = _journal_entry_for_commit(
                     session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                     seat=seat, occurrence=occurrence,
+                    **_journal_transport_fields(stored),
                     **_journal_addressing_fields(expect_round, expect_phase),
                     **_journal_identity_fields(phase, seat, occurrence, attempt))
                 cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
@@ -8727,6 +8757,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                                    detail=", ".join(exc.missing))
             revision_fields = round_records.recorded_row_fields(
                 stored_envelope, cited_head, cited_head_source)
+            revision_fields.update(_journal_transport_fields(stored_envelope))
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
@@ -9461,6 +9492,7 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
             **round_records.recorded_row_fields(
                 envelope, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR),
             superseded=False,
+            **_journal_transport_fields(envelope),
             **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
     }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
@@ -9594,6 +9626,7 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
                                detail=", ".join(exc.missing))
         revision_fields = round_records.recorded_row_fields(
             stored_envelope, cited_head, cited_head_source)
+        revision_fields.update(_journal_transport_fields(stored_envelope))
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
                        attempt=entry_attempt, seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,
