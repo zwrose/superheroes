@@ -261,8 +261,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
 #### B1 — Launcher + launch ledger (declare-batch/launch/record-outcome/amend)
 
 - **Component.** Headless launcher, launch ledger, doctrine, and build-lane stamp that walk
-  preflight, reserve, background-session launch, and outcome recording for unattended waves; it
-  costs ledger I/O and background-launch acknowledgement plumbing on every batch.
+  preflight, reserve, spawn, and outcome recording for unattended waves; it costs ledger I/O and
+  detached-spawn plumbing on every batch.
 - **Condition.** Usage-based, 60 days: unattended launch batches that reach a stamped ledger outcome
   via launcher verbs. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
@@ -1812,62 +1812,6 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — the gate is temporary shape, not the background channel itself.
   Tag: `background-channel`.
 
-#### S21 — Claude-argv census (D1)
-
-- **Component.** Not a census row. The static census in
-  `plugins/superheroes/lib/tests/test_claude_argv_census.py` that flags every `claude` argv assembled
-  outside `engine_adapter`.
-- **Condition.** Capability-based: retire when claude process launches no longer go through argv lists.
-- **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural; `c14-l4a-D1`. Accepted residual: argv assembled from runtime data is outside
-  static reach.
-
-#### S22 — Background `started` record invariant (D2)
-
-- **Component.** Not a census row. The `launch_ledger._validate_event_fields` branch that enforces the
-  all-or-none `launchMode`, `backgroundId`, and `sessionId` set on `started` records.
-- **Condition.** Retire when the ledger schema is versioned past 1 and the legacy `started` shape is
-  dropped.
-- **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural; `c14-l4a-D2`. Coverage is by construction: one validator branch and a closed
-  field set.
-
-#### S23 — Launch-stage background gate (D3)
-
-- **Component.** Not a census row. The `launcher._spawn_attempt` background launch path and its settle
-  over the listed session.
-- **Condition.** Retire when builder lanes no longer launch through `claude --bg`.
-- **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural; `c14-l4a-D3`.
-
-#### S24 — Builder-session canary (D4)
-
-- **Component.** Not a census row. `launcher.canary`, which reads session-transcript tool calls to
-  report builder engagement.
-- **Condition.** Retire when the watcher reads engagement from the per-account listing alone.
-- **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural; `c14-l4a-D4`.
-
-#### S25 — Old-reader compatibility fold (D5)
-
-- **Component.** Not a census row. The compat fold exercised in
-  `plugins/superheroes/lib/tests/test_launch_ledger_compat.py` so ledger readers older than this
-  layer still fold background `started` records.
-- **Condition.** Retire when no seat can run a launch-ledger reader older than this layer, i.e. the
-  stack has merged and released.
-- **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural; `c14-l4a-D5`.
-
 
 ## The workaround-marker inventory
 
@@ -1906,9 +1850,9 @@ file, returns exactly that set.
 - `plugins/superheroes/lib/launch_ledger.py` — file-backed launch batch ledger when the host has no
   durable batch accounting. **delete-when:** the host records launch batches durably without this
   ledger module.
-- `plugins/superheroes/lib/launcher.py` — the detached spawn is the launch acknowledgement process
-  of a background session, detached so the launch call cannot tie it to the caller's session.
-  **delete-when:** the background-session trial receipt marks detached spawn not needed.
+- `plugins/superheroes/lib/launcher.py` — headless builders must survive parent session exit via
+  detached spawn. **delete-when:** the background-session trial receipt marks detached spawn not
+  needed.
 - `plugins/superheroes/lib/launcher.py` — launcher refuses spawn when cwd is the primary checkout
   (own-worktree). **delete-when:** the background-session trial receipt marks launcher worktree
   enforcement not needed.

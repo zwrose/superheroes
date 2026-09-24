@@ -74,19 +74,14 @@ invariant and is **not** delivered to the builder through the composed launch pr
 
 **Build-worktree provisioning (documentation only — not parsed).** `own-worktree` is prose a builder
 must obey, and one build in roughly thirty worked in the primary checkout anyway. The launcher now
-makes it structural: `launch` creates the build worktree before it starts the builder — one per launch,
-detached at the premise's base commit — records the path and the config root the background session
-runs under (`configDir`, absolute; must resolve to an existing directory) on the `reserved` ledger
-record, starts the builder as a **background session** inside it via `claude --bg`, and records the
-session's id, short background id, and pid on the `started` record (not `reserved`), so a builder
-never sees the primary checkout. The recorded `configDir` is what lets a watcher running under a
-*different* Claude instance resolve that lane's session transcript under the lane's own root rather
-than its own (#1036). A path that already exists, or that git still registers, refuses the launch
-rather than being reused. **`launch` refuses a config root it cannot resolve
-(`config-dir-unusable:unresolvable`) or that is not an existing directory
-(`config-dir-unusable:not-a-directory`); this gate is not bypassed by `--allow-foreign-instance`.**
-**`launch` also refuses a `CLAUDE_CONFIG_DIR` pin that is not the calling seat's own instance**
-(`launch-foreign-instance-pin`
+makes it structural: `launch` creates the build worktree before it spawns — one per launch, detached
+at the premise's base commit — records the path, the builder's session id, and the config root the
+child is spawned under (`configDir`, absolute; omitted when no absolute root can be derived) on the
+`reserved` ledger record, and starts the session inside it, so a builder never sees the primary
+checkout. The recorded `configDir` is what lets a watcher running under a *different* Claude instance
+resolve that lane's session transcript under the lane's own root rather than its own (#1036). A path that already exists, or that
+git still registers, refuses the launch rather than being reused. **`launch` also refuses a
+`CLAUDE_CONFIG_DIR` pin that is not the calling seat's own instance** (`launch-foreign-instance-pin`
 or `launch-seat-instance-undetermined`) unless the caller passes `--allow-foreign-instance`; **that gate applies only on a Claude Code seat** — it keys on
 `CLAUDE_PID`, so a host with none (Codex, a scripted or cron caller) skips the gate entirely rather
 than refusing, which means the pin is left **unchecked**, not **approved**. **The ruling above stays in the
@@ -179,15 +174,12 @@ handoff — both halves run, neither replaces the other.
 
 Map a builder to its transcript by grepping the **first 4KB** of each transcript file for the
 **issue token** the launch prompt carries. The token match must be **unique before you pin** — more
-than one match is a signal to disambiguate, not to pick one. For a background lane, the `started`
-record identifies the transcript directly: **`configDir` + `sessionId`**. The launch ledger records
-each dispatch's **pid** and **logPath** at start — on a background lane **pid** is the **background
-session's own process**, which stays alive after the session's turn ends until the session is stopped;
-it is the right handle for the liveness read in the next sub-section. **logPath** holds only the
-launch acknowledgement stdout, not a transcript identifier. When a lane carries no recorded
-**sessionId**, the issue-token grep remains the method — when the token match is not unique,
-disambiguate by **reading the candidates' content** (which one carries this build's actual work), not
-by recency — and **never** by taking the newest file. Once uniquely matched,
+than one match is a signal to disambiguate, not to pick one. The launch ledger records each dispatch's
+**pid** and **logPath** at start — **pid** identifies the **process**, not the transcript; it is the
+right handle for the liveness read in the next sub-section. **logPath** is the child process's stdout
+log, not a transcript identifier. The launcher records **no transcript identifier** — when the token
+match is not unique, disambiguate by **reading the candidates' content** (which one carries this
+build's actual work), not by recency — and **never** by taking the newest file. Once uniquely matched,
 **pin that file path** and use it for the rest of the run. **Never
 re-discover** a builder's transcript by taking the newest file — **a dead launch attempt leaves a
 stub**, and newest-first hands you the stub while the live retry runs elsewhere. Because a resumed
@@ -199,10 +191,8 @@ A **double-confirmed** process check — the process must read as gone twice, se
 because single reads false-negative. Pinned-transcript **mtime** freshness: quiet for a long stretch
 while the process is still alive is a stall or a blocked permission prompt, not progress.
 
-The **stdout log is not a liveness signal** — on a background lane it holds only the launch
-acknowledgement, so an empty or unchanging log says nothing about whether the session is working; a
-legacy `-p` session **buffers its output to exit**, so the same caveat applies when reading old lanes.
-**Never identify a worker
+The **stdout log is not a liveness signal** — a `-p` session **buffers its output to exit**, so an
+empty or unchanging log says nothing about whether the session is working. **Never identify a worker
 by a global process match**: a `pgrep` on an engine's name catches long-lived daemons and, under
 parallel load, sibling sessions' dispatches — poll the thing you own (your own output file, your own
 recorded pid, your own task id).
