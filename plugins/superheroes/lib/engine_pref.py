@@ -150,12 +150,10 @@ def canonical_codex_pin_role(role):
     return _LEGACY_CODEX_PIN_ALIAS.get(role, role)
 
 
-def normalize_codex_pin_map(raw, effort_map=None):
+def normalize_codex_pin_map(raw):
     """→ {"pins": {role: model}, "invalid": {role: reason_string}}"""
     if not isinstance(raw, dict):
         return {"pins": {}, "invalid": {}}
-    if not isinstance(effort_map, dict):
-        effort_map = {}
     pins = {}
     invalid = {}
     for role, model in raw.items():
@@ -166,14 +164,14 @@ def normalize_codex_pin_map(raw, effort_map=None):
         if role not in CODEX_PIN_ROLES:
             invalid[role] = "unknown role %r rejected" % role
             continue
-        if not isinstance(model, str) or model not in CODEX_MODELS:
+        if not isinstance(model, str):
             invalid[role] = "unknown model %r rejected" % model
             continue
-        role_effort = resolve_effort("codex", CODEX_ROLE_KIND[role], effort_map)
-        if valid_codex_model_effort(model, role_effort):
+        ok, reason = model_registry.codex_pin_verdict(role, model)
+        if ok:
             pins[role] = model
         else:
-            invalid[role] = "%s + %s is invalid" % (model, role_effort)
+            invalid[role] = reason
     return {"pins": pins, "invalid": invalid}
 
 
@@ -530,8 +528,10 @@ def resolve_engine_model(engine, tier_role, tier_model, prefs=None):
     pins = prefs.get("codexModels") if isinstance(prefs, dict) else None
     if isinstance(pins, dict):
         pinned = pins.get(tier_role)
-        if isinstance(pinned, str) and pinned in CODEX_MODELS:
-            return pinned
+        if isinstance(pinned, str):
+            ok, _ = model_registry.codex_pin_verdict(tier_role, pinned)
+            if ok:
+                return pinned
     try:
         return model_registry.codex_peer_for_claude_tier(tier_model)
     except ValueError:
@@ -613,7 +613,7 @@ def _normalize_engine_preferences_block(prefs):
            "effort": dict(effort) if isinstance(effort, dict) else {}}
     codex_models = prefs.get("codexModels")
     if isinstance(codex_models, dict):
-        codex_result = normalize_codex_pin_map(codex_models, out["effort"])
+        codex_result = normalize_codex_pin_map(codex_models)
         if codex_result["pins"]:
             out["codexModels"] = codex_result["pins"]
         if codex_result["invalid"]:
