@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import core_md  # noqa: E402
 import mode_registry  # noqa: E402
+import order_contract  # noqa: E402
 import round_adapters  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_phases  # noqa: E402
@@ -131,7 +132,7 @@ def _format_payload_contract(phase: str) -> tuple[str | None, str | None]:
     if reason:
         return None, "payload-contract:%s" % reason
     lines = [
-        "## Payload contract",
+        order_contract.PAYLOAD_CONTRACT_HEADING,
         "",
         "Your result must carry a payload matching this shape:",
         "",
@@ -293,12 +294,12 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
             "- Payload landing path: %s" % landing,
         ])
     else:
-        stdout_example, reason = _stdout_payload_example(phase)
-        if reason:
-            return None, reason
-        if phase == round_phases.P_PANEL:
+        if phase in (round_phases.P_PANEL, round_phases.P_FIXER):
             lines.extend([_RESULT_CHANNEL_NEUTRAL_DELIVERY])
         else:
+            stdout_example, reason = _stdout_payload_example(phase)
+            if reason:
+                return None, reason
             lines.extend([_result_channel_neutral_delivery(stdout_example)])
     return "\n".join(lines), None
 
@@ -374,6 +375,31 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     return ph
 
 
+def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
+    ph = dict(context.get("placeholders") or {})
+    host_seat = context.get("host_seat") is True
+    if host_seat:
+        ph["FIXER_STEP_5_BLOCK"] = (
+            "5. Report back per the Payload contract section below."
+        )
+        ph["FIXER_ESCALATION_BLOCK"] = (
+            "Report it for owner escalation (see Payload contract) with the id and why."
+        )
+    else:
+        ph["FIXER_STEP_5_BLOCK"] = (
+            "5. Report back per the result contract the runner appends at dispatch — "
+            "not a graded shape in this order. The orchestrator derives the `fixes` "
+            "record from git; you are not asked to emit it."
+        )
+        ph["FIXER_ESCALATION_BLOCK"] = (
+            "Report it for owner escalation via the runner's native write-result contract "
+            "the runner appends at dispatch: set `signal` to `needs_context`, name the "
+            "finding id and why in `report`, and write the graded JSON object to the "
+            "result file when the contract names one."
+        )
+    return ph
+
+
 def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     channel = ph.get("CHANNEL", "file")
@@ -415,6 +441,8 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     if phase == round_phases.P_PANEL:
         ph = _panel_derived_placeholders(context)
+    elif phase == round_phases.P_FIXER:
+        ph = _fixer_derived_placeholders(context)
     elif phase in (round_phases.P_VERIFIERS, round_phases.P_SYNTHESIS,
                    round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
         ph = _channel_derived_placeholders(phase, context)
@@ -451,16 +479,18 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         if _PLACEHOLDER_RE.search(body):
             return _refuse("unknown-placeholder-remaining")
 
-        contract_block, creason = _format_payload_contract(phase)
-        if creason:
-            return _refuse(creason)
+        blocks = [body.rstrip(), _format_residual_block(context).rstrip()]
+        if phase != round_phases.P_FIXER or context.get("host_seat"):
+            contract_block, creason = _format_payload_contract(phase)
+            if creason:
+                return _refuse(creason)
+            blocks.append(contract_block.rstrip())
         landing_block, lreason = _format_landing_block(context, phase)
         if lreason:
             return _refuse(lreason)
-        residual_block = _format_residual_block(context)
+        blocks.append(landing_block.rstrip())
 
-        order = "\n\n".join([body.rstrip(), residual_block.rstrip(),
-                             contract_block.rstrip(), landing_block.rstrip()]) + "\n"
+        order = "\n\n".join(blocks) + "\n"
 
         if _PLACEHOLDER_RE.search(order):
             return _refuse("post-condition-placeholder-leak")

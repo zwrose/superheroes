@@ -302,8 +302,9 @@ dispositions.
 At a terminal, the driver now writes a **certification artifact** beside `round-receipt.json`:
 
 - **Success** — `certification-receipt.json`: carries `terminalState`, `terminalCause`, per-seat
-  provenance in `seats`, the `disclosures` block (`importantOutOfScope`), and each finding's
-  disposition plus its disposition proof (`dispositionReceipt` where applicable).
+  provenance in `seats`, the `disclosures` block (`importantOutOfScope` for Important out-of-scope
+  deferrals, `survivingNonBlocking` for surviving Minor or Nit findings without disposition), and
+  each finding's disposition plus its disposition proof (`dispositionReceipt` where applicable).
 - **Refusal** — `certification-refusal.json`: names one of the four escape classes
   (`unrun-review`, `same-family-seat`, `unfetched-findings`, `disposition-without-receipt`) and the
   artifact that failed.

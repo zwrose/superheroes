@@ -265,6 +265,7 @@ def test_write_run_stamp_qualifies_execution_only_despite_digest_mismatch():
     ok, binding = RC._hand_landed_evidence_qualifies(
         envelope, HEAD, journal_binding=journal_binding,
         recorded_nonces={"hand-landed-nonce"},
+        phase=SC.FIXER_PHASE,
     )
     assert ok is True
     assert binding == RC.EXECUTION_ONLY_BINDING
@@ -421,6 +422,7 @@ def test_bite_bp2f_h_write_run_execution_only():
     ok, binding = RC._hand_landed_evidence_qualifies(
         envelope, HEAD, journal_binding=journal_binding,
         recorded_nonces={"hand-landed-nonce"},
+        phase=SC.FIXER_PHASE,
     )
     assert ok is True
     assert binding == RC.EXECUTION_ONLY_BINDING

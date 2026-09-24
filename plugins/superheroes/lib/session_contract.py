@@ -42,6 +42,8 @@ __all__ = (
     "disposition_ledger_owner_classification",
     "MERGED_INTO_FIELD",
     "RAISED_ROUND_FIELD",
+    "RAISED_SEQ_FIELD",
+    "DISPOSITION_SEQ_FIELD",
     "DISPOSITION_FAMILY_FIELDS",
     "has_disposition_family",
     "disposition_family_snapshot",
@@ -73,18 +75,23 @@ __all__ = (
     "EXECUTION_ONLY_BINDING",
     "PAYLOAD_BOUND_BINDING",
     "evidence_binding",
+    "execution_only_admissible_for_phase",
     "verify_result_for_head",
     "RE_EMIT_CMD",
     "ORDERS_SUPERSEDED_OUTCOME",
     "journal_is_re_emit_orders_superseded",
 )
 
+RAISED_ROUND_FIELD = "raisedRound"
+RAISED_SEQ_FIELD = "raisedSeq"
+DISPOSITION_SEQ_FIELD = "dispositionSeq"
+
 # Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
 TRANSIENT_FINDING_FIELDS = frozenset({
     "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
     "disposition", "dispositionReceipt",
     "dispositionRound", "refutedReason", "outOfScopeReason", "followUp", "mergedInto",
-    "raisedRound",
+    RAISED_ROUND_FIELD, RAISED_SEQ_FIELD, DISPOSITION_SEQ_FIELD,
 })
 
 SEAT_TRANSPORT_KEY = "transport"
@@ -111,6 +118,15 @@ def evidence_binding(result_kind):
     if result_kind == WRITE_RESULT_KIND:
         return EXECUTION_ONLY_BINDING
     return PAYLOAD_BOUND_BINDING
+
+
+def execution_only_admissible_for_phase(phase):
+    """True when execution-only (write-run) evidence binding is admissible for this phase."""
+    if not isinstance(phase, str) or not phase:
+        return False
+    if phase not in (PANEL_PHASE, FIXER_PHASE, AUDITS_PHASE):
+        return False
+    return phase == FIXER_PHASE
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 
@@ -292,11 +308,17 @@ def disposition_ledger_owner_classification(state):
     if value == DISPOSITION_LEDGER_OWNER_VALUE:
         return DISPOSITION_LEDGER_OWNER_RECOGNIZED
     return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
-RAISED_ROUND_FIELD = "raisedRound"
 DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
     "outOfScopeReason", "followUp", MERGED_INTO_FIELD,
 )
+
+
+def disposition_value(row):
+    """The graded disposition value on row, or None when absent."""
+    if not isinstance(row, dict):
+        return None
+    return row.get("disposition")
 
 
 def has_disposition_family(row):

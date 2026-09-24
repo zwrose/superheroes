@@ -1151,6 +1151,7 @@ def _fix_batch_cap(config):
 VERIFY_THEN_CEILING = "ceiling"
 VERIFY_THEN_PANEL = "full-panel"
 VERIFY_THEN_POST_AUDITS = "post-audits"
+DELTA_BASELINE_ABSENT = "delta-baseline-absent"
 
 
 def _round_ceiling(config):
@@ -1193,6 +1194,7 @@ def new_state(config=None):
                             if isinstance(seeded_seat_map, dict) and seeded_seat_map else []),
         "reviewedDiff": cfg.get("diff"),
         "headDiff": None,
+        "dispositionSeqCounter": 0,
         "fixBatch": [],
         "fullPanelRan": False,
         # A configured lens that never ran is an OUTSTANDING coverage gap: set when a panel is
@@ -1459,6 +1461,8 @@ def _backfill_ledger_from_records(state, ledger, seen):
             if not key:
                 continue
             entry = _strip_disposition_family(dict(finding))
+            entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+            entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
             if key in preexisting:
                 entry.update(family_snapshots.get(key, {}))
             if key in seen:
@@ -1492,6 +1496,8 @@ def _stage_findings(state, compiled):
             continue
         existing = ledger[seen[key]] if key in seen else None
         entry = _strip_disposition_family(dict(finding))
+        entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+        entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
         if (isinstance(existing, dict)
                 and session_contract.has_disposition_family(existing)
@@ -1501,7 +1507,10 @@ def _stage_findings(state, compiled):
                     entry[field] = existing[field]
         else:
             entry = _strip_disposition_family(entry)
+            entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+            entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
             entry[session_contract.RAISED_ROUND_FIELD] = round_no
+        entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
         sanitized.append(entry)
         if key in seen:
             ledger[seen[key]] = entry
@@ -1516,9 +1525,16 @@ def _stage_findings(state, compiled):
         )
 
 
+def _next_disposition_seq(state):
+    counter = state.get("dispositionSeqCounter", 0) + 1
+    state["dispositionSeqCounter"] = counter
+    return counter
+
+
 def _record_disposition(state, key, disposition, round_no, **fields):
     if disposition not in session_contract.DISPOSITIONS:
         raise ValueError("unknown disposition %r" % (disposition,))
+    disp_seq = _next_disposition_seq(state)
     ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
     live = _live_finding_by_key(state, key)
@@ -1534,12 +1550,14 @@ def _record_disposition(state, key, disposition, round_no, **fields):
         if val is not None:
             family[fname] = val
     _apply_disposition_family(entry, family)
+    entry[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
     if key in seen:
         ledger[seen[key]] = entry
     else:
         ledger.append(entry)
     if live is not None:
         _apply_disposition_family(live, family)
+        live[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
 
 
 def _record_merged_into(state, key, into_key):
@@ -3623,15 +3641,102 @@ def _after_findings_settled(state, config):
 
 # ---- fix + verify legs ----------------------------------------------------------------------
 
+def _disposition_ledger_by_key(state):
+    """Non-mutating ledger lookup keyed by finding identity — ``None`` on read fault."""
+    owner = session_contract.disposition_ledger_owner_classification(state)
+    if owner == session_contract.DISPOSITION_LEDGER_OWNER_ABSENT:
+        by_key = {}
+        for key, entry in session_contract.legacy_disposition_ledger_rows(state):
+            if key:
+                by_key[key] = entry
+        return by_key, None
+    required = owner == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED
+    ledger_rows, fault = session_contract.read_disposition_ledger(state, required=required)
+    if fault is not None:
+        return {}, fault
+    by_key = {}
+    for entry in ledger_rows:
+        key = _finding_identity_key(entry)
+        if key:
+            by_key[key] = entry
+    return by_key, None
+
+
+def _excluded_discharged_fix_row(ledger_by_key, row):
+    """True when a discharged fix must not re-enter the fix batch (A1 chokepoint predicate)."""
+    key = _finding_identity_key(row)
+    if not key:
+        return False
+    entry = ledger_by_key.get(key)
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("disposition") != "fixed":
+        return False
+    disp_seq = entry.get(session_contract.DISPOSITION_SEQ_FIELD)
+    raised_seq = entry.get(session_contract.RAISED_SEQ_FIELD)
+    disp_is_int = isinstance(disp_seq, int) and not isinstance(disp_seq, bool)
+    raised_is_int = isinstance(raised_seq, int) and not isinstance(raised_seq, bool)
+    if disp_is_int and raised_is_int:
+        return disp_seq > raised_seq
+    return False
+
+
+def _filter_excluded_discharged_fixes(state, rows):
+    if not rows:
+        return rows, None
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return rows, fault
+    filtered = [row for row in rows
+                if not _excluded_discharged_fix_row(ledger_by_key, row)]
+    return filtered, None
+
+
+def _resolve_empty_fix_batch_convergence(state, config):
+    """Route an exclusion-emptied batch through the path's own resolver (A2)."""
+    round_rec = state.get("rounds", {}).get(str(state["round"]), {})
+    if round_rec.get("roundKind") == "delta":
+        _settle_delta_converged(state, config)
+        return
+    _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+
+
 def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0):
-    """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap."""
+    """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
+
+    May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
+    setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
+    the batch was emptied by discharge exclusion (settling the round only when ``batch_index``
+    is 0; on a continuation the caller enters post-fix), or ``"faulted"`` when a disposition-
+    ledger read fault parked the session.
+    """
     cap = _fix_batch_cap(config)
     if reset_accumulator:
         state["fixBatch"] = []
-    state["_fixBatch"] = rows[:cap]
-    state["_fixQueue"] = rows[cap:]
+    offered_nonempty = bool(rows)
+    filtered, ledger_fault = _filter_excluded_discharged_fixes(state, rows)
+    if ledger_fault is not None:
+        _park_cannot_certify(state, ledger_fault.detail)
+        return "faulted"
+    if offered_nonempty and not filtered:
+        rec = state["rounds"].setdefault(str(state["round"]), {})
+        prior = rec.get("fixBatchExcludedByDischarge") or 0
+        _record_round(state, "fixBatchExcludedByDischarge", prior + len(rows))
+        if batch_index == 0:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "without fixer dispatch")
+            _resolve_empty_fix_batch_convergence(state, config)
+        else:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "remaining queue exhausted, the round proceeds to post-fix")
+        return "excluded"
+    state["_fixBatch"] = filtered[:cap]
+    state["_fixQueue"] = filtered[cap:]
     state["_fixBatchIndex"] = batch_index
     state["step"] = P_FIXER
+    return "queued"
 
 
 def _subjects_for_dimension(dimension):
@@ -3779,11 +3884,15 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         cap = _fix_batch_cap(config)
         done = len(slice_)
         queued = len(queue) - min(cap, len(queue))
-        _queue_fix_batch(state, config, queue, reset_accumulator=False, batch_index=index + 1)
-        _decision(state, "fix-batch-split",
-                  "fix batch slice %d of this round dispatched (%d findings; %d queued)"
-                  % (index + 1, done, queued))
-        return
+        status = _queue_fix_batch(
+            state, config, queue, reset_accumulator=False, batch_index=index + 1)
+        if status == "queued":
+            _decision(state, "fix-batch-split",
+                      "fix batch slice %d of this round dispatched (%d findings; %d queued)"
+                      % (index + 1, done, queued))
+            return
+        if status == "faulted":
+            return
     state.pop("_escalatedRung", None)
     state.pop("_fixQueue", None)
     state.pop("_fixBatchIndex", None)
@@ -4123,7 +4232,6 @@ def _fold_verify(state, config, artifact, *, resolution):
     # is here — at the ceiling it parks `round-ceiling`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
-    state["_priorReviewedDiff"] = state.get("reviewedDiff")
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
     _enter_delta_round(state, config)
 
@@ -4170,7 +4278,6 @@ def _enter_post_fix(state, config, session_dir=None):
         return
     if not _advance_round(state, config, reason="post-fix-advance"):
         return
-    state["_priorReviewedDiff"] = state.get("reviewedDiff")
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
     state["_postFixEntry"] = True
     _enter_delta_round(state, config)
@@ -4204,9 +4311,35 @@ def _enter_delta_round(state, config):
             state["_verifyThen"] = VERIFY_THEN_PANEL
             state["step"] = P_VERIFY
         return
+    baseline = state.get("deltaBaseline")
+    if not isinstance(baseline, dict):
+        cause = "no baseline record" if baseline is None else "baseline is not a record"
+        _schedule_full_panel_unknown(state, "%s: %s" % (DELTA_BASELINE_ABSENT, cause))
+        if post_fix:
+            state["_verifyThen"] = VERIFY_THEN_PANEL
+            state["step"] = P_VERIFY
+        return
+    stamped_round = baseline.get("round")
+    current_round = state["round"]
+    if (not isinstance(stamped_round, int) or isinstance(stamped_round, bool)
+            or stamped_round != current_round):
+        _schedule_full_panel_unknown(
+            state, "%s: baseline stamped round %s, current round %s"
+            % (DELTA_BASELINE_ABSENT, stamped_round, current_round))
+        if post_fix:
+            state["_verifyThen"] = VERIFY_THEN_PANEL
+            state["step"] = P_VERIFY
+        return
+    reviewed = baseline.get("diff")
+    if not isinstance(reviewed, str):
+        _schedule_full_panel_unknown(
+            state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT)
+        if post_fix:
+            state["_verifyThen"] = VERIFY_THEN_PANEL
+            state["step"] = P_VERIFY
+        return
     split = delta_surface.split_fix_surface(
-        state.get("_priorReviewedDiff") or state.get("reviewedDiff"),
-        state.get("headDiff"), state.get("fixBatch") or [])
+        reviewed, state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
         _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel")
         if post_fix:
@@ -4623,11 +4756,13 @@ def _advance_round(state, config, *, reason):
     The ceiling is a BOUNDARY, not a settle-path terminal: the round at the ceiling completes,
     and the loop then refuses to begin the next one. Returns True when the counter advanced,
     False when it parked `round-ceiling` — a False return means the caller must return
-    immediately without any further state mutation."""
+    immediately without any further state mutation. This function is also the one writer of
+    `state["deltaBaseline"]`."""
     next_round = state["round"] + 1
     if _ceiling_blocks(state, config, next_round, reason):
         return False
     state["round"] = next_round
+    state["deltaBaseline"] = {"round": next_round, "diff": state.get("reviewedDiff")}
     return True
 
 
@@ -8331,6 +8466,8 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "ROUND",
     "TARGET_ID",
     "GATE_GUIDANCE",
+    "FIXER_STEP_5_BLOCK",
+    "FIXER_ESCALATION_BLOCK",
 })
 
 
@@ -8991,7 +9128,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         if phase == P_FIXER:
             lint_text = _order_lint_text(order_text, context)
             lint = order_lint.check_text(
-                lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer")
+                lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer",
+                allow_payload_contract=context.get("host_seat") is True)
             if not lint.get("ok"):
                 first = (lint.get("findings") or [{}])[0]
                 token = first.get("token") or "unknown"
@@ -9459,7 +9597,7 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
         return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}, None
     run_kind = record.get("runKind")
     if run_kind == engine_dispatch.RUN_KIND_WRITE:
-        if phase != P_FIXER:
+        if not session_contract.execution_only_admissible_for_phase(phase):
             return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
     elif run_kind == engine_dispatch.RUN_KIND_REVIEW:
         if phase == P_FIXER:

@@ -410,7 +410,10 @@ def test_template_body_does_not_restate_payload_contract(phase):
     body = _template_body(phase)
     fields, enum_values = _contract_vocabulary(phase)
     violations = []
+    exempt_fields = set()
     for field in sorted(fields):
+        if field in exempt_fields:
+            continue
         if re.search(r"\b" + re.escape(field) + r"\b", body):
             violations.append("field %s in %s" % (field, RO.order_template_path(phase)))
     for value in enum_values:
@@ -1260,7 +1263,9 @@ def test_engine_verifiers_order_uses_verdict_stdout_contract():
     assert "Emit findings" not in text
 
 
-def test_engine_fixer_order_landing_block_uses_fixes_stdout_contract(tmp_path, monkeypatch):
+def test_engine_fixer_order_landing_block_names_no_graded_shape(tmp_path, monkeypatch):
+    # R28 re-pin (WO-D #1272): engine fixer orders carry channel-neutral delivery only — the
+    # runner appends the graded contract; the order must not name `{"fixes"`.
     import engine_pref as EP
     import round_driver as RD
 
@@ -1274,22 +1279,16 @@ def test_engine_fixer_order_landing_block_uses_fixes_stdout_contract(tmp_path, m
         "reviewedDiff": "diff --git a/f b/f\n",
         "fixBatch": [],  # fixer-order render path requires a known batch
     }
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
     row = RD._seat_transport_row(state, RP.P_FIXER, "fixer", 0, state["config"], {"fixes": []}, repo)
     ctx, _paths = RD._build_order_render_context(
         session_dir, state, 2, RP.P_FIXER, 0, "fixer", 0, {"fixes": []}, row,
     )
     text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
     assert reason is None
-    assert '{"fixes":' in text.split("## Return your result")[-1]
-    assert "Payload landing path:" not in text.split("## Return your result")[-1]
+    landing = text.split("## Return your result")[-1]
+    assert '{"fixes":' not in landing
+    assert "runner appends the authoritative result contract" in landing
+    assert "Payload landing path:" not in landing
 
 
 def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
