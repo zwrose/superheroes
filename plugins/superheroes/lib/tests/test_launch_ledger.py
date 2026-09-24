@@ -5205,3 +5205,149 @@ def test_fold_seat_instance_and_foreign_allowed_are_none_when_omitted():
     lane = result["launches"]["l1"]
     assert lane["seatInstance"] is None
     assert lane["foreignInstanceAllowed"] is None
+
+
+# --- public git scrub helpers (#1340 layer 2d) -------------------------------
+
+
+def test_scrub_env_strips_git_vars_and_ledger_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_DIR", "/tmp/bogus/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/tmp/bogus")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, "/tmp/ledger-root")
+    monkeypatch.setenv("SAFE_VAR", "keep")
+    scrubbed = ll.scrub_env()
+    for key in ll.GIT_SCRUB_VARS:
+        assert key not in scrubbed
+    assert ll.LEDGER_ROOT_ENV not in scrubbed
+    assert scrubbed["SAFE_VAR"] == "keep"
+
+
+def test_scrub_env_default_removes_exactly_git_scrub_vars_and_ledger_root():
+    # axis: default call removes only the seven GIT_SCRUB_VARS and LEDGER_ROOT_ENV
+    input_env = {
+        "SAFE": "keep",
+        "OTHER": "also-keep",
+        **{key: "strip-me" for key in ll.GIT_SCRUB_VARS},
+        ll.LEDGER_ROOT_ENV: "strip-me-too",
+    }
+    scrubbed = ll.scrub_env(input_env)
+    removed = set(input_env) - set(scrubbed)
+    expected = set(ll.GIT_SCRUB_VARS) | {ll.LEDGER_ROOT_ENV}
+    assert removed == expected
+    assert scrubbed == {"SAFE": "keep", "OTHER": "also-keep"}
+
+
+def test_scrub_env_explicit_keys_replaces_default_set():
+    # axis: keys= replaces the default — vars in default but not in keys survive
+    input_env = {
+        "GIT_DIR": "/tmp/git",
+        "SAFE": "keep",
+    }
+    scrubbed = ll.scrub_env(input_env, keys=("GIT_WORK_TREE",))
+    assert "GIT_DIR" in scrubbed
+    assert "GIT_WORK_TREE" not in scrubbed
+    assert scrubbed["SAFE"] == "keep"
+
+
+def test_scrub_env_explicit_roots_replaces_default_root():
+    # axis: roots= replaces the default — LEDGER_ROOT_ENV survives when not named
+    input_env = {
+        ll.LEDGER_ROOT_ENV: "/tmp/ledger",
+        "CUSTOM_ROOT": "/tmp/custom",
+        "SAFE": "keep",
+    }
+    scrubbed = ll.scrub_env(input_env, roots=("CUSTOM_ROOT",))
+    assert ll.LEDGER_ROOT_ENV in scrubbed
+    assert "CUSTOM_ROOT" not in scrubbed
+    assert scrubbed["SAFE"] == "keep"
+
+
+def test_scrub_env_none_reads_process_environment(monkeypatch):
+    # axis: env=None reads os.environ
+    monkeypatch.setenv("GIT_DIR", "/tmp/bogus")
+    monkeypatch.setenv("SAFE_VAR", "from-process")
+    scrubbed = ll.scrub_env()
+    assert "GIT_DIR" not in scrubbed
+    assert scrubbed["SAFE_VAR"] == "from-process"
+
+
+def test_git_scrub_vars_is_public_tuple():
+    assert ll.GIT_SCRUB_VARS == (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CEILING_DIRECTORIES",
+    )
+
+
+# --- fold premise stack fields (#1340 layer 2d) ------------------------------
+
+
+def test_fold_premise_stack_fields_from_well_formed_premise():
+    rec = _reserved(
+        "l1",
+        "b",
+        ["a"],
+        "/tmp",
+        premise={"stack": 3, "layerPosition": 2, "layersPlanned": 4},
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["stack"] == 3
+    assert lane["layerPosition"] == 2
+    assert lane["layersPlanned"] == 4
+
+
+@pytest.mark.parametrize(
+    "premise",
+    [
+        {},
+        "not-a-dict",
+        {"stack": False, "layerPosition": 0, "layersPlanned": "3"},
+    ],
+)
+def test_fold_premise_stack_fields_none_when_missing_or_malformed(premise):
+    rec = _reserved("l1", "b", ["a"], "/tmp", premise=premise)
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["stack"] is None
+    assert lane["layerPosition"] is None
+    assert lane["layersPlanned"] is None
+
+
+def test_fold_premise_stack_negative_int_folds_to_none_for_that_field_only():
+    rec = _reserved(
+        "l1",
+        "b",
+        ["a"],
+        "/tmp",
+        premise={"stack": -1, "layerPosition": 2, "layersPlanned": 4},
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["stack"] is None
+    assert lane["layerPosition"] == 2
+    assert lane["layersPlanned"] == 4
+
+
+def test_fold_premise_stack_field_invalid_values_fold_to_none():
+    # bite-axis: positive-int validation — bool/0/string/negative premise values fold to None
+    rec = _reserved(
+        "l1",
+        "b",
+        ["a"],
+        "/tmp",
+        premise={"stack": False, "layerPosition": 0, "layersPlanned": "3"},
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    lane = result["launches"]["l1"]
+    assert lane["stack"] is None
+    assert lane["layerPosition"] is None
+    assert lane["layersPlanned"] is None
