@@ -133,7 +133,9 @@ def _order_lint_text(order_text, context):
     instructions, and every path in them stay graded by the lint.
     """
     ph = context.get("placeholders") if isinstance(context.get("placeholders"), dict) else {}
-    text = order_text
+    # Mask an inlined implementer template first: an elision landing inside it would break the
+    # verbatim match the lint's own mask needs, and the two doors would grade differently.
+    text, _ = order_lint.mask_template(order_text)
     budget = ph.get("VERIFY_BUDGET")
     verify = context.get("verify_command")
     # The budget QUOTES the owner's command as its TAIL (`_fixer_verify_budget` appends it last),

@@ -33,6 +33,7 @@ import launch_ledger as ll  # noqa: E402
 import model_registry  # noqa: E402
 import pilot_calibration  # noqa: E402
 import pilot_slot  # noqa: E402
+import stack_check  # noqa: E402
 
 SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
@@ -63,16 +64,6 @@ _SETTLE_SECONDS = 20
 _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = (5, 15, 45)
 _TOTAL_DEADLINE_SECONDS = 300
-
-_GIT_SCRUB_VARS = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_CEILING_DIRECTORIES",
-)
 
 _VALID_STATES = frozenset({"pass", "fail", "na"})
 _HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -169,21 +160,13 @@ def _calibration_unreadable_remedy(cause, path):
         "`cause`", repr(cause))
 
 
-def _scrub_env(env=None):
-    base = dict(env if env is not None else os.environ)
-    for key in _GIT_SCRUB_VARS:
-        base.pop(key, None)
-    base.pop(ll.LEDGER_ROOT_ENV, None)
-    return base
-
-
 def _git_scrubbed(repo_root, *args, env=None, timeout=None):
     try:
         return subprocess.run(
             ["git", "-C", repo_root, *args],
             capture_output=True,
             text=True,
-            env=_scrub_env(env),
+            env=ll.scrub_env(env),
             timeout=timeout,
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -345,6 +328,26 @@ def _read_seat_snapshot(pid):
         return None
 
 
+_CLAUDE_VERSIONED_BINARY_RE = re.compile(
+    r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?",
+)
+
+
+# Structural classification of installer layouts — not an identity proof;
+# the basename "claude" rule was never one either.
+def _is_claude_code_runtime(snapshot):
+    exec_path = snapshot.get("exec_path") if isinstance(snapshot, dict) else None
+    if not isinstance(exec_path, str) or not exec_path:
+        return False
+    if os.path.basename(exec_path) == "claude":
+        return True
+    parent = os.path.basename(os.path.dirname(exec_path))
+    grandparent = os.path.basename(os.path.dirname(os.path.dirname(exec_path)))
+    if parent == "versions" and grandparent == "claude":
+        return bool(_CLAUDE_VERSIONED_BINARY_RE.fullmatch(os.path.basename(exec_path)))
+    return False
+
+
 def _normalized_instance_path(path, home):
     if not isinstance(path, str) or not path.strip():
         return None
@@ -384,8 +387,7 @@ def seat_config_dir(env=None):
     if snapshot is None:
         return {"instance": None, "reason": "seat-snapshot-unreadable"}
 
-    exec_path = snapshot.get("exec_path")
-    if not isinstance(exec_path, str) or os.path.basename(exec_path) != "claude":
+    if not _is_claude_code_runtime(snapshot):
         return {"instance": None, "reason": "seat-not-claude"}
 
     seat_env = snapshot.get("env") or {}
@@ -1058,6 +1060,39 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     if mismatch:
         return _fail(mismatch)
 
+    has_stack = "stack" in premise
+    has_layer = "layerPosition" in premise
+    has_layers_planned = "layersPlanned" in premise
+    # axis: stack and layerPosition must both be present or both absent
+    if has_stack != has_layer:
+        return _fail("premise-stack-fields-incomplete")
+    # axis: layersPlanned requires stack and layerPosition
+    if has_layers_planned and not has_stack:
+        return _fail("premise-stack-layers-planned-incomplete")
+    if has_stack:
+        stack_val = premise["stack"]
+        layer_val = premise["layerPosition"]
+        # axis: stack and layerPosition must be positive ints (bool is not an int here)
+        if (
+            not ll.is_positive_premise_int(stack_val)
+            or not ll.is_positive_premise_int(layer_val)
+        ):
+            return _fail("premise-stack-field-invalid")
+        if has_layers_planned:
+            layers_planned_val = premise["layersPlanned"]
+            # axis: layersPlanned must be a positive int (bool is not an int here)
+            if not ll.is_positive_premise_int(layers_planned_val):
+                return _fail("premise-stack-layers-planned-invalid")
+            # axis: layersPlanned must be at least layerPosition
+            if layers_planned_val < layer_val:
+                return _fail("premise-stack-layers-planned-under-position")
+
+    if "dependency" in premise:
+        dependency_val = premise["dependency"]
+        # axis: dependency must be a positive int (bool is not an int here)
+        if not ll.is_positive_premise_int(dependency_val):
+            return _fail("premise-dependency-invalid")
+
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
     stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
@@ -1224,7 +1259,7 @@ def _spawn_attempt(
         return {"ok": False, "reason": "spawn-cwd-missing", "proc": None}
     if os.path.realpath(cwd) == os.path.realpath(repo_root):
         return {"ok": False, "reason": "spawn-cwd-is-repo-root", "proc": None}
-    child_env = _scrub_env(env)
+    child_env = ll.scrub_env(env)
     child_env[hb.LAUNCH_ID_ENV] = launch_id
     if slot is not None and generation is not None:
         child_env[SLOT_REF_ENV] = pilot_slot.format_slot_ref(slot, generation)
@@ -1250,7 +1285,7 @@ def _spawn_attempt(
         child_env[CONFIG_DIR_ENV] = config_dir
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
     # Assignment, not defaulting: the launching session's ambient effort variables are already
-    # in `child_env` via `_scrub_env`, so a pinned effort must overwrite the documented input or
+    # in `child_env` via `ll.scrub_env`, so a pinned effort must overwrite the documented input or
     # the accident this closes survives. The stale CLAUDE_EFFORT *reflection* is dropped rather
     # than written: the CLI overwrites it from its own resolution anyway, so writing it would buy
     # nothing while destroying the one honest observable — a child's reflection is evidence of
@@ -1331,6 +1366,278 @@ def _observe_settle(proc, settle_seconds, deadline=None):
     return rc
 
 
+def _lookup_stack_entry_pr(
+    repo_root, resolved_base_commit, env=None, gh_run=None, deadline=None,
+):
+    """Resolve the open PR whose head is the resolved base commit. Never raises."""
+    if gh_run is None:
+        gh_run = subprocess.run
+    scrubbed = ll.scrub_env(env)
+    if deadline is not None and time.monotonic() >= deadline:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    slug_deadline = None
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "reason": "stack-read-unavailable"}
+        slug_deadline = remaining
+    repo_name, slug_refusal = stack_check.resolve_repo_slug(
+        repo_root, deadline=slug_deadline, run=gh_run, env=scrubbed,
+    )
+    if slug_refusal is not None:
+        detail = slug_refusal.get("detail") or slug_refusal.get("reason")
+        out = {"ok": False, "reason": "stack-read-unavailable"}
+        if detail:
+            out["detail"] = detail
+        return out
+    if deadline is not None and time.monotonic() >= deadline:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    pr_timeout = 120
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "reason": "stack-read-unavailable"}
+        pr_timeout = min(120, remaining)
+    try:
+        pr_proc = gh_run(
+            [
+                "gh", "pr", "list",
+                "--state", "open",
+                "--json", "number,headRefOid,state",
+                "--limit", "1000",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            env=scrubbed,
+            timeout=pr_timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    if pr_proc.returncode != 0:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    try:
+        pr_list = json.loads(pr_proc.stdout or "")
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    if not isinstance(pr_list, list):
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    candidates = []
+    for pr in pr_list:
+        if not isinstance(pr, dict):
+            continue
+        number = pr.get("number")
+        if pr.get("state") != "OPEN":
+            continue
+        if not stack_check.same_commit(pr.get("headRefOid"), resolved_base_commit):
+            continue
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        candidates.append(number)
+    # axis: zero open PRs carry this head — base is not a layer head
+    if not candidates:
+        return {"ok": False, "reason": "base-not-layer-head"}
+    # axis: ambiguous or unreadable entry PR lookup
+    if len(candidates) > 1:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    return {"ok": True, "pr": candidates[0], "repo": repo_name}
+
+
+def _apply_stack_gate(
+    stamped_premise,
+    resolved_base_commit,
+    repo_root,
+    env,
+    pr_lookup,
+    membership_reader,
+    deadline=None,
+):
+    """Run the layer gate when the premise names a stack; GitHub-side and argument-side failures return a refusal dict and raise nothing, while a violated internal pair-slot invariant in membership_reader raises AssertionError."""
+    stack_num = stamped_premise["stack"]
+    layer_pos = stamped_premise["layerPosition"]
+    if layer_pos == 1:
+        return {
+            "ok": True,
+            "stackGate": {"applied": False, "reason": "bottom-layer"},
+        }
+    if deadline is not None and time.monotonic() >= deadline:
+        return {"ok": False, "reason": "stack-read-unavailable"}
+    lookup = pr_lookup(repo_root, resolved_base_commit, env=env, deadline=deadline)
+    if not lookup["ok"]:
+        out = {"ok": False, "reason": lookup["reason"]}
+        if "detail" in lookup:
+            out["detail"] = lookup["detail"]
+        return out
+    entry_pr = lookup["pr"]
+    repo_name = lookup["repo"]
+    membership_deadline = None
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "reason": "stack-read-unavailable"}
+        membership_deadline = remaining
+    membership = membership_reader(
+        pr=entry_pr,
+        repo=repo_name,
+        expect_stack=stack_num,
+        deadline=membership_deadline,
+    )
+    if not membership["ok"]:
+        reason = membership.get("reason")
+        # axis: entry PR is not linked to a stack
+        if reason == stack_check.REASON_NOT_LINKED:
+            return {"ok": False, "reason": "base-not-layer-head"}
+        # axis: membership read found stack order inconsistent with premise
+        if reason == stack_check.REASON_ORDER_MISMATCH:
+            out = {"ok": False, "reason": "order-mismatch"}
+            if "detail" in membership:
+                out["detail"] = membership["detail"]
+            return out
+        return {
+            "ok": False,
+            "reason": "stack-read-unavailable",
+            "detail": reason,
+        }
+    queried = membership["queried"]
+    members = membership.get("members", [])
+    # axis: claimed layer position is already occupied in the stack
+    for member in members:
+        position = member.get("position")
+        if (
+            isinstance(position, int)
+            and not isinstance(position, bool)
+            and position == layer_pos
+        ):
+            return {"ok": False, "reason": "layer-position-occupied"}
+    # axis: queried position must equal layerPosition - 1
+    if queried["position"] != layer_pos - 1:
+        return {"ok": False, "reason": "base-not-layer-head"}
+    # axis: queried headRefOid must equal resolved base commit
+    if not stack_check.same_commit(queried["headRefOid"], resolved_base_commit):
+        return {"ok": False, "reason": "base-not-layer-head"}
+    return {
+        "ok": True,
+        "stackGate": {
+            "applied": True,
+            "stack": stack_num,
+            "layerPosition": layer_pos,
+            "entryPr": entry_pr,
+            "layerBelowHead": resolved_base_commit,
+        },
+    }
+
+
+def _apply_dependency_gate(
+    stamped_premise,
+    resolved_base_commit,
+    repo_root,
+    env,
+    pr_vet_reader,
+    deadline=None,
+):
+    """Run the dependency gate when the premise names a dependency; GitHub-side and argument-side failures return a refusal dict and raise nothing."""
+    dependency = stamped_premise["dependency"]
+    if deadline is not None and time.monotonic() >= deadline:
+        return {"ok": False, "reason": "dependency-read-unavailable"}
+    scrubbed = ll.scrub_env(env)
+    slug_deadline = None
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "reason": "dependency-read-unavailable"}
+        slug_deadline = remaining
+    repo_name, slug_refusal = stack_check.resolve_repo_slug(
+        repo_root, deadline=slug_deadline, env=scrubbed,
+    )
+    if slug_refusal is not None:
+        detail = slug_refusal.get("detail") or slug_refusal.get("reason")
+        out = {"ok": False, "reason": "dependency-read-unavailable"}
+        if detail:
+            out["detail"] = detail
+        return out
+    if deadline is not None and time.monotonic() >= deadline:
+        return {"ok": False, "reason": "dependency-read-unavailable"}
+    read_deadline = None
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "reason": "dependency-read-unavailable"}
+        read_deadline = remaining
+    pr_state, read_refusal = pr_vet_reader(
+        dependency,
+        repo_name,
+        deadline=read_deadline,
+        env=scrubbed,
+    )
+    if read_refusal is not None:
+        detail = read_refusal.get("detail") or read_refusal.get("reason")
+        out = {"ok": False, "reason": "dependency-read-unavailable"}
+        if detail:
+            out["detail"] = detail
+        return out
+    if pr_state is None:
+        return {"ok": False, "reason": "dependency-read-unavailable"}
+    pr_lifecycle = pr_state["state"]
+    # axis: merged dependency is not gated — trunk base is what merged deps are for
+    if pr_lifecycle == "MERGED":
+        return {
+            "ok": True,
+            "dependencyGate": {"applied": False, "reason": "dependency-not-open"},
+        }
+    # axis: closed-unmerged dependency is stale — the premise cannot resolve by itself
+    if pr_lifecycle == "CLOSED":
+        return {
+            "ok": False,
+            "reason": "dependency-closed-unmerged",
+            "detail": str(dependency),
+        }
+    # Allowlist guarantees OPEN/MERGED/CLOSED only; any other value refuses.
+    if pr_lifecycle != "OPEN":
+        return {
+            "ok": False,
+            "reason": "dependency-read-unavailable",
+            "detail": pr_lifecycle,
+        }
+    # axis: draft dependency is work in flight — verdict is not consulted
+    if pr_state.get("isDraft"):
+        return {
+            "ok": True,
+            "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
+        }
+    verdict, vet_refusal = stack_check.read_vet_verdict(
+        pr_state["body"], pr_state["headRefOid"],
+    )
+    if vet_refusal is not None:
+        out = {"ok": False, "reason": "dependency-read-unavailable"}
+        detail = vet_refusal.get("detail") or vet_refusal.get("reason")
+        if detail:
+            out["detail"] = detail
+        return out
+    # axis: unreadable verdict is never treated as absent — only explicit not-ready passes
+    if verdict != stack_check.VERDICT_READY:
+        return {
+            "ok": True,
+            "dependencyGate": {"applied": False, "reason": "dependency-not-ready"},
+        }
+    head_sha = pr_state["headRefOid"]
+    # axis: READY dependency requires base exactly equal to dependency head
+    if stack_check.same_commit(resolved_base_commit, head_sha):
+        return {
+            "ok": True,
+            "dependencyGate": {
+                "applied": True,
+                "dependency": dependency,
+                "dependencyHead": head_sha,
+                "verdict": verdict,
+            },
+        }
+    return {
+        "ok": False,
+        "reason": "dependency-open-ready-pr",
+        "detail": head_sha,
+    }
+
+
 def launch_build(
     repo_root,
     issue,
@@ -1351,8 +1658,17 @@ def launch_build(
     boundary=None,
     effort=None,
     allow_foreign_instance=False,
+    membership_reader=None,
+    pr_lookup=None,
+    pr_vet_reader=None,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry."""
+    if membership_reader is None:
+        membership_reader = stack_check.read_membership
+    if pr_lookup is None:
+        pr_lookup = _lookup_stack_entry_pr
+    if pr_vet_reader is None:
+        pr_vet_reader = stack_check.read_pr_vet_state
     settle_seconds = _SETTLE_SECONDS if settle_seconds is None else settle_seconds
     max_attempts = _MAX_ATTEMPTS if max_attempts is None else max_attempts
     backoff_seconds = _BACKOFF_SECONDS if backoff_seconds is None else backoff_seconds
@@ -1457,8 +1773,84 @@ def launch_build(
                 )
         return _accounted_fail(reserve_result, reason, launch_id)
 
+    stamped_premise = premise_result["premise"]
+    resolved_base = premise_result["resolvedBaseCommit"]
+    dependency_gate = None
+    if "dependency" in stamped_premise:
+        gate_result = _apply_dependency_gate(
+            stamped_premise,
+            resolved_base,
+            repo_root,
+            env,
+            pr_vet_reader,
+            deadline=deadline,
+        )
+        if not gate_result["ok"]:
+            stage = "dependency"
+            reason = gate_result["reason"]
+            extra = {}
+            if "detail" in gate_result:
+                extra["detail"] = gate_result["detail"]
+            reserve_result = _try_reserve_for_refusal(
+                repo_root, launch_id, issue, stamped_premise,
+                preflight_result, None, env,
+                slot=slot, generation=generation, boundary=boundary,
+                seat_instance=seat["instance"],
+                foreign_instance_allowed=foreign_override,
+            )
+            if reserve_result.get("reserved"):
+                term = _terminalize(
+                    repo_root, launch_id, False, reason, stage=stage, env=env,
+                )
+                if not term["ok"]:
+                    return _accounted_fail(
+                        reserve_result,
+                        _terminalization_reason(term, reason),
+                        launch_id,
+                        **extra,
+                    )
+            return _accounted_fail(reserve_result, reason, launch_id, **extra)
+        dependency_gate = gate_result["dependencyGate"]
+    stack_gate = None
+    if "stack" in stamped_premise:
+        gate_result = _apply_stack_gate(
+            stamped_premise,
+            resolved_base,
+            repo_root,
+            env,
+            pr_lookup,
+            membership_reader,
+            deadline=deadline,
+        )
+        if not gate_result["ok"]:
+            stage = "stack"
+            reason = gate_result["reason"]
+            extra = {}
+            if "detail" in gate_result:
+                extra["detail"] = gate_result["detail"]
+            reserve_result = _try_reserve_for_refusal(
+                repo_root, launch_id, issue, stamped_premise,
+                preflight_result, None, env,
+                slot=slot, generation=generation, boundary=boundary,
+                seat_instance=seat["instance"],
+                foreign_instance_allowed=foreign_override,
+            )
+            if reserve_result.get("reserved"):
+                term = _terminalize(
+                    repo_root, launch_id, False, reason, stage=stage, env=env,
+                )
+                if not term["ok"]:
+                    return _accounted_fail(
+                        reserve_result,
+                        _terminalization_reason(term, reason),
+                        launch_id,
+                        **extra,
+                    )
+            return _accounted_fail(reserve_result, reason, launch_id, **extra)
+        stack_gate = gate_result["stackGate"]
+
     compose_result = compose_launch(
-        repo_root, issue, premise_result["premise"], model=model, doctrine_loader=doctrine_loader,
+        repo_root, issue, stamped_premise, model=model, doctrine_loader=doctrine_loader,
         effort=effort,
     )
     if not compose_result["ok"]:
@@ -1483,7 +1875,7 @@ def launch_build(
                 )
         return _accounted_fail(reserve_result, reason, launch_id)
 
-    stamped = premise_result["premise"]
+    stamped = stamped_premise
     doctrine = compose_result["doctrine"]
     argv = compose_result["argv"]
 
@@ -1774,7 +2166,7 @@ def launch_build(
             reason = _terminalization_reason(term, "retry-deadline-exceeded")
             return _post_reserve_fail(reason)
         if rc is None:
-            return {
+            success = {
                 "ok": True,
                 "reason": None,
                 "launchId": launch_id,
@@ -1789,6 +2181,11 @@ def launch_build(
                 "worktree": worktree_path,
                 "warnings": warnings,
             }
+            if stack_gate is not None:
+                success["stackGate"] = stack_gate
+            if dependency_gate is not None:
+                success["dependencyGate"] = dependency_gate
+            return success
 
         evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
         term = _terminalize(
