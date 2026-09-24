@@ -1,11 +1,23 @@
+import copy
+import importlib.abc
 import importlib.util
+import json
 import os
 import re
+import subprocess
+import sys
 
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_MOD = os.path.join(_HERE, "..", "model_registry.py")
+_LIB = os.path.join(_HERE, "..")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+_MOD = os.path.join(_LIB, "model_registry.py")
+_DA_MOD = os.path.join(_LIB, "dispatch_allowlist.py")
+_DG_MOD = os.path.join(_LIB, "dispatch_guard.py")
+_ED_MOD = os.path.join(_LIB, "engine_dispatch.py")
+_SM_MOD = os.path.join(_LIB, "seat_map.py")
 
 
 def _load():
@@ -15,7 +27,30 @@ def _load():
     return mod
 
 
+def _load_dispatch_allowlist():
+    spec = importlib.util.spec_from_file_location("dispatch_allowlist", _DA_MOD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_seat_map():
+    spec = importlib.util.spec_from_file_location("seat_map", _SM_MOD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_engine_dispatch():
+    spec = importlib.util.spec_from_file_location("engine_dispatch", _ED_MOD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 MR = _load()
+DA = _load_dispatch_allowlist()
+SM = _load_seat_map()
 
 _EXPECTED_DEFAULT_CLAUDE_TIERS = {
     "orchestrator": None,
@@ -114,7 +149,7 @@ def test_codex_effort_for_kind_matches_matrix_and_pilot_floor():
 
 
 def test_model_family():
-    assert MR.model_family("claude", "opus-5") == "anthropic"
+    assert MR.model_family("claude", "opus-5.5") == "anthropic"
     assert MR.model_family("codex", "gpt-5.6-sol") == "openai"
     assert MR.model_family("cursor", "composer-2.5") == "xai"
     assert MR.model_family("cursor", "cursor-grok-4.6") == "xai"
@@ -123,8 +158,8 @@ def test_model_family():
 
 def test_derivation_helpers():
     assert MR.known_claude_models() == ("haiku", "sonnet", "opus", "fable")
-    assert MR.codex_models() == ("gpt-5.6-terra", "gpt-5.6-sol")
-    assert MR.codex_model_strength() == ("gpt-5.6-terra", "gpt-5.6-sol")
+    assert MR.codex_models() == ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra")
+    assert MR.codex_model_strength() == ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra")
     assert MR.codex_pin_roles() == (
         "reviewer",
         "reviewer-deep",
@@ -189,10 +224,10 @@ def test_validate_config_cases():
         False,
         "effort 'high' is not valid for model 'cursor-grok-4.6'",
     )
-    ok, reason = MR.validate_config("claude", "fable-5", "high", allow_override_only=False)
+    ok, reason = MR.validate_config("claude", "fable-5.1", "high", allow_override_only=False)
     assert ok is False and "override" in reason.lower()
-    assert MR.validate_config("claude", "fable-5", "high", allow_override_only=True) == (True, None)
-    ok, reason = MR.validate_config("codex", "fable-5", "high")
+    assert MR.validate_config("claude", "fable-5.1", "high", allow_override_only=True) == (True, None)
+    ok, reason = MR.validate_config("codex", "fable-5.1", "high")
     assert ok is False and "not registered" in reason
 
 
@@ -212,24 +247,24 @@ def test_dispatch_token():
 
 
 def test_escalate():
-    assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-5", "high")
+    assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-5.5", "high")
     assert MR.escalate("cursor", "cursor-grok-4.6", "xhigh") == ("claude", "haiku-4.5", "medium")
-    assert MR.escalate("claude", "fable-5", "high") is None
+    assert MR.escalate("claude", "fable-5.1", "high") is None
 
 
 def test_fable_never_default():
-    assert MR._MODELS["claude"]["fable-5"]["override_only"] is True
+    assert MR._MODELS["claude"]["fable-5.1"]["override_only"] is True
     for role in MR.roles():
         for vendor in MR.vendors():
             cell = MR.matrix_config(role, vendor)
             if cell is not None:
-                assert cell[0] != "fable-5"
+                assert cell[0] != "fable-5.1"
     for vendor in MR.vendors():
         for model_id, _ in MR.ladder(vendor):
-            assert model_id != "fable-5"
+            assert model_id != "fable-5.1"
 
 
-_REVIEW_ROLES = ("reviewer", "reviewer-deep", "verifier")
+_REVIEW_ROLES = ("reviewer", "reviewer-deep", "verifier", "auditor")
 
 
 def test_family_for_review_roles():
@@ -275,8 +310,8 @@ def test_is_allowed():
 
 
 def test_parse_dispatch_token_vendors():
-    assert MR.parse_dispatch_token("claude", "opus") == ("opus-5", None)
-    assert MR.parse_dispatch_token("claude", "fable") == ("fable-5", None)
+    assert MR.parse_dispatch_token("claude", "opus") == ("opus-5.5", None)
+    assert MR.parse_dispatch_token("claude", "fable") == ("fable-5.1", None)
     assert MR.parse_dispatch_token("codex", "gpt-5.6-sol") == ("gpt-5.6-sol", None)
     assert MR.parse_dispatch_token("cursor", "composer-2.5") == ("composer-2.5", None)
     assert MR.parse_dispatch_token("cursor", "cursor-grok-4.6-xhigh") == (
@@ -398,7 +433,7 @@ def test_resolve_dispatch_fail_closed_edges():
     )
     assert r["ok"] is False and "conflicts" in r["reason"]
 
-    r = MR.resolve_dispatch("reviewer", "claude", "fable-5", "high")
+    r = MR.resolve_dispatch("reviewer", "claude", "fable-5.1", "high")
     assert r["ok"] is False and r["reason"]
 
     r = MR.resolve_dispatch("reviewer", "claude", "fable", "high")
@@ -428,7 +463,56 @@ def test_claude_alias_resolution_record_matches_registry_ids():
     assert MR.CLAUDE_ALIAS_RESOLUTION["harness"].startswith("claude-code/")
 
 
-def test_verifier_and_code_fixer_families_match_per_vendor():
+# axis: auditor matrix row is derived from verifier, not an independent literal copy
+def test_auditor_cells_track_verifier_cells():
+    for vendor in MR.vendors():
+        assert MR.matrix_config("auditor", vendor) == MR.matrix_config("verifier", vendor)
+    cell = MR.matrix_config("auditor", "codex")
+    assert cell is not None
+    model_id, effort = cell
+    seat = {"vendor": "codex", "model": model_id, "effort": effort, "role": "auditor"}
+    proc = subprocess.run(
+        [sys.executable, _DG_MOD, "check", "--seat", json.dumps(seat)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+
+
+# axis: legacy journaled claude model ids are compared exactly — no translation at continuation
+def test_continuation_refuses_legacy_claude_label_mismatch():
+    ED = _load_engine_dispatch()
+    opened = {
+        "resolvedInputs": {
+            "engine": "claude",
+            "model": "opus-5",
+            "effort": "xhigh",
+            "role": "reviewer-deep",
+        }
+    }
+    seat = {
+        "vendor": "claude",
+        "model": "opus-5.5",
+        "effort": "xhigh",
+        "role": "reviewer-deep",
+    }
+    assert ED._continuation_seat_mismatch(opened, seat) == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+    seat_diff = {
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "effort": "xhigh",
+        "role": "reviewer-deep",
+    }
+    assert ED._continuation_seat_mismatch(opened, seat_diff) == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+
+
+# axis: legacy claude model ids stay unregistered and honored nowhere
+def test_legacy_claude_model_ids_stay_unregistered():
+    assert MR.validate_config("claude", "opus-5", "xhigh")[0] is False
+
+
+def test_auditor_and_code_fixer_families_match_per_vendor():
     """This invariant is what makes round_driver._auditor_vendor's same-vendor fallback unreachable
     (#652 rider 4a). If a future registry change breaks the invariant, the fallback becomes reachable
     again and the deleted branch must be reconsidered — so this test failing is a design signal,
@@ -437,15 +521,15 @@ def test_verifier_and_code_fixer_families_match_per_vendor():
     assert vendors, "model_registry.vendors() must be non-empty for this invariant"
     for vendor in vendors:
         fixer_fam = MR.family_for("code-fixer", vendor)
-        verifier_fam = MR.family_for("verifier", vendor)
+        auditor_fam = MR.family_for("auditor", vendor)
         assert fixer_fam is not None, (
             f"code-fixer family_for({vendor!r}) returned None — invariant cannot be evaluated"
         )
-        assert verifier_fam is not None, (
-            f"verifier family_for({vendor!r}) returned None — invariant cannot be evaluated"
+        assert auditor_fam is not None, (
+            f"auditor family_for({vendor!r}) returned None — invariant cannot be evaluated"
         )
-        assert verifier_fam == fixer_fam, (
-            vendor, fixer_fam, verifier_fam,
+        assert auditor_fam == fixer_fam, (
+            vendor, fixer_fam, auditor_fam,
         )
 
 
@@ -499,3 +583,209 @@ def test_claude_dispatch_tokens_excludes_fable_override_only():
 def test_claude_dispatch_tokens_round_trip_through_parse_dispatch_token():
     for token in MR.claude_dispatch_tokens():
         assert MR.parse_dispatch_token("claude", token) is not None, token
+
+
+# Pre-child head of this work item's child.
+_PRE_CHILD_HEAD = "aaf27b8089159c2ea4020b03ccbddcd263c57e8a"
+_REGISTRY_PATH = "plugins/superheroes/lib/model_registry.py"
+
+
+class _GitShowLoader(importlib.abc.Loader):
+    def __init__(self, source):
+        self._source = source
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        exec(compile(self._source, "<git-show>", "exec"), module.__dict__)
+
+
+def _load_model_registry_at_sha(sha):
+    toplevel = subprocess.run(
+        ["git", "-C", _HERE, "rev-parse", "--show-toplevel"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    try:
+        proc = subprocess.run(
+            ["git", "-C", toplevel, "show", f"{sha}:{_REGISTRY_PATH}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise AssertionError(
+            "commit %s is not available in this checkout — "
+            "fetch full history (fetch-depth: 0) to run the git-baseline test"
+            % sha
+        ) from exc
+    name = f"_model_registry_snapshot_{sha[:12]}"
+    spec = importlib.util.spec_from_loader(name, _GitShowLoader(proc.stdout))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_LEGACY_MATRIX_MODEL_IDS = {"opus-5": "opus-5.5", "fable-5": "fable-5.1"}
+
+
+def _matrix_cell_after_legacy_translate(vendor, cell):
+    if cell is None:
+        return None
+    model_id, effort = cell
+    if vendor == "claude":
+        model_id = _LEGACY_MATRIX_MODEL_IDS.get(model_id, model_id)
+    return (model_id, effort)
+
+
+# axis: reviewer-deep, reviewer, and verifier matrix cells at the live registry match the pre-child head baseline.
+def test_matrix_cells_reviewer_roles_unchanged_at_base():
+    base = _load_model_registry_at_sha(_PRE_CHILD_HEAD)
+    compared = 0
+    for role in ("reviewer-deep", "reviewer", "verifier"):
+        for vendor in ("claude", "codex", "cursor"):
+            live = MR.matrix_config(role, vendor)
+            baseline = base.matrix_config(role, vendor)
+            assert _matrix_cell_after_legacy_translate(vendor, live) == (
+                _matrix_cell_after_legacy_translate(vendor, baseline)
+            )
+            compared += 1
+    assert compared == 9
+
+
+def _plant_probe_pending_astra(monkeypatch):
+    models = copy.deepcopy(MR._MODELS)
+    astra = dict(models["codex"]["gpt-6-astra"])
+    astra["registration"] = "probe-pending"
+    models["codex"]["gpt-6-astra"] = astra
+    monkeypatch.setattr(MR, "_MODELS", models)
+
+
+def test_registered_astra_on_reviewer_deep_allowlist_and_probe_role_admits():
+    assert MR.allowlist("reviewer-deep", "codex") == (
+        MR.matrix_config("reviewer-deep", "codex"),
+        ("gpt-6-astra", "high"),
+    )
+    assert MR.allowlist("registration-probe", "codex") == (("gpt-6-astra", "high"),)
+    assert MR.ladder("codex")[-1] == ("gpt-6-astra", "high")
+    assert MR.codex_effort_for_kind("review") == MR.matrix_config("reviewer", "codex")[1]
+    r = MR.resolve_dispatch("registration-probe", "codex")
+    assert r["ok"] is True
+    assert r["effort"] == "high"
+
+
+def test_registered_astra_accepted_on_reviewer_deep_explicit_dispatch():
+    r = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-6-astra", None)
+    assert r["ok"] is True
+    assert r["effort"] == "high"
+    assert r["effort_source"] == "resolved-unique"
+
+
+def test_escalate_from_sol_xhigh_returns_registered_astra():
+    result = MR.escalate("codex", "gpt-5.6-sol", "xhigh")
+    assert result == ("codex", "gpt-6-astra", "high")
+
+
+def test_planted_probe_pending_astra_hidden_from_ladder_and_allowlist(monkeypatch):
+    _plant_probe_pending_astra(monkeypatch)
+    assert ("gpt-6-astra", "high") not in MR.ladder("codex")
+    assert MR.allowlist("reviewer-deep", "codex") == (
+        MR.matrix_config("reviewer-deep", "codex"),
+    )
+
+
+def test_codex_pin_verdict_planted_pending_astra_on_reviewer_deep(monkeypatch):
+    _plant_probe_pending_astra(monkeypatch)
+    ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+    assert ok is False
+    assert reason.startswith("pin-probe-pending:")
+
+
+def test_codex_pin_verdict_registered_astra_on_reviewer_deep():
+    ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+    assert ok is True
+    assert reason is None
+    ok_sol, _ = MR.codex_pin_verdict("reviewer-deep", "gpt-5.6-sol")
+    assert ok_sol is True
+    r_sol = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-5.6-sol", None)
+    assert r_sol["ok"] is True
+    assert r_sol["effort"] == "xhigh"
+
+
+def test_codex_pin_verdict_astra_on_reviewer_refused_pin_role():
+    ok, reason = MR.codex_pin_verdict("reviewer", "gpt-6-astra")
+    assert ok is False
+    assert reason.startswith("pin-role-not-eligible:")
+
+
+def test_codex_pin_verdict_refuses_pins_off_the_role_allowlist():
+    ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-5.6-terra")
+    assert ok is False
+    assert reason.startswith("pin-not-on-allowlist:")
+    assert "(gpt-5.6-sol, xhigh)" in reason
+    ok, reason = MR.codex_pin_verdict("pilot", "gpt-5.6-terra")
+    assert ok is False
+    assert reason.startswith("pin-not-on-allowlist:")
+
+
+@pytest.mark.parametrize("registry_state", ["registered-astra", "planted-probe-pending"])
+def test_pin_judges_agree_writer_guard_and_composer(monkeypatch, registry_state):
+    # bite-axis: one judge — writer, composer and guard agree on every codex role pin in both registry states
+    if registry_state == "planted-probe-pending":
+        models = copy.deepcopy(MR._MODELS)
+        astra = dict(models["codex"]["gpt-6-astra"])
+        astra["registration"] = "probe-pending"
+        models["codex"]["gpt-6-astra"] = astra
+        monkeypatch.setattr(MR, "_MODELS", models)
+        monkeypatch.setattr(SM.model_registry, "_MODELS", models)
+        monkeypatch.setattr(DA.model_registry, "_MODELS", models)
+    carve_out_count = 0
+    for role in MR.codex_pin_roles():
+        for model in MR.codex_models():
+            ok, reason = MR.codex_pin_verdict(role, model)
+            guard_accepts = DA.validate(role, "codex", model, None)["ok"]
+            if ok is False and reason.startswith("pin-role-not-eligible:"):
+                carve_out_count += 1
+            else:
+                assert ok == guard_accepts
+            if role in SM.panel_pin_tiers():
+                _m, _e, info = SM._cell(role, "codex", {role: model})
+                assert info["honored"] == ok
+    if registry_state == "planted-probe-pending":
+        assert carve_out_count == 0
+        ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+        assert ok is False
+        assert reason.startswith("pin-probe-pending:")
+        model, effort, info = SM._cell("reviewer-deep", "codex", {"reviewer-deep": "gpt-6-astra"})
+        assert (model, effort) == ("gpt-5.6-sol", "xhigh")
+        assert info["honored"] is False
+    else:
+        assert carve_out_count == len(MR.codex_pin_roles()) - 1
+        ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+        assert ok is True
+        assert reason is None
+        model, effort, info = SM._cell("reviewer-deep", "codex", {"reviewer-deep": "gpt-6-astra"})
+        assert (model, effort) == ("gpt-6-astra", "high")
+        assert info["honored"] is True
+
+
+def test_codex_pin_verdict_non_str_inputs():
+    ok, reason = MR.codex_pin_verdict(42, "gpt-5.6-sol")
+    assert ok is False
+    assert "unknown role" in reason
+    ok, reason = MR.codex_pin_verdict("reviewer", 123)
+    assert ok is False
+    assert "unknown model" in reason
+
+
+def test_host_family_table():
+    assert MR.host_family("claude-opus-5") == "anthropic"
+    assert MR.host_family("opus") == "anthropic"
+    assert MR.host_family("gpt-6-astra") == "openai"
+    assert MR.host_family("composer-2.5") == "xai"
+    assert MR.host_family("") is None
+    assert MR.host_family(None) is None
+    assert MR.host_family(123) is None
+    assert MR.host_family("mystery") is None
