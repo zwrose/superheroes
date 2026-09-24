@@ -76,8 +76,58 @@ above, plus the shared native family `native-result-missing`, `native-result-ove
 `marker-channel-retired`; the adapter
 refusals `unregistered-engine-model`, `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
 
-Not in this release: the launcher's hand-built argv retiring into the adapter, the watcher and
-the steer channel.
+Not in this release: the watcher and the steer channel.
+
+### Builder lanes launch as background sessions
+
+The launcher no longer builds a claude argv. A builder launch asks the adapter for the `builder`
+role kind, which is valid only with `claudeMode: "background"`. The argv is
+`claude --bg --model <tok> [--effort <e>] -- <prompt>`, with no `--restricted` and no
+`--permission-mode`: a builder runs under the target instance's own settings. `builder` in any
+other mode refuses `builder-requires-background`, and on codex or cursor it refuses
+`claude-mode-unsupported`. The `agents`/`stop` argv comes from `engine_adapter.claude_cli_argv`,
+so no module but the adapter mints a claude argv.
+
+The launch is graded on the session it opened, never on the acknowledgement. The session must be
+listed by `claude agents --json --all --cwd <worktree>` under the lane's config root, in that
+worktree, with a `pid` and a `sessionId`. Short of that, the launch refuses with the
+`lib/background_outcome.py` tokens: `background-launch-failed` (a nonzero or timed-out
+acknowledgement), `background-launch-unacknowledged`, `background-agents-unreadable` or
+`background-session-unlisted`. A refusal after the acknowledgement stops the session first. It is
+recorded as `refused` only once the stop is confirmed. An unconfirmed stop leaves a `started` lane
+(when the pid is known) or a reserved-only lane, and the result names `backgroundId`.
+
+A config root that does not exist refuses `config-dir-unusable:not-a-directory`, and one that
+cannot be derived refuses `config-dir-unusable:unresolvable`. Both checks run before reservation and
+again at spawn, so a relative `CLAUDE_CONFIG_DIR`, which resolves inside a worktree that does not
+exist yet, now refuses. `launch-foreign-instance-pin` and `--allow-foreign-instance` are unchanged.
+
+**Ledger shape (older readers fold it unchanged):**
+
+- `started.pid` is the background session's pid, not the acknowledging process's.
+- `started` gains three optional fields:
+  - `backgroundId`: eight lowercase hex characters.
+  - `sessionId`: a UUID that begins with `backgroundId`.
+  - `envPins`: `CLAUDE_CONFIG_DIR`, equal to `reserved.configDir`, plus `CLAUDE_CODE_EFFORT_LEVEL`
+    when pinned.
+- `reserved.sessionId` is no longer written, because `--bg` assigns the id. The new fold takes the
+  lane's `sessionId` from `started` and refuses a disagreeing `reserved.sessionId`.
+- The launch result gains `backgroundId` and `sessionId`, and its `pid` is the session's.
+- A session that dies in the settle window terminalizes as `settle-session-exited` (evidence
+  `session-exited`). That replaces `settle-exit-zero-uncertain` and `settle-nonzero-exit`, because
+  the session is not the launcher's child and its exit code is not observable.
+
+**What an older checkout's reader meets:**
+
+- It reads the lane live while the session runs.
+- It can no longer resolve a new lane's transcript for the watcher's second chance, so a stale lane
+  stays stale.
+- Its `record-outcome` refuses `terminal-child-live:<pid>` until the session is stopped, because a
+  background session idles alive after its turn. `claude stop <backgroundId>` under the lane's
+  config root clears it.
+
+`seat_canary probe` accepts `--engine claude --claude-mode {print,background}`, and its
+`evidence.engagementSource` names where `toolCalls` came from (`claude-transcript` for background).
 
 ### Astra and the codex role pin
 

@@ -269,7 +269,12 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — load-bearing spine for declare-batch, launch, record-outcome, and amend;
-  wave_watch and heartbeat read the ledger it writes.
+  wave_watch and heartbeat read the ledger it writes. Builder lanes now launch as `claude --bg`
+  sessions through the adapter's `builder` role (C14 layer 4a). The inventory entry for the
+  hand-built claude argv is retired because its delete-when fired: no module but the adapter mints
+  a claude argv, and a census test holds that. The detached-spawn and own-worktree markers stay as
+  keeps: the launcher now spawns the background shape their conditions name, but each condition
+  turns on a re-run of the background-session trial against that path.
 
 #### B2 — wave_watch (loop watcher + re-arm doctrine)
 
@@ -1856,10 +1861,6 @@ file, returns exactly that set.
 - `plugins/superheroes/lib/launcher.py` — launcher refuses spawn when cwd is the primary checkout
   (own-worktree). **delete-when:** the background-session trial receipt marks launcher worktree
   enforcement not needed.
-- `plugins/superheroes/lib/launcher.py` — the launcher's hand-built claude -p argv (spawn path)
-  duplicates the engine adapter's claude branch until the migration layer folds it in.
-  **delete-when:** the launcher's builder launch goes through engine_adapter.build_argv_result for
-  vendor claude (a grep for the hand-built argv returns nothing).
 - `plugins/superheroes/lib/pilot_conformance_runtime.py` — env-var transport of connection detail
   across multi-account ownership probes. **delete-when:** the background-session trial receipt marks
   multi-account provisioning transport not needed.

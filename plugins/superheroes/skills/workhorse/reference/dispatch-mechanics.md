@@ -244,6 +244,17 @@ with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>` (`engine-started.env` records both
 uses `engagement.source: "claude-stream"`, `telemetry: "tool-calls"`; distinct `tool_use` block
 ids across `assistant` events are counted, excluding the `StructuredOutput` call.
 
+**Builder lanes are background sessions too, but launched, not dispatched.** The launcher asks the
+adapter for the `builder` role kind: `claude --bg --model <tok> [--effort <e>] -- <prompt>`, with
+no `--restricted` and no `--permission-mode`. It then grades the launch by the same rule, so an
+acknowledgement alone is not a lane. The session must be listed under the lane's config root, in
+the lane's worktree, with a pid and a session id.
+
+The ledger's `started.pid` is that **session's** pid. That is what every watcher probes, and it
+stays alive after the session goes idle at the end of its turn. So `record-outcome` refuses
+`terminal-child-live:<pid>` until the lane is stopped with `claude stop <backgroundId>` under its
+config root. `backgroundId`, `sessionId` and the env pins ride the `started` record.
+
 On the native channel, the output adapter reads a typed result file validated against the declared
 schema at `<run-dir>/native-schema.json`. Admission is engine-neutral: the schema on disk must equal
 the declared one (`native-schema-unreadable` otherwise); the file must be a regular file within the

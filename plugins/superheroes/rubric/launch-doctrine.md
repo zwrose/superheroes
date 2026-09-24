@@ -172,12 +172,16 @@ handoff — both halves run, neither replaces the other.
 
 ### Pin the transcript; never re-discover it
 
+A lane launched as a background session names its own transcript. Its `started.sessionId` is
+the file `projects/*/<sessionId>.jsonl` under the lane's `reserved.configDir`, so pin that file
+directly. The grep below is for lanes whose record carries no session id.
+
 Map a builder to its transcript by grepping the **first 4KB** of each transcript file for the
 **issue token** the launch prompt carries. The token match must be **unique before you pin** — more
 than one match is a signal to disambiguate, not to pick one. The launch ledger records each dispatch's
 **pid** and **logPath** at start — **pid** identifies the **process**, not the transcript; it is the
 right handle for the liveness read in the next sub-section. **logPath** is the child process's stdout
-log, not a transcript identifier. The launcher records **no transcript identifier** — when the token
+log, not a transcript identifier. Without a recorded session id there is **no transcript identifier** — when the token
 match is not unique, disambiguate by **reading the candidates' content** (which one carries this
 build's actual work), not by recency — and **never** by taking the newest file. Once uniquely matched,
 **pin that file path** and use it for the rest of the run. **Never
