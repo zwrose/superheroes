@@ -147,8 +147,10 @@ def repo_identity_memo():
         stack.pop()
 
 
-def repo_root(cwd):
+def repo_root(cwd, *, env=None):
     """Fail-closed repository root for ``cwd`` (issue #742)."""
+    if env is not None:
+        return _repo_root_uncached(cwd, env=env)
     memo = _active_repo_identity_memo()
     if memo is not None:
         if cwd in memo["root"]:
@@ -166,8 +168,11 @@ def repo_root(cwd):
     return resolved
 
 
-def _repo_root_uncached(cwd):
-    res = run_git_result(cwd, "rev-parse", "--show-toplevel")
+def _repo_root_uncached(cwd, *, env=None):
+    if env is None:
+        res = run_git_result(cwd, "rev-parse", "--show-toplevel")
+    else:
+        res = run_git_result(cwd, "rev-parse", "--show-toplevel", env=env)
     if res.status == GIT_UNAVAILABLE:
         raise RepoRootUnavailable(
             "git could not be run at %s: %s" % (cwd, res.detail),
@@ -259,13 +264,16 @@ def git_dot_entry_ancestor(cwd):
         path = parent
 
 
-def run_git_result(cwd, *args):
+def run_git_result(cwd, *args, env=None):
     """`run_git` plus WHY there is no output (issue #699 rider 11).
 
     ``GIT_DECLINED`` means git ran and answered no — callers may believe it. ``GIT_UNAVAILABLE``
     means git never ran (missing binary, OSError, timeout), so a caller that would otherwise fall
     back to a default must fail closed instead: it has no answer, not a negative one."""
-    env = dict(os.environ)
+    if env is None:
+        env = dict(os.environ)
+    else:
+        env = dict(env)
     env["LC_ALL"] = "C"
     env["LANGUAGE"] = "C"  # stderr messages only; path output is locale-independent
     try:
@@ -280,7 +288,8 @@ def run_git_result(cwd, *args):
 
 def run_git(cwd, *args):
     """Run git with an argv array + timeout. Return stdout (stripped) or None.
-    Thin wrapper over `run_git_result` — see it for the failure distinction."""
+    Thin wrapper over `run_git_result` — see it for the failure distinction.
+    For an explicit environment, use ``run_git_result``."""
     return run_git_result(cwd, *args).out
 
 
@@ -289,7 +298,8 @@ def get_remote_result(cwd):
 
     ``status`` is the ``run_git_result`` status: ``GIT_OK``/``GIT_DECLINED`` are authoritative
     answers a caller may cache; ``GIT_UNAVAILABLE`` means git never ran, so the "no remote" is
-    unknown, not negative, and must never be memoized as fact."""
+    unknown, not negative, and must never be memoized as fact.
+    For an explicit environment, use ``run_git_result``."""
     res = run_git_result(cwd, "remote", "get-url", "origin")
     return normalize_remote(res.out), res.status
 
