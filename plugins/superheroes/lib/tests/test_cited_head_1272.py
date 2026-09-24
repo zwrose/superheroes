@@ -24,6 +24,7 @@ from test_recorded_row_chokepoint_1272 import (  # noqa: E402
     _advance,
     _land,
     _pending,
+    RUNNER_SEAT_MAP,
     _record_all_panel_seats,
     _result_envelope,
     _session,
@@ -618,7 +619,7 @@ def _at_run_verify(tmp_path, session_dir):
 
 
 def test_orchestrator_fulfilled_declares_order_anchor_cited_head_source(tmp_path, adapters):
-    d = _session(tmp_path)
+    d = _session(tmp_path, seatMap=RUNNER_SEAT_MAP)
     _at_run_verify(tmp_path, d)
     pend = _pending(d)
     skey = RR.storage_key("verify")

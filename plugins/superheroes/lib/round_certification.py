@@ -87,17 +87,11 @@ ORDERS_DIRNAME = "orders"
 
 BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND = "execution-evidence-head-unbound"
 BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE = "certified-head-unresolvable"
-BINDING_FAILURE_NO_RUNNER_PROVEN_PANEL_SEAT = "no-runner-proven-panel-seat"
 
 # What proves a recorded seat ran, as each receipt seat row names it (#1272 layer 4a).
 SEAT_PROOF_RUNNER_RECORD = "runner-record"
 SEAT_PROOF_HAND_LANDED = "hand-landed-evidence"
 SEAT_PROOF_NONE_HOST_SEAT = "none-host-seat"
-# Phases whose output can never clear a finding: the finders only add findings. Only these may sit
-# out of the certified panel. A verifier can REFUTE; a synthesis grouping can merge a confirmed
-# finding under a representative the author-justification filter then drops; audits and the fixer
-# carry their own proof obligations — none of them is ever exempt.
-HOST_SEAT_EXEMPT_PHASES = frozenset((PANEL_PHASE, "dispatch-scoped-finder", "dispatch-gap-sweep"))
 
 RECEIPT_FORM_CERTIFIED = receipt_disclosures.RECEIPT_FORM_CERTIFIED
 VENDOR_SOURCE_DEFAULTED = "defaulted"
@@ -122,10 +116,7 @@ def _certification_shape(state, seats):
     cert = state.get("certification") or {}
     shape = cert.get("shape")
     hand_landed = any(s.get("provenance") == PROVENANCE_HAND_LANDED for s in seats)
-    # A panel seat out of the certified panel means the panel that certifies is not the full one.
-    host_panel = any(s.get("phase") == PANEL_PHASE and s.get("proof") == SEAT_PROOF_NONE_HOST_SEAT
-                     for s in seats)
-    if hand_landed or host_panel:
+    if hand_landed:
         if shape == "full-panel-confirmed":
             return "audited-chain"
         if isinstance(shape, str) and shape.startswith("full-panel"):
@@ -836,15 +827,12 @@ def _seat_carries_execution_evidence(ctx, seat_entry):
     return True
 
 
-def uncertified_host_seat(ctx, seat_entry):
-    """True when a recorded seat sits OUT of the certified panel: the driver handed it the host
-    channel (its authenticated orders manifest says so — a vendor label alone is not host evidence)
-    and it carries no execution evidence. Such a seat proves nothing about having run, so no
-    certification rests on it and the receipt names it. Only a phase whose output cannot clear a
-    finding may sit out (``HOST_SEAT_EXEMPT_PHASES``)."""
-    # axis: only a manifest-recorded host channel with evidence absent leaves the certified panel
-    if seat_entry.get("phase") not in HOST_SEAT_EXEMPT_PHASES:
-        return False
+def host_seat_without_evidence(ctx, seat_entry):
+    """True when a recorded seat was handed the host channel (its authenticated orders manifest
+    says so — a vendor label alone is not host evidence) and carries no execution evidence. It
+    only LABELS the seat on the receipt: no certification check skips it, so such a seat still
+    refuses `unrun-review` wherever proof is required. The driver keeps such seats off every
+    runner-proof phase at seat time; synthesis is the one host seat left."""
     if seat_entry.get("provenance") not in RECEIPT_PROVENANCE:
         return False
     if _seat_carries_execution_evidence(ctx, seat_entry):
@@ -852,25 +840,6 @@ def uncertified_host_seat(ctx, seat_entry):
     entry = _manifest_seat_entry(ctx, seat_entry)
     return (isinstance(entry, dict)
             and entry.get("channel") == session_contract.SEAT_CHANNEL_HOST)
-
-
-def _panel_round_without_runner_proof(ctx, seats):
-    """A refusal when some panel round's every seat sits out of the certified panel — exclusion
-    never leaves a round certified on nothing."""
-    by_round = {}
-    for seat_entry in seats:
-        if seat_entry.get("phase") == PANEL_PHASE:
-            by_round.setdefault(seat_entry["round"], []).append(seat_entry)
-    for rnd in sorted(by_round, key=str):
-        if all(uncertified_host_seat(ctx, s) for s in by_round[rnd]):
-            return _refusal(
-                "unrun-review",
-                by_round[rnd][0]["seat"],
-                "panel round %s has no seat whose run is proven; every seat is a host seat "
-                "without execution evidence" % (rnd,),
-                binding_failure=BINDING_FAILURE_NO_RUNNER_PROVEN_PANEL_SEAT,
-            )
-    return None
 
 
 def _journal_open_seats(journal, session_dir=None):
@@ -1225,8 +1194,6 @@ def check_unrun_review(ctx):
         slot_nonces = _journal_recorded_runner_nonces_for_slot(
             journal, seat, phase, attempt, occurrence, rnd
         )
-        if uncertified_host_seat(ctx, seat_entry):
-            continue
         if provenance not in RECEIPT_PROVENANCE:
             if provenance == PROVENANCE_ORCHESTRATOR_FULFILLED:
                 return _refusal(
@@ -1303,7 +1270,7 @@ def check_unrun_review(ctx):
                     "hand-landed seat lacks qualifying execution-evidence binding",
                     binding_failure=binding,
                 )
-    return _panel_round_without_runner_proof(ctx, seats)
+    return None
 
 
 def check_same_family_seat(ctx):
@@ -1772,8 +1739,6 @@ def check_hand_landed_read_engaged(ctx):
     for seat_entry in _collect_seats(ctx):
         if seat_entry.get("provenance") != PROVENANCE_HAND_LANDED:
             continue
-        if uncertified_host_seat(ctx, seat_entry):
-            continue
         env, path = _load_envelope(
             session_dir,
             seat_entry["round"],
@@ -1815,8 +1780,6 @@ def check_evidence_head_bound(ctx):
         )
     for seat_entry in _collect_seats(ctx):
         if seat_entry.get("provenance") != PROVENANCE_DISPATCH_OBSERVED:
-            continue
-        if uncertified_host_seat(ctx, seat_entry):
             continue
         cited_head = seat_entry.get("citedHead")
         if cited_head:
@@ -2090,7 +2053,7 @@ def _receipt_seat_row(ctx, seat_entry):
         "attempt": seat_entry["attempt"],
         "provenance": seat_entry.get("provenance"),
     }
-    if uncertified_host_seat(ctx, seat_entry):
+    if host_seat_without_evidence(ctx, seat_entry):
         row["proof"] = SEAT_PROOF_NONE_HOST_SEAT
     elif seat_entry.get("provenance") == PROVENANCE_DISPATCH_OBSERVED:
         row["proof"] = SEAT_PROOF_RUNNER_RECORD
@@ -2109,7 +2072,7 @@ def _receipt_seat_row(ctx, seat_entry):
 def _uncertified_seat_disclosures(ctx):
     out = []
     for seat_entry in _collect_seats(ctx):
-        if uncertified_host_seat(ctx, seat_entry):
+        if host_seat_without_evidence(ctx, seat_entry):
             entry = _manifest_seat_entry(ctx, seat_entry) or {}
             out.append({"seat": seat_entry["seat"], "phase": seat_entry["phase"],
                         "round": seat_entry["round"], "attempt": seat_entry["attempt"],

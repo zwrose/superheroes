@@ -30,6 +30,10 @@ DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
 HEAD_SHA = "abc123def4567890abcdef1234567890abcdef12"
 SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
                       for dim in RD.DIMENSIONS}}
+# A confirmation panel on a durable-record session seats only runner vendors (#1272 layer 4a,
+# seat-time runner proof); tests that fold past round 1 on that path run this map.
+RUNNER_SEAT_MAP = {"seats": {dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+                             for dim in RD.DIMENSIONS}}
 
 
 class FakeAdapters(object):

@@ -159,26 +159,57 @@ def test_l4a_2_audit_targets_carry_the_seated_verifier_cell():
         ("codex",) + tuple(RD.model_registry.matrix_config("verifier", "codex"))]
 
 
-def test_l4a_2_transport_fault_refuses_a_durable_audit_seat_off_the_runner():
+_SEAT_TIME = RD.SEAT_NO_RUNNER_RECORD_CAUSE
+
+
+def test_l4a_2_transport_fault_refuses_every_durable_runner_proof_seat_off_the_runner():
+    # axis: every runner-proof phase, one token — a claude or absent vendor refuses at seat time
     state = _durable_state(vendors=["claude"], fixerVendor="claude")
-    for vendor in ("claude", None, ""):
-        assert RD._seat_transport_fault({"vendor": vendor}, "t1", RD.P_AUDITS, state) == (
-            "auditor-no-runner-record:%s" % (vendor if isinstance(vendor, str) else repr(vendor)))
-    for vendor in ("codex", "cursor"):
-        assert RD._seat_transport_fault({"vendor": vendor}, "t1", RD.P_AUDITS, state) is None
+    assert RD.RUNNER_PROOF_PHASES == frozenset((
+        RD.P_PANEL, RD.P_VERIFIERS, RD.P_SCOPED, RD.P_GAPSWEEP, RD.P_AUDITS))
+    for phase in sorted(RD.RUNNER_PROOF_PHASES):
+        for vendor in ("claude", None, ""):
+            assert RD._seat_transport_fault({"vendor": vendor}, "s", phase, state) == (
+                "seat-no-runner-record:%s"
+                % (vendor if isinstance(vendor, str) else repr(vendor))), (phase, vendor)
+        for vendor in ("codex", "cursor"):
+            assert RD._seat_transport_fault({"vendor": vendor}, "s", phase, state) is None
 
 
-def test_l4a_2_transport_fault_leaves_other_phases_and_hand_sessions_alone():
+def test_l4a_2_single_seat_phases_seat_a_runner_vendor_on_a_durable_session(tmp_path):
+    # the auditor rule, widened: the reviewer engine resolves to claude here (no core.md), so a
+    # durable session seats the live runner vendor outside the fixer's family instead
+    repo_root = str(tmp_path)
+    durable = _durable_state(vendors=["claude", "codex"], fixerVendor="claude")
+    hand = dict(durable, _submitUsed=True)
+    only_claude = _durable_state(vendors=["claude"], fixerVendor="claude")
+    for phase in (RD.P_VERIFIERS, RD.P_SCOPED, RD.P_GAPSWEEP):
+        row = RD._seat_transport_row(durable, phase, "s", 0, durable["config"], {}, repo_root)
+        assert row["vendor"] == "codex", (phase, row)
+        assert RD._seat_transport_fault(row, "s", phase, durable) is None
+        assert RD._seat_channel(phase, row) == RD.CHANNEL_STDOUT
+        kept = RD._seat_transport_row(hand, phase, "s", 0, hand["config"], {}, repo_root)
+        assert kept["vendor"] == "claude", (phase, kept)
+        none = RD._seat_transport_row(only_claude, phase, "s", 0, only_claude["config"], {},
+                                      repo_root)
+        assert RD._seat_transport_fault(none, "s", phase, only_claude) == (
+            "seat-no-runner-record:claude")
+
+
+def test_l4a_2_transport_fault_leaves_synthesis_the_fixer_and_hand_sessions_alone():
     durable = _durable_state(vendors=["claude"], fixerVendor="claude")
     hand = dict(durable, _submitUsed=True)
     library = dict(durable, _advanceUsed=False)
-    assert RD._seat_transport_fault({"vendor": "claude"}, "s", RD.P_PANEL, durable) is None
-    assert RD._seat_transport_fault({"vendor": "claude"}, "t1", RD.P_AUDITS, hand) is None
-    assert RD._seat_transport_fault({"vendor": "claude"}, "t1", RD.P_AUDITS, library) is None
+    assert RD._seat_transport_fault({"vendor": "claude"}, "s", RD.P_SYNTHESIS, durable) is None
+    assert RD._seat_transport_fault({"vendor": "claude"}, "f", RD.P_FIXER, durable) is None
+    for phase in sorted(RD.RUNNER_PROOF_PHASES):
+        assert RD._seat_transport_fault({"vendor": "claude"}, "s", phase, hand) is None
+        assert RD._seat_transport_fault({"vendor": "claude"}, "s", phase, library) is None
 
 
-def test_l4a_2_a_claude_only_durable_session_refuses_the_audit_order_before_dispatch(tmp_path):
-    # axis: the refusal lands when the audit order is emitted — nothing to record, nothing lost
+def test_l4a_2_a_claude_only_durable_session_refuses_the_first_gated_order_before_dispatch(tmp_path):
+    # axis: the refusal lands when the order is emitted — nothing to record, nothing lost. The
+    # round-1 panel precedes the path latch; the verifiers are the first order after it.
     session_dir, gitdir, head_path = _TDI._bootstrap(tmp_path, name="claude-only",
                                                      vendors=["claude"], fixerVendor="claude")
     findings = [_TDI._blocking_finding("unchecked index", 2)]
@@ -188,19 +219,20 @@ def test_l4a_2_a_claude_only_durable_session_refuses_the_audit_order_before_disp
         seen, out = exc.args[0]
     else:
         raise AssertionError("the claude-only durable session reached dispatch-audits")
-    assert seen == RD.P_FIXER
+    assert seen == RD.P_PANEL
     assert out["ok"] is False and out["reason"] == "order-render-refused"
-    assert out["detail"].endswith(":auditor-no-runner-record:claude"), out
+    assert out["detail"].endswith(":seat-no-runner-record:claude"), out
     state = _TDI._state(session_dir)
-    # the fixer folded; the audit step was never handed out, and asking again refuses again
-    assert state.get("pending") is None and state["step"] == RD.P_AUDITS
+    # the panel folded; the verifier step was never handed out, and asking again refuses again
+    assert state.get("pending") is None and state["step"] == RD.P_VERIFIERS
     again = RD.cmd_next(session_dir)
     assert again["ok"] is False and again["detail"] == out["detail"]
-    audits_dir = os.path.join(session_dir, "round-%d" % state["round"], "orders", RD.P_AUDITS)
-    assert not os.path.exists(audits_dir)
+    verifiers_dir = os.path.join(session_dir, "round-%d" % state["round"], "orders",
+                                 RD.P_VERIFIERS)
+    assert not os.path.exists(verifiers_dir)
 
 
-# --- item 3: a host seat with no execution evidence sits out of the certified panel ---------------
+# --- item 3: a host seat never certifies; the receipt names an unproven one ----------------------
 
 import round_certification as RC  # noqa: E402
 import round_records as RR  # noqa: E402
@@ -261,15 +293,31 @@ def _session_with_host_seat(tmp_path, name="host", manifest=None, tamper=None,
     return session_dir
 
 
-def test_l4a_3_a_host_seat_without_evidence_leaves_the_panel_and_the_receipt_names_it(tmp_path):
+def test_l4a_3_a_mixed_panel_with_an_unproven_host_lens_refuses(tmp_path):
+    # axis: round 4's Critical — one runner-proven lens never certifies an unproven configured one
     receipt, refusal = RC.certify(_session_with_host_seat(tmp_path))
-    assert refusal is None, refusal
-    rows = {r["seat"]: r for r in receipt["seats"]}
+    assert receipt is None
+    assert (refusal["class"], refusal["artifact"], refusal["bindingFailure"]) == (
+        "unrun-review", _HOST, "execution-evidence-absent")
+
+
+def test_l4a_3_the_receipt_labels_an_unproven_host_seat_by_its_own_phase_manifest(tmp_path):
+    session_dir = _session_with_host_seat(tmp_path)
+    ctx, refusal = RC._load_context(session_dir)
+    assert refusal is None
+    rows = {r["seat"]: r for r in (RC._receipt_seat_row(ctx, s) for s in RC._collect_seats(ctx))}
     assert rows["code-reviewer"]["proof"] == RC.SEAT_PROOF_RUNNER_RECORD
     assert rows[_HOST]["proof"] == RC.SEAT_PROOF_NONE_HOST_SEAT
-    assert receipt["disclosures"]["uncertifiedSeats"] == [
+    assert RC._uncertified_seat_disclosures(ctx) == [
         {"seat": _HOST, "phase": RC.PANEL_PHASE, "round": 1, "attempt": 0, "vendor": "claude",
          "proof": RC.SEAT_PROOF_NONE_HOST_SEAT}]
+    # the label reads the manifest emitted for the seat's OWN phase: the panel's host channel
+    # never labels the same seat key recorded on another phase
+    base = {"seat": _HOST, "round": 1, "attempt": 0, "occurrence": 0,
+            "provenance": RC.PROVENANCE_DISPATCH_OBSERVED}
+    assert RC.host_seat_without_evidence(ctx, dict(base, phase=RC.PANEL_PHASE)) is True
+    for phase in (RC.P_AUDITS, RC.P_FIXER, "dispatch-verifiers", "dispatch-synthesis"):
+        assert RC.host_seat_without_evidence(ctx, dict(base, phase=phase)) is False, phase
 
 
 def test_l4a_3_a_vendor_label_without_the_host_channel_still_refuses(tmp_path):
@@ -301,27 +349,26 @@ def test_l4a_3_a_panel_round_of_only_host_seats_refuses(tmp_path):
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
     assert (refusal["class"], refusal["bindingFailure"]) == (
-        "unrun-review", RC.BINDING_FAILURE_NO_RUNNER_PROVEN_PANEL_SEAT)
+        "unrun-review", "execution-evidence-absent")
 
 
-def test_l4a_3_audit_and_fixer_seats_never_leave_the_certified_panel(tmp_path):
-    session_dir = _session_with_host_seat(tmp_path)
-    ctx, refusal = RC._load_context(session_dir)
-    assert refusal is None
-    base = {"seat": _HOST, "round": 1, "attempt": 0, "occurrence": 0,
-            "provenance": RC.PROVENANCE_DISPATCH_OBSERVED}
-    assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.PANEL_PHASE)) is True
-    assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.P_AUDITS)) is False
-    assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.P_FIXER)) is False
-    # a verifier can refute a finding, so an unproven one never leaves the certified panel
-    assert RC.uncertified_host_seat(ctx, dict(base, phase="dispatch-verifiers")) is False
-    # a synthesis grouping can merge a confirmed finding under a representative the
-    # author-justification filter drops, so an unproven synthesis seat never leaves it either
-    assert RC.uncertified_host_seat(ctx, dict(base, phase="dispatch-synthesis")) is False
-    assert RC.HOST_SEAT_EXEMPT_PHASES == frozenset((
-        RC.PANEL_PHASE, "dispatch-scoped-finder", "dispatch-gap-sweep"))
-    assert RC.uncertified_host_seat(
-        ctx, dict(base, phase=RC.PANEL_PHASE, provenance="orchestrator-fulfilled")) is False
+def test_l4a_3_census_the_host_seat_label_skips_no_certification_check():
+    # axis: the writer exempts nothing — the label is read only where the receipt is written
+    for gone in ("HOST_SEAT_EXEMPT_PHASES", "uncertified_host_seat",
+                 "_panel_round_without_runner_proof", "BINDING_FAILURE_NO_RUNNER_PROVEN_PANEL_SEAT"):
+        assert not hasattr(RC, gone), gone
+    with open(RC.__file__, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    callers = set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef):
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "host_seat_without_evidence"):
+                    callers.add(fn.name)
+    assert callers == {"_receipt_seat_row", "_uncertified_seat_disclosures"}, callers
+    assert not any(isinstance(n, ast.Constant) and n.value in (
+        "dispatch-scoped-finder", "dispatch-gap-sweep") for n in ast.walk(tree))
 
 
 def test_l4a_3_the_driver_records_each_seats_rendered_channel_in_the_orders_manifest(tmp_path):
@@ -462,23 +509,6 @@ def test_l4a_r1_the_channel_token_has_one_home():
     assert RD.CHANNEL_FILE is SC.SEAT_CHANNEL_HOST
     assert RD.CHANNEL_STDOUT is SC.SEAT_CHANNEL_ENGINE
     assert not hasattr(RC, "SEAT_CHANNEL_HOST")
-
-
-def test_l4a_r1_a_panel_seat_out_of_the_certified_panel_downgrades_the_full_panel_shape():
-    state = {"certification": {"shape": "full-panel-confirmed"}}
-    engine_row = {"phase": RC.PANEL_PHASE, "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
-                  "proof": RC.SEAT_PROOF_RUNNER_RECORD}
-    host_row = dict(engine_row, proof=RC.SEAT_PROOF_NONE_HOST_SEAT)
-    finder_row = dict(host_row, phase="dispatch-scoped-finder")
-    assert RC._certification_shape(state, [engine_row]) == "full-panel-confirmed"
-    assert RC._certification_shape(state, [engine_row, finder_row]) == "full-panel-confirmed"
-    assert RC._certification_shape(state, [engine_row, host_row]) == "audited-chain"
-
-
-def test_l4a_r1_the_host_panel_receipt_certifies_on_the_downgraded_shape(tmp_path):
-    receipt, refusal = RC.certify(_session_with_host_seat(tmp_path))
-    assert refusal is None, refusal
-    assert receipt["certificationShape"] == "audited-chain"
 
 
 def test_l4a_r1_a_fresh_emission_refuses_before_any_order_is_written(tmp_path):

@@ -108,7 +108,7 @@ def test_record_missing_sink_binds_order_anchor(tmp_path, adapters):
 
 
 def test_orchestrator_fulfilled_sink_binds_order_anchor(tmp_path, adapters):
-    d = _SESSION(tmp_path)
+    d = _SESSION(tmp_path, seatMap=_TCH.RUNNER_SEAT_MAP)
     _AT_RUN_VERIFY(tmp_path, d)
     pend = _PENDING(d)
     skey = RR.storage_key("verify")

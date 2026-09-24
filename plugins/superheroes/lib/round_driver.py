@@ -1005,14 +1005,22 @@ def _auditor_vendor(config, fixer_vendor, runner_record_only=False):
     return (fallback[0] if fallback else fixer_vendor), "degraded"
 
 
-def _audit_landing_requires_runner_record(state):
+def _durable_record_session(state):
     """True on a durable-record session: seat records are `seat-result/2` and the session folds
-    through `advance`, never hand `submit` (the two latch each other out). There an audit landing
-    refuses at `record-result` without a runner record, so the auditor must be seated on a vendor
-    that can produce one. A library-driven loop (`run_loop`) folds its seams directly and never
-    records a landing, so it keeps today's selection."""
+    through `advance`, never hand `submit` (the two latch each other out). There certification rests
+    only on runner records, so every runner-proof phase is seated on a vendor that can produce one
+    (`_seat_transport_fault`). A library-driven loop (`run_loop`) folds its seams directly and never
+    records a landing, so it keeps today's selection. The round-1 panel is emitted before the first
+    fold latches the path, so it is not gated here; a host seat there still refuses `unrun-review`
+    at certification."""
     return (_seat_result_schema(state) == round_records.SEAT_RESULT_SCHEMA_V2
             and bool(state.get("_advanceUsed")) and not state.get("_submitUsed"))
+
+
+# Phases whose seats must prove they ran with a runner record on a durable-record session. Synthesis
+# (host-only by design; its unproven seat is the named `unrun-review`) and the in-place fixer are not.
+RUNNER_PROOF_PHASES = frozenset((P_PANEL, P_VERIFIERS, P_SCOPED, P_GAPSWEEP, P_AUDITS))
+SEAT_NO_RUNNER_RECORD_CAUSE = "seat-no-runner-record"
 
 
 # Seat-map receipt projections (#681) — leaf module ``seat_map_receipts``; thin aliases for in-module
@@ -4369,7 +4377,7 @@ def _audit_targets(state, config, audit_targets_map):
     occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
     auditor_vendor, independence = _auditor_vendor(
-        config, fixer_vendor, _audit_landing_requires_runner_record(state))
+        config, fixer_vendor, _durable_record_session(state))
     if independence == "degraded":
         state["independenceDegraded"] = True
     # Audits stay at the `verifier` role; the seated cell is what the order names and the receipt
@@ -8310,23 +8318,30 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
         return {"vendor": "claude", "model": None, "engine": None}
     if phase in (P_VERIFIERS, P_GAPSWEEP, P_SCOPED):
         vendor, source = _reviewer_engine_vendor(repo_root)
+        if (isinstance(state, dict) and _durable_record_session(state)
+                and not _vendor_is_external_engine(vendor)):
+            # Seat-time runner proof: the auditor rule, widened — seat a live runner vendor outside
+            # the fixer's family when one exists. A driver selection, not a guess; with no runner
+            # vendor live the render refuses `seat-no-runner-record`.
+            vendor, _independence = _auditor_vendor(cfg, cfg.get("fixerVendor"), True)
+            source = VENDOR_SOURCE_CONFIGURED
         return {"vendor": vendor, "model": None, "engine": None, "vendorSource": source}
     return {"vendor": None, "model": None, "engine": None}
 
 
 def _seat_transport_fault(row, seat_key, phase=None, state=None):
     """Refuse when a seat names a vendor the driver does not recognise, or — at seat time, before
-    any dispatch — when a durable-record session's audit seat is on a vendor that cannot produce
-    the runner record its landing will need.
+    any dispatch — when a durable-record session seats a runner-proof phase on a vendor that cannot
+    produce the runner record its certification will need.
 
-    Vendor absent is the normal unknowable-vendor case — not a refusal (except on that audit seat,
-    where an absent vendor cannot produce the record either)."""
+    Vendor absent is the normal unknowable-vendor case — not a refusal (except on a runner-proof
+    seat of a durable-record session, where an absent vendor cannot produce the record either)."""
     vendor = row.get("vendor")
-    # axis: a durable-record audit seat off the runner refuses here, never at record-result
-    if (phase == P_AUDITS and isinstance(state, dict)
-            and _audit_landing_requires_runner_record(state)
+    # axis: a durable-record runner-proof seat off the runner refuses here, never at record time
+    if (phase in RUNNER_PROOF_PHASES and isinstance(state, dict)
+            and _durable_record_session(state)
             and not _vendor_is_external_engine(vendor)):
-        return "auditor-no-runner-record:%s" % (_label(vendor),)
+        return "%s:%s" % (SEAT_NO_RUNNER_RECORD_CAUSE, _label(vendor))
     if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
         return None
     if not isinstance(vendor, str):

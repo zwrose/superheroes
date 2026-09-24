@@ -73,6 +73,10 @@ V2_STATE_HASH_BEFORE_723 = "e39a8e3163d24fb114d1ac95d8e7c9bfbea2d0baef1240a4f7c9
 
 SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
                       for dim in RD.DIMENSIONS}}
+# A confirmation panel on a durable-record session seats only runner vendors (#1272 layer 4a,
+# seat-time runner proof); tests that fold past round 1 on that path run this map.
+RUNNER_SEAT_MAP = {"seats": {dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+                           for dim in RD.DIMENSIONS}}
 
 
 # =============================================================================================
@@ -1649,7 +1653,7 @@ def test_orchestrator_fulfilled_phase_census():
 
 
 def test_advance_folds_run_verify_from_host_payload_without_manifest(tmp_path, adapters):
-    d = _session(tmp_path)
+    d = _session(tmp_path, seatMap=RUNNER_SEAT_MAP)
     _record_all_panel_seats(d)
     assert _advance(d, tmp_path)["ok"] is True
     _pending_at_run_verify(d)
@@ -1715,7 +1719,7 @@ def test_advance_does_not_fold_stale_attempt_orchestrator_payload(tmp_path, adap
 
 def test_advance_folds_run_verify_from_seat_record_without_bare_payload(tmp_path, adapters):
     """Absent bare payload with a durable seat record folds through the seat path."""
-    d = _session(tmp_path)
+    d = _session(tmp_path, seatMap=RUNNER_SEAT_MAP)
     _record_all_panel_seats(d)
     assert _advance(d, tmp_path)["ok"] is True
     _pending_at_run_verify(d)
@@ -1761,7 +1765,7 @@ def test_orchestrator_fulfilled_fold_writes_the_durable_seat_record(tmp_path, ad
 
     The reconstruction assertion is the point: the folded `verifyResult` is readable from the STORE
     RECORD alone, with no reference to the state it folded into and no bare payload in hand."""
-    d = _session(tmp_path)
+    d = _session(tmp_path, seatMap=RUNNER_SEAT_MAP)
     _at_run_verify(tmp_path, d)
     assert not os.path.exists(_verify_store_path(d))                              # A/B
     _write_verify_payload(d, {"result": "pass"})
@@ -1792,7 +1796,7 @@ def test_orchestrator_fulfilled_recorded_journal_carries_stored_envelope_revisio
         tmp_path, adapters):
     """#1271 WO-A12-G finding 2: orchestrator-fulfilled advance must journal the stored envelope's
     complete revision identity — provenance and execution-evidence markers — not the triple alone."""
-    d = _session(tmp_path)
+    d = _session(tmp_path, seatMap=RUNNER_SEAT_MAP)
     _at_run_verify(tmp_path, d)
     _write_verify_payload(d, {"result": "pass"})
     assert _advance(d, tmp_path)["ok"]
@@ -1829,7 +1833,7 @@ def test_orchestrator_fulfilled_record_and_journal_reconcile_clean(tmp_path, ada
     consistency, not atomicity. The atomicity itself is asserted structurally by
     `test_durable_record_rides_the_folds_own_commit_intent` below, which inspects the single commit
     the fold builds rather than its aftermath."""
-    d = _session(tmp_path)
+    d = _session(tmp_path, seatMap=RUNNER_SEAT_MAP)
     _at_run_verify(tmp_path, d)
     _write_verify_payload(d, {"result": "pass"})
     assert _advance(d, tmp_path)["ok"] is True
@@ -1858,7 +1862,7 @@ def test_durable_record_rides_the_folds_own_commit_intent(tmp_path, adapters, mo
         return commit
 
     monkeypatch.setattr(RD.round_commit, "begin", spy)
-    d = _session(tmp_path)
+    d = _session(tmp_path, seatMap=RUNNER_SEAT_MAP)
     _at_run_verify(tmp_path, d)
     _write_verify_payload(d, {"result": "pass"})
     seen.clear()          # drop setup's own commits — only the verify fold is under inspection
@@ -1880,7 +1884,7 @@ def test_orchestrator_fold_refuses_to_write_a_record_with_no_session_id(tmp_path
     axis: that the fold REFUSES, not that the envelope merely ends up with a null field. The seat
     path enforces the same precondition as `bootstrap-required` inside `validate_landing`; this
     path does not route through that validation, so it owes its own check."""
-    d = _session(tmp_path)
+    d = _session(tmp_path, seatMap=RUNNER_SEAT_MAP)
     _at_run_verify(tmp_path, d)
     _write_verify_payload(d, {"result": "pass"})
     meta = os.path.join(d, RR.META_FILE)
@@ -1950,7 +1954,7 @@ def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(t
     make progress anyway — a duplicate `submit` returns before `pending` is cleared — so the loud
     refusal is both the ratified behaviour and the honest one.
     """
-    d = _session(tmp_path)
+    d = _session(tmp_path, seatMap=RUNNER_SEAT_MAP)
     _at_run_verify(tmp_path, d)
     _write_verify_payload(d, {"result": "pass"})
     assert _advance(d, tmp_path)["ok"] is True                       # A/B: the fold itself works
@@ -1988,14 +1992,14 @@ def test_advance_refuses_landing_ambiguous_when_payload_and_record_both_present(
 
 def test_landing_ambiguous_ab_each_artifact_alone_still_folds(tmp_path, adapters):
     """The A/B halves of the refusal above: record alone folds; bare payload alone folds."""
-    record_only = _session(tmp_path, name="record-only")
+    record_only = _session(tmp_path, name="record-only", seatMap=RUNNER_SEAT_MAP)
     _at_run_verify(tmp_path, record_only)
     _land_and_record(record_only, "verify",
                      payload={"result": "pass", "command": "none", "exit": 0})
     assert _advance(record_only, tmp_path)["ok"] is True
     assert _state(record_only)["rounds"]["1"]["verifyResult"] == "pass"
 
-    payload_only = _session(tmp_path, name="payload-only")
+    payload_only = _session(tmp_path, name="payload-only", seatMap=RUNNER_SEAT_MAP)
     _at_run_verify(tmp_path, payload_only)
     _write_verify_payload(payload_only, {"result": "pass"})
     assert _advance(payload_only, tmp_path)["ok"] is True
