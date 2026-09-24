@@ -156,7 +156,7 @@ register, or a single-issue child standing in for one under FR-36 — run the re
 zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
 derived from the issue alone, the route names the register and child token for you to pass. On
 `pass`, record the check's own output in the intake note — the `result` line, or `pass` together
-with `requiredEntries` — not merely a claim that it ran. When the register path and child token are
+with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child token are
 known — the route names them or they are derivable — **run the check**; an `undecided` result
 blocks exactly like `fail`. When they are not known and applicability is genuinely unclear, that is
 a **routing gap, not a reason to proceed**: raise it with the advisor (a builder **parks**; the
@@ -328,6 +328,44 @@ the identity you actually found (unset, or set to the wrong value) and stop; imp
 the failure this rule exists to name. (A separate case,
 not an exception to borrow: a **throwaway repo a test fixture creates** has no configured identity
 on a CI runner, so a fixture's own commits still pass an explicit inline one.)
+
+### Building a layer of a stack
+
+Every multi-PR child of a superheroes project is a [native stack](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#stack); an exception is owner-ruled and recorded — see
+[native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) for what a stack is and the glossary for the two terms.
+A layer's branch, its PR base, and its stack membership all name the **layer below**,
+and each of the three is established from the **remote**, never from a local assumption.
+
+- **Branch from the layer below's head** and set the **PR base to that branch** — the bottom layer
+  branches from and targets the stack's base (normally `main`).
+- **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests, so
+  the **bottom layer** has nothing to link to at its own handback: it records that the stack does not
+  exist yet and names the layer that will form it. The stack is created by `gh stack link <bottom> <top>`
+  when the layer above opens; from then on every layer verifies membership from the branch before
+  claiming it. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist).
+  A base-branch chain that was never linked **is not a stack** — nothing downstream, not the advisor's click list,
+  not the atomic merge, works on it.
+- **Membership is verified from the branch before it is claimed** — the GraphQL read in
+  [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How membership is verified, not `gh stack view`, which reads local tracking state only.
+  "Linked" is a claim like any other: quote the PR's own `stackEntry` position and the stack's ordered entries in the PR body.
+- **The verify gate takes the pinned base** — on a stacked branch the review session's verify command
+  carries `{baseRef}` bound to the **pinned base commit** (`review-code` § *The verify command*); without it a layer's
+  gate selects the whole stack below it.
+- **The register check reads main's copy, and the handback says which copy it read** — a layer's
+  worktree carries whatever the layers below wrote ([register-check.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md)).
+- **Size is reported at 300 and the call is handed up at 600** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md) § Review bars and recorded residuals) — a layer growing past the bars is split into another layer rather than
+  allowed to swallow two surfaces.
+- **Never hand-rebase and never force-push a layer inside a lane** — both move a head other layers and the
+  review are pinned to; take in a moved base or a moved lower layer **by merge** — a **local `--no-ff`
+  merge of the layer below, pushed plainly**, bottom-up, never `gh pr update-branch`, which was
+  **observed** to refuse a stacked pull request with a 403 — a field observation, not a documented
+  GitHub rule — which keeps your own commits; the moved head still
+  takes a fresh remote-head check, CI on the new sha, and a receipt naming it; GitHub's cascading rebase is the disclosed alternative when a
+  merge cannot resolve the conflict — it rewrites every commit above the change, and each moved layer then owes what the content pin decides: recompute the digest, and an equal digest re-pins with CI and re-reviews nothing while an unequal digest takes the branch the pin already
+  defines
+  ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
+- **A conflict round when a lower layer changes under you** — bring the lower layer current first, then
+  update your layer from it, bottom-up, and **disclose the conflict round in the PR body**.
 
 Your own worktree + branch off the issue's base, and **bring the app up** the way test-pilot will
 run it (dev server, any login/seed the app needs to be usable). **No running app (a plugin, library,
@@ -562,7 +600,7 @@ a path already dirty before the run and unchanged after is not credited. Declari
 behaviour unchanged — which is exactly why declaring is required rather than optional. Mechanics:
 `reference/dispatch-mechanics.md` § Declared items.
 
-**Lint every order before you dispatch it — both halves, and a refusal or an Important finding is stop-and-fix-the-order, never a dispatch.** The deterministic half is `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/order_lint.py" check --order <the order file> --repo-root <the build worktree> --alt-root <the build worktree's plugin root, in this repository> --expect-item <each declared item>` over the **authored order text** (the same text you hand the runner or the subagent; the runner's appended write-report contract is not what is linted). Exit 1 with a named token refuses. The semantic half is one native subagent at the mechanical role's registry cell (Haiku tier; run the model gate below first, `--seat` with `"role": "mechanical"`), prompt = `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/orders/order-lint-semantic.md` followed by two lines naming the order's absolute path and the repo root, returning findings-only JSON with an investigated list. Where the registry lists no model for the `mechanical` role on the host vendor (Codex today — `model_registry` has `mechanical: codex: None`), the semantic half is **UNAVAILABLE** on that host: the deterministic half still runs and is still binding, the order is dispatched, and the dispatch-provenance row records `semantic-lint-unavailable:<vendor>` as a disclosed degradation. Any **Important** finding is stop-and-fix; **Minor** is your call, recorded in the dispatch-provenance row. An unparseable answer, an empty investigated list, or an investigated list that omits the order's absolute path or lists paths that do not resolve under the repository root or session scratch means the check did not happen — re-dispatch it once, then the order is not dispatched (fix it or park; "lint skipped" is never a state). Both halves run before **every** implementer order and every review-fix work order you author, on both channels (native subagent and `dispatch-write`); the review-code in-place fixer's order is driver-rendered and gets the deterministic half at the driver's emission (auto-fix-loop.md names it). Record both halves' results — the token list or `clean`, and the semantic seat's finding count with its wall time — in each order's dispatch-provenance row. The lint exists because an orchestrator writes orders faster than it re-reads them, and each order defect costs a full implementer dispatch plus a rework: a plugin-only file named as repo-wide and a stdout report literal beside declared items are the deterministic half's tokens (plugin-only path unresolved; the fixer literal `{"fixes"` with declared expect-items); a marker-channel order asking for the native shape and forbidden phrases supplied by the order are the semantic half's items (b) and (d).
+**Lint every order before you dispatch it — both halves, and a refusal or an Important finding is stop-and-fix-the-order, never a dispatch.** The deterministic half is `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/order_lint.py" check --order <the order file> --repo-root <the build worktree> --alt-root <the build worktree's plugin root, in this repository> --expect-item <each declared item>` over the **authored order text** (the same text you hand the runner or the subagent, an inlined implementer template included — the lint recognises a verbatim copy of the shipped `agents/implementer.md` body and grades only the text around it, so never lint a trimmed subset; the runner's appended write-report contract is not what is linted). Exit 1 with a named token refuses. The semantic half is one native subagent at the mechanical role's registry cell (Haiku tier; run the model gate below first, `--seat` with `"role": "mechanical"`), prompt = `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/orders/order-lint-semantic.md` followed by two lines naming the order's absolute path and the repo root, returning findings-only JSON with an investigated list. Where the registry lists no model for the `mechanical` role on the host vendor (Codex today — `model_registry` has `mechanical: codex: None`), the semantic half is **UNAVAILABLE** on that host: the deterministic half still runs and is still binding, the order is dispatched, and the dispatch-provenance row records `semantic-lint-unavailable:<vendor>` as a disclosed degradation. Any **Important** finding is stop-and-fix; **Minor** is your call, recorded in the dispatch-provenance row. An unparseable answer, an empty investigated list, or an investigated list that omits the order's absolute path or lists paths that do not resolve under the repository root or session scratch means the check did not happen — re-dispatch it once, then the order is not dispatched (fix it or park; "lint skipped" is never a state). Both halves run before **every** implementer order and every review-fix work order you author, on both channels (native subagent and `dispatch-write`); the review-code in-place fixer's order is driver-rendered and gets the deterministic half at the driver's emission (auto-fix-loop.md names it). Record both halves' results — the token list or `clean`, and the semantic seat's finding count with its wall time — in each order's dispatch-provenance row. The lint exists because an orchestrator writes orders faster than it re-reads them, and each order defect costs a full implementer dispatch plus a rework: a plugin-only file named as repo-wide and a stdout report literal beside declared items are the deterministic half's tokens (plugin-only path unresolved; the fixer literal `{"fixes"` with declared expect-items); a marker-channel order asking for the native shape and forbidden phrases supplied by the order are the semantic half's items (b) and (d).
 
 Both paths carry identical instructions by construction. Choose each implementer's **model tier
 deliberately** — from the project's model/engine calibration where configured, **judged and disclosed
@@ -746,7 +784,9 @@ without a tool call.
   `review-code/reference/auto-fix-loop.md`); the in-place fixer is explicitly not a `dispatch-write`
   consumer. **`review-code`'s codex/cursor seats run the native shape** — `dispatch-review` with
   `--max-wait` slices and originating-verb continuation on the same `--run-dir` until terminal
-  (`review-code/reference/auto-fix-loop.md`); **claude seats** are native subagents covered by the
+  (`review-code/reference/auto-fix-loop.md`); every runner-dispatched review seat's durable record
+  follows `review-code` step 3's `record-result --evidence-run-dir` obligation (`review-code`
+  durable-record path); **claude seats** are native subagents covered by the
   ruling's native-subagent lifecycle exemption (the runner cannot dispatch them). The **hand-rolled
   engine fallback** in `review-code` does not follow that shape and still owes the limitation
   disclosure when used. The **in-place fixer deliberately stays a foreground Bash dispatch**: the
@@ -834,16 +874,27 @@ each engine dispatch itself and forbids a per-dispatch watchdog) — don't overr
 
 ## 8. Verify — re-run every receipt yourself
 
-**Verification authority never delegates.** Every receipt an implementer claims — tests pass, types
-clean, build green — **you re-run yourself and read the raw output**. An implementer's claim is an
-*input* to your verification, never a substitute for it. **A handback may claim a live process only
-with evidence of which physics applies** — **harness-tracked** background work dies at turn end; a
-**shell-detached child with durable on-disk output** survives and is recoverable (see §7 "Channel and
-wait are two choices", two-physics bullet). Without that evidence, state the wait as owed to the
-reader rather than implying something is running. Run the **full local gates** and **watch CI**. **A full-gate run starts only on a clean, settled tree —
-ideally a detached pinned worktree** — three builds burned roughly five full-suite runs against
-in-flight edits; a suite started while edits are still landing measures a tree that no longer exists,
-and its green is not a receipt.
+**Verification authority never delegates.** What you re-run **yourself** and read the raw output of
+is the **calibrated verify command** (the project's verify command, whatever the calibration names)
+and the **bite-proof red and green runs**; an implementer's claim — tests pass, types clean, build
+green — is an *input*, never a substitute. A claim the calibrated verify command does not cover, and
+that no qualifying receipt grounds, is carried into the handback as **UNVERIFIED** and named as such
+— it is never repeated as though it had been checked. **A handback may claim a live process only with evidence
+of which physics applies** — **harness-tracked** background work dies at turn end; a **shell-detached
+child with durable on-disk output** survives and is recoverable (see §7 "Channel and wait are two
+choices", two-physics bullet). Without that evidence, state the wait as owed to the reader rather
+than implying something is running. **What grounds a test-pass claim** lives in
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/test-receipt-evidence.md` — do not restate that policy
+here. **The local full suite runs at most once per build, at the final head — and not at all when that
+suite workflow already has a successful run on that head.** A second local run proves nothing CI does
+not, and it costs the lane the suite's whole wall-clock while it waits. The **calibrated verify
+command still runs every time** this charter says it does, and the bite-proof runs are never what
+this skips. **A full-gate run starts only on a clean, settled tree — ideally a detached pinned
+worktree** — three builds burned roughly five full-suite runs against in-flight edits; a suite
+started while edits are still landing measures a tree that no longer exists, and its green is not a
+receipt; the requirement attaches to the calibrated verify and any local full-suite run alike. **A
+handback whose suite receipt is still pending says so**, reports that the **calibrated verify
+passed**, and makes **no test-pass claim at all**.
 When you probe a guard by mutating the code it guards, apply the mutation as a **targeted,
 revertible edit through the host's edit action** — never a whole-file rewrite and never an ad-hoc
 shell edit — and revert it before moving on. **Before you run any mutation probe, commit the landed
@@ -1139,7 +1190,7 @@ for repo-local operational knowledge. Memory may hold a recall copy — never th
 | Excuse | Reality |
 |---|---|
 | "This fix is tiny, I'll just type it" | In the **full lane**, all implementation is delegated — the only typing exceptions are the **light** and **micro** lanes, never a size judgment. Dispatch a work order (or route to the light lane at kickoff with the owner present). |
-| "The implementer says tests pass" | Re-run every receipt yourself and read the raw output. Verification authority never delegates. |
+| "The implementer says tests pass" | Re-run the **calibrated verify** and the **bite-proof runs** yourself and read the raw output; with no qualifying receipt per `rubric/test-receipt-evidence.md`, claim no test pass. Verification authority never delegates. |
 | "The pilot found a bug, I'll fix it inline" | The pilot observes only. In the light lane, route through the implementer-dispatch escalation rule; in the full lane (or after escalation), dispatch an implementer work order. |
 | "This bug's cause is the interesting part; I'll write up the diagnosis properly." | You debug to get the fix built and earn your receipts; a **diagnosis receipt** is the detective's deliverable, reached through the advisor. Hand the cause up as a follow-up — do not mint the receipt. |
 | "These orders are related, I'll do them one by one" | Independent orders run in parallel by default, isolated worktrees. Sequence only real dependencies. |
@@ -1157,7 +1208,7 @@ for repo-local operational knowledge. Memory may hold a recall copy — never th
 | "I'll kick off the implementer and wrap up my turn." | A headless session **exits when the turn ends** — until handback or park is posted, the turn's final act is a **tool call**. Launch long external dispatches through the **authorized entrypoint** (`dispatch-review`/`dispatch-write --max-wait`) and **poll in-turn** by re-invoking the originating verb until terminal (charter §7); survivability comes from the runner's own session leadership, not a standalone narrative turn-end. A **native subagent has no detach** — await it in-turn or park. Park only when the in-turn poll genuinely cannot fit. |
 | "I'll dispatch these seats one at a time so I can watch each one." | An independent batch — no result dependency, no shared writable worktree, and no shared output path — goes out **together** (own `--run-dir` each, launch each with a short positive slice, then rotate re-invocations over the non-terminal runs until each is terminal); watching one seat at a time is how a five-seat round costs the sum instead of the slowest; the invariant is unchanged — in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
-| "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
+| "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim — re-run the calibrated verify yourself, ground any test-pass claim per `rubric/test-receipt-evidence.md`, and sweep the dead session's worktrees for unpushed work first. |
 | "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
 | "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the identity the worktree **resolves** (repo-local config when set, else this environment's global — read it with `git config user.email`, never `--local`); `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
 | "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. Without a recorded PID the only recovery is the one in `dispatch-mechanics.md` § Process cleanup — exactly one PID resolved from your own run's kernel-reported cwd or listener port; zero or several candidates means no kill target (§7). |
