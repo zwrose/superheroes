@@ -1021,13 +1021,13 @@ def acquire_background_handle(config_dir, cwd, background_id=None, wait_seconds=
 def _valid_background_handle(handle):
     if not isinstance(handle, BackgroundHandle):
         return False
-    if not isinstance(handle.backgroundId, str):
+    if not isinstance(handle.backgroundId, str) or not handle.backgroundId:
         return False
     if not isinstance(handle.pid, int) or isinstance(handle.pid, bool) or handle.pid < 2:
         return False
-    if not isinstance(handle.cwd, str):
+    if not isinstance(handle.cwd, str) or not handle.cwd:
         return False
-    if not isinstance(handle.configDir, str):
+    if not isinstance(handle.configDir, str) or not handle.configDir:
         return False
     return True
 
