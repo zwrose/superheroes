@@ -24,7 +24,7 @@ To refresh after any of the above changes, run:
 
 ## Accepted seat shapes
 
-pass --seat as JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"} (the effort key is required; its value may be null; role is required and must not be null). role must be a member of the seat JSON "role" key; valid roles: implementer, code-fixer, doc-reviser, reviewer, reviewer-deep, verifier, brief-check, synthesis, mechanical, pilot, scoped-finder
+pass --seat as JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"} (the effort key is required; its value may be null; role is required and must not be null). role must be a member of the seat JSON "role" key; valid roles: implementer, code-fixer, doc-reviser, reviewer, reviewer-deep, verifier, brief-check, synthesis, mechanical, pilot, registration-probe, scoped-finder, auditor
 
 ## Declared vocabularies
 
@@ -55,6 +55,8 @@ The entry-refusal reasons are the closed set the dispatch shell's `entryReason` 
 - `allowlist-malformed`
 - `allowlist-raised`
 - `allowlist-refused`
+- `claude-mode-unknown`
+- `claude-mode-unsupported`
 - `effort-invalid`
 - `effort-key-absent`
 - `effort-token-conflict`
@@ -96,9 +98,13 @@ Derived from `engine_adapter.BUILD_ARGV_REFUSAL_TOKENS`.
 
 The engine-config refusal tokens name a refused argv build. The `build-argv` CLI surfaces `reason: "engine-config"` with the bare token in `detail`; the dispatch runner wraps the same token as `detail: "engine-config:<token>"`.
 
+- `builder-prompt-missing`
+- `builder-session-id-invalid`
+- `claude-mode-unsupported`
 - `engine-model-effort-conflict`
 - `fable-unrunnable`
 - `invalid-model-effort`
+- `unknown-claude-mode`
 - `unknown-claude-tier`
 - `unknown-engine`
 - `unregistered-engine-model`
@@ -144,6 +150,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--progress-file` | no | `free-text` | none |  |
 | `--expect-item` | no | `free-text` | none |  |
 | `--expect-items-file` | no | `free-text` | none |  |
+| `--claude-mode` | no | `choices:print,background` | none | background refused before spawn; detail claude-mode-background-write |
 
 #### `engine_dispatch.py dispatch-review`
 
@@ -160,9 +167,10 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--order-id` | no | `free-text` | none |  |
 | `--diff-base` | no | `free-text` | none | pinned commit object id (40 hex, or 64 in a SHA-256 repository) to stage the merge-base->head review patch against; a revision expression, branch name or tag is refused |
 | `--mode` | no | `choices:review,brief-check` | none |  |
+| `--claude-mode` | no | `choices:print,background` | none | background is dispatchable |
 | `--expected-result-kind` | no | `choices:findings,verdicts,grouping,ruling` | none | mechanical pin: refuse attempts whose parsed resultKind differs |
-| `--pr-body-path` | no | `free-text` | none |  |
-| `--session-dir` | no | `existing-directory` | none |  |
+| `--pr-body-path` | no | `free-text` | none | pairs with --session-dir; either alone refuses pr-body-args-unpaired |
+| `--session-dir` | no | `existing-directory` | none | pairs with --pr-body-path; either alone refuses pr-body-args-unpaired |
 
 ### `engine_adapter.py`
 

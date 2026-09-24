@@ -72,6 +72,8 @@ ENTRY_REFUSAL_REASONS = frozenset({
     "allowlist-malformed",
     "allowlist-raised",
     "allowlist-refused",
+    "claude-mode-unknown",
+    "claude-mode-unsupported",
     "effort-invalid",
     "effort-key-absent",
     "effort-token-conflict",

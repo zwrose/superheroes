@@ -2075,6 +2075,45 @@ def test_v2_execution_evidence_observation_extra_key_refuses_unknown_field(tmp_p
     assert refusal["location"] == "observation"
 
 
+def test_execution_evidence_fields_tuple_unchanged():
+    assert RR.EXECUTION_EVIDENCE_FIELDS == (
+        "source",
+        "runnerNonce",
+        "recordDigest",
+        "resultDigest",
+        "resultKind",
+        "observation",
+    )
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_optional_engine_model_accepted(tmp_path, provenance):
+    sd = _session(tmp_path)
+    env = _v2_env(
+        provenance=provenance,
+        execution_evidence=_execution_evidence(engineModel="gpt-5.6-sol"),
+    )
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert refusal is None and plan is not None
+    assert plan["envelope"]["executionEvidence"]["engineModel"] == "gpt-5.6-sol"
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+@pytest.mark.parametrize("bad_value", ["", 7, None, [], {}])
+def test_v2_execution_evidence_optional_engine_model_refused_when_invalid(
+    tmp_path, provenance, bad_value,
+):
+    sd = _session(tmp_path)
+    env = _v2_env(
+        provenance=provenance,
+        execution_evidence=_execution_evidence(engineModel=bad_value),
+    )
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
+
+
 @pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
 def test_v2_execution_evidence_extra_sibling_key_refuses_unknown_field(tmp_path, provenance):
     # axis: execution-evidence-unknown-field — wo_r2_1271 evidence key set

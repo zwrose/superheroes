@@ -120,7 +120,10 @@ into the machine-parsed blocks above; nothing at launch reads prose outside thos
 
 A headless builder session (`claude -p`) **exits when its turn ends** — so until the durable
 handback comment or a durable park is posted, every turn ends with a tool call; a standalone narrative
-message is a session exit, not a pause. **`Monitor`, harness background-run completion, and wakeup
+message is a session exit, not a pause. Builders run as `claude -p` sessions; the launcher builds
+their command through the engine adapter, the one home for every claude command; the `canary` verb
+reads a lane's transcript tool calls to show it engaged; a builder is steered by a message addressed
+to its registered session name. **`Monitor`, harness background-run completion, and wakeup
 scheduling cannot wake a headless session** and are never a turn's exit plan. On the night of
 **2026-08-02**, three headless builder sessions died in two lanes from this class of failure (one
 waiting on `Monitor`, two on standalone narrative with nothing in flight); all were recovered with
