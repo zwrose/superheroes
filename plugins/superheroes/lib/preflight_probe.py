@@ -73,6 +73,8 @@ def cross_vendor_no_op_argv(engine):
         # live run, which would fail the probe for a project that never dispatches it.
         return ("cursor-agent", "--model", engine_adapter._CURSOR_MODEL, "-p", "--trust",
                 "-f", "--sandbox", "enabled")
+    if engine == "claude":
+        return tuple(engine_adapter.claude_cli_argv(["--version"]))
     return (engine, "--version")
 
 

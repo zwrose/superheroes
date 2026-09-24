@@ -7,6 +7,8 @@ from __future__ import annotations
 import os
 
 CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
+# The CLI's documented reasoning-effort input — the variable a spawned claude child is pinned by.
+EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
 DEFAULT_CONFIG_DIR_NAME = ".claude"
 
 

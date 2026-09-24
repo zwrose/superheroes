@@ -202,6 +202,12 @@ def test_launcher_holds_no_claude_list_at_all():
     assert found == [], "claude list literal in launcher.py at lines %r" % found
 
 
+def test_the_preflight_claude_probe_argv_comes_from_the_adapter():
+    # axis: D1 — the preflight's claude no-op is minted by the adapter, not by the probe
+    import preflight_probe as pp
+    assert list(pp.cross_vendor_no_op_argv("claude")) == ea.claude_cli_argv(["--version"])
+
+
 def test_claude_cli_argv_is_the_management_verb_home():
     # axis: D1 — the agents/stop argv is minted by the adapter, head and args in order
     assert ea.claude_cli_argv(["stop", BG_ID]) == ["claude", "stop", BG_ID]
@@ -454,17 +460,116 @@ def test_unconfirmed_stop_without_a_pid_leaves_the_lane_reserved(tmp_path, monke
     assert [r["event"] for r in _events(repo, result["launchId"])] == ["reserved"]
 
 
-def test_no_acknowledgement_means_nothing_to_stop(tmp_path, monkeypatch):
-    # axis: D4 — no acknowledgement: refused at once, nothing to stop
+def _unacknowledged(*a):
+    return {"ok": False, "reason": bo.REFUSAL_LAUNCH_UNACKNOWLEDGED, "backgroundId": None}
+
+
+@pytest.mark.parametrize("rows,listing_ok,stop,events,stopped_ids", [
+    pytest.param([], True, "stopped", ["reserved", "refused"], [], id="no-rows"),
+    pytest.param([_row(pid=None, cwd=None)], True, "stopped", ["reserved", "refused"], [BG_ID],
+                 id="one-row-stopped"),
+    pytest.param([_row(pid=None, cwd=None)], True, "stop-unconfirmed", ["reserved"], [BG_ID],
+                 id="one-row-unconfirmed"),
+    pytest.param(None, False, "stopped", ["reserved"], [], id="listing-unreadable"),
+])
+def test_no_acknowledgement_reconciles_the_worktree_before_refusing(
+        tmp_path, monkeypatch, rows, listing_ok, stop, events, stopped_ids):
+    # axis: D4 — with no acknowledged id, every background session listed in the launch's own
+    # worktree is stopped first; `refused` is recorded only when the listing was readable and
+    # every stop confirmed — an unreadable inventory or an unconfirmed stop leaves the lane open
     stops = []
-    monkeypatch.setattr(L, "_background_handshake", lambda *a: {
-        "ok": False, "reason": bo.REFUSAL_LAUNCH_UNACKNOWLEDGED, "backgroundId": None})
-    monkeypatch.setattr(L, "_stop_background", lambda *a, **k: stops.append(a) or "stopped")
+    monkeypatch.setattr(L, "_background_handshake", _unacknowledged)
+    monkeypatch.setattr(L.engine_dispatch, "claude_agents_rows",
+                        lambda cfg, cwd: (rows, listing_ok))
+    monkeypatch.setattr(L, "_stop_background", lambda sid, *a, **k: stops.append(sid) or stop)
     repo = _init_repo(tmp_path / "repo")
     result = _launch(repo, tmp_path, spawn_fn=_make_spawn_fn("exit0"))
     assert result["reason"] == bo.REFUSAL_LAUNCH_UNACKNOWLEDGED
-    assert stops == []
-    assert [r["event"] for r in _events(repo, result["launchId"])] == ["reserved", "refused"]
+    assert stops == stopped_ids
+    assert [r["event"] for r in _events(repo, result["launchId"])] == events
+    if events == ["reserved"]:
+        assert result["stop"] == "stop-unconfirmed"
+
+
+def _live_session():
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"],
+                            start_new_session=True)
+
+
+def _stop_session(session):
+    def stop(sid, cfg, cwd, pid, proc=None):
+        _kill(session.pid)
+        session.wait()
+        return "stopped"
+    return stop
+
+
+def test_deadline_in_settle_stops_the_session_before_terminalizing(tmp_path, monkeypatch):
+    # axis: D4 — the acknowledging process has exited and the session is a separate process;
+    # at the deadline the session is stopped and confirmed, then the lane is terminalized
+    session = _live_session()
+    try:
+        monkeypatch.setattr(L, "_background_handshake", lambda proc, *a: {
+            "ok": True, "backgroundId": BG_ID, "sessionId": SESSION_ID, "pid": session.pid})
+        monkeypatch.setattr(L, "_stop_background", _stop_session(session))
+        repo = _init_repo(tmp_path / "repo")
+        monkeypatch.setattr(L, "_observe_session_settle", lambda *a, **k: "deadline")
+        result = _launch(repo, tmp_path, spawn_fn=_make_spawn_fn("exit0"))
+        assert result["reason"] == "retry-deadline-exceeded", result
+        assert result["stop"] == "stopped" and result["backgroundId"] == BG_ID
+        info = ll.fold(ll.read(repo)["records"])["launches"][result["launchId"]]
+        assert info["terminal"] is True
+    finally:
+        _kill(session.pid)
+        session.wait()
+
+
+def test_deadline_with_an_unconfirmed_stop_keeps_the_lane_live(tmp_path, monkeypatch):
+    # axis: D4 — a session that may still run is never terminalized: the started lane stays
+    # open on the ledger and the result hands back its id
+    session = _live_session()
+    try:
+        monkeypatch.setattr(L, "_background_handshake", lambda proc, *a: {
+            "ok": True, "backgroundId": BG_ID, "sessionId": SESSION_ID, "pid": session.pid})
+        monkeypatch.setattr(L, "_stop_background", lambda *a, **k: "stop-unconfirmed")
+        repo = _init_repo(tmp_path / "repo")
+        monkeypatch.setattr(L, "_observe_session_settle", lambda *a, **k: "deadline")
+        result = _launch(repo, tmp_path, spawn_fn=_make_spawn_fn("exit0"))
+        assert result["reason"] == "retry-deadline-exceeded"
+        assert result["stop"] == "stop-unconfirmed" and result["backgroundId"] == BG_ID
+        info = ll.fold(ll.read(repo)["records"])["launches"][result["launchId"]]
+        assert info["terminal"] is False and info["pid"] == session.pid
+    finally:
+        _kill(session.pid)
+        session.wait()
+
+
+@pytest.mark.parametrize("confirmed", [True, False], ids=["stop-confirmed", "stop-unconfirmed"])
+def test_failed_started_append_retires_the_session_or_hands_back_its_handle(
+        tmp_path, monkeypatch, confirmed):
+    # axis: D4 — the ledger refuses the lane's started record: a confirmed stop terminalizes
+    # through the repair path; an unconfirmed one terminalizes nothing and returns the handle
+    session = _live_session()
+    real_append = ll.append
+    try:
+        monkeypatch.setattr(ll, "append", lambda root, rec, env=None: False
+                            if rec.get("event") == "started" else real_append(root, rec, env=env))
+        monkeypatch.setattr(L, "_background_handshake", lambda proc, *a: {
+            "ok": True, "backgroundId": BG_ID, "sessionId": SESSION_ID, "pid": session.pid})
+        monkeypatch.setattr(L, "_stop_background", _stop_session(session) if confirmed
+                            else (lambda *a, **k: "stop-unconfirmed"))
+        repo = _init_repo(tmp_path / "repo")
+        result = _launch(repo, tmp_path, spawn_fn=_make_spawn_fn("exit0"))
+        assert result["ok"] is False
+        assert result["backgroundId"] == BG_ID and result["sessionId"] == SESSION_ID
+        assert result["stop"] == ("stopped" if confirmed else "stop-unconfirmed")
+        events = [r["event"] for r in _events(repo, result["launchId"])]
+        assert "outcome" not in events and "refused" not in events
+        if not confirmed:
+            os.kill(session.pid, 0)  # still running, and the result named it
+    finally:
+        _kill(session.pid)
+        session.wait()
 
 
 @pytest.mark.parametrize("rc,pid,alive,expected", [

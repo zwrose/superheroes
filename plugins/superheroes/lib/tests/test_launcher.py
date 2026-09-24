@@ -2746,6 +2746,14 @@ def test_c2_edge1_deadline_settle_reaps_before_park(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ll, "_reap_process", tracking_reap)
 
+    # R28 re-pin (C14 4a): the lane is a background session, so at the deadline the launcher
+    # STOPS it (confirmed) before terminalizing; the stop is the reap this test orders first.
+    def tracking_stop(background_id, config_dir, cwd, pid, proc=None):
+        order.append(("reap", pid))
+        return _standin_stop(background_id, config_dir, cwd, pid, proc)
+
+    monkeypatch.setattr(L, "_stop_background", tracking_stop)
+
     real_append_raw = ll._append_raw
     terminal_tracked = {"n": 0}
 

@@ -20,6 +20,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import background_outcome  # noqa: E402  (background-session identity grammar; leaf)
 import readout  # noqa: E402  (the band's single scrub seam; same-tree sibling)
 import model_registry  # noqa: E402  (band-wide model taxonomy; same-tree sibling)
 import resolved_inputs_vocab  # noqa: E402  resolvedInputs <field>Source marker home (#1296)
@@ -974,7 +975,7 @@ def claude_transcript_turn_ended(rows):
         return False
 
 
-_CLAUDE_LAUNCH_ID_RE = re.compile(r"^backgrounded · ([0-9a-f]{8})$")
+_CLAUDE_LAUNCH_ID_RE = re.compile(r"^backgrounded · (%s)$" % background_outcome.BACKGROUND_ID_PATTERN)
 
 
 def claude_launch_id(stdout):

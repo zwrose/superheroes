@@ -50,7 +50,7 @@ _expand_home = config_dir._expand_home
 # yields a child that resolves `high`, while CLAUDE_CODE_EFFORT_LEVEL=medium yields `medium`
 # even when a stale CLAUDE_EFFORT=high rides along. `ps eww` cannot see this: it shows the
 # exec-time environment, not the live resolution, so a spawn-plumbing check is not a receipt.
-EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
+EFFORT_ENV = config_dir.EFFORT_ENV
 EFFORT_REFLECTION_ENV = "CLAUDE_EFFORT"
 # Owner ruling 2026-08-25 (in-channel, walk-3 sitting): every use of Opus 5 runs at effort
 # `medium` — "opus 5 works better at medium overall". The launcher pins it at the spawn point
@@ -1336,22 +1336,40 @@ def _spawn_attempt(
     if not shake["ok"]:
         failed = {"ok": False, "reason": shake["reason"], "proc": proc,
                   "detail": shake.get("detail"), "backgroundId": background_id}
-        if background_id is None:
+        # A session that may still be running is never recorded as refused. Every session this
+        # launch may have opened is stopped first — the acknowledged one, or, with no id to go
+        # on, every background session listed in this launch's own fresh worktree. `refused` is
+        # written (by the caller) only once each stop is confirmed; otherwise a known live pid is
+        # recorded as a started lane, so every watcher sees it, and the ids ride the result.
+        sessions = _sessions_to_retire(background_id, shake.get("pid"), config_dir, cwd)
+        stops = {sid: _stop_background(sid, config_dir, cwd, pid, proc)
+                 for sid, pid in (sessions or [])}
+        unconfirmed = sorted(sid for sid, state in stops.items() if state != "stopped")
+        if sessions is not None and not unconfirmed:
+            if stops:
+                failed["stop"] = "stopped"
             return failed
-        failed["stop"] = _stop_background(background_id, config_dir, cwd, shake.get("pid"), proc)
-        if failed["stop"] == "stopped":
-            return failed
-        # A session that may still be running is never recorded as refused. With its pid known
-        # it is recorded as a started lane, so every watcher sees it live; without one the lane
-        # stays reserved-only and the result names the id to reconcile.
         failed["refused"] = True
-        if started["pid"] is not None:
+        failed["stop"] = "stop-unconfirmed"
+        failed["unconfirmedSessions"] = unconfirmed
+        live = [(sid, pid) for sid, pid in (sessions or []) if sid in unconfirmed and pid]
+        if live:
+            started["pid"] = live[0][1]
+            started["backgroundId"] = live[0][0]
+            if not ll.valid_background_session_id(started.get("sessionId"), live[0][0]):
+                started.pop("sessionId", None)
             _append_under_lock(repo_root, started, env=env)
         return failed
 
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
-        _stop_background(background_id, config_dir, cwd, started["pid"], proc)
+        identity = {"backgroundId": background_id, "sessionId": started["sessionId"],
+                    "stop": _stop_background(background_id, config_dir, cwd, started["pid"], proc)}
+        if identity["stop"] != "stopped":
+            # The ledger could not take the lane and the session may still run: nothing is
+            # terminalized as though it had stopped; the result carries its handle instead.
+            return dict({"ok": False, "reason": append_result["reason"], "proc": None,
+                         "refused": True}, **identity)
         term = _terminalize(
             repo_root,
             launch_id,
@@ -1371,10 +1389,35 @@ def _spawn_attempt(
             ),
         )
         fail_reason = _terminalization_reason(term, append_result["reason"])
-        return {"ok": False, "reason": fail_reason, "proc": None, "refused": True}
+        return dict({"ok": False, "reason": fail_reason, "proc": None, "refused": True},
+                    **identity)
 
     return {"ok": True, "proc": proc, "pid": started["pid"], "backgroundId": background_id,
-            "sessionId": started["sessionId"]}
+            "sessionId": started["sessionId"], "configDir": config_dir}
+
+
+def _sessions_to_retire(background_id, pid, config_dir, cwd):
+    """[(listing id, pid or None)] this launch may have opened, or None when that cannot be
+    known. With no acknowledged id, the launch's own fresh worktree is listed: every background
+    session there is this launch's. Never raises."""
+    if background_id is not None:
+        return [(background_id, pid)]
+    try:
+        rows, listing_ok = engine_dispatch.claude_agents_rows(config_dir, cwd)
+        if not listing_ok:
+            return None
+        found = []
+        for row in rows:
+            if not isinstance(row, dict) or row.get("kind") != "background":
+                continue
+            if row.get("state") == "stopped" or not ll.valid_background_id(row.get("id")):
+                continue
+            row_pid = row.get("pid")
+            ok_pid = isinstance(row_pid, int) and not isinstance(row_pid, bool) and row_pid > 1
+            found.append((row["id"], row_pid if ok_pid else None))
+        return found
+    except Exception:  # noqa: BLE001 — an unreadable inventory is "unknown", never "none"
+        return None
 
 
 def _pid_alive(pid, proc=None):
@@ -1851,7 +1894,7 @@ def launch_build(
         )
         background_extra = {
             key: spawn_result[key]
-            for key in ("detail", "backgroundId", "stop")
+            for key in ("detail", "backgroundId", "sessionId", "stop", "unconfirmedSessions")
             if spawn_result.get(key) is not None
         }
         if spawn_result.get("refused"):
@@ -1935,6 +1978,15 @@ def launch_build(
         proc = spawn_result["proc"]
         rc = _observe_session_settle(proc, spawn_result["pid"], settle_seconds, deadline=deadline)
         if rc == "deadline":
+            # The session outlives the acknowledging process, so it is stopped (and the stop
+            # confirmed) before the lane is terminalized; an unconfirmed stop leaves the started
+            # lane live on the ledger and hands back its id.
+            lane = {"backgroundId": spawn_result["backgroundId"],
+                    "stop": _stop_background(spawn_result["backgroundId"],
+                                             spawn_result["configDir"], worktree_path,
+                                             spawn_result["pid"], proc)}
+            if lane["stop"] != "stopped":
+                return _post_reserve_fail("retry-deadline-exceeded", **lane)
             term = _terminalize(
                 repo_root,
                 launch_id,
@@ -1945,7 +1997,7 @@ def launch_build(
                 env=env,
             )
             reason = _terminalization_reason(term, "retry-deadline-exceeded")
-            return _post_reserve_fail(reason)
+            return _post_reserve_fail(reason, **lane)
         if rc is None:
             return {
                 "ok": True,

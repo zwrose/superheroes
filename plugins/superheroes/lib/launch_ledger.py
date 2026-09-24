@@ -36,6 +36,8 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import background_outcome  # noqa: E402
+import config_dir  # noqa: E402
 import file_lock  # noqa: E402
 import pilot_boundary  # noqa: E402
 import pilot_policy  # noqa: E402
@@ -1080,26 +1082,10 @@ def _validate_event_fields(rec):
     return None
 
 
-_BACKGROUND_ID_HEX = frozenset("0123456789abcdef")
-_ENV_PIN_CONFIG = "CLAUDE_CONFIG_DIR"
-_ENV_PIN_KEYS = frozenset({_ENV_PIN_CONFIG, "CLAUDE_CODE_EFFORT_LEVEL"})
-
-
-def valid_background_id(value):
-    """A background session's listing id: exactly eight lowercase hex characters."""
-    return (isinstance(value, str) and len(value) == 8
-            and all(ch in _BACKGROUND_ID_HEX for ch in value))
-
-
-def valid_background_session_id(session_id, background_id):
-    """A background session id: a UUID that begins with its listing id."""
-    if not valid_background_id(background_id) or not isinstance(session_id, str):
-        return False
-    try:
-        uuid.UUID(session_id)
-    except (ValueError, AttributeError, TypeError):
-        return False
-    return session_id.startswith(background_id + "-")
+_ENV_PIN_CONFIG = config_dir.CONFIG_DIR_ENV
+_ENV_PIN_KEYS = frozenset({_ENV_PIN_CONFIG, config_dir.EFFORT_ENV})
+valid_background_id = background_outcome.valid_background_id
+valid_background_session_id = background_outcome.valid_background_session_id
 
 
 def _valid_env_pins(pins):

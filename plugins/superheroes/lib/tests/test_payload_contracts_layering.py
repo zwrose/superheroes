@@ -21,6 +21,7 @@ import round_adapters  # noqa: E402
 # (`seat_bundle.resolve_entry`), so any dispatch entry imports it.
 _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "audits",
+    "background_outcome",  # R28 (C14 4a): stdlib-only leaf — the background-session identity grammar
     "dispatch_allowlist",
     "dispatch_outcome",
     "engine_adapter",
