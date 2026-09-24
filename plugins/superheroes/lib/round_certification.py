@@ -1279,10 +1279,11 @@ def _runner_recorded_vendor_status(obs, session_dir, seat_entry):
     return "missing"
 
 
-def _envelope_execution_model(session_dir, seat_entry):
+def _envelope_execution_model_field(session_dir, seat_entry):
+    """Return (model_field_present, model_value) from the CAS-bound envelope."""
     provenance = seat_entry.get("provenance")
     if provenance not in RECEIPT_PROVENANCE:
-        return None
+        return False, None
     seat = seat_entry["seat"]
     phase = seat_entry["phase"]
     attempt = seat_entry["attempt"]
@@ -1297,11 +1298,18 @@ def _envelope_execution_model(session_dir, seat_entry):
         occurrence,
     )
     if not isinstance(env, dict):
-        return None
+        return False, None
     evidence = env.get("executionEvidence")
-    if isinstance(evidence, dict) and "model" in evidence:
-        return evidence.get("model")
-    return None
+    if not isinstance(evidence, dict) or "model" not in evidence:
+        return False, None
+    return True, evidence.get("model")
+
+
+def _envelope_execution_model(session_dir, seat_entry):
+    present, value = _envelope_execution_model_field(session_dir, seat_entry)
+    if not present:
+        return None
+    return value
 
 
 def _runner_recorded_model(obs, session_dir, seat_entry):
@@ -1313,10 +1321,10 @@ def _journal_envelope_model_refusal(obs, session_dir, seat_entry):
     if not isinstance(obs, dict) or "model" not in obs:
         return None
     journal_model = obs.get("model")
-    envelope_model = _envelope_execution_model(session_dir, seat_entry)
-    if envelope_model is None:
-        return None
-    if journal_model != envelope_model:
+    envelope_has_model, envelope_model = _envelope_execution_model_field(
+        session_dir, seat_entry
+    )
+    if not envelope_has_model or journal_model != envelope_model:
         seat = seat_entry["seat"]
         return _refusal(
             "unfetched-findings",
