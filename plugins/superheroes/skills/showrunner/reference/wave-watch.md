@@ -21,8 +21,8 @@
 - **`loop`** — the arming shape. Re-arms internally until the first actionable event or a refusal,
   then prints one JSON line and exits. Arm as **one harness background task per batch** at wave
   launch.
-- **`run`** — a one-off foreground spot check. It watches once, prints one JSON line, and exits. It
-  does **not** re-arm.
+- **`run`** — a true one-shot. One ledger read (and at most one open-PR read, for stack state), no
+  waiting, then prints one JSON line on stdout and exits. It does **not** re-arm.
 
 **The re-arm lives inside `loop`** — there is no daemon, so there is nothing to orphan. It replaces
 hand-rolled per-session watch loops that kept failing quietly: a double-backgrounded loop that
@@ -90,17 +90,21 @@ primitive so `loop` survives across turns — do not rely on a foreground arm ou
 
 ## One-off check (`run`)
 
-Use `run` for a **single foreground spot check** — "is anything happening right now?" — not for wave
-arming:
+Use `run` for a **single foreground check** — "what is due right now?" — not for wave arming:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/wave_watch.py" run \
-  --repo-root "$REPO_ROOT" --batch "$BATCH_ID" \
-  --max-seconds 2400 --interval-seconds 60
+  --repo-root "$REPO_ROOT" --batch "$BATCH_ID"
 ```
 
-`run` takes the same flags as `loop` except `--max-total-seconds` and `--log`. It does not re-arm.
+`run` is a true one-shot: one ledger read and at most one open-PR read for stack state, no waiting,
+then exit. Flags: `--repo-root`, `--batch`, `--ignore-launch`, `--ignore-event`. It does **not** take
+`--max-seconds`, `--interval-seconds`, `--max-total-seconds`, or `--log` — passing `--max-seconds` or
+`--interval-seconds` is a usage error. Its reads of GitHub are bounded by a fixed 30-second budget
+(`RUN_READ_BUDGET_SECONDS`). It returns the first event due right now, or `timer` when nothing is
+due. It cannot report `pr-set-changed` (a one-shot has no PR baseline to compare against), and it
+never reports the window-only degradations `lane-never-stamped` or `pr-signal-never-sampled`.
 
 ## `--ignore-launch` and re-arming
 
@@ -218,6 +222,8 @@ regardless of any promise.
 
 ## Timing flags
 
+`run` takes no timing flags.
+
 Under `loop`, `--max-seconds` is the **per-arm** watch window (default 2400) — how long each internal
 arm watches before a `timer` forces a re-arm. It is **not** how long the advisor's session is
 committed.
@@ -242,7 +248,7 @@ The watcher prints **one JSON line on stdout**; **exit 0 on an event, exit 1 on 
 - `lane-blocked`
 - `builder-exited`
 - `stack-state-changed`
-- `pr-set-changed`
+- `pr-set-changed` — never reported by `run`
 - `lane-stale`
 - `timer`
 

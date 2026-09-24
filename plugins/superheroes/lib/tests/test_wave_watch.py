@@ -223,7 +223,6 @@ def _setup_stale_lane(
 def test_refusal_r1_batch_invalid_cli():
     proc = _run_cli([
         "run", "--repo-root", os.getcwd(), "--batch", "   ",
-        "--max-seconds", "1", "--interval-seconds", "1",
     ])
     out = json.loads(proc.stdout.strip())
     assert proc.returncode == 1
@@ -232,7 +231,7 @@ def test_refusal_r1_batch_invalid_cli():
 
 def test_refusal_r1_batch_invalid_run(tmp_path):
     repo = _init_repo(tmp_path / "repo")
-    result = ww.run(repo, None)
+    result = ww.watch_arm(repo, None)
     assert result["ok"] is False
     assert result["reason"] == "batch-invalid"
 
@@ -240,41 +239,34 @@ def test_refusal_r1_batch_invalid_run(tmp_path):
 def test_refusal_r2_interval_invalid_cli():
     proc = _run_cli([
         "run", "--repo-root", os.getcwd(), "--batch", "b",
-        "--max-seconds", "2", "--interval-seconds", "0",
+        "--interval-seconds", "0",
     ])
-    out = json.loads(proc.stdout.strip())
-    assert proc.returncode == 1
-    assert out["reason"] == "interval-invalid"
-    assert out["ok"] is False
-    assert out["batchId"] == "b"
+    assert proc.returncode == 2
 
 
 def test_refusal_r2_interval_bool_run(tmp_path):
     repo = _init_repo(tmp_path / "repo")
-    result = ww.run(repo, "batch-982", interval_seconds=True, max_seconds=2)
+    result = ww.watch_arm(repo, "batch-982", interval_seconds=True, max_seconds=2)
     assert result["reason"] == "interval-invalid"
 
 
 def test_refusal_r3_max_seconds_invalid_cli():
     proc = _run_cli([
         "run", "--repo-root", os.getcwd(), "--batch", "b",
-        "--max-seconds", "0", "--interval-seconds", "1",
+        "--max-seconds", "5",
     ])
-    out = json.loads(proc.stdout.strip())
-    assert proc.returncode == 1
-    assert out["reason"] == "max-seconds-invalid"
+    assert proc.returncode == 2
 
 
 def test_refusal_r3_max_seconds_bool_run(tmp_path):
     repo = _init_repo(tmp_path / "repo")
-    result = ww.run(repo, "batch-982", max_seconds=False, interval_seconds=1)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=False, interval_seconds=1)
     assert result["reason"] == "max-seconds-invalid"
 
 
 def test_refusal_r4_repo_root_invalid_cli():
     proc = _run_cli([
         "run", "--repo-root", "/nonexistent/ww-r4", "--batch", "b",
-        "--max-seconds", "1", "--interval-seconds", "1",
     ])
     out = json.loads(proc.stdout.strip())
     assert proc.returncode == 1
@@ -285,7 +277,7 @@ def test_refusal_r4_repo_root_invalid_cli():
 def test_refusal_r5_store_unresolvable(tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
-    result = ww.run(str(plain), "batch-982", max_seconds=1, interval_seconds=1)
+    result = ww.watch_arm(str(plain), "batch-982", max_seconds=1, interval_seconds=1)
     assert result["ok"] is False
     assert result["reason"] == "store-unresolvable"
     assert result["batchId"] == "batch-982"
@@ -299,13 +291,12 @@ def test_refusal_internal_error_on_read_exception(tmp_path, monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(ww.ll, "read", raiser)
-    result = ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=1, interval_seconds=1)
     assert result["ok"] is False
     assert result["reason"] == "internal-error"
     assert result["detail"] == "RuntimeError"
     exit_code = ww.main([
         "wave_watch.py", "run", "--repo-root", repo, "--batch", "batch-982",
-        "--max-seconds", "1", "--interval-seconds", "1",
     ])
     assert exit_code == 1
 
@@ -316,7 +307,7 @@ def test_refusal_internal_error_on_read_exception(tmp_path, monkeypatch):
 def test_event_e1_lane_terminal(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="handback")
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["ok"] is True
     assert result["event"] == "lane-terminal"
     assert result["batchId"] == "batch-982"
@@ -328,7 +319,7 @@ def test_event_e1_lane_terminal(tmp_path, monkeypatch):
 def test_event_e2_lane_blocked(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="blocked")
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["ok"] is True
     assert result["event"] == "lane-blocked"
     assert result["launchId"] == "lane-a"
@@ -339,7 +330,7 @@ def test_event_e3_builder_exited(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead_pid = 999999999
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["ok"] is True
     assert result["event"] == "builder-exited"
     assert result["pids"] == [dead_pid]
@@ -355,7 +346,7 @@ def test_lane_terminal_makes_zero_gh_run_calls(tmp_path, monkeypatch):
         gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         monotonic=_advancing_monotonic(), sleep=lambda _d: None,
         gh_run=counting_gh_run,
@@ -374,7 +365,7 @@ def test_lane_blocked_makes_zero_gh_run_calls(tmp_path, monkeypatch):
         gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         monotonic=_advancing_monotonic(), sleep=lambda _d: None,
         gh_run=counting_gh_run,
@@ -394,7 +385,7 @@ def test_builder_exited_makes_zero_gh_run_calls(tmp_path, monkeypatch):
         gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         monotonic=_advancing_monotonic(), sleep=lambda _d: None,
         gh_run=counting_gh_run,
@@ -420,7 +411,7 @@ def test_suppressed_terminal_lane_polls_prs_for_pr_set_changed(tmp_path, monkeyp
             )
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         monotonic=_advancing_monotonic(), sleep=lambda _d: None,
         gh_run=counting_gh_run,
@@ -446,7 +437,7 @@ def test_event_e4_pr_set_changed(tmp_path, monkeypatch):
         idx[0] += 1
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=5, interval_seconds=1,
         gh_run=gh_run_seq,
     )
@@ -464,7 +455,7 @@ def test_event_e4_pr_set_changed(tmp_path, monkeypatch):
 def test_event_e5_timer(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["ok"] is True
@@ -488,7 +479,7 @@ def test_corrupt_ledger_interior_corrupt_refuses_immediately(tmp_path, monkeypat
     with open(ledger_file, "ab") as fh:
         fh.write(b"not-valid-json\n")
     assert ll.read(repo)["state"] == "interiorCorrupt"
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["ok"] is False
@@ -507,7 +498,7 @@ def test_torn_tail_ledger_still_detects_builder_exited(tmp_path, monkeypatch):
     with open(ledger_file, "ab") as fh:
         fh.write(b'{"event":"started"')
     assert ll.read(repo)["state"] == "tornTail"
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["event"] == "builder-exited"
@@ -532,7 +523,7 @@ def test_corrupt_heartbeat_dead_pid_emits_builder_exited_with_degradation(
     hb_result = hb.read_heartbeat(repo, launch_id)
     assert hb_result["class"] == "unknown"
     assert hb_result["reason"] != ww.REASON_HEARTBEAT_MISSING
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["event"] == "builder-exited"
@@ -553,7 +544,7 @@ def test_corrupt_heartbeat_emits_timer_degraded(tmp_path, monkeypatch):
     hb_result = hb.read_heartbeat(repo, launch_id)
     assert hb_result["class"] == "unknown"
     assert hb_result["reason"] != "heartbeat-missing"
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
@@ -586,7 +577,7 @@ def test_ledger_unreadable_refuses_at_timer_when_still_unreadable(tmp_path, monk
     def fake_sleep(duration):
         clock[0] += duration
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         monotonic=_with_loop_budget(mono), sleep=fake_sleep, gh_run=_noop_gh_run,
     )
@@ -622,7 +613,7 @@ def test_ledger_transient_unreadable_then_readable_emits_timer_degraded(
     def fake_sleep(duration):
         clock[0] += duration
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         monotonic=_with_loop_budget(mono), sleep=fake_sleep, gh_run=_noop_gh_run,
     )
@@ -647,7 +638,7 @@ def test_first_interval_unreadable_refuses_immediately(tmp_path, monkeypatch):
         return {"state": "unreadable", "records": []}
 
     monkeypatch.setattr(ww.ll, "read", unreadable_read)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2400, interval_seconds=60,
         monotonic=mono, sleep=fake_sleep, gh_run=_noop_gh_run,
     )
@@ -671,7 +662,7 @@ def test_fold_failure_refuses_on_first_interval(tmp_path, monkeypatch):
                 "batchDeclarations": {}}
 
     monkeypatch.setattr(ww.ll, "fold", bad_fold)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["ok"] is False
@@ -687,7 +678,7 @@ def test_unrecognized_ledger_state_refuses_on_first_interval(tmp_path, monkeypat
         return {"state": "future-state", "records": []}
 
     monkeypatch.setattr(ww.ll, "read", bogus_read)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["ok"] is False
@@ -697,7 +688,7 @@ def test_unrecognized_ledger_state_refuses_on_first_interval(tmp_path, monkeypat
 def test_missing_ledger_never_observed_emits_timer(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["ok"] is True
@@ -731,7 +722,7 @@ def test_observed_then_missing_refuses_at_deadline(tmp_path, monkeypatch):
     def fake_sleep(duration):
         clock[0] += duration
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         monotonic=_with_loop_budget(mono), sleep=fake_sleep, gh_run=_noop_gh_run,
     )
@@ -767,7 +758,7 @@ def test_deadline_blind_on_final_read_refuses_not_timer(tmp_path, monkeypatch):
         clock[0] = 3.0
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         monotonic=mono, sleep=fake_sleep, gh_run=gh_advance,
     )
@@ -781,7 +772,7 @@ def test_deadline_blind_on_final_read_refuses_not_timer(tmp_path, monkeypatch):
 def test_lane_stale_working_state_with_live_pid(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_stale_lane(repo, tmp_path, monkeypatch, stamp_state="working")
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["ok"] is True
@@ -796,7 +787,7 @@ def test_lane_stale_working_state_with_live_pid(tmp_path, monkeypatch):
 def test_lane_stale_awaiting_dispatch_state_with_live_pid(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_stale_lane(repo, tmp_path, monkeypatch, stamp_state="awaiting-dispatch")
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["event"] == "lane-stale"
@@ -811,7 +802,7 @@ def test_stale_heartbeat_pid_uncertain_no_lane_stale(tmp_path, monkeypatch):
         raise OSError("probe failed")
 
     monkeypatch.setattr(ww.os, "kill", raiser)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
@@ -825,7 +816,7 @@ def test_stale_heartbeat_dead_pid_emits_builder_exited_not_lane_stale(
     repo = _init_repo(tmp_path / "repo")
     dead_pid = 999999999
     _setup_stale_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["event"] == "builder-exited"
@@ -865,7 +856,7 @@ def test_lane_never_stamped_emits_timer_not_lane_stale(tmp_path, monkeypatch):
     ll.declare_batch(repo, "batch-982", 1)
     ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
     ll.append(repo, _started("lane-a", pid=os.getpid()))
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
@@ -901,7 +892,7 @@ def test_stale_heartbeat_not_started_no_lane_stale(tmp_path, monkeypatch):
         return batch_lanes, live, readable
 
     monkeypatch.setattr(ww, "_derive_batch_lanes", derive_with_unstarted_pid)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
@@ -930,7 +921,7 @@ def test_lane_never_stamped_not_latched_when_stamp_arrives_on_tick_two(
             )
             stamped[0] = True
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         sleep=sleep_fn, gh_run=_noop_gh_run,
     )
@@ -949,7 +940,7 @@ def test_os_kill_uses_signal_zero_only(tmp_path, monkeypatch):
         return original_kill(pid, sig)
 
     monkeypatch.setattr(ww.os, "kill", record_kill)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
@@ -978,7 +969,7 @@ def test_stale_heartbeat_invalid_pid_no_lane_stale():
 def test_blocked_and_stale_emits_lane_blocked_not_lane_stale(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_stale_lane(repo, tmp_path, monkeypatch, stamp_state="blocked")
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["event"] == "lane-blocked"
@@ -988,7 +979,7 @@ def test_blocked_and_stale_emits_lane_blocked_not_lane_stale(tmp_path, monkeypat
 def test_ignore_launch_suppresses_stale_lane(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_stale_lane(repo, tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         ignore_launch_ids=("lane-a",), gh_run=_noop_gh_run,
     )
@@ -1019,7 +1010,7 @@ def test_precedence_pr_set_changed_beats_lane_stale(tmp_path, monkeypatch):
             now=time.time() - 60,
         )
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=5, interval_seconds=1,
         gh_run=gh_run_seq, sleep=sleep_fn,
     )
@@ -1048,7 +1039,7 @@ def test_precedence_builder_exited_beats_lane_stale(tmp_path, monkeypatch):
         now=time.time() - 60,
     )
     assert hb.read_heartbeat(repo, "lane-stale")["class"] == "stale"
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["event"] == "builder-exited"
@@ -1069,7 +1060,7 @@ def test_pid_probe_uncertain_emits_timer_not_builder_exited(tmp_path, monkeypatc
         raise OSError("probe failed")
 
     monkeypatch.setattr(ww.os, "kill", raiser)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
@@ -1105,7 +1096,7 @@ def test_acceptance_pid_exit(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead = 888888888
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead)
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["event"] == "builder-exited"
     assert result["pids"] == [dead]
 
@@ -1113,7 +1104,7 @@ def test_acceptance_pid_exit(tmp_path, monkeypatch):
 def test_acceptance_heartbeat_flip(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="parked")
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["event"] == "lane-terminal"
     assert result["launches"][0]["state"] == "parked"
 
@@ -1133,7 +1124,7 @@ def test_acceptance_pr_set_change_mocked_gh(tmp_path, monkeypatch):
             argv, 0, stdout=json.dumps(body), stderr="",
         )
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=4, interval_seconds=1, gh_run=gh_run,
     )
     assert result["event"] == "pr-set-changed"
@@ -1143,7 +1134,7 @@ def test_acceptance_pr_set_change_mocked_gh(tmp_path, monkeypatch):
 def test_acceptance_timer(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=10, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
@@ -1153,7 +1144,7 @@ def test_precedence_terminal_beats_builder_exited(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead = 777777777
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead, stamp_state="handback")
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["event"] == "lane-terminal"
     assert result["event"] != "builder-exited"
 
@@ -1196,7 +1187,7 @@ def test_also_observed_carries_co_occurring_blocked_lane(tmp_path, monkeypatch):
         repo, state="blocked", phase="watch", launch_id="lane-b",
         stale_after_seconds=3600,
     )
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["event"] == "lane-terminal"
     assert result["launchId"] == "lane-a"
     assert result["alsoObserved"] == {"blocked": ["lane-b"]}
@@ -1206,7 +1197,7 @@ def test_ignore_launch_suppresses_lane_event(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead = 777777777
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead, stamp_state="handback")
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         ignore_launch_ids=("lane-a",), gh_run=_noop_gh_run,
     )
@@ -1219,7 +1210,6 @@ def test_ignore_launch_cli_flag(tmp_path, monkeypatch):
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead, stamp_state="handback")
     proc = _run_cli([
         "run", "--repo-root", repo, "--batch", "batch-982",
-        "--max-seconds", "2", "--interval-seconds", "60",
         "--ignore-launch", "lane-a",
     ], env=_fake_gh_cli_env(tmp_path))
     assert proc.returncode == 0
@@ -1233,7 +1223,7 @@ def test_ignore_launch_cli_flag(tmp_path, monkeypatch):
 def test_working_lane_fires_nothing(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=os.getpid(), stamp_state="working")
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
@@ -1253,7 +1243,7 @@ def test_mid_watch_launch_detected_within_one_interval(tmp_path, monkeypatch):
         ll.append(repo, _reserved("lane-late", "batch-982", ["plugins/superheroes/lib"], repo))
         ll.append(repo, _started("lane-late", pid=dead))
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=3, interval_seconds=1,
         sleep=sleep_fn, gh_run=_noop_gh_run,
     )
@@ -1274,7 +1264,7 @@ def test_batch_isolation_other_batch_never_produces_event(tmp_path, monkeypatch)
     dead = 555555555
     ll.append(repo, _reserved("lane-other", "batch-other", ["plugins/superheroes/lib"], repo))
     ll.append(repo, _started("lane-other", pid=dead))
-    result = ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
     assert result["event"] == "timer"
 
 
@@ -1287,7 +1277,7 @@ def test_reserved_never_started_no_event(tmp_path, monkeypatch):
     _precreate_repo_store_dir(repo, store_root)
     ll.declare_batch(repo, "batch-982", 1)
     ll.append(repo, _reserved("lane-b", "batch-982", ["plugins/superheroes/lib"], repo))
-    result = ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
     assert result["event"] == "timer"
 
 
@@ -1301,7 +1291,7 @@ def test_retried_lane_old_pid_dead_latest_live_no_event(tmp_path, monkeypatch):
     ll.append(repo, _started(launch_id, attempt=1, pid=444444444))
     ll.append(repo, _retry(launch_id, attempt=2))
     ll.append(repo, _started(launch_id, attempt=2, pid=os.getpid()))
-    result = ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
+    result = ww.watch_arm(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
     assert result["event"] == "timer"
 
 
@@ -1318,7 +1308,7 @@ def test_pr_identical_set_no_event(tmp_path, monkeypatch):
             argv, 0, stdout=json.dumps(body), stderr="",
         )
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=3, interval_seconds=1, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1337,7 +1327,7 @@ def test_pr_same_tick_open_close_fires(tmp_path, monkeypatch):
             argv, 0, stdout=json.dumps(body), stderr="",
         )
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=4, interval_seconds=1, gh_run=gh_run,
     )
     assert result["event"] == "pr-set-changed"
@@ -1355,7 +1345,7 @@ def test_gh_exception_adds_degradation_no_event(tmp_path, monkeypatch):
     def gh_run(argv, **kwargs):
         raise OSError("gh missing")
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1369,7 +1359,7 @@ def test_gh_nonzero_exit_adds_degradation_no_event(tmp_path, monkeypatch):
     def gh_run(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 1, stdout="", stderr="fail")
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1383,7 +1373,7 @@ def test_gh_bad_json_adds_degradation_no_event(tmp_path, monkeypatch):
     def gh_run(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 0, stdout="not-json", stderr="")
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1404,7 +1394,7 @@ def test_gh_first_failure_then_success_baselines(tmp_path, monkeypatch):
             argv, 0, stdout=json.dumps(body), stderr="",
         )
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=3, interval_seconds=1, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1428,7 +1418,7 @@ def test_deadline_timer_without_overshoot(tmp_path, monkeypatch):
         sleeps.append(duration)
         clock[0] += duration
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=5, interval_seconds=60,
         monotonic=_with_loop_budget(mono), sleep=fake_sleep, gh_run=_noop_gh_run,
     )
@@ -1449,7 +1439,7 @@ def test_max_seconds_shorter_than_interval_evaluates_once_then_timer(tmp_path, m
     def fake_sleep(duration):
         clock[0] += duration
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         monotonic=_with_loop_budget(mono), sleep=fake_sleep, gh_run=_noop_gh_run,
     )
@@ -1486,7 +1476,7 @@ def test_read_only_no_store_files_changed(tmp_path, monkeypatch):
     )
     before = _snapshot_files(store_root)
     before_paths = set(before.keys())
-    ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
+    ww.watch_arm(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
     after = _snapshot_files(store_root)
     assert set(after.keys()) == before_paths
     assert before == after
@@ -1509,7 +1499,7 @@ def test_gh_child_receives_supplied_env(tmp_path, monkeypatch):
         seen.append(kwargs.get("env"))
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
@@ -1558,7 +1548,7 @@ def test_gh_child_env_scrubs_routing_var(tmp_path, monkeypatch, var):
         seen.append(kwargs.get("env"))
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
@@ -1580,7 +1570,7 @@ def test_gh_child_env_preserves_auth_vars(tmp_path, monkeypatch):
         seen.append(kwargs.get("env"))
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
@@ -1605,7 +1595,7 @@ def test_at_deadline_skips_gh_no_degradation(tmp_path, monkeypatch):
         calls.append(True)
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=60,
         monotonic=_with_loop_budget(mono), sleep=lambda d: None, gh_run=gh_run,
     )
@@ -1636,7 +1626,7 @@ def test_pr_change_after_deadline_not_returned(tmp_path, monkeypatch):
             argv, 0, stdout=json.dumps(body), stderr="",
         )
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1,
         monotonic=_with_loop_budget(mono), sleep=fake_sleep, gh_run=gh_run,
     )
@@ -1661,7 +1651,7 @@ def test_gh_timeout_never_exceeds_remaining(tmp_path, monkeypatch):
         timeouts.append(kwargs.get("timeout"))
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=3, interval_seconds=1,
         monotonic=_with_loop_budget(mono), sleep=fake_sleep, gh_run=gh_run,
     )
@@ -1702,7 +1692,7 @@ def test_first_tick_slow_scans_skip_gh_poll_without_overrun(tmp_path, monkeypatc
         gh_calls.append(kwargs.get("timeout"))
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=max_seconds, interval_seconds=60,
         monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
     )
@@ -1732,7 +1722,7 @@ def test_gh_poll_budget_computed_after_scans(tmp_path, monkeypatch):
         timeouts.append(kwargs.get("timeout"))
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=3, interval_seconds=60,
         monotonic=mono, sleep=lambda d: None, gh_run=gh_run,
     )
@@ -1758,7 +1748,7 @@ def test_gh_timeout_ceiling_thirty_when_remaining_large(tmp_path, monkeypatch):
         timeouts.append(kwargs.get("timeout"))
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=35, interval_seconds=60,
         monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
     )
@@ -1790,7 +1780,7 @@ def test_gh_poll_spacing_skips_missed_ticks(tmp_path, monkeypatch):
         clock[0] += gh_cost
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=15, interval_seconds=interval_seconds,
         monotonic=mono, sleep=fake_sleep, gh_run=paced_gh_run,
     )
@@ -1822,7 +1812,7 @@ def test_sub_floor_remaining_skips_gh_no_pr_degradation(tmp_path, monkeypatch):
         timeouts.append(kwargs.get("timeout"))
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
     )
@@ -1850,7 +1840,7 @@ def test_all_skipped_gh_polls_add_pr_signal_never_sampled(tmp_path, monkeypatch)
         calls.append(True)
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1,
         monotonic=mono, sleep=lambda d: None, gh_run=gh_run,
     )
@@ -1865,7 +1855,6 @@ def test_all_skipped_gh_polls_add_pr_signal_never_sampled(tmp_path, monkeypatch)
 def test_cli_refusal_exit_one(tmp_path):
     proc = _run_cli([
         "run", "--repo-root", str(tmp_path / "missing"), "--batch", "b",
-        "--max-seconds", "1", "--interval-seconds", "1",
     ])
     assert proc.returncode == 1
     out = json.loads(proc.stdout.strip())
@@ -1877,7 +1866,6 @@ def test_cli_event_exit_zero(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     proc = _run_cli([
         "run", "--repo-root", repo, "--batch", "batch-982",
-        "--max-seconds", "1", "--interval-seconds", "1",
     ], env=_fake_gh_cli_env(tmp_path))
     assert proc.returncode == 0
     out = json.loads(proc.stdout.strip())
@@ -1888,8 +1876,10 @@ def test_cli_event_exit_zero(tmp_path, monkeypatch):
 # --- loop verb (B1–B5) --------------------------------------------------------
 
 
-def _valid_repo_for_loop(tmp_path):
-    return _init_repo(tmp_path / "loop-repo")
+def _valid_repo_for_loop(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "loop-repo")
+    _ledger_env(tmp_path, monkeypatch)
+    return repo
 
 
 def _timer_arm_result(batch_id="batch-982", degraded=None):
@@ -1938,8 +1928,8 @@ def _never_run_fn():
     return run_fn, calls, violations
 
 
-def test_loop_timer_rearms_until_non_timer_event(tmp_path):
-    repo = _valid_repo_for_loop(tmp_path)
+def test_loop_timer_rearms_until_non_timer_event(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
     terminal = {
         "ok": True,
         "event": "lane-terminal",
@@ -1962,8 +1952,8 @@ def test_loop_timer_rearms_until_non_timer_event(tmp_path):
     assert violations == []
 
 
-def test_loop_first_non_timer_ok_terminates_with_arms(tmp_path):
-    repo = _valid_repo_for_loop(tmp_path)
+def test_loop_first_non_timer_ok_terminates_with_arms(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
     exited = {
         "ok": True,
         "event": "builder-exited",
@@ -1983,8 +1973,8 @@ def test_loop_first_non_timer_ok_terminates_with_arms(tmp_path):
     assert violations == []
 
 
-def test_loop_refusal_terminates_immediately_with_arms(tmp_path):
-    repo = _valid_repo_for_loop(tmp_path)
+def test_loop_refusal_terminates_immediately_with_arms(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
     refusal = {
         "ok": False,
         "reason": ww.REFUSAL_LEDGER_UNREADABLE,
@@ -2012,9 +2002,9 @@ def test_loop_refusal_terminates_immediately_with_arms(tmp_path):
     ),
 ])
 def test_loop_validation_refusal_never_calls_run_fn(
-    tmp_path, kwargs, expected_reason,
+    tmp_path, monkeypatch, kwargs, expected_reason,
 ):
-    repo = _valid_repo_for_loop(tmp_path)
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
     run_fn, calls, violations = _never_run_fn()
     batch_id = kwargs.pop("batch_id", "batch-982")
     result = ww.loop(repo, batch_id, run_fn=run_fn, **kwargs)
@@ -2025,8 +2015,8 @@ def test_loop_validation_refusal_never_calls_run_fn(
     assert violations == []
 
 
-def test_loop_max_total_seconds_emits_last_timer_not_refusal(tmp_path):
-    repo = _valid_repo_for_loop(tmp_path)
+def test_loop_max_total_seconds_emits_last_timer_not_refusal(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
     clock = [0.0]
 
     def mono():
@@ -2054,8 +2044,8 @@ def test_loop_max_total_seconds_emits_last_timer_not_refusal(tmp_path):
     assert result["arms"] == 2
 
 
-def test_loop_accumulates_degraded_from_discarded_timer_arms(tmp_path):
-    repo = _valid_repo_for_loop(tmp_path)
+def test_loop_accumulates_degraded_from_discarded_timer_arms(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
     terminal = {
         "ok": True,
         "event": "lane-terminal",
@@ -2084,7 +2074,7 @@ def test_loop_threads_ledger_observed_across_arms(tmp_path, monkeypatch):
     ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
     ll.append(repo, _started("lane-a", pid=os.getpid()))
     arm = [0]
-    real_run = ww.run
+    real_run = ww.watch_arm
     clock = [0.0]
 
     def mono():
@@ -2120,7 +2110,7 @@ def test_loop_threads_pr_state_across_arm_boundary(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     arm = [0]
     pr_sets = [{1}, {1, 2}]
-    real_run = ww.run
+    real_run = ww.watch_arm
 
     def gh_for_arm(argv, **kwargs):
         idx = min(arm[0] - 1, len(pr_sets) - 1)
@@ -2152,7 +2142,7 @@ def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatc
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     arm = [0]
-    real_run = ww.run
+    real_run = ww.watch_arm
     clock = [0.0]
     original_derive = ww._derive_batch_lanes
     gh_calls = [0]
@@ -2207,9 +2197,9 @@ def test_run_explicit_none_cells_start_fresh_each_call(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     common = dict(max_seconds=3, interval_seconds=1, gh_run=_noop_gh_run)
-    ww.run(repo, "batch-982", **common)
-    omitted = ww.run(repo, "batch-982", **common)
-    explicit_none = ww.run(
+    ww.watch_arm(repo, "batch-982", **common)
+    omitted = ww.watch_arm(repo, "batch-982", **common)
+    explicit_none = ww.watch_arm(
         repo, "batch-982",
         ledger_observed=None, pr_state=None, pr_sampled=None,
         **common,
@@ -2225,7 +2215,7 @@ def test_run_explicit_none_cells_start_fresh_each_call(tmp_path, monkeypatch):
 def test_ignore_event_suppressed_lane_stale_falls_through(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_stale_lane(repo, tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         ignore_events=(("lane-a", ww.EVENT_LANE_STALE),),
         gh_run=_noop_gh_run,
@@ -2237,7 +2227,7 @@ def test_ignore_event_suppressed_lane_stale_falls_through(tmp_path, monkeypatch)
 def test_ignore_event_same_lane_different_event_still_fires(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="handback")
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         ignore_events=(("lane-a", ww.EVENT_LANE_STALE),),
         gh_run=_noop_gh_run,
@@ -2263,7 +2253,7 @@ def test_ignore_event_same_event_different_lane_still_fires(tmp_path, monkeypatc
         repo, state="working", phase="watch", launch_id="lane-b",
         stale_after_seconds=1, now=time.time() - 60,
     )
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         ignore_events=(("lane-a", ww.EVENT_LANE_STALE),),
         gh_run=_noop_gh_run,
@@ -2291,7 +2281,7 @@ def test_ignore_event_suppressed_builder_exited_filters_pids_and_launches(
         _reserved("lane-live", "batch-982", ["plugins/superheroes/lib"], repo),
     )
     ll.append(repo, _started("lane-live", pid=dead_unsuppressed))
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         ignore_events=(("lane-suppressed", ww.EVENT_BUILDER_EXITED),),
         gh_run=_noop_gh_run,
@@ -2318,7 +2308,7 @@ def test_ignore_event_suppressed_lane_still_in_also_observed(tmp_path, monkeypat
         repo, state="working", phase="watch", launch_id="lane-stale",
         stale_after_seconds=1, now=time.time() - 60,
     )
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
         ignore_events=(("lane-stale", ww.EVENT_LANE_STALE),),
         gh_run=_noop_gh_run,
@@ -2336,9 +2326,9 @@ def test_ignore_event_suppressed_lane_still_in_also_observed(tmp_path, monkeypat
     (("lane-a", ww.EVENT_STACK_STATE_CHANGED),),
     (("lane-a", ww.EVENT_TIMER),),
 ])
-def test_ignore_event_invalid_direct_call(tmp_path, ignore_events):
-    repo = _valid_repo_for_loop(tmp_path)
-    result = ww.run(
+def test_ignore_event_invalid_direct_call(tmp_path, monkeypatch, ignore_events):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1,
         ignore_events=ignore_events,
     )
@@ -2354,11 +2344,10 @@ def test_ignore_event_invalid_direct_call(tmp_path, ignore_events):
     "lane-a:stack-state-changed",
     "lane-a:timer",
 ])
-def test_ignore_event_invalid_cli(tmp_path, cli_value):
-    repo = _valid_repo_for_loop(tmp_path)
+def test_ignore_event_invalid_cli(tmp_path, monkeypatch, cli_value):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
     proc = _run_cli([
         "run", "--repo-root", repo, "--batch", "batch-982",
-        "--max-seconds", "1", "--interval-seconds", "1",
         "--ignore-event", cli_value,
     ])
     out = json.loads(proc.stdout.strip())
@@ -2384,7 +2373,6 @@ def test_ignore_event_cli_repeatable_and_last_colon_split(tmp_path, monkeypatch)
         assert hb.read_heartbeat(repo, launch_id)["class"] == "stale"
     proc = _run_cli([
         "run", "--repo-root", repo, "--batch", "batch-982",
-        "--max-seconds", "2", "--interval-seconds", "60",
         "--ignore-event", "lane-a:lane-stale",
         "--ignore-event", "lane-b:lane-stale",
     ], env=_fake_gh_cli_env(tmp_path))
@@ -2508,8 +2496,8 @@ def test_loop_log_non_regular_file_refuses_write(tmp_path, monkeypatch):
 # --- loop gaps (B5) -----------------------------------------------------------
 
 
-def test_loop_refusal_interval_invalid_has_arms_zero(tmp_path):
-    repo = _valid_repo_for_loop(tmp_path)
+def test_loop_refusal_interval_invalid_has_arms_zero(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
     run_fn, calls, violations = _never_run_fn()
     result = ww.loop(
         repo, "batch-982", interval_seconds=0, run_fn=run_fn,
@@ -2519,6 +2507,59 @@ def test_loop_refusal_interval_invalid_has_arms_zero(tmp_path):
     assert result["arms"] == 0
     assert calls[0] == 0
     assert violations == []
+
+
+# --- C15 layer 1 watcher (issue #1274) ----------------------------------------
+
+
+def test_run_is_one_shot_against_quiet_live_lane(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_live_lane(
+        repo, tmp_path, monkeypatch, pid=os.getpid(), stamp_state="working",
+    )
+    config = tmp_path / "claude-config"
+    config.mkdir(exist_ok=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    ledger_reads = [0]
+    real_read = ww.ll.read
+
+    def counting_read(repo_root, env=None):
+        ledger_reads[0] += 1
+        return real_read(repo_root, env=env)
+
+    monkeypatch.setattr(ww.ll, "read", counting_read)
+    sleeps = []
+    monkeypatch.setattr(ww.time, "sleep", lambda d: sleeps.append(d))
+    result = ww.run(repo, "batch-982", gh_run=_noop_gh_run)
+    assert result["event"] == "timer"
+    assert sleeps == []
+    assert ledger_reads[0] == 1
+
+
+def test_run_slow_gh_returns_without_waiting(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def slow_gh(argv, **kwargs):
+        clock[0] += ww.RUN_READ_BUDGET_SECONDS + 5
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", monotonic=mono, gh_run=slow_gh,
+    )
+    assert result["event"] == "timer"
+
+
+def test_cli_run_max_seconds_exits_two():
+    proc = _run_cli([
+        "run", "--repo-root", os.getcwd(), "--batch", "b",
+        "--max-seconds", "5",
+    ])
+    assert proc.returncode == 2
 
 
 def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch):
@@ -2635,7 +2676,7 @@ def test_lane_stale_suppressed_when_transcript_fresh(tmp_path, monkeypatch):
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
     _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=150)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
 
@@ -2797,7 +2838,7 @@ def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, request
     else:
         _write_session_transcript(config_dir, session_id, age_seconds=60)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
 
@@ -2930,7 +2971,7 @@ def test_absent_bucket_with_fresh_match_suppresses_lane(tmp_path, monkeypatch):
     _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=60, bucket="present")
     os.makedirs(os.path.join(str(config_dir), "projects", "absent"), exist_ok=True)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
 
@@ -2995,7 +3036,7 @@ def test_recorded_config_dir_is_searched_instead_of_the_watchers_own(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root_b))
     _write_session_transcript(root_a, _TEST_SESSION_ID, age_seconds=120)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
 
@@ -3023,7 +3064,7 @@ def test_without_a_recorded_config_dir_only_the_env_root_resolves(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root_b))
     _write_session_transcript(root_a, _TEST_SESSION_ID, age_seconds=120)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
 
@@ -3034,7 +3075,7 @@ def test_without_a_recorded_config_dir_only_the_env_root_resolves(
     # And the same lane resolves once the env root IS the one holding the transcript —
     # proving the miss above is the root choice, not a broken fixture.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root_a))
-    again = ww.run(
+    again = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
     assert [e["launchId"] for e in again["staleSuppressed"]] == ["lane-a"]
@@ -3058,7 +3099,7 @@ def test_recorded_config_dir_never_falls_back_to_the_env_root(tmp_path, monkeypa
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_root))
     _write_session_transcript(env_root, _TEST_SESSION_ID, age_seconds=60)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
 
@@ -3081,7 +3122,7 @@ def test_unreadable_recorded_config_dir_discloses_unresolved(tmp_path, monkeypat
     os.chmod(unreadable_root, 0o000)
     request.addfinalizer(lambda: os.chmod(unreadable_root, 0o700))
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
 
@@ -3242,7 +3283,7 @@ def test_folded_session_id_wires_end_to_end_to_suppressed_lane(tmp_path, monkeyp
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
     _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=120)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
 
@@ -3274,7 +3315,7 @@ def test_one_fresh_lane_cannot_hide_a_different_wedged_lane(tmp_path, monkeypatc
     _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=120)
     _write_session_transcript(config_dir, _OTHER_SESSION_ID, age_seconds=3600)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
 
@@ -3355,7 +3396,7 @@ def test_suppressed_lane_drops_out_of_also_observed(tmp_path, monkeypatch):
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
     _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=120)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
 
@@ -3384,7 +3425,7 @@ def test_later_tick_finding_lane_still_stale_clears_its_suppression(
 
     monkeypatch.setattr(ww, "_session_transcript_mtime", fading_transcript)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=4, interval_seconds=1, gh_run=_noop_gh_run,
     )
 
@@ -3466,7 +3507,7 @@ def _run_pr_set_changed(
 ):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    return ww.run(
+    return ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=max_seconds,
@@ -3679,7 +3720,7 @@ def test_pr_set_changed_exhausted_deadline_stops_walk_no_reader_after(
 
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=5,
@@ -3713,7 +3754,7 @@ def test_pr_set_changed_membership_read_timeout_bounded_by_remaining(
 
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=5,
@@ -3835,7 +3876,7 @@ def test_pr_set_changed_whole_membership_read_bounded_by_watcher_remaining_budge
 
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=5,
@@ -3867,7 +3908,7 @@ def test_pr_set_changed_slow_read_refusal_degrades_without_partial_stack(
 
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=5,
@@ -3912,7 +3953,7 @@ def test_pr_set_changed_real_read_membership_whole_read_bounded_by_watcher_budge
     mono = [1000.0]
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=5,
@@ -4025,7 +4066,7 @@ def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
     pr_sets = [{10}, {10, 99}]
     recorded = []
     arm = [0]
-    real_run = ww.run
+    real_run = ww.watch_arm
 
     def membership_reader(*, pr, repo, **kwargs):
         recorded.append(pr)
@@ -4244,7 +4285,7 @@ def test_stack_complete_fires_when_every_position_ready(tmp_path, monkeypatch):
         50: {"state": _pr_vet_state()},
         51: {"state": _pr_vet_state()},
     })
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=2,
@@ -4319,7 +4360,7 @@ def test_stack_complete_fires_on_vet_only_without_pr_set_change(
         clock[0] += duration
         tick[0] += 1
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=5,
@@ -4776,7 +4817,7 @@ def test_incomplete_seeds_silently_complete_fires(tmp_path, monkeypatch):
         clock[0] += duration
         tick[0] += 1
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=5,
@@ -4816,11 +4857,11 @@ def test_baseline_advances_unchanged_complete_does_not_refire(tmp_path, monkeypa
         "sleep": lambda _d: None,
         "stack_state": stack_state,
     }
-    first = ww.run(
+    first = ww.watch_arm(
         repo, "batch-982", **run_kwargs, monotonic=_advancing_monotonic(),
     )
     assert first["event"] == ww.EVENT_STACK_STATE_CHANGED
-    second = ww.run(
+    second = ww.watch_arm(
         repo, "batch-982", **run_kwargs, monotonic=_advancing_monotonic(),
     )
     assert second["event"] != ww.EVENT_STACK_STATE_CHANGED
@@ -4895,7 +4936,7 @@ def test_precedence_stack_state_over_pr_set_pr_baseline_unchanged(
         tick[0] += 1
         idx[0] = min(tick[0], len(pr_sets) - 1)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=5,
@@ -5040,7 +5081,7 @@ def test_repo_slug_resolved_once_per_run_tick(tmp_path, monkeypatch):
             )
         raise AssertionError("unexpected gh argv: %r" % argv)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=2,
@@ -5088,7 +5129,7 @@ def test_slug_resolution_failure_adds_stack_signal_degradation(
             )
         raise AssertionError("unexpected gh argv: %r" % argv)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=2,
@@ -5138,7 +5179,7 @@ def test_unrelated_ignore_pair_does_not_suppress_stack_state_event(
         50: {"state": _pr_vet_state()},
         51: {"state": _pr_vet_state()},
     })
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=2,
@@ -5328,7 +5369,7 @@ def test_stack_state_changed_emits_flags_on_first_arm_with_idle_seat(
         50: {"state": _pr_vet_state()},
         51: {"state": _pr_vet_state()},
     })
-    result = ww.run(
+    result = ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=2,
@@ -5641,7 +5682,7 @@ def test_gh_scrub_removes_routing_vars_and_ledger_root(tmp_path, monkeypatch):
         seen.append(kwargs.get("env"))
         return _noop_gh_run(argv, **kwargs)
 
-    result = ww.run(
+    result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
@@ -5770,7 +5811,7 @@ def test_stack_state_watch_read_only_no_store_mutation(tmp_path, monkeypatch):
         51: {"state": _pr_vet_state()},
     })
     before = _snapshot_files(store_root)
-    ww.run(
+    ww.watch_arm(
         repo,
         "batch-982",
         max_seconds=2,
