@@ -7,6 +7,7 @@ reserve and spawn. Never raises to callers."""
 from __future__ import annotations
 
 import argparse
+import collections
 import ctypes
 import ctypes.util
 import json
@@ -51,6 +52,8 @@ _expand_home = config_dir._expand_home
 # even when a stale CLAUDE_EFFORT=high rides along. `ps eww` cannot see this: it shows the
 # exec-time environment, not the live resolution, so a spawn-plumbing check is not a receipt.
 EFFORT_ENV = config_dir.EFFORT_ENV
+# Bound here because `config_dir` is also the name of a resolved root inside the spawn functions.
+_config_root_unusable = config_dir.unusable
 EFFORT_REFLECTION_ENV = "CLAUDE_EFFORT"
 # Owner ruling 2026-08-25 (in-channel, walk-3 sitting): every use of Opus 5 runs at effort
 # `medium` — "opus 5 works better at medium overall". The launcher pins it at the spawn point
@@ -61,9 +64,6 @@ OPUS_DEFAULT_EFFORT = "medium"
 
 STANDING_EXCLUSIONS = {"releasePRsExcluded": True, "forcePush": "never"}
 
-# The dispatch shell's claude refusal family (engine_dispatch run-open), applied to a launch.
-CONFIG_DIR_UNRESOLVABLE = "config-dir-unusable:unresolvable"
-CONFIG_DIR_NOT_A_DIRECTORY = "config-dir-unusable:not-a-directory"
 # How long the `claude --bg` acknowledging process may take to print its id and exit, and how
 # long a stop may take to end the session's process before the stop counts as unconfirmed.
 _ACK_WAIT_SECONDS = 30
@@ -1081,15 +1081,6 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     }
 
 
-def _config_dir_refusal(path):
-    """The dispatch shell's claude token for a config root a lane cannot run under, or None."""
-    if path is None:
-        return CONFIG_DIR_UNRESOLVABLE
-    if not os.path.isdir(path):
-        return CONFIG_DIR_NOT_A_DIRECTORY
-    return None
-
-
 def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, effort=None):
     """Compose prompt and argv. Never raises."""
     loader = doctrine_loader or launch_doctrine.load
@@ -1272,7 +1263,7 @@ def _spawn_attempt(
     config_dir = spawn_config_dir(env=env, cwd=cwd)
     # Rechecked here, at the spawn boundary, as the dispatch shell does: the root can vanish
     # between the pre-reservation gate and the spawn.
-    config_refusal = _config_dir_refusal(config_dir)
+    config_refusal = _config_root_unusable(config_dir)
     if config_refusal is not None:
         return {"ok": False, "reason": config_refusal, "proc": None}
     child_env[CONFIG_DIR_ENV] = config_dir
@@ -1337,28 +1328,24 @@ def _spawn_attempt(
         failed = {"ok": False, "reason": shake["reason"], "proc": proc,
                   "detail": shake.get("detail"), "backgroundId": background_id}
         # A session that may still be running is never recorded as refused. Every session this
-        # launch may have opened is stopped first — the acknowledged one, or, with no id to go
-        # on, every background session listed in this launch's own fresh worktree. `refused` is
-        # written (by the caller) only once each stop is confirmed; otherwise a known live pid is
-        # recorded as a started lane, so every watcher sees it, and the ids ride the result.
+        # launch may have opened is retired first (`_retire_lane`). `refused` is written (by the
+        # caller) only once each retire is confirmed; otherwise a known live pid is recorded as
+        # a started lane, so every watcher sees it, and the ids ride the result.
         if proc.poll() is None:  # a live acknowledger could still open a session: reap it first
             ll.reap_process(proc)
-        sessions = _sessions_to_retire(background_id, shake.get("pid"), config_dir, cwd)
-        stops = {sid: _stop_background(sid, config_dir, cwd, pid, proc)
-                 for sid, pid in (sessions or [])}
-        unconfirmed = sorted(sid for sid, state in stops.items() if state != "stopped")
-        if sessions is not None and not unconfirmed:
-            if stops:
+        lane = _retire_lane(config_dir, cwd, background_id)
+        if lane is not None and not lane["unconfirmed"]:
+            if lane["retired"]:
                 failed["stop"] = "stopped"
             return failed
         failed["refused"] = True
         failed["stop"] = "stop-unconfirmed"
-        failed["unconfirmedSessions"] = unconfirmed
-        live = [(sid, pid) for sid, pid in (sessions or []) if sid in unconfirmed and pid]
+        failed["unconfirmedSessions"] = sorted((lane or {}).get("unconfirmed") or [])
+        live = [h for h in (lane or {}).get("live") or [] if h.pid is not None]
         if live:
-            started["pid"] = live[0][1]
-            started["backgroundId"] = live[0][0]
-            if not ll.valid_background_session_id(started.get("sessionId"), live[0][0]):
+            started["pid"] = live[0].pid
+            started["backgroundId"] = live[0].backgroundId
+            if not ll.valid_background_session_id(started.get("sessionId"), live[0].backgroundId):
                 started.pop("sessionId", None)
             _append_under_lock(repo_root, started, env=env)
         return failed
@@ -1366,7 +1353,7 @@ def _spawn_attempt(
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
         identity = {"backgroundId": background_id, "sessionId": started["sessionId"],
-                    "stop": _stop_background(background_id, config_dir, cwd, started["pid"], proc)}
+                    "stop": _retire(shake["handle"], proc)}
         if identity["stop"] != "stopped":
             # The ledger could not take the lane and the session may still run: nothing is
             # terminalized as though it had stopped; the result carries its handle instead.
@@ -1395,15 +1382,32 @@ def _spawn_attempt(
                     **identity)
 
     return {"ok": True, "proc": proc, "pid": started["pid"], "backgroundId": background_id,
-            "sessionId": started["sessionId"], "configDir": config_dir}
+            "sessionId": started["sessionId"], "handle": shake["handle"]}
 
 
-def _sessions_to_retire(background_id, pid, config_dir, cwd):
-    """[(listing id, pid or None)] this launch may have opened, or None when that cannot be
-    known. With no acknowledged id, the launch's own fresh worktree is listed: every background
-    session there is this launch's. Never raises."""
-    if background_id is not None:
-        return [(background_id, pid)]
+# One background session this launch owns. Built ONLY by `_handle_from_row`, from a listing row
+# whose cwd realpath-matches the lane's worktree; stopped ONLY by `_retire`.
+_Handle = collections.namedtuple("_Handle", "backgroundId pid cwd configDir")
+
+
+def _handle_from_row(row, config_dir, cwd):
+    """The handle for a listed background session in the lane's own worktree, or None."""
+    if not isinstance(row, dict) or not ll.valid_background_id(row.get("id")):
+        return None
+    row_cwd = row.get("cwd")
+    if not isinstance(row_cwd, str) or os.path.realpath(row_cwd) != os.path.realpath(cwd):
+        return None
+    pid = row.get("pid")
+    ok_pid = isinstance(pid, int) and not isinstance(pid, bool) and pid > 1
+    return _Handle(row["id"], pid if ok_pid else None, cwd, config_dir)
+
+
+def _retire_lane(config_dir, cwd, background_id):
+    """Retire, through `_retire`, every session this launch may have opened: the acknowledged
+    one, or with no id every live session listed in the lane's own fresh worktree. Returns
+    {retired, unconfirmed: [ids], live: [handles]}, or None when the listing cannot be read. An
+    acknowledged session listed outside the worktree yields no handle: it is never stopped and
+    is named unconfirmed. Never raises."""
     try:
         # A session is listed shortly after it opens, so an empty inventory is re-read, bounded.
         limit = time.monotonic() + _LISTING_WAIT_SECONDS
@@ -1411,18 +1415,23 @@ def _sessions_to_retire(background_id, pid, config_dir, cwd):
             rows, listing_ok = engine_dispatch.claude_agents_rows(config_dir, cwd)
             if not listing_ok:
                 return None
-            found = []
-            for row in rows:
-                if not isinstance(row, dict) or row.get("kind") != "background":
-                    continue
-                if row.get("state") == "stopped" or not ll.valid_background_id(row.get("id")):
-                    continue
-                row_pid = row.get("pid")
-                ok_pid = isinstance(row_pid, int) and not isinstance(row_pid, bool) and row_pid > 1
-                found.append((row["id"], row_pid if ok_pid else None))
-            if found or time.monotonic() >= limit:
-                return found
+            rows = [r for r in rows if isinstance(r, dict) and r.get("state") != "stopped"
+                    and (background_id is None or r.get("id") == background_id)]
+            if rows or background_id is not None or time.monotonic() >= limit:
+                break
             time.sleep(_LISTING_POLL_SECONDS)
+        lane = {"retired": [], "unconfirmed": [], "live": []}
+        for row in rows:
+            handle = _handle_from_row(row, config_dir, cwd)
+            if handle is None:
+                if background_id is not None:
+                    lane["unconfirmed"].append(background_id)
+            elif _retire(handle) == "stopped":
+                lane["retired"].append(handle.backgroundId)
+            else:
+                lane["unconfirmed"].append(handle.backgroundId)
+                lane["live"].append(handle)
+        return lane
     except Exception:  # noqa: BLE001 — an unreadable inventory is "unknown", never "none"
         return None
 
@@ -1503,30 +1512,41 @@ def _grade_background_launch(proc, log_path, cwd, config_dir, deadline):
         pid = None
     refusal["pid"] = pid
     session_id = row.get("sessionId")
-    row_cwd = row.get("cwd")
     if not ll.valid_background_session_id(session_id, background_id):
         return dict(refusal, reason=background_outcome.REFUSAL_SESSION_UNLISTED, detail="session-id")
     if pid is None:
         return dict(refusal, reason=background_outcome.REFUSAL_SESSION_UNLISTED, detail="pid")
-    if not isinstance(row_cwd, str) or os.path.realpath(row_cwd) != os.path.realpath(cwd):
+    handle = _handle_from_row(row, config_dir, cwd)
+    if handle is None:
         return dict(refusal, reason=background_outcome.REFUSAL_SESSION_UNLISTED, detail="cwd")
-    return {"ok": True, "backgroundId": background_id, "sessionId": session_id, "pid": pid}
+    return {"ok": True, "backgroundId": background_id, "sessionId": session_id, "pid": pid,
+            "handle": handle}
 
 
-def _stop_background(background_id, config_dir, cwd, pid, proc=None):
-    """Stop a session the launcher is not keeping. `stopped` only when confirmed: the stop
-    command succeeded and, when the session pid is known, that pid is gone. Never raises."""
-    rc, _out, _err = engine_dispatch.claude_cli(["stop", background_id], config_dir, cwd=cwd)
-    if rc != 0:
-        return "stop-unconfirmed"
-    if pid is None:
+def _session_gone(handle, proc=None):
+    """The one confirmation that a builder session stopped: its pid has exited, or a cleanly
+    read listing holds no row with its id. Never raises."""
+    if handle.pid is not None and not _pid_alive(handle.pid, proc):
+        return True
+    rows, listing_ok = engine_dispatch.claude_agents_rows(handle.configDir, handle.cwd)
+    return listing_ok and engine_dispatch.claude_agent_row_for_launch(
+        rows, handle.backgroundId) is None
+
+
+def _retire(handle, proc=None):
+    """The ONLY place the launcher stops a builder session. `stopped` only when `_session_gone`
+    confirms it within the bound, else `stop-unconfirmed`. Never raises."""
+    try:
+        engine_dispatch.claude_cli(["stop", handle.backgroundId], handle.configDir,
+                                   cwd=handle.cwd)
+        limit = time.monotonic() + _STOP_CONFIRM_SECONDS
+        while not _session_gone(handle, proc):
+            if time.monotonic() >= limit:
+                return "stop-unconfirmed"
+            time.sleep(0.2)
         return "stopped"
-    limit = time.monotonic() + _STOP_CONFIRM_SECONDS
-    while _pid_alive(pid, proc):
-        if time.monotonic() >= limit:
-            return "stop-unconfirmed"
-        time.sleep(0.2)
-    return "stopped"
+    except Exception:  # noqa: BLE001 — a stop that cannot be observed is unconfirmed
+        return "stop-unconfirmed"
 
 
 def _observe_session_settle(proc, pid, settle_seconds, deadline=None):
@@ -1610,7 +1630,7 @@ def launch_build(
                 foreign_override = True
     else:
         seat = {"instance": None, "reason": "seat-pid-absent"}
-    config_refusal = _config_dir_refusal(requested)
+    config_refusal = _config_root_unusable(requested)
     if config_refusal is not None:
         return _fail(  # pre-reservation: the lane's config root must exist before anything runs
             config_refusal, requestedInstance=requested, launchId=launch_id,
@@ -1989,9 +2009,7 @@ def launch_build(
             # confirmed) before the lane is terminalized; an unconfirmed stop leaves the started
             # lane live on the ledger and hands back its id.
             lane = {"backgroundId": spawn_result["backgroundId"],
-                    "stop": _stop_background(spawn_result["backgroundId"],
-                                             spawn_result["configDir"], worktree_path,
-                                             spawn_result["pid"], proc)}
+                    "stop": _retire(spawn_result["handle"], proc)}
             if lane["stop"] != "stopped":
                 return _post_reserve_fail("retry-deadline-exceeded", **lane)
             term = _terminalize(
@@ -2108,8 +2126,34 @@ def _try_reserve_for_refusal(
     return {"reserved": result["ok"], "warnings": list(result.get("warnings") or [])}
 
 
-def record_outcome(repo_root, launch_id, outcome, evidence, env=None, await_exit=0):
-    """Thin pass-through to launch_ledger.record_outcome."""
+def _retire_recorded_lane(repo_root, launch_id, env=None):
+    """A finished lane's path from stop to terminal: its background session, identified by what
+    the launcher recorded (backgroundId, worktree, config root), is retired through `_retire`.
+    None when nothing of the lane's still runs; else the refusal. Never raises."""
+    try:
+        read = ll.read(repo_root, env=env)
+        folded = ll.fold(read.get("records") or [])
+    except Exception:  # noqa: BLE001
+        return _fail("retire-ledger-unreadable", launchId=launch_id)
+    if read.get("state") not in ("ok", "missing") or not folded.get("ok"):
+        return _fail("retire-ledger-unreadable", launchId=launch_id)
+    info = folded["launches"].get(launch_id) or {}
+    if info.get("backgroundId") is None:
+        return None  # no background session was recorded: nothing to stop
+    lane = _retire_lane(info.get("configDir"), info.get("worktree"), info["backgroundId"])
+    if lane is None or lane["unconfirmed"]:
+        return _fail("stop-unconfirmed", launchId=launch_id, backgroundId=info["backgroundId"])
+    return None
+
+
+def record_outcome(repo_root, launch_id, outcome, evidence, env=None, await_exit=0,
+                   retire=False):
+    """Pass-through to launch_ledger.record_outcome; with ``retire`` the lane's background
+    session is retired first, and an unconfirmed stop records nothing."""
+    if retire:
+        refusal = _retire_recorded_lane(repo_root, launch_id, env=env)
+        if refusal is not None:
+            return refusal
     return ll.record_outcome(
         repo_root, launch_id, outcome, evidence, env=env, await_exit=await_exit,
     )
@@ -2203,7 +2247,7 @@ def _cli_launch(args):
 def _cli_record_outcome(args):
     return record_outcome(
         args.repo_root, args.launch_id, args.outcome, args.evidence,
-        await_exit=args.await_exit,
+        await_exit=args.await_exit, retire=args.retire,
     )
 
 
@@ -2273,6 +2317,10 @@ def main(argv=None):
         help="seconds to keep re-attempting while the lane's child is still alive "
              "(0..1800, default 0 = refuse immediately as before; foreground callers "
              "under a 10-minute tool cap stay <=540 — longer waits are background calls)",
+    )
+    ro.add_argument(
+        "--retire", action="store_true",
+        help="stop the lane's background session (confirmed) before recording",
     )
     ro.set_defaults(func=_cli_record_outcome)
 

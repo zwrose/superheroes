@@ -123,8 +123,8 @@ exist yet, now refuses. `launch-foreign-instance-pin` and `--allow-foreign-insta
 - It can no longer resolve a new lane's transcript for the watcher's second chance, so a stale lane
   stays stale.
 - Its `record-outcome` refuses `terminal-child-live:<pid>` until the session is stopped, because a
-  background session idles alive after its turn. `claude stop <backgroundId>` under the lane's
-  config root clears it.
+  background session idles alive after its turn. A current checkout's `record-outcome --retire`
+  stops the session (confirmed) and then records.
 
 `seat_canary lane --repo-root <r> --launch-id <id>` is the launcher's canary for a builder lane.
 It counts the tool calls in the lane's session transcript, which it finds through the session id

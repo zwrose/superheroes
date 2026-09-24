@@ -10,6 +10,19 @@ CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 # The CLI's documented reasoning-effort input — the variable a spawned claude child is pinned by.
 EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
 DEFAULT_CONFIG_DIR_NAME = ".claude"
+# The refusal tokens for a config root a claude child cannot run under — one home, read by the
+# dispatch shell and the launcher alike.
+UNRESOLVABLE = "config-dir-unusable:unresolvable"
+NOT_A_DIRECTORY = "config-dir-unusable:not-a-directory"
+
+
+def unusable(path):
+    """The refusal token for a resolved config root no claude child can run under, or None."""
+    if path is None:
+        return UNRESOLVABLE
+    if not os.path.isdir(path):
+        return NOT_A_DIRECTORY
+    return None
 
 
 def _expand_home(path, env):

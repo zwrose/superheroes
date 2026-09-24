@@ -924,6 +924,11 @@ def claude_transcript_result(rows):
         return None
 
 
+# The engagement source a tool-call count read from a claude session transcript carries — one home
+# for the dispatch grade and the lane canary.
+ENGAGEMENT_SOURCE_TRANSCRIPT = "claude-transcript"
+
+
 def claude_transcript_tool_calls(rows):
     """Count distinct non-StructuredOutput tool_use ids in transcript rows; int or None."""
     try:

@@ -252,8 +252,10 @@ the lane's worktree, with a pid and a session id.
 
 The ledger's `started.pid` is that **session's** pid. That is what every watcher probes, and it
 stays alive after the session goes idle at the end of its turn. So `record-outcome` refuses
-`terminal-child-live:<pid>` until the lane is stopped with `claude stop <backgroundId>` under its
-config root. `backgroundId`, `sessionId` and the env pins ride the `started` record.
+`terminal-child-live:<pid>` until the session stops. `record-outcome --retire` is the finished
+lane's path: it stops the session the launcher recorded, confirms the stop (the pid exited, or no
+row with its id in a clean listing), then records; an unconfirmed stop records nothing.
+`backgroundId`, `sessionId` and the env pins ride the `started` record.
 
 On the native channel, the output adapter reads a typed result file validated against the declared
 schema at `<run-dir>/native-schema.json`. Admission is engine-neutral: the schema on disk must equal

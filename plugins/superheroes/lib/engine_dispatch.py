@@ -4091,7 +4091,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         cfg = opened.get("configDir")
         # axis: spawn-time configDir must still be a directory — open-time record is not enough.
         if not isinstance(cfg, str) or not cfg or not os.path.isdir(cfg):
-            _journal_prep_refusal(run_dir_real, attempt, "config-dir-unusable:not-a-directory")
+            _journal_prep_refusal(run_dir_real, attempt, config_dir.NOT_A_DIRECTORY)
             return
     prompt_path = staged_path
     argv, recorded = _derive_and_record_spawn_argv(
@@ -5274,7 +5274,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             "toolCalls": tool_calls,
             "stdoutBytes": stdout_bytes,
             "wallSeconds": elapsed,
-            "source": "claude-transcript" if tool_calls is not None else "none",
+            "source": (engine_adapter.ENGAGEMENT_SOURCE_TRANSCRIPT
+                       if tool_calls is not None else "none"),
             "telemetry": _engagement_telemetry(tool_calls),
         }
     else:
@@ -6046,10 +6047,9 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
 
     if engine == "claude":
         cfg = config_dir.resolve(env=os.environ, cwd=cwd)
-        if cfg is None:
-            return False, "config-dir-unusable:unresolvable"
-        if not os.path.isdir(cfg):
-            return False, "config-dir-unusable:not-a-directory"
+        refusal = config_dir.unusable(cfg)
+        if refusal is not None:
+            return False, refusal
     else:
         cfg = None
 
@@ -6703,10 +6703,9 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
 
     if engine == "claude":
         cfg = config_dir.resolve(env=os.environ, cwd=cwd)
-        if cfg is None:
-            return False, "config-dir-unusable:unresolvable"
-        if not os.path.isdir(cfg):
-            return False, "config-dir-unusable:not-a-directory"
+        refusal = config_dir.unusable(cfg)
+        if refusal is not None:
+            return False, refusal
     else:
         cfg = None
 

@@ -57,7 +57,8 @@ a mistyped batch id before you go blind in a long `loop`.
 a second watcher used to cover: `lane-terminal` fires from the ledger the moment a builder hands
 back, typically a minute or two *before* its session exits, and `record-outcome` refuses while that
 child is still alive (`terminal-child-live:<pid>`). Close it on the `lane-terminal` wake with
-`launcher record-outcome --await-exit <seconds>`, which re-attempts until the child is gone and at
+`launcher record-outcome --await-exit <seconds>` — add `--retire` for a background builder lane,
+whose session idles alive after handback until stopped — which re-attempts until the child is gone and at
 the ceiling returns that same refusal, so nothing falls open. The ceiling is a **sleep budget spent
 from the first live-child refusal onward**, not a whole-call wall-clock bound: each attempt also runs
 a liveness probe that settles for a couple of seconds, so a call costs the ceiling plus one probe per

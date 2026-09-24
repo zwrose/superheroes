@@ -381,16 +381,18 @@ def lane_canary(repo_root, launch_id, *, env=None):
     session_id, cfg = info.get("sessionId"), info.get("configDir")
     if not session_id or not cfg:
         return _lane_refusal("lane-session-unrecorded", launch_id)
-    rows, paths, _size = engine_dispatch.read_session_transcript_rows(cfg, session_id)
+    rows, paths, size = engine_dispatch.read_session_transcript_rows(cfg, session_id)
     if len(paths) != 1:
         reason = "lane-transcript-ambiguous" if paths else "lane-transcript-unresolved"
         return _lane_refusal(reason, launch_id)
+    if size > engine_dispatch.MAX_STDOUT_CAPTURE:  # only the tail was read: never graded
+        return _lane_refusal("lane-transcript-truncated", launch_id)
     tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
     if tool_calls is None:
         return _lane_refusal("lane-transcript-unreadable", launch_id)
     return {"ok": True, "reason": None, "launchId": launch_id, "sessionId": session_id,
             "toolCalls": tool_calls, "engaged": tool_calls > 0,
-            "engagementSource": "claude-transcript"}
+            "engagementSource": engine_adapter.ENGAGEMENT_SOURCE_TRANSCRIPT}
 
 
 def main(argv):

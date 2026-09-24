@@ -636,7 +636,8 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_root))
     monkeypatch.setattr(launcher, "_background_handshake", lambda *a: {
         "ok": False, "reason": "background-launch-unacknowledged", "backgroundId": None})
-    monkeypatch.setattr(launcher, "_sessions_to_retire", lambda *a: [])
+    monkeypatch.setattr(launcher, "_retire_lane", lambda *a: {
+        "retired": [], "unconfirmed": [], "live": []})
     launcher._spawn_attempt(
         repo,
         launch_id,

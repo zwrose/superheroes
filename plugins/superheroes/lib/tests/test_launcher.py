@@ -114,11 +114,14 @@ STANDIN_SESSION_ID = STANDIN_BACKGROUND_ID + "-0000-4000-8000-000000000000"
 
 def _standin_handshake(proc, log_path, cwd, config_dir, deadline):
     """The stand-in child plays the listed background session: its pid is the session pid."""
+    row = {"id": STANDIN_BACKGROUND_ID, "pid": proc.pid, "cwd": cwd}
     return {"ok": True, "backgroundId": STANDIN_BACKGROUND_ID,
-            "sessionId": STANDIN_SESSION_ID, "pid": proc.pid}
+            "sessionId": STANDIN_SESSION_ID, "pid": proc.pid,
+            "handle": L._handle_from_row(row, config_dir, cwd)}
 
 
-def _standin_stop(background_id, config_dir, cwd, pid, proc=None):
+def _standin_retire(handle, proc=None):
+    pid = handle.pid
     try:
         os.killpg(pid, signal.SIGKILL)
     except OSError:
@@ -138,7 +141,7 @@ def _autouse_background_standins(monkeypatch, tmp_path):
     # in test_launcher_background.py. The lane's config root must exist (the launch refuses
     # `config-dir-unusable:*` otherwise), so an unset one gets a real directory here.
     monkeypatch.setattr(L, "_background_handshake", _standin_handshake)
-    monkeypatch.setattr(L, "_stop_background", _standin_stop)
+    monkeypatch.setattr(L, "_retire", _standin_retire)
     if not os.environ.get("CLAUDE_CONFIG_DIR"):
         cfg = tmp_path / "standin-claude-config"
         cfg.mkdir(exist_ok=True)
@@ -2748,11 +2751,11 @@ def test_c2_edge1_deadline_settle_reaps_before_park(tmp_path, monkeypatch):
 
     # R28 re-pin (C14 4a): the lane is a background session, so at the deadline the launcher
     # STOPS it (confirmed) before terminalizing; the stop is the reap this test orders first.
-    def tracking_stop(background_id, config_dir, cwd, pid, proc=None):
-        order.append(("reap", pid))
-        return _standin_stop(background_id, config_dir, cwd, pid, proc)
+    def tracking_retire(handle, proc=None):
+        order.append(("reap", handle.pid))
+        return _standin_retire(handle, proc)
 
-    monkeypatch.setattr(L, "_stop_background", tracking_stop)
+    monkeypatch.setattr(L, "_retire", tracking_retire)
 
     real_append_raw = ll._append_raw
     terminal_tracked = {"n": 0}
@@ -3212,7 +3215,8 @@ def test_spawn_attempt_exports_heartbeat_env_without_ledger_root(tmp_path, monke
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
-        env={ll.LEDGER_ROOT_ENV: ledger_root},
+        env={ll.LEDGER_ROOT_ENV: ledger_root,
+             L.CONFIG_DIR_ENV: _existing_config_dir(tmp_path, "spawn-config")},
         spawn_fn=capture_spawn,
         cwd=_spawn_cwd(tmp_path),
     )
@@ -3264,7 +3268,8 @@ def test_spawn_attempt_exports_slot_ref_when_supplied(tmp_path, monkeypatch):
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
-        env={ll.LEDGER_ROOT_ENV: ledger_root},
+        env={ll.LEDGER_ROOT_ENV: ledger_root,
+             L.CONFIG_DIR_ENV: _existing_config_dir(tmp_path, "spawn-config")},
         spawn_fn=capture_spawn,
         cwd=_spawn_cwd(tmp_path),
         slot="slot-a",
@@ -3352,7 +3357,9 @@ def test_spawn_attempt_strips_inherited_slot_ref_when_unslotted(tmp_path, monkey
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
-        env={ll.LEDGER_ROOT_ENV: ledger_root, L.SLOT_REF_ENV: stale_ref},
+        env={ll.LEDGER_ROOT_ENV: ledger_root,
+             L.CONFIG_DIR_ENV: _existing_config_dir(tmp_path, "spawn-config"),
+             L.SLOT_REF_ENV: stale_ref},
         spawn_fn=capture_spawn,
         cwd=_spawn_cwd(tmp_path),
     )
@@ -3402,7 +3409,9 @@ def test_spawn_attempt_replaces_inherited_slot_ref_when_slotted(tmp_path, monkey
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
-        env={ll.LEDGER_ROOT_ENV: ledger_root, L.SLOT_REF_ENV: stale_ref},
+        env={ll.LEDGER_ROOT_ENV: ledger_root,
+             L.CONFIG_DIR_ENV: _existing_config_dir(tmp_path, "spawn-config"),
+             L.SLOT_REF_ENV: stale_ref},
         spawn_fn=capture_spawn,
         cwd=_spawn_cwd(tmp_path),
         slot="slot-a",
@@ -3507,7 +3516,9 @@ def test_spawn_attempt_strips_empty_string_slot_ref_when_unslotted(tmp_path, mon
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
-        env={ll.LEDGER_ROOT_ENV: ledger_root, L.SLOT_REF_ENV: ""},
+        env={ll.LEDGER_ROOT_ENV: ledger_root,
+             L.CONFIG_DIR_ENV: _existing_config_dir(tmp_path, "spawn-config"),
+             L.SLOT_REF_ENV: ""},
         spawn_fn=capture_spawn,
         cwd=_spawn_cwd(tmp_path),
     )
