@@ -315,8 +315,11 @@ def test_l4a_3_audit_and_fixer_seats_never_leave_the_certified_panel(tmp_path):
     assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.P_FIXER)) is False
     # a verifier can refute a finding, so an unproven one never leaves the certified panel
     assert RC.uncertified_host_seat(ctx, dict(base, phase="dispatch-verifiers")) is False
+    # a synthesis grouping can merge a confirmed finding under a representative the
+    # author-justification filter drops, so an unproven synthesis seat never leaves it either
+    assert RC.uncertified_host_seat(ctx, dict(base, phase="dispatch-synthesis")) is False
     assert RC.HOST_SEAT_EXEMPT_PHASES == frozenset((
-        RC.PANEL_PHASE, "dispatch-scoped-finder", "dispatch-gap-sweep", "dispatch-synthesis"))
+        RC.PANEL_PHASE, "dispatch-scoped-finder", "dispatch-gap-sweep"))
     assert RC.uncertified_host_seat(
         ctx, dict(base, phase=RC.PANEL_PHASE, provenance="orchestrator-fulfilled")) is False
 
@@ -466,9 +469,9 @@ def test_l4a_r1_a_panel_seat_out_of_the_certified_panel_downgrades_the_full_pane
     engine_row = {"phase": RC.PANEL_PHASE, "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
                   "proof": RC.SEAT_PROOF_RUNNER_RECORD}
     host_row = dict(engine_row, proof=RC.SEAT_PROOF_NONE_HOST_SEAT)
-    synth_row = dict(host_row, phase="dispatch-synthesis")
+    finder_row = dict(host_row, phase="dispatch-scoped-finder")
     assert RC._certification_shape(state, [engine_row]) == "full-panel-confirmed"
-    assert RC._certification_shape(state, [engine_row, synth_row]) == "full-panel-confirmed"
+    assert RC._certification_shape(state, [engine_row, finder_row]) == "full-panel-confirmed"
     assert RC._certification_shape(state, [engine_row, host_row]) == "audited-chain"
 
 
@@ -510,3 +513,43 @@ def test_l4a_r1_re_emit_refuses_before_superseding_anything(tmp_path, capsys):
     assert [r["outcome"] for r in new_rows] == [_OWNER_CAUSE]
     assert new_rows[0]["cmd"] == "re-emit"
     assert not any(r.get("outcome") in ("orders-superseded", "orders-emitted") for r in new_rows)
+
+
+
+def test_l4a_r2_an_unproven_host_synthesis_seat_still_refuses_certification(tmp_path):
+    """Round-2 Critical: exempting synthesis let an unproven grouping clear a confirmed finding
+    (merged under a representative the author-justification filter drops)."""
+    synth_manifest = {"schema": "orders-manifest/1", "session": "test-session-001", "round": 1,
+                      "phase": "dispatch-synthesis", "attempt": 0, "orders": "not-emitted",
+                      "seats": {"synthesis-k": {"seat": "synthesis", "occurrence": 0,
+                                                "vendor": "claude", "model": None,
+                                                "engine": None, "channel": "file"}}}
+    sha = SC.sha256_text(SC.canonical(synth_manifest))
+    payload = {"grouping": [{"member_ids": ["v0"]}]}
+    envelope = {"schema": RR.SEAT_RESULT_SCHEMA_V2, "session": "test-session-001", "round": 1,
+                "phase": "dispatch-synthesis", "seat": "synthesis", "attempt": 0,
+                "vendor": "claude", "payload": payload,
+                "payloadSha256": RR.payload_sha256(payload),
+                "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+                "envelopeSha256": RR.envelope_sha256(payload, None)}
+    rows = [_default_journal_row(),
+            {"cmd": "next", "outcome": "orders-emitted", "phase": "dispatch-synthesis",
+             "round": 1, "attempt": 0, "manifestSha256": sha},
+            {"cmd": "record-result", "outcome": "recorded", "phase": "dispatch-synthesis",
+             "round": 1, "attempt": 0, "seat": "synthesis", "occurrence": 0,
+             "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+             "payloadSha256": RR.payload_sha256(payload), "headSha": HEAD_SHA,
+             "recordIdentity": {"phase": "dispatch-synthesis", "seat": "synthesis",
+                                "occurrence": 0, "attempt": 0}}]
+    session_dir = write_session(
+        tmp_path, name="synth", journal_lines=rows,
+        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA},
+                   {"seat": "synthesis", "phase": "dispatch-synthesis", "envelope": envelope}])
+    path = RC._orders_manifest_path(session_dir, 1, "dispatch-synthesis", 0)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(synth_manifest, fh, sort_keys=True)
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert (refusal["class"], refusal["artifact"], refusal["bindingFailure"]) == (
+        "unrun-review", "synthesis", "execution-evidence-absent")

@@ -93,11 +93,11 @@ BINDING_FAILURE_NO_RUNNER_PROVEN_PANEL_SEAT = "no-runner-proven-panel-seat"
 SEAT_PROOF_RUNNER_RECORD = "runner-record"
 SEAT_PROOF_HAND_LANDED = "hand-landed-evidence"
 SEAT_PROOF_NONE_HOST_SEAT = "none-host-seat"
-# Phases whose output can never clear a finding: the finders only add findings, and synthesis only
-# groups them (coverage-guaranteed, never lowers a severity). Only these may sit out of the certified
-# panel; a verifier can REFUTE, and audits and the fixer carry their own proof obligations.
-HOST_SEAT_EXEMPT_PHASES = frozenset((
-    PANEL_PHASE, "dispatch-scoped-finder", "dispatch-gap-sweep", "dispatch-synthesis"))
+# Phases whose output can never clear a finding: the finders only add findings. Only these may sit
+# out of the certified panel. A verifier can REFUTE; a synthesis grouping can merge a confirmed
+# finding under a representative the author-justification filter then drops; audits and the fixer
+# carry their own proof obligations — none of them is ever exempt.
+HOST_SEAT_EXEMPT_PHASES = frozenset((PANEL_PHASE, "dispatch-scoped-finder", "dispatch-gap-sweep"))
 
 RECEIPT_FORM_CERTIFIED = receipt_disclosures.RECEIPT_FORM_CERTIFIED
 VENDOR_SOURCE_DEFAULTED = "defaulted"

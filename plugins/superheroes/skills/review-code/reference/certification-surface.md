@@ -75,12 +75,16 @@ Four escape classes (`REFUSAL_CLASSES`). Each refusal is `{class, artifact, deta
 
 **Host seats sit out of the certified panel.** A seat the driver dispatched on the host
 (file-landing) channel — a native claude seat — lands a payload no runner observed. When its
-authenticated orders-manifest entry records `channel: "file"` and it carries no execution evidence,
-it is **out of the certified panel**: the three `unrun-review` checks skip it, its receipt row reads
+authenticated orders-manifest entry records `channel: "file"`, it carries no execution evidence,
+and it sits on a finder phase (`dispatch-panel`, `dispatch-scoped-finder`, `dispatch-gap-sweep` —
+phases whose output can only add findings), it is **out of the certified panel**: the three
+`unrun-review` checks skip it, its receipt row reads
 `proof: none-host-seat`, and `disclosures.uncertifiedSeats` names it. The manifest's channel is the
 only host evidence — a vendor label is not (a defaulted `claude` is rendered on stdout), and a
 manifest without `channel`, or one whose bytes disagree with the journal's `manifestSha256`, exempts
-nothing. Audit and fixer seats are never out. A panel round whose every seat is out refuses
+nothing. Verifier, synthesis, audit and fixer seats are never out: a verifier can refute a finding,
+and a synthesis grouping can merge a confirmed finding under a representative the
+author-justification filter then drops. A panel round whose every seat is out refuses
 `unrun-review` with `bindingFailure: no-runner-proven-panel-seat` — exclusion never certifies a round
 on nothing.
 
