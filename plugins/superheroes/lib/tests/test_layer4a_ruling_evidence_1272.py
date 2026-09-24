@@ -344,7 +344,10 @@ def test_edge11_write_run_omits_result_content(tmp_path):
 
 
 def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
-    """Receipt test — independence.auditSeats[0].model equals runner engineModel."""
+    """Receipt test — independence.auditSeats[0].model equals runner engineModel.
+
+    Uses cmd_record_result to land audit execution evidence on disk, then certifies
+    when the journal row omits the optional model projection."""
     from round_certification_fixtures import (
         AUDIT_PHASE,
         DEFAULT_PANEL_PAYLOAD,
@@ -355,30 +358,33 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
 
     engine_model = "gemini-3.8-flash-high"
     audit_seat = "audit-target-01"
-    audit_payload = {
-        "id": audit_seat,
-        "ruling": "discharged",
-        "reason": "ok",
-        "auditorVendor": "claude",
-    }
-    audit_payload_sha = RR.payload_sha256(audit_payload)
-    audit_evidence = {
-        "source": "claude",
-        "runnerNonce": "nonce-receipt-model",
-        "recordDigest": "d" * 64,
-        "resultDigest": audit_payload_sha,
-        "resultKind": "ruling",
-        "model": engine_model,
-        "observation": {
-            "read": "engaged",
-            "source": "claude",
-            "telemetry": "tool-calls",
-            "stdoutBytes": 10,
-            "wallSeconds": 1.0,
-            "tokens": None,
-            "toolCalls": 1,
-        },
-    }
+    session_dir, _gitdir, head_path = TRI._bootstrap(
+        tmp_path, name="receipt-model-ingest", fixerVendor="cursor")
+    findings = [TRI._blocking_finding("unchecked index", 2)]
+    TRI._drive_to_phase(session_dir, _gitdir, findings, head_path, RD.P_AUDITS)
+    seat = _audit_roster(session_dir)[0]
+    pend = _pending(session_dir)
+    order_path = RR.order_prompt_path(
+        session_dir, pend["round"], pend["phase"], RR.storage_key(seat), pend["attempt"])
+    anchor_head = _anchor_head_sha(session_dir) or HEAD_SHA
+    run_dir = _audit_execution_run_dir(tmp_path, order_path, seat, view_head_sha=anchor_head)
+    _patch_run_opened_engine_model(run_dir, engine_model)
+    record, err = engine_dispatch.run_execution_record(run_dir)
+    assert err is None, err
+    ruling_payload = record["resultContent"]
+    state = _state(session_dir)
+    TRI._dispatch_observed_land(session_dir, state, pend, seat, ruling_payload)
+    out = RD.cmd_record_result(session_dir, seat, evidence_run_dir=run_dir)
+    assert out["ok"] is True, out
+    stored, read_err = RR.read_json(out["storePath"])
+    assert read_err is None
+    assert stored["executionEvidence"]["model"] == engine_model
+    audit_payload = stored["payload"]
+    audit_payload_sha = stored["payloadSha256"]
+    audit_evidence = stored["executionEvidence"]
+    journal_evidence = dict(audit_evidence)
+    journal_evidence.pop("model", None)
+
     obs_fields = audit_evidence["observation"]
     panel_evidence = {
         "source": "codex",
@@ -396,6 +402,7 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
         "resultKind": "findings",
         "observation": dict(obs_fields, source="cursor"),
     }
+
     def _stored_envelope(payload, payload_sha, evidence):
         return {
             "schema": "seat-result/2",
@@ -406,7 +413,7 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
             "envelopeSha256": RR.envelope_sha256(payload, evidence),
         }
 
-    def _recorded_journal_row(envelope, seat, phase, payload_sha):
+    def _recorded_journal_row(envelope, seat, phase, payload_sha, *, evidence_override=None):
         row = {
             "cmd": "record-result",
             "outcome": "recorded",
@@ -428,6 +435,8 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
         }
         row.update(RR.recorded_row_fields(
             envelope, HEAD_SHA, RR.CITED_HEAD_SOURCE_ORDER_ANCHOR))
+        if evidence_override is not None:
+            row["executionEvidence"] = evidence_override
         return row
 
     panel_envelope = _stored_envelope(
@@ -440,7 +449,9 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
             panel_envelope, "code-reviewer", RC.PANEL_PHASE, DEFAULT_PANEL_PAYLOAD_SHA),
         _recorded_journal_row(
             fixer_envelope, "dispatch-fixer", "dispatch-fixer", DEFAULT_PANEL_PAYLOAD_SHA),
-        _recorded_journal_row(audit_envelope, audit_seat, AUDIT_PHASE, audit_payload_sha),
+        _recorded_journal_row(
+            audit_envelope, audit_seat, AUDIT_PHASE, audit_payload_sha,
+            evidence_override=journal_evidence),
     ]
     envelopes = [
         {
@@ -477,8 +488,9 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
             "executionEvidence": audit_evidence,
         },
     ]
-    session_dir = write_session(
+    cert_dir = write_session(
         tmp_path,
+        name="receipt-model-cert",
         state={
             "config": {
                 "fixerVendor": "cursor",
@@ -491,7 +503,7 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
         journal_lines=journal_lines,
         envelopes=envelopes,
     )
-    receipt, refusal = RC.certify(session_dir)
+    receipt, refusal = RC.certify(cert_dir)
     assert refusal is None, refusal
     audit_seats = receipt["independence"]["auditSeats"]
     assert audit_seats[0]["model"] == engine_model

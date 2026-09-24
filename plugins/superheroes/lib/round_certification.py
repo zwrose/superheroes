@@ -1361,7 +1361,7 @@ def _runner_recorded_model(obs, session_dir, seat_entry):
     if isinstance(obs, dict) and "model" in obs:
         return obs.get("model")
     provenance = seat_entry.get("provenance")
-    if provenance == PROVENANCE_HAND_LANDED:
+    if provenance in RECEIPT_PROVENANCE:
         seat = seat_entry["seat"]
         phase = seat_entry["phase"]
         attempt = seat_entry["attempt"]
