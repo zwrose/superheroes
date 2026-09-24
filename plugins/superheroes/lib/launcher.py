@@ -14,18 +14,21 @@ import os
 import platform
 import re
 import secrets
+import signal
 import struct
 import subprocess
 import sys
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import background_outcome  # noqa: E402
 import config_dir  # noqa: E402
+import engine_adapter  # noqa: E402
+import engine_dispatch  # noqa: E402
 import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
@@ -63,6 +66,7 @@ _SETTLE_SECONDS = 20
 _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = (5, 15, 45)
 _TOTAL_DEADLINE_SECONDS = 300
+_ACK_TIMEOUT_SECONDS = 30
 
 _GIT_SCRUB_VARS = (
     "GIT_DIR",
@@ -251,6 +255,9 @@ _KERN_PROCARGS2 = 49
 _INSTANCE_PIN_REMEDY = (
     "Relaunch with `--allow-foreign-instance` only when you deliberately intend the "
     "builder to run under a Claude instance other than this seat's own."
+)
+_CONFIG_DIR_REMEDY = (
+    "Set CLAUDE_CONFIG_DIR to an absolute directory path the builder can write under."
 )
 
 
@@ -1094,18 +1101,16 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     effort_result = _resolve_effort(effort, token)
     if not effort_result["ok"]:
         return effort_result
-    session_id = str(uuid.uuid4())
-    # The same argv is reused if launch_build retries, so the session id is reused
-    # too. That is safe because the only retrying path is spawn-oserror, where
-    # Popen raised and no child ever started — every other failure is terminal
-    # with no re-spawn.
-    argv = ["claude", "--model", token, "--session-id", session_id, "-p", prompt]
+    argv_result = engine_adapter.claude_builder_argv(
+        token, effort_result["effort"], prompt,
+    )
+    if argv_result.get("reason") is not None:
+        return _fail(argv_result["reason"])
     return {
         "ok": True,
         "reason": None,
         "prompt": prompt,
-        "argv": argv,
-        "sessionId": session_id,
+        "argv": argv_result["argv"],
         "model": token,
         "modelResolution": {
             "tier": resolution["tier"],
@@ -1120,7 +1125,8 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     }
 
 
-# WORKAROUND: headless builders must survive parent session exit via detached spawn
+# WORKAROUND: the acknowledgement process of a background launch must survive parent session
+# exit via detached spawn, so the launch call cannot tie it to the caller's session
 # delete-when: the background-session trial receipt marks detached spawn not needed
 def _default_spawn(argv, cwd, out_fh, err_fh, child_env):
     return subprocess.Popen(
@@ -1194,6 +1200,118 @@ def _overlap_evidence(warnings):
     return "overlaps %s; %s" % (", ".join(ids), _OVERLAP_EVIDENCE_SUFFIX)
 
 
+def _read_text_file(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def _first_nonempty_line(text):
+    if not isinstance(text, str):
+        return ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def _wait_ack_process(proc, deadline):
+    ack_deadline = min(time.monotonic() + _ACK_TIMEOUT_SECONDS, deadline)
+    while time.monotonic() < ack_deadline:
+        rc = proc.poll()
+        if rc is not None:
+            return rc
+        time.sleep(0.05)
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    return None
+
+
+def _retire_lane(config_dir, worktree, background_id, reason, evidence, deadline=None):
+    """Acquire a handle scoped to the lane worktree and retire it. Never raises."""
+    if deadline is not None:
+        wait_seconds = max(0.0, min(30.0, deadline - time.monotonic()))
+    else:
+        wait_seconds = 30.0
+    handle, status = engine_dispatch.acquire_background_handle(
+        config_dir, worktree, background_id, wait_seconds=wait_seconds,
+    )
+    if handle is not None:
+        stop_result = engine_dispatch.retire(handle)
+        if stop_result == "stopped":
+            return {}
+        return {
+            "reason": background_outcome.REFUSAL_STOP_UNCONFIRMED,
+            "cause": reason,
+            "orphanedBackgroundId": handle.backgroundId,
+            "remedy": "claude stop %s under CLAUDE_CONFIG_DIR=%s (cwd %s)" % (
+                handle.backgroundId, config_dir, worktree,
+            ),
+        }
+    if status == "ended":
+        return {}
+    out = {}
+    if background_id is not None:
+        out["orphanedBackgroundId"] = background_id
+    out["remedy"] = "claude agents --json --all --cwd %s under CLAUDE_CONFIG_DIR=%s" % (
+        worktree, config_dir,
+    )
+    return out
+
+
+def _merge_retire_refusal(reason, evidence, retire_extra):
+    out = {"ok": False, "reason": reason, "proc": None, "ack_spawned": True}
+    if evidence is not None:
+        out["evidence"] = evidence
+    if retire_extra.get("reason"):
+        out["reason"] = retire_extra["reason"]
+        if retire_extra.get("cause"):
+            out["cause"] = retire_extra["cause"]
+    if "orphanedBackgroundId" in retire_extra:
+        out["orphanedBackgroundId"] = retire_extra["orphanedBackgroundId"]
+    if "remedy" in retire_extra:
+        out["remedy"] = retire_extra["remedy"]
+    return out
+
+
+def _settle_background_handle(handle, config_dir, cwd, background_id, settle_seconds, deadline):
+    settle_deadline = min(time.monotonic() + settle_seconds, deadline)
+    while time.monotonic() < settle_deadline:
+        if time.monotonic() >= deadline:
+            return "deadline"
+        try:
+            os.kill(handle.pid, 0)
+        except ProcessLookupError:
+            return background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
+        except PermissionError:
+            pass
+        except OSError:
+            pass
+        time.sleep(0.5)
+    if time.monotonic() >= deadline:
+        return "deadline"
+    row = engine_dispatch.background_identity_row(config_dir, cwd, background_id)
+    if row is None:
+        _, status = engine_dispatch.acquire_background_handle(
+            config_dir, cwd, background_id, wait_seconds=0,
+        )
+        if status == "agents-unreadable":
+            return background_outcome.REFUSAL_AGENTS_UNREADABLE
+        return background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
+    if row.get("state") in ("stopped", "done"):
+        return background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
+    return None
+
+
 # WORKAROUND: launcher refuses spawn when cwd is the primary checkout (own-worktree)
 # delete-when: the background-session trial receipt marks launcher worktree enforcement not needed
 def _spawn_attempt(
@@ -1211,6 +1329,7 @@ def _spawn_attempt(
     cwd=None,
     evidence=None,
     effort=None,
+    deadline=None,
 ):
     """Spawn one attempt in the build worktree; return dict with ok, proc, reason.
 
@@ -1233,29 +1352,21 @@ def _spawn_attempt(
     resolved = ll.resolve_root(repo_root, env=env)
     if resolved["ok"]:
         child_env[hb.HEARTBEAT_ROOT_ENV] = resolved["root"]
-    # The config root is PINNED here rather than left to inheritance (#1246). A spawned
-    # `claude -p` child with no CLAUDE_CONFIG_DIR dies "OAuth session expired" — an error
-    # that reads as an auth failure and is really an unset variable — so a caller who forgot
-    # the export killed an unattended lane. Pinning it at the one place a child is born is
-    # what makes the export impossible to forget, exactly as the effort pin below does.
-    # This is NOT an override: `spawn_config_dir` reads a caller-provided value first, so a
-    # deliberate export wins and only the default is supplied. It is also the SAME call the
-    # `reserved` record makes, on the same `env` and the same `cwd` (the record passes the
-    # worktree path this spawn runs in) — so the recorded configDir and the injected value
-    # agree by construction, not by two sites happening to derive the same answer. None means
-    # no absolute root could be derived: inject nothing and leave the inherited value alone,
-    # matching the record, which omits the field on exactly that branch.
-    config_dir = spawn_config_dir(env=env, cwd=cwd)
-    if config_dir is not None:
-        child_env[CONFIG_DIR_ENV] = config_dir
+    resolved_config_dir = spawn_config_dir(env=env, cwd=cwd)
+    if resolved_config_dir is None:
+        return {
+            "ok": False,
+            "reason": config_dir.REFUSAL_CONFIG_DIR_UNRESOLVABLE,
+            "proc": None,
+        }
+    if not os.path.isdir(resolved_config_dir):
+        return {
+            "ok": False,
+            "reason": config_dir.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY,
+            "proc": None,
+        }
+    child_env[CONFIG_DIR_ENV] = resolved_config_dir
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
-    # Assignment, not defaulting: the launching session's ambient effort variables are already
-    # in `child_env` via `_scrub_env`, so a pinned effort must overwrite the documented input or
-    # the accident this closes survives. The stale CLAUDE_EFFORT *reflection* is dropped rather
-    # than written: the CLI overwrites it from its own resolution anyway, so writing it would buy
-    # nothing while destroying the one honest observable — a child's reflection is evidence of
-    # what the CLI resolved only for as long as we do not forge it, and a forged one is exactly
-    # the placebo receipt vet 178 caught. A None effort is the inherit case and touches neither.
     if effort is not None:
         child_env[EFFORT_ENV] = effort
         child_env.pop(EFFORT_REFLECTION_ENV, None)
@@ -1278,57 +1389,139 @@ def _spawn_attempt(
     out_fh.close()
     err_fh.close()
 
+    ack_deadline = deadline if deadline is not None else time.monotonic() + _TOTAL_DEADLINE_SECONDS
+    rc = _wait_ack_process(proc, ack_deadline)
+    if rc is None:
+        retire_extra = _retire_lane(
+            resolved_config_dir, cwd, None,
+            background_outcome.REFUSAL_LAUNCH_FAILED, "ack-timeout", deadline=deadline,
+        )
+        return _merge_retire_refusal(
+            background_outcome.REFUSAL_LAUNCH_FAILED, "ack-timeout", retire_extra,
+        )
+
+    stdout_text = _read_text_file(log_path)
+    stderr_text = _read_text_file(err_path)
+    if rc != 0:
+        line = _first_nonempty_line(stdout_text) or _first_nonempty_line(stderr_text)
+        if len(line) > 200:
+            line = line[:200]
+        evidence_text = "nonzero-exit:%s:%s" % (rc, line)
+        launch_id_8hex = engine_adapter.claude_launch_id(stdout_text)
+        retire_extra = _retire_lane(
+            resolved_config_dir, cwd, launch_id_8hex,
+            background_outcome.REFUSAL_LAUNCH_FAILED, evidence_text, deadline=deadline,
+        )
+        return _merge_retire_refusal(
+            background_outcome.REFUSAL_LAUNCH_FAILED, evidence_text, retire_extra,
+        )
+
+    launch_id_8hex = engine_adapter.claude_launch_id(stdout_text)
+    if launch_id_8hex is None:
+        retire_extra = _retire_lane(
+            resolved_config_dir, cwd, None,
+            background_outcome.REFUSAL_LAUNCH_UNACKNOWLEDGED, None, deadline=deadline,
+        )
+        return _merge_retire_refusal(
+            background_outcome.REFUSAL_LAUNCH_UNACKNOWLEDGED, None, retire_extra,
+        )
+
+    if deadline is not None:
+        wait_seconds = max(0.0, min(30.0, deadline - time.monotonic()))
+    else:
+        wait_seconds = 30.0
+    handle, status = engine_dispatch.acquire_background_handle(
+        resolved_config_dir, cwd, launch_id_8hex, wait_seconds=wait_seconds,
+    )
+    if handle is None:
+        if status == "ended":
+            reason = background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
+            status_evidence = None
+        elif status == "agents-unreadable":
+            reason = background_outcome.REFUSAL_AGENTS_UNREADABLE
+            status_evidence = None
+        else:
+            reason = background_outcome.REFUSAL_SESSION_UNLISTED
+            status_evidence = status
+        retire_extra = _retire_lane(
+            resolved_config_dir, cwd, launch_id_8hex,
+            reason, status_evidence, deadline=deadline,
+        )
+        return _merge_retire_refusal(reason, status_evidence, retire_extra)
+
+    identity_row = engine_dispatch.background_identity_row(
+        resolved_config_dir, cwd, launch_id_8hex,
+    )
+    session_id = identity_row.get("sessionId") if identity_row else None
+    if not isinstance(session_id, str) or not session_id.startswith(launch_id_8hex):
+        retire_extra = _retire_lane(
+            resolved_config_dir, cwd, launch_id_8hex,
+            background_outcome.REFUSAL_SESSION_UNLISTED, "session-id", deadline=deadline,
+        )
+        return _merge_retire_refusal(
+            background_outcome.REFUSAL_SESSION_UNLISTED, "session-id", retire_extra,
+        )
+
     started = {
         "event": "started",
         "launchId": launch_id,
         "ts": time.time(),
         "schema": ll.SCHEMA,
         "attempt": attempt,
-        "pid": proc.pid,
+        "pid": handle.pid,
         "logPath": log_path,
         "errPath": err_path,
+        "launchMode": ll.LAUNCH_MODE_BACKGROUND,
+        "backgroundId": launch_id_8hex,
+        "sessionId": session_id,
     }
     if isinstance(evidence, str) and evidence.strip():
         started["evidence"] = evidence
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
+        retire_extra = _retire_lane(
+            resolved_config_dir, cwd, launch_id_8hex,
+            append_result["reason"], "started-append-failed", deadline=deadline,
+        )
+        started_repair = dict(
+            {
+                "attempt": attempt,
+                "pid": handle.pid,
+                "logPath": log_path,
+                "errPath": err_path,
+                "launchMode": ll.LAUNCH_MODE_BACKGROUND,
+                "backgroundId": launch_id_8hex,
+                "sessionId": session_id,
+            },
+            **({"evidence": started["evidence"]} if "evidence" in started else {})
+        )
         term = _terminalize(
             repo_root,
             launch_id,
             True,
-            append_result["reason"],
+            retire_extra.get("reason", append_result["reason"]),
             evidence="started-append-failed",
-            proc=proc,
             env=env,
-            started_repair=dict(
-                {
-                    "attempt": attempt,
-                    "pid": proc.pid,
-                    "logPath": log_path,
-                    "errPath": err_path,
-                },
-                **({"evidence": started["evidence"]} if "evidence" in started else {})
-            ),
+            started_repair=started_repair,
         )
-        fail_reason = _terminalization_reason(term, append_result["reason"])
-        return {"ok": False, "reason": fail_reason, "proc": None, "refused": True}
+        fail_reason = _terminalization_reason(
+            term, retire_extra.get("reason", append_result["reason"]),
+        )
+        out = {"ok": False, "reason": fail_reason, "proc": None, "refused": True}
+        if "orphanedBackgroundId" in retire_extra:
+            out["orphanedBackgroundId"] = retire_extra["orphanedBackgroundId"]
+        if "remedy" in retire_extra:
+            out["remedy"] = retire_extra["remedy"]
+        return out
 
-    return {"ok": True, "proc": proc}
-
-
-def _observe_settle(proc, settle_seconds, deadline=None):
-    settle_deadline = time.monotonic() + settle_seconds
-    while time.monotonic() < settle_deadline:
-        if deadline is not None and time.monotonic() >= deadline:
-            return "deadline"
-        rc = proc.poll()
-        if rc is not None:
-            return rc
-        time.sleep(0.1)
-    if deadline is not None and time.monotonic() >= deadline:
-        return "deadline"
-    rc = proc.poll()
-    return rc
+    return {
+        "ok": True,
+        "proc": None,
+        "handle": handle,
+        "backgroundId": launch_id_8hex,
+        "sessionId": session_id,
+        "config_dir": resolved_config_dir,
+    }
 
 
 def launch_build(
@@ -1369,6 +1562,25 @@ def launch_build(
 
     worktree_path = build_worktree_path(repo_root, issue, launch_id, env=env)
     requested = spawn_config_dir(env=env, cwd=worktree_path)
+    if requested is None:
+        return _fail(  # pre-reservation: config dir gate before any reservation
+            config_dir.REFUSAL_CONFIG_DIR_UNRESOLVABLE,
+            launchId=launch_id,
+            remedy=_CONFIG_DIR_REMEDY,
+        )
+    if worktree_path:
+        try:
+            inside_worktree = os.path.commonpath([requested, worktree_path]) == worktree_path
+        except ValueError:
+            inside_worktree = False
+    else:
+        inside_worktree = False
+    if not inside_worktree and not os.path.isdir(requested):
+        return _fail(  # pre-reservation: config dir gate before any reservation
+            config_dir.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY,
+            launchId=launch_id,
+            remedy=_CONFIG_DIR_REMEDY,
+        )
     foreign_override = False
     if _claude_seat_pin_gate_applies(env=env):
         seat = seat_config_dir(env=env)
@@ -1564,11 +1776,8 @@ def launch_build(
         "effort": compose_result["effort"] or "",
         "effortSource": compose_result["effortSource"],
         "worktree": worktree_path,
-        "sessionId": compose_result["sessionId"],
     }
-    config_dir = spawn_config_dir(env=env, cwd=worktree_path)
-    if config_dir is not None:
-        reserved["configDir"] = config_dir
+    reserved["configDir"] = requested
     if seat["instance"] is not None:
         reserved["seatInstance"] = seat["instance"]
     if foreign_override:
@@ -1681,9 +1890,15 @@ def launch_build(
             cwd=worktree_path,
             evidence=overlap_evidence,
             effort=compose_result["effort"],
+            deadline=deadline,
         )
         if spawn_result.get("refused"):
-            return _post_reserve_fail(spawn_result["reason"])
+            extra = {}
+            if "orphanedBackgroundId" in spawn_result:
+                extra["orphanedBackgroundId"] = spawn_result["orphanedBackgroundId"]
+            if "remedy" in spawn_result:
+                extra["remedy"] = spawn_result["remedy"]
+            return _post_reserve_fail(spawn_result["reason"], **extra)
         if spawn_result.get("oserror"):
             if attempt >= max_attempts:
                 term = _terminalize(
@@ -1747,64 +1962,94 @@ def launch_build(
             attempt += 1
             continue
         if not spawn_result["ok"]:
+            spawn_reason = spawn_result["reason"]
+            spawn_evidence = spawn_result.get("evidence", spawn_reason)
+            extra = {}
+            if "orphanedBackgroundId" in spawn_result:
+                extra["orphanedBackgroundId"] = spawn_result["orphanedBackgroundId"]
+            if "remedy" in spawn_result:
+                extra["remedy"] = spawn_result["remedy"]
             term = _terminalize(
                 repo_root,
                 launch_id,
-                False,
-                spawn_result["reason"],
+                bool(spawn_result.get("ack_spawned")),
+                spawn_reason,
+                evidence=spawn_evidence,
                 stage="spawn",
                 env=env,
             )
-            reason = _terminalization_reason(term, spawn_result["reason"])
-            return _post_reserve_fail(reason)
+            reason = _terminalization_reason(term, spawn_reason)
+            return _post_reserve_fail(reason, **extra)
 
         child_ever_spawned = True
-        proc = spawn_result["proc"]
-        rc = _observe_settle(proc, settle_seconds, deadline=deadline)
-        if rc == "deadline":
+        handle = spawn_result["handle"]
+        background_id = spawn_result["backgroundId"]
+        session_id = spawn_result["sessionId"]
+        cfg_dir = spawn_result["config_dir"]
+        settle_result = _settle_background_handle(
+            handle, cfg_dir, worktree_path, background_id, settle_seconds, deadline,
+        )
+        if settle_result == "deadline":
+            retire_extra = _retire_lane(
+                cfg_dir, worktree_path, background_id,
+                "retry-deadline-exceeded", "deadline", deadline=deadline,
+            )
             term = _terminalize(
                 repo_root,
                 launch_id,
                 True,
-                "retry-deadline-exceeded",
+                retire_extra.get("reason", "retry-deadline-exceeded"),
                 evidence="deadline",
-                proc=proc,
                 env=env,
             )
-            reason = _terminalization_reason(term, "retry-deadline-exceeded")
-            return _post_reserve_fail(reason)
-        if rc is None:
-            return {
-                "ok": True,
-                "reason": None,
-                "launchId": launch_id,
-                "pid": proc.pid,
-                "logPath": log_path,
-                "errPath": err_path,
-                "attempt": attempt,
-                "model": compose_result["model"],
-                "modelResolution": compose_result["modelResolution"],
-                "effort": compose_result["effort"],
-                "effortSource": compose_result["effortSource"],
-                "worktree": worktree_path,
-                "warnings": warnings,
-            }
-
-        evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
-        term = _terminalize(
-            repo_root,
-            launch_id,
-            True,
-            evidence,
-            evidence=evidence,
-            proc=proc,
-            env=env,
-        )
-        if rc == 0:
-            reason = _terminalization_reason(term, "settle-exit-zero-uncertain")
-            return _post_reserve_fail(reason)
-        reason = _terminalization_reason(term, "settle-nonzero-exit")
-        return _post_reserve_fail(reason)
+            reason = _terminalization_reason(
+                term, retire_extra.get("reason", "retry-deadline-exceeded"),
+            )
+            extra = {}
+            if "orphanedBackgroundId" in retire_extra:
+                extra["orphanedBackgroundId"] = retire_extra["orphanedBackgroundId"]
+            if "remedy" in retire_extra:
+                extra["remedy"] = retire_extra["remedy"]
+            return _post_reserve_fail(reason, **extra)
+        if settle_result is not None:
+            retire_extra = _retire_lane(
+                cfg_dir, worktree_path, background_id,
+                settle_result, settle_result, deadline=deadline,
+            )
+            term = _terminalize(
+                repo_root,
+                launch_id,
+                True,
+                retire_extra.get("reason", settle_result),
+                evidence=settle_result,
+                env=env,
+            )
+            reason = _terminalization_reason(
+                term, retire_extra.get("reason", settle_result),
+            )
+            extra = {}
+            if "orphanedBackgroundId" in retire_extra:
+                extra["orphanedBackgroundId"] = retire_extra["orphanedBackgroundId"]
+            if "remedy" in retire_extra:
+                extra["remedy"] = retire_extra["remedy"]
+            return _post_reserve_fail(reason, **extra)
+        return {
+            "ok": True,
+            "reason": None,
+            "launchId": launch_id,
+            "pid": handle.pid,
+            "logPath": log_path,
+            "errPath": err_path,
+            "attempt": attempt,
+            "model": compose_result["model"],
+            "modelResolution": compose_result["modelResolution"],
+            "effort": compose_result["effort"],
+            "effortSource": compose_result["effortSource"],
+            "worktree": worktree_path,
+            "warnings": warnings,
+            "sessionId": session_id,
+            "backgroundId": background_id,
+        }
 
 
 def _try_reserve_for_refusal(

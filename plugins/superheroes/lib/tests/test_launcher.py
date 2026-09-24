@@ -19,6 +19,10 @@ _LD_MOD = os.path.join(_HERE, "..", "launch_doctrine.py")
 
 import launch_ledger as ll  # noqa: E402
 import heartbeat as hb  # noqa: E402
+import config_dir as cd  # noqa: E402
+import engine_adapter as ea  # noqa: E402
+import engine_dispatch as ed  # noqa: E402
+import background_outcome as bo  # noqa: E402
 
 
 def _load_launcher():
@@ -73,6 +77,115 @@ def _head_sha(repo):
         check=True,
     )
     return out.stdout.strip()
+
+
+_BG_ID = "feac172f"
+_BG_SESSION = "feac172f-474c-424d-86e7-0e50688972c9"
+_BG_TEST_STATE = {
+    "session_pid": None,
+    "row_state": "working",
+    "listing_ok": True,
+    "stop_result": "stopped",
+    "agents_rows": None,
+    "retire_calls": [],
+    "acquire_calls": [],
+}
+
+
+def _bg_default_row(cwd, config_dir):
+    pid = _BG_TEST_STATE["session_pid"] or 99999
+    return {
+        "pid": pid,
+        "id": _BG_ID,
+        "sessionId": _BG_SESSION,
+        "state": _BG_TEST_STATE["row_state"],
+        "kind": "background",
+        "cwd": cwd,
+    }
+
+
+def _bg_acquire(config_dir, cwd, background_id=None, wait_seconds=None):
+    _BG_TEST_STATE["acquire_calls"].append((config_dir, cwd, background_id, wait_seconds))
+    if not _BG_TEST_STATE["listing_ok"]:
+        return None, "agents-unreadable"
+    if _BG_TEST_STATE["agents_rows"] is not None:
+        rows = _BG_TEST_STATE["agents_rows"]
+        if not rows:
+            return None, "ended"
+        live = [r for r in rows if r.get("state") not in ("stopped", "done")]
+        if not live:
+            return None, "ended"
+        if len(live) > 1:
+            return None, "ambiguous"
+        row = live[0]
+        pid = row.get("pid")
+        if not isinstance(pid, int) or pid < 2:
+            return None, "unlisted"
+        return ed.BackgroundHandle(row["id"], pid, cwd, config_dir), "ok"
+    pid = _BG_TEST_STATE["session_pid"]
+    if pid is None:
+        return None, "unlisted"
+    if _BG_TEST_STATE["row_state"] in ("stopped", "done"):
+        return None, "ended"
+    return ed.BackgroundHandle(_BG_ID, pid, cwd, config_dir), "ok"
+
+
+def _bg_retire(handle):
+    _BG_TEST_STATE["retire_calls"].append(handle)
+    return _BG_TEST_STATE["stop_result"]
+
+
+def _bg_identity_row(config_dir, cwd, background_id):
+    if not _BG_TEST_STATE["listing_ok"]:
+        return None
+    if _BG_TEST_STATE["agents_rows"] is not None:
+        rows = ed.background_identity_rows(_BG_TEST_STATE["agents_rows"], cwd, background_id)
+        return rows[0] if len(rows) == 1 else None
+    if _BG_TEST_STATE["session_pid"] is None:
+        return None
+    if _BG_TEST_STATE["row_state"] in ("stopped", "done"):
+        return None
+    return _bg_default_row(cwd, config_dir)
+
+
+@pytest.fixture(autouse=True)
+def _autouse_background_dispatch_stubs(tmp_path, monkeypatch):
+    _BG_TEST_STATE.update({
+        "session_pid": None,
+        "row_state": "working",
+        "listing_ok": True,
+        "stop_result": "stopped",
+        "agents_rows": None,
+        "retire_calls": [],
+        "acquire_calls": [],
+    })
+    cfg = tmp_path / "claude-config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv(cd.CONFIG_DIR_ENV, str(cfg))
+    monkeypatch.setattr(ed, "acquire_background_handle", _bg_acquire)
+    monkeypatch.setattr(ed, "retire", _bg_retire)
+    monkeypatch.setattr(ed, "background_identity_row", _bg_identity_row)
+
+
+@pytest.fixture(autouse=True)
+def _autouse_seat_config_matches_spawn(monkeypatch):
+    last_worktree = [None]
+    orig_build_worktree_path = L.build_worktree_path
+
+    def _tracking_build_worktree_path(repo_root, issue, launch_id, env=None):
+        path = orig_build_worktree_path(repo_root, issue, launch_id, env=env)
+        last_worktree[0] = path
+        return path
+
+    def _matching_seat(env=None):
+        base = dict(env if env is not None else os.environ)
+        requested = L.spawn_config_dir(env=base, cwd=last_worktree[0])
+        if requested is not None:
+            return {"instance": requested, "reason": None}
+        return {"instance": None, "reason": "seat-pid-absent"}
+
+    monkeypatch.setattr(L, "build_worktree_path", _tracking_build_worktree_path)
+    monkeypatch.setattr(L, "seat_config_dir", _matching_seat)
 
 
 def _ledger_env(tmp_path, monkeypatch):
@@ -583,43 +696,47 @@ def test_model_default_opus(tmp_path):
     result = L.compose_launch(repo, 656, premise)
     assert result["ok"] is True
     assert result["model"] == "opus"
-    assert result["argv"][2] == "opus"
+    assert result["argv"][result["argv"].index("--model") + 1] == "opus"
 
 
 def test_compose_argv_shape(tmp_path):
-  # axis: composed argv carries --model with registry token
+  # axis: composed argv matches engine_adapter builder argv
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo)
     result = L.compose_launch(repo, 656, premise, model="sonnet")
     assert result["ok"] is True
-    assert result["argv"] == [
-        "claude", "--model", "sonnet", "--session-id", result["sessionId"],
-        "-p", result["prompt"],
-    ]
+    expected = ea.claude_builder_argv("sonnet", result["effort"], result["prompt"])
+    assert expected["reason"] is None
+    assert result["argv"] == expected["argv"]
+    assert "--bg" in result["argv"]
+    assert "-p" not in result["argv"]
+    assert "--session-id" not in result["argv"]
+    assert "--restricted" not in result["argv"]
+    assert result["argv"][-1] == result["prompt"]
+    assert "sessionId" not in result
 
 
 def test_compose_argv_carries_session_id(tmp_path):
-  # axis: --session-id precedes -p and matches the returned sessionId
-    import uuid as _uuid
+  # axis: compose no longer mints sessionId (WO-B background argv)
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo)
     result = L.compose_launch(repo, 656, premise)
     assert result["ok"] is True
-    argv = result["argv"]
-    sid_index = argv.index("--session-id")
-    assert argv[sid_index + 1] == result["sessionId"]
-    _uuid.UUID(result["sessionId"])
-    assert argv.index("-p") == sid_index + 2
+    assert "sessionId" not in result
+    assert result["argv"] == ea.claude_builder_argv(
+        result["model"], result["effort"], result["prompt"],
+    )["argv"]
 
 
 def test_compose_launch_mints_distinct_session_ids(tmp_path):
-  # axis: each compose_launch call gets its own session id
+  # axis: compose no longer mints session ids (background launch)
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo)
     first = L.compose_launch(repo, 656, premise)
     second = L.compose_launch(repo, 656, premise)
     assert first["ok"] is True and second["ok"] is True
-    assert first["sessionId"] != second["sessionId"]
+    assert "sessionId" not in first and "sessionId" not in second
+    assert first["argv"] == second["argv"]
 
 
 def _write_core_with_builder_tier(repo, prefs):
@@ -812,15 +929,71 @@ def _standin_script(behavior):
     )
 
 
+def _bg_unit_spawn(captured=None, *, ack_rc=0, write_id=True, session_pid=88888):
+    """Minimal ack proc for direct _spawn_attempt unit tests."""
+
+    class _AckProc:
+        pid = 424240
+
+        def poll(self):
+            return ack_rc if ack_rc != 0 else 0
+
+        def wait(self, timeout=None):
+            return ack_rc if ack_rc != 0 else 0
+
+    def spawn(argv, cwd, out_fh, err_fh, child_env):
+        if captured is not None:
+            captured.update(child_env)
+        if write_id:
+            out_fh.write(b"backgrounded \xc2\xb7 feac172f\n")
+            out_fh.flush()
+        _BG_TEST_STATE["session_pid"] = session_pid
+        out_fh.close()
+        err_fh.close()
+        return _AckProc()
+
+    return spawn
+
+
 def _make_spawn_fn(behavior):
-    def spawn(argv, repo_root, out_fh, err_fh, child_env):
-        real_argv = [
-            sys.executable, "-c", _standin_script(behavior),
-        ]
+    def spawn(argv, cwd, out_fh, err_fh, child_env):
         env = dict(child_env)
+        if behavior == "sleep":
+            session = subprocess.Popen(
+                [sys.executable, "-c", _standin_script("sleep")],
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+                env=env,
+            )
+            _BG_TEST_STATE["session_pid"] = session.pid
+        elif behavior in ("exit0", "exit1"):
+            session = subprocess.Popen(
+                [sys.executable, "-c", _standin_script(behavior)],
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+                env=env,
+            )
+            _BG_TEST_STATE["session_pid"] = session.pid
+        marker = b"backgrounded \xc2\xb7 feac172f\n"
+        out_fh.write(marker)
+        out_fh.flush()
+        if behavior == "exit1":
+            ack_script = "import sys; sys.exit(1)"
+        elif behavior == "hang":
+            ack_script = "import time; time.sleep(120)"
+        else:
+            ack_script = "pass"
         return subprocess.Popen(
-            real_argv,
-            cwd=repo_root,
+            [sys.executable, "-c", ack_script],
+            cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=out_fh,
             stderr=err_fh,
@@ -842,7 +1015,7 @@ def test_spawn_reserved_before_child(tmp_path, monkeypatch):
         records = ll.read(repo_root)["records"]
         order.append(("before_spawn", len(records)))
         proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
-        order.append(("after_spawn", proc.pid))
+        order.append(("after_spawn", _BG_TEST_STATE["session_pid"]))
         return proc
 
     result = L.launch_build(
@@ -863,6 +1036,8 @@ def test_spawn_reserved_before_child(tmp_path, monkeypatch):
     assert order[0][0] == "before_spawn"
     assert order[0][1] >= 1
     assert started[0]["pid"] == order[1][1]
+    assert started[0]["pid"] == result["pid"]
+    assert started[0]["launchMode"] == ll.LAUNCH_MODE_BACKGROUND
 
 
 def test_started_append_failure_reaps_child_and_writes_no_invalid_terminal(tmp_path, monkeypatch):
@@ -900,7 +1075,7 @@ def test_started_append_failure_reaps_child_and_writes_no_invalid_terminal(tmp_p
     )
     assert result["ok"] is False
     assert result["reason"] == "terminalization-failed:ledger-append-failed"
-    pid = child_pid["pid"]
+    pid = _BG_TEST_STATE["session_pid"]
     assert pid is not None
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
@@ -1333,12 +1508,12 @@ def test_retry_nonzero_exit_parks_no_retry(tmp_path, monkeypatch):
         backoff_seconds=(0,),
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-nonzero-exit"
+    assert result["reason"] == bo.REFUSAL_LAUNCH_FAILED
     assert calls["n"] == 1
     records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "nonzero-exit:1"
+    assert parks[0]["evidence"] == bo.REFUSAL_LAUNCH_FAILED
     retries = [r for r in records if r.get("event") == "retry"]
     assert retries == []
 
@@ -1364,7 +1539,7 @@ def test_nonzero_exit_parks_even_when_worktree_dirty(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-nonzero-exit"
+    assert result["reason"] == bo.REFUSAL_LAUNCH_FAILED
     parks = [
         r for r in ll.read(repo)["records"]
         if r.get("event") == "outcome" and r.get("outcome") == "park"
@@ -1387,13 +1562,13 @@ def test_settle_exit_zero_uncertain(tmp_path, monkeypatch):
         settle_seconds=0.5,
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-exit-zero-uncertain"
+    assert result["reason"] == bo.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
     parks = [
         r for r in ll.read(repo)["records"]
         if r.get("event") == "outcome" and r.get("outcome") == "park"
     ]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "exit-zero"
+    assert parks[0]["evidence"] == bo.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
 
 
 def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
@@ -1424,14 +1599,13 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert calls["n"] == 2
     assert len(spawn_argv) == 2
-    sid_index = spawn_argv[0].index("--session-id")
-    session_id = spawn_argv[0][sid_index + 1]
-    assert spawn_argv[1][sid_index + 1] == session_id
+    assert spawn_argv[0] == spawn_argv[1]
+    assert "--bg" in spawn_argv[0]
+    assert "--session-id" not in spawn_argv[0]
     records = ll.read(repo)["records"]
     reserved = [r for r in records if r.get("event") == "reserved"][0]
-    assert reserved["sessionId"] == session_id
-    reserved_sid_index = reserved["argv"].index("--session-id")
-    assert reserved["argv"][reserved_sid_index + 1] == session_id
+    assert "sessionId" not in reserved
+    assert "--session-id" not in reserved["argv"]
     retries = [r for r in records if r.get("event") == "retry"]
     assert len(retries) == 1
     assert retries[0]["attempt"] == 1
@@ -1439,15 +1613,15 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
 
 
 def test_launch_build_reserved_session_id_matches_spawn_argv(tmp_path, monkeypatch):
-  # axis: reserved record sessionId matches spawned --session-id and stored argv
+  # axis: reserved argv matches spawned background argv; no compose sessionId
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     spawn_argv = []
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def capture_spawn(argv, cwd, out_fh, err_fh, child_env):
         spawn_argv.append(list(argv))
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -1459,19 +1633,14 @@ def test_launch_build_reserved_session_id_matches_spawn_argv(tmp_path, monkeypat
         settle_seconds=0.2,
     )
     assert result["ok"] is True
-    assert len(spawn_argv) == 1
-    sid_index = spawn_argv[0].index("--session-id")
-    session_id = spawn_argv[0][sid_index + 1]
-    reserved = [
-        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
-    ][0]
-    assert reserved["sessionId"] == session_id
-    reserved_sid_index = reserved["argv"].index("--session-id")
-    assert reserved["argv"][reserved_sid_index + 1] == session_id
-    try:
-        os.kill(result["pid"], signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    records = ll.read(repo)["records"]
+    reserved = [r for r in records if r.get("event") == "reserved"][0]
+    assert reserved["argv"] == spawn_argv[0]
+    assert "--bg" in reserved["argv"]
+    assert "sessionId" not in reserved
+    assert result["sessionId"] == _BG_SESSION
+    assert result["backgroundId"] == _BG_ID
+    _reap(result)
 
 
 def test_launch_build_reserved_config_dir_matches_the_child_env(tmp_path, monkeypatch):
@@ -1480,6 +1649,7 @@ def test_launch_build_reserved_config_dir_matches_the_child_env(tmp_path, monkey
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     other_instance = str(tmp_path / "claude-two")
+    os.makedirs(other_instance, exist_ok=True)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", other_instance)
     spawned_envs = []
 
@@ -1520,6 +1690,7 @@ def test_launch_build_records_the_default_config_root_when_unset(tmp_path, monke
     home.mkdir()
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("HOME", str(home))
+    os.makedirs(home / ".claude", exist_ok=True)
 
     result = L.launch_build(
         repo,
@@ -2323,7 +2494,7 @@ def test_edge5_nonzero_exit_in_settle_parks(tmp_path, monkeypatch):
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "nonzero-exit:1"
+    assert parks[0]["evidence"] == bo.REFUSAL_LAUNCH_FAILED
     assert refused == []
 
 
@@ -2345,7 +2516,7 @@ def test_edge6_zero_exit_in_settle_parks(tmp_path, monkeypatch):
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "exit-zero"
+    assert parks[0]["evidence"] == bo.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
     assert refused == []
 
 
@@ -2991,7 +3162,7 @@ def test_c2_edge9_zero_exit_parks(tmp_path, monkeypatch):
     records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "exit-zero"
+    assert parks[0]["evidence"] == bo.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
 
 
 def test_c2_edge10_child_alive_after_settle_no_terminal(tmp_path, monkeypatch):
@@ -3176,14 +3347,7 @@ def test_spawn_attempt_exports_heartbeat_env_without_ledger_root(tmp_path, monke
     })
     captured = {}
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424242
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _bg_unit_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3191,7 +3355,7 @@ def test_spawn_attempt_exports_heartbeat_env_without_ledger_root(tmp_path, monke
         repo,
         launch_id,
         1,
-        ["claude", "-p", "test"],
+        ["claude", "--bg", "test"],
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
@@ -3228,14 +3392,7 @@ def test_spawn_attempt_exports_slot_ref_when_supplied(tmp_path, monkeypatch):
     })
     captured = {}
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424243
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _bg_unit_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3243,7 +3400,7 @@ def test_spawn_attempt_exports_slot_ref_when_supplied(tmp_path, monkeypatch):
         repo,
         launch_id,
         1,
-        ["claude", "-p", "test"],
+        ["claude", "--bg", "test"],
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
@@ -3264,14 +3421,7 @@ def test_spawn_attempt_omits_slot_ref_without_generation(tmp_path, monkeypatch):
     launch_id = "launch-slot-only"
     captured = {}
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424244
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _bg_unit_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3279,7 +3429,7 @@ def test_spawn_attempt_omits_slot_ref_without_generation(tmp_path, monkeypatch):
         repo,
         launch_id,
         1,
-        ["claude", "-p", "test"],
+        ["claude", "--bg", "test"],
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
@@ -3315,14 +3465,7 @@ def test_spawn_attempt_strips_inherited_slot_ref_when_unslotted(tmp_path, monkey
     })
     captured = {}
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424245
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _bg_unit_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3331,7 +3474,7 @@ def test_spawn_attempt_strips_inherited_slot_ref_when_unslotted(tmp_path, monkey
         repo,
         launch_id,
         1,
-        ["claude", "-p", "test"],
+        ["claude", "--bg", "test"],
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
@@ -3365,14 +3508,7 @@ def test_spawn_attempt_replaces_inherited_slot_ref_when_slotted(tmp_path, monkey
     })
     captured = {}
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424246
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _bg_unit_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3381,7 +3517,7 @@ def test_spawn_attempt_replaces_inherited_slot_ref_when_slotted(tmp_path, monkey
         repo,
         launch_id,
         1,
-        ["claude", "-p", "test"],
+        ["claude", "--bg", "test"],
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
@@ -3421,14 +3557,7 @@ def test_spawn_attempt_strips_slot_ref_from_process_env_when_unslotted(
     })
     captured = {}
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424247
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _bg_unit_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3436,7 +3565,7 @@ def test_spawn_attempt_strips_slot_ref_from_process_env_when_unslotted(
         repo,
         launch_id,
         1,
-        ["claude", "-p", "test"],
+        ["claude", "--bg", "test"],
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
@@ -3471,14 +3600,7 @@ def test_spawn_attempt_strips_empty_string_slot_ref_when_unslotted(tmp_path, mon
     })
     captured = {}
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424248
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _bg_unit_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3486,7 +3608,7 @@ def test_spawn_attempt_strips_empty_string_slot_ref_when_unslotted(tmp_path, mon
         repo,
         launch_id,
         1,
-        ["claude", "-p", "test"],
+        ["claude", "--bg", "test"],
         os.path.join(log_dir, "out.log"),
         os.path.join(log_dir, "err.log"),
         900000,
@@ -5512,12 +5634,16 @@ def test_launch_foreign_instance_pin_refuses_mismatch(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    launcher_pin = str(tmp_path / "launcher-pin")
+    seat_own = str(tmp_path / "seat-own")
+    os.makedirs(launcher_pin)
+    os.makedirs(seat_own)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", launcher_pin)
     monkeypatch.setattr(
         L,
         "seat_config_dir",
-        lambda env=None: {"instance": "/tmp/seat-own", "reason": None},
+        lambda env=None: {"instance": seat_own, "reason": None},
     )
     result = L.launch_build(
         repo,
@@ -5528,8 +5654,8 @@ def test_launch_foreign_instance_pin_refuses_mismatch(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == "launch-foreign-instance-pin"
-    assert result["seatInstance"] == "/tmp/seat-own"
-    assert result["requestedInstance"] == "/tmp/launcher-pin"
+    assert result["seatInstance"] == seat_own
+    assert result["requestedInstance"] == launcher_pin
     assert "--allow-foreign-instance" in result["remedy"]
 
 
@@ -5538,12 +5664,16 @@ def test_launch_instance_pin_refusal_launches_nothing(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     wt_root = _worktree_root(tmp_path, monkeypatch)
+    launcher_pin = str(tmp_path / "launcher-pin")
+    seat_own = str(tmp_path / "seat-own")
+    os.makedirs(launcher_pin)
+    os.makedirs(seat_own)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", launcher_pin)
     monkeypatch.setattr(
         L,
         "seat_config_dir",
-        lambda env=None: {"instance": "/tmp/seat-own", "reason": None},
+        lambda env=None: {"instance": seat_own, "reason": None},
     )
     spawn_calls = []
     monkeypatch.setattr(
@@ -5693,7 +5823,7 @@ def test_launch_seat_undetermined_refuses(seat_result, tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
+    launcher_pin = str(tmp_path / "launcher-pin"); os.makedirs(launcher_pin, exist_ok=True); monkeypatch.setenv("CLAUDE_CONFIG_DIR", launcher_pin)
     monkeypatch.setattr(L, "seat_config_dir", lambda env=None: dict(seat_result))
     result = L.launch_build(
         repo,
@@ -5706,7 +5836,7 @@ def test_launch_seat_undetermined_refuses(seat_result, tmp_path, monkeypatch):
     assert result["reason"] == "launch-seat-instance-undetermined"
     assert result["seatInstance"] is None
     assert result["seatReason"] == seat_result["reason"]
-    assert result["requestedInstance"] == "/tmp/launcher-pin"
+    assert result["requestedInstance"] == launcher_pin
     assert "--allow-foreign-instance" in result["remedy"]
 
 
@@ -5718,11 +5848,11 @@ def test_allow_foreign_instance_flag_permits_mismatch_and_records_override(
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
+    launcher_pin = str(tmp_path / "launcher-pin"); seat_own = str(tmp_path / "seat-own"); os.makedirs(launcher_pin, exist_ok=True); os.makedirs(seat_own, exist_ok=True); monkeypatch.setenv("CLAUDE_CONFIG_DIR", launcher_pin)
     monkeypatch.setattr(
         L,
         "seat_config_dir",
-        lambda env=None: {"instance": "/tmp/seat-own", "reason": None},
+        lambda env=None: {"instance": seat_own, "reason": None},
     )
     result = L.launch_build(
         repo,
@@ -5739,7 +5869,7 @@ def test_allow_foreign_instance_flag_permits_mismatch_and_records_override(
         r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
     ][0]
     assert reserved["foreignInstanceAllowed"] is True
-    assert reserved["seatInstance"] == "/tmp/seat-own"
+    assert reserved["seatInstance"] == seat_own
     try:
         os.kill(result["pid"], signal.SIGTERM)
     except ProcessLookupError:
@@ -5754,7 +5884,7 @@ def test_allow_foreign_instance_on_undetermined_seat_omits_seat_instance(
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
+    launcher_pin = str(tmp_path / "launcher-pin"); os.makedirs(launcher_pin, exist_ok=True); monkeypatch.setenv("CLAUDE_CONFIG_DIR", launcher_pin)
     monkeypatch.setattr(
         L,
         "seat_config_dir",
@@ -5828,7 +5958,7 @@ def test_launch_proceeds_when_requested_config_dir_is_none(tmp_path, monkeypatch
     monkeypatch.setattr(
         L,
         "seat_config_dir",
-        lambda env=None: {"instance": "/tmp/seat-own", "reason": None},
+        lambda env=None: {"instance": seat_own, "reason": None},
     )
     result = L.launch_build(
         repo,
@@ -5996,3 +6126,60 @@ def test_launch_refusal_record_keeps_failed_check(tmp_path, monkeypatch):
     assert auth, preflight_checks
     assert auth[0]["state"] == "fail"
     assert "codex" in auth[0].get("evidence", "")
+
+
+# --- WO-B C14 layer 4a-2 (#1273) ---------------------------------------------
+
+
+def test_wo_b_pre_reservation_unresolvable(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.delenv(cd.CONFIG_DIR_ENV, raising=False)
+    monkeypatch.setattr(cd, "resolve", lambda env=None, cwd=None: None)
+    result = L.launch_build(repo, 656, _valid_premise(repo), _all_checks(), str(tmp_path / "logs"))
+    assert result["ok"] is False
+    assert result["reason"] == cd.REFUSAL_CONFIG_DIR_UNRESOLVABLE
+    assert not ll.read(repo).get("records")
+
+
+def test_wo_b_pre_reservation_not_a_directory(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    missing = str(tmp_path / "missing-abs")
+    monkeypatch.setenv(cd.CONFIG_DIR_ENV, missing)
+    result = L.launch_build(repo, 656, _valid_premise(repo), _all_checks(), str(tmp_path / "logs"))
+    assert result["ok"] is False
+    assert result["reason"] == cd.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY
+    assert not ll.read(repo).get("records")
+
+
+def test_wo_b_pre_reservation_gate_no_ledger_allow_foreign(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    missing = str(tmp_path / "missing-abs")
+    monkeypatch.setenv(cd.CONFIG_DIR_ENV, missing)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    seat_own = str(tmp_path / "seat-own")
+    os.makedirs(seat_own, exist_ok=True)
+    monkeypatch.setattr(L, "seat_config_dir", lambda env=None: {"instance": seat_own, "reason": None})
+    result = L.launch_build(
+        repo, 656, _valid_premise(repo), _all_checks(), str(tmp_path / "logs"),
+        allow_foreign_instance=True,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == cd.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY
+    assert not ll.read(repo).get("records")
+
+
+def test_wo_b_started_pid_is_handle_not_ack(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo, 656, _valid_premise(repo), _all_checks(), str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"), settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    started = [r for r in ll.read(repo)["records"] if r.get("event") == "started"][0]
+    assert started["pid"] == result["pid"]
+    assert started["pid"] == _BG_TEST_STATE["session_pid"]
+    _reap(result)

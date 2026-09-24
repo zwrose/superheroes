@@ -936,6 +936,17 @@ def _claude_agent_row_for_launch(rows, launch_id):
     return None
 
 
+def background_identity_row(config_dir, cwd, background_id):
+    """Return the sole identity row dict, or None. Never raises."""
+    rows, listing_ok = _claude_agents_rows(config_dir, cwd)
+    if not listing_ok:
+        return None
+    identity = background_identity_rows(rows, cwd, background_id)
+    if len(identity) != 1:
+        return None
+    return identity[0]
+
+
 def background_identity_rows(rows, cwd, background_id=None):
     """Return background rows matching cwd identity (and optional id). Never raises."""
     if not isinstance(rows, list):
@@ -6154,9 +6165,9 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     if engine == "claude":
         cfg = config_dir.resolve(env=os.environ, cwd=cwd)
         if cfg is None:
-            return False, "config-dir-unusable:unresolvable"
+            return False, config_dir.REFUSAL_CONFIG_DIR_UNRESOLVABLE
         if not os.path.isdir(cfg):
-            return False, "config-dir-unusable:not-a-directory"
+            return False, config_dir.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY
     else:
         cfg = None
 
@@ -6811,9 +6822,9 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     if engine == "claude":
         cfg = config_dir.resolve(env=os.environ, cwd=cwd)
         if cfg is None:
-            return False, "config-dir-unusable:unresolvable"
+            return False, config_dir.REFUSAL_CONFIG_DIR_UNRESOLVABLE
         if not os.path.isdir(cfg):
-            return False, "config-dir-unusable:not-a-directory"
+            return False, config_dir.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY
     else:
         cfg = None
 
