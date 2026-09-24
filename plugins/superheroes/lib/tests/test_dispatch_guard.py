@@ -249,7 +249,7 @@ def test_structured_triple_success_all_vendors():
 def test_opus_resolves_lowest_rung():
     result = DG.validate("reviewer", "claude", "opus")
     assert result["ok"] is True
-    assert result["model_id"] == "opus-5"
+    assert result["model_id"] == "opus-5.5"
     assert result["effort"] == "high"
     assert result["effort_source"] == "resolved-lowest-rung"
     _assert_success_triple(result)
@@ -532,10 +532,16 @@ def test_wo8_edge7_dispatch_guard_check_valid_and_off_allowlist_unchanged():
 
 
 def test_claude_cells_on_allowlist_per_role():
+    # registration-probe has no claude cell (no fall-open path).
+    probe_only = {"registration-probe"}
+    cells_checked = 0
     for role in MR.roles():
-        cell = MR.matrix_config(role, "claude")
-        if cell is None:
+        if role in probe_only:
+            assert MR.matrix_config(role, "claude") is None
             continue
+        cell = MR.matrix_config(role, "claude")
+        assert cell is not None, role
+        cells_checked += 1
         model_id, effort = cell
         seat = {"vendor": "claude", "model": model_id, "effort": effort, "role": role}
         proc = subprocess.run(
@@ -548,6 +554,7 @@ def test_claude_cells_on_allowlist_per_role():
         payload = json.loads(proc.stdout)
         assert payload["ok"] is True
         assert payload["dispatch_token"] == MR.dispatch_token("claude", model_id, effort)
+    assert cells_checked == len(MR.roles()) - len(probe_only)
 
 
 def test_claude_off_cell_refused():

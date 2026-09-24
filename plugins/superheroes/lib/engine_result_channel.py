@@ -6,6 +6,12 @@ Codex and cursor are both native-channel engines; result delivery differs by eng
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import os
+import uuid
+
 import engine_adapter
 import model_registry
 import payload_contracts
@@ -47,14 +53,182 @@ _CHANNEL_BY_ENGINE = {
     "claude": CHANNEL_NATIVE,
 }
 
+MODE_PRINT = engine_adapter.MODE_PRINT
+MODE_BACKGROUND = engine_adapter.MODE_BACKGROUND
+CLAUDE_MODES = engine_adapter.CLAUDE_MODES
+
 RESULT_DELIVERY_ARGV = "argv"      # the shell appends -o <path> --output-schema <schema>
 RESULT_DELIVERY_PROMPT = "prompt"  # the shell names <path> in a per-attempt prompt block
 RESULT_DELIVERY_STDOUT = "stdout"  # the shell passes --json-schema <schema> on argv; the runner materializes the final result event's structured_output to the result path
+RESULT_DELIVERY_TRANSCRIPT = "transcript"  # the shell reads the typed result from background transcript rows
+RESULT_DELIVERY_MEMBERS = frozenset({
+    RESULT_DELIVERY_ARGV,
+    RESULT_DELIVERY_PROMPT,
+    RESULT_DELIVERY_STDOUT,
+    RESULT_DELIVERY_TRANSCRIPT,
+})
 _RESULT_DELIVERY_BY_ENGINE = {
     "codex": RESULT_DELIVERY_ARGV,
     "cursor": RESULT_DELIVERY_PROMPT,
     "claude": RESULT_DELIVERY_STDOUT,
 }
+# Mode → delivery mechanics for non-print claude dispatch; capability (which engines accept
+# each mode) is derived from engine_adapter._NON_PRINT_CLAUDE_MODE_ENGINES — never hand-typed.
+_RESULT_DELIVERY_BY_MODE = {
+    MODE_BACKGROUND: RESULT_DELIVERY_TRANSCRIPT,
+}
+
+FIELD_RESULT_COMPLETE_AT = "resultCompleteAt"
+FIELD_RESULT_COMPLETE_EPOCH = "resultCompleteEpoch"
+FIELD_RESULT_COMPLETE_SHA256 = "resultCompleteSha256"
+FIELD_DEADLINE_MONO = "deadlineMono"
+FIELD_DEADLINE_EPOCH = "deadlineEpoch"
+
+REFUSAL_RESULT_COMPLETION_UNRECORDED = "result-completion-unrecorded"
+REFUSAL_RESULT_COMPLETION_AFTER_DEADLINE = "result-completion-after-deadline"
+REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH = "result-completion-payload-mismatch"
+
+_mono_epoch_cache = None
+
+
+def _is_real_number(value):
+    """True for int/float that is not bool. Never raises."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return True
+
+
+def _is_valid_sha256_hex(value):
+    """True when value is a 64-character lowercase hex string. Never raises."""
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    hex_chars = "0123456789abcdef"
+    for ch in value:
+        if ch not in hex_chars:
+            return False
+    return True
+
+
+def mono_epoch():
+    """Return this process's clock identity; computed once and cached. Never raises."""
+    global _mono_epoch_cache
+    if _mono_epoch_cache is None:
+        _mono_epoch_cache = "%d-%s" % (os.getpid(), uuid.uuid4().hex)
+    return _mono_epoch_cache
+
+
+def canonical_payload_digest(obj):
+    """Canonical JSON digest for native result objects; None when not a serializable dict. Never raises."""
+    if not isinstance(obj, dict):
+        return None
+    try:
+        raw = json.dumps(
+            obj,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    return payload_digest(raw)
+
+
+def payload_digest(data):
+    """Return lowercase hex sha256 of bytes or UTF-8 str; None for other types. Never raises."""
+    if isinstance(data, bytes):
+        raw = data
+    elif isinstance(data, str):
+        raw = data.encode("utf-8", errors="replace")
+    else:
+        return None
+    return hashlib.sha256(raw).hexdigest()
+
+
+def completion_stamp(mono_now, payload_sha256):
+    """Stamp completion fields for a just-observed channel result. Never raises."""
+    if not _is_real_number(mono_now):
+        return None
+    if not _is_valid_sha256_hex(payload_sha256):
+        return None
+    return {
+        FIELD_RESULT_COMPLETE_AT: float(mono_now),
+        FIELD_RESULT_COMPLETE_EPOCH: mono_epoch(),
+        FIELD_RESULT_COMPLETE_SHA256: payload_sha256,
+    }
+
+
+def deadline_stamp(mono_deadline):
+    """Stamp deadline fields for a timeout cap. Never raises."""
+    if not _is_real_number(mono_deadline):
+        return None
+    return {
+        FIELD_DEADLINE_MONO: float(mono_deadline),
+        FIELD_DEADLINE_EPOCH: mono_epoch(),
+    }
+
+
+def completion_window(ended, payload_sha256):
+    """Evaluate completion vs deadline on an attempt-ended record. Never raises."""
+    # axis: result-completion-unrecorded — missing or unusable completion stamp
+    if not isinstance(ended, dict):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    complete_at = ended.get(FIELD_RESULT_COMPLETE_AT)
+    if isinstance(complete_at, bool) or not isinstance(complete_at, (int, float)):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    complete_epoch = ended.get(FIELD_RESULT_COMPLETE_EPOCH)
+    if not isinstance(complete_epoch, str) or not complete_epoch:
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    recorded_digest = ended.get(FIELD_RESULT_COMPLETE_SHA256)
+    if not _is_valid_sha256_hex(recorded_digest):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    # axis: result-completion-payload-mismatch — digest does not match admitted bytes
+    if not _is_valid_sha256_hex(payload_sha256):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH)
+    if not hmac.compare_digest(payload_sha256, recorded_digest):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH)
+
+    if FIELD_DEADLINE_MONO not in ended:
+        return ("no-deadline", None)
+
+    deadline_mono = ended.get(FIELD_DEADLINE_MONO)
+    if isinstance(deadline_mono, bool) or not isinstance(deadline_mono, (int, float)):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    deadline_epoch = ended.get(FIELD_DEADLINE_EPOCH)
+    if (
+        not isinstance(deadline_epoch, str)
+        or not deadline_epoch
+        or deadline_epoch != complete_epoch
+    ):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    # axis: result-completion-after-deadline — completion instant strictly after cap
+    if float(complete_at) <= float(deadline_mono):
+        return ("admit", None)
+    return ("forfeit", REFUSAL_RESULT_COMPLETION_AFTER_DEADLINE)
+
+
+def _derive_result_delivery_by_engine_mode():
+    derived = {}
+    for mode, engines in engine_adapter._NON_PRINT_CLAUDE_MODE_ENGINES.items():
+        delivery = _RESULT_DELIVERY_BY_MODE.get(mode)
+        if delivery is None:
+            raise ValueError(
+                "non-print claude mode %r declared in engine_adapter has no result "
+                "delivery entry in _RESULT_DELIVERY_BY_MODE"
+                % (mode,)
+            )
+        for engine in engines:
+            derived[(engine, mode)] = delivery
+    return derived
+
+
+_RESULT_DELIVERY_BY_ENGINE_MODE = _derive_result_delivery_by_engine_mode()
 
 RESULT_FILE_LINE_PREFIX = "Result file (write exactly this path; nothing else is graded): "
 
@@ -169,20 +343,48 @@ def channel_for(engine):
     return _CHANNEL_BY_ENGINE[engine]
 
 
-def result_delivery(engine):
+def claude_mode_ok(mode):
+    """True when mode is absent or one of the declared claude dispatch modes."""
+    return mode is None or mode in CLAUDE_MODES
+
+
+def normalize_claude_mode(mode):
+    """Treat omitted journal mode as print for continuation comparison (#1273)."""
+    if mode is None:
+        return MODE_PRINT
+    return mode
+
+
+def result_delivery(engine, mode=None):
     """How a native-channel engine receives its result path; None for a marker-channel engine."""
     if not isinstance(engine, str) or engine not in _CHANNEL_BY_ENGINE:
         raise UnknownEngineError(
             "unknown engine %r; registered engines: %s"
             % (engine, ", ".join(model_registry.vendors()))
         )
+    if mode is not None and mode not in CLAUDE_MODES:
+        raise ValueError(
+            "unknown claude mode %r; declared modes: %s"
+            % (mode, ", ".join(CLAUDE_MODES))
+        )
     channel = _CHANNEL_BY_ENGINE[engine]
     if channel == CHANNEL_MARKER:
         return None
-    delivery = _RESULT_DELIVERY_BY_ENGINE.get(engine)
-    if delivery is None:
-        raise ValueError("native engine %r has no result delivery entry" % (engine,))
-    return delivery
+    if mode is None or mode == MODE_PRINT:
+        delivery = _RESULT_DELIVERY_BY_ENGINE.get(engine)
+        if delivery is None:
+            raise ValueError("native engine %r has no result delivery entry" % (engine,))
+        return delivery
+    if not engine_adapter.claude_mode_supported(engine, mode):
+        raise ValueError(
+            "engine %r has no delivery for mode %r" % (engine, mode)
+        )
+    mode_delivery = _RESULT_DELIVERY_BY_ENGINE_MODE.get((engine, mode))
+    if mode_delivery is not None:
+        return mode_delivery
+    raise ValueError(
+        "engine %r has no delivery for mode %r" % (engine, mode)
+    )
 
 
 def file_result_contract(schema_text, result_path, run_kind=RUN_KIND_REVIEW):
@@ -714,7 +916,7 @@ def _schema_branch_active_payload_keys(branch):
     return active
 
 
-def native_review_payload_shape(detail, envelope=None, branch=None):
+def native_review_payload_shape(detail, envelope=None, branch=None, echo_nonce=None):
     """Derive payloadShape for a native-channel review forfeit from the result file state.
 
     Returns {"parsed", "topLevelKeys", "keysTruncated"} or None when no diagnostic applies.
@@ -738,6 +940,18 @@ def native_review_payload_shape(detail, envelope=None, branch=None):
     if detail in ("native-result-schema-invalid", "native-result-malformed-branch"):
         if isinstance(branch, dict):
             matched = ea._recognised_review_kinds(branch)
+            # The native branch is a discriminated-union object: every result-kind's payload
+            # key is always present, null for every kind but the one `resultKind` names. The
+            # stdout-oriented matchers (`_matches_review_findings`/`_matches_review_verdicts`)
+            # only check key PRESENCE, so on a branch they spuriously "match" every sibling
+            # kind whose key is merely present-but-null. Narrow to kinds whose own payload key
+            # actually carries a value, so a genuinely single-kind branch is diagnosed as one
+            # kind instead of falling into the both-payload-keys ambiguity case.
+            matched = [
+                k for k in matched
+                if (key := ea.review_payload_key(k)) is not None
+                and branch.get(key) is not None
+            ]
             top_keys, keys_truncated = ea._bound_top_level_keys(branch)
             if len(matched) > 1:
                 return {
@@ -745,6 +959,20 @@ def native_review_payload_shape(detail, envelope=None, branch=None):
                     "topLevelKeys": top_keys,
                     "keysTruncated": keys_truncated,
                 }
+            if len(matched) == 1:
+                # Route through the same hollow-family constructor the marker-stdout path
+                # uses (review_payload_shape), so a schema-valid native branch with a
+                # partial/hollow findings or verdicts list gets the specific
+                # findings-partial-hollow-member / verdicts-partial-hollow-member label
+                # (with memberShapeWanted/memberShapeGot) instead of the generic
+                # object-without-findings fallback.
+                kind = matched[0]
+                if kind == "findings":
+                    diag = ea._review_payload_shape_findings_obj(branch, echo_nonce=echo_nonce)
+                else:
+                    diag = ea._REVIEW_PAYLOAD_SHAPE_DIAGNOSTICS.get(kind, lambda _obj: None)(branch)
+                if diag is not None:
+                    return diag
             return {
                 "parsed": ea.SHAPE_OBJECT_WITHOUT_FINDINGS,
                 "topLevelKeys": top_keys,
@@ -781,6 +1009,12 @@ def write_result_contract_from_schema(schema, delivery=None):
             "The graded result is your structured output — the typed final response the --json-schema "
             "flag governs; it is the report object matching the declared schema. "
             "Print nothing else as a result; stdout is telemetry."
+        )
+    elif delivery == RESULT_DELIVERY_TRANSCRIPT:
+        graded_line = (
+            "The graded result is the StructuredOutput tool_use input in the background session "
+            "transcript; it is the report object matching the declared schema. "
+            "The --json-schema flag governs that typed output."
         )
     else:
         graded_line = "The final response must be exactly one JSON object matching the declared output schema."
@@ -819,6 +1053,12 @@ def review_result_contract_from_schema(schema, delivery=None):
             "The graded result is your structured output — the typed final response the --json-schema flag governs; "
             "its root has exactly one property `result` wrapping the graded branch. "
             "Print nothing else as a result; stdout is telemetry."
+        )
+    elif delivery == RESULT_DELIVERY_TRANSCRIPT:
+        result_line = (
+            "The graded result is the StructuredOutput tool_use input in the background session transcript; "
+            "the --json-schema flag governs that typed output. "
+            "Its root has exactly one property `result` wrapping the graded branch."
         )
     else:
         result_line = (

@@ -307,7 +307,7 @@ def test_engine_dispatch_calls_dispatch_guard_validate():
     assert "dispatch_guard.validate" in source
     assert "_spawn_allowlist_verdict" in source
     assert "_run_engine_files" in source
-    g2_idx = source.index("def _run_engine_files")
+    g2_idx = source.index("def _run_engine_files(")
     next_def_match = re.search(r"\ndef ", source[g2_idx + 1:])
     g2_block = source[g2_idx:g2_idx + 1 + next_def_match.start()] if next_def_match else source[g2_idx:]
     assert sum(1 for line in g2_block.splitlines() if line.startswith("def ")) == 1
