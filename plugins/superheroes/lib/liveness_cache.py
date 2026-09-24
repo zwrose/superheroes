@@ -555,9 +555,8 @@ def live_from(liveness, needed):
     if reconcile_error is not None:
         dead_notes.append(_liveness_read_error_note(str(reconcile_error), stage="reconcile"))
 
-    _claude_vendor = model_registry.VENDORS[0]
-    if _claude_vendor not in live:
-        live.append(_claude_vendor)
+    if "claude" not in live:
+        live.append("claude")
     live_cells.sort(key=_live_cell_sort_key)
     return (sorted(live), live_cells, dead_notes)
 

@@ -15,10 +15,10 @@ import platform
 import re
 import secrets
 import struct
+import signal
 import subprocess
 import sys
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +26,9 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import config_dir  # noqa: E402
+import engine_adapter  # noqa: E402
+import engine_dispatch  # noqa: E402
+import background_outcome  # noqa: E402
 import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
@@ -63,6 +66,10 @@ _SETTLE_SECONDS = 20
 _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = (5, 15, 45)
 _TOTAL_DEADLINE_SECONDS = 300
+_ACK_TIMEOUT_SECONDS = 30
+
+CANARY_TRANSCRIPT_UNRESOLVED = "canary-transcript-unresolved"
+CANARY_NOT_ENGAGED = "canary-not-engaged"
 
 _GIT_SCRUB_VARS = (
     "GIT_DIR",
@@ -1094,18 +1101,16 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     effort_result = _resolve_effort(effort, token)
     if not effort_result["ok"]:
         return effort_result
-    session_id = str(uuid.uuid4())
-    # The same argv is reused if launch_build retries, so the session id is reused
-    # too. That is safe because the only retrying path is spawn-oserror, where
-    # Popen raised and no child ever started — every other failure is terminal
-    # with no re-spawn.
-    argv = ["claude", "--model", token, "--session-id", session_id, "-p", prompt]
+    argv_result = engine_adapter.claude_builder_argv(
+        token, effort_result["effort"], prompt,
+    )
+    if argv_result.get("reason") is not None:
+        return _fail(argv_result["reason"])
     return {
         "ok": True,
         "reason": None,
         "prompt": prompt,
-        "argv": argv,
-        "sessionId": session_id,
+        "argv": argv_result["argv"],
         "model": token,
         "modelResolution": {
             "tier": resolution["tier"],
@@ -1120,7 +1125,8 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     }
 
 
-# WORKAROUND: headless builders must survive parent session exit via detached spawn
+# WORKAROUND: the acknowledgement process of a background launch must survive parent session
+# exit via detached spawn, so the launch call cannot tie it to the caller's session
 # delete-when: the background-session trial receipt marks detached spawn not needed
 def _default_spawn(argv, cwd, out_fh, err_fh, child_env):
     return subprocess.Popen(
@@ -1194,6 +1200,116 @@ def _overlap_evidence(warnings):
     return "overlaps %s; %s" % (", ".join(ids), _OVERLAP_EVIDENCE_SUFFIX)
 
 
+def _read_text_file(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def _first_nonempty_line(text):
+    if not isinstance(text, str):
+        return ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def _wait_ack_process(proc, deadline):
+    ack_deadline = min(time.monotonic() + _ACK_TIMEOUT_SECONDS, deadline)
+    while time.monotonic() < ack_deadline:
+        rc = proc.poll()
+        if rc is not None:
+            return rc
+        time.sleep(0.05)
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    return None
+
+
+def _resolve_agent_row(config_dir, cwd, launch_id_8hex):
+    rows, ok = engine_dispatch.claude_agents_rows(config_dir, cwd)
+    if not ok:
+        time.sleep(1)
+        rows, ok = engine_dispatch.claude_agents_rows(config_dir, cwd)
+        if not ok:
+            return None, background_outcome.REFUSAL_AGENTS_UNREADABLE
+    row = engine_dispatch.claude_agent_row_for_launch(rows, launch_id_8hex)
+    if row is None:
+        time.sleep(1)
+        rows, ok = engine_dispatch.claude_agents_rows(config_dir, cwd)
+        if not ok:
+            return None, background_outcome.REFUSAL_AGENTS_UNREADABLE
+        row = engine_dispatch.claude_agent_row_for_launch(rows, launch_id_8hex)
+    return row, None
+
+
+def _background_row_refusal(row, launch_id_8hex):
+    if row is None:
+        return background_outcome.REFUSAL_SESSION_UNLISTED
+    state = row.get("state")
+    if state in ("stopped", "done"):
+        return background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
+    pid = row.get("pid")
+    if not isinstance(pid, int) or pid < 2:
+        return background_outcome.REFUSAL_SESSION_UNLISTED
+    session_id = row.get("sessionId")
+    if not isinstance(session_id, str) or not session_id.startswith(launch_id_8hex):
+        return background_outcome.REFUSAL_SESSION_UNLISTED
+    return None
+
+
+def _stop_background_failure(launch_id_8hex, config_dir, cwd, reason, **extra):
+    out = {"ok": False, "reason": reason, "proc": None}
+    out.update(extra)
+    stop_result = engine_dispatch.claude_session_stop_confirmed(
+        launch_id_8hex, config_dir, cwd,
+    )
+    if stop_result == background_outcome.REFUSAL_STOP_UNCONFIRMED:
+        out["reason"] = background_outcome.REFUSAL_STOP_UNCONFIRMED
+        out["orphanedBackgroundId"] = launch_id_8hex
+        out["remedy"] = "claude stop %s under CLAUDE_CONFIG_DIR=%s" % (
+            launch_id_8hex, config_dir,
+        )
+    return out
+
+
+def _settle_background_session(
+        session_pid, background_id, config_dir, cwd, settle_seconds, deadline):
+    settle_deadline = min(time.monotonic() + settle_seconds, deadline)
+    while time.monotonic() < settle_deadline:
+        if time.monotonic() >= deadline:
+            return "deadline"
+        try:
+            os.kill(session_pid, 0)
+        except ProcessLookupError:
+            return background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
+        except PermissionError:
+            pass
+        except OSError:
+            pass
+        time.sleep(0.5)
+    if time.monotonic() >= deadline:
+        return "deadline"
+    row, listing_refusal = _resolve_agent_row(config_dir, cwd, background_id)
+    if listing_refusal:
+        return listing_refusal
+    if row is None:
+        return background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
+    if row.get("state") in ("stopped", "done"):
+        return background_outcome.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
+    return None
+
+
 # WORKAROUND: launcher refuses spawn when cwd is the primary checkout (own-worktree)
 # delete-when: the background-session trial receipt marks launcher worktree enforcement not needed
 def _spawn_attempt(
@@ -1211,6 +1327,7 @@ def _spawn_attempt(
     cwd=None,
     evidence=None,
     effort=None,
+    deadline=None,
 ):
     """Spawn one attempt in the build worktree; return dict with ok, proc, reason.
 
@@ -1245,9 +1362,20 @@ def _spawn_attempt(
     # agree by construction, not by two sites happening to derive the same answer. None means
     # no absolute root could be derived: inject nothing and leave the inherited value alone,
     # matching the record, which omits the field on exactly that branch.
-    config_dir = spawn_config_dir(env=env, cwd=cwd)
-    if config_dir is not None:
-        child_env[CONFIG_DIR_ENV] = config_dir
+    resolved_config_dir = spawn_config_dir(env=env, cwd=cwd)
+    if resolved_config_dir is None:
+        return {
+            "ok": False,
+            "reason": config_dir.REFUSAL_CONFIG_DIR_UNRESOLVABLE,
+            "proc": None,
+        }
+    if not os.path.isdir(resolved_config_dir):
+        return {
+            "ok": False,
+            "reason": config_dir.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY,
+            "proc": None,
+        }
+    child_env[CONFIG_DIR_ENV] = resolved_config_dir
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
     # Assignment, not defaulting: the launching session's ambient effort variables are already
     # in `child_env` via `_scrub_env`, so a pinned effort must overwrite the documented input or
@@ -1278,42 +1406,112 @@ def _spawn_attempt(
     out_fh.close()
     err_fh.close()
 
+    ack_deadline = deadline if deadline is not None else time.monotonic() + _TOTAL_DEADLINE_SECONDS
+    rc = _wait_ack_process(proc, ack_deadline)
+    if rc is None:
+        return {
+            "ok": False,
+            "reason": background_outcome.REFUSAL_LAUNCH_FAILED,
+            "proc": None,
+            "evidence": "ack-timeout",
+            "ack_spawned": True,
+        }
+    stdout_text = _read_text_file(log_path)
+    stderr_text = _read_text_file(err_path)
+    if rc != 0:
+        line = _first_nonempty_line(stdout_text) or _first_nonempty_line(stderr_text)
+        if len(line) > 200:
+            line = line[:200]
+        return {
+            "ok": False,
+            "reason": background_outcome.REFUSAL_LAUNCH_FAILED,
+            "proc": None,
+            "evidence": "nonzero-exit:%s:%s" % (rc, line),
+            "ack_spawned": True,
+        }
+
+    launch_id_8hex = engine_adapter.claude_launch_id(stdout_text)
+    if launch_id_8hex is None:
+        return {
+            "ok": False,
+            "reason": background_outcome.REFUSAL_LAUNCH_UNACKNOWLEDGED,
+            "proc": None,
+            "ack_spawned": True,
+        }
+
+    row, listing_refusal = _resolve_agent_row(resolved_config_dir, cwd, launch_id_8hex)
+    if listing_refusal:
+        out = _stop_background_failure(
+            launch_id_8hex, resolved_config_dir, cwd, listing_refusal,
+        )
+        out["ack_spawned"] = True
+        return out
+    row_refusal = _background_row_refusal(row, launch_id_8hex)
+    if row_refusal:
+        out = _stop_background_failure(
+            launch_id_8hex, resolved_config_dir, cwd, row_refusal,
+        )
+        out["ack_spawned"] = True
+        return out
+
+    session_pid = row["pid"]
+    session_id = row["sessionId"]
     started = {
         "event": "started",
         "launchId": launch_id,
         "ts": time.time(),
         "schema": ll.SCHEMA,
         "attempt": attempt,
-        "pid": proc.pid,
+        "pid": session_pid,
         "logPath": log_path,
         "errPath": err_path,
+        "launchMode": ll.LAUNCH_MODE_BACKGROUND,
+        "backgroundId": launch_id_8hex,
+        "sessionId": session_id,
     }
     if isinstance(evidence, str) and evidence.strip():
         started["evidence"] = evidence
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
+        stop_out = _stop_background_failure(
+            launch_id_8hex, resolved_config_dir, cwd, append_result["reason"],
+        )
         term = _terminalize(
             repo_root,
             launch_id,
             True,
-            append_result["reason"],
+            stop_out["reason"],
             evidence="started-append-failed",
-            proc=proc,
             env=env,
             started_repair=dict(
                 {
                     "attempt": attempt,
-                    "pid": proc.pid,
+                    "pid": session_pid,
                     "logPath": log_path,
                     "errPath": err_path,
+                    "launchMode": ll.LAUNCH_MODE_BACKGROUND,
+                    "backgroundId": launch_id_8hex,
+                    "sessionId": session_id,
                 },
                 **({"evidence": started["evidence"]} if "evidence" in started else {})
             ),
         )
-        fail_reason = _terminalization_reason(term, append_result["reason"])
-        return {"ok": False, "reason": fail_reason, "proc": None, "refused": True}
+        fail_reason = _terminalization_reason(term, stop_out["reason"])
+        out = {"ok": False, "reason": fail_reason, "proc": None, "refused": True}
+        if "orphanedBackgroundId" in stop_out:
+            out["orphanedBackgroundId"] = stop_out["orphanedBackgroundId"]
+        if "remedy" in stop_out:
+            out["remedy"] = stop_out["remedy"]
+        return out
 
-    return {"ok": True, "proc": proc}
+    return {
+        "ok": True,
+        "proc": None,
+        "session_pid": session_pid,
+        "backgroundId": launch_id_8hex,
+        "sessionId": session_id,
+        "config_dir": resolved_config_dir,
+    }
 
 
 def _observe_settle(proc, settle_seconds, deadline=None):
@@ -1564,11 +1762,8 @@ def launch_build(
         "effort": compose_result["effort"] or "",
         "effortSource": compose_result["effortSource"],
         "worktree": worktree_path,
-        "sessionId": compose_result["sessionId"],
     }
-    config_dir = spawn_config_dir(env=env, cwd=worktree_path)
-    if config_dir is not None:
-        reserved["configDir"] = config_dir
+    reserved["configDir"] = requested
     if seat["instance"] is not None:
         reserved["seatInstance"] = seat["instance"]
     if foreign_override:
@@ -1681,9 +1876,15 @@ def launch_build(
             cwd=worktree_path,
             evidence=overlap_evidence,
             effort=compose_result["effort"],
+            deadline=deadline,
         )
         if spawn_result.get("refused"):
-            return _post_reserve_fail(spawn_result["reason"])
+            extra = {}
+            if "orphanedBackgroundId" in spawn_result:
+                extra["orphanedBackgroundId"] = spawn_result["orphanedBackgroundId"]
+            if "remedy" in spawn_result:
+                extra["remedy"] = spawn_result["remedy"]
+            return _post_reserve_fail(spawn_result["reason"], **extra)
         if spawn_result.get("oserror"):
             if attempt >= max_attempts:
                 term = _terminalize(
@@ -1747,64 +1948,90 @@ def launch_build(
             attempt += 1
             continue
         if not spawn_result["ok"]:
+            spawn_reason = spawn_result["reason"]
+            spawn_evidence = spawn_result.get("evidence", spawn_reason)
+            extra = {}
+            if "orphanedBackgroundId" in spawn_result:
+                extra["orphanedBackgroundId"] = spawn_result["orphanedBackgroundId"]
+            if "remedy" in spawn_result:
+                extra["remedy"] = spawn_result["remedy"]
             term = _terminalize(
                 repo_root,
                 launch_id,
-                False,
-                spawn_result["reason"],
+                bool(spawn_result.get("ack_spawned")),
+                spawn_reason,
+                evidence=spawn_evidence,
                 stage="spawn",
                 env=env,
             )
-            reason = _terminalization_reason(term, spawn_result["reason"])
-            return _post_reserve_fail(reason)
+            reason = _terminalization_reason(term, spawn_reason)
+            return _post_reserve_fail(reason, **extra)
 
         child_ever_spawned = True
-        proc = spawn_result["proc"]
-        rc = _observe_settle(proc, settle_seconds, deadline=deadline)
-        if rc == "deadline":
+        session_pid = spawn_result["session_pid"]
+        background_id = spawn_result["backgroundId"]
+        session_id = spawn_result["sessionId"]
+        cfg_dir = spawn_result["config_dir"]
+        settle_result = _settle_background_session(
+            session_pid, background_id, cfg_dir, worktree_path,
+            settle_seconds, deadline,
+        )
+        if settle_result == "deadline":
+            stop_out = _stop_background_failure(
+                background_id, cfg_dir, worktree_path,
+                "retry-deadline-exceeded",
+            )
             term = _terminalize(
                 repo_root,
                 launch_id,
                 True,
-                "retry-deadline-exceeded",
+                stop_out["reason"],
                 evidence="deadline",
-                proc=proc,
                 env=env,
             )
-            reason = _terminalization_reason(term, "retry-deadline-exceeded")
-            return _post_reserve_fail(reason)
-        if rc is None:
-            return {
-                "ok": True,
-                "reason": None,
-                "launchId": launch_id,
-                "pid": proc.pid,
-                "logPath": log_path,
-                "errPath": err_path,
-                "attempt": attempt,
-                "model": compose_result["model"],
-                "modelResolution": compose_result["modelResolution"],
-                "effort": compose_result["effort"],
-                "effortSource": compose_result["effortSource"],
-                "worktree": worktree_path,
-                "warnings": warnings,
-            }
-
-        evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
-        term = _terminalize(
-            repo_root,
-            launch_id,
-            True,
-            evidence,
-            evidence=evidence,
-            proc=proc,
-            env=env,
-        )
-        if rc == 0:
-            reason = _terminalization_reason(term, "settle-exit-zero-uncertain")
-            return _post_reserve_fail(reason)
-        reason = _terminalization_reason(term, "settle-nonzero-exit")
-        return _post_reserve_fail(reason)
+            reason = _terminalization_reason(term, stop_out["reason"])
+            extra = {}
+            if "orphanedBackgroundId" in stop_out:
+                extra["orphanedBackgroundId"] = stop_out["orphanedBackgroundId"]
+            if "remedy" in stop_out:
+                extra["remedy"] = stop_out["remedy"]
+            return _post_reserve_fail(reason, **extra)
+        if settle_result is not None:
+            stop_out = _stop_background_failure(
+                background_id, cfg_dir, worktree_path, settle_result,
+            )
+            term = _terminalize(
+                repo_root,
+                launch_id,
+                True,
+                stop_out["reason"],
+                evidence=settle_result,
+                env=env,
+            )
+            reason = _terminalization_reason(term, stop_out["reason"])
+            extra = {}
+            if "orphanedBackgroundId" in stop_out:
+                extra["orphanedBackgroundId"] = stop_out["orphanedBackgroundId"]
+            if "remedy" in stop_out:
+                extra["remedy"] = stop_out["remedy"]
+            return _post_reserve_fail(reason, **extra)
+        return {
+            "ok": True,
+            "reason": None,
+            "launchId": launch_id,
+            "pid": session_pid,
+            "logPath": log_path,
+            "errPath": err_path,
+            "attempt": attempt,
+            "model": compose_result["model"],
+            "modelResolution": compose_result["modelResolution"],
+            "effort": compose_result["effort"],
+            "effortSource": compose_result["effortSource"],
+            "worktree": worktree_path,
+            "warnings": warnings,
+            "sessionId": session_id,
+            "backgroundId": background_id,
+        }
 
 
 def _try_reserve_for_refusal(
@@ -1878,10 +2105,113 @@ def _try_reserve_for_refusal(
 
 
 def record_outcome(repo_root, launch_id, outcome, evidence, env=None, await_exit=0):
-    """Thin pass-through to launch_ledger.record_outcome."""
+    """Record outcome; stop background lanes before delegating to the ledger."""
+    read_result = ll.read(repo_root, env=env)
+    if read_result["state"] == "ok":
+        folded = ll.fold(read_result["records"])
+        if folded.get("ok"):
+            info = folded["launches"].get(launch_id)
+            if (
+                info is not None
+                and not info.get("terminal")
+                and info.get("launchMode") == ll.LAUNCH_MODE_BACKGROUND
+            ):
+                config_dir_val = info.get("configDir")
+                worktree_val = info.get("worktree")
+                background_id = info.get("backgroundId")
+                if not config_dir_val or not worktree_val:
+                    return {
+                        "ok": False,
+                        "reason": background_outcome.REFUSAL_STOP_UNCONFIRMED,
+                        "launchId": launch_id,
+                        "backgroundId": background_id,
+                        "detail": "lane-record-incomplete",
+                    }
+                stop_result = engine_dispatch.claude_session_stop_confirmed(
+                    background_id, config_dir_val, worktree_val,
+                )
+                if stop_result == background_outcome.REFUSAL_STOP_UNCONFIRMED:
+                    return {
+                        "ok": False,
+                        "reason": background_outcome.REFUSAL_STOP_UNCONFIRMED,
+                        "launchId": launch_id,
+                        "backgroundId": background_id,
+                        "remedy": "claude stop %s under CLAUDE_CONFIG_DIR=%s" % (
+                            background_id, config_dir_val,
+                        ),
+                    }
     return ll.record_outcome(
         repo_root, launch_id, outcome, evidence, env=env, await_exit=await_exit,
     )
+
+
+def canary(repo_root, launch_id, env=None):
+    """Builder-session seat canary: transcript tool-call engagement. Never raises."""
+    read_result = ll.read(repo_root, env=env)
+    if read_result["state"] != "ok":
+        return {
+            "ok": False,
+            "reason": CANARY_TRANSCRIPT_UNRESOLVED,
+            "detail": "ledger-unreadable",
+        }
+    folded = ll.fold(read_result["records"])
+    if not folded.get("ok"):
+        return {
+            "ok": False,
+            "reason": CANARY_TRANSCRIPT_UNRESOLVED,
+            "detail": folded.get("reason"),
+        }
+    info = folded["launches"].get(launch_id)
+    if info is None:
+        return {
+            "ok": False,
+            "reason": CANARY_TRANSCRIPT_UNRESOLVED,
+            "detail": "unknown-launch",
+        }
+    if info.get("launchMode") != ll.LAUNCH_MODE_BACKGROUND:
+        return {
+            "ok": False,
+            "reason": CANARY_TRANSCRIPT_UNRESOLVED,
+            "detail": "launchMode",
+        }
+    session_id = info.get("sessionId")
+    config_dir_val = info.get("configDir")
+    if not session_id:
+        return {
+            "ok": False,
+            "reason": CANARY_TRANSCRIPT_UNRESOLVED,
+            "detail": "sessionId",
+        }
+    if not config_dir_val:
+        return {
+            "ok": False,
+            "reason": CANARY_TRANSCRIPT_UNRESOLVED,
+            "detail": "configDir",
+        }
+    rows, paths, _size = engine_dispatch.read_session_transcript_rows(
+        config_dir_val, session_id,
+    )
+    if len(paths) != 1:
+        return {
+            "ok": False,
+            "reason": CANARY_TRANSCRIPT_UNRESOLVED,
+            "detail": "transcript-count:%s" % len(paths),
+        }
+    n = engine_adapter.claude_transcript_tool_calls(rows)
+    if n is None or n == 0:
+        return {
+            "ok": False,
+            "reason": CANARY_NOT_ENGAGED,
+            "toolCalls": n or 0,
+            "transcript": paths[0],
+        }
+    return {
+        "ok": True,
+        "engaged": True,
+        "toolCalls": n,
+        "sessionId": session_id,
+        "transcript": paths[0],
+    }
 
 
 def amend(repo_root, launch_id, kind, value, note, env=None):
@@ -1976,6 +2306,10 @@ def _cli_record_outcome(args):
     )
 
 
+def _cli_canary(args):
+    return canary(args.repo_root, args.launch_id)
+
+
 def _cli_amend(args):
     if args.kind not in ll.CALLER_WRITABLE_AMENDMENT_KINDS:
         return _fail("amend-kind-not-caller-writable:%s" % args.kind)
@@ -2044,6 +2378,11 @@ def main(argv=None):
              "under a 10-minute tool cap stay <=540 — longer waits are background calls)",
     )
     ro.set_defaults(func=_cli_record_outcome)
+
+    cn = sub.add_parser("canary")
+    cn.add_argument("--repo-root", required=True)
+    cn.add_argument("--launch-id", required=True)
+    cn.set_defaults(func=_cli_canary)
 
     am = sub.add_parser("amend")
     am.add_argument("--repo-root", required=True)

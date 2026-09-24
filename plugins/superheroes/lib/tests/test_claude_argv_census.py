@@ -15,7 +15,6 @@ if _LIB not in sys.path:
 import model_registry  # noqa: E402
 
 _ENGINE_ADAPTER_REL = "lib/engine_adapter.py"
-_LAUNCHER_REL = "lib/launcher.py"
 _VENDOR_STRINGS = frozenset(model_registry.VENDORS)
 _SPAWNER_SUFFIXES = ("Popen", "run", "call", "check_call", "check_output")
 _SPAWNER_PREFIXES = ("os.exec", "os.spawn", "os.posix_spawn")
@@ -89,6 +88,7 @@ class _ParentVisitor(ast.NodeVisitor):
 
 def _scope_tainted_names(tree):
     tainted = set()
+    spawned = set()
 
     class ScopeVisitor(ast.NodeVisitor):
         def visit_FunctionDef(self, node):
@@ -123,46 +123,61 @@ def _scope_tainted_names(tree):
 
         def visit_Call(self, node):
             callee = _dotted_name(node.func)
-            if _is_mutator(callee) and isinstance(node.func, ast.Attribute):
-                recv = node.func.value
-                if isinstance(recv, ast.Name):
-                    tainted.add(recv.id)
             if _is_spawner(callee):
                 for arg in node.args:
-                    self._mark_names(arg)
+                    self._mark_names(arg, spawned)
             self.generic_visit(node)
 
         def visit_BinOp(self, node):
             if isinstance(node.op, ast.Add):
-                self._mark_names(node.left)
-                self._mark_names(node.right)
+                self._mark_names(node.left, tainted)
+                self._mark_names(node.right, tainted)
             self.generic_visit(node)
 
-        def _mark_names(self, node):
+        def _mark_names(self, node, bucket):
             if isinstance(node, ast.Name):
-                tainted.add(node.id)
+                bucket.add(node.id)
             elif isinstance(node, (ast.List, ast.Tuple)):
                 for elt in node.elts:
-                    self._mark_names(elt)
+                    self._mark_names(elt, bucket)
 
     ScopeVisitor().visit(tree)
-    return tainted
+    return tainted, spawned
 
 
-def _has_compare_ancestor(node, parents):
-    current = node
-    while current in parents:
-        current = parents[current]
-        if isinstance(current, ast.Compare):
-            return True
+def _compare_operand(node):
+    if isinstance(node, ast.Compare):
+        for side in (node.left, *node.comparators):
+            if isinstance(side, ast.Constant) and _is_claude_literal(side.value):
+                return True
     return False
 
 
-def _allowed_constant(node, parent, grandparent, tainted_names, parents):
+def _judgment_parent(node, parents):
+    current = node
+    while True:
+        parent = parents.get(current)
+        if parent is None:
+            return None, None
+        if isinstance(parent, ast.IfExp):
+            current = parent
+            continue
+        return parent, parents.get(parent)
+
+
+def _allowed_constant(node, parent, grandparent, tainted_names, spawned_names, parents):
     if parent is None:
         return False, "orphan"
-    if isinstance(parent, ast.Compare) or _has_compare_ancestor(node, parents):
-        return True, "compare"
+    if isinstance(parent, ast.Compare) and parent.left is node:
+        return True, "compare-operand"
+    if isinstance(parent, ast.Compare):
+        for comp in parent.comparators:
+            if comp is node:
+                return True, "compare-operand"
+    if isinstance(parent, (ast.List, ast.Tuple, ast.Set)):
+        for elt in parent.elts:
+            if elt is node and _compare_operand(parent):
+                return True, "compare-display"
     if isinstance(parent, ast.Dict):
         return True, "dict"
     if isinstance(parent, ast.DictComp) and node in (parent.key, parent.value):
@@ -171,10 +186,13 @@ def _allowed_constant(node, parent, grandparent, tainted_names, parents):
         return True, "subscript"
     if isinstance(parent, ast.keyword):
         return True, "keyword"
-    if isinstance(parent, ast.IfExp):
-        return True, "ifexp"
     if isinstance(parent, ast.Call):
         callee = _dotted_name(parent.func)
+        if _is_mutator(callee) and isinstance(parent.func, ast.Attribute):
+            recv = parent.func.value
+            if isinstance(recv, ast.Name) and node in parent.args:
+                if recv.id not in spawned_names and recv.id not in tainted_names:
+                    return True, "mutator-name-receiver"
         if _is_spawner(callee) or _is_mutator(callee):
             return False, "spawner-or-mutator-call"
         if node in parent.args:
@@ -208,18 +226,19 @@ def _violations(source_text, relpath):
     try:
         tree = ast.parse(source_text, filename=relpath)
     except SyntaxError:
-        return []
+        return [(relpath, 0, "unparseable")]
     parent_visitor = _ParentVisitor()
     parent_visitor.visit(tree)
     parents = parent_visitor.parents
-    tainted_names = _scope_tainted_names(tree)
+    tainted_names, spawned_names = _scope_tainted_names(tree)
     out = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not _is_claude_literal(node.value):
             continue
-        parent = parents.get(node)
-        grandparent = parents.get(parent) if parent is not None else None
-        allowed, context = _allowed_constant(node, parent, grandparent, tainted_names, parents)
+        parent, grandparent = _judgment_parent(node, parents)
+        allowed, context = _allowed_constant(
+            node, parent, grandparent, tainted_names, spawned_names, parents,
+        )
         if not allowed:
             out.append((relpath, node.lineno, context))
     return out
@@ -248,24 +267,9 @@ def _all_violations():
 
 
 def test_no_claude_argv_outside_engine_adapter():
-    """axis: every claude argv literal outside engine_adapter is absent (except launcher WO-B)."""
+    """axis: every claude argv literal outside engine_adapter is absent."""
     violations = _all_violations()
-    non_launcher = [v for v in violations if v[0] != _LAUNCHER_REL]
-    assert non_launcher == [], non_launcher
-
-
-@pytest.mark.xfail(strict=True, reason="launcher argv retired by WO-B")
-def test_launcher_hand_built_argv_is_the_last_violation():
-    violations = _all_violations()
-    launcher_hits = {(v[0], v[1]) for v in violations if v[0] == _LAUNCHER_REL}
-    with open(os.path.join(_PLUGIN_ROOT, _LAUNCHER_REL), encoding="utf-8") as fh:
-        for lineno, line in enumerate(fh, start=1):
-            if '["claude"' in line or "['claude'" in line:
-                expected_line = lineno
-                break
-        else:
-            expected_line = None
-    assert launcher_hits == {(_LAUNCHER_REL, expected_line)}
+    assert violations == [], violations
 
 
 _FLAG_CASES = [
@@ -277,6 +281,10 @@ _FLAG_CASES = [
     ('subprocess.run(["env", "FOO=1", "claude", "-p"])', "env-wrapper"),
     ('cmd = []\ncmd.append("claude")', "append-mutator"),
     ('subprocess.Popen("claude")', "popen-string"),
+    ('if subprocess.run(["claude", "-p"]).returncode == 0: pass', "compare-ancestor"),
+    ('cmd = ["claude" if a else "x", "-p"]', "ifexp-list"),
+    ('cmd = []\ncmd.append("claude")\nsubprocess.run(cmd)', "append-then-spawn"),
+    ('def (:', "unparseable"),
 ]
 
 _PASS_CASES = [
@@ -284,6 +292,9 @@ _PASS_CASES = [
     ('x = {"claude": 1}', "dict"),
     ('def f():\n return ["claude"]', "return-list"),
     ('family_for(tier, "claude")', "call-arg"),
+    ('x not in (None, "claude")', "compare-display"),
+    ('d = {"v": a if a else "claude"}', "ifexp-dict"),
+    ('live = []\nlive.append("claude")', "append-safe-name"),
 ]
 
 

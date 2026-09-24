@@ -19,6 +19,10 @@ _LD_MOD = os.path.join(_HERE, "..", "launch_doctrine.py")
 
 import launch_ledger as ll  # noqa: E402
 import heartbeat as hb  # noqa: E402
+import engine_adapter as ea  # noqa: E402
+import engine_dispatch as ed  # noqa: E402
+import background_outcome as bo  # noqa: E402
+import config_dir as cd  # noqa: E402
 
 
 def _load_launcher():
@@ -79,6 +83,52 @@ def _ledger_env(tmp_path, monkeypatch):
     root = str(tmp_path / "ledger-root")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, root)
     return root
+
+
+_BG_TEST_STATE = {
+    "session_pid": None,
+    "row_state": "working",
+    "listing_ok": True,
+    "stop_result": "stopped",
+    "agents_rows": None,
+    "stop_calls": [],
+}
+
+
+@pytest.fixture(autouse=True)
+def _autouse_background_dispatch_stubs(tmp_path, monkeypatch):
+    _BG_TEST_STATE.update({
+        "session_pid": None,
+        "row_state": "working",
+        "listing_ok": True,
+        "stop_result": "stopped",
+        "agents_rows": None,
+        "stop_calls": [],
+    })
+    cfg = tmp_path / "claude-config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv(cd.CONFIG_DIR_ENV, str(cfg))
+
+    def _agents_rows(config_dir, cwd):
+        if not _BG_TEST_STATE["listing_ok"]:
+            return None, False
+        if _BG_TEST_STATE["agents_rows"] is not None:
+            return _BG_TEST_STATE["agents_rows"], True
+        pid = _BG_TEST_STATE["session_pid"] or 99999
+        return [{
+            "pid": pid,
+            "id": _BG_ID,
+            "sessionId": _BG_SESSION,
+            "state": _BG_TEST_STATE["row_state"],
+            "kind": "background",
+        }], True
+
+    def _stop_confirmed(launch_id, config_dir, cwd):
+        _BG_TEST_STATE["stop_calls"].append((launch_id, config_dir, cwd))
+        return _BG_TEST_STATE["stop_result"]
+
+    monkeypatch.setattr(ed, "claude_agents_rows", _agents_rows)
+    monkeypatch.setattr(ed, "claude_session_stop_confirmed", _stop_confirmed)
 
 
 @pytest.fixture(autouse=True)
@@ -583,43 +633,48 @@ def test_model_default_opus(tmp_path):
     result = L.compose_launch(repo, 656, premise)
     assert result["ok"] is True
     assert result["model"] == "opus"
-    assert result["argv"][2] == "opus"
+    model_idx = result["argv"].index("--model")
+    assert result["argv"][model_idx + 1] == "opus"
 
 
 def test_compose_argv_shape(tmp_path):
-  # axis: composed argv carries --model with registry token
+  # axis: composed argv matches engine_adapter builder argv
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo)
     result = L.compose_launch(repo, 656, premise, model="sonnet")
     assert result["ok"] is True
-    assert result["argv"] == [
-        "claude", "--model", "sonnet", "--session-id", result["sessionId"],
-        "-p", result["prompt"],
-    ]
+    expected = ea.claude_builder_argv("sonnet", result["effort"], result["prompt"])
+    assert expected["ok"] is True
+    assert result["argv"] == expected["argv"]
+    assert "--bg" in result["argv"]
+    assert "-p" not in result["argv"]
+    assert "--session-id" not in result["argv"]
+    assert "--restricted" not in result["argv"]
+    assert result["argv"][-1] == result["prompt"]
+    assert "sessionId" not in result
 
 
 def test_compose_argv_carries_session_id(tmp_path):
-  # axis: --session-id precedes -p and matches the returned sessionId
-    import uuid as _uuid
+  # axis: compose no longer mints sessionId (WO-B background argv)
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo)
     result = L.compose_launch(repo, 656, premise)
     assert result["ok"] is True
-    argv = result["argv"]
-    sid_index = argv.index("--session-id")
-    assert argv[sid_index + 1] == result["sessionId"]
-    _uuid.UUID(result["sessionId"])
-    assert argv.index("-p") == sid_index + 2
+    assert "sessionId" not in result
+    assert result["argv"] == ea.claude_builder_argv(
+        result["model"], result["effort"], result["prompt"],
+    )["argv"]
 
 
 def test_compose_launch_mints_distinct_session_ids(tmp_path):
-  # axis: each compose_launch call gets its own session id
+  # axis: compose no longer mints session ids (background launch)
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo)
     first = L.compose_launch(repo, 656, premise)
     second = L.compose_launch(repo, 656, premise)
     assert first["ok"] is True and second["ok"] is True
-    assert first["sessionId"] != second["sessionId"]
+    assert "sessionId" not in first and "sessionId" not in second
+    assert first["argv"] == second["argv"]
 
 
 def _write_core_with_builder_tier(repo, prefs):
@@ -813,14 +868,41 @@ def _standin_script(behavior):
 
 
 def _make_spawn_fn(behavior):
-    def spawn(argv, repo_root, out_fh, err_fh, child_env):
-        real_argv = [
-            sys.executable, "-c", _standin_script(behavior),
-        ]
+    def spawn(argv, cwd, out_fh, err_fh, child_env):
         env = dict(child_env)
+        if behavior == "sleep":
+            session = subprocess.Popen(
+                [sys.executable, "-c", _standin_script("sleep")],
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+                env=env,
+            )
+            _BG_TEST_STATE["session_pid"] = session.pid
+        elif behavior in ("exit0", "exit1"):
+            session = subprocess.Popen(
+                [sys.executable, "-c", _standin_script(behavior)],
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+                env=env,
+            )
+            _BG_TEST_STATE["session_pid"] = session.pid
+        out_fh.write(b"backgrounded \xc2\xb7 feac172f\n")
+        out_fh.flush()
+        if behavior == "exit1":
+            ack_script = "import sys; sys.exit(1)"
+        else:
+            ack_script = "pass"
         return subprocess.Popen(
-            real_argv,
-            cwd=repo_root,
+            [sys.executable, "-c", ack_script],
+            cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=out_fh,
             stderr=err_fh,
@@ -830,6 +912,146 @@ def _make_spawn_fn(behavior):
         )
     return spawn
 
+def _capture_bg_spawn(captured=None, *, session_behavior="sleep", ack_script="pass"):
+    def capture_spawn(argv, cwd, out_fh, err_fh, child_env):
+        if captured is not None:
+            captured.update(child_env)
+        session = subprocess.Popen(
+            [sys.executable, "-c", _standin_script(session_behavior)],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+            env=dict(child_env),
+        )
+        _BG_TEST_STATE["session_pid"] = session.pid
+        out_fh.write(b"backgrounded \xc2\xb7 feac172f\n")
+        out_fh.flush()
+        return subprocess.Popen(
+            [sys.executable, "-c", ack_script],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=out_fh,
+            stderr=err_fh,
+            start_new_session=True,
+            close_fds=True,
+            env=dict(child_env),
+        )
+    return capture_spawn
+
+
+_BG_ID = "feac172f"
+_BG_SESSION = "feac172f-474c-424d-86e7-0e50688972c9"
+_TRUST_REFUSAL = (
+    "Workspace not trusted. Run `claude` in <dir> once and accept the trust prompt, "
+    "then retry."
+)
+
+
+class _BackgroundHarness:
+    """Stub ack spawn, agents listing, and stop for background launch tests."""
+
+    def __init__(self, monkeypatch, *, row_state="working", listing_ok=True,
+                 stop_result="stopped", agents_rows=None):
+        self.monkeypatch = monkeypatch
+        self.row_state = row_state
+        self.listing_ok = listing_ok
+        self.stop_result = stop_result
+        self.agents_rows = agents_rows
+        self.session_proc = None
+        self.ack_pid = None
+        self.stop_calls = []
+        self._install()
+
+    def _default_row(self):
+        return {
+            "pid": self.session_proc.pid if self.session_proc else 99999,
+            "id": _BG_ID,
+            "sessionId": _BG_SESSION,
+            "state": self.row_state,
+            "kind": "background",
+        }
+
+    def _agents_rows(self, config_dir, cwd):
+        if not self.listing_ok:
+            return None, False
+        if self.agents_rows is not None:
+            return self.agents_rows, True
+        return [self._default_row()], True
+
+    def _stop_confirmed(self, launch_id, config_dir, cwd):
+        self.stop_calls.append((launch_id, config_dir, cwd))
+        return self.stop_result
+
+    def _spawn_fn(self, argv, cwd, out_fh, err_fh, child_env):
+        self.session_proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+            env=dict(child_env),
+        )
+        out_fh.write(b"backgrounded \xc2\xb7 feac172f\n")
+        out_fh.flush()
+        ack = subprocess.Popen(
+            [sys.executable, "-c", "pass"],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=out_fh,
+            stderr=err_fh,
+            start_new_session=True,
+            close_fds=True,
+            env=dict(child_env),
+        )
+        self.ack_pid = ack.pid
+        return ack
+
+    def _install(self):
+        self.monkeypatch.setattr(ed, "claude_agents_rows", self._agents_rows)
+        self.monkeypatch.setattr(ed, "claude_session_stop_confirmed", self._stop_confirmed)
+
+    def teardown(self):
+        if self.session_proc is not None and self.session_proc.poll() is None:
+            os.kill(self.session_proc.pid, signal.SIGTERM)
+            try:
+                self.session_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                os.kill(self.session_proc.pid, signal.SIGKILL)
+
+
+def _launch_build_bg(repo, tmp_path, monkeypatch, **kwargs):
+    harness = kwargs.pop("harness", None)
+    if harness is None:
+        harness = _BackgroundHarness(monkeypatch)
+    spawn_fn = kwargs.pop("spawn_fn", harness._spawn_fn)
+    log_dir = kwargs.pop("log_dir", str(tmp_path / "logs"))
+    teardown = kwargs.pop("teardown", True)
+    try:
+        return L.launch_build(
+            repo,
+            kwargs.pop("issue", 656),
+            kwargs.pop("premise", _valid_premise(repo)),
+            kwargs.pop("checks", _all_checks()),
+            log_dir,
+            spawn_fn=spawn_fn,
+            **kwargs,
+        )
+    finally:
+        if teardown:
+            harness.teardown()
+
+
+def _config_dir_for_repo(repo, tmp_path, monkeypatch):
+    path = tmp_path / "claude-config"
+    path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv(cd.CONFIG_DIR_ENV, str(path))
+    return str(path)
+
 
 def test_spawn_reserved_before_child(tmp_path, monkeypatch):
   # axis: reserved before child starts; started carries real pid
@@ -838,11 +1060,11 @@ def test_spawn_reserved_before_child(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     order = []
 
-    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        records = ll.read(repo_root)["records"]
+    def tracking_spawn(argv, cwd, out_fh, err_fh, child_env):
+        records = ll.read(repo)["records"]
         order.append(("before_spawn", len(records)))
-        proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
-        order.append(("after_spawn", proc.pid))
+        proc = _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
+        order.append(("after_spawn", _BG_TEST_STATE["session_pid"]))
         return proc
 
     result = L.launch_build(
@@ -863,6 +1085,8 @@ def test_spawn_reserved_before_child(tmp_path, monkeypatch):
     assert order[0][0] == "before_spawn"
     assert order[0][1] >= 1
     assert started[0]["pid"] == order[1][1]
+    assert started[0]["pid"] == result["pid"]
+    assert started[0]["launchMode"] == ll.LAUNCH_MODE_BACKGROUND
 
 
 def test_started_append_failure_reaps_child_and_writes_no_invalid_terminal(tmp_path, monkeypatch):
@@ -884,8 +1108,8 @@ def test_started_append_failure_reaps_child_and_writes_no_invalid_terminal(tmp_p
 
     monkeypatch.setattr(ll, "append", failing_append)
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+    def capture_spawn(argv, cwd, out_fh, err_fh, child_env):
+        proc = _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
         child_pid["pid"] = proc.pid
         return proc
 
@@ -922,10 +1146,10 @@ def test_detachment_stdin_devnull(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     stdin_out = str(tmp_path / "stdin.txt")
 
-    def stdin_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def stdin_spawn(argv, cwd, out_fh, err_fh, child_env):
         env = dict(child_env)
         env["STDIN_OUT"] = stdin_out
-        return _make_spawn_fn("stdin")(argv, repo_root, out_fh, err_fh, env)
+        return _make_spawn_fn("stdin")(argv, cwd, out_fh, err_fh, env)
 
     result = L.launch_build(
         repo,
@@ -1317,10 +1541,10 @@ def test_retry_nonzero_exit_parks_no_retry(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     calls = {"n": 0}
 
-    def flip_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def flip_spawn(argv, cwd, out_fh, err_fh, child_env):
         calls["n"] += 1
         behavior = "exit1" if calls["n"] == 1 else "sleep"
-        return _make_spawn_fn(behavior)(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn(behavior)(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -1333,12 +1557,12 @@ def test_retry_nonzero_exit_parks_no_retry(tmp_path, monkeypatch):
         backoff_seconds=(0,),
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-nonzero-exit"
+    assert result["reason"] == bo.REFUSAL_LAUNCH_FAILED
     assert calls["n"] == 1
     records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "nonzero-exit:1"
+    assert parks[0]["evidence"] == bo.REFUSAL_LAUNCH_FAILED
     retries = [r for r in records if r.get("event") == "retry"]
     assert retries == []
 
@@ -1349,8 +1573,8 @@ def test_nonzero_exit_parks_even_when_worktree_dirty(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
 
-    def dirty_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        proc = _make_spawn_fn("exit1")(argv, repo_root, out_fh, err_fh, child_env)
+    def dirty_spawn(argv, cwd, out_fh, err_fh, child_env):
+        proc = _make_spawn_fn("exit1")(argv, cwd, out_fh, err_fh, child_env)
         (tmp_path / "repo" / "dirt.txt").write_text("dirty\n")
         return proc
 
@@ -1364,7 +1588,7 @@ def test_nonzero_exit_parks_even_when_worktree_dirty(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-nonzero-exit"
+    assert result["reason"] == bo.REFUSAL_LAUNCH_FAILED
     parks = [
         r for r in ll.read(repo)["records"]
         if r.get("event") == "outcome" and r.get("outcome") == "park"
@@ -1387,13 +1611,13 @@ def test_settle_exit_zero_uncertain(tmp_path, monkeypatch):
         settle_seconds=0.5,
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-exit-zero-uncertain"
+    assert result["reason"] == bo.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
     parks = [
         r for r in ll.read(repo)["records"]
         if r.get("event") == "outcome" and r.get("outcome") == "park"
     ]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "exit-zero"
+    assert parks[0]["evidence"] == bo.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
 
 
 def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
@@ -1404,12 +1628,12 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
     calls = {"n": 0}
     spawn_argv = []
 
-    def oserror_then_sleep(argv, repo_root, out_fh, err_fh, child_env):
+    def oserror_then_sleep(argv, cwd, out_fh, err_fh, child_env):
         calls["n"] += 1
         spawn_argv.append(list(argv))
         if calls["n"] == 1:
             raise OSError("spawn failed")
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -1424,14 +1648,13 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert calls["n"] == 2
     assert len(spawn_argv) == 2
-    sid_index = spawn_argv[0].index("--session-id")
-    session_id = spawn_argv[0][sid_index + 1]
-    assert spawn_argv[1][sid_index + 1] == session_id
+    assert spawn_argv[0] == spawn_argv[1]
+    assert "--bg" in spawn_argv[0]
+    assert "--session-id" not in spawn_argv[0]
     records = ll.read(repo)["records"]
     reserved = [r for r in records if r.get("event") == "reserved"][0]
-    assert reserved["sessionId"] == session_id
-    reserved_sid_index = reserved["argv"].index("--session-id")
-    assert reserved["argv"][reserved_sid_index + 1] == session_id
+    assert "sessionId" not in reserved
+    assert "--session-id" not in reserved["argv"]
     retries = [r for r in records if r.get("event") == "retry"]
     assert len(retries) == 1
     assert retries[0]["attempt"] == 1
@@ -1439,15 +1662,15 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
 
 
 def test_launch_build_reserved_session_id_matches_spawn_argv(tmp_path, monkeypatch):
-  # axis: reserved record sessionId matches spawned --session-id and stored argv
+  # axis: reserved argv matches spawned background argv; no compose sessionId
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     spawn_argv = []
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def capture_spawn(argv, cwd, out_fh, err_fh, child_env):
         spawn_argv.append(list(argv))
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -1459,15 +1682,13 @@ def test_launch_build_reserved_session_id_matches_spawn_argv(tmp_path, monkeypat
         settle_seconds=0.2,
     )
     assert result["ok"] is True
-    assert len(spawn_argv) == 1
-    sid_index = spawn_argv[0].index("--session-id")
-    session_id = spawn_argv[0][sid_index + 1]
-    reserved = [
-        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
-    ][0]
-    assert reserved["sessionId"] == session_id
-    reserved_sid_index = reserved["argv"].index("--session-id")
-    assert reserved["argv"][reserved_sid_index + 1] == session_id
+    records = ll.read(repo)["records"]
+    reserved = [r for r in records if r.get("event") == "reserved"][0]
+    assert reserved["argv"] == spawn_argv[0]
+    assert "--bg" in reserved["argv"]
+    assert "sessionId" not in reserved
+    assert result["sessionId"] == _BG_SESSION
+    assert result["backgroundId"] == _BG_ID
     try:
         os.kill(result["pid"], signal.SIGTERM)
     except ProcessLookupError:
@@ -1483,9 +1704,9 @@ def test_launch_build_reserved_config_dir_matches_the_child_env(tmp_path, monkey
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", other_instance)
     spawned_envs = []
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def capture_spawn(argv, cwd, out_fh, err_fh, child_env):
         spawned_envs.append(dict(child_env))
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -1520,6 +1741,7 @@ def test_launch_build_records_the_default_config_root_when_unset(tmp_path, monke
     home.mkdir()
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("HOME", str(home))
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
 
     result = L.launch_build(
         repo,
@@ -1796,7 +2018,7 @@ def test_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
 
-    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+    def always_oserror(argv, cwd, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     result = L.launch_build(
@@ -1824,7 +2046,7 @@ def test_retry_deadline_exceeded_before_spawn(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
 
-    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+    def always_oserror(argv, cwd, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     result = L.launch_build(
@@ -1866,8 +2088,8 @@ def test_deadline_after_spawn_parks(tmp_path, monkeypatch):
 
     monkeypatch.setattr(L, "time", _TimeShim)
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+    def capture_spawn(argv, cwd, out_fh, err_fh, child_env):
+        proc = _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
         clock["monotonic"] += 10
         return proc
 
@@ -2257,11 +2479,11 @@ def test_edge3_spawn_oserror_closes_handles_and_retries(tmp_path, monkeypatch):
             open_handles.append(fh)
         return fh
 
-    def oserror_then_sleep(argv, repo_root, out_fh, err_fh, child_env):
+    def oserror_then_sleep(argv, cwd, out_fh, err_fh, child_env):
         calls["n"] += 1
         if calls["n"] == 1:
             raise OSError("spawn failed")
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     monkeypatch.setattr("builtins.open", tracking_open)
     result = L.launch_build(
@@ -2285,7 +2507,7 @@ def test_edge4_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
 
-    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+    def always_oserror(argv, cwd, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     result = L.launch_build(
@@ -2323,7 +2545,7 @@ def test_edge5_nonzero_exit_in_settle_parks(tmp_path, monkeypatch):
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "nonzero-exit:1"
+    assert parks[0]["evidence"] == bo.REFUSAL_LAUNCH_FAILED
     assert refused == []
 
 
@@ -2345,7 +2567,7 @@ def test_edge6_zero_exit_in_settle_parks(tmp_path, monkeypatch):
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "exit-zero"
+    assert parks[0]["evidence"] == bo.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
     assert refused == []
 
 
@@ -2393,7 +2615,7 @@ def test_edge8_deadline_parks_if_spawned_refuses_if_not(tmp_path, monkeypatch):
     repo2 = _init_repo(tmp_path / "repo2")
     log_dir2 = str(tmp_path / "logs2")
 
-    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+    def always_oserror(argv, cwd, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     refused = L.launch_build(
@@ -2561,7 +2783,7 @@ def test_edge19_oserror_retry_does_not_ignore_refused_append_failure(tmp_path, m
     real_append_raw = ll._append_raw
     calls = {"n": 0}
 
-    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+    def always_oserror(argv, cwd, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     def failing_refused_append(repo_root, record, env=None):
@@ -2748,8 +2970,8 @@ def test_c2_edge1_deadline_settle_reaps_before_park(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ll, "_append_raw", tracking_append)
 
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+    def capture_spawn(argv, cwd, out_fh, err_fh, child_env):
+        proc = _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
         child_pid["pid"] = proc.pid
         clock["monotonic"] += 10
         return proc
@@ -2781,7 +3003,7 @@ def test_c2_edge2_deadline_before_spawn_refuses(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
 
-    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+    def always_oserror(argv, cwd, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     result = L.launch_build(
@@ -2874,11 +3096,11 @@ def test_c2_edge5_oserror_retry_writes_retry_event(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     calls = {"n": 0}
 
-    def oserror_then_sleep(argv, repo_root, out_fh, err_fh, child_env):
+    def oserror_then_sleep(argv, cwd, out_fh, err_fh, child_env):
         calls["n"] += 1
         if calls["n"] == 1:
             raise OSError("spawn failed")
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -2911,7 +3133,7 @@ def test_c2_edge6_retry_append_failure_terminalizes(tmp_path, monkeypatch):
 
     monkeypatch.setattr(L, "_append_under_lock", fail_retry_append)
 
-    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+    def always_oserror(argv, cwd, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     result = L.launch_build(
@@ -2935,7 +3157,7 @@ def test_c2_edge7_final_oserror_refuses(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
 
-    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+    def always_oserror(argv, cwd, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     result = L.launch_build(
@@ -2991,7 +3213,7 @@ def test_c2_edge9_zero_exit_parks(tmp_path, monkeypatch):
     records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "exit-zero"
+    assert parks[0]["evidence"] == bo.REFUSAL_SESSION_ENDED_WITHOUT_RESULT
 
 
 def test_c2_edge10_child_alive_after_settle_no_terminal(tmp_path, monkeypatch):
@@ -3040,7 +3262,7 @@ def test_c2_edge11_backoff_clamped_to_deadline(tmp_path, monkeypatch):
 
     monkeypatch.setattr(L, "time", _TimeShim)
 
-    def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
+    def always_oserror(argv, cwd, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     result = L.launch_build(
@@ -3175,15 +3397,7 @@ def test_spawn_attempt_exports_heartbeat_env_without_ledger_root(tmp_path, monke
         "model": "test",
     })
     captured = {}
-
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424242
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _capture_bg_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3227,15 +3441,7 @@ def test_spawn_attempt_exports_slot_ref_when_supplied(tmp_path, monkeypatch):
         "model": "test",
     })
     captured = {}
-
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424243
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _capture_bg_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3263,15 +3469,7 @@ def test_spawn_attempt_omits_slot_ref_without_generation(tmp_path, monkeypatch):
     ledger_root = _ledger_env(tmp_path, monkeypatch)
     launch_id = "launch-slot-only"
     captured = {}
-
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424244
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _capture_bg_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3314,15 +3512,7 @@ def test_spawn_attempt_strips_inherited_slot_ref_when_unslotted(tmp_path, monkey
         "model": "test",
     })
     captured = {}
-
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424245
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _capture_bg_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3364,15 +3554,7 @@ def test_spawn_attempt_replaces_inherited_slot_ref_when_slotted(tmp_path, monkey
         "model": "test",
     })
     captured = {}
-
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424246
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _capture_bg_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3420,15 +3602,7 @@ def test_spawn_attempt_strips_slot_ref_from_process_env_when_unslotted(
         "model": "test",
     })
     captured = {}
-
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424247
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _capture_bg_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -3470,15 +3644,7 @@ def test_spawn_attempt_strips_empty_string_slot_ref_when_unslotted(tmp_path, mon
         "model": "test",
     })
     captured = {}
-
-    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
-        captured.update(child_env)
-        class _Proc:
-            pid = 424248
-
-        out_fh.close()
-        err_fh.close()
-        return _Proc()
+    capture_spawn = _capture_bg_spawn(captured)
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
@@ -4049,10 +4215,10 @@ def test_launch_build_post_reserve_slot_recheck_refuses(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     spawn_called = False
 
-    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def tracking_spawn(argv, cwd, out_fh, err_fh, child_env):
         nonlocal spawn_called
         spawn_called = True
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     real_compose = L.compose_launch
 
@@ -4135,10 +4301,10 @@ def test_launch_build_single_lane_unslotted_spawns(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     spawn_called = False
 
-    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def tracking_spawn(argv, cwd, out_fh, err_fh, child_env):
         nonlocal spawn_called
         spawn_called = True
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -4180,10 +4346,10 @@ def test_launch_build_post_reserve_unreadable_ledger_refuses(tmp_path, monkeypat
 
     monkeypatch.setattr(L, "_ledger_live_state", unreadable_on_recheck)
 
-    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def tracking_spawn(argv, cwd, out_fh, err_fh, child_env):
         nonlocal spawn_called
         spawn_called = True
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -4218,10 +4384,10 @@ def test_launch_build_unslotted_lane_refuses_after_slotted_sibling_refused(tmp_p
     )
     spawn_called = False
 
-    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def tracking_spawn(argv, cwd, out_fh, err_fh, child_env):
         nonlocal spawn_called
         spawn_called = True
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -4261,10 +4427,10 @@ def test_launch_build_single_lane_unslotted_spawns_after_handback_terminal(tmp_p
     log_dir = str(tmp_path / "logs")
     spawn_called = False
 
-    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def tracking_spawn(argv, cwd, out_fh, err_fh, child_env):
         nonlocal spawn_called
         spawn_called = True
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -4298,10 +4464,10 @@ def test_launch_build_single_lane_unslotted_spawns_after_post_reserve_unreadable
     log_dir = str(tmp_path / "logs")
     spawn_called = False
 
-    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def tracking_spawn(argv, cwd, out_fh, err_fh, child_env):
         nonlocal spawn_called
         spawn_called = True
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,
@@ -4329,10 +4495,10 @@ def test_preflight_and_launch_agree_after_handback_terminal(tmp_path, monkeypatc
     log_dir = str(tmp_path / "logs")
     spawn_called = False
 
-    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def tracking_spawn(argv, cwd, out_fh, err_fh, child_env):
         nonlocal spawn_called
         spawn_called = True
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     launch = L.launch_build(
         repo,
@@ -4389,10 +4555,10 @@ def test_launch_build_parallel_slotted_spawns(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     spawn_called = False
 
-    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+    def tracking_spawn(argv, cwd, out_fh, err_fh, child_env):
         nonlocal spawn_called
         spawn_called = True
-        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
 
     result = L.launch_build(
         repo,

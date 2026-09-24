@@ -9,6 +9,9 @@ import os
 CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 DEFAULT_CONFIG_DIR_NAME = ".claude"
 
+REFUSAL_CONFIG_DIR_UNRESOLVABLE = "config-dir-unusable:unresolvable"
+REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY = "config-dir-unusable:not-a-directory"
+
 
 def _expand_home(path, env):
     """expanduser against the SUPPLIED env's HOME, not the ambient process env.

@@ -4118,7 +4118,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         cfg = opened.get("configDir")
         # axis: spawn-time configDir must still be a directory — open-time record is not enough.
         if not isinstance(cfg, str) or not cfg or not os.path.isdir(cfg):
-            _journal_prep_refusal(run_dir_real, attempt, "config-dir-unusable:not-a-directory")
+            _journal_prep_refusal(run_dir_real, attempt, config_dir.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY)
             return
     prompt_path = staged_path
     argv, recorded = _derive_and_record_spawn_argv(
@@ -6077,9 +6077,9 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     if engine == "claude":
         cfg = config_dir.resolve(env=os.environ, cwd=cwd)
         if cfg is None:
-            return False, "config-dir-unusable:unresolvable"
+            return False, config_dir.REFUSAL_CONFIG_DIR_UNRESOLVABLE
         if not os.path.isdir(cfg):
-            return False, "config-dir-unusable:not-a-directory"
+            return False, config_dir.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY
     else:
         cfg = None
 
@@ -6734,9 +6734,9 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     if engine == "claude":
         cfg = config_dir.resolve(env=os.environ, cwd=cwd)
         if cfg is None:
-            return False, "config-dir-unusable:unresolvable"
+            return False, config_dir.REFUSAL_CONFIG_DIR_UNRESOLVABLE
         if not os.path.isdir(cfg):
-            return False, "config-dir-unusable:not-a-directory"
+            return False, config_dir.REFUSAL_CONFIG_DIR_NOT_A_DIRECTORY
     else:
         cfg = None
 
