@@ -417,6 +417,7 @@ VERIFIED_HEAD_UNRESOLVED_CAUSE = "verified-head-unresolved"
 RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
 RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL
 RELOCATION_EVIDENCE_INDETERMINATE_CAUSE = "relocation-evidence-indeterminate"
+AUDITOR_UNSEATABLE_CAUSE = "auditor-unseatable"
 RELOCATION_EVIDENCE_INDETERMINATE_DETAIL = (
     "relocation evidence in the journal is unreadable or malformed; "
     "cannot determine whether this attempt predates a checkout move"
@@ -541,6 +542,16 @@ class DispositionLedgerOwnerRefusal(ValueError):
         super().__init__(reason)
         self.reason = reason
         self.value = value
+
+
+class AuditorUnseatable(ValueError):
+    """Refusal when a durable-path audit target seats a non-runner-channel auditor."""
+
+    def __init__(self, detail, live_vendors, fixer_vendor):
+        super().__init__(detail)
+        self.detail = detail
+        self.live_vendors = live_vendors
+        self.fixer_vendor = fixer_vendor
 
 
 RECEIPT_FAULT_WRITE = "receipt-write"                 # round-receipt.json could not be written
@@ -995,7 +1006,7 @@ def author_justification_filter(findings, prior_comments):
 # independence + certification shape
 # =============================================================================================
 
-def _auditor_vendor(config, fixer_vendor):
+def _auditor_vendor(config, fixer_vendor, runner_only=False):
     """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
     on family, not the dispatch CLI). Independence is NEVER satisfied between two cursor first-party
     models (#651, owner-ratified 2026-07-26): composer and grok share the `xai` family, so a
@@ -1003,10 +1014,20 @@ def _auditor_vendor(config, fixer_vendor):
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
     independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
     rider 4a); see test_auditor_and_code_fixer_families_match_per_vendor in test_model_registry."""
-    vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor)
+    vendor, _fam = receipt_disclosures.independent_auditor(
+        config, fixer_vendor, runner_only=runner_only)
     if vendor is not None:
         return vendor, "independent"
     live = _live_vendors(config)
+    if runner_only:
+        host_independent, _fam = receipt_disclosures.independent_auditor(
+            config, fixer_vendor, runner_only=False)
+        if host_independent is not None:
+            return None, "unseatable"
+        for v in live:
+            if session_contract.runner_channel_vendor(v):
+                return v, "degraded"
+        return None, "unseatable"
     return (live[0] if live else fixer_vendor), "degraded"
 
 
@@ -4363,8 +4384,10 @@ def _audit_targets(state, config, audit_targets_map):
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
     occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
-    auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
-    if independence == "degraded":
+    runner_only = bool(state.get("_advanceUsed"))
+    auditor_vendor, independence = _auditor_vendor(
+        config, fixer_vendor, runner_only=runner_only)
+    if independence in ("degraded", "unseatable"):
         state["independenceDegraded"] = True
     targets = []
     seen_keys = set()
@@ -4375,7 +4398,7 @@ def _audit_targets(state, config, audit_targets_map):
         if tid in seen_keys:
             continue
         seen_keys.add(tid)
-        targets.append({
+        row = {
             "id": tid,
             session_contract.FINDING_KEY_FIELD: tid,
             "identity": finding_identity(f),
@@ -4388,11 +4411,13 @@ def _audit_targets(state, config, audit_targets_map):
             "dimension": f.get("dimension"),
             "taxonomy": f.get("taxonomy"),
             "fixerVendor": fixer_vendor,
-            "auditorVendor": auditor_vendor,
             "independence": independence,
             "verdict": f.get("verdict"),
             "evidence": f.get("evidence"),
-        })
+        }
+        if auditor_vendor is not None:
+            row["auditorVendor"] = auditor_vendor
+        targets.append(row)
     return targets
 
 
@@ -6368,7 +6393,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fail = _terminal_receipt_gate(session_dir, state)
             if fail:
                 return _receipt_fault_response(fail)
-            return _next_response(pending, state_hash(state))
+            return _next_response(session_dir, state, pending, "next")
     else:
         state = loaded
         if config_overrides and config_overrides.get("recordsPath") is not None:
@@ -6392,7 +6417,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fail = _terminal_receipt_gate(session_dir, state)
             if fail:
                 return _receipt_fault_response(fail)
-            return _next_response(pending, state_hash(state))
+            return _next_response(session_dir, state, pending, "next")
     if state.get("pending"):
         # idempotent re-emit: the state is unchanged since the pending was persisted, so the hash
         # recomputed here equals the one the first `next` returned (the hash is NEVER stored in the
@@ -6410,7 +6435,10 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fault = _terminal_receipt_gate(session_dir, state)
             if fault:
                 return _receipt_fault_response(fault)
-        return _next_response(pend, state_hash(state))
+        refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, "next")
+        if refusal is not None:
+            return refusal
+        return _next_response(session_dir, state, pend, "next")
     step = _advance(state, state["config"])
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
     pending = {"action": step["action"], "round": step["round"], "phase": step["phase"],
@@ -6427,6 +6455,9 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                 session_dir, pending["round"], P_VERIFY,
                 round_records.storage_key("verify"), attempt),
         })
+    refusal = _disposition_ledger_owner_refusal(session_dir, state, pending, "next")
+    if refusal is not None:
+        return refusal
     state["pending"] = pending
     phase = pending.get("phase")
     if isinstance(phase, str) and phase.startswith("dispatch-"):
@@ -6441,6 +6472,11 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         except round_commit.CommitRefused as exc:
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
+        except AuditorUnseatable as exc:
+            return _refuse_cmd(session_dir, "next", AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                               rnd=pending.get("round"), attempt=attempt,
+                               liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
+                               detail=exc.detail)
         except ValueError as exc:
             return _refuse_cmd(session_dir, "next", "order-render-refused", phase=phase,
                                rnd=pending.get("round"), attempt=attempt, detail=str(exc))
@@ -6452,7 +6488,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         fail = _terminal_receipt_gate(session_dir, state)
         if fail:
             return _receipt_fault_response(fail)
-    return _next_response(pending, state_hash(state))
+    return _next_response(session_dir, state, pending, "next")
 
 
 def _receipt_fault_response(detail):
@@ -6492,7 +6528,23 @@ def _refuse_base_guard(session_dir, reason, detail=None, value=None):
     return 1
 
 
-def _next_response(pending, expected_hash):
+def _disposition_ledger_owner_refusal(session_dir, state, pending, cmd):
+    """Refuse hand-out when the disposition-ledger owner is unrecognized (non-terminal only)."""
+    action = pending.get("action") if isinstance(pending, dict) else None
+    if action == P_TERMINAL:
+        return None
+    if (session_contract.disposition_ledger_owner_classification(state)
+            == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED):
+        phase = pending.get("phase") if isinstance(pending, dict) else None
+        rnd = pending.get("round") if isinstance(pending, dict) else None
+        attempt = pending.get("attempt") if isinstance(pending, dict) else None
+        return _refuse_cmd(session_dir, cmd, DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE,
+                           phase=phase, rnd=rnd, attempt=attempt)
+    return None
+
+
+def _next_response(session_dir, state, pending, cmd):
+    expected_hash = state_hash(state)
     return {
         "ok": True,
         "action": pending["action"],
@@ -7017,6 +7069,10 @@ def _cmd_re_emit_locked(session_dir, by):
     rnd = pending.get("round")
     old_attempt = pending.get("attempt")
 
+    refusal = _disposition_ledger_owner_refusal(session_dir, state, pending, RE_EMIT_CMD)
+    if refusal is not None:
+        return refusal
+
     relocation = _relocation_lookup(session_dir, rnd, phase, old_attempt)
     if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
         return _refuse_relocation_evidence_indeterminate(
@@ -7061,7 +7117,9 @@ def _cmd_re_emit_locked(session_dir, by):
         if completed is not None:
             superseded_attempt, superseded_row = completed
             anchor = _orders_anchor(state, session_dir, rnd, phase, superseded_attempt)
-            response = _next_response(state["pending"], state_hash(state))
+            response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
+            if not response.get("ok"):
+                return response
             response["superseded"] = {
                 "attempt": superseded_attempt,
                 "manifestSha256": ((anchor or {}).get("manifestSha256")
@@ -7121,12 +7179,19 @@ def _cmd_re_emit_locked(session_dir, by):
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "re-emit", exc, phase=phase,
                                         rnd=rnd, attempt=new_attempt)
+    except AuditorUnseatable as exc:
+        return _refuse_cmd(session_dir, RE_EMIT_CMD, AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                           rnd=rnd, attempt=new_attempt,
+                           liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
+                           detail=exc.detail)
     except ValueError as exc:
         return _refuse_cmd(session_dir, "re-emit", "order-render-refused", phase=phase,
                            rnd=rnd, attempt=new_attempt, detail=str(exc))
 
     save_state(session_dir, state)
-    response = _next_response(state["pending"], state_hash(state))
+    response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
+    if not response.get("ok"):
+        return response
     response["superseded"] = {
         "attempt": old_attempt,
         "manifestSha256": anchor.get("manifestSha256"),
@@ -8112,12 +8177,7 @@ def _vendor_is_external_engine(vendor):
     """True when ``vendor`` is a registered non-claude engine (codex/cursor today).
 
     Unknown vendors fail closed to host transport — they cannot land on the engine stdout branch."""
-    if not isinstance(vendor, str) or not vendor.strip():
-        return False
-    v = vendor.strip()
-    if v == "claude":
-        return False
-    return v in model_registry.vendors()
+    return session_contract.runner_channel_vendor(vendor)
 
 
 def _seat_is_engine(row):
@@ -8125,8 +8185,8 @@ def _seat_is_engine(row):
     return _vendor_is_external_engine(row.get("vendor"))
 
 
-CHANNEL_FILE = "file"
-CHANNEL_STDOUT = "stdout"
+CHANNEL_FILE = session_contract.CHANNEL_FILE
+CHANNEL_STDOUT = session_contract.CHANNEL_STDOUT
 
 # Phases whose seats an orchestrator dispatches through `dispatch-review` — a READ-ONLY sandbox on
 # an external engine. `dispatch-fixer` is deliberately absent: it is a foreground in-place writer,
@@ -9073,6 +9133,34 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     that refuses."""
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
+    if phase == P_AUDITS and state.get("_advanceUsed"):
+        targets = pending_payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        cfg = state.get("config") or {}
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            if not session_contract.runner_channel_vendor(target.get("auditorVendor")):
+                host_independent, _fam = receipt_disclosures.independent_auditor(
+                    cfg, cfg.get("fixerVendor"), runner_only=False)
+                if host_independent is not None:
+                    detail = (
+                        "The durable-record path requires a fix auditor dispatched through the "
+                        "runner (codex or cursor). The independent-family auditor vendor "
+                        "%s is live but cannot prove it ran on the durable-record path, so the "
+                        "fix cannot be audited independently. Start a fresh session whose "
+                        "--vendors names a second runner vendor (codex or cursor) of a different "
+                        "family from the fixer, or use hand next/submit for the whole session."
+                        % host_independent)
+                else:
+                    detail = (
+                        "The durable-record path requires a fix auditor dispatched through the "
+                        "runner (codex or cursor), but none is among this session's vendors. "
+                        "Start a fresh session seeded with --vendors naming a runner vendor "
+                        "(for example codex or cursor), or use hand next/submit for the whole "
+                        "session.")
+                raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
     seats = {}
     order_hashes = {}
@@ -9145,6 +9233,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             "vendor": row["vendor"],
             "model": row["model"],
             "engine": row["engine"],
+            "channel": _seat_channel(phase, row),
             "resultContract": _seat_result_schema(state),
             "orderSha256": order_sha,
             "orderPath": paths["order_path"],
@@ -9603,14 +9692,25 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
         if phase == P_FIXER:
             return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
     envelope_payload = envelope.get("payload")
+    payload_adopted = False
+    if (result_kind in session_contract.RECORD_RESULT_KINDS
+            and envelope_payload is None):
+        result_content = record.get("resultContent")
+        if isinstance(result_content, dict):
+            envelope_payload = dict(result_content)
+            payload_adopted = True
     if session_contract.evidence_binding(result_kind) == session_contract.EXECUTION_ONLY_BINDING:
         # axis: write-run stamp proves the run happened under this order — no transported payload
         # is bound; never read it as payload proof
         pass
     else:
         if not isinstance(envelope_payload, dict):
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "resultKind": result_kind}, None
+            mismatch_extra = {"resultDigest": result_digest, "resultKind": result_kind}
+            result_content = record.get("resultContent")
+            if isinstance(result_content, dict):
+                mismatch_extra["expectedPayloadSha256"] = round_records.payload_sha256(
+                    result_content)
+            return None, "evidence-result-mismatch", mismatch_extra, None
         shaped = _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload)
         carried, adapter_subject = engine_adapter.review_payload_carried(shaped, result_kind)
         digest_carried, digest_subject = session_contract.evidence_digest_subject(
@@ -9627,9 +9727,14 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
                                                        "subjectDisagreement": True}, None
         payload_digest = round_records.payload_sha256(digest_subject)
         if result_digest != payload_digest:
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "payloadSha256": payload_digest,
-                                                       "resultKind": result_kind}, None
+            mismatch_extra = {"resultDigest": result_digest,
+                              "payloadSha256": payload_digest,
+                              "resultKind": result_kind}
+            result_content = record.get("resultContent")
+            if isinstance(result_content, dict):
+                mismatch_extra["expectedPayloadSha256"] = round_records.payload_sha256(
+                    result_content)
+            return None, "evidence-result-mismatch", mismatch_extra, None
     cited_head_source = None
     view_head = None
     if run_kind == engine_dispatch.RUN_KIND_WRITE:
@@ -9651,6 +9756,9 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
     if evidence is None:
         return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}, None
     out = dict(envelope)
+    if payload_adopted:
+        out["payload"] = envelope_payload
+        out["payloadSha256"] = round_records.payload_sha256(envelope_payload)
     if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
         env_head = envelope.get("headSha")
         if env_head is None:
@@ -9793,7 +9901,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                 return _refuse_cmd(session_dir, "record-result", ev_reason, phase=phase,
                                    rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                                    **ev_extra)
-        fault = _preflight_payload_fault(phase, envelope, seat)
+        preflight_envelope = assembled if assembled is not None else envelope
+        fault = _preflight_payload_fault(phase, preflight_envelope, seat)
         if fault:
             return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
                                rnd=rnd, attempt=cur_attempt, seat=seat, detail=fault)

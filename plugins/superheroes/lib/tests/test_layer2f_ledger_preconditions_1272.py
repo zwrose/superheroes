@@ -183,10 +183,9 @@ def test_marker_driver_submit_refuses_null_owner(tmp_path):
     assert ok and state is not None
     state["dispositionLedgerOwner"] = None
     RD.save_state(session_dir, state)
-    n = RD.cmd_next(session_dir)
-    assert n["ok"], n
+    planted_hash = RD.state_hash(state)
     before = _state_bytes(session_dir)
-    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
+    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], planted_hash,
                         _panel_artifact())
     assert out["ok"] is False
     assert out["reason"] == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE
@@ -213,10 +212,9 @@ def test_marker_driver_submit_refuses_unrecognized(tmp_path):
     assert ok and state is not None
     state["dispositionLedgerOwner"] = "ledger-v2"
     RD.save_state(session_dir, state)
-    n = RD.cmd_next(session_dir)
-    assert n["ok"], n
+    planted_hash = RD.state_hash(state)
     before = _state_bytes(session_dir)
-    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
+    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], planted_hash,
                         _panel_artifact())
     assert out["ok"] is False
     assert out["reason"] == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE
@@ -377,13 +375,14 @@ def test_bite_bp2f_b_driver_submit_preflight_refusal(tmp_path):
     """axis: unrecognized dispositionLedgerOwner refuses submit before fold — state byte-unchanged."""
     session_dir = str(tmp_path)
     n = RD.cmd_next(session_dir, _cfg())
+    assert n["ok"], n
     ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
     state["dispositionLedgerOwner"] = "ledger-v2"
     RD.save_state(session_dir, state)
-    n = RD.cmd_next(session_dir)
-    assert n["ok"], n
+    planted_hash = RD.state_hash(state)
     before = _state_bytes(session_dir)
-    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
+    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], planted_hash,
                         _panel_artifact())
     assert out["ok"] is False
     assert _state_bytes(session_dir) == before

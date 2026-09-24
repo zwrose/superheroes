@@ -101,7 +101,7 @@ SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
 EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind",
                              "observation")
-EXECUTION_EVIDENCE_OPTIONAL_FIELDS = ("engineModel",)
+EXECUTION_EVIDENCE_OPTIONAL_FIELDS = ("engineModel", "model")
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
@@ -116,6 +116,7 @@ _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK = {
     "resultKind": lambda value: isinstance(value, str) and value,
     "observation": lambda value: isinstance(value, dict),
     "engineModel": lambda value: isinstance(value, str) and value,
+    "model": lambda value: value is None or (isinstance(value, str) and value),
 }
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
 # payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.
@@ -216,9 +217,8 @@ def execution_evidence_fields(evidence):
         return None
     out = {field: evidence[field] for field in EXECUTION_EVIDENCE_FIELDS}
     for field in EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
-        val = evidence.get(field)
-        if isinstance(val, str) and val:
-            out[field] = val
+        if field in evidence and _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):
+            out[field] = evidence[field]
     return out
 
 

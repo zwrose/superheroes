@@ -7505,6 +7505,18 @@ def run_execution_record(run_dir):
         if isinstance(result_digest, str) and result_digest and isinstance(result_kind, str) and result_kind:
             record["resultDigest"] = result_digest
             record["resultKind"] = result_kind
+        if run_kind != RUN_KIND_WRITE and isinstance(result_kind, str):
+            if result_kind in session_contract.RECORD_RESULT_KINDS:
+                _, result_content = _result_kind_and_content_from_parse(res)
+                if isinstance(result_content, dict):
+                    record["resultContent"] = result_content
+        resolved = opened.get("resolvedInputs")
+        if isinstance(resolved, dict) and "engineModel" in resolved:
+            engine_model = resolved.get("engineModel")
+            if engine_model is None:
+                record["model"] = None
+            elif isinstance(engine_model, str) and engine_model:
+                record["model"] = engine_model
         resolved = opened.get("resolvedInputs")
         if isinstance(resolved, dict):
             engine_model = resolved.get("engineModel")

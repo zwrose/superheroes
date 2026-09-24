@@ -97,7 +97,7 @@ def _blocking_finding(title, line):
 # =============================================================================================
 
 def _cfg(**over):
-    base = {"leg": "code", "vendors": ["claude"], "diff": REVIEWED_DIFF, "fixerVendor": "claude",
+    base = {"leg": "code", "vendors": ["claude", "codex"], "diff": REVIEWED_DIFF, "fixerVendor": "claude",
             "verifyCommand": "none", "seatMap": SEAT_MAP}
     base.update(over)
     return base

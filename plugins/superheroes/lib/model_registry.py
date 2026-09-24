@@ -135,6 +135,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     },
 }
 
+_MATRIX["scoped-finder"] = dict(_MATRIX["reviewer-deep"])
 # auditor seats at the verifier's cells until an owner call separates them
 _MATRIX["auditor"] = dict(_MATRIX["verifier"])
 
@@ -231,6 +232,14 @@ _ROLE_META: dict[str, dict] = {
         "model_tier_role": False,
         "engine_pref_key": "briefCheck",
         "codex_kind": "brief-check",
+        "read_write": "read",
+        "pin_eligible": False,
+        "owner_tunable": False,
+    },
+    "scoped-finder": {
+        "model_tier_role": False,
+        "engine_pref_key": "reviewer",
+        "codex_kind": "review-deep",
         "read_write": "read",
         "pin_eligible": False,
         "owner_tunable": False,
