@@ -50,6 +50,7 @@ def test_case_1_recovered_seat_certifies_with_failed_attempt_history(tmp_path):
             "round": 1,
             "attempt": 1,
             "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+            "model": None,
         }
     ]
 
