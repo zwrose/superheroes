@@ -5959,8 +5959,8 @@ def test_seat_map_unavailable_disclosure_not_unjudgeable_prose():
     assert unj_lines == []
 
 
-def test_unattested_cross_vendor_map_without_canary_still_degrades_not_canary_parked():
-    """NR-D: unattested cross-vendor map still degrades certification; canary gap no longer parks (#1272)."""
+def test_unattested_cross_vendor_map_refuses_unrun_review_not_probe_parked():
+    """NR-D: unattested cross-vendor map refuses unrun-review; probe gap no longer parks (#1272)."""
     cfg = _cfg_cert(leg="panel", vendors=["codex", "cursor"])
     seat_map = _seat_map_vendors({
         "code-reviewer": "codex",
@@ -5970,7 +5970,7 @@ def test_unattested_cross_vendor_map_without_canary_still_degrades_not_canary_pa
         "premortem-reviewer": "cursor",
     })
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
-    assert "class" in result
+    assert result["class"] == "unrun-review"
     assert "verdict" not in result
     assert result["loopTerminal"] == "converged"
     assert result["loopCertificationShape"] == "full-panel-confirmed-constraint-violated"

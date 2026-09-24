@@ -2733,8 +2733,8 @@ def _fold_panel(state, config, artifact):
     if unverified_dims:
         _record_round(state, "canaryUnverified", sorted(set(unverified_dims)))
         _decision(state, "canary-unverified",
-                  "cross-vendor seat(s) (%s) returned zero findings and no engaged control "
-                  "probe for their vendor — external-seat liveness unverified (recorded disclosure)"
+                  "cross-vendor seat(s) (%s) returned zero findings and no control probe was "
+                  "submitted for their vendor — recorded"
                   % ", ".join(sorted(set(unverified_dims))))
     if failed_vendors:
         failed_dims = sorted({d for info in failed_vendors.values()
