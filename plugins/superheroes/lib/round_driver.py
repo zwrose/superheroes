@@ -408,6 +408,8 @@ _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 
 # Named refusal when a submit artifact lists the same judgment id with conflicting dispositions.
 JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
+FOLLOWUP_MALFORMED_CAUSE = "follow-up-malformed"
+STAGED_ID_UNRESOLVABLE_CAUSE = "staged-id-unresolvable"
 
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
@@ -2857,12 +2859,136 @@ def _fold_panel(state, config, artifact):
     state["step"] = P_VERIFIERS
 
 
+def _staged_by_id_map(staged):
+    """Build staged-id → finding; refuse duplicate ids."""
+    by_id = {}
+    for finding in staged:
+        if not isinstance(finding, dict):
+            continue
+        staged_id = finding.get("id")
+        if staged_id is None:
+            continue
+        if staged_id in by_id:
+            return None, "%s: duplicate staged id %r" % (STAGED_ID_UNRESOLVABLE_CAUSE, staged_id)
+        by_id[staged_id] = finding
+    return by_id, None
+
+
+def _staged_id_resolution_fault(staged, staged_id):
+    """None when staged_id resolves to exactly one keyed finding; otherwise a named cause."""
+    if staged_id is None:
+        return "%s: missing staged id" % STAGED_ID_UNRESOLVABLE_CAUSE
+    by_id, map_fault = _staged_by_id_map(staged)
+    if map_fault:
+        return map_fault
+    finding = by_id.get(staged_id)
+    if finding is None:
+        return "%s: staged id %r maps to no entry" % (STAGED_ID_UNRESOLVABLE_CAUSE, staged_id)
+    if not _finding_identity_key(finding):
+        return "%s: staged id %r has no derivable finding key" % (STAGED_ID_UNRESOLVABLE_CAUSE,
+                                                                  staged_id)
+    return None
+
+
+def _resolve_staged_finding(staged, staged_id):
+    """Return (finding, fault). fault is None on success."""
+    fault = _staged_id_resolution_fault(staged, staged_id)
+    if fault:
+        return None, fault
+    by_id, _ = _staged_by_id_map(staged)
+    return by_id.get(staged_id), None
+
+
+def verifier_drop_staged_id_fault(state, artifact):
+    """Refuse verifier drops whose staged ids do not resolve before fold."""
+    if verifier_results_fault(artifact) is not None:
+        return None
+    staged = verification.stage_ids(state.get("_toVerify") or [])
+    verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
+    applied = verification.apply_verdicts(staged, verdicts)
+    for drop in applied["drops"]:
+        fault = _staged_id_resolution_fault(staged, drop.get("id"))
+        if fault:
+            return fault
+    by_id = {}
+    for verdict in verdicts:
+        if isinstance(verdict, dict) and isinstance(verdict.get("id"), str):
+            by_id[verdict["id"]] = verdict
+    for staged_id in applied.get("unmatched") or []:
+        verdict = by_id.get(staged_id)
+        if isinstance(verdict, dict) and verdict.get("verdict") == "REFUTED":
+            fault = _staged_id_resolution_fault(staged, staged_id)
+            if fault:
+                return fault
+    for staged_id in applied.get("ambiguous") or []:
+        fault = _staged_id_resolution_fault(staged, staged_id)
+        if fault:
+            return fault
+    return None
+
+
+def _format_grouping_coverage_fault(fault):
+    """Map ``verification.grouping_coverage_fault`` output to a synthesis refusal string."""
+    if not fault:
+        return None
+    kind = fault.get("kind")
+    member_id = fault.get("member_id")
+    if kind == "duplicate_member":
+        return "%s: duplicate member %r in grouping[%d]" % (
+            STAGED_ID_UNRESOLVABLE_CAUSE, member_id, fault.get("index"))
+    if kind == "omits":
+        return "%s: grouping omits staged id %r" % (STAGED_ID_UNRESOLVABLE_CAUSE, member_id)
+    if kind == "extra":
+        return "%s: staged id %r maps to no entry" % (STAGED_ID_UNRESOLVABLE_CAUSE, member_id)
+    return "%s: grouping does not cover every survivor exactly once" % STAGED_ID_UNRESOLVABLE_CAUSE
+
+
+def synthesis_staged_id_fault(state, artifact):
+    """Refuse synthesis author-justified drops and merge members whose ids do not resolve."""
+    verified = state.get("_verified") or []
+    grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
+    if isinstance(grouping, list):
+        fault = _format_grouping_coverage_fault(
+            verification.grouping_coverage_fault(verified, grouping))
+        if fault:
+            return fault
+        for group in grouping:
+            if not isinstance(group, dict):
+                continue
+            for member_id in group.get("member_ids") or []:
+                fault = _staged_id_resolution_fault(verified, member_id)
+                if fault:
+                    return fault
+    merged = verification.merge_and_rank(verified, grouping)
+    findings = merged["findings"]
+    config = state.get("config") or {}
+    _kept, aj_drops = author_justification_filter(findings, config.get("priorComments"))
+    for drop in aj_drops:
+        fault = _staged_id_resolution_fault(verified, drop.get("id"))
+        if fault:
+            return fault
+    for merge in merged.get("merges") or []:
+        if not isinstance(merge, dict):
+            continue
+        kept_id = merge.get("kept_id")
+        kept_finding, fault = _resolve_staged_finding(verified, kept_id)
+        if fault:
+            return fault
+        if kept_finding is None:
+            continue
+        for member_id in merge.get("member_ids") or []:
+            if member_id == kept_id:
+                continue
+            fault = _staged_id_resolution_fault(verified, member_id)
+            if fault:
+                return fault
+    return None
+
+
 def _fold_verifiers(state, config, artifact):
     """Apply per-finding verification verdicts deterministically (verification.apply_verdicts)."""
     verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
     staged = verification.stage_ids(state.get("_toVerify") or [])
-    staged_by_id = {f.get("id"): f for f in staged
-                    if isinstance(f, dict) and f.get("id") is not None}
     applied = verification.apply_verdicts(staged, verdicts)
     state["_verified"] = applied["findings"]
     _record_round(state, "verify", {"drops": applied["drops"], "downgrades": applied["downgrades"],
@@ -2879,9 +3005,13 @@ def _fold_verifiers(state, config, artifact):
     })
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
-        staged = staged_by_id.get(d.get("id"))
-        if isinstance(staged, dict):
-            key = _finding_identity_key(staged)
+        staged_finding, fault = _resolve_staged_finding(staged, d.get("id"))
+        if fault:
+            _park_cannot_certify(state, fault)
+            state["step"] = P_TERMINAL
+            return
+        if isinstance(staged_finding, dict):
+            key = _finding_identity_key(staged_finding)
             if key:
                 reason = d.get("reason") or "verifier refuted (no reason recorded)"
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
@@ -2895,16 +3025,18 @@ def _fold_synthesis(state, config, artifact):
     author-justification POST-filter, then decide gap-sweep / fix / terminal."""
     grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
     verified = state.get("_verified") or []
-    verified_by_id = {f.get("id"): f for f in verified
-                      if isinstance(f, dict) and f.get("id") is not None}
     merged = verification.merge_and_rank(verified, grouping)
     findings = merged["findings"]
     kept, aj_drops = author_justification_filter(findings, config.get("priorComments"))
     for d in aj_drops:
         _decision(state, "author-justified-drop", d.get("justification"))
-        staged = verified_by_id.get(d.get("id"))
-        if isinstance(staged, dict):
-            key = _finding_identity_key(staged)
+        staged_finding, fault = _resolve_staged_finding(verified, d.get("id"))
+        if fault:
+            _park_cannot_certify(state, fault)
+            state["step"] = P_TERMINAL
+            return
+        if isinstance(staged_finding, dict):
+            key = _finding_identity_key(staged_finding)
             if key:
                 justification = d.get("justification") or ""
                 _record_disposition(
@@ -2914,14 +3046,25 @@ def _fold_synthesis(state, config, artifact):
         if not isinstance(merge, dict):
             continue
         kept_id = merge.get("kept_id")
-        kept_finding = verified_by_id.get(kept_id)
+        kept_finding, kept_fault = _resolve_staged_finding(verified, kept_id)
+        if kept_fault:
+            _park_cannot_certify(state, kept_fault)
+            state["step"] = P_TERMINAL
+            return
         kept_key = _finding_identity_key(kept_finding) if isinstance(kept_finding, dict) else None
         if not kept_key:
-            continue
+            _park_cannot_certify(state, "%s: staged id %r has no derivable finding key"
+                                % (STAGED_ID_UNRESOLVABLE_CAUSE, kept_id))
+            state["step"] = P_TERMINAL
+            return
         for member_id in merge.get("member_ids") or []:
             if member_id == kept_id:
                 continue
-            member = verified_by_id.get(member_id)
+            member, member_fault = _resolve_staged_finding(verified, member_id)
+            if member_fault:
+                _park_cannot_certify(state, member_fault)
+                state["step"] = P_TERMINAL
+                return
             if isinstance(member, dict):
                 key = _finding_identity_key(member)
                 if key:
@@ -3366,6 +3509,23 @@ def _fold_judgment(state, config, artifact):
                     state.pop("_judgmentFindings", None)
                     state.pop("_judgmentMechanical", None)
                     return
+            if prior.get("disposition") == "skip" and d.get("disposition") == "skip":
+                prior_reason = prior.get("reason")
+                new_reason = d.get("reason")
+                prior_rs = prior_reason.strip() if isinstance(prior_reason, str) else ""
+                new_rs = new_reason.strip() if isinstance(new_reason, str) else ""
+                if prior_rs != new_rs:
+                    _park_cannot_certify(state, "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid))
+                    state.pop("_judgmentFindings", None)
+                    state.pop("_judgmentMechanical", None)
+                    return
+                prior_fu = prior.get("followUp") if isinstance(prior.get("followUp"), dict) else None
+                new_fu = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
+                if session_contract.canonical(prior_fu or {}) != session_contract.canonical(new_fu or {}):
+                    _park_cannot_certify(state, "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid))
+                    state.pop("_judgmentFindings", None)
+                    state.pop("_judgmentMechanical", None)
+                    return
         by_id[fid] = d
     judgment = [f for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]
     row_ids = _judgment_row_ids(judgment)
@@ -3627,7 +3787,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     state.pop("_escalatedRung", None)
     state.pop("_fixQueue", None)
     state.pop("_fixBatchIndex", None)
-    _enter_post_fix(state, config)
+    _enter_post_fix(state, config, session_dir=session_dir)
 
 
 _VERIFY_SKIP = ("skipped", "none", "unverified")
@@ -3720,6 +3880,25 @@ def _audit_result_entry_fault(entry, index, target_ids):
             detail += ("; the artifact carries `newIssue` (singular) — the driver consumes "
                        "`newIssues`, a LIST")
         return detail
+    return None
+
+
+def synthesis_results_fault(artifact):
+    """None when a synthesis artifact satisfies the declared payload contract; otherwise a reason
+    string naming the offending field.
+
+    `grouping: null` (no merging proposed) is a real answer and is not a fault — only a missing,
+    mis-keyed, or mis-shaped `grouping` is refused at the submit chokepoint."""
+    if not isinstance(artifact, dict):
+        return ("synthesis artifact is %s, not a grouping object; expected {\"grouping\": ...}; "
+                "resubmit the same phase/attempt/state-hash with a corrected artifact"
+                % type(artifact).__name__)
+    if "grouping" not in artifact:
+        return ("synthesis artifact carries no `grouping` key; expected {\"grouping\": ...}; "
+                "resubmit the same phase/attempt/state-hash with a corrected artifact")
+    fault = payload_contracts.payload_fault(payload_contracts.P_SYNTHESIS, artifact, "hand-submit")
+    if fault is not None:
+        return fault
     return None
 
 
@@ -3949,20 +4128,43 @@ def _fold_verify(state, config, artifact, *, resolution):
     _enter_delta_round(state, config)
 
 
-def _enter_post_fix(state, config):
+def _try_reuse_ceiling_verify_gate(state, config, session_dir):
+    """Reuse the round's passing gate at the ceiling when the post-fix head matches.
+
+    A reuse is allowed only when ``verify_result_for_head`` returns ``"pass"`` for the post-fix
+    head resolved by ``_resolve_fix_fold_head_sha`` — the canonical verified-head reader. Every
+    other case — an unresolvable head, a non-pass result, or no prior verification for that head
+    — returns False so the ceiling gate runs (fail closed toward running it). On reuse, records
+    ``ceilingGateReused`` and parks ``round-ceiling``."""
+    if session_dir is None:
+        cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
+        post_fix_head = cfg.get(FIX_FOLD_HEAD_KEY)
+        if not (isinstance(post_fix_head, str) and post_fix_head):
+            return False
+    else:
+        post_fix_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+        if head_err or not post_fix_head:
+            return False
+    if session_contract.verify_result_for_head(state, post_fix_head) != "pass":
+        return False
+    _record_round(state, "ceilingGateReused", post_fix_head)
+    next_round = state["round"] + 1
+    brk = circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config))
+    detail = brk.get("detail") or "round ceiling reached"
+    detail = "%s (ceiling gate reused for post-fix head %s)" % (detail, post_fix_head)
+    _park_round_ceiling(state, detail)
+    return True
+
+
+def _enter_post_fix(state, config, session_dir=None):
     """After the round's last fix-batch slice folds: advance or run the gate at the ceiling."""
     next_round = state["round"] + 1
     if circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config)).get("halt"):
-        rnd_key = str(state["round"])
-        if state.get("rounds", {}).get(rnd_key, {}).get("verifyResult") is not None:
-            _record_round(state, "ceilingGateSkipped",
-                          "the round's gate already ran on an earlier head; the post-fix head is "
-                          "unverified by the loop — certification is withheld at the ceiling regardless")
-            if not _advance_round(state, config, reason="post-fix-advance"):
-                return
-            return
         # The round at the ceiling completes — fix AND gate — before the boundary refuses the next
-        # round (owner ruling 19-c, #1030). The gate runs alone here; its fold parks.
+        # round. Reuse the gate when it already passed on this post-fix head; otherwise run it on
+        # the post-fix head (including when the round's earlier gate ran on a different head).
+        if _try_reuse_ceiling_verify_gate(state, config, session_dir):
+            return
         state["_verifyThen"] = VERIFY_THEN_CEILING
         state["step"] = P_VERIFY
         return
@@ -4875,11 +5077,19 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
             if chan in disclosures:
                 rd[chan] = disclosures[chan]
         rounds.append(rd)
-    findings = [{"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
-                 "title": f.get("title"), "severity": f.get("severity"),
-                 "verdict": f.get("verdict"), "challenge": f.get("challenge"),
-                 "unverified": f.get("unverified")}
-                for f in (state.get("findings") or []) if isinstance(f, dict)]
+    findings = []
+    for f in (state.get("findings") or []):
+        if not isinstance(f, dict):
+            continue
+        row = {"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
+               "title": f.get("title"), "severity": f.get("severity"),
+               "verdict": f.get("verdict"), "challenge": f.get("challenge"),
+               "unverified": f.get("unverified")}
+        if (_state_version(state) or 0) >= STATE_SCHEMA_VERSION:
+            finding_key = f.get(session_contract.FINDING_KEY_FIELD)
+            if isinstance(finding_key, str) and finding_key:
+                row[session_contract.FINDING_KEY_FIELD] = finding_key
+        findings.append(row)
     cfg = state.get("config") or {}
     journal = read_journal(session_dir) if session_dir else None
     degraded, skipped_blockers = build_degraded_prose(state, form, journal=journal)
@@ -6563,8 +6773,6 @@ def _relocation_after_emission(journal, rnd, phase, attempt):
     # axis: a dispatch attempt with no emission row counts as stale when any move exists (fail closed)
     start = 0 if last_emit_idx is None else last_emit_idx + 1
     for event in journal[start:]:
-        if not isinstance(event, dict):
-            return _RELOCATION_EVIDENCE_INDETERMINATE
         if event.get("outcome") != "relocated":
             continue
         old_root = event.get("oldRoot")
@@ -6585,9 +6793,6 @@ def _relocation_lookup(session_dir, rnd, phase, attempt):
     journal, lossy = read_journal(session_dir, report_lossy=True)
     if lossy:
         return _RELOCATION_EVIDENCE_INDETERMINATE
-    for row in journal:
-        if not isinstance(row, dict):
-            return _RELOCATION_EVIDENCE_INDETERMINATE
     result = _relocation_after_emission(journal, rnd, phase, attempt)
     if result is _RELOCATION_EVIDENCE_INDETERMINATE:
         return result
@@ -6957,6 +7162,85 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
         return _lock_held_refusal(session_dir, "submit", held)
 
 
+def _judgment_skip_equiv(prior, new):
+    """True when two skip dispositions carry the same normalized reason and followUp."""
+    prior_reason = prior.get("reason")
+    new_reason = new.get("reason")
+    prior_rs = prior_reason.strip() if isinstance(prior_reason, str) else ""
+    new_rs = new_reason.strip() if isinstance(new_reason, str) else ""
+    if prior_rs != new_rs:
+        return False
+    prior_fu = prior.get("followUp") if isinstance(prior.get("followUp"), dict) else None
+    new_fu = new.get("followUp") if isinstance(new.get("followUp"), dict) else None
+    return session_contract.canonical(prior_fu or {}) == session_contract.canonical(new_fu or {})
+
+
+def judgment_disposition_collision_fault(artifact):
+    """Refuse duplicate judgment ids with conflicting dispositions before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    by_id = {}
+    raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    for disp in raw:
+        if not isinstance(disp, dict) or disp.get("id") is None:
+            continue
+        fid = disp.get("id")
+        prior = by_id.get(fid)
+        if prior is not None:
+            if prior.get("disposition") != disp.get("disposition"):
+                return "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid)
+            if prior.get("disposition") == "fix-with-guidance" \
+                    and disp.get("disposition") == "fix-with-guidance":
+                prior_g = prior.get("guidance")
+                new_g = disp.get("guidance")
+                prior_s = prior_g.strip() if isinstance(prior_g, str) else ""
+                new_s = new_g.strip() if isinstance(new_g, str) else ""
+                if prior_s != new_s:
+                    return "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid)
+            if prior.get("disposition") == "skip" and disp.get("disposition") == "skip":
+                if not _judgment_skip_equiv(prior, disp):
+                    return "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid)
+        by_id[fid] = disp
+    return None
+
+
+def judgment_follow_up_fault(artifact):
+    """Refuse malformed followUp on skip dispositions before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    for disp in raw:
+        if not isinstance(disp, dict) or disp.get("disposition") != "skip":
+            continue
+        reason = disp.get("reason")
+        if not (isinstance(reason, str) and reason.strip()):
+            # Reasonless skip is not honor-able — let _fold_judgment fail-closed instead.
+            continue
+        if "followUp" not in disp:
+            continue
+        fault = session_contract.follow_up_shape_fault(disp.get("followUp"))
+        if fault:
+            entry_id = disp.get("id") or "?"
+            _binding_failure, detail = fault
+            return "%s: %s: %s" % (FOLLOWUP_MALFORMED_CAUSE, entry_id, detail)
+    return None
+
+
+def stall_follow_up_fault(artifact):
+    """Refuse malformed followUp on accept-the-disclosed-risk before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    if artifact.get("choice") != ACCEPT_RISK_CHOICE:
+        return None
+    if "followUp" not in artifact:
+        return None
+    fault = session_contract.follow_up_shape_fault(artifact.get("followUp"))
+    if fault:
+        _binding_failure, detail = fault
+        return "%s: stall: %s" % (FOLLOWUP_MALFORMED_CAUSE, detail)
+    return None
+
+
 def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
     ok, loaded = load_state(session_dir)
     if not ok:
@@ -7124,6 +7408,25 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "verifier-results-shape"})
             return {"ok": False, "reason": fault}
+        fault = verifier_drop_staged_id_fault(state, artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "staged-id-unresolvable"})
+            return {"ok": False, "reason": fault}
+    if phase == P_SYNTHESIS:
+        fault = synthesis_results_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "synthesis-results-shape"})
+            return {"ok": False, "reason": fault}
+        fault = synthesis_staged_id_fault(state, artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "staged-id-unresolvable"})
+            return {"ok": False, "reason": fault}
     if phase == P_STALL:
         choice = artifact.get("choice") if isinstance(artifact, dict) else None
         if isinstance(choice, str) and choice in RETIRED_STALL_CHOICES:
@@ -7155,6 +7458,25 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": STALL_ACCEPT_RISK_NOT_ELIGIBLE})
             return {"ok": False, "reason": STALL_ACCEPT_RISK_NOT_ELIGIBLE}
+        fault = stall_follow_up_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "follow-up-malformed"})
+            return {"ok": False, "reason": fault}
+    if phase == P_JUDGMENT:
+        fault = judgment_disposition_collision_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": JUDGMENT_DISPOSITION_COLLISION_CAUSE})
+            return {"ok": False, "reason": fault}
+        fault = judgment_follow_up_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "follow-up-malformed"})
+            return {"ok": False, "reason": fault}
 
     # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.
     # `cmd_submit` never reads the durable store, so `record-result` (or `--sweep`) followed by a
@@ -9143,7 +9465,9 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
         if phase == P_FIXER:
             return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
     envelope_payload = envelope.get("payload")
-    if result_kind == session_contract.WRITE_RESULT_KIND:
+    if session_contract.evidence_binding(result_kind) == session_contract.EXECUTION_ONLY_BINDING:
+        # axis: write-run stamp proves the run happened under this order — no transported payload
+        # is bound; never read it as payload proof
         pass
     else:
         if not isinstance(envelope_payload, dict):
@@ -9811,6 +10135,9 @@ def _judgment_artifact_from_resolution(state, resolution):
         entry = {"id": row_ids[row_index], "disposition": disposition}
         if disposition == review_gate_policy.JUDGMENT_SKIP_DISPOSITION:
             entry["reason"] = _GATE_POLICY_SKIP_REASON
+            follow_up = rule.get("followUp")
+            if follow_up is not None:
+                entry["followUp"] = dict(follow_up)
         dispositions.append(entry)
     return {"dispositions": dispositions}
 

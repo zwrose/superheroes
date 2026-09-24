@@ -28,6 +28,8 @@ __all__ = (
     "TRANSIENT_FINDING_FIELDS",
     "VERIFIED_HEAD_FIELD",
     "DISPOSITIONS",
+    "FOLLOW_UP_FIELDS",
+    "follow_up_shape_fault",
     "DISPOSITION_LEDGER_KEY",
     "DISPOSITION_LEDGER_MALFORMED_TOKEN",
     "DispositionLedgerReadFault",
@@ -66,7 +68,14 @@ __all__ = (
     "fix_proof_path",
     "fix_still_present_at_head",
     "legacy_disposition_ledger_rows",
+    "legacy_key_collision",
+    "DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN",
+    "EXECUTION_ONLY_BINDING",
+    "PAYLOAD_BOUND_BINDING",
+    "evidence_binding",
     "verify_result_for_head",
+    "verified_head_for_round",
+    "verify_result_for_round",
     "RE_EMIT_CMD",
     "ORDERS_SUPERSEDED_OUTCOME",
     "journal_is_re_emit_orders_superseded",
@@ -76,6 +85,8 @@ __all__ = (
 TRANSIENT_FINDING_FIELDS = frozenset({
     "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
     "disposition", "dispositionReceipt",
+    "dispositionRound", "refutedReason", "outOfScopeReason", "followUp", "mergedInto",
+    "raisedRound",
 })
 
 SEAT_TRANSPORT_KEY = "transport"
@@ -93,6 +104,15 @@ SEAT_TRANSPORTS_DISCLOSED = (SEAT_TRANSPORT_NATIVE, SEAT_TRANSPORT_HAND_LANDED)
 
 # Result kind a write run's execution record carries — binds the run's own report, not a payload key.
 WRITE_RESULT_KIND = "evidence"
+EXECUTION_ONLY_BINDING = "execution-only"
+PAYLOAD_BOUND_BINDING = "payload-bound"
+
+
+def evidence_binding(result_kind):
+    """Which binding a result kind carries — the one home for write-run vs payload-bound kinds."""
+    if result_kind == WRITE_RESULT_KIND:
+        return EXECUTION_ONLY_BINDING
+    return PAYLOAD_BOUND_BINDING
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 
@@ -121,8 +141,36 @@ VERIFIED_HEAD_FIELD = "verifiedHead"
 FINDING_KEY_FIELD = "findingKey"
 
 DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
+FOLLOW_UP_FIELDS = ("item", "revisitTrigger", "classClosure")
+
+
+def follow_up_shape_fault(follow_up, *, require_item=True):
+    """None when followUp is fully shaped; otherwise (binding_failure, detail).
+
+    With ``require_item=True`` a missing ``item`` is refused; with ``require_item=False`` a missing
+    ``item`` passes, but a present-but-empty or non-string ``item`` is still refused."""
+    if not isinstance(follow_up, dict):
+        return (None, "out-of-scope disposition lacks named follow-up item")
+    if require_item and "item" not in follow_up:
+        return ("missing-follow-up-item", "out-of-scope follow-up lacks named item")
+    if "item" in follow_up:
+        item = follow_up.get("item")
+        if not isinstance(item, str) or not item.strip():
+            return ("missing-follow-up-item", "out-of-scope follow-up lacks named item")
+    trigger = follow_up.get("revisitTrigger")
+    if not isinstance(trigger, str) or not trigger.strip():
+        return ("missing-revisit-trigger", "out-of-scope follow-up lacks revisit trigger")
+    if "documented" in trigger.lower():
+        return (None, "revisit trigger must not be the word documented")
+    closure = follow_up.get("classClosure")
+    if not isinstance(closure, str) or not closure.strip():
+        return ("missing-class-closure", "out-of-scope follow-up lacks class-closure line")
+    return None
+
+
 DISPOSITION_LEDGER_KEY = "dispositionLedger"
 DISPOSITION_LEDGER_MALFORMED_TOKEN = "disposition-ledger-malformed"
+DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN = "disposition-ledger-legacy-key-collision"
 DISPOSITION_LEDGER_OWNER_FIELD = "dispositionLedgerOwner"
 DISPOSITION_LEDGER_OWNER_VALUE = "ledger"
 DISPOSITION_LEDGER_OWNER_ABSENT = "absent"
@@ -196,6 +244,26 @@ def legacy_disposition_ledger_rows(state):
         key = finding_identity_key(finding)
         if key:
             yield key, finding
+
+
+def legacy_key_collision(rows):
+    """Return (bare_key, minted_key) when a legacy-bare row collides with a minted-key twin."""
+    identity_keys = set()
+    legacy_pairs = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        identity = finding_identity_key(row)
+        bare = location_key(row)
+        minted = minted_identity_key(row)
+        if identity:
+            identity_keys.add(identity)
+        if identity == bare and bare != minted:
+            legacy_pairs.append((bare, minted))
+    for bare, minted in legacy_pairs:
+        if minted in identity_keys:
+            return bare, minted
+    return None
 
 
 def disposition_ledger_owner_classification(state):
@@ -472,6 +540,45 @@ def fix_still_present_at_head(finding, receipt, head, read_outcome, by_key=None)
             "fixed disposition fix is not present in content at the certified head",
         )
     return None
+
+
+def _round_record(state, round_num):
+    if not isinstance(state, dict):
+        return None
+    rounds = state.get("rounds")
+    if not isinstance(rounds, dict):
+        return None
+    try:
+        key = str(int(round_num))
+    except (TypeError, ValueError):
+        return None
+    rec = rounds.get(key)
+    return rec if isinstance(rec, dict) else None
+
+
+def verified_head_for_round(state, round_num):
+    """The verified head recorded on round ``round_num``, or None (fail-closed)."""
+    rec = _round_record(state, round_num)
+    if rec is None:
+        return None
+    verified = rec.get(VERIFIED_HEAD_FIELD)
+    if isinstance(verified, str) and verified:
+        return verified
+    return None
+
+
+def verify_result_for_round(state, round_num):
+    """The verify result recorded on round ``round_num``, or None (fail-closed).
+
+    Returns None when the round record is missing or when ``verifiedHead`` is absent or not a
+    non-empty string — the verified-head fact is never inferred from other fields."""
+    rec = _round_record(state, round_num)
+    if rec is None:
+        return None
+    verified = rec.get(VERIFIED_HEAD_FIELD)
+    if not isinstance(verified, str) or not verified:
+        return None
+    return rec.get("verifyResult")
 
 
 def verify_result_for_head(state, head):

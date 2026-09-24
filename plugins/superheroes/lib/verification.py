@@ -272,6 +272,49 @@ def _merge_group(members):
     return merged
 
 
+def _coverage_fault_from_seen(expected, seen):
+    """Shared exact-once rule: None when ``seen`` covers ``expected`` exactly once."""
+    seen_set = set(seen)
+    if seen_set == expected and len(seen) == len(expected):
+        return None
+    missing = expected - seen_set
+    if missing:
+        return {"kind": "omits", "member_id": sorted(missing)[0]}
+    extra = seen_set - expected
+    if extra:
+        return {"kind": "extra", "member_id": sorted(extra)[0]}
+    return {"kind": "incomplete"}
+
+
+def grouping_coverage_fault(survivors, grouping):
+    """Structured fault when grouping does not cover every id-bearing survivor exactly once.
+
+    Returns None when coverage is exact-once, or when ``grouping`` is empty (no obligation).
+    Otherwise returns a dict with ``kind`` in (``duplicate_member``, ``omits``, ``extra``,
+    ``incomplete``) and supporting keys for refusal messaging."""
+    if not isinstance(grouping, list) or not grouping:
+        return None
+    survivor_ids = [
+        s["id"] for s in survivors
+        if isinstance(s, dict) and isinstance(s.get("id"), str)
+    ]
+    expected = set(survivor_ids)
+    seen = []
+    for index, group in enumerate(grouping):
+        if not isinstance(group, dict):
+            continue
+        member_ids = group.get("member_ids")
+        if not isinstance(member_ids, list):
+            continue
+        for member_id in member_ids:
+            if not isinstance(member_id, str):
+                continue
+            if member_id in seen:
+                return {"kind": "duplicate_member", "member_id": member_id, "index": index}
+            seen.append(member_id)
+    return _coverage_fault_from_seen(expected, seen)
+
+
 def _valid_grouping(survivors, grouping):
     if grouping is None or not isinstance(grouping, list):
         return None
@@ -297,7 +340,7 @@ def _valid_grouping(survivors, grouping):
             "group_id": g.get("group_id"),
             "member_ids": list(member_ids),
         })
-    if set(seen) != expected or len(seen) != len(expected):
+    if _coverage_fault_from_seen(expected, seen) is not None:
         return None
     return groups
 

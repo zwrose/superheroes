@@ -13,6 +13,7 @@ import os
 
 import panel_tally
 import round_phases
+import session_contract
 
 GATE_POLICY_SCHEMA = "gate-policy/1"
 GATE_PRESENT_JUDGMENT = "present-judgment"
@@ -169,13 +170,27 @@ def _validate_layer(
         ):
             return None, "layer-disposition-not-allowed"
 
-        normalized_rules.append(
-            {
-                "gate": gate,
-                "findingClass": finding_class,
-                "disposition": disposition,
-            }
-        )
+        follow_up = None
+        if "followUp" in rule:
+            follow_up = rule["followUp"]
+            allowed = (
+                (gate == GATE_PRESENT_JUDGMENT and disposition == JUDGMENT_SKIP_DISPOSITION)
+                or (gate == GATE_PRESENT_STALL_MENU and disposition == ACCEPT_RISK_CHOICE)
+            )
+            if not allowed:
+                return None, "layer-follow-up-not-allowed"
+            fault = session_contract.follow_up_shape_fault(follow_up)
+            if fault is not None:
+                return None, "layer-follow-up-malformed"
+
+        normalized_rule = {
+            "gate": gate,
+            "findingClass": finding_class,
+            "disposition": disposition,
+        }
+        if follow_up is not None:
+            normalized_rule["followUp"] = dict(follow_up)
+        normalized_rules.append(normalized_rule)
 
     identity = {"source": source, "schema": GATE_POLICY_SCHEMA, "sha256": sha256}
     return {
@@ -224,6 +239,18 @@ def validate_policy_for_write(policy: object) -> str | None:
         if not isinstance(disposition, str) or disposition not in allowed:
             return "rules[%d].disposition for gate %s class %s must be one of %s (got %r)" % (
                 index, gate, finding_class, ", ".join(allowed), disposition)
+        if "followUp" in rule:
+            follow_up = rule["followUp"]
+            follow_up_allowed = (
+                (gate == GATE_PRESENT_JUDGMENT and disposition == JUDGMENT_SKIP_DISPOSITION)
+                or (gate == GATE_PRESENT_STALL_MENU and disposition == ACCEPT_RISK_CHOICE)
+            )
+            if not follow_up_allowed:
+                return "rules[%d].followUp: not allowed for disposition %r" % (index, disposition)
+            fault = session_contract.follow_up_shape_fault(follow_up)
+            if fault is not None:
+                _binding, detail = fault
+                return "rules[%d].followUp: %s" % (index, detail)
     source = "calibration/write-check"
     raw = json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
@@ -392,12 +419,13 @@ def resolve_judgment(rows: list, overlay: dict | None = None) -> dict:
                 "layer": dict(layer["identity"]),
             }
         )
-        dispositions.append(
-            {
-                "findingClass": finding_class,
-                "disposition": rule["disposition"],
-            }
-        )
+        disp = {
+            "findingClass": finding_class,
+            "disposition": rule["disposition"],
+        }
+        if "followUp" in rule:
+            disp["followUp"] = dict(rule["followUp"])
+        dispositions.append(disp)
 
     return {
         "action": {"dispositions": dispositions},
@@ -424,8 +452,11 @@ def resolve_stall(stall_class: str, overlay: dict | None = None) -> dict:
         if rec.get("identity") == layer["identity"]:
             rec["used"] = True
 
+    action = {"choice": rule["disposition"]}
+    if "followUp" in rule:
+        action["followUp"] = dict(rule["followUp"])
     return {
-        "action": {"choice": rule["disposition"]},
+        "action": action,
         "reason": None,
         "layers": records,
         "matches": [

@@ -474,6 +474,10 @@ def test_durable_skeleton_carries_finding_key_so_resume_keeps_one_identity():
     assert SC.FINDING_KEY_FIELD not in bare_skeleton["findings"][0]
 
 
+# Line-less stall alias — a different identity on purpose (audit-stall breaker, stall matching).
+STALL_ALIAS = "finding_identity"
+
+
 def test_identity_derivation_has_one_home_census():
     """Census: identity derivation lives only in session_contract except _mint_finding_keys."""
     import ast
@@ -486,7 +490,15 @@ def test_identity_derivation_has_one_home_census():
         "_loop_minted_key", "_title_clamp_hash_suffix", "_location_id",
         "_finding_content_canonical", "_content_hash_suffix",
     }
-    modules = ("round_driver", "round_certification", "round_records", "verification")
+    # review_memory.clamp_title is the canonical home of clamp_title; other modules may call it.
+    REVIEW_MEMORY_ALLOWED_CALLS = frozenset({"clamp_title"})
+    modules = ("round_driver", "round_certification", "round_records", "verification",
+               "audits", "review_memory")
+    assert STALL_ALIAS not in forbidden_calls
+    audits_path = os.path.join(_LIB, "audits.py")
+    with open(audits_path, encoding="utf-8") as fh:
+        audits_src = fh.read()
+    assert "from finding_identity import finding_identity" in audits_src
     for mod_name in modules:
         path = os.path.join(_LIB, mod_name + ".py")
         with open(path, encoding="utf-8") as fh:
@@ -512,6 +524,8 @@ def test_identity_derivation_has_one_home_census():
             elif isinstance(func, ast.Attribute):
                 name = func.attr
             if name in forbidden_calls:
+                if mod_name == "review_memory" and name in REVIEW_MEMORY_ALLOWED_CALLS:
+                    continue
                 raise AssertionError("%s calls forbidden %s at line %s" % (mod_name, name, node.lineno))
     rd_path = os.path.join(_LIB, "round_driver.py")
     with open(rd_path, encoding="utf-8") as fh:
