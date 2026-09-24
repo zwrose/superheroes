@@ -8,6 +8,7 @@ Re-taken at head d0ff2866 plus WO-B3 latch and absent-auditor guard fixes.
 | B2 | durable-path emission guard in `_emit_orders_manifest` | `test_t2_cmd_next_refuses_claude_auditor` |
 | B3 | absent-auditor clause in emission guard | `test_t2b_emit_orders_manifest_refuses_missing_auditor_vendor` |
 | B4 | `_advanceUsed` latch in `_audit_targets` | `test_explicit_cross_family_fixer_still_independent_two_vendor` |
+| B5 | independent-host-live refusal in `_auditor_vendor` | `test_t8_cmd_next_refuses_same_family_fallback_when_independent_host_live` |
 
 ## B1 — runner-only candidate filter in `independent_auditor`
 
@@ -254,4 +255,67 @@ FAILED plugins/superheroes/lib/tests/test_round_driver.py::test_explicit_cross_f
 ```
 .                                                                        [100%]
 1 passed in 1.16s
+```
+
+## B5 — fail closed when the independent auditor cannot prove it ran
+
+**Axis:** durable-path auditor selection refuses when a family-independent vendor is live only as a host seat.
+
+**Guarded code:** `round_driver._auditor_vendor` (`independent_auditor(..., runner_only=False)` check in runner-only branch)
+
+**Neutralization:**
+
+```python
+        if False and host_independent is not None:
+            return None, "unseatable"
+```
+
+**Detector:** `test_t8_cmd_next_refuses_same_family_fallback_when_independent_host_live`
+
+**Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_t8_cmd_next_refuses_same_family_fallback_when_independent_host_live ___
+
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-5903/test_t8_cmd_next_refuses_same_0')
+
+    def test_t8_cmd_next_refuses_same_family_fallback_when_independent_host_live(tmp_path):
+        session_dir, _gitdir, _head_path = _bootstrap(
+            tmp_path, vendors=["claude", "codex"], fixerVendor="codex")
+        state = _state(session_dir)
+        state["config"]["vendors"] = ["claude", "codex"]
+        state["config"]["fixerVendor"] = "codex"
+        state["step"] = P_AUDITS
+        state["round"] = 1
+        state["pending"] = None
+        state["_advanceUsed"] = True
+        state["headDiff"] = HEAD_DIFF
+        state["fixBatch"] = [_blocking_finding("missing bounds guard", 2)]
+        state["_auditTargets"] = round_driver._audit_targets(state, state["config"], {})
+        round_driver.save_state(session_dir, state)
+        manifest_path = _orders_manifest_path(session_dir, 1, 0)
+        out = round_driver.cmd_next(session_dir)
+>       assert out["ok"] is False
+E       assert True is False
+
+plugins/superheroes/lib/tests/test_layer4a_auditor_seat_time_1272.py:257: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_layer4a_auditor_seat_time_1272.py::test_t8_cmd_next_refuses_same_family_fallback_when_independent_host_live
+1 failed, 15 deselected in 9.99s
+```
+
+**Restore (quoted restored lines):**
+
+```python
+        if host_independent is not None:
+            return None, "unseatable"
+```
+
+**Green:**
+
+```
+.                                                                        [100%]
+1 passed, 15 deselected in 4.23s
 ```

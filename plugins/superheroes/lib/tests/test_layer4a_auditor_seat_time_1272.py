@@ -27,6 +27,7 @@ _state = _TDI._state
 _land = _TDI._land
 _payload_for = _TDI._payload_for
 _blocking_finding = _TDI._blocking_finding
+HEAD_DIFF = _TDI.HEAD_DIFF
 FINDING_SEAT = _TDI.FINDING_SEAT
 P_AUDITS = round_driver.P_AUDITS
 
@@ -95,9 +96,30 @@ def test_t1_edge2_codex_cursor_fixer_cursor_unchanged():
 
 
 def test_t1_edge3_claude_codex_fixer_codex_runner_vs_hand():
-    """Edge 3 — codex fixer: degraded codex on durable path, claude independent on hand path."""
+    """Edge 1 — durable path refuses: independent claude cannot prove it ran; hand unchanged."""
     cfg = {"vendors": ["claude", "codex"], "fixerVendor": "codex"}
+    assert round_driver._auditor_vendor(cfg, "codex", runner_only=True) == (None, "unseatable")
+    assert round_driver._auditor_vendor(cfg, "codex", runner_only=False) == ("claude", "independent")
+
+
+def test_t1_e2_claude_cursor_fixer_cursor_durable_unseatable():
+    """Edge 2 — claude/cursor pool with cursor fixer refuses on durable path."""
+    cfg = {"vendors": ["claude", "cursor"], "fixerVendor": "cursor"}
+    assert round_driver._auditor_vendor(cfg, "cursor", runner_only=True) == (None, "unseatable")
+    assert round_driver._auditor_vendor(cfg, "cursor", runner_only=False) == ("claude", "independent")
+
+
+def test_t1_e3_codex_only_fixer_codex_degraded():
+    """Edge 3 — no independent vendor live at all: degraded same-family fallback."""
+    cfg = {"vendors": ["codex"], "fixerVendor": "codex"}
     assert round_driver._auditor_vendor(cfg, "codex", runner_only=True) == ("codex", "degraded")
+    assert round_driver._auditor_vendor(cfg, "codex", runner_only=False) == ("codex", "degraded")
+
+
+def test_t1_e5_three_vendor_independent_runner_wins():
+    """Edge 5 — independent runner vendor wins before host-only refusal."""
+    cfg = {"vendors": ["claude", "codex", "cursor"], "fixerVendor": "codex"}
+    assert round_driver._auditor_vendor(cfg, "codex", runner_only=True) == ("cursor", "independent")
     assert round_driver._auditor_vendor(cfg, "codex", runner_only=False) == ("claude", "independent")
 
 
@@ -214,3 +236,29 @@ def test_t5_record_result_panel_not_refused(tmp_path):
     out = round_driver.cmd_record_result(session_dir, FINDING_SEAT)
     assert out["ok"] is True
     assert out.get("reason") != round_driver.AUDITOR_UNSEATABLE_CAUSE
+
+
+def test_t8_cmd_next_refuses_same_family_fallback_when_independent_host_live(tmp_path):
+    session_dir, _gitdir, _head_path = _bootstrap(
+        tmp_path, vendors=["claude", "codex"], fixerVendor="codex")
+    state = _state(session_dir)
+    state["config"]["vendors"] = ["claude", "codex"]
+    state["config"]["fixerVendor"] = "codex"
+    state["step"] = P_AUDITS
+    state["round"] = 1
+    state["pending"] = None
+    state["_advanceUsed"] = True
+    state["headDiff"] = HEAD_DIFF
+    state["fixBatch"] = [_blocking_finding("missing bounds guard", 2)]
+    state["_auditTargets"] = round_driver._audit_targets(state, state["config"], {})
+    round_driver.save_state(session_dir, state)
+    manifest_path = _orders_manifest_path(session_dir, 1, 0)
+    out = round_driver.cmd_next(session_dir)
+    assert out["ok"] is False
+    assert out["reason"] == round_driver.AUDITOR_UNSEATABLE_CAUSE
+    assert not os.path.exists(manifest_path)
+    rows = _journal_refused(session_dir, "next", round_driver.AUDITOR_UNSEATABLE_CAUSE)
+    assert len(rows) == 1
+    detail = out.get("detail") or rows[0].get("detail") or ""
+    assert "claude" in detail
+    assert "hand" in detail

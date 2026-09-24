@@ -1010,6 +1010,10 @@ def _auditor_vendor(config, fixer_vendor, runner_only=False):
         return vendor, "independent"
     live = _live_vendors(config)
     if runner_only:
+        host_independent, _fam = receipt_disclosures.independent_auditor(
+            config, fixer_vendor, runner_only=False)
+        if host_independent is not None:
+            return None, "unseatable"
         for v in live:
             if session_contract.runner_channel_vendor(v):
                 return v, "degraded"
@@ -9111,12 +9115,24 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             if not isinstance(target, dict):
                 continue
             if not session_contract.runner_channel_vendor(target.get("auditorVendor")):
-                detail = (
-                    "The durable-record path requires a fix auditor dispatched through the runner "
-                    "(codex or cursor), but none is among this session's vendors. "
-                    "Start a fresh session seeded with --vendors naming a runner vendor "
-                    "(for example codex or cursor), or use hand next/submit for the whole session."
-                )
+                host_independent, _fam = receipt_disclosures.independent_auditor(
+                    cfg, cfg.get("fixerVendor"), runner_only=False)
+                if host_independent is not None:
+                    detail = (
+                        "The durable-record path requires a fix auditor dispatched through the "
+                        "runner (codex or cursor). The independent-family auditor vendor "
+                        "%s is live but cannot prove it ran on the durable-record path, so the "
+                        "fix cannot be audited independently. Start a fresh session whose "
+                        "--vendors names a second runner vendor (codex or cursor) of a different "
+                        "family from the fixer, or use hand next/submit for the whole session."
+                        % host_independent)
+                else:
+                    detail = (
+                        "The durable-record path requires a fix auditor dispatched through the "
+                        "runner (codex or cursor), but none is among this session's vendors. "
+                        "Start a fresh session seeded with --vendors naming a runner vendor "
+                        "(for example codex or cursor), or use hand next/submit for the whole "
+                        "session.")
                 raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
     seats = {}
