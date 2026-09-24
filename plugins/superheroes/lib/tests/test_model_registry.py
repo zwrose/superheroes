@@ -1,7 +1,9 @@
 import copy
+import importlib.abc
 import importlib.util
 import os
 import re
+import subprocess
 import sys
 
 import pytest
@@ -524,27 +526,51 @@ def test_claude_dispatch_tokens_round_trip_through_parse_dispatch_token():
         assert MR.parse_dispatch_token("claude", token) is not None, token
 
 
-_REVIEWER_DEEP_CLAUDE = ("opus-5", "xhigh")
-_REVIEWER_DEEP_CODEX = ("gpt-5.6-sol", "xhigh")
-_REVIEWER_DEEP_CURSOR = ("cursor-grok-4.6", "xhigh")
-_REVIEWER_CLAUDE = ("sonnet-5", "high")
-_REVIEWER_CODEX = ("gpt-5.6-terra", "high")
-_REVIEWER_CURSOR = ("cursor-grok-4.6", "xhigh")
-_VERIFIER_CLAUDE = ("opus-5", "high")
-_VERIFIER_CODEX = ("gpt-5.6-sol", "high")
-_VERIFIER_CURSOR = ("cursor-grok-4.6", "xhigh")
+# Pre-child head of this work item's child.
+_PRE_CHILD_HEAD = "aaf27b8089159c2ea4020b03ccbddcd263c57e8a"
+_REGISTRY_PATH = "plugins/superheroes/lib/model_registry.py"
 
 
+class _GitShowLoader(importlib.abc.Loader):
+    def __init__(self, source):
+        self._source = source
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        exec(compile(self._source, "<git-show>", "exec"), module.__dict__)
+
+
+def _load_model_registry_at_sha(sha):
+    toplevel = subprocess.run(
+        ["git", "-C", _HERE, "rev-parse", "--show-toplevel"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    proc = subprocess.run(
+        ["git", "-C", toplevel, "show", f"{sha}:{_REGISTRY_PATH}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    name = f"_model_registry_snapshot_{sha[:12]}"
+    spec = importlib.util.spec_from_loader(name, _GitShowLoader(proc.stdout))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# axis: reviewer-deep, reviewer, and verifier matrix cells at the live registry match the pre-child head baseline.
 def test_matrix_cells_reviewer_roles_unchanged_at_base():
-    assert MR.matrix_config("reviewer-deep", "claude") == _REVIEWER_DEEP_CLAUDE
-    assert MR.matrix_config("reviewer-deep", "codex") == _REVIEWER_DEEP_CODEX
-    assert MR.matrix_config("reviewer-deep", "cursor") == _REVIEWER_DEEP_CURSOR
-    assert MR.matrix_config("reviewer", "claude") == _REVIEWER_CLAUDE
-    assert MR.matrix_config("reviewer", "codex") == _REVIEWER_CODEX
-    assert MR.matrix_config("reviewer", "cursor") == _REVIEWER_CURSOR
-    assert MR.matrix_config("verifier", "claude") == _VERIFIER_CLAUDE
-    assert MR.matrix_config("verifier", "codex") == _VERIFIER_CODEX
-    assert MR.matrix_config("verifier", "cursor") == _VERIFIER_CURSOR
+    base = _load_model_registry_at_sha(_PRE_CHILD_HEAD)
+    compared = 0
+    for role in ("reviewer-deep", "reviewer", "verifier"):
+        for vendor in ("claude", "codex", "cursor"):
+            assert MR.matrix_config(role, vendor) == base.matrix_config(role, vendor)
+            compared += 1
+    assert compared == 9
 
 
 def _plant_probe_pending_astra(monkeypatch):
@@ -557,7 +583,7 @@ def _plant_probe_pending_astra(monkeypatch):
 
 def test_registered_astra_on_reviewer_deep_allowlist_and_probe_role_admits():
     assert MR.allowlist("reviewer-deep", "codex") == (
-        (_REVIEWER_DEEP_CODEX[0], _REVIEWER_DEEP_CODEX[1]),
+        MR.matrix_config("reviewer-deep", "codex"),
         ("gpt-6-astra", "high"),
     )
     assert MR.allowlist("registration-probe", "codex") == (("gpt-6-astra", "high"),)
@@ -584,7 +610,7 @@ def test_planted_probe_pending_astra_hidden_from_ladder_and_allowlist(monkeypatc
     _plant_probe_pending_astra(monkeypatch)
     assert ("gpt-6-astra", "high") not in MR.ladder("codex")
     assert MR.allowlist("reviewer-deep", "codex") == (
-        (_REVIEWER_DEEP_CODEX[0], _REVIEWER_DEEP_CODEX[1]),
+        MR.matrix_config("reviewer-deep", "codex"),
     )
 
 

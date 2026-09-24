@@ -185,7 +185,9 @@ the steer channel.
 `gpt-6-astra` is registered as the codex top rung and a valid `reviewer-deep` pin at effort `high`.
 A consumer meets:
 
-- the `registration-probe` role (for a future probe-pending model);
+- the `registration-probe` role the registration probe dispatches under — today its only cell is
+  Astra (`gpt-6-astra` at `high`), which has passed; it stays for any model registered
+  probe-pending later;
 - `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
   wave is re-attempted with a different run dir);
 - pin refusal tokens `pin-probe-pending` (for a future probe-pending model), `pin-role-not-eligible`,

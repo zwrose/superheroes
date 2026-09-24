@@ -1,4 +1,6 @@
 """Shared fixture helpers for round_certification tests — test tree only, no driver imports."""
+import base64
+import hashlib
 import json
 import os
 import shutil
@@ -6,6 +8,7 @@ import shutil
 import record_paths
 import round_certification as RC
 import round_records as RR
+import session_contract
 
 GENERATED_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "fixtures", "round_certification_generated")
@@ -164,7 +167,7 @@ def _minimal_terminal_state():
 _LEGACY_TYPED_RESULT_DIGEST = "e" * 64
 
 
-def _binding_fields(nonce, *, result_digest=None):
+def _binding_fields(nonce="test-nonce", *, result_digest=None):
     digest = (
         result_digest
         if isinstance(result_digest, str) and result_digest
@@ -177,6 +180,86 @@ def _binding_fields(nonce, *, result_digest=None):
         "resultDigest": digest,
         "resultKind": "findings",
     }
+
+
+def _dispatch_journal_with_binding(
+    seat="code-reviewer",
+    payload_sha=DEFAULT_PANEL_PAYLOAD_SHA,
+    *,
+    nonce="test-nonce",
+    attempt=0,
+    head_sha=HEAD_SHA,
+    read="engaged",
+):
+    evidence = {
+        "read": read,
+        "source": "runner",
+        "telemetry": "tool-calls",
+        "stdoutBytes": 10,
+        "wallSeconds": 1.0,
+        "toolCalls": 1,
+        **_binding_fields(nonce, result_digest=DEFAULT_FINDINGS_RESULT_SHA),
+    }
+    row = {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": PANEL_PHASE,
+        "round": 1,
+        "attempt": attempt,
+        "seat": seat,
+        "occurrence": 0,
+        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+        "payloadSha256": payload_sha,
+        "executionEvidence": evidence,
+        "recordIdentity": {
+            "phase": PANEL_PHASE,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": attempt,
+        },
+    }
+    if head_sha is not None:
+        row["headSha"] = head_sha
+    return row
+
+
+def _hand_landed_binding_journal_row(seat, payload_sha, evidence, *, attempt=0):
+    return {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": PANEL_PHASE,
+        "round": 1,
+        "attempt": attempt,
+        "seat": seat,
+        "provenance": RC.PROVENANCE_HAND_LANDED,
+        "payloadSha256": payload_sha,
+        "executionEvidence": {
+            field: evidence[field]
+            for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
+        },
+        "recordIdentity": {
+            "phase": PANEL_PHASE,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": attempt,
+        },
+    }
+
+
+_FIX_PRESENT_BYTES = b"fix present\n"
+
+
+def _head_content_read_row(path, content_bytes, head=HEAD_SHA):
+    digest = hashlib.sha256(content_bytes).hexdigest()
+    return {
+        "headSha": head,
+        "path": path,
+        "contentDigest": digest,
+        "bytes": len(content_bytes),
+        "readAt": "2026-01-01T00:00:00Z",
+        "source": "git-show",
+        "readError": None,
+    }, digest
 
 
 def _observation_fields(*, read="engaged", tool_calls=1):
@@ -406,8 +489,8 @@ def _default_journal_row():
     }
 
 
-def _head_content_blobs_for_findings(findings, head):
-    fix_commits = []
+def _head_content_blobs_for_findings(findings, head=HEAD_SHA):
+    reads = []
     files = {}
     for finding in findings:
         if not isinstance(finding, dict):
@@ -417,17 +500,51 @@ def _head_content_blobs_for_findings(findings, head):
         path = finding.get("file")
         if not isinstance(path, str) or not path:
             continue
-        fix_commits.append({"headSha": head, "path": path, "present": True})
-        files[path] = "fix present\n"
-    if not fix_commits:
+        row, _digest = _head_content_read_row(path, _FIX_PRESENT_BYTES, head)
+        reads.append(row)
+        files[path] = base64.b64encode(_FIX_PRESENT_BYTES).decode("ascii")
+    if not reads:
         return None
-    return {"headSha": head, "files": files, "fixCommits": fix_commits}
+    return {
+        "schema": session_contract.HEAD_CONTENT_BLOBS_SCHEMA,
+        "headSha": head,
+        "files": files,
+        "reads": reads,
+    }
 
 
 def _write_head_content_blobs(session_dir, blobs):
     path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(blobs, fh, sort_keys=True)
+
+
+def write_certifiable_session(tmp_path, **kwargs):
+    """Session with binding telemetry and head-content evidence for fixed findings."""
+    state = kwargs.get("state")
+    if state is None:
+        state = {}
+    elif not isinstance(state, dict):
+        state = {}
+    kwargs = dict(kwargs)
+    kwargs["state"] = state
+    if kwargs.get("journal_lines") is None:
+        kwargs["journal_lines"] = [_dispatch_journal_with_binding()]
+    session_dir = write_session(tmp_path, **kwargs)
+    findings = (state.get("findings") if state else None) or []
+    blobs = _head_content_blobs_for_findings(findings)
+    if blobs is None:
+        blobs = _head_content_blobs_for_findings(
+            [
+                {
+                    "id": "F1",
+                    "file": "a.py",
+                    "disposition": "fixed",
+                }
+            ]
+        )
+    _write_head_content_blobs(session_dir, blobs)
+    return session_dir
 
 
 def parity_converged_single_round(tmp_path):
