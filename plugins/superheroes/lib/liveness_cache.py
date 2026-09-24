@@ -11,7 +11,6 @@ import tempfile
 from collections import Counter
 
 import mode_registry
-import model_registry
 
 # Bump when probe configuration semantics change so legacy receipts cannot be
 # reused (#711: effort is now enforced per (model, effort) pair; v1 receipts

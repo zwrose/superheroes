@@ -18829,6 +18829,36 @@ def test_retire_no_identity_row_stopped(monkeypatch):
     assert ED.retire(handle) == "stopped"
 
 
+def test_retire_same_id_live_row_under_prefix_child_is_unconfirmed(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (1, "", "stop failed"))
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: (
+            [{"kind": "background", "cwd": "/wt/child", "id": "abc12345", "pid": 4242, "state": "working"}],
+            True,
+        ),
+    )
+    handle = ED.BackgroundHandle("abc12345", 4242, "/wt", "/cfg")
+    assert ED.retire(handle) == background_outcome.REFUSAL_STOP_UNCONFIRMED
+
+
+def test_retire_other_id_row_under_prefix_child_stopped(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: (
+            [{"kind": "background", "cwd": "/wt/child", "id": "other999", "pid": 4242, "state": "working"}],
+            True,
+        ),
+    )
+    handle = ED.BackgroundHandle("abc12345", 4242, "/wt", "/cfg")
+    assert ED.retire(handle) == "stopped"
+
+
 def test_acquire_background_handle_unlisted_no_pid(monkeypatch):
     monkeypatch.setattr(
         ED, "_claude_agents_rows",

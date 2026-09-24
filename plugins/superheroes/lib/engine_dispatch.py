@@ -1059,7 +1059,7 @@ def retire(handle):
         except OSError:
             return background_outcome.REFUSAL_STOP_UNCONFIRMED
         rows, listing_ok = _claude_agents_rows(handle.configDir, handle.cwd)
-        if listing_ok and not background_identity_rows(rows, handle.cwd, handle.backgroundId):
+        if listing_ok and not _launch_id_rows(rows, handle.backgroundId):
             return "stopped"
         if poll < 5:
             _SLEEP(0.5)
