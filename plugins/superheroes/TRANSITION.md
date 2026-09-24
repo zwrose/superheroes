@@ -126,8 +126,13 @@ exist yet, now refuses. `launch-foreign-instance-pin` and `--allow-foreign-insta
   background session idles alive after its turn. `claude stop <backgroundId>` under the lane's
   config root clears it.
 
-`seat_canary probe` accepts `--engine claude --claude-mode {print,background}`, and its
-`evidence.engagementSource` names where `toolCalls` came from (`claude-transcript` for background).
+`seat_canary lane --repo-root <r> --launch-id <id>` is the launcher's canary for a builder lane.
+It counts the tool calls in the lane's session transcript, which it finds through the session id
+and config root the launcher recorded, and never through anything the lane wrote. It reports
+`engaged` only for at least one tool call, and exits 1 on a refusal: `lane-unknown`,
+`lane-session-unrecorded` (a lane launched before this layer), `lane-transcript-unresolved`,
+`lane-transcript-ambiguous`, `lane-transcript-unreadable` or `lane-ledger-unreadable`.
+`seat_canary probe`'s `evidence.engagementSource` names where `toolCalls` came from.
 
 ### Astra and the codex role pin
 

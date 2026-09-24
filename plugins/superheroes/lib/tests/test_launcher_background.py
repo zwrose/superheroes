@@ -5,7 +5,8 @@ D1 no claude argv minted outside engine_adapter; D2 the launcher reaches the ada
 argv; D3 a config root that cannot hold a lane refuses; D4 an acknowledgement alone is never a
 launched lane, and a refusal is recorded only after a confirmed stop; D5 older readers see a
 new lane live (the session pid, not the acknowledging process); D6 the builder role's refusals;
-D7 the new `started` fields' grammar and precedence.
+D7 the new `started` fields' grammar and precedence; item 3 the launcher's lane canary reads
+the lane's transcript through the identity the launcher recorded.
 """
 import ast
 import io
@@ -637,40 +638,76 @@ def test_fold_refuses_a_reserved_session_id_that_disagrees(tmp_path, monkeypatch
             assert folded["reason"] == "fold-bad-field:started:sessionId"
 
 
-# --- item 3: the seat canary on a background claude seat -------------------------------------
+# --- item 3: the launcher's seat canary reads the lane's transcript ---------------------------
 
 
-def test_seat_canary_threads_the_claude_mode_and_the_telemetry_source():
-    # axis: item 3 — the canary hands the claude mode to the runner and records the telemetry source
+def _write_transcript(cfg, session_id, tool_ids):
+    folder = os.path.join(cfg, "projects", "-some-worktree")
+    os.makedirs(folder, exist_ok=True)
+    rows = [{"type": "user", "message": {"role": "user", "content": "go"}}]
+    for tool_id in tool_ids:
+        rows.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tool_id, "name": "Read", "input": {}}]}})
+    with open(os.path.join(folder, session_id + ".jsonl"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+def _canary_lane(tmp_path, monkeypatch):
+    monkeypatch.setattr(L, "_background_handshake", lambda proc, *a: {
+        "ok": True, "backgroundId": BG_ID, "sessionId": SESSION_ID, "pid": proc.pid})
+    repo = _init_repo(tmp_path / "repo")
+    result = _launch(repo, tmp_path)
+    _kill(result["pid"])
+    return repo, result["launchId"]
+
+
+def test_lane_canary_reads_tool_calls_from_the_recorded_transcript(tmp_path, monkeypatch,
+                                                                   _config_root):
+    # axis: item 3 (R7) — the launcher's canary counts the lane's transcript tool calls, found
+    # through the session id and config root the LAUNCHER recorded
     import seat_canary as sc
-    seen = {}
-
-    def fake_dispatch(**kw):
-        seen.update(kw)
-        return {"ok": True, "findings": [], "investigated": ["lib/x.py"],
-                "engagement": {"read": "engaged", "toolCalls": 7, "source": "claude-transcript"}}
-
-    res = sc.run_canary("security-reviewer",
-                        {"vendor": "claude", "model": "sonnet-5", "effort": "high",
-                         "tier": "reviewer"},
-                        repo_root="/r", dispatch=fake_dispatch, claude_mode="background")
-    assert seen["claude_mode"] == "background"
-    assert res["evidence"]["toolCalls"] == 7
-    assert res["evidence"]["engagementSource"] == "claude-transcript"
-    codex_seen = {}
-    sc.run_canary("security-reviewer",
-                  {"vendor": "codex", "model": "gpt-5.6-terra", "effort": "high",
-                   "tier": "reviewer"},
-                  repo_root="/r", dispatch=lambda **kw: codex_seen.update(kw) or {})
-    assert codex_seen and "claude_mode" not in codex_seen
+    repo, lid = _canary_lane(tmp_path, monkeypatch)
+    _write_transcript(_config_root, SESSION_ID, ["t1", "t2", "t2"])
+    res = sc.lane_canary(repo, lid)
+    assert res == {"ok": True, "reason": None, "launchId": lid, "sessionId": SESSION_ID,
+                   "toolCalls": 2, "engaged": True, "engagementSource": "claude-transcript"}
 
 
-def test_seat_canary_cli_accepts_a_background_claude_probe(monkeypatch):
-    # axis: item 3 — the CLI reaches a background claude probe
+def test_lane_canary_zero_tool_calls_is_not_engaged(tmp_path, monkeypatch, _config_root):
+    # axis: item 3 — empty telemetry is not engagement
     import seat_canary as sc
-    seen = {}
-    monkeypatch.setattr(sc, "run_canary", lambda *a, **k: seen.update(k) or {})
-    assert sc.main(["probe", "--seat-key", "s", "--tier", "reviewer", "--engine", "claude",
-                    "--engine-model", "sonnet", "--effort", "medium", "--repo-root", "/r",
-                    "--claude-mode", "background"]) == 0
-    assert seen["claude_mode"] == "background"
+    repo, lid = _canary_lane(tmp_path, monkeypatch)
+    _write_transcript(_config_root, SESSION_ID, [])
+    res = sc.lane_canary(repo, lid)
+    assert res["ok"] is True and res["toolCalls"] == 0 and res["engaged"] is False
+
+
+@pytest.mark.parametrize("case,reason", [
+    pytest.param("no-transcript", "lane-transcript-unresolved", id="no-transcript"),
+    pytest.param("unknown-lane", "lane-unknown", id="unknown-lane"),
+    pytest.param("no-session", "lane-session-unrecorded", id="legacy-record"),
+])
+def test_lane_canary_refuses_rather_than_guessing(tmp_path, monkeypatch, _config_root, case,
+                                                  reason):
+    # axis: item 3 — no recorded identity, no transcript, no lane: a named refusal, never a
+    # transcript found some other way
+    import seat_canary as sc
+    repo, lid = _canary_lane(tmp_path, monkeypatch)
+    if case == "unknown-lane":
+        lid = "launch-0000000000000000"
+    if case == "no-session":
+        _write_transcript(_config_root, SESSION_ID, ["t1"])
+        records = _with_started(ll.read(repo)["records"], sessionId=_DROP, backgroundId=_DROP)
+        monkeypatch.setattr(sc.launch_ledger, "read",
+                            lambda repo_root, env=None: {"state": "ok", "records": records})
+    res = sc.lane_canary(repo, lid)
+    assert res["ok"] is False and res["reason"] == reason and res["engaged"] is False
+
+
+def test_lane_canary_cli_exit_follows_the_result(tmp_path, monkeypatch, _config_root):
+    # axis: item 3 — the CLI exits 1 on a refusal, so a caller cannot read one as engaged
+    import seat_canary as sc
+    repo, lid = _canary_lane(tmp_path, monkeypatch)
+    assert sc.main(["lane", "--repo-root", repo, "--launch-id", lid]) == 1
+    _write_transcript(_config_root, SESSION_ID, ["t1"])
+    assert sc.main(["lane", "--repo-root", repo, "--launch-id", lid]) == 0

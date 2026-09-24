@@ -928,6 +928,11 @@ def claude_agent_row_for_launch(rows, launch_id):
     return _claude_agent_row_for_launch(rows, launch_id)
 
 
+def read_session_transcript_rows(config_dir, session_id):
+    """Public face of the capped transcript read: (rows, paths, size). Never raises."""
+    return _read_session_transcript_rows(config_dir, session_id)
+
+
 def _claude_agent_row_for_launch(rows, launch_id):
     """Find the background agent row matching launch_id; skip interactive rows without id."""
     if not isinstance(rows, list) or not isinstance(launch_id, str) or not launch_id:

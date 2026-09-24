@@ -16,6 +16,7 @@ import canary_outcome  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
+import launch_ledger  # noqa: E402
 import model_registry  # noqa: E402
 import review_findings_schema  # noqa: E402
 import seat_bundle  # noqa: E402
@@ -245,8 +246,7 @@ def _evidence_from_dispatch(res):
     }
 
 
-def run_canary(seat_key, seat_config, *, repo_root, dispatch=None, timeout=300,
-               claude_mode=None):
+def run_canary(seat_key, seat_config, *, repo_root, dispatch=None, timeout=300):
     """Dispatch the planted-defect fixture through the real seat path and score ENGAGEMENT.
 
     ``seat_key`` and ``seat_config`` (with ``tier`` from the seat map) supply seat identity; the
@@ -282,7 +282,6 @@ def run_canary(seat_key, seat_config, *, repo_root, dispatch=None, timeout=300,
                 repo_root=repo_root,
                 timeout=timeout,
                 expected_result_kind="findings",
-                **({"claude_mode": claude_mode} if claude_mode is not None else {}),
             )
         except Exception as exc:
             return {
@@ -358,16 +357,53 @@ def run_canary(seat_key, seat_config, *, repo_root, dispatch=None, timeout=300,
                 pass
 
 
+def _lane_refusal(reason, launch_id):
+    return {"ok": False, "reason": reason, "launchId": launch_id, "toolCalls": None,
+            "engaged": False}
+
+
+def lane_canary(repo_root, launch_id, *, env=None):
+    """The launcher's seat canary for a builder lane (R7): the tool calls the lane's own session
+    transcript records. The transcript is found through the identity the LAUNCHER recorded for
+    the lane — its session id and config root on the ledger — never through anything the lane
+    wrote about itself; a lane with no recorded session refuses rather than being guessed at.
+    Engaged means at least one tool call. Never raises."""
+    try:
+        read = launch_ledger.read(repo_root, env=env)
+        folded = launch_ledger.fold(read.get("records") or [])
+    except Exception:
+        return _lane_refusal("lane-ledger-unreadable", launch_id)
+    if read.get("state") not in ("ok", "missing") or not folded.get("ok"):
+        return _lane_refusal("lane-ledger-unreadable", launch_id)
+    info = folded["launches"].get(launch_id)
+    if info is None:
+        return _lane_refusal("lane-unknown", launch_id)
+    session_id, cfg = info.get("sessionId"), info.get("configDir")
+    if not session_id or not cfg:
+        return _lane_refusal("lane-session-unrecorded", launch_id)
+    rows, paths, _size = engine_dispatch.read_session_transcript_rows(cfg, session_id)
+    if len(paths) != 1:
+        reason = "lane-transcript-ambiguous" if paths else "lane-transcript-unresolved"
+        return _lane_refusal(reason, launch_id)
+    tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+    if tool_calls is None:
+        return _lane_refusal("lane-transcript-unreadable", launch_id)
+    return {"ok": True, "reason": None, "launchId": launch_id, "sessionId": session_id,
+            "toolCalls": tool_calls, "engaged": tool_calls > 0,
+            "engagementSource": "claude-transcript"}
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="seat_canary")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    lane = sub.add_parser("lane", help="engagement of a launched builder lane, from its transcript")
+    lane.add_argument("--repo-root", required=True)
+    lane.add_argument("--launch-id", required=True)
     p = sub.add_parser("probe")
     p.add_argument("--seat-key", required=True)
     p.add_argument("--tier", required=True,
                    help="Seat-map tier (registry role name) for this probe")
-    p.add_argument("--engine", required=True, choices=("codex", "cursor", "claude"))
-    p.add_argument("--claude-mode", default=None, choices=engine_adapter.CLAUDE_MODES,
-                   help="claude only: print (stdout telemetry) or background (transcript)")
+    p.add_argument("--engine", required=True, choices=("codex", "cursor"))
     p.add_argument("--engine-model", required=True)
     # Optional, defaulting to None (#963): the registry's cursor implementer/code-fixer config is
     # effort-LESS — ("composer-2.5", None) — and no effort STRING can express that, so a required
@@ -381,6 +417,10 @@ def main(argv):
     p.add_argument("--repo-root", required=True)
     p.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args(argv)
+    if args.cmd == "lane":
+        res = lane_canary(args.repo_root, args.launch_id)
+        sys.stdout.write(json.dumps(res) + "\n")
+        return 0 if res.get("ok") else 1
     seat_config = {
         "vendor": args.engine,
         "model": args.engine_model,
@@ -392,7 +432,6 @@ def main(argv):
         seat_config,
         repo_root=args.repo_root,
         timeout=args.timeout,
-        claude_mode=args.claude_mode,
     )
     sys.stdout.write(json.dumps(res) + "\n")
     return 0
