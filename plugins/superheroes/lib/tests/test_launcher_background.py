@@ -478,6 +478,8 @@ def test_no_acknowledgement_reconciles_the_worktree_before_refusing(
     # worktree is stopped first; `refused` is recorded only when the listing was readable and
     # every stop confirmed — an unreadable inventory or an unconfirmed stop leaves the lane open
     stops = []
+    monkeypatch.setattr(L, "_LISTING_WAIT_SECONDS", 0.3)
+    monkeypatch.setattr(L, "_LISTING_POLL_SECONDS", 0.05)
     monkeypatch.setattr(L, "_background_handshake", _unacknowledged)
     monkeypatch.setattr(L.engine_dispatch, "claude_agents_rows",
                         lambda cfg, cwd: (rows, listing_ok))
@@ -489,6 +491,39 @@ def test_no_acknowledgement_reconciles_the_worktree_before_refusing(
     assert [r["event"] for r in _events(repo, result["launchId"])] == events
     if events == ["reserved"]:
         assert result["stop"] == "stop-unconfirmed"
+
+
+def test_no_acknowledgement_rereads_an_empty_inventory(tmp_path, monkeypatch):
+    # axis: D4 — a session listed a moment after the first read is still found and stopped
+    reads, stops = [], []
+    monkeypatch.setattr(L, "_LISTING_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(L, "_background_handshake", _unacknowledged)
+    monkeypatch.setattr(L.engine_dispatch, "claude_agents_rows", lambda cfg, cwd: (
+        reads.append(1) or ([] if len(reads) < 3 else [_row(pid=None, cwd=None)]), True))
+    monkeypatch.setattr(L, "_stop_background", lambda sid, *a, **k: stops.append(sid) or "stopped")
+    repo = _init_repo(tmp_path / "repo")
+    result = _launch(repo, tmp_path, spawn_fn=_make_spawn_fn("exit0"))
+    assert stops == [BG_ID] and len(reads) == 3
+    assert [r["event"] for r in _events(repo, result["launchId"])] == ["reserved", "refused"]
+
+
+def test_a_live_acknowledger_is_reaped_before_the_inventory(tmp_path, monkeypatch):
+    # axis: D4 — a timed-out acknowledger still running could open a session after the
+    # inventory; it is reaped before the worktree is listed
+    alive_at_listing = []
+    monkeypatch.setattr(L, "_LISTING_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(L, "_LISTING_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(L, "_background_handshake", lambda proc, *a: (
+        _SPAWNED.append(proc) or {"ok": False, "reason": bo.REFUSAL_LAUNCH_FAILED,
+                                  "detail": "ack-timeout", "backgroundId": None}))
+    monkeypatch.setattr(L.engine_dispatch, "claude_agents_rows", lambda cfg, cwd: (
+        alive_at_listing.append(_SPAWNED[-1].poll() is None) or [], True))
+    repo = _init_repo(tmp_path / "repo")
+    _launch(repo, tmp_path, spawn_fn=_make_spawn_fn("sleep"))
+    assert alive_at_listing and not any(alive_at_listing)
+
+
+_SPAWNED = []
 
 
 def _live_session():
@@ -691,6 +726,14 @@ def _with_started(records, **fields):
     for rec in records:
         rec = dict(rec)
         if rec["event"] == "started":
+            if isinstance(fields.get("envPins"), str):
+                pins = dict(rec["envPins"])
+                effort = fields["envPins"].split(":", 1)[1]
+                if effort == "drop":
+                    pins.pop("CLAUDE_CODE_EFFORT_LEVEL")
+                else:
+                    pins["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+                fields = dict(fields, envPins=pins)
             for key, value in fields.items():
                 if value is _DROP:
                     rec.pop(key, None)
@@ -729,6 +772,10 @@ def test_fold_carries_the_started_session_id(tmp_path, monkeypatch):
                  "fold-bad-field:started:envPins", id="extra-key"),
     pytest.param({"envPins": {"CLAUDE_CONFIG_DIR": "/somewhere/else"}},
                  "fold-bad-field:started:envPins", id="root-disagrees-with-reserved"),
+    pytest.param({"envPins": "EFFORT:high"}, "fold-bad-field:started:envPins",
+                 id="effort-disagrees-with-reserved"),
+    pytest.param({"envPins": "EFFORT:drop"}, "fold-bad-field:started:envPins",
+                 id="pinned-reservation-without-effort-pin"),
 ])
 def test_fold_refuses_each_malformed_started_field(tmp_path, monkeypatch, fields, reason):
     # axis: D7 — one rule per case; the refusal names the field

@@ -830,13 +830,13 @@ def _claude_child_env(opened, base=None):
         return env, pins
     cfg = opened.get("configDir")
     if isinstance(cfg, str) and cfg:
-        env["CLAUDE_CONFIG_DIR"] = cfg
-        pins["CLAUDE_CONFIG_DIR"] = cfg
+        env[config_dir.CONFIG_DIR_ENV] = cfg
+        pins[config_dir.CONFIG_DIR_ENV] = cfg
     seat = _seat_dict_from_resolved_snapshot(opened.get("resolvedInputs"))
     effort = seat.get("effort") if isinstance(seat, dict) else None
     if isinstance(effort, str) and effort:
-        env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
-        pins["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+        env[config_dir.EFFORT_ENV] = effort
+        pins[config_dir.EFFORT_ENV] = effort
     env.pop("CLAUDE_EFFORT", None)
     return env, pins
 

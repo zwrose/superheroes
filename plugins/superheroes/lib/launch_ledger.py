@@ -1183,6 +1183,7 @@ def fold(records):
                 "attempts": 0,
                 "started": False,
                 "amendments": [],
+                "effort": rec.get("effort"),
                 "slot": rec.get("slot"),
                 "generation": rec.get("generation"),
                 "boundary": rec.get("boundary"),
@@ -1238,8 +1239,10 @@ def fold(records):
                     "batchDeclarations": batch_declarations,
                 }
             pins = rec.get("envPins")
-            if (pins is not None and info.get("configDir") is not None
-                    and pins[_ENV_PIN_CONFIG] != info["configDir"]):
+            if pins is not None and (
+                    (info.get("configDir") is not None
+                     and pins[_ENV_PIN_CONFIG] != info["configDir"])
+                    or pins.get(config_dir.EFFORT_ENV) != (info.get("effort") or None)):
                 return {"ok": False, "reason": "fold-bad-field:started:envPins",
                         "launches": {}, "batchDeclarations": batch_declarations}
             session_id = rec.get("sessionId")
@@ -1543,6 +1546,11 @@ def _reap_process(proc):
         proc.wait(timeout=5)
     except Exception:
         pass
+
+
+def reap_process(proc):
+    """Public face of the ledger's process-group reaper, for the launcher. Never raises."""
+    _reap_process(proc)
 
 
 def _started_pids_to_probe(info):

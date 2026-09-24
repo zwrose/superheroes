@@ -1341,6 +1341,8 @@ def _spawn_attempt(
         # on, every background session listed in this launch's own fresh worktree. `refused` is
         # written (by the caller) only once each stop is confirmed; otherwise a known live pid is
         # recorded as a started lane, so every watcher sees it, and the ids ride the result.
+        if proc.poll() is None:  # a live acknowledger could still open a session: reap it first
+            ll.reap_process(proc)
         sessions = _sessions_to_retire(background_id, shake.get("pid"), config_dir, cwd)
         stops = {sid: _stop_background(sid, config_dir, cwd, pid, proc)
                  for sid, pid in (sessions or [])}
@@ -1403,19 +1405,24 @@ def _sessions_to_retire(background_id, pid, config_dir, cwd):
     if background_id is not None:
         return [(background_id, pid)]
     try:
-        rows, listing_ok = engine_dispatch.claude_agents_rows(config_dir, cwd)
-        if not listing_ok:
-            return None
-        found = []
-        for row in rows:
-            if not isinstance(row, dict) or row.get("kind") != "background":
-                continue
-            if row.get("state") == "stopped" or not ll.valid_background_id(row.get("id")):
-                continue
-            row_pid = row.get("pid")
-            ok_pid = isinstance(row_pid, int) and not isinstance(row_pid, bool) and row_pid > 1
-            found.append((row["id"], row_pid if ok_pid else None))
-        return found
+        # A session is listed shortly after it opens, so an empty inventory is re-read, bounded.
+        limit = time.monotonic() + _LISTING_WAIT_SECONDS
+        while True:
+            rows, listing_ok = engine_dispatch.claude_agents_rows(config_dir, cwd)
+            if not listing_ok:
+                return None
+            found = []
+            for row in rows:
+                if not isinstance(row, dict) or row.get("kind") != "background":
+                    continue
+                if row.get("state") == "stopped" or not ll.valid_background_id(row.get("id")):
+                    continue
+                row_pid = row.get("pid")
+                ok_pid = isinstance(row_pid, int) and not isinstance(row_pid, bool) and row_pid > 1
+                found.append((row["id"], row_pid if ok_pid else None))
+            if found or time.monotonic() >= limit:
+                return found
+            time.sleep(_LISTING_POLL_SECONDS)
     except Exception:  # noqa: BLE001 — an unreadable inventory is "unknown", never "none"
         return None
 

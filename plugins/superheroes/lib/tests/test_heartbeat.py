@@ -618,6 +618,10 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
         class _Proc:
             pid = 424242
 
+            @staticmethod
+            def poll():
+                return 0
+
         out_fh.close()
         err_fh.close()
         return _Proc()
@@ -632,6 +636,7 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_root))
     monkeypatch.setattr(launcher, "_background_handshake", lambda *a: {
         "ok": False, "reason": "background-launch-unacknowledged", "backgroundId": None})
+    monkeypatch.setattr(launcher, "_sessions_to_retire", lambda *a: [])
     launcher._spawn_attempt(
         repo,
         launch_id,
