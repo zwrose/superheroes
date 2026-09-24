@@ -196,6 +196,7 @@ def test_launcher_holds_no_claude_list_at_all():
 
 
 def test_claude_cli_argv_is_the_management_verb_home():
+    # axis: D1 — the agents/stop argv is minted by the adapter, head and args in order
     assert ea.claude_cli_argv(["stop", BG_ID]) == ["claude", "stop", BG_ID]
 
 
@@ -222,6 +223,7 @@ def test_compose_launch_takes_its_argv_from_the_adapter(tmp_path, monkeypatch):
 
 
 def test_compose_launch_surfaces_an_adapter_refusal(tmp_path, monkeypatch):
+    # axis: D2 — an adapter refusal stops the launch with its token, never a fallback argv
     monkeypatch.setattr(L.engine_adapter, "build_argv_result",
                         lambda *a: {"argv": [], "reason": "untokenizable", "detail": "d"})
     repo = _init_repo(tmp_path / "repo")
@@ -234,6 +236,8 @@ def test_compose_launch_surfaces_an_adapter_refusal(tmp_path, monkeypatch):
 
 
 def test_builder_argv_shapes():
+    # axis: D6 — the builder argv: --bg, the token, --effort only when pinned, prompt after --,
+    # and never --restricted or --permission-mode
     seat = {"vendor": "claude", "model": "opus", "effort": "medium"}
     opts = {"claudeMode": ea.MODE_BACKGROUND, "prompt": "P"}
     assert ea.build_argv_result(seat, ea.ROLE_KIND_BUILDER, opts)["argv"] == [
@@ -347,6 +351,7 @@ def _grade(tmp_path, monkeypatch, *, rc=0, ack="backgrounded · %s\n" % BG_ID,
 
 
 def test_handshake_listed_session_is_a_launch(tmp_path, monkeypatch):
+    # axis: D4 — the one passing grade: a listed session in this worktree with its own ids
     shake = _grade(tmp_path, monkeypatch)
     assert shake == {"ok": True, "backgroundId": BG_ID, "sessionId": SESSION_ID, "pid": 5150}
 
@@ -425,6 +430,7 @@ def test_unconfirmed_stop_without_a_pid_leaves_the_lane_reserved(tmp_path, monke
 
 
 def test_no_acknowledgement_means_nothing_to_stop(tmp_path, monkeypatch):
+    # axis: D4 — no acknowledgement: refused at once, nothing to stop
     stops = []
     monkeypatch.setattr(L, "_background_handshake", lambda *a: {
         "ok": False, "reason": bo.REFUSAL_LAUNCH_UNACKNOWLEDGED, "backgroundId": None})
@@ -525,8 +531,8 @@ def test_older_readers_see_a_background_lane_live(tmp_path, monkeypatch, sha, re
 
         live = _run_old_reader(lib, repo, lid, "live")
         assert live["foldOk"] is True, live
+        assert live["exited"] is False, "old watch loop reads the new lane as builder-exited"
         assert live["pid"] == session.pid
-        assert live["exited"] is False
         assert live["heartbeat"][1] == "working"
         assert live["recordOutcome"]["ok"] is False
         assert live["recordOutcome"]["reason"].startswith("terminal-child-live")
@@ -568,6 +574,7 @@ _DROP = object()
 
 
 def test_fold_carries_the_started_session_id(tmp_path, monkeypatch):
+    # axis: D7 — started.sessionId becomes the lane's session id; a legacy record folds unchanged
     lid, records = _launched_records(tmp_path, monkeypatch)
     info = ll.fold(records)["launches"][lid]
     assert info["sessionId"] == SESSION_ID and info["backgroundId"] == BG_ID
@@ -616,6 +623,7 @@ def test_fold_refuses_a_reserved_session_id_that_disagrees(tmp_path, monkeypatch
 
 
 def test_seat_canary_threads_the_claude_mode_and_the_telemetry_source():
+    # axis: item 3 — the canary hands the claude mode to the runner and records the telemetry source
     import seat_canary as sc
     seen = {}
 
@@ -640,6 +648,7 @@ def test_seat_canary_threads_the_claude_mode_and_the_telemetry_source():
 
 
 def test_seat_canary_cli_accepts_a_background_claude_probe(monkeypatch):
+    # axis: item 3 — the CLI reaches a background claude probe
     import seat_canary as sc
     seen = {}
     monkeypatch.setattr(sc, "run_canary", lambda *a, **k: seen.update(k) or {})
