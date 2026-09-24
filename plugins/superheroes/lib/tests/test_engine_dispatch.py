@@ -15777,6 +15777,7 @@ def test_background_stop_ended_row_other_cwd_not_already_ended(tmp_path, monkeyp
         harness["agents_rows"] = [
             r for r in harness["agents_rows"] if r.get("cwd") != cwd
         ]
+        harness["dead_pids"].add(4242)
         return 0, "", ""
 
     monkeypatch.setattr(ED, "_claude_cli", cli_live)
