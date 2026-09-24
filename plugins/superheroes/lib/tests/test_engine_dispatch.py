@@ -18596,6 +18596,19 @@ def test_handle_from_rows_two_live_identity_rows():
     assert ED._handle_from_rows(rows, "/wt", "/cfg", "abc12345") is None
 
 
+@pytest.mark.parametrize("pid", [0, 1])
+def test_handle_from_rows_pid_floor_rejects_zero_and_one(pid):
+    rows = [{"kind": "background", "cwd": "/wt", "id": "abc12345", "pid": pid, "state": "working"}]
+    assert ED._handle_from_rows(rows, "/wt", "/cfg", "abc12345") is None
+
+
+def test_handle_from_rows_pid_floor_accepts_two():
+    rows = [{"kind": "background", "cwd": "/wt", "id": "abc12345", "pid": 2, "state": "working"}]
+    handle = ED._handle_from_rows(rows, "/wt", "/cfg", "abc12345")
+    assert handle == ED.BackgroundHandle("abc12345", 2, "/wt", "/cfg")
+    assert handle.pid == 2
+
+
 def test_acquire_background_handle_pid_on_third_poll(monkeypatch):
     polls = {"n": 0}
     now = {"t": 0.0}
@@ -18701,6 +18714,18 @@ def test_retire_bool_pid_unconfirmed(monkeypatch):
     calls = []
     monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: calls.append(a) or (0, "", ""))
     handle = ED.BackgroundHandle("abc12345", True, "/wt", "/cfg")
+    assert ED.retire(handle) == background_outcome.REFUSAL_STOP_UNCONFIRMED
+    assert calls == []
+
+
+@pytest.mark.parametrize("pid", [0, 1])
+def test_retire_pid_floor_zero_and_one_unconfirmed_no_cli(pid, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: calls.append(a) or (0, "", ""))
+    monkeypatch.setattr(ED.os, "kill", lambda pid_arg, sig: None)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    monkeypatch.setattr(ED, "_claude_agents_rows", lambda *a, **k: ([], True))
+    handle = ED.BackgroundHandle("abc12345", pid, "/wt", "/cfg")
     assert ED.retire(handle) == background_outcome.REFUSAL_STOP_UNCONFIRMED
     assert calls == []
 
@@ -18827,6 +18852,30 @@ def test_retire_done_row_still_issues_stop(monkeypatch):
     handle = ED.BackgroundHandle("id-done", 4242, "/wt", "/cfg")
     ED.retire(handle)
     assert calls == [["stop", "id-done"]]
+
+
+def test_background_stop_same_id_live_row_under_prefix_child_only_is_already_ended(
+    tmp_path, monkeypatch,
+):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    cwd = os.path.realpath(_repo(tmp_path))
+    child_cwd = os.path.join(cwd, "child")
+    os.makedirs(child_cwd, exist_ok=True)
+    harness["agents_rows"] = [_bg_agent_row(launch_id, session_id, cwd=child_cwd)]
+    calls = []
+
+    def cli(args, config_dir, cwd=None, timeout=30):
+        if args[:1] == ["agents"]:
+            return 0, json.dumps(harness["agents_rows"]), ""
+        calls.append(list(args))
+        return 0, "", ""
+
+    monkeypatch.setattr(ED, "_claude_cli", cli)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    monkeypatch.setattr(ED, "_HANDLE_WAIT_SECONDS", 0)
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    assert ED._background_stop(launch_id, cfg, cwd) == "already-ended"
+    assert not any(c[0] == "stop" for c in calls)
 
 
 def test_claude_cli_invalid_args_never_spawns(monkeypatch):
