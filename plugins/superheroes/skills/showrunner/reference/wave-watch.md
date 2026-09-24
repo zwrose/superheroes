@@ -55,8 +55,8 @@ python3 -B "$ROOT_DIR/lib/wave_watch.py" loop \
 any benign events you want suppressed (see below).
 
 **Before arming**, run a one-off foreground `run` with the same `--repo-root` and `--batch`. It
-returns immediately and shows whether the batch resolves to any lanes at all — the cheap way to catch
-a mistyped batch id before you go blind in a long `loop`.
+returns at once and reports what is due right now, but it cannot tell a mistyped batch id from a quiet
+batch (both return `timer`); confirm the batch id from the launch record.
 
 **`loop` is the wave's sole watcher — do not arm a second pid-death watcher beside it.** The one gap
 a second watcher used to cover: `lane-terminal` fires from the ledger the moment a builder hands
@@ -132,8 +132,8 @@ python3 -B "$ROOT_DIR/lib/wave_watch.py" run \
 `run` is a true one-shot: one ledger read and at most one open-PR read for stack state, no waiting,
 then exit. Flags: `--repo-root`, `--batch`, `--ignore-launch`, `--ignore-event`. It does **not** take
 `--max-seconds`, `--interval-seconds`, `--max-total-seconds`, or `--log` — passing `--max-seconds` or
-`--interval-seconds` is a usage error. Its reads of GitHub are bounded by a fixed 30-second budget
-(`RUN_READ_BUDGET_SECONDS`). It returns the first event due right now, or `timer` when nothing is
+`--interval-seconds` is a usage error. Its reads of GitHub are bounded by a fixed read budget,
+`RUN_READ_BUDGET_SECONDS` in `lib/wave_watch.py`. It returns the first event due right now, or `timer` when nothing is
 due. It cannot report `pr-set-changed` (a one-shot has no PR baseline to compare against), and it
 never reports the window-only degradations `lane-never-stamped` or `pr-signal-never-sampled`.
 
