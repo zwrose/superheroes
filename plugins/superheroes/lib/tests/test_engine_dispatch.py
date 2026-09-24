@@ -15087,7 +15087,7 @@ def test_claude_background_materializer_error_when_transcript_unreadable(tmp_pat
         "claudeMode": "background",
     }
     stdout_path = str(tmp_path / "missing-transcript.stdout")
-    assert ED._materialize_stdout_result(run_dir, 1, opened, stdout_path) == "error"
+    assert ED._materialize_stdout_result(run_dir, 1, opened, stdout_path, None) == "error"
 
 
 def test_claude_review_json_schema_argv_text_drift_refuses_coherence(tmp_path, monkeypatch):
@@ -16216,16 +16216,9 @@ def _large_claude_result_stream(
 
 
 def _patch_stdout_completion_bounds(monkeypatch, max_stdout_capture):
-    """Patch stdout cap and derived stampable line bound for readable bound tests."""
+    """Patch the one stdout cap."""
     monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", max_stdout_capture)
-    stampable = (
-        max_stdout_capture
-        - len(ED._truncation_marker(
-            ED.CAP_STREAM_STDOUT, ED._STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES,
-        ).encode("utf-8"))
-    )
-    monkeypatch.setattr(ED, "_STDOUT_STAMPABLE_LINE_MAX", stampable)
-    return max_stdout_capture, stampable
+    return max_stdout_capture, max_stdout_capture
 
 
 def _stdout_last_line_byte_length(stdout_path):
@@ -17408,7 +17401,7 @@ def test_completion_stdout_over_bound_line_bounded_buffer(tmp_path, monkeypatch)
     end-to-end expression; the companion e2e block asserts such a line is never stamped.
     """
     patched_cap = 16384
-    patched_stampable = 16328
+    patched_stampable = patched_cap
     patched_chunk = 256
     _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", patched_chunk)
@@ -17446,15 +17439,31 @@ def test_completion_stdout_over_bound_line_bounded_buffer(tmp_path, monkeypatch)
 
 
 def test_completion_stdout_at_bound_line_admits(tmp_path, monkeypatch):
-    """axis: a valid result line just inside the stampable bound is stamped and admitted."""
+    """axis: the longest result line whose file fits under the cap is stamped and admitted."""
     patched_cap = 16384
-    patched_stampable = 16328
     _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    stream, structured, result_line_bytes = _large_claude_result_stream(
-        structured, max_result_line_bytes=patched_stampable,
+    probe_stream = _claude_event_stream(result=structured)
+    probe_lines = [line for line in probe_stream.split("\n") if line]
+    result_line_probe = probe_lines[-1]
+    other_line_bytes = len(probe_stream.encode("utf-8")) - len(
+        result_line_probe.encode("utf-8"),
     )
-    assert result_line_bytes < patched_stampable
+    compact_event = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "structured_output": structured,
+        "session_id": "sess-1",
+    }, separators=(",", ":"))
+    format_overhead = len(result_line_probe.encode("utf-8")) - len(
+        compact_event.encode("utf-8"),
+    )
+    max_result_line_bytes = patched_cap - other_line_bytes - format_overhead - 1
+    stream, structured, result_line_bytes = _large_claude_result_stream(
+        structured, max_result_line_bytes=max_result_line_bytes,
+    )
+    assert result_line_bytes < max_result_line_bytes
     file_bytes = len(stream.encode("utf-8"))
     assert file_bytes < patched_cap
     script = "import sys\nsys.stdout.write(%r)\n" % stream
@@ -17471,7 +17480,7 @@ def test_completion_stdout_at_bound_line_admits(tmp_path, monkeypatch):
 def test_completion_stdout_large_under_cap_still_admits(tmp_path, monkeypatch):
     """axis: stamped result survives when stdout is large but still at or under the cap."""
     patched_cap = 16384
-    patched_stampable = 16328
+    patched_stampable = patched_cap
     _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     structured = _wrap_native_review_result(_native_review_branch("verdicts"))
     result_stream, structured, result_line_bytes = _large_claude_result_stream(
@@ -17507,7 +17516,7 @@ def test_completion_stdout_overflow_does_not_suppress_following_result(
 ):
     """axis: overflow on one over-bound line must not leak into the next valid result line."""
     patched_cap = 16384
-    patched_stampable = 16328
+    patched_stampable = patched_cap
     patched_chunk = 256
     _patch_stdout_completion_bounds(monkeypatch, patched_cap)
     monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", patched_chunk)
@@ -17549,6 +17558,523 @@ def test_completion_stdout_overflow_does_not_suppress_following_result(
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade.get("detail") is None
+
+
+# --- stdout parsed exactly once for the result (#1273 WO-B) ---
+
+
+def _stdout_opened_write_journal(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "stdout-opened")
+    os.makedirs(run_dir)
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    return run_dir, opened
+
+
+def test_stdout_materializer_without_held_event_is_absent_despite_valid_stdout(
+        tmp_path, monkeypatch,
+):
+    """axis: materializer never re-parses stdout when the held event is absent."""
+    run_dir, opened = _stdout_opened_write_journal(tmp_path, monkeypatch)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    payload = json.loads(_native_write_result_json())
+    stream = _claude_event_stream(result=payload)
+    open(stdout_path, "w", encoding="utf-8").write(stream)
+    status = ED._materialize_stdout_result(
+        run_dir, 1, opened, stdout_path, None,
+    )
+    assert status == "absent"
+    assert not os.path.isfile(ED._native_result_path(run_dir, 1))
+
+
+def test_stdout_materializer_writes_held_event_with_empty_stdout(
+        tmp_path, monkeypatch,
+):
+    """axis: materializer writes from the held event alone, not from stdout bytes."""
+    run_dir, opened = _stdout_opened_write_journal(tmp_path, monkeypatch)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    open(stdout_path, "w", encoding="utf-8").close()
+    payload = json.loads(_native_write_result_json())
+    held = {"type": "result", "is_error": False, "structured_output": payload}
+    status = ED._materialize_stdout_result(
+        run_dir, 1, opened, stdout_path, held,
+    )
+    assert status == "materialized"
+    with open(ED._native_result_path(run_dir, 1), encoding="utf-8") as fh:
+        assert json.load(fh) == ED._scrub_native_payload(payload)
+    status2 = ED._materialize_stdout_result(
+        run_dir, 1, opened, stdout_path, held,
+    )
+    assert status2 == "occupied"
+
+
+def test_stdout_materializer_inadmissible_held_event_is_absent(tmp_path, monkeypatch):
+    """axis: inadmissible held events materialize as absent."""
+    run_dir, opened = _stdout_opened_write_journal(tmp_path, monkeypatch)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    open(stdout_path, "w", encoding="utf-8").close()
+    payload = json.loads(_native_write_result_json())
+    for held in (
+        {"type": "result", "is_error": True, "structured_output": payload},
+        {"type": "result", "is_error": False},
+    ):
+        status = ED._materialize_stdout_result(
+            run_dir, 1, opened, stdout_path, held,
+        )
+        assert status == "absent"
+
+
+def test_stdout_materializer_requires_the_held_event_argument(tmp_path, monkeypatch):
+    """axis: materializer requires the held stdout event argument."""
+    run_dir, opened = _stdout_opened_write_journal(tmp_path, monkeypatch)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with pytest.raises(TypeError):
+        ED._materialize_stdout_result(run_dir, 1, opened, stdout_path)
+
+
+def test_stdout_result_envelope_never_parsed_on_real_path_through_grading(
+        tmp_path, monkeypatch,
+):
+    """axis: the real run-child path never calls claude_result_envelope."""
+    envelope_calls = {"count": 0}
+    real_envelope = ED.engine_adapter.claude_result_envelope
+
+    def _counting_envelope(stdout):
+        envelope_calls["count"] += 1
+        return real_envelope(stdout)
+
+    monkeypatch.setattr(
+        ED.engine_adapter, "claude_result_envelope", _counting_envelope,
+    )
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    review_script = "import sys\nsys.stdout.write(%r)\n" % _claude_event_stream(
+        result=structured,
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, review_script,
+    )
+    review_grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert review_grade.get("ok") is True
+    write_run_dir = str(tmp_path / "stdout-envelope-write")
+    os.makedirs(write_run_dir)
+    write_stdout = os.path.join(write_run_dir, "attempt-1.stdout")
+    write_stderr = os.path.join(write_run_dir, "attempt-1.stderr")
+    write_prompt = os.path.join(write_run_dir, "prompt.txt")
+    open(write_prompt, "w").write("go\n")
+    write_payload = json.loads(_native_write_result_json())
+    write_stream = _claude_event_stream(result=write_payload)
+    write_script = "import sys\nsys.stdout.write(%r)\n" % write_stream
+    write_argv = _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, write_run_dir, write_prompt, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, write_script)
+    ED._run_engine_files(
+        write_run_dir, 1, write_argv, write_run_dir,
+        write_prompt, write_stdout, write_stderr, 30,
+        os.path.join(write_run_dir, "progress.jsonl"),
+    )
+    write_records, _ = ED._journal_read(write_run_dir)
+    write_state = ED._journal_state(write_records)
+    write_grade = ED._grade_write_attempt(write_run_dir, write_state, 1)
+    assert write_grade.get("forfeit") is not True
+    assert envelope_calls["count"] == 0
+
+
+def test_stdout_unicode_line_separators_inside_payload_admit(tmp_path, monkeypatch):
+    """axis: unicode line separators inside the payload still admit once."""
+    ls = "\u2028"
+    ps = "\u2029"
+    nel = "\u0085"
+    chunk = ED._STDOUT_COMPLETION_READ_CHUNK
+    payload = json.loads(_native_write_result_json(
+        report=ls + ps + nel + ("p" * (chunk + 200 * 1024)),
+    ))
+    event = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "structured_output": payload,
+        "session_id": "sess-1",
+    }, ensure_ascii=False)
+    stream = event + "\n"
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir = str(tmp_path / "stdout-unicode-seps")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    stdout_bytes = open(stdout_path, "rb").read()
+    stdout_text = stdout_bytes.decode("utf-8")
+    assert ls.encode("utf-8") in stdout_bytes
+    assert len(stdout_text.splitlines()) > stdout_bytes.count(b"\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+    with open(ED._native_result_path(run_dir, 1), encoding="utf-8") as fh:
+        assert json.load(fh) == ED._scrub_native_payload(payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+
+
+def _stdout_prefix_bytes(target_len):
+    """Newline-split prefix that lands exactly on target_len without over-long lines."""
+    parts = []
+    total = 0
+    unit = b"x" * 512 + b"\n"
+    while total + len(unit) <= target_len:
+        parts.append(unit)
+        total += len(unit)
+    remainder = target_len - total
+    if remainder > 0:
+        parts.append(b"x" * (remainder - 1) + b"\n")
+    prefix = b"".join(parts)
+    assert len(prefix) == target_len
+    return prefix
+
+
+def test_stdout_unterminated_result_at_cap_admits_under_cap(tmp_path, monkeypatch):
+    """axis: an unterminated final result line at the cap still stamps and admits."""
+    patched_cap = 16384
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
+    report_pad = ""
+    body = ""
+    payload = json.loads(_native_write_result_json())
+    while True:
+        payload = json.loads(_native_write_result_json(report="cap-pad" + report_pad))
+        stream = _claude_event_stream(result=payload)
+        body = stream.rstrip("\n")
+        body_bytes = body.encode("utf-8")
+        if len(body_bytes) == patched_cap:
+            break
+        if len(body_bytes) < patched_cap:
+            report_pad += "x" * (patched_cap - len(body_bytes))
+        else:
+            report_pad = report_pad[: max(0, len(report_pad) - (len(body_bytes) - patched_cap))]
+    result_line_bytes = len(body_bytes)
+    assert result_line_bytes > patched_cap - 64
+    script = "import sys\nsys.stdout.write(%r)\n" % body
+    run_dir = str(tmp_path / "stdout-unterminated-cap")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert os.path.getsize(stdout_path) == patched_cap
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+    assert ended["stdoutResult"] == "materialized"
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+
+
+def test_stdout_line_one_byte_over_cap_is_dropped(tmp_path, monkeypatch):
+    """axis: a newline-terminated result line one byte over the cap is never stamped."""
+    patched_cap = 16384
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
+    payload = json.loads(_native_write_result_json())
+    stream, payload, line_bytes = _large_claude_result_stream(
+        payload,
+        min_result_line_bytes=patched_cap + 1,
+        max_result_line_bytes=patched_cap + 2,
+    )
+    assert line_bytes == patched_cap + 1
+    stdout_bytes = stream.encode("utf-8")
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir, state, ended, stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+    assert ended["stdoutResult"] == "absent"
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    obs_state = {"offset": 0, "buf": b"", "overflow": False}
+    ED._observe_stdout_completion(obs_state, stdout_path, terminal=True)
+    assert obs_state.get("event") is None
+
+
+def test_stdout_eviction_boundary_keeps_at_budget_and_evicts_past_it(
+        tmp_path, monkeypatch,
+):
+    """axis: eviction keeps a stamp at the budget boundary and evicts one byte earlier."""
+    patched_cap = 16384
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_stream = _claude_event_stream(result=structured)
+    result_line = result_stream.strip()
+    result_bytes = result_line.encode("utf-8")
+    offset = patched_cap + 500
+    budget = ED._cap_content_budget(patched_cap, ED.CAP_STREAM_STDOUT, offset)
+    assert offset > patched_cap
+    keep_start = offset - budget
+    evict_start = offset - budget - 1
+    assert offset - keep_start == budget
+    assert offset - evict_start == budget + 1
+
+    def _file_with_stamp_at(stamp_start):
+        prefix = _stdout_prefix_bytes(stamp_start)
+        tail_len = offset - stamp_start - len(result_bytes) - 1
+        return prefix + result_bytes + b"\n" + (b"y" * tail_len)
+
+    keep_path = tmp_path / "evict-keep.stdout"
+    keep_path.write_bytes(_file_with_stamp_at(keep_start))
+    keep_obs = {"offset": 0, "buf": b"", "overflow": False}
+    ED._observe_stdout_completion(keep_obs, str(keep_path), terminal=True)
+    assert keep_obs.get("stamp") is not None
+    assert keep_obs.get("event") is not None
+
+    evict_path = tmp_path / "evict-drop.stdout"
+    evict_path.write_bytes(_file_with_stamp_at(evict_start))
+    evict_obs = {"offset": 0, "buf": b"", "overflow": False}
+    ED._observe_stdout_completion(evict_obs, str(evict_path), terminal=True)
+    assert evict_obs.get("stamp") is None
+    assert evict_obs.get("event") is None
+
+
+def test_stdout_later_inadmissible_result_governs_and_materializes_absent(
+        tmp_path, monkeypatch,
+):
+    """axis: a later inadmissible result clears the stamp and materializes absent."""
+    first = json.loads(_native_write_result_json(report="first"))
+    second_event = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "structured_output": json.loads(_native_write_result_json(report="second")),
+        "session_id": "sess-1",
+    }, separators=(",", ":")) + "\n"
+    stream = _claude_event_stream(result=first) + second_event
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir = str(tmp_path / "stdout-inadmissible-last")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+    assert ended["stdoutResult"] == "absent"
+
+
+def test_stdout_terminal_read_failure_clears_held_event(tmp_path):
+    """axis: a terminal observation read failure clears the held stdout event."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_a = _claude_event_stream(result=structured)
+    payload_b = json.loads(_native_write_result_json(report="second"))
+    result_b = _claude_event_stream(result=payload_b)
+    stdout_path = tmp_path / "terminal-read-fail.stdout"
+    stdout_path.write_text(result_a, encoding="utf-8")
+    obs = {"offset": 0, "buf": b"", "overflow": False}
+    ED._observe_stdout_completion(obs, str(stdout_path), terminal=False)
+    assert obs.get("event") is not None
+    assert obs.get("stamp") is not None
+    with open(stdout_path, "a", encoding="utf-8") as fh:
+        fh.write(result_b)
+    path_str = str(stdout_path)
+    os.remove(path_str)
+    ED._observe_stdout_completion(obs, path_str, terminal=False)
+    assert obs.get("event") is not None
+    assert obs.get("stamp") is not None
+    ED._observe_stdout_completion(obs, path_str, terminal=True)
+    assert obs.get("event") is None
+    assert obs.get("stamp") is None
+    assert obs.get("stamp_line_start") is None
+    run_dir = str(tmp_path / "terminal-read-fail-run")
+    os.makedirs(run_dir)
+    opened = {
+        "engine": "claude", "claudeMode": None, "channel": ERC.CHANNEL_NATIVE,
+        "runKind": ED.RUN_KIND_WRITE,
+    }
+    status = ED._materialize_stdout_result(
+        run_dir, 1, opened, path_str, obs.get("event"),
+    )
+    assert status == "absent"
+
+
+def test_stdout_size_regression_poisons_the_producer(tmp_path):
+    """axis: a stdout size regression poisons later observations."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_a = _claude_event_stream(result=structured)
+    stdout_path = tmp_path / "size-regression.stdout"
+    stdout_path.write_text(result_a, encoding="utf-8")
+    obs = {"offset": 0, "buf": b"", "overflow": False}
+    ED._observe_stdout_completion(obs, str(stdout_path), terminal=False)
+    assert obs.get("event") is not None
+    assert obs.get("stamp") is not None
+    old_offset = obs["offset"]
+    with open(stdout_path, "r+b") as fh:
+        fh.truncate(old_offset - 10)
+    ED._observe_stdout_completion(obs, str(stdout_path), terminal=False)
+    assert obs.get("event") is None
+    assert obs.get("stamp") is None
+    assert obs.get("poisoned") is True
+    payload_b = json.loads(_native_write_result_json(report="fresh" * 200))
+    result_b = _claude_event_stream(result=payload_b)
+    stdout_path.write_text(result_b, encoding="utf-8")
+    assert os.path.getsize(stdout_path) > old_offset
+    ED._observe_stdout_completion(obs, str(stdout_path), terminal=True)
+    assert obs.get("event") is None
+    assert obs.get("stamp") is None
+
+
+def test_stdout_natural_exit_descendant_result_on_sigterm_admits(tmp_path, monkeypatch):
+    """axis: a descendant result written after natural exit still admits."""
+    payload = json.loads(_native_write_result_json())
+    result_stream = _claude_event_stream(result=payload)
+    ready_path = str(tmp_path / "descendant-ready")
+    child_body = (
+        "import signal, sys, time\n"
+        "ready = %r\n"
+        "result = %r\n"
+        "def on_term(signum, frame):\n"
+        "    sys.stdout.write(result)\n"
+        "    sys.stdout.flush()\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, on_term)\n"
+        "open(ready, 'w', encoding='utf-8').close()\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % (ready_path, result_stream)
+    )
+    script = (
+        "import os, subprocess, sys, time\n"
+        "child = %r\n"
+        "subprocess.Popen([sys.executable, '-c', child])\n"
+        "while not os.path.exists(%r):\n"
+        "    time.sleep(0.01)\n"
+        % (child_body, ready_path)
+    )
+    run_dir = str(tmp_path / "stdout-descendant-sigterm")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["timedOut"] is False
+    _assert_completion_keys(ended, payload)
+    assert ended["stdoutResult"] == "materialized"
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+
+
+def test_stdout_result_before_natural_exit_is_stamped_before_termination(
+        tmp_path, monkeypatch,
+):
+    """axis: the completion stamp is taken before termination begins."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream = _claude_event_stream(result=structured)
+    go_path = str(tmp_path / "stamp-go")
+    script = (
+        "import os, sys, time\n"
+        "go = %r\n"
+        "while not os.path.exists(go):\n"
+        "    time.sleep(0.01)\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        % (go_path, stream)
+    )
+    run_dir = str(tmp_path / "stdout-stamp-before-term")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    real_observe = ED._observe_stdout_completion
+    first_call_at = {"t": None}
+    go_created_at = {"t": None}
+
+    def _observe_spy(obs_state, stdout_path_arg, *, terminal=False):
+        before_go = not os.path.exists(go_path)
+        real_observe(obs_state, stdout_path_arg, terminal=terminal)
+        if first_call_at["t"] is None:
+            first_call_at["t"] = time.monotonic()
+            assert before_go is True
+            open(go_path, "w", encoding="utf-8").close()
+            go_created_at["t"] = time.monotonic()
+
+    real_popen = subprocess.Popen
+    terminate_entry = {"t": None}
+    real_terminate = ED._terminate_process_group
+
+    class _WaitPollPopen(real_popen):
+        def poll(self):
+            self.wait()
+            return self.returncode
+
+    def _record_terminate(pgid):
+        terminate_entry["t"] = time.monotonic()
+        return real_terminate(pgid)
+
+    monkeypatch.setattr(ED, "_observe_stdout_completion", _observe_spy)
+    monkeypatch.setattr(ED.subprocess, "Popen", _WaitPollPopen)
+    monkeypatch.setattr(ED, "_terminate_process_group", _record_terminate)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended[ERC.FIELD_RESULT_COMPLETE_AT] < terminate_entry["t"]
+    assert first_call_at["t"] < go_created_at["t"]
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
 
 
 def test_completion_producer_argv_delivery_admits_with_stamp(tmp_path, monkeypatch):
