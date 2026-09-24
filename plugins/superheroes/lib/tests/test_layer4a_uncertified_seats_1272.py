@@ -207,24 +207,20 @@ def _panel_host_uncertified_session(tmp_path, host_seat="code-reviewer", engine_
 # --- edge 1: host panel seat without telemetry → uncertified, no per-seat refusal --------
 
 
-def test_l4a_edge1_host_panel_uncertified_named_not_refused(tmp_path):
+def test_l4a_edge1_host_panel_refuses_unrun_review(tmp_path):
+    """R28 (owner ruling 1=b): host panel seat refuses unrun-review."""
     session_dir = _panel_host_uncertified_session(tmp_path)
     ctx, err = RC._load_context(session_dir)
     assert err is None
     refusal = RC.check_unrun_review(ctx)
-    assert refusal is None
-    uncertified = ctx.get("uncertified_seats") or []
-    assert len(uncertified) == 1
-    row = uncertified[0]
-    assert row["seat"] == "code-reviewer"
-    assert row["phase"] == RP.P_PANEL
-    assert row["channel"] == SC.CHANNEL_FILE
-    assert row["reason"] == "host-seat-no-runner-record"
-    assert row["vendor"] == "claude"
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["artifact"] == "code-reviewer"
+    assert refusal["bindingFailure"] == "execution-evidence-absent"
 
 
-def test_l4a_certify_receipt_discloses_host_uncertified_seat(tmp_path):
-    """End-to-end: certified receipt names host seat in disclosures.uncertifiedSeats."""
+def test_l4a_certify_refuses_host_panel_seat(tmp_path):
+    """R28: certification refuses when a host-channel panel seat lacks runner evidence."""
     host_seat = "code-reviewer"
     engine_seat = "security-reviewer"
     host_row = _dispatch_observed_no_telemetry_row(host_seat, RP.P_PANEL)
@@ -277,23 +273,14 @@ def test_l4a_certify_receipt_discloses_host_uncertified_seat(tmp_path):
     )
     _write_orders_manifest(session_dir, manifest)
     receipt, refusal = RC.certify(session_dir)
-    assert refusal is None, refusal
-    assert receipt["disclosures"]["uncertifiedSeats"] == [{
-        "seat": host_seat,
-        "phase": RP.P_PANEL,
-        "round": 1,
-        "attempt": 0,
-        "occurrence": 0,
-        "vendor": "claude",
-        "channel": SC.CHANNEL_FILE,
-        "reason": "host-seat-no-runner-record",
-    }]
-    assert receipt["seatMap"]["seats"][host_seat]["certifiedPanel"] is False
-    assert receipt["seatMap"]["seats"][engine_seat]["certifiedPanel"] is True
-    assert RC.CERTIFIED_PANEL_LABEL in receipt["provenanceLabels"]["derived"]
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["artifact"] == host_seat
+    assert refusal["bindingFailure"] == "execution-evidence-absent"
 
 
-# --- provenance census: injected seat-map row keys named in provenanceLabels.derived ------
+# --- provenance census: writer receipt omits retired host-seat exclusion labels ----------
 
 
 def _derived_seat_map_row_field_labels(derived_labels):
@@ -326,20 +313,8 @@ def test_l4a_seat_map_injected_keys_provenance_census(tmp_path):
     receipt, refusal = RC._build_receipt(ctx, "certified", None)
     assert refusal is None
     derived = receipt["provenanceLabels"]["derived"]
-    assert RC.CERTIFIED_PANEL_LABEL in derived
-    labeled_keys = _derived_seat_map_row_field_labels(derived)
-    receipt_seats = (receipt.get("seatMap") or {}).get("seats") or {}
-    for seat_name, receipt_row in receipt_seats.items():
-        if not isinstance(receipt_row, dict):
-            continue
-        source_row = source_seats.get(seat_name) or {}
-        if not isinstance(source_row, dict):
-            source_row = {}
-        injected = set(receipt_row) - set(source_row)
-        for key in injected:
-            assert key in labeled_keys, (
-                "seatMap.seats.*.%s missing from provenanceLabels.derived" % key
-            )
+    assert "seatMap.seats.*.certifiedPanel" not in derived
+    assert "uncertifiedSeats" not in receipt.get("disclosures", {})
 
 
 # --- edge 2: sole host on non-panel phase with no panel row → floor refuses ---------------
@@ -368,7 +343,8 @@ def test_l4a_edge2_host_non_panel_phase_uncertified_named(tmp_path, phase):
     refusal = RC.check_unrun_review(ctx)
     assert refusal is not None
     assert refusal["class"] == "unrun-review"
-    assert refusal["artifact"] == RC.JOURNAL_FILE
+    assert refusal["artifact"] == seat
+    assert refusal["bindingFailure"] == "execution-evidence-absent"
 
 
 # --- edge 3: host on audits/fixer → refuses as today -------------------------------------
@@ -640,39 +616,25 @@ def test_l4a_edge7_seat_missing_from_manifest_refuses(tmp_path):
                 "row": _dispatch_observed_no_telemetry_row("synthesis-seat", RP.P_SYNTHESIS),
             }],
         },
-        False,
+        True,
     ),
 ))
-def test_l4a_exclusion_floor_census(tmp_path, case_id, phase_specs, expect_refusal):
+def test_l4a_host_channel_refusal_census(tmp_path, case_id, phase_specs, expect_refusal):
+    """R28: host-channel seats without runner evidence refuse per-seat unrun-review."""
     session_dir = _multi_phase_session(tmp_path, phase_specs)
     ctx, err = RC._load_context(session_dir)
     assert err is None
     refusal = RC.check_unrun_review(ctx)
-    if expect_refusal:
-        assert refusal is not None
-        assert refusal["class"] == "unrun-review"
-        assert refusal["artifact"] == RC.JOURNAL_FILE
-    else:
-        assert refusal is None
-        uncertified = ctx.get("uncertified_seats") or []
-        expected_slots = {
-            ("code-reviewer", RP.P_PANEL, 1, 0, 0),
-            ("verifier-seat", RP.P_VERIFIERS, 1, 0, 0),
-            ("gapsweep-seat", RP.P_GAPSWEEP, 1, 0, 0),
-            ("scoped-seat", RP.P_SCOPED, 1, 0, 0),
-            ("synthesis-seat", RP.P_SYNTHESIS, 1, 0, 0),
-        }
-        actual_slots = {
-            (r["seat"], r["phase"], r["round"], r["attempt"], r.get("occurrence", 0))
-            for r in uncertified
-        }
-        assert actual_slots == expected_slots
+    assert expect_refusal
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-absent"
 
 
 # --- edge 8: every panel seat uncertified → floor refusal --------------------------------
 
 
-def test_l4a_edge8_all_panel_seats_uncertified_floor_refuses(tmp_path):
+def test_l4a_edge8_all_panel_seats_host_channel_refuse(tmp_path):
     seat = "code-reviewer"
     row = _dispatch_observed_no_telemetry_row(seat, RP.P_PANEL)
     session_dir, _ = _session_with_manifest(
@@ -689,8 +651,8 @@ def test_l4a_edge8_all_panel_seats_uncertified_floor_refuses(tmp_path):
     refusal = RC.check_unrun_review(ctx)
     assert refusal is not None
     assert refusal["class"] == "unrun-review"
-    assert refusal["artifact"] == RC.JOURNAL_FILE
-    assert "every panel seat was host-channel" in refusal["detail"]
+    assert refusal["artifact"] == seat
+    assert refusal["bindingFailure"] == "execution-evidence-absent"
 
 
 # --- edge 9: no recorded panel seat → unchanged ------------------------------------------
@@ -735,7 +697,6 @@ def test_l4a_edge10_host_with_telemetry_certified_not_named(tmp_path):
     ctx, err = RC._load_context(session_dir)
     assert err is None
     assert RC.check_unrun_review(ctx) is None
-    assert not (ctx.get("uncertified_seats") or [])
 
 
 def test_l4a_edge10b_host_present_evidence_wrong_head_refuses(tmp_path):
@@ -758,10 +719,9 @@ def test_l4a_edge10b_host_present_evidence_wrong_head_refuses(tmp_path):
     assert refusal["class"] == "unrun-review"
     assert refusal["artifact"] == seat
     assert refusal.get("bindingFailure") != "execution-evidence-absent"
-    assert not ctx.get("uncertified_seats")
 
 
-# --- T-floor-hand: hand-landed qualifying panel + host uncertified → no floor refusal ----
+# --- hand-landed qualifying panel + host without telemetry → host refuses -------------------
 
 
 def _panel_hand_landed_plus_host_uncertified_session(tmp_path):
@@ -814,17 +774,16 @@ def _panel_hand_landed_plus_host_uncertified_session(tmp_path):
     return session_dir, host_seat
 
 
-def test_l4a_t_floor_hand_landed_qualifying_panel_plus_host_uncertified_no_refusal(tmp_path):
+def test_l4a_hand_landed_panel_plus_host_refuses_host_seat(tmp_path):
+    """R28: qualifying hand-landed panel seat does not exempt host panel seat."""
     session_dir, host_seat = _panel_hand_landed_plus_host_uncertified_session(tmp_path)
     ctx, err = RC._load_context(session_dir)
     assert err is None
     refusal = RC.check_unrun_review(ctx)
-    assert refusal is None
-    uncertified = ctx.get("uncertified_seats") or []
-    assert len(uncertified) == 1
-    assert uncertified[0]["seat"] == host_seat
-    assert uncertified[0]["phase"] == RP.P_PANEL
-    assert uncertified[0]["channel"] == SC.CHANNEL_FILE
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["artifact"] == host_seat
+    assert refusal["bindingFailure"] == "execution-evidence-absent"
 
 
 # --- T-nomutate: _build_receipt must not mutate state seat-map rows ---------------------
@@ -844,7 +803,7 @@ def test_l4a_t_nomutate_build_receipt_does_not_mutate_state_seat_map_rows(tmp_pa
             },
         },
     }]
-    assert RC.check_unrun_review(ctx) is None
+    assert RC.check_unrun_review(ctx) is not None
     receipt, refusal = RC._build_receipt(ctx, "certified", None)
     assert refusal is None
     assert receipt is not None
@@ -854,8 +813,8 @@ def test_l4a_t_nomutate_build_receipt_does_not_mutate_state_seat_map_rows(tmp_pa
             if isinstance(row, dict):
                 assert "certifiedPanel" not in row
     receipt_seats = (receipt.get("seatMap") or {}).get("seats") or {}
-    assert receipt_seats["code-reviewer"]["certifiedPanel"] is False
-    assert receipt_seats["security-reviewer"]["certifiedPanel"] is True
+    assert "certifiedPanel" not in receipt_seats.get("code-reviewer", {})
+    assert "certifiedPanel" not in receipt_seats.get("security-reviewer", {})
 
 
 # --- edge 11: malformed receipt additions → validator refuses -----------------------------
@@ -865,7 +824,6 @@ def _minimal_valid_receipt(**overrides):
     receipt = {
         "disclosures": {
             "importantOutOfScope": [],
-            "uncertifiedSeats": [],
         },
         "seatMap": {"seats": {"code-reviewer": {"vendor": "claude"}}},
         "independence": {"auditSeats": []},
@@ -874,20 +832,20 @@ def _minimal_valid_receipt(**overrides):
     return receipt
 
 
-def test_l4a_edge11_absent_uncertified_seats_refuses():
+def test_l4a_edge11_no_uncertified_seats_key_on_receipt():
+    """R28: certified receipt shape omits retired disclosures.uncertifiedSeats."""
     receipt = _minimal_valid_receipt()
-    receipt["disclosures"].pop("uncertifiedSeats")
     refusal = RC._validate_receipt_additions(receipt)
-    assert refusal is not None
-    assert refusal["class"] == "unfetched-findings"
+    assert refusal is None
+    assert "uncertifiedSeats" not in receipt["disclosures"]
 
 
-def test_l4a_edge11_non_bool_certified_panel_refuses():
+def test_l4a_edge11_no_certified_panel_validator():
+    """R28: retired certifiedPanel receipt validator removed."""
     receipt = _minimal_valid_receipt()
     receipt["seatMap"]["seats"]["code-reviewer"]["certifiedPanel"] = "yes"
     refusal = RC._validate_receipt_additions(receipt)
-    assert refusal is not None
-    assert refusal["class"] == "unfetched-findings"
+    assert refusal is None
 
 
 def test_l4a_edge11_bad_audit_model_refuses():

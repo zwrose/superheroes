@@ -4,7 +4,7 @@ Head under proof: **01fceef1**. Courtesy proof for the re-pinned `certifiedPanel
 
 | ID | guarded element | proving test |
 |---|---|---|
-| G1 | writer `seatMap.seats` rows carry `certifiedPanel` as bool | `test_certification_receipt_matches_driver_today_fields[converged-single-round]` |
+| G1 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** writer `seatMap.seats` rows carry `certifiedPanel` as bool | direct driver/writer seatMap parity in `test_certification_receipt_matches_driver_today_fields` |
 
 ## G1 — writer seatMap.seats certifiedPanel bool assertion
 

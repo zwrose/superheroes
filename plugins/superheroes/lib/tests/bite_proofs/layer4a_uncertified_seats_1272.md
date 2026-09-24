@@ -6,14 +6,15 @@ Re-taken at head 3b1ee864 (plus this order's changes).
 |---|---|---|
 | C1 | channel condition (`channel == "file"`) | `test_l4a_edge4_engine_stdout_without_telemetry_refuses` |
 | C2 | manifest-sha verification in `_verified_orders_manifest` | `test_l4a_edge6_tampered_manifest_sha_refuses` |
-| C3 | post-loop exclusion floor (`_exclusion_floor_refusal`) | `test_l4a_exclusion_floor_census[no_panel_verifiers-phase_specs0-True]` |
-| C4 | `uncertifiedSeats` list check in `_validate_receipt_additions` | `test_l4a_edge11_absent_uncertified_seats_refuses` |
-| C5 | `certifiedPanel` bool check | `test_l4a_edge11_non_bool_certified_panel_refuses` |
+| C3 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** post-loop exclusion floor (`_exclusion_floor_refusal`) | `test_l4a_host_channel_refusal_census[no_panel_verifiers-phase_specs0-True]` |
+| C4 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** `uncertifiedSeats` list check in `_validate_receipt_additions` | `test_l4a_edge11_no_uncertified_seats_key_on_receipt` |
+| C5 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** `certifiedPanel` bool check | `test_l4a_edge11_no_certified_panel_validator` |
 | C6 | `auditSeats[].model` check | `test_l4a_edge11_bad_audit_model_refuses` |
-| C7 | hand-landed `qualified.append` (defect-1 fix) | `test_l4a_t_floor_hand_landed_qualifying_panel_plus_host_uncertified_no_refusal` |
+| C7 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** hand-landed floor exemption | `test_l4a_hand_landed_panel_plus_host_refuses_host_seat` |
 | C8 | copied seat-map rows (defect-2 fix) | `test_l4a_t_nomutate_build_receipt_does_not_mutate_state_seat_map_rows` |
-| C9 | `certifiedPanel` provenance label | `test_l4a_seat_map_injected_keys_provenance_census` |
+| C9 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** `certifiedPanel` provenance label | `test_l4a_seat_map_injected_keys_provenance_census` |
 | C10 | binding condition (`binding == "execution-evidence-absent"`) | `test_l4a_edge10b_host_present_evidence_wrong_head_refuses` |
+| C11 | per-seat `unrun-review` refusal for host panel seat (`check_unrun_review`) | `test_l4a_certify_refuses_host_panel_seat` |
 
 ## C1 — channel condition
 
@@ -559,4 +560,37 @@ FAILED plugins/superheroes/lib/tests/test_layer4a_uncertified_seats_1272.py::tes
 ```
 .                                                                        [100%]
 1 passed in 0.33s
+```
+
+## C11 — per-seat host panel `unrun-review` refusal (R28)
+
+**Axis:** certification must refuse `unrun-review` for a host-channel panel seat with `execution-evidence-absent`, not return a receipt.
+
+**Guarded code:** `round_certification.check_unrun_review` (dispatch-observed branch)
+
+**Neutralization:**
+
+```python
+                if binding == "execution-evidence-absent" and phase == PANEL_PHASE:
+                    continue
+```
+
+(inserted before the `return _refusal("unrun-review", ...)` for dispatch-observed seats)
+
+**Detector:** `test_l4a_certify_refuses_host_panel_seat`
+
+**Red:**
+
+```
+>       assert receipt is None
+E       AssertionError: assert {'baseGuard': 'checked-stat-bound', ... 'certificationShape': 'full-panel-confirmed', ...} is None
+FAILED plugins/superheroes/lib/tests/test_layer4a_uncertified_seats_1272.py::test_l4a_certify_refuses_host_panel_seat
+1 failed in 0.19s
+```
+
+**Green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.27s
 ```

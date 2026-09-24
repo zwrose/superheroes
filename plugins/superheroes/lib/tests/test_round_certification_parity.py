@@ -39,24 +39,8 @@ def _load_state(session_dir):
 
 
 def _seat_map_for_driver_parity(writer_seat_map):
-    """Strip writer-only certifiedPanel before comparing to the driver seatMap."""
-    if not isinstance(writer_seat_map, dict):
-        return writer_seat_map
-    seats = writer_seat_map.get("seats")
-    if not isinstance(seats, dict):
-        return writer_seat_map
-    stripped_seats = {}
-    for seat_name, row in seats.items():
-        if isinstance(row, dict):
-            assert isinstance(row.get("certifiedPanel"), bool), (
-                "writer seatMap.seats[%r] must carry certifiedPanel as bool" % seat_name
-            )
-            stripped_seats[seat_name] = {
-                key: val for key, val in row.items() if key != "certifiedPanel"
-            }
-        else:
-            stripped_seats[seat_name] = row
-    return dict(writer_seat_map, seats=stripped_seats)
+    """Writer seatMap matches driver seatMap after R28 host-seat exclusion removal."""
+    return writer_seat_map
 
 
 def _assert_findings_parity(session_dir, driver_findings, cert_findings):

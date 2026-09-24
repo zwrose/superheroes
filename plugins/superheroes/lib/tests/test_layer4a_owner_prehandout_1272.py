@@ -70,8 +70,8 @@ def test_next_refuses_unrecognized_owner_on_fresh_advance(tmp_path):
     assert out["reason"] == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE
 
 
-def test_next_response_terminal_unrecognized_owner_not_refused(tmp_path):
-    """T3: terminal pending with unrecognized owner is not refused at _next_response."""
+def test_disposition_ledger_owner_refusal_terminal_pending_not_refused(tmp_path):
+    """T3: terminal pending with unrecognized owner is not refused at the ledger gate."""
     session_dir = str(tmp_path / "sess")
     os.makedirs(session_dir, exist_ok=True)
     with open(os.path.join(session_dir, RD.JOURNAL_FILE), "w", encoding="utf-8") as fh:
@@ -85,8 +85,25 @@ def test_next_response_terminal_unrecognized_owner_not_refused(tmp_path):
         "attempt": 0,
         "payload": {"verdict": "converged"},
     }
-    resp = RD._next_response(session_dir, state, pending, "next")
-    assert resp["ok"] is True
+    refusal = RD._disposition_ledger_owner_refusal(session_dir, state, pending, "next")
+    assert refusal is None
+
+
+def test_re_emit_refuses_unrecognized_disposition_ledger_owner(tmp_path):
+    """A2: re-emit refuses before superseding when dispositionLedgerOwner is unrecognized."""
+    session_dir = str(tmp_path)
+    n = RD.cmd_next(session_dir, _cfg())
+    assert n["ok"], n
+    ok, state = RD.load_state(session_dir)
+    assert ok and state is not None
+    old_attempt = state["pending"]["attempt"]
+    state["dispositionLedgerOwner"] = "ledger-v2"
+    RD.save_state(session_dir, state)
+    out = RD.cmd_re_emit(session_dir, "tester")
+    assert out["ok"] is False
+    assert out["reason"] == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE
+    ok, state = RD.load_state(session_dir)
+    assert state["pending"]["attempt"] == old_attempt
 
 
 def test_next_response_call_sites_pass_state():

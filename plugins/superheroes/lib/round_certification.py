@@ -78,14 +78,12 @@ EXECUTION_ONLY_BINDING = session_contract.EXECUTION_ONLY_BINDING
 PANEL_PHASE = session_contract.PANEL_PHASE
 FIXER_PHASE = session_contract.FIXER_PHASE
 AUDITS_PHASE = session_contract.AUDITS_PHASE
-CHANNEL_FILE = session_contract.CHANNEL_FILE
 P_FIXER = session_contract.FIXER_PHASE
 P_AUDITS = session_contract.AUDITS_PHASE
 
 SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
 SEAT_RESULT_SCHEMA_V2 = "seat-result/2"
 ORDERS_DIRNAME = "orders"
-CERTIFIED_PANEL_LABEL = "seatMap.seats.*.certifiedPanel"
 
 BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND = "execution-evidence-head-unbound"
 BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE = "certified-head-unresolvable"
@@ -1132,116 +1130,12 @@ def _fix_still_present_at_head(ctx, finding, receipt, by_key=None):
     )
 
 
-def _last_orders_emitted_event(journal, rnd, phase, attempt):
-    last = None
-    for event in journal:
-        if event.get("outcome") != "orders-emitted":
-            continue
-        if event.get("round") != rnd or event.get("phase") != phase:
-            continue
-        if event.get("attempt") != attempt:
-            continue
-        last = event
-    return last
-
-
-def _recorded_seat_channel(ctx, seat_entry):
-    rnd = seat_entry.get("round")
-    phase = seat_entry.get("phase")
-    attempt = seat_entry.get("attempt")
-    seat = seat_entry.get("seat")
-    occurrence = seat_entry.get("occurrence", 0)
-    if rnd is None or phase is None or attempt is None:
-        return None, None
-    if not isinstance(seat, str) or not seat:
-        return None, None
-    event = _last_orders_emitted_event(ctx["journal"], rnd, phase, attempt)
-    if event is None:
-        return None, None
-    manifest, refusal = _verified_orders_manifest(ctx["session_dir"], event)
-    if refusal is not None:
-        return None, None
-    seats = manifest.get("seats")
-    if not isinstance(seats, dict):
-        return None, None
-    entry = seats.get(storage_key(seat, occurrence))
-    if not isinstance(entry, dict):
-        return None, None
-    channel = entry.get("channel")
-    vendor = entry.get("vendor")
-    if not isinstance(channel, str) or not channel:
-        return None, None
-    if not isinstance(vendor, str):
-        vendor = None
-    return channel, vendor
-
-
-def _seat_entry_slot(seat_entry):
-    return (
-        seat_entry["seat"],
-        seat_entry.get("phase"),
-        seat_entry["round"],
-        seat_entry["attempt"],
-        seat_entry.get("occurrence", 0),
-    )
-
-
-def _uncertified_slot(row):
-    return (
-        row["seat"],
-        row["phase"],
-        row["round"],
-        row["attempt"],
-        row.get("occurrence", 0),
-    )
-
-
-def _exclusion_floor_refusal(seats, qualified, uncertified_seats):
-    if not uncertified_seats:
-        return None
-    qualified_slots = {_seat_entry_slot(q) for q in qualified}
-    all_slots = {_seat_entry_slot(s) for s in seats}
-    excluded_slots = all_slots - qualified_slots
-    uncertified_slots = {_uncertified_slot(u) for u in uncertified_seats}
-    if not any(q.get("phase") == PANEL_PHASE for q in qualified):
-        n = len(uncertified_seats)
-        return _refusal(
-            "unrun-review",
-            JOURNAL_FILE,
-            "no runner-evidenced panel seat qualified while %d seat(s) were excluded; "
-            "no recorded dispatch-panel seat carries runner evidence; "
-            "every panel seat was host-channel" % (n,),
-        )
-    if excluded_slots != uncertified_slots:
-        unnamed = sorted(excluded_slots - uncertified_slots)
-        if unnamed:
-            parts = ["%s/%s r%s a%s o%s" % slot for slot in unnamed]
-            return _refusal(
-                "unrun-review",
-                JOURNAL_FILE,
-                "excluded seat slot(s) not named in uncertified_seats: %s"
-                % ", ".join(parts),
-            )
-        extra = sorted(uncertified_slots - excluded_slots)
-        parts = ["%s/%s r%s a%s o%s" % slot for slot in extra]
-        return _refusal(
-            "unrun-review",
-            JOURNAL_FILE,
-            "uncertified_seats names slot(s) not excluded from certification: %s"
-            % ", ".join(parts),
-        )
-    return None
-
-
 def check_unrun_review(ctx):
     state = ctx["state"]
     journal = ctx["journal"]
     session_dir = ctx["session_dir"]
     certified_head = _certified_head_sha(ctx)
     seats = _collect_seats(ctx)
-    uncertified_seats = []
-    ctx["uncertified_seats"] = uncertified_seats
-    qualified = []
     for seat_entry in seats:
         seat = seat_entry["seat"]
         provenance = seat_entry.get("provenance")
@@ -1285,28 +1179,12 @@ def check_unrun_review(ctx):
                 require_runner_action=True,
             )
             if not ok:
-                channel, vendor = _recorded_seat_channel(ctx, seat_entry)
-                if (phase not in (P_AUDITS, P_FIXER)
-                        and channel == CHANNEL_FILE
-                        and binding == "execution-evidence-absent"):
-                    uncertified_seats.append({
-                        "seat": seat,
-                        "phase": phase,
-                        "round": rnd,
-                        "attempt": attempt,
-                        "occurrence": occurrence,
-                        "vendor": vendor,
-                        "channel": CHANNEL_FILE,
-                        "reason": "host-seat-no-runner-record",
-                    })
-                    continue
                 return _refusal(
                     "unrun-review",
                     seat,
                     "dispatch-observed seat lacks qualifying execution telemetry",
                     binding_failure=binding,
                 )
-            qualified.append(seat_entry)
         elif provenance == PROVENANCE_HAND_LANDED:
             env, path = _load_envelope(
                 session_dir,
@@ -1344,8 +1222,7 @@ def check_unrun_review(ctx):
                     "hand-landed seat lacks qualifying execution-evidence binding",
                     binding_failure=binding,
                 )
-            qualified.append(seat_entry)
-    return _exclusion_floor_refusal(seats, qualified, uncertified_seats)
+    return None
 
 
 def check_same_family_seat(ctx):
@@ -1402,29 +1279,53 @@ def _runner_recorded_vendor_status(obs, session_dir, seat_entry):
     return "missing"
 
 
-def _runner_recorded_model(obs, session_dir, seat_entry):
-    """Return the runner-recorded model from execution evidence, or None when absent."""
-    if isinstance(obs, dict) and "model" in obs:
-        return obs.get("model")
+def _envelope_execution_model(session_dir, seat_entry):
     provenance = seat_entry.get("provenance")
-    if provenance in RECEIPT_PROVENANCE:
+    if provenance not in RECEIPT_PROVENANCE:
+        return None
+    seat = seat_entry["seat"]
+    phase = seat_entry["phase"]
+    attempt = seat_entry["attempt"]
+    occurrence = seat_entry.get("occurrence", 0)
+    rnd = seat_entry["round"]
+    env, _path = _load_envelope(
+        session_dir,
+        rnd,
+        phase,
+        seat,
+        attempt,
+        occurrence,
+    )
+    if not isinstance(env, dict):
+        return None
+    evidence = env.get("executionEvidence")
+    if isinstance(evidence, dict) and "model" in evidence:
+        return evidence.get("model")
+    if "model" in env:
+        return env.get("model")
+    return None
+
+
+def _runner_recorded_model(obs, session_dir, seat_entry):
+    """Return the runner-recorded model from the CAS-bound envelope."""
+    return _envelope_execution_model(session_dir, seat_entry)
+
+
+def _journal_envelope_model_refusal(obs, session_dir, seat_entry):
+    if not isinstance(obs, dict) or "model" not in obs:
+        return None
+    journal_model = obs.get("model")
+    envelope_model = _envelope_execution_model(session_dir, seat_entry)
+    if envelope_model is None:
+        return None
+    if journal_model != envelope_model:
         seat = seat_entry["seat"]
-        phase = seat_entry["phase"]
-        attempt = seat_entry["attempt"]
-        occurrence = seat_entry.get("occurrence", 0)
-        rnd = seat_entry["round"]
-        env, _path = _load_envelope(
-            session_dir,
-            rnd,
-            phase,
+        return _refusal(
+            "unfetched-findings",
             seat,
-            attempt,
-            occurrence,
+            "journal executionEvidence.model disagrees with stored envelope",
+            binding_failure="journal-envelope-mismatch",
         )
-        if isinstance(env, dict):
-            evidence = env.get("executionEvidence")
-            if isinstance(evidence, dict) and "model" in evidence:
-                return evidence.get("model")
     return None
 
 
@@ -1478,6 +1379,9 @@ def check_seat_independence(ctx):
                 seat,
                 "audit seat %s vendor %r has no registry family" % (seat, vendor),
             )
+        model_refusal = _journal_envelope_model_refusal(obs, session_dir, seat_entry)
+        if model_refusal is not None:
+            return model_refusal
     return None
 
 
@@ -2110,65 +2014,6 @@ def _validate_receipt_findings(receipt):
 
 
 def _validate_receipt_additions(receipt):
-    disclosures = receipt.get("disclosures")
-    if not isinstance(disclosures, dict):
-        return _refusal(
-            "unfetched-findings",
-            STATE_FILE,
-            "certified receipt disclosures must be an object",
-        )
-    uncertified = disclosures.get("uncertifiedSeats")
-    if not isinstance(uncertified, list):
-        return _refusal(
-            "unfetched-findings",
-            STATE_FILE,
-            "certified receipt disclosures.uncertifiedSeats must be a list",
-        )
-    for row in uncertified:
-        if not isinstance(row, dict):
-            return _refusal(
-                "unfetched-findings",
-                STATE_FILE,
-                "certified receipt uncertifiedSeats row must be an object",
-            )
-        for key in (
-            "seat", "phase", "round", "attempt", "occurrence",
-            "vendor", "channel", "reason",
-        ):
-            if key not in row:
-                return _refusal(
-                    "unfetched-findings",
-                    STATE_FILE,
-                    "certified receipt uncertifiedSeats row lacks %r" % (key,),
-                )
-        for key in ("seat", "phase", "vendor", "channel", "reason"):
-            if not isinstance(row.get(key), str):
-                return _refusal(
-                    "unfetched-findings",
-                    STATE_FILE,
-                    "certified receipt uncertifiedSeats row %r must be a string" % (key,),
-                )
-        for key in ("round", "attempt", "occurrence"):
-            value = row.get(key)
-            if isinstance(value, bool) or not isinstance(value, int):
-                return _refusal(
-                    "unfetched-findings",
-                    STATE_FILE,
-                    "certified receipt uncertifiedSeats row %r must be an int" % (key,),
-                )
-    seat_map = receipt.get("seatMap") or {}
-    seats_dict = seat_map.get("seats")
-    if isinstance(seats_dict, dict):
-        for seat_name, row in seats_dict.items():
-            if not isinstance(row, dict):
-                continue
-            certified_panel = row.get("certifiedPanel")
-            if certified_panel is not None and not isinstance(certified_panel, bool):
-                return _refusal(
-                    "unfetched-findings",
-                    seat_name,
-                    "certified receipt seatMap.seats certifiedPanel must be a bool",
-                )
     independence = receipt.get("independence") or {}
     audit_seats = independence.get("auditSeats")
     if isinstance(audit_seats, list):
@@ -2227,7 +2072,6 @@ def _build_receipt_rounds(state, form):
 def _receipt_disclosures(ctx, state):
     disclosures = {
         "importantOutOfScope": list(ctx.get("important_disclosures") or []),
-        "uncertifiedSeats": list(ctx.get("uncertified_seats") or []),
     }
     if _supports_nonblocking_disclosure(state):
         disclosures["survivingNonBlocking"] = list(ctx.get("nonblocking_disclosures") or [])
@@ -2314,7 +2158,6 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
                 "disclosures",
                 "certificationShape",
                 "independence",
-                CERTIFIED_PANEL_LABEL,
             ],
             "makerAuthored": [
                 "verdict",
@@ -2336,25 +2179,6 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     policy_applied = state.get("_policyApplied")
     if isinstance(policy_applied, list) and policy_applied:
         receipt["policyApplied"] = list(policy_applied)
-    uncertified_panel_seats = {
-        row["seat"]
-        for row in (ctx.get("uncertified_seats") or [])
-        if isinstance(row, dict) and row.get("phase") == PANEL_PHASE
-    }
-    seat_map_seats = (receipt.get("seatMap") or {}).get("seats")
-    if isinstance(seat_map_seats, dict):
-        certified_panel_key = CERTIFIED_PANEL_LABEL.rsplit(".", 1)[-1]
-        receipt["seatMap"]["seats"] = {
-            seat_name: (
-                dict(
-                    row,
-                    **{certified_panel_key: seat_name not in uncertified_panel_seats},
-                )
-                if isinstance(row, dict)
-                else row
-            )
-            for seat_name, row in seat_map_seats.items()
-        }
     return receipt, None
 
 
