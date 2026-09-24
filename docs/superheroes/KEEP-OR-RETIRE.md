@@ -1247,6 +1247,23 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — owner authority over which model runs which role; the fail-open degrade
   path is deliberate cost control.
 
+#### F2a — Probe-pending registration gate
+
+- **Component.** The probe-pending registration gate: a new model is dispatchable only on the
+  `registration-probe` role while its row is probe-pending; `model_registry.py`'s
+  `registration` field, the `ladder()` / `codex_pin_verdict` filters, and
+  `conformance_probe astra-probe` enforce it.
+- **Condition.** Retires when no registry row carries `registration: "probe-pending"`; re-arms only
+  if a future model is registered that way.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — gates pin eligibility and general dispatch while a row is probe-pending;
+  only a reviewed commit that removes `probe-pending` from the row admits the model.
+  Condition met 2026-09-23: Astra's row no longer carries `probe-pending` (layer 3b-2, PR #1382);
+  no row is probe-pending, so the gate retires at the next gardening pass unless a new model is
+  registered that way.
+
 #### F3 — Doctor/readout/CLI support
 
 - **Component.** F3 is substrate: doctor, readout, CLI contract, identifiers, catalog, core_md, and
@@ -1823,6 +1840,27 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** capability-gap — the lint compensates for an orchestrator that writes orders faster than
   it re-reads them; a model that never leaves a placeholder or a dangling path unfilled would retire
   it. Arrives with issue #1339.
+
+#### S20 — Background mode review-only gate
+
+- **Component.** Not a census row. The review-only restriction on claude background dispatch mode —
+  `_claude_mode_background_write_refusal` / `MODE_REFUSAL_CLAUDE_MODE_BACKGROUND_WRITE` in
+  `engine_dispatch.py`, which refuses any `dispatch-write` opened with `--claude-mode background`
+  before spawn (`attempts: 0`, detail `claude-mode-background-write`). Review runs may use
+  `--claude-mode background` on `dispatch-review`; the transcript delivery path in
+  `_run_claude_background_attempt` is the paired mechanism.
+- **Condition.** Capability-based: the review-only restriction retires when the worktree lease can
+  represent a detached session — until then it stays. A lease that can bind to a background session
+  independently of the launching process's liveness removes the reason write dispatches must refuse.
+- **Last demonstrated benefit.** A write dispatch in background mode would let a detached claude
+  session keep editing after the worktree lease's liveness anchor exits; the gate refuses before
+  spawn rather than reclaiming mid-edit (issue #1273 layer 2b background flow;
+  `plugins/superheroes/lib/tests/test_engine_dispatch_write.py`
+  `test_claude_mode_background_write_refused`).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the gate is temporary shape, not the background channel itself.
+  Tag: `background-channel`.
 
 
 ## The workaround-marker inventory

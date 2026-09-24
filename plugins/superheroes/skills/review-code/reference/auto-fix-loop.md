@@ -170,7 +170,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > | token | when |
 > |---|---|
-> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a pinned 40-/64-hex commit object id, does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, or the merge-base cannot be established |
+> | `sanitized-view-diff-base-abbreviated` | the base is an abbreviated hex commit id; pass the full 40- or 64-character id |
+> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a full 40-/64-hex commit object id (non-hex, fewer than four hex digits, or hex lengths of 41–63 or 65 or more), does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, or the merge-base cannot be established |
 > | `sanitized-view-diff-base-shallow` | the reviewed repository is a shallow clone, so the genuine merge-base cannot be established from its object store; fetch full history (for example `fetch-depth: 0` or `git fetch --unshallow`) and dispatch again |
 > | `sanitized-view-diff-empty` | a base was requested and the resulting patch is empty with nothing withheld |
 > | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config — an external seat could not review this change at all |
@@ -190,6 +191,12 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `mode-invalid` | `--mode` is not a string in `{review,brief-check}` — top-level `mode` stays canonical (`review`); the rejected value is in `rejectedMode` |
 > | `mode-brief-check-with-diff-base` | `--mode brief-check` and `--diff-base` were both explicitly supplied |
 > | `run-dir-mode-mismatch` | continuation with an explicitly disagreeing `--mode` |
+> | `run-dir-claude-mode-mismatch` | a continuation supplies a `--claude-mode` that disagrees with the one the run was opened with; refused with `attempts: 0`, nothing spawned |
+> | `claude-mode-background-write` | a `dispatch-write` call supplies `--claude-mode background` — background mode is review-only; refused with `attempts: 0`, nothing spawned |
+>
+> **Background attempt refusals** (claude `--claude-mode background` on `dispatch-review` only —
+> attempt outcomes on `attempt-ended.refusal`, not pre-spawn refusals): authoritative token
+> list and meanings live in `lib/background_outcome.py` (`ALL_REFUSALS`).
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to the host model), never a
@@ -324,13 +331,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > **`payloadShape` on shape-unreadable forfeit (#687).** When the **last** attempt forfeits because
 > stdout was shape-unreadable, the result may carry `payloadShape`: a mapping with `parsed` (one of
-> `object-without-findings`, `object-both-payload-keys`, `object-findings-not-a-list`,
-> `object-verdicts-not-a-list`, `array-not-all-objects`, `findings-hollow-member`,
-> `verdicts-hollow-member`, `placeholder-literal-refusal`, `no-parseable-json`, `empty-stdout`, or
-> `prompt-echo-only`), `topLevelKeys` (a list of strings,
+> the tokens in `engine_adapter.REVIEW_PAYLOAD_SHAPES` — the one home for this enumeration;
+> read it there rather than a restated list here), `topLevelKeys` (a list of strings,
 > populated only when
-> `parsed` is `object-without-findings` or `object-both-payload-keys`), and `keysTruncated` (bool; signals the key list was
-> capped). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
+> `parsed` is `object-without-findings` or `object-both-payload-keys`), `keysTruncated` (bool; signals the key list was
+> capped), and on hollow-family diagnostics only (the `*-hollow-member` / `*-partial-hollow-member` shapes — read the token enumeration in `engine_adapter.REVIEW_PAYLOAD_SHAPES` rather than a restated list here) `memberShapeWanted` and `memberShapeGot` (each a short bounded token naming the member shape the grader **wanted** and **got**, respectively). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
 > vacuous forfeit and on success.
 >
 > **Originating-verb continuation loop.** Open with `--run-dir` (or omit it for a private temp run dir

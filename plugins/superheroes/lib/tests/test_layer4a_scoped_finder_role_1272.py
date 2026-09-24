@@ -83,7 +83,7 @@ def test_edge2_claude_scoped_finder_guard_check():
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
     assert payload["ok"] is True
-    assert payload["model_id"] == "opus-5"
+    assert payload["model_id"] == "opus-5.5"
     assert payload["effort"] == "xhigh"
     assert payload["dispatch_token"] == "opus"
 

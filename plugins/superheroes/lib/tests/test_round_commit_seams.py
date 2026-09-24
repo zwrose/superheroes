@@ -14,6 +14,8 @@ import time
 
 import pytest
 
+from bite_support import _stamp_ended_from_native_result
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 
@@ -647,11 +649,13 @@ def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run",
   assert ok, detail
   _write_native_review_result(run_dir, repo_root, findings=[])
   stdout = _codex_event_stream_with_tool_call()
-  ED._journal_append(run_dir, {
-    "kind": "attempt-ended", "attempt": 1,
+  ended = _stamp_ended_from_native_result(run_dir, {
     "exit": 0, "timedOut": False, "refusal": None,
     "wallSeconds": 0.1, "stdoutBytes": len(stdout),
     "at": time.time(),
+  }, 1)
+  ED._journal_append(run_dir, {
+    "kind": "attempt-ended", "attempt": 1, **ended,
   })
   open(os.path.join(run_dir, "attempt-1.stdout"), "wb").write(stdout.encode("utf-8"))
   open(os.path.join(run_dir, "attempt-1.stderr"), "wb").write(b"")
