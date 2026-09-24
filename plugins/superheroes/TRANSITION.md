@@ -92,7 +92,8 @@ first arm.
 `interval_seconds`, and `sleep`; the old windowed function is `watch_arm()`). `run` returns at once
 — one ledger read and at most one open-PR read, no waiting. `loop` no longer returns on
 `pr-set-changed` or `stack-state-changed`; those are benign wakes passed over and reported at exit.
-Every `loop` result gains `passedOver` and `passedOverCount`.
+Every `loop` result gains `passedOver` and `passedOverCount`; a `loop-already-live` refusal gains
+`liveLoop`. New refusal tokens: `loop-already-live` and `loop-lock-unavailable`.
 
 ### Launcher premise `dependency` field
 

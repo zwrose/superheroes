@@ -7,7 +7,8 @@ Verbs:
 - run: one-shot evaluation tick — one ledger read, at most one open-PR poll, no sleep.
 - watch_arm: windowed watch — one arm until the first event or arm deadline.
 - loop: re-arms watch_arm internally, passes over benign events, and exits only
-  on lane-ending events, refusals, or its ceiling. loop owns one set of state
+  on lane-ending events, refusals, or its ceiling; refuses a second live loop on
+  the batch. loop owns one set of state
   cells (ledger_observed, pr_state, stack_state, pr_sampled) threaded through every arm so
   store loss across an arm boundary is not mistaken for benign pre-arm silence,
   PR deltas across an arm boundary are not absorbed into a fresh baseline, and
@@ -16,7 +17,8 @@ Verbs:
 Contract:
 - Refusals (ok=False): batch-invalid, max-total-seconds-invalid,
   ignore-event-invalid, interval-invalid, max-seconds-invalid, repo-root-invalid,
-  store-unresolvable, ledger-unreadable, internal-error.
+  store-unresolvable, ledger-unreadable, internal-error, loop-already-live,
+  loop-lock-unavailable.
 - Events (ok=True): lane-terminal, lane-blocked, builder-exited, stack-state-changed,
   pr-set-changed, lane-stale, timer.
 - Degradations (non-fatal): ledger-torn-tail, ledger-unreadable,
@@ -94,11 +96,15 @@ Contract:
   (1.0), strict — so a window of exactly one second DOES poll (with timeout=1.0), and
   only a window shorter than one second is skipped. (Loop's final truncated arm polls
   when at least one full second remains.)
-- Standing guarantees: the watcher never writes under the store (never mutates
-  ledger or heartbeat state); `--log` writes the caller-selected log. It never
-  signals any process (pid liveness is os.kill(pid, 0) probing only).
+- Standing guarantees: the watcher never writes ledger or heartbeat state; under
+  the store its only write is its own loop-lock sidecar (`wave-watch-locks/`);
+  `--log` writes the caller-selected log. It never signals any process (pid
+  liveness is os.kill(pid, 0) probing only).
 """
 import argparse
+import errno
+import fcntl
+import hashlib
 import json
 import math
 import os
@@ -141,6 +147,7 @@ NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH = "stale-suppressed-transcript-fresh"
 RESULT_KEY_STALE_SUPPRESSED = "staleSuppressed"
 RESULT_KEY_PASSED_OVER = "passedOver"
 RESULT_KEY_PASSED_OVER_COUNT = "passedOverCount"
+RESULT_KEY_LIVE_LOOP = "liveLoop"
 
 RUN_READ_BUDGET_SECONDS = 30
 PASSED_OVER_CAP = 100
@@ -185,6 +192,8 @@ REFUSAL_REPO_ROOT_INVALID = "repo-root-invalid"
 REFUSAL_STORE_UNRESOLVABLE = "store-unresolvable"
 REFUSAL_LEDGER_UNREADABLE = "ledger-unreadable"
 REFUSAL_INTERNAL_ERROR = "internal-error"
+REFUSAL_LOOP_ALREADY_LIVE = "loop-already-live"
+REFUSAL_LOOP_LOCK_UNAVAILABLE = "loop-lock-unavailable"
 
 REFUSALS = frozenset({
     REFUSAL_BATCH_INVALID,
@@ -196,6 +205,8 @@ REFUSALS = frozenset({
     REFUSAL_STORE_UNRESOLVABLE,
     REFUSAL_LEDGER_UNREADABLE,
     REFUSAL_INTERNAL_ERROR,
+    REFUSAL_LOOP_ALREADY_LIVE,
+    REFUSAL_LOOP_LOCK_UNAVAILABLE,
 })
 
 EVENT_LANE_TERMINAL = "lane-terminal"
@@ -1284,6 +1295,10 @@ def _loop_exits_on(result):
     return result.get("event") not in BENIGN_EVENTS
 
 
+def _utc_started_at():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 def _passed_over_keys_empty():
     return {
         RESULT_KEY_PASSED_OVER: [],
@@ -1311,6 +1326,157 @@ def _append_passed_over(passed_over, passed_over_count, arm, elapsed, result):
     overflow = len(passed_over) - PASSED_OVER_CAP
     if overflow > 0:
         del passed_over[:overflow]
+
+
+def _read_live_loop_record(lock_fd):
+    try:
+        os.lseek(lock_fd, 0, os.SEEK_SET)
+        raw = os.read(lock_fd, 4096)
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _loop_lock_refusal(detail):
+    result = {
+        "ok": False,
+        "reason": REFUSAL_LOOP_LOCK_UNAVAILABLE,
+        "detail": detail,
+        "arms": 0,
+    }
+    result.update(_passed_over_keys_empty())
+    return result
+
+
+def _loop_already_live_refusal(batch_id, live_loop):
+    pid = live_loop.get("pid") if isinstance(live_loop, dict) else None
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        detail = "loop-already-live:holder-unreadable"
+    else:
+        detail = f"loop-already-live:pid={pid}"
+    result = {
+        "ok": False,
+        "reason": REFUSAL_LOOP_ALREADY_LIVE,
+        "batchId": batch_id,
+        "detail": detail,
+        "arms": 0,
+        RESULT_KEY_LIVE_LOOP: live_loop,
+    }
+    result.update(_passed_over_keys_empty())
+    return result
+
+
+def _close_fd_quiet(fd):
+    if fd is not None:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _acquire_loop_lock(repo_root, batch_id, env, log_path):
+    opened = ll._open_ledger_dirs(repo_root, env=env)
+    if not opened["ok"]:
+        reason = opened.get("reason") or "unknown"
+        _close_fd_quiet(opened.get("root_fd"))
+        _close_fd_quiet(opened.get("repo_fd"))
+        return None, _loop_lock_refusal(f"store-door:{reason}")
+
+    root_fd = opened["root_fd"]
+    repo_fd = opened["repo_fd"]
+    locks_fd = None
+    lock_fd = None
+    try:
+        try:
+            os.mkdir("wave-watch-locks", 0o700, dir_fd=repo_fd)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            return None, _loop_lock_refusal(
+                f"lock-dir-mkdir:{errno.errorcode.get(exc.errno, exc.errno)}",
+            )
+
+        try:
+            locks_fd = os.open(
+                "wave-watch-locks",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=repo_fd,
+            )
+        except OSError as exc:
+            return None, _loop_lock_refusal(
+                f"lock-dir-open:{errno.errorcode.get(exc.errno, exc.errno)}",
+            )
+
+        lock_name = (
+            hashlib.sha256(batch_id.encode("utf-8")).hexdigest() + ".lock"
+        )
+        try:
+            lock_fd = os.open(
+                lock_name,
+                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+                0o600,
+                dir_fd=locks_fd,
+            )
+        except OSError as exc:
+            return None, _loop_lock_refusal(
+                f"lock-file-open:{errno.errorcode.get(exc.errno, exc.errno)}",
+            )
+
+        try:
+            lock_stat = os.fstat(lock_fd)
+        except OSError as exc:
+            return None, _loop_lock_refusal(
+                f"lock-file-stat:{errno.errorcode.get(exc.errno, exc.errno)}",
+            )
+
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            live_loop = _read_live_loop_record(lock_fd)
+            return None, _loop_already_live_refusal(batch_id, live_loop)
+        except OSError as exc:
+            if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+                live_loop = _read_live_loop_record(lock_fd)
+                return None, _loop_already_live_refusal(batch_id, live_loop)
+            return None, _loop_lock_refusal(
+                f"flock:{errno.errorcode.get(exc.errno, exc.errno)}",
+            )
+
+        try:
+            os.ftruncate(lock_fd, 0)
+            payload = json.dumps({
+                "pid": os.getpid(),
+                "startedAt": _utc_started_at(),
+                "batch": batch_id,
+                "log": log_path,
+            }) + "\n"
+            os.write(lock_fd, payload.encode("utf-8"))
+            try:
+                os.fsync(lock_fd)
+            except OSError:
+                pass
+        except OSError as exc:
+            return None, _loop_lock_refusal(
+                f"lock-record-write:{errno.errorcode.get(exc.errno, exc.errno)}",
+            )
+
+        held_fd = lock_fd
+        lock_fd = None
+        return held_fd, None
+    finally:
+        _close_fd_quiet(locks_fd)
+        _close_fd_quiet(repo_fd)
+        _close_fd_quiet(root_fd)
+        _close_fd_quiet(lock_fd)
+
+
+def _release_loop_lock(lock_fd):
+    _close_fd_quiet(lock_fd)
 
 
 def _close_log_silent(log_file):
@@ -1787,12 +1953,14 @@ def loop(
     ignore_launch_ids=(),
     ignore_events=(),
     run_fn=None,
+    loop_lock=None,
 ):
     """Re-arm watch_arm until lane-ending exit, refusal, or ceiling."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
     arms = 0
     loop_degraded = set()
     log_file = None
+    lock_fd = None
     passed_over = []
     passed_over_count = [0]
     try:
@@ -1840,6 +2008,15 @@ def loop(
                 _refusal(REFUSAL_REPO_ROOT_INVALID, batch_id, arms=0),
             )
 
+        if loop_lock is not None:
+            lock_fd = loop_lock
+        else:
+            lock_fd, lock_refusal = _acquire_loop_lock(
+                repo_root, batch_id, env, log_path,
+            )
+            if lock_refusal is not None:
+                return lock_refusal
+
         ledger_observed = [False]
         pr_state = [None]
         stack_state = [None]
@@ -1875,6 +2052,8 @@ def loop(
                     final_degraded.update(loop_degraded)
                     final["degraded"] = sorted(final_degraded)
                     _close_log_silent(log_file)
+                    _release_loop_lock(lock_fd)
+                    lock_fd = None
                     return final
 
             if total_deadline is not None:
@@ -1913,6 +2092,8 @@ def loop(
                 final["degraded"] = sorted(final_degraded)
                 _loop_attach_passed_over(final, passed_over, passed_over_count)
                 _close_log_silent(log_file)
+                _release_loop_lock(lock_fd)
+                lock_fd = None
                 return final
 
             elapsed = monotonic() - total_start
@@ -1959,10 +2140,14 @@ def loop(
                     final_degraded.update(loop_degraded)
                     final["degraded"] = sorted(final_degraded)
                     _close_log_silent(log_file)
+                    _release_loop_lock(lock_fd)
+                    lock_fd = None
                     return final
             continue
     except Exception as exc:
         _close_log_silent(log_file)
+        _release_loop_lock(lock_fd)
+        lock_fd = None
         result = _refusal(REFUSAL_INTERNAL_ERROR, batch_for_refusal, arms=arms)
         result["detail"] = type(exc).__name__
         if loop_degraded:

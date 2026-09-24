@@ -109,7 +109,7 @@ The check is **fail-closed:** a hit, an ambiguous reading, an unavailable listin
 
 The reference's one-off check returns at once and is safe before arming — the cheap catch for a mistyped batch id.
 
-**Residual:** the check and the arm are two steps, so two advisor seats resuming the same project at the same moment could both find nothing and both arm. This skill rests on there being one advisor seat per project; do not imply the check is atomic.
+**Residual:** the check and the arm are two steps, so two advisor seats resuming the same project at the same moment could both find nothing and both arm; `loop` itself also refuses a second live loop on the same batch (`loop-already-live`), so two seats racing to arm end with one watcher and one refusal, not two watchers. This skill rests on there being one advisor seat per project; do not imply the check is atomic.
 
 ## Step 7 — report in three lines
 
