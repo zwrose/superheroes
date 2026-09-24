@@ -85,6 +85,7 @@ P_AUDITS = session_contract.AUDITS_PHASE
 SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
 SEAT_RESULT_SCHEMA_V2 = "seat-result/2"
 ORDERS_DIRNAME = "orders"
+CERTIFIED_PANEL_LABEL = "seatMap.seats.*.certifiedPanel"
 
 BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND = "execution-evidence-head-unbound"
 BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE = "certified-head-unresolvable"
@@ -2313,6 +2314,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
                 "disclosures",
                 "certificationShape",
                 "independence",
+                CERTIFIED_PANEL_LABEL,
             ],
             "makerAuthored": [
                 "verdict",
@@ -2341,9 +2343,13 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     }
     seat_map_seats = (receipt.get("seatMap") or {}).get("seats")
     if isinstance(seat_map_seats, dict):
+        certified_panel_key = CERTIFIED_PANEL_LABEL.rsplit(".", 1)[-1]
         receipt["seatMap"]["seats"] = {
             seat_name: (
-                dict(row, certifiedPanel=seat_name not in uncertified_panel_seats)
+                dict(
+                    row,
+                    **{certified_panel_key: seat_name not in uncertified_panel_seats},
+                )
                 if isinstance(row, dict)
                 else row
             )

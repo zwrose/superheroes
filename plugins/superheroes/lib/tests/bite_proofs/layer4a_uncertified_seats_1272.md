@@ -12,6 +12,7 @@ Re-taken at head 3b1ee864 (plus this order's changes).
 | C6 | `auditSeats[].model` check | `test_l4a_edge11_bad_audit_model_refuses` |
 | C7 | hand-landed `qualified.append` (defect-1 fix) | `test_l4a_t_floor_hand_landed_qualifying_panel_plus_host_uncertified_no_refusal` |
 | C8 | copied seat-map rows (defect-2 fix) | `test_l4a_t_nomutate_build_receipt_does_not_mutate_state_seat_map_rows` |
+| C9 | `certifiedPanel` provenance label | `test_l4a_seat_map_injected_keys_provenance_census` |
 
 ## C1 — channel condition
 
@@ -485,4 +486,76 @@ receipt["seatMap"]["seats"] = {
 ```
 .                                                                        [100%]
 1 passed in 0.21s
+```
+
+## C9 — certifiedPanel provenance label
+
+**Axis:** every key the writer injects into a seat-map row must be named in `provenanceLabels.derived` as `seatMap.seats.*.<key>`.
+
+**Guarded code:** `round_certification._build_receipt` (`provenanceLabels.derived` includes `CERTIFIED_PANEL_LABEL`)
+
+**Neutralization:**
+
+```python
+                "independence",
+            ],
+```
+
+(removes `CERTIFIED_PANEL_LABEL` from the `derived` list)
+
+**Detector:** `test_l4a_seat_map_injected_keys_provenance_census`
+
+**Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_l4a_seat_map_injected_keys_provenance_census _______________
+
+tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-5671/test_l4a_seat_map_injected_key0')
+
+    def test_l4a_seat_map_injected_keys_provenance_census(tmp_path):
+        session_dir = _panel_host_uncertified_session(tmp_path)
+        ctx, err = RC._load_context(session_dir)
+        assert err is None
+        state = ctx["state"]
+        state["seatMapReceipts"] = [{
+            "round": "1",
+            "map": {
+                "seats": {
+                    "code-reviewer": {"vendor": "claude", "model": "sonnet"},
+                    "security-reviewer": {"vendor": "codex", "model": "gpt"},
+                },
+            },
+        }]
+        source_seats = {}
+        for entry in state["seatMapReceipts"]:
+            seats = (entry.get("map") or {}).get("seats") or {}
+            source_seats.update(seats)
+        receipt, refusal = RC._build_receipt(ctx, "certified", None)
+        assert refusal is None
+        derived = receipt["provenanceLabels"]["derived"]
+>       assert RC.CERTIFIED_PANEL_LABEL in derived
+E       AssertionError: assert 'seatMap.seats.*.certifiedPanel' in ['schemaVersion', 'scriptRan', 'terminalState', 'terminalCause', 'seats', 'disclosures', ...]
+E        +  where 'seatMap.seats.*.certifiedPanel' = RC.CERTIFIED_PANEL_LABEL
+
+tests/test_layer4a_uncertified_seats_1272.py:329: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_layer4a_uncertified_seats_1272.py::test_l4a_seat_map_injected_keys_provenance_census
+1 failed in 0.25s
+```
+
+**Restore (quoted restored lines):**
+
+```python
+                "independence",
+                CERTIFIED_PANEL_LABEL,
+            ],
+```
+
+**Green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.33s
 ```

@@ -290,6 +290,56 @@ def test_l4a_certify_receipt_discloses_host_uncertified_seat(tmp_path):
     }]
     assert receipt["seatMap"]["seats"][host_seat]["certifiedPanel"] is False
     assert receipt["seatMap"]["seats"][engine_seat]["certifiedPanel"] is True
+    assert RC.CERTIFIED_PANEL_LABEL in receipt["provenanceLabels"]["derived"]
+
+
+# --- provenance census: injected seat-map row keys named in provenanceLabels.derived ------
+
+
+def _derived_seat_map_row_field_labels(derived_labels):
+    prefix = "seatMap.seats.*."
+    return {
+        label[len(prefix):]
+        for label in derived_labels
+        if label.startswith(prefix)
+    }
+
+
+def test_l4a_seat_map_injected_keys_provenance_census(tmp_path):
+    session_dir = _panel_host_uncertified_session(tmp_path)
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    state = ctx["state"]
+    state["seatMapReceipts"] = [{
+        "round": "1",
+        "map": {
+            "seats": {
+                "code-reviewer": {"vendor": "claude", "model": "sonnet"},
+                "security-reviewer": {"vendor": "codex", "model": "gpt"},
+            },
+        },
+    }]
+    source_seats = {}
+    for entry in state["seatMapReceipts"]:
+        seats = (entry.get("map") or {}).get("seats") or {}
+        source_seats.update(seats)
+    receipt, refusal = RC._build_receipt(ctx, "certified", None)
+    assert refusal is None
+    derived = receipt["provenanceLabels"]["derived"]
+    assert RC.CERTIFIED_PANEL_LABEL in derived
+    labeled_keys = _derived_seat_map_row_field_labels(derived)
+    receipt_seats = (receipt.get("seatMap") or {}).get("seats") or {}
+    for seat_name, receipt_row in receipt_seats.items():
+        if not isinstance(receipt_row, dict):
+            continue
+        source_row = source_seats.get(seat_name) or {}
+        if not isinstance(source_row, dict):
+            source_row = {}
+        injected = set(receipt_row) - set(source_row)
+        for key in injected:
+            assert key in labeled_keys, (
+                "seatMap.seats.*.%s missing from provenanceLabels.derived" % key
+            )
 
 
 # --- edge 2: sole host on non-panel phase with no panel row → floor refuses ---------------

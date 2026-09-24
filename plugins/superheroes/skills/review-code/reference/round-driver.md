@@ -1005,7 +1005,9 @@ The certification receipt is a **superset** of today's `round-receipt.json` fiel
   `importantOutOfScope` for every Important finding that took an out-of-scope disposition with a
   valid follow-up; `survivingNonBlocking` for surviving Minor or Nit findings without a recorded
   disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`)
-- `provenanceLabels` — which receipt keys are derived from the journal vs maker-authored
+- `provenanceLabels` — which receipt keys are derived from the journal vs maker-authored;
+  each derived entry is a top-level key or one dotted nested path with `*` for any seat
+  (e.g. `seatMap.seats.*.certifiedPanel`)
 
 `certificationShape` is the **single field that deliberately differs** from what
 `build_receipt` would write for the same session: **any** hand-landed seat forces

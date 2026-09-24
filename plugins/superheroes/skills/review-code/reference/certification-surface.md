@@ -55,7 +55,7 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `terminalCause` | `null` when certified; otherwise `{kind, reason}` from the terminal-cause table |
 | `seats` | Per collected seat: `seat`, `phase`, `round`, `attempt`, `provenance` |
 | `disclosures` | `{importantOutOfScope: [...], survivingNonBlocking: [...], uncertifiedSeats: [...]}` — `importantOutOfScope`: Important findings with valid out-of-scope follow-up; `survivingNonBlocking`: surviving Minor or Nit findings without a recorded disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`); `uncertifiedSeats` (always present, possibly empty): each row `seat`, `phase`, `round`, `attempt`, `occurrence`, `vendor`, `channel`, `reason` |
-| `provenanceLabels` | `{derived: [...], makerAuthored: [...]}` naming which keys are journal-derived |
+| `provenanceLabels` | `{derived: [...], makerAuthored: [...]}` — each entry is a top-level receipt key or one dotted nested path with `*` for any seat (e.g. `seatMap.seats.*.certifiedPanel`); derived entries are journal-derived, makerAuthored entries are projected from state |
 
 Optional keys when present in state: `base` (pinned-base metadata), `policyApplied`.
 
