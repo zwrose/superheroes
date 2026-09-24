@@ -202,6 +202,20 @@ def unjudgeable_run_level_disclosure(
     )
 
 
+def round_governing_map(state, round_id):
+    """The seat map governing *this round* — own-round submission wins, else ``effective_seat_map``.
+
+    Shared selector for per-round receipt projections (#1204, #1273)."""
+    round_label = str(round_id)
+    for entry in reversed(receipts(state)):
+        if str(entry.get("round", "")) == round_label:
+            selected = entry.get("map")
+            if isinstance(selected, dict):
+                return selected
+            break
+    return effective_seat_map(state)
+
+
 def round_governing_unjudgeable(state, round_id, driver_author_family=None):
     """Per-round judgeability for the map governing *this round* — not the terminal predicate.
 
@@ -212,16 +226,8 @@ def round_governing_unjudgeable(state, round_id, driver_author_family=None):
     This is **not** ``unjudgeable_receipts``: that reader keeps the whole-history union so an
     earlier bad map is never dropped from the run's disclosure (#714 NR-B)."""
     round_label = str(round_id)
-    selected_map = None
+    selected_map = round_governing_map(state, round_id)
     selected_round_label = round_label
-    for entry in reversed(receipts(state)):
-        if str(entry.get("round", "")) == round_label:
-            selected_map = entry.get("map")
-            selected_round_label = str(entry.get("round", ""))
-            break
-    if selected_map is None:
-        selected_map = effective_seat_map(state)
-        selected_round_label = round_label
     if not isinstance(selected_map, dict) or not selected_map:
         return []
     basis = seat_map.violation_basis(selected_map, driver_author_family)

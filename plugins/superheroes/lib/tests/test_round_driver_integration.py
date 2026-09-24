@@ -25,6 +25,8 @@ import time
 
 import pytest
 
+from bite_support import _stamp_ended_from_native_result
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
@@ -824,7 +826,8 @@ def _write_native_review_result(run_dir, repo_root, *, findings=None, panel_find
 
 
 def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-panel-e2e",
-                       telemetry_shape="dispatch-observed", view_head_sha="abc123fake"):
+                       telemetry_shape="dispatch-observed", view_head_sha="abc123fake",
+                       resolved_inputs=None):
     """Build a runner run directory for dispatch-observed evidence tests.
 
     This run directory is a test double for the runner's own record of a real dispatch; the
@@ -868,17 +871,19 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
         timeout=30, retry_timeout=30, prompt_path=order_path, view_path=view_path,
         view_meta=view_meta, fed_prompt=fed_prompt, order_id="panel-e2e-order",
         progress_path=os.path.join(run_dir, "progress.jsonl"), repo_root=repo_root,
-        echo_nonce=echo_nonce, base_prompt=base_prompt,
+        echo_nonce=echo_nonce, base_prompt=base_prompt, resolved_inputs=resolved_inputs,
     )
     assert ok, detail
     if engine == "codex":
         _write_native_review_result(
             run_dir, repo_root, panel_findings=panel_findings)
-    engine_dispatch._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 0.1, "stdoutBytes": len(stdout),
         "at": time.time(),
+    }, 1)
+    engine_dispatch._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, **ended,
     })
     with open(os.path.join(run_dir, "attempt-1.stdout"), "wb") as fh:
         fh.write(stdout.encode("utf-8"))
@@ -1235,11 +1240,13 @@ def _write_execution_run_dir(tmp_path, order_path, echo_nonce="nonce-fixer-e2e")
         assert ok is True, reason
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
         fh.write("")
-    engine_dispatch._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 1.0, "stdoutBytes": len(stdout),
         "at": time.time(),
+    }, 1)
+    engine_dispatch._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, **ended,
     })
     return run_dir
 

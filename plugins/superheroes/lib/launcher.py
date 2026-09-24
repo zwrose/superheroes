@@ -26,6 +26,8 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import config_dir  # noqa: E402
+import engine_adapter  # noqa: E402
+import engine_dispatch  # noqa: E402
 import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
@@ -1134,7 +1136,10 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     # too. That is safe because the only retrying path is spawn-oserror, where
     # Popen raised and no child ever started — every other failure is terminal
     # with no re-spawn.
-    argv = ["claude", "--model", token, "--session-id", session_id, "-p", prompt]
+    built = engine_adapter.claude_builder_argv(token, session_id, prompt)
+    if built.get("ok") is False or built.get("reason") is not None:
+        return _fail(built["reason"])
+    argv = built["argv"]
     return {
         "ok": True,
         "reason": None,
@@ -2296,6 +2301,49 @@ def count_batch(repo_root, batch_id, env=None):
     return ll.count(repo_root, batch_id, env=env)
 
 
+def canary(repo_root, launch_id, env=None):
+    """Report builder engagement from the lane's own session transcript tool calls."""
+    read = ll.read(repo_root, env=env)
+    if read["state"] != "ok":
+        return _fail("canary-ledger-unreadable:%s" % read["state"])
+    folded = ll.fold(read["records"])
+    if not folded["ok"]:
+        return _fail("canary-ledger-fold-refused:%s" % folded["reason"])
+    lane = folded["launches"].get(launch_id)
+    if lane is None:
+        return _fail("canary-lane-unknown")
+    session_id = lane.get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        return _fail("canary-session-id-absent")
+    config_dir = lane.get("configDir")
+    if not isinstance(config_dir, str) or not config_dir:
+        return _fail("canary-config-dir-absent")
+    rows, paths, size = engine_dispatch.read_session_transcript_rows(
+        config_dir, session_id,
+    )
+    if len(paths) == 0:
+        return _fail("canary-transcript-missing")
+    if len(paths) > 1:
+        return _fail("canary-transcript-ambiguous")
+    tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+    if tool_calls is None:
+        return _fail("canary-transcript-unreadable")
+    truncated = size > engine_dispatch.MAX_STDOUT_CAPTURE
+    if size > engine_dispatch.MAX_STDOUT_CAPTURE and tool_calls == 0:
+        return _fail("canary-transcript-truncated")
+    return {
+        "ok": True,
+        "reason": None,
+        "launchId": launch_id,
+        "sessionId": session_id,
+        "configDir": config_dir,
+        "transcriptPath": paths[0],
+        "toolCalls": tool_calls,
+        "truncated": truncated,
+        "engaged": tool_calls > 0,
+    }
+
+
 def _cli_preflight(args):
     checks, dup_reason = _read_json_file(args.checks, duplicate_reason="preflight-duplicate-key")
     if dup_reason:
@@ -2390,6 +2438,10 @@ def _cli_declare_batch(args):
     return declare_batch(args.repo_root, args.batch, expected)
 
 
+def _cli_canary(args):
+    return canary(args.repo_root, args.launch_id)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="launcher")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2460,6 +2512,11 @@ def main(argv=None):
     db.add_argument("--batch", required=True)
     db.add_argument("--expected", type=int, required=True)
     db.set_defaults(func=_cli_declare_batch)
+
+    cn = sub.add_parser("canary")
+    cn.add_argument("--repo-root", required=True)
+    cn.add_argument("--launch-id", required=True)
+    cn.set_defaults(func=_cli_canary)
 
     args = parser.parse_args(argv)
     result = args.func(args)
