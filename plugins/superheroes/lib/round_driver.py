@@ -299,12 +299,14 @@ _declared_disclosures = receipt_disclosures.declared_disclosures
 _receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 _normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 RESUMABLE_DISCLOSURE_CHANNELS = receipt_disclosures.RESUMABLE_DISCLOSURE_CHANNELS
+RECORD_ONLY_DISCLOSURE_CHANNELS = receipt_disclosures.RECORD_ONLY_DISCLOSURE_CHANNELS
 _DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
 _str_list = receipt_disclosures.str_list
 _dict_list = receipt_disclosures.dict_list
 _bool_value = receipt_disclosures.bool_value
 _canary_failed_shape = receipt_disclosures.canary_failed_shape
 _canary_verified_shape = receipt_disclosures.canary_verified_shape
+_control_probe_shape = receipt_disclosures.control_probe_shape
 _adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 _order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
 build_degraded_prose = receipt_disclosures.build_degraded_prose
@@ -334,6 +336,7 @@ dict_list = receipt_disclosures.dict_list
 bool_value = receipt_disclosures.bool_value
 canary_failed_shape = receipt_disclosures.canary_failed_shape
 canary_verified_shape = receipt_disclosures.canary_verified_shape
+control_probe_shape = receipt_disclosures.control_probe_shape
 adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
 DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
@@ -2422,62 +2425,10 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
             if isinstance(eng, str) and eng == vendor:
                 matching.append(probe)
 
-        # axis: every probe is normalized before status — self-asserted outcome cannot certify alone
-        normalized = []
-        for probe in matching:
-            outcome, fault = canary_outcome.normalize(probe)
-            normalized.append((probe, outcome, fault))
-
-        dead = []
-        outcome_failed = []
-        plant_undetected = []
-        passing = []
-        for probe, outcome, fault in normalized:
-            if canary_outcome.is_pass(outcome):
-                passing.append((probe, outcome, fault))
-            elif outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
-                plant_undetected.append((probe, outcome, fault))
-            elif outcome in _CANARY_DISPATCH_FAILURE_OUTCOMES:
-                if probe.get("engaged") is True:
-                    outcome_failed.append((probe, outcome, fault))
-                else:
-                    dead.append((probe, outcome, fault))
-            elif outcome in _CANARY_DEAD_OUTCOMES:
-                dead.append((probe, outcome, fault))
-
-        if dead:
-            deciding, _, fault = sorted(dead, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "dead"
-        elif outcome_failed:
-            deciding, _, fault = sorted(
-                outcome_failed, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "outcome-failed"
-        elif plant_undetected:
-            deciding, _, fault = sorted(
-                plant_undetected, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = canary_outcome.OUTCOME_PLANT_UNDETECTED
-        elif passing:
-            deciding, _, fault = sorted(passing, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "proven"
-        else:
-            deciding = None
-            fault = None
-            st = "unproven"
-
-        if deciding is not None:
-            det = deciding.get("detail")
-            probe_detail = det if isinstance(det, str) else None
-            if fault:
-                detail_s = fault
-                if probe_detail:
-                    detail_s = "%s; %s" % (fault, probe_detail)
-            else:
-                detail_s = probe_detail
-            ev = deciding.get("evidence")
-            evidence = ev if isinstance(ev, dict) else None
-        else:
-            detail_s = None
-            evidence = None
+        judged = _canary_judge_vendor_probes(matching)
+        st = judged["status"]
+        detail_s = judged["detail"]
+        evidence = judged["evidence"]
 
         by_vendor[vendor] = {
             "status": st, "seats": dims_v, "detail": detail_s, "evidence": evidence,
@@ -2523,6 +2474,108 @@ def _normalize_canary_probes(canary_raw):
     if isinstance(canary_raw, list):
         return [p for p in canary_raw if isinstance(p, dict)]
     return []
+
+
+def _canary_judge_vendor_probes(matching):
+    """Worst probe for one vendor — shared by ``canary_liveness`` and ``_build_control_probe_record``."""
+    # axis: every probe is normalized before status — self-asserted outcome cannot certify alone
+    normalized = []
+    for probe in matching:
+        if not isinstance(probe, dict):
+            continue
+        outcome, fault = canary_outcome.normalize(probe)
+        normalized.append((probe, outcome, fault))
+
+    dead = []
+    outcome_failed = []
+    plant_undetected = []
+    passing = []
+    for probe, outcome, fault in normalized:
+        if canary_outcome.is_pass(outcome):
+            passing.append((probe, outcome, fault))
+        elif outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
+            plant_undetected.append((probe, outcome, fault))
+        elif outcome in _CANARY_DISPATCH_FAILURE_OUTCOMES:
+            if probe.get("engaged") is True:
+                outcome_failed.append((probe, outcome, fault))
+            else:
+                dead.append((probe, outcome, fault))
+        elif outcome in _CANARY_DEAD_OUTCOMES:
+            dead.append((probe, outcome, fault))
+
+    if dead:
+        deciding, outcome_token, fault = sorted(
+            dead, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = "dead"
+    elif outcome_failed:
+        deciding, outcome_token, fault = sorted(
+            outcome_failed, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = "outcome-failed"
+    elif plant_undetected:
+        deciding, outcome_token, fault = sorted(
+            plant_undetected, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = canary_outcome.OUTCOME_PLANT_UNDETECTED
+    elif passing:
+        deciding, outcome_token, fault = sorted(
+            passing, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = "proven"
+    else:
+        deciding = None
+        outcome_token = None
+        fault = None
+        st = "unproven"
+
+    if deciding is not None:
+        det = deciding.get("detail")
+        probe_detail = det if isinstance(det, str) else None
+        if fault:
+            detail_s = fault
+            if probe_detail:
+                detail_s = "%s; %s" % (fault, probe_detail)
+        else:
+            detail_s = probe_detail
+        ev = deciding.get("evidence")
+        evidence = ev if isinstance(ev, dict) else None
+    else:
+        detail_s = None
+        evidence = None
+
+    return {
+        "status": st,
+        "detail": detail_s,
+        "evidence": evidence,
+        "deciding": deciding,
+        "outcomeToken": outcome_token,
+    }
+
+
+def _build_control_probe_record(canary_raw):
+    """Per-round sampled competence probe disclosure; never a verdict input."""
+    if canary_raw is None:
+        return {"submitted": False, "vendors": {}}
+    if isinstance(canary_raw, dict):
+        indexed = list(enumerate([canary_raw]))
+    elif isinstance(canary_raw, list):
+        indexed = list(enumerate(canary_raw))
+    else:
+        return {"submitted": True, "vendors": {"<malformed-0>": "malformed"}}
+    vendors = {}
+    by_engine = {}
+    for index, probe in indexed:
+        if not isinstance(probe, dict):
+            vendors["<malformed-%d>" % index] = "malformed"
+            continue
+        engine = probe.get("engine")
+        if not isinstance(engine, str) or not engine:
+            vendors["<malformed-%d>" % index] = "malformed"
+            continue
+        by_engine.setdefault(engine, []).append(probe)
+    for engine, matching in by_engine.items():
+        judged = _canary_judge_vendor_probes(matching)
+        token = judged.get("outcomeToken")
+        if token is not None:
+            vendors[engine] = token
+    return {"submitted": True, "vendors": {k: vendors[k] for k in sorted(vendors)}}
 
 
 def _seat_map_configured_vendor(seat_map, dim):
@@ -2651,7 +2704,6 @@ def _fold_panel(state, config, artifact):
                   % (len(engaged_artifact_dims), ", ".join(engaged_artifact_dims)))
     # Cross-vendor liveness canary — per-vendor judgement via canary_liveness (pure).
     _sm_for_canary = _sm_canary_map(state, seat_map)
-    canary_panel_gap = False
     ran_manifest_canary = (artifact.get("ranManifest")
                            if isinstance(artifact.get("ranManifest"), dict) else {})
     live = canary_liveness(
@@ -2661,7 +2713,6 @@ def _fold_panel(state, config, artifact):
     if not isinstance(by_vendor, dict):
         by_vendor = {}
     unverified_dims = _canary_dims_for_status(live, by_vendor, "unproven")
-    dead_dims = _canary_dims_for_status(live, by_vendor, "dead")
     failed_vendors = {}
     outcome_failed_vendors = {}
     plant_undetected_vendors = {}
@@ -2674,22 +2725,16 @@ def _fold_panel(state, config, artifact):
             failed_vendors[vendor] = info
         elif st == "outcome-failed":
             outcome_failed_vendors[vendor] = info
-            canary_panel_gap = True
         elif st == canary_outcome.OUTCOME_PLANT_UNDETECTED:
             plant_undetected_vendors[vendor] = info
         elif st == "proven":
             ev = info.get("evidence")
             verified_by_vendor[vendor] = ev if isinstance(ev, dict) else {}
-    for dim in dead_dims:
-        if dim not in missing_dims:
-            missing_dims.append(dim)
-        seat_status[dim] = "missing"
     if unverified_dims:
-        canary_panel_gap = True
         _record_round(state, "canaryUnverified", sorted(set(unverified_dims)))
         _decision(state, "canary-unverified",
-                  "cross-vendor seat(s) (%s) returned zero findings and no engaged control "
-                  "probe for their vendor — external-seat liveness unverified"
+                  "cross-vendor seat(s) (%s) returned zero findings and no control probe was "
+                  "submitted for their vendor — recorded"
                   % ", ".join(sorted(set(unverified_dims))))
     if failed_vendors:
         failed_dims = sorted({d for info in failed_vendors.values()
@@ -2715,7 +2760,7 @@ def _fold_panel(state, config, artifact):
             detail = info.get("detail") or "engaged not true"
             _decision(state, "canary-failed",
                       "control probe for vendor %s showed no engagement (%s) — cross-vendor "
-                      "seat(s) %s downgraded to never-ran"
+                      "seat(s) %s; probe outcome recorded"
                       % (vendor, detail, ", ".join(vdims)))
     if outcome_failed_vendors:
         failed_dims = sorted({d for info in outcome_failed_vendors.values()
@@ -2743,11 +2788,9 @@ def _fold_panel(state, config, artifact):
             detail = info.get("detail") or "outcome failure"
             _decision(state, "canary-outcome-failed",
                       "control probe for vendor %s was engaged but reported outcome failure "
-                      "(%s) — cross-vendor seat(s) %s remain run; panel certification withheld"
+                      "(%s) — cross-vendor seat(s) %s; probe outcome recorded"
                       % (vendor, detail, ", ".join(vdims)))
     if plant_undetected_vendors:
-        # axis: a non-pass canary withholds panel certification
-        canary_panel_gap = True
         if len(plant_undetected_vendors) == 1:
             only = next(iter(plant_undetected_vendors.values()))
             cpu_rec = {
@@ -2771,7 +2814,7 @@ def _fold_panel(state, config, artifact):
             detail = info.get("detail") or "plant not detected"
             _decision(state, "canary-plant-undetected",
                       "control probe for vendor %s was engaged but missed the planted defect "
-                      "(%s) — cross-vendor seat(s) %s remain run; panel certification withheld"
+                      "(%s) — cross-vendor seat(s) %s; probe outcome recorded"
                       % (vendor, detail, ", ".join(vdims)))
     if verified_by_vendor:
         if len(live.get("byVendor") or {}) == 1:
@@ -2779,7 +2822,8 @@ def _fold_panel(state, config, artifact):
                           next(iter(verified_by_vendor.values())))
         else:
             _record_round(state, "canaryVerified", verified_by_vendor)
-    incomplete = bool(missing_dims) or canary_panel_gap
+    _record_round(state, "controlProbe", _build_control_probe_record(artifact.get("canaryResult")))
+    incomplete = bool(missing_dims)
     compiled, drops = mechanical_compile(raw, state.get("reviewedDiff"))
     # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
     # confirmation panel: it consumes one of the two-panel budget (the #174 bar). An INCOMPLETE panel
@@ -2846,20 +2890,6 @@ def _fold_panel(state, config, artifact):
             _decision(state, "panel-seat-missing",
                       "panel incomplete — %d configured lens(es) did not run (%s); certification cannot "
                       "be full-panel-confirmed" % (len(missing_dims), ", ".join(missing_dims)))
-        elif canary_panel_gap:
-            unv = sorted({
-                d for info in (live.get("byVendor") or {}).values()
-                if isinstance(info, dict) and info.get("status") == "unproven"
-                for d in (info.get("seats") or [])
-            })
-            if unv:
-                vendors = sorted(
-                    v for v, info in (live.get("byVendor") or {}).items()
-                    if isinstance(info, dict) and info.get("status") == "unproven")
-                _decision(state, "panel-incomplete-canary-gap",
-                          "panel incomplete — cross-vendor seat(s) %s lack an engaged control probe "
-                          "for vendor(s) %s; certification cannot be full-panel-confirmed"
-                          % (", ".join(unv), ", ".join(vendors)))
     # Only a COMPLETE panel can anchor a full-panel-confirmed certification. A missing seat leaves
     # fullPanelRan False so a clean finish downgrades to audited-chain and names the gap.
     state["fullPanelRan"] = not incomplete

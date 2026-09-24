@@ -308,7 +308,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **unsafe** because the key may carry `null`, not merely be missing; consumers must handle a `null`
 > value. The runner **never** reports `"inert"` — absence of positive evidence is not proof of
 > inaction, because a correct payload the transport could not read looks identical to a seat that never
-> ran. Only `seat_canary probe` can justify calling a seat inert.
+> ran. Whether a seat actually looked is proven only by that seat's runner telemetry (recorded tool
+> calls and reads). The control probe never decides engagement.
 >
 > **Tokens are corroborating evidence only — measured (#687).** Engine telemetry (token spend, tool
 > calls, wall time) remains **corroborating evidence only** and can never satisfy the investigation
@@ -422,10 +423,31 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > path). `dispatch-write` refuses a primary checkout (`cwd-primary-checkout`), so the in-place fixer
 > path is **unchanged** and is **not** a consumer of the write verb. Do not imply otherwise.
 >
-> **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
-> panel's seats that **ran** with zero findings on that vendor's seat(s), run the planted-defect
-> control probe **once per such vendor** before treating those seats as clean. Select and
-> deduplicate canaries using the same effective-vendor rule as `round_driver.canary_liveness` —
+> **Cross-vendor control probe (#668, register R7).** The planted-defect control probe is a **sampled competence
+> probe**: it measures whether a cross-vendor seat would catch an obvious planted defect, not whether
+> the seat engaged. It runs **after certification**, never during a panel fold and never before the
+> session reaches a **certified** terminal state — uncertified reviews are never probed.
+>
+> **Sampling — outside the loop.** The review loop **does not decide** whether a review is sampled and
+> **does not record** that decision. No panel fold runs the probe and no loop artifact carries a sampling
+> flag. After a review **certifies**, whoever runs the post-cert competence probe decides whether this
+> review is in the sample (for example the advisor at wave preflight or at vet). When a sample runs,
+> save the result beside the receipt as `$SESSION_DIR/control-probe-sample.json`: the probe JSON per
+> cross-vendor vendor plus the receipt's `terminalState`. **No file means no sample ran.** That file is
+> **never** read into a verdict and **never** edits the receipt. Because the probe is not a gate, a lost
+> or skipped sample costs one competence data point and never a certification — there is no durable
+> in-loop sampling flag.
+>
+> **Panel fold — no probe, no `canaryResult`.** On every loop that follows this doc, no panel fold
+> runs the probe and no panel artifact carries `canaryResult`. The driver's `controlProbe` fold stays a
+> **tolerant recorder** for a legacy `canaryResult` when one is still submitted on an older path; when
+> absent it records `controlProbe: {"submitted": false, "vendors": {}}`. Use
+> `control-probe-sample.json` to audit which post-cert probes ran — not the receipt's `controlProbe` alone.
+>
+> **Post-certification probe selection.** When a sample runs on a **certified** review, run the probe
+> **once per distinct cross-vendor vendor** among seats that **ran** with zero findings on that vendor's
+> seat(s). Select and deduplicate canaries using the same effective-vendor rule as
+> `round_driver.canary_liveness` —
 > trusted `ranManifest` first, configured vendor otherwise — and resolve that effective vendor's
 > model and effort for the seat tier before probing. Exclude seats whose status is not `run`. A seat
 > whose registry config is **effort-less** — one the model
@@ -436,12 +458,13 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-> # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object you
-> # submit on `dispatch-panel`). $PANEL_SEAT_STATUS — per-dimension status map (`run` / `missing` /
-> # etc.) for the same round. $RAN_MANIFEST — trusted `{<dim>: <vendor>}` record of which vendor
-> # produced each seat's folded findings (omit or `{}` when none fell open). One representative seat
-> # per effective cross-vendor vendor that ran with zero usable findings (dict members only — mirrors
-> # `round_driver._usable_findings`).
+> # Run only after a certified terminal receipt, when the operator chose to sample this review.
+> # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object from
+> # the certified session's round-1 panel fold). $PANEL_SEAT_STATUS — per-dimension status map
+> # (`run` / `missing` / etc.) for that round. $RAN_MANIFEST — trusted `{<dim>: <vendor>}` record
+> # of which vendor produced each seat's folded findings (omit or `{}` when none fell open). One
+> # representative seat per effective cross-vendor vendor that ran with zero usable findings (dict
+> # members only — mirrors `round_driver._usable_findings`).
 > RAN_MANIFEST_JSON="${RAN_MANIFEST:-}"
 > if [ -z "$RAN_MANIFEST_JSON" ]; then RAN_MANIFEST_JSON="{}"; fi
 > PANEL_SEAT_STATUS_JSON="${PANEL_SEAT_STATUS:-}"
@@ -529,28 +552,35 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > done
 > ```
 >
-> Submit the probe JSON objects as a **list** on the panel artifact as `canaryResult` (a single
-> dict is still accepted when only one cross-vendor vendor needs a probe). Each result must carry
-> its `engine` field matching the vendor you probed. The probe is scored on **two axes**:
+> Persist the probe JSON objects in `$SESSION_DIR/control-probe-sample.json`'s `probes` array (one
+> object per cross-vendor vendor probed). Each result must carry its `engine` field matching the
+> vendor you probed. The driver may still fold a legacy panel `canaryResult` into a per-round
+> `controlProbe` record on the receipt's `rounds[]` entry when that legacy path submits one — shape
+> in `receipt_disclosures.control_probe_shape`:
+> `{"submitted": <bool>, "vendors": {<engine>: <outcome token> | "malformed"}}`, where the token is
+> the probe's normalized outcome (`ok`, `plant-undetected`, `not-engaged`, or a dispatch-failure
+> outcome such as `forfeited`, `vacuous`, `forfeit-with-engaged-artifact`, `unrunnable`),
+> `submitted: false` with empty `vendors` when no legacy `canaryResult` was submitted, and
+> `"malformed"` for an unreadable probe entry. The probe result is **recorded** and **never a gate**
+> — a missing, fizzled, or plant-undetected probe never blocks, degrades, or refuses certification,
+> never changes a seat's status, and never makes a round partial. Legacy per-round keys
+> (`canaryUnverified`, `canaryFailed`, `canaryOutcomeFailed`, `canaryPlantUndetected`,
+> `canaryVerified`) may still be written as disclosures; they no longer gate anything.
 >
-> - **Liveness / engagement** — the seat must show a verifiable investigation record: at least one
->   accepted, non-empty `investigated` path. Findings alone are not enough, and tool calls alone
->   are not enough (this is where the canary deliberately diverges from `engagement_read`). Token
->   spend and wall time are recorded but are deliberately not a pass branch, because they classify
->   backwards (a genuinely engaged clean review here spent 2,460 tokens while the field's vacuous
->   seat spent about ten times that, and an 8-second dispatch returned a Critical). This axis
->   **never** scores plant detection: a demonstrably live seat that misses the plant is **not**
->   called inert and its seats are **not** downgraded to never-ran (measured twice: PR #667's
->   round-1 control, and this build's own live probe, which spent 14,980 tokens and ran three repo
->   commands while missing it).
-> - **Outcome** — an engaged probe that misses the plant is `plant-undetected`, which is **not a
->   pass**, withholds panel certification, and is disclosed as `canaryPlantUndetected`. An engaged
->   probe whose dispatch failed (`forfeited`, `vacuous`, `forfeit-with-engaged-artifact`, or
->   `unrunnable`) is disclosed as `canaryOutcomeFailed` (also not a pass). A probe with no
->   engagement evidence is `not-engaged` (also not a pass).
+> The probe is scored on **two axes** — these describe what the recorded outcome **means**, not
+> what the receipt may do with it:
 >
-> Without a probe, the round records `canaryUnverified` and the receipt carries a degraded
-> disclosure; a probe that shows no engagement downgrades those seats to never-ran.
+> - **Liveness / engagement** — whether the probe dispatch shows a verifiable investigation record:
+>   at least one accepted, non-empty `investigated` path. Findings alone are not enough, and tool
+>   calls alone are not enough (this is where the canary deliberately diverges from
+>   `engagement_read`). Token spend and wall time are recorded but are deliberately not a pass
+>   branch, because they classify backwards (a genuinely engaged clean review here spent 2,460
+>   tokens while the field's vacuous seat spent about ten times that, and an 8-second dispatch
+>   returned a Critical). This axis **never** scores plant detection.
+> - **Outcome** — an engaged probe that misses the plant is `plant-undetected` (disclosed as
+>   `canaryPlantUndetected`). An engaged probe whose dispatch failed (`forfeited`, `vacuous`,
+>   `forfeit-with-engaged-artifact`, or `unrunnable`) is disclosed as `canaryOutcomeFailed`. A probe
+>   with no engagement evidence is `not-engaged` (disclosed as `canaryFailed` when submitted).
 
 > **External-engine dispatches — timeout is structural, an expired slot is `unreadable` (#202, #204).**
 > Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —

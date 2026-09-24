@@ -346,23 +346,16 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
 
 
 def _normalize_canary(canary):
-    """(probe_list_or_None, reason_or_None). A single dict is tolerated (the existing contract
-    accepts one); absent stays absent so the driver's `canaryUnverified` disclosure fires."""
+    """(probe_list_or_None, reason_or_None). Malformed probes pass through for fold-time recording."""
     if canary is None:
         return None, None
-    probes = [canary] if isinstance(canary, dict) else canary
-    if not isinstance(probes, list):
-        return None, "canary-not-a-list:%s" % _type_name(canary)
+    if isinstance(canary, dict):
+        return [dict(canary)], None
+    if not isinstance(canary, list):
+        return [canary], None
     out = []
-    for index, probe in enumerate(probes):
-        if not isinstance(probe, dict):
-            return None, "canary-entry-not-an-object:index-%d:%s" % (index, _type_name(probe))
-        engine = probe.get("engine")
-        if not isinstance(engine, str) or not engine:
-            # A probe with no engine matches NO vendor in `canary_liveness` — it is silently inert,
-            # which reads as "a probe was supplied" while proving nothing.
-            return None, "canary-entry-has-no-engine:index-%d" % index
-        out.append(dict(probe))
+    for probe in canary:
+        out.append(dict(probe) if isinstance(probe, dict) else probe)
     return out, None
 
 
