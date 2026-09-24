@@ -107,7 +107,7 @@ The check is **fail-closed:** a hit, an ambiguous reading, an unavailable listin
 
 **Arming is a background task, always.** Cite `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/wave-watch.md` for the arming pattern and its flags rather than restating them.
 
-The reference's one-off check returns at once and is safe before arming — the cheap catch for a mistyped batch id.
+The reference's one-off check returns at once and is safe to run before arming, but a mistyped batch id reads as a quiet batch (`timer`), so check the batch id against the launch record rather than trusting the check.
 
 **Residual:** the check and the arm are two steps, so two advisor seats resuming the same project at the same moment could both find nothing and both arm. This skill rests on there being one advisor seat per project; do not imply the check is atomic.
 
