@@ -44,7 +44,9 @@ attempt must never be globbed and honored.
 
 2. **Dispatch one fresh verifier per cluster** — `model: $VERIFIER_MODEL` (the **verifier**
    tier, resolved via `--role verifier`; never the session model). Dispatch on the **reviewer
-   engine** (`$REVIEWER_ENGINE`). Each verifier reads the cluster's findings (with their staged
+   engine** (`$REVIEWER_ENGINE`) — on a durable-record session, on the vendor, model and effort its
+   orders-manifest entry names instead (`skills/review-code/reference/round-driver.md`
+   § Seat-time runner proof). Each verifier reads the cluster's findings (with their staged
    `id`s), the round diff, and the repo — the working tree on branch/auto-fix paths, or
    `$SESSION_DIR/repo` on `--review-only`. It must **never** read the PR's own
    description or narrative (the #230 immunity). The clusters' verifiers run in **parallel**,

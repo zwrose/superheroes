@@ -52,8 +52,8 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `baseGuard` | `"checked-stat-bound"` or `"not-checked"` |
 | `terminalState` | `certified`, `cap`, or `cannot-certify` |
 | `terminalCause` | `null` when certified; otherwise `{kind, reason}` from the terminal-cause table |
-| `seats` | Per collected seat: `seat`, `phase`, `round`, `attempt`, `provenance`, and `proof` — what proves the seat ran: `runner-record` (dispatch-observed runner evidence), `hand-landed-evidence`, or `none-host-seat` (see below). An audit row also names the auditor: `vendor` (the runner-recorded vendor, `missing` when none) and `model` (the model the driver seated) |
-| `disclosures` | `{importantOutOfScope: [...], survivingNonBlocking: [...], uncertifiedSeats?: [...]}` — `importantOutOfScope`: Important findings with valid out-of-scope follow-up; `survivingNonBlocking`: surviving Minor or Nit findings without a recorded disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`); `uncertifiedSeats` (present when non-empty): every host seat that landed without execution evidence (`seat`, `phase`, `round`, `attempt`, `vendor`, `proof`) |
+| `seats` | Per collected seat: `seat`, `phase`, `round`, `attempt`, `provenance`, and `proof` — what proves the seat ran: `runner-record` (dispatch-observed runner evidence) or `hand-landed-evidence`. An audit row also names the auditor: `vendor` (the runner-recorded vendor, `missing` when none) and `model` (the model the driver seated) |
+| `disclosures` | `{importantOutOfScope: [...], survivingNonBlocking: [...]}` — `importantOutOfScope`: Important findings with valid out-of-scope follow-up; `survivingNonBlocking`: surviving Minor or Nit findings without a recorded disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`) |
 | `provenanceLabels` | `{derived: [...], makerAuthored: [...]}` naming which keys are journal-derived |
 
 Optional keys when present in state: `base` (pinned-base metadata), `policyApplied`.
@@ -77,10 +77,9 @@ Four escape classes (`REFUSAL_CLASSES`). Each refusal is `{class, artifact, deta
 native claude seat — lands a payload no runner observed. No certification check exempts it: without
 execution evidence it refuses `unrun-review` like any other unproven seat. On a durable-record session
 the driver keeps host seats off every runner-proof phase at seat time
-(`skills/review-code/reference/round-driver.md` § Seat-time runner proof), so synthesis is the one host seat left. When a seat's authenticated
-orders-manifest entry records `channel: "file"` and it carries no execution evidence, its receipt row
-reads `proof: none-host-seat` and `disclosures.uncertifiedSeats` names it. The manifest's channel is
-the only host evidence — a vendor label is not (a defaulted `claude` is rendered on stdout).
+(`skills/review-code/reference/round-driver.md` § Seat-time runner proof), so synthesis is the one host seat left. An unproven
+host seat therefore never reaches a receipt: the one named reason is the refusal itself —
+`unrun-review` with `bindingFailure: execution-evidence-absent`, its `artifact` naming the seat.
 
 A post-shrink escape in any of the four classes is filed as a **misses-log entry on the collector's
 pinned comment**, so the keep-or-retire list reads catches and escapes together.

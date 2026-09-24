@@ -91,7 +91,6 @@ BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE = "certified-head-unresolvable"
 # What proves a recorded seat ran, as each receipt seat row names it (#1272 layer 4a).
 SEAT_PROOF_RUNNER_RECORD = "runner-record"
 SEAT_PROOF_HAND_LANDED = "hand-landed-evidence"
-SEAT_PROOF_NONE_HOST_SEAT = "none-host-seat"
 
 RECEIPT_FORM_CERTIFIED = receipt_disclosures.RECEIPT_FORM_CERTIFIED
 VENDOR_SOURCE_DEFAULTED = "defaulted"
@@ -809,37 +808,6 @@ def _manifest_seat_entry(ctx, seat_entry):
                 and entry.get("occurrence", 0) == seat_entry.get("occurrence", 0)):
             return entry
     return None
-
-
-def _seat_carries_execution_evidence(ctx, seat_entry):
-    """False only when a dispatch-observed or hand-landed seat demonstrably carries no execution
-    evidence at all; anything unreadable counts as carrying it, so the evidence checks still run."""
-    provenance = seat_entry.get("provenance")
-    if provenance == PROVENANCE_DISPATCH_OBSERVED:
-        return _journal_observation_for_seat(
-            ctx["journal"], seat_entry["seat"], seat_entry.get("phase"), seat_entry["attempt"],
-            seat_entry.get("occurrence", 0), seat_entry["round"]) is not None
-    if provenance == PROVENANCE_HAND_LANDED:
-        env, _path = _load_envelope(ctx["session_dir"], seat_entry["round"], seat_entry["phase"],
-                                    seat_entry["seat"], seat_entry["attempt"],
-                                    seat_entry.get("occurrence", 0))
-        return not isinstance(env, dict) or "executionEvidence" in env
-    return True
-
-
-def host_seat_without_evidence(ctx, seat_entry):
-    """True when a recorded seat was handed the host channel (its authenticated orders manifest
-    says so — a vendor label alone is not host evidence) and carries no execution evidence. It
-    only LABELS the seat on the receipt: no certification check skips it, so such a seat still
-    refuses `unrun-review` wherever proof is required. The driver keeps such seats off every
-    runner-proof phase at seat time; synthesis is the one host seat left."""
-    if seat_entry.get("provenance") not in RECEIPT_PROVENANCE:
-        return False
-    if _seat_carries_execution_evidence(ctx, seat_entry):
-        return False
-    entry = _manifest_seat_entry(ctx, seat_entry)
-    return (isinstance(entry, dict)
-            and entry.get("channel") == session_contract.SEAT_CHANNEL_HOST)
 
 
 def _journal_open_seats(journal, session_dir=None):
@@ -2053,9 +2021,7 @@ def _receipt_seat_row(ctx, seat_entry):
         "attempt": seat_entry["attempt"],
         "provenance": seat_entry.get("provenance"),
     }
-    if host_seat_without_evidence(ctx, seat_entry):
-        row["proof"] = SEAT_PROOF_NONE_HOST_SEAT
-    elif seat_entry.get("provenance") == PROVENANCE_DISPATCH_OBSERVED:
+    if seat_entry.get("provenance") == PROVENANCE_DISPATCH_OBSERVED:
         row["proof"] = SEAT_PROOF_RUNNER_RECORD
     elif seat_entry.get("provenance") == PROVENANCE_HAND_LANDED:
         row["proof"] = SEAT_PROOF_HAND_LANDED
@@ -2069,24 +2035,10 @@ def _receipt_seat_row(ctx, seat_entry):
     return row
 
 
-def _uncertified_seat_disclosures(ctx):
-    out = []
-    for seat_entry in _collect_seats(ctx):
-        if host_seat_without_evidence(ctx, seat_entry):
-            entry = _manifest_seat_entry(ctx, seat_entry) or {}
-            out.append({"seat": seat_entry["seat"], "phase": seat_entry["phase"],
-                        "round": seat_entry["round"], "attempt": seat_entry["attempt"],
-                        "vendor": entry.get("vendor"), "proof": SEAT_PROOF_NONE_HOST_SEAT})
-    return out
-
-
 def _receipt_disclosures(ctx, state):
     disclosures = {
         "importantOutOfScope": list(ctx.get("important_disclosures") or []),
     }
-    uncertified = _uncertified_seat_disclosures(ctx)
-    if uncertified:
-        disclosures["uncertifiedSeats"] = uncertified
     if _supports_nonblocking_disclosure(state):
         disclosures["survivingNonBlocking"] = list(ctx.get("nonblocking_disclosures") or [])
     return disclosures

@@ -8295,6 +8295,12 @@ def _disclose_order_vendor_provenance_gaps(state, gaps):
     _record_round(state, "orderVendorProvenanceGaps", merged)
 
 
+# The registry role each single-seat reviewer phase is seated at; on a durable-record session its
+# resolved cell (with the audit target's) is written to the orders manifest as the seat to dispatch.
+_SINGLE_SEAT_ROLES = {P_VERIFIERS: "verifier", P_SCOPED: "scoped-finder", P_GAPSWEEP: "reviewer-deep"}
+_SEATED_CELL_KEYS = ("effort", "role")
+
+
 def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root,
                         seat_map=None):
     """{vendor, model, engine} for transport — one home keyed to the source that actually knows."""
@@ -8311,21 +8317,27 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
         for target in targets:
             if isinstance(target, dict) and target.get("id") == seat_key:
                 return {"vendor": target.get("auditorVendor"),
-                        "model": target.get("auditorModel"), "engine": None}
+                        "model": target.get("auditorModel"), "engine": None,
+                        "effort": target.get("auditorEffort"), "role": "verifier"}
         return {"vendor": None, "model": None, "engine": None}
     if phase == P_SYNTHESIS:
         # Synthesis is Claude-only ($SYNTH_MODEL); never route through external reviewer engines.
         return {"vendor": "claude", "model": None, "engine": None}
     if phase in (P_VERIFIERS, P_GAPSWEEP, P_SCOPED):
         vendor, source = _reviewer_engine_vendor(repo_root)
-        if (isinstance(state, dict) and _durable_record_session(state)
-                and not _vendor_is_external_engine(vendor)):
+        if not (isinstance(state, dict) and _durable_record_session(state)):
+            return {"vendor": vendor, "model": None, "engine": None, "vendorSource": source}
+        if not _vendor_is_external_engine(vendor):
             # Seat-time runner proof: the auditor rule, widened — seat a live runner vendor outside
             # the fixer's family when one exists. A driver selection, not a guess; with no runner
             # vendor live the render refuses `seat-no-runner-record`.
             vendor, _independence = _auditor_vendor(cfg, cfg.get("fixerVendor"), True)
             source = VENDOR_SOURCE_CONFIGURED
-        return {"vendor": vendor, "model": None, "engine": None, "vendorSource": source}
+        # The orchestrator dispatches this seat on the cell its orders-manifest entry records.
+        role = _SINGLE_SEAT_ROLES[phase]
+        model, effort = model_registry.matrix_config(role, vendor) or (None, None)
+        return {"vendor": vendor, "model": model, "engine": None, "vendorSource": source,
+                "effort": effort, "role": role}
     return {"vendor": None, "model": None, "engine": None}
 
 
@@ -9192,9 +9204,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             "vendor": row["vendor"],
             "model": row["model"],
             "engine": row["engine"],
-            # The channel this seat's order was rendered for — the certification writer reads a
-            # host channel here, never a vendor label, as the fact that no runner observed the seat.
-            "channel": _seat_channel(phase, row),
+            **{k: row[k] for k in _SEATED_CELL_KEYS if k in row},
             "resultContract": _seat_result_schema(state),
             "orderSha256": order_sha,
             "orderPath": paths["order_path"],

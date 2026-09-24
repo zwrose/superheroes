@@ -120,8 +120,7 @@ REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 # the runner (the C14 stack) changes exactly this set.
 HOST_SEAT_VENDORS = frozenset(("claude",))
 
-# The two order channels the driver renders a seat for — recorded per seat in the orders manifest.
-# The certification writer reads the host channel there as the fact that no runner observed a seat.
+# The two order channels the driver renders a seat for.
 SEAT_CHANNEL_HOST = "file"
 SEAT_CHANNEL_ENGINE = "stdout"
 
