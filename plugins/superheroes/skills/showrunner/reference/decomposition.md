@@ -4,6 +4,7 @@
 - [The coverage map](#the-coverage-map)
 - [The contract register](#the-contract-register)
 - [Seam-first sequencing](#seam-first-sequencing)
+- [Stacked layers — one surface per layer](#stacked-layers--one-surface-per-layer)
 - [Verbatim injection into child bodies](#verbatim-injection-into-child-bodies)
 - [The adversarial package read](#the-adversarial-package-read)
 - [Re-entry after a substantive amendment](#re-entry-after-a-substantive-amendment)
@@ -120,6 +121,29 @@ register's contracts get their real review **as working code rather than as a do
 What goes wrong otherwise: a contract that reads fine on paper and does not survive contact with its
 first implementation — discovered by every consumer at once when their builds start in parallel
 against an untested seam.
+
+## Stacked layers — one surface per layer
+
+Every multi-PR child is planned as a [native stack](../../../rubric/native-stacks.md); an exception
+is owner-ruled and recorded. What a stack is and the terms around it live in that file and in
+[`rubric/glossary.md`](../../../rubric/glossary.md).
+
+**One surface per layer.** A layer is sized by how many surfaces it touches, not by its line count
+— because that is what drives review cost. A layer that touches one contested seam converges; a
+layer that carries two goes round and round on whichever is harder, and the second surface's review
+cost is paid in rounds, not lines.
+
+The size bars still apply, and they are not restated here — see `rubric/review-discipline.md`
+§ *Review bars and recorded residuals* for the numbers, their two different effects, and who
+rules on each.
+
+The reason beside the rule: an observational read of roughly sixty-five merged pull requests across
+two projects found that review rounds track **size** only at the extremes. Below about five hundred
+changed code lines, changes converged in a single round; above about fourteen hundred, every one
+took three rounds or more. **In between, the rounds were driven by the surface, not the line
+count** — changes of two to four hundred code lines took seven to nine rounds whenever they sat on
+one hard, contested surface, all of them well below the stop. Vet time moves the same way. This is
+an observational read of merged work, not a controlled measurement.
 
 ## Verbatim injection into child bodies
 

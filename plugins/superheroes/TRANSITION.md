@@ -9,6 +9,107 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Launcher stacked premise
+
+`validate_premise` copies every premise key into the stamped premise. A premise may now carry
+`stack` (the GitHub native stack's number), `layerPosition` (this PR's 1-based position in that
+stack), optionally `layersPlanned` (the stack's planned layer count), and optionally `dependency`
+(the pull request number of an open dependency whose READY vet the launch must be based on).
+`stack` and `layerPosition` are optional together — one without the other refuses; `layersPlanned`
+requires both.
+
+A stacked launch's stamped premise carries `stack` and `layerPosition`, and `layersPlanned` only
+when the launch supplied it — keys a pre-existing consumer never saw; strict key enumeration or
+fixed-schema round-trips must accept up to three new stack-metadata keys (`stack`, `layerPosition`,
+`layersPlanned`); a launch that also names a `dependency` may add a fourth. A launch that names a
+`dependency` carries that key in the stamped premise. A non-stacked launch without a dependency is
+unchanged.
+
+A successful launch that ran the dependency gate carries `dependencyGate` on its result. Two
+variants: when the gate did not apply, `applied` is `false` and `reason` names why (`dependency-not-open`
+for a merged dependency, `dependency-not-ready` for an open draft dependency, before the vet is read
+at all however that dependency's slot reads, or for an open dependency whose vet is not READY); a
+closed, unmerged dependency refuses the launch with `dependency-closed-unmerged` and carries no
+`dependencyGate`. When the gate applied, `applied` is `true` and the object carries `dependency`,
+`dependencyHead`, and `verdict` with no `reason` field.
+
+`launcher.py launch` adds thirteen refusal tokens (see `lib/launcher.py`; rule in
+`rubric/launch-doctrine.md`): `premise-stack-fields-incomplete` when only one of `stack` or
+`layerPosition` is supplied; `premise-stack-field-invalid` when either key is present but not a
+positive integer (`bool` is not an integer here); `premise-stack-layers-planned-incomplete` when
+`layersPlanned` is supplied and **both** `stack` and `layerPosition` are absent — the pair check runs
+first, so when exactly one of the pair is present, with or without `layersPlanned`,
+`premise-stack-fields-incomplete` refuses first;
+`premise-stack-layers-planned-invalid` when `layersPlanned` is present but not a positive integer
+(`bool` is not an integer here); `premise-stack-layers-planned-under-position` when `layersPlanned`
+is less than `layerPosition`; `base-not-layer-head` when `layerPosition >= 2` and the resolved base
+commit is not the current head of the stack member at position `layerPosition - 1`;
+`stack-read-unavailable` when the launcher could not read stack membership and the gate could not
+run — the launcher's own token, distinct from `stack_check.py`'s `stack-unreadable` (never aliases,
+never interchanged); `order-mismatch` when the membership read found the stack's order inconsistent
+with the premise (previously folded into `stack-read-unavailable`, so a consumer matching on
+`stack-read-unavailable` for this case must now also match `order-mismatch`);
+`layer-position-occupied` when the claimed `layerPosition` is already held by an existing member
+(`layerPosition >= 2` only); `premise-dependency-invalid` when `dependency` is present but not a
+positive integer (`bool` is not an integer here); `dependency-closed-unmerged` when the premise
+names a closed, unmerged dependency pull request; `dependency-open-ready-pr` when the premise
+names an open dependency pull request with a READY vet and the resolved base commit is not that pull
+request's current head; `dependency-read-unavailable` when the launcher could not read the
+dependency pull request or its vet and the gate could not run.
+
+### `launch_ledger.fold` lane stack keys
+
+`fold` puts three keys on **every** lane record — `stack`, `layerPosition` and `layersPlanned` —
+derived from that launch's stamped premise, so a strict key enumeration over a lane record must
+accept them rather than refuse. The value is `None` when the premise is absent, omits the key, or
+carries a value that is not a positive integer (`bool` is not an integer here): a non-positive or
+non-integer premise value folds to `None` rather than refusing the fold. The documented signal is
+**`None`, never a missing key** — a pre-stack record and a malformed premise read alike.
+
+### `wave_watch.py` `pr-set-changed` payload
+
+The `pr-set-changed` event payload gains `stacks` and `ungrouped`. `stack-signal-unavailable`
+joins the degradation set. The existing `prs`, `prsAdded`, and `prsRemoved` keys are unchanged, so
+a strict key enumeration must accept the two new ones.
+
+### `wave_watch.py` `stack-state-changed` event
+
+`wave_watch.py` gains a new event, `stack-state-changed`, at precedence rank four — immediately
+above `pr-set-changed` and below `builder-exited`. Its payload carries `stacks` (one entry per
+stack the batch's launches name, each with `stack`, `state`, `layersPlanned`, `missingPositions`,
+and `reason`) and `flags` (today only the idle-seat flag — `FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` in
+`lib/wave_watch.py` — naming `stack`, `position`, and `flag`). The event is not suppressible per
+lane through `--ignore-event`; naming it refuses `ignore-event-invalid`. Within one `loop`
+invocation the stack-state baseline threads across timer arms, so a stack that becomes complete
+between arms is reported once; each new invocation starts without one, so a watch armed on a batch
+whose stack is already complete, or that already carries the idle-seat flag
+(`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` in `lib/wave_watch.py`), reports `stack-state-changed` on its
+first arm.
+
+### Launcher premise `dependency` field
+
+`validate_premise` accepts an optional `dependency` field on the premise — a positive integer pull
+request number, independent of the stack fields. When `dependency` is present but not a positive
+integer (`bool` is not an integer here), validation refuses `premise-dependency-invalid`. A stamped
+premise carries `dependency` only when the launch supplied a valid one.
+
+### Launcher dependency gate refusals
+
+`launcher.py launch` adds two refusal tokens when the premise names a `dependency` and the
+dependency gate runs: `dependency-open-ready-pr` when the dependency is an open pull request
+carrying a READY vet and the resolved base commit is not that pull request's current head; and
+`dependency-read-unavailable` when the dependency pull request, its head, or its vet could not be
+read so the gate could not run.
+
+### `register_check.py check`
+
+`register_check check` gains `--register-copy {auto,main,worktree}`. Two new result keys —
+`registerCopy` and `registerRef` — are present on **every** result, including every `undecided`.
+The default changed: inside a git work tree the register is now read from main's copy
+(`origin/main`, else `main`) rather than the file on disk, and a main read that cannot be resolved
+is `undecided` / `register-unreadable` rather than a silent fallback to the worktree copy. A caller
+that wants the old behaviour passes `--register-copy worktree`.
+
 ### Dispatch-shell exit codes
 
 A dispatch-shell command-line entry point exits **1** when it refuses (returns without doing the
