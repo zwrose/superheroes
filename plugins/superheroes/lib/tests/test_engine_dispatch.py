@@ -18384,12 +18384,22 @@ def test_claude_cli_spawns_claude_cli_argv(monkeypatch):
     assert captured["cmd"] == ED.engine_adapter.claude_cli_argv(["agents", "--json"])
 
 
+def _top_level_function(tree, name):
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    return None
+
+
 def _claude_stop_invariant_problems(source_text, relpath):
     """Return invariant violation tokens for one lib source file. Never raises."""
     try:
         tree = ast.parse(source_text, filename=relpath)
     except SyntaxError:
         return ["claude-stop-census-unparseable:%s" % relpath]
+    canonical_retire = None
+    if relpath == "lib/engine_dispatch.py":
+        canonical_retire = _top_level_function(tree, "retire")
     problems = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -18427,7 +18437,7 @@ def _claude_stop_invariant_problems(source_text, relpath):
                     continue
                 subcmd = arg0.elts[0].value
                 if subcmd == "stop":
-                    if relpath != "lib/engine_dispatch.py" or fn_name != "retire":
+                    if node is not canonical_retire:
                         problems.append(
                             "claude-stop-outside-retire:%s:%s" % (relpath, fn_name),
                         )
@@ -18462,27 +18472,26 @@ def _claude_stop_invariant_problems(source_text, relpath):
                         % (relpath, fn_name),
                     )
     retire_has_stop = False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "retire":
-            for child in ast.walk(node):
-                if not isinstance(child, ast.Call):
-                    continue
-                func = child.func
-                if not (
-                    (isinstance(func, ast.Name) and func.id == "_claude_cli")
-                    or (isinstance(func, ast.Attribute) and func.attr == "_claude_cli")
-                ):
-                    continue
-                if not child.args:
-                    continue
-                arg0 = child.args[0]
-                if (
-                    isinstance(arg0, ast.List)
-                    and arg0.elts
-                    and isinstance(arg0.elts[0], ast.Constant)
-                    and arg0.elts[0].value == "stop"
-                ):
-                    retire_has_stop = True
+    if canonical_retire is not None:
+        for child in ast.walk(canonical_retire):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if not (
+                (isinstance(func, ast.Name) and func.id == "_claude_cli")
+                or (isinstance(func, ast.Attribute) and func.attr == "_claude_cli")
+            ):
+                continue
+            if not child.args:
+                continue
+            arg0 = child.args[0]
+            if (
+                isinstance(arg0, ast.List)
+                and arg0.elts
+                and isinstance(arg0.elts[0], ast.Constant)
+                and arg0.elts[0].value == "stop"
+            ):
+                retire_has_stop = True
     if relpath == "lib/engine_dispatch.py" and not retire_has_stop:
         problems.append("claude-stop-retire-stale")
     return problems
@@ -18534,6 +18543,16 @@ def test_claude_stop_invariant_enumeration():
             "def retire():\n    _claude_cli(['stop', x], c)\n",
             "lib/other.py",
             "claude-stop-outside-retire:lib/other.py:retire",
+        ),
+        (
+            "class X:\n    def retire(self):\n        _claude_cli(['stop', x], c)\n",
+            "lib/engine_dispatch.py",
+            "claude-stop-outside-retire:lib/engine_dispatch.py:retire",
+        ),
+        (
+            "def outer():\n    def retire():\n        _claude_cli(['stop', x], c)\n",
+            "lib/engine_dispatch.py",
+            "claude-stop-outside-retire:lib/engine_dispatch.py:retire",
         ),
         (
             "def other():\n    BackgroundHandle('a', 2, '/w', '/c')\n",
