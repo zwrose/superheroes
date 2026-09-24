@@ -1945,6 +1945,28 @@ def test_resolvable_families_reads_codex_role_pin():
     assert "openai" in fams
 
 
+def test_synthesized_family_check_resolves_codex_cells_through_the_role_pin(monkeypatch):
+    # axis: r3 (C14 4a ride-along) — the synthesized-cells branch hands the seat map's codex role
+    # pins to the one cell resolver, exactly as the probed branch does. Both an honored pin and
+    # the matrix cell land in the same family, so the family set cannot tell them apart; what
+    # the resolver RECEIVES is the observable, and a branch that dropped the pins would hand it
+    # None.
+    seat_map, seat, _cfg = _resolvable_families_fixture()
+    seat_map["codexRolePins"] = {"reviewer-deep": "gpt-6-astra"}
+    seen = []
+    real_cell = SM._cell
+
+    def spy_cell(tier, vendor, role_pins=None):
+        seen.append((tier, vendor, role_pins))
+        return real_cell(tier, vendor, role_pins)
+
+    monkeypatch.setattr(SM, "_cell", spy_cell)
+    fams = SM._resolvable_families_for_seat(seat_map, seat, {}, tier="reviewer-deep")
+    assert "openai" in fams
+    codex_calls = [pins for tier, vendor, pins in seen if vendor == "codex"]
+    assert codex_calls == [{"reviewer-deep": "gpt-6-astra"}]
+
+
 @pytest.mark.parametrize(
     "bad_pins",
     [
