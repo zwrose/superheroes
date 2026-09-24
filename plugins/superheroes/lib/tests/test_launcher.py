@@ -622,6 +622,37 @@ def test_compose_launch_mints_distinct_session_ids(tmp_path):
     assert first["sessionId"] != second["sessionId"]
 
 
+def test_compose_launch_argv_is_the_adapter_argv(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    r = L.compose_launch(repo, 656, premise, model="sonnet")
+    assert r["ok"] is True
+    import engine_adapter as _ea
+
+    expected = _ea.claude_builder_argv(r["model"], r["sessionId"], r["prompt"])
+    assert r["argv"] == expected["argv"]
+    assert r["argv"][:2] == ["claude", "--model"]
+    assert r["argv"][3:6] == ["--session-id", r["sessionId"], "-p"]
+
+
+def test_compose_launch_propagates_adapter_refusal(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+
+    def _refuse_builder(token, session_id, prompt):
+        return {
+            "ok": False,
+            "argv": [],
+            "reason": "builder-session-id-invalid",
+            "detail": "a canonical lowercase UUID string",
+        }
+
+    monkeypatch.setattr(L.engine_adapter, "claude_builder_argv", _refuse_builder)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is False
+    assert result["reason"] == "builder-session-id-invalid"
+
+
 def _write_core_with_builder_tier(repo, prefs):
     import importlib.util as _u
     _lib = os.path.join(_HERE, "..")

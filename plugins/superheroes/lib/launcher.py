@@ -26,6 +26,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import config_dir  # noqa: E402
+import engine_adapter  # noqa: E402
 import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
@@ -1134,7 +1135,10 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     # too. That is safe because the only retrying path is spawn-oserror, where
     # Popen raised and no child ever started — every other failure is terminal
     # with no re-spawn.
-    argv = ["claude", "--model", token, "--session-id", session_id, "-p", prompt]
+    built = engine_adapter.claude_builder_argv(token, session_id, prompt)
+    if built.get("ok") is False or built.get("reason") is not None:
+        return _fail(built["reason"])
+    argv = built["argv"]
     return {
         "ok": True,
         "reason": None,
