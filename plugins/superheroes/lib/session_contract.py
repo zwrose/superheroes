@@ -25,6 +25,8 @@ __all__ = (
     "RECORD_RESULT_KINDS",
     "REVIEW_LIST_RESULT_KINDS",
     "HOST_SEAT_VENDORS",
+    "SEAT_CHANNEL_HOST",
+    "SEAT_CHANNEL_ENGINE",
     "runner_record_vendor",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
@@ -117,6 +119,11 @@ REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 # is an external engine the orchestrator dispatches through the runner. Routing claude seats through
 # the runner (the C14 stack) changes exactly this set.
 HOST_SEAT_VENDORS = frozenset(("claude",))
+
+# The two order channels the driver renders a seat for — recorded per seat in the orders manifest.
+# The certification writer reads the host channel there as the fact that no runner observed a seat.
+SEAT_CHANNEL_HOST = "file"
+SEAT_CHANNEL_ENGINE = "stdout"
 
 
 def runner_record_vendor(vendor, registered):

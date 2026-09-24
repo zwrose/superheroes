@@ -6448,6 +6448,8 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
                                   journal_cmd="next", pending_payload=pending.get("payload"),
                                   seat_map=_effective_seat_map(state))
+        except DispositionLedgerOwnerRefusal:
+            return _owner_refusal_response(session_dir, "next", pending)
         except round_commit.CommitRefused as exc:
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
@@ -6502,20 +6504,30 @@ def _refuse_base_guard(session_dir, reason, detail=None, value=None):
     return 1
 
 
+def _owner_refusal_response(session_dir, cmd, pending):
+    _journal_append(session_dir, {"cmd": cmd, "phase": pending.get("phase"),
+                                  "round": pending.get("round"),
+                                  "attempt": pending.get("attempt"),
+                                  "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
+    return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
+
+
+def _owner_blocks_hand_out(state, pending):
+    """The one rule for an unrecognized ``dispositionLedgerOwner``: no non-terminal step is emitted
+    or handed out. Read by the order emitter before anything is written, and by the step builder."""
+    return (isinstance(pending, dict) and pending.get("action") != P_TERMINAL
+            and session_contract.disposition_ledger_owner_classification(state)
+            == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED)
+
+
 def _next_response(session_dir, cmd, state, pending):
     """The ONE builder of a step handed to the orchestrator (`next`, `re-emit`, and `advance`
     through `cmd_next`). While the state carries an unrecognized ``dispositionLedgerOwner`` marker
     no non-terminal step is handed out — a dispatch nobody can fold is refused before anyone spends
     on it, not at the `submit` that follows. A terminal step hands nothing out and still answers."""
     # axis: an unrecognized owner refuses a non-terminal hand-out; a terminal one still answers
-    if (pending.get("action") != P_TERMINAL
-            and session_contract.disposition_ledger_owner_classification(state)
-            == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED):
-        _journal_append(session_dir, {"cmd": cmd, "phase": pending.get("phase"),
-                                      "round": pending.get("round"),
-                                      "attempt": pending.get("attempt"),
-                                      "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
-        return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
+    if _owner_blocks_hand_out(state, pending):
+        return _owner_refusal_response(session_dir, cmd, pending)
     return {
         "ok": True,
         "action": pending["action"],
@@ -7143,6 +7155,8 @@ def _cmd_re_emit_locked(session_dir, by):
             journal_cmd=RE_EMIT_CMD, pending_payload=state["pending"]["payload"],
             seat_map=_effective_seat_map(state),
             extra_journal_entries=[superseded_row])
+    except DispositionLedgerOwnerRefusal:
+        return _owner_refusal_response(session_dir, "re-emit", state["pending"])
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "re-emit", exc, phase=phase,
                                         rnd=rnd, attempt=new_attempt)
@@ -8147,8 +8161,8 @@ def _seat_is_engine(row):
     return _vendor_is_external_engine(row.get("vendor"))
 
 
-CHANNEL_FILE = "file"
-CHANNEL_STDOUT = "stdout"
+CHANNEL_FILE = session_contract.SEAT_CHANNEL_HOST
+CHANNEL_STDOUT = session_contract.SEAT_CHANNEL_ENGINE
 
 # Phases whose seats an orchestrator dispatches through `dispatch-review` — a READ-ONLY sandbox on
 # an external engine. `dispatch-fixer` is deliberately absent: it is a foreground in-place writer,
@@ -9086,6 +9100,9 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     together with the manifest and state anchor. A render refusal for any slot refuses the whole
     emission — a phase that dispatches some seats with orders and others without is worse than one
     that refuses."""
+    # axis: an unrecognized owner refuses before a single order, stub, or anchor is written
+    if _owner_blocks_hand_out(state, {"action": phase}):
+        raise DispositionLedgerOwnerRefusal(DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE)
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)

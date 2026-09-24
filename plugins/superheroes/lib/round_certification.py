@@ -93,8 +93,11 @@ BINDING_FAILURE_NO_RUNNER_PROVEN_PANEL_SEAT = "no-runner-proven-panel-seat"
 SEAT_PROOF_RUNNER_RECORD = "runner-record"
 SEAT_PROOF_HAND_LANDED = "hand-landed-evidence"
 SEAT_PROOF_NONE_HOST_SEAT = "none-host-seat"
-# The driver's host (file-landing) channel as its orders manifest records each seat's channel.
-SEAT_CHANNEL_HOST = "file"
+# Phases whose output can never clear a finding: the finders only add findings, and synthesis only
+# groups them (coverage-guaranteed, never lowers a severity). Only these may sit out of the certified
+# panel; a verifier can REFUTE, and audits and the fixer carry their own proof obligations.
+HOST_SEAT_EXEMPT_PHASES = frozenset((
+    PANEL_PHASE, "dispatch-scoped-finder", "dispatch-gap-sweep", "dispatch-synthesis"))
 
 RECEIPT_FORM_CERTIFIED = receipt_disclosures.RECEIPT_FORM_CERTIFIED
 VENDOR_SOURCE_DEFAULTED = "defaulted"
@@ -119,7 +122,10 @@ def _certification_shape(state, seats):
     cert = state.get("certification") or {}
     shape = cert.get("shape")
     hand_landed = any(s.get("provenance") == PROVENANCE_HAND_LANDED for s in seats)
-    if hand_landed:
+    # A panel seat out of the certified panel means the panel that certifies is not the full one.
+    host_panel = any(s.get("phase") == PANEL_PHASE and s.get("proof") == SEAT_PROOF_NONE_HOST_SEAT
+                     for s in seats)
+    if hand_landed or host_panel:
         if shape == "full-panel-confirmed":
             return "audited-chain"
         if isinstance(shape, str) and shape.startswith("full-panel"):
@@ -834,17 +840,18 @@ def uncertified_host_seat(ctx, seat_entry):
     """True when a recorded seat sits OUT of the certified panel: the driver handed it the host
     channel (its authenticated orders manifest says so — a vendor label alone is not host evidence)
     and it carries no execution evidence. Such a seat proves nothing about having run, so no
-    certification rests on it and the receipt names it. Audits and the fixer are never out: their
-    landings carry their own proof obligations."""
+    certification rests on it and the receipt names it. Only a phase whose output cannot clear a
+    finding may sit out (``HOST_SEAT_EXEMPT_PHASES``)."""
     # axis: only a manifest-recorded host channel with evidence absent leaves the certified panel
-    if seat_entry.get("phase") in (P_AUDITS, P_FIXER):
+    if seat_entry.get("phase") not in HOST_SEAT_EXEMPT_PHASES:
         return False
     if seat_entry.get("provenance") not in RECEIPT_PROVENANCE:
         return False
     if _seat_carries_execution_evidence(ctx, seat_entry):
         return False
     entry = _manifest_seat_entry(ctx, seat_entry)
-    return isinstance(entry, dict) and entry.get("channel") == SEAT_CHANNEL_HOST
+    return (isinstance(entry, dict)
+            and entry.get("channel") == session_contract.SEAT_CHANNEL_HOST)
 
 
 def _panel_round_without_runner_proof(ctx, seats):

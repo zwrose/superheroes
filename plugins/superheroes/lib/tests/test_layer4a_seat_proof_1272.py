@@ -313,6 +313,10 @@ def test_l4a_3_audit_and_fixer_seats_never_leave_the_certified_panel(tmp_path):
     assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.PANEL_PHASE)) is True
     assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.P_AUDITS)) is False
     assert RC.uncertified_host_seat(ctx, dict(base, phase=RC.P_FIXER)) is False
+    # a verifier can refute a finding, so an unproven one never leaves the certified panel
+    assert RC.uncertified_host_seat(ctx, dict(base, phase="dispatch-verifiers")) is False
+    assert RC.HOST_SEAT_EXEMPT_PHASES == frozenset((
+        RC.PANEL_PHASE, "dispatch-scoped-finder", "dispatch-gap-sweep", "dispatch-synthesis"))
     assert RC.uncertified_host_seat(
         ctx, dict(base, phase=RC.PANEL_PHASE, provenance="orchestrator-fulfilled")) is False
 
@@ -446,3 +450,63 @@ def test_l4a_5_the_scoped_finder_gates_as_its_own_role_on_the_deep_cells():
                                                     "effort": "high", "role": "scoped-finder"}),
                                         verb="guard-check")
     assert refused["ok"] is False
+
+
+
+# --- review round 1 fixes -----------------------------------------------------------------------
+
+def test_l4a_r1_the_channel_token_has_one_home():
+    assert RD.CHANNEL_FILE is SC.SEAT_CHANNEL_HOST
+    assert RD.CHANNEL_STDOUT is SC.SEAT_CHANNEL_ENGINE
+    assert not hasattr(RC, "SEAT_CHANNEL_HOST")
+
+
+def test_l4a_r1_a_panel_seat_out_of_the_certified_panel_downgrades_the_full_panel_shape():
+    state = {"certification": {"shape": "full-panel-confirmed"}}
+    engine_row = {"phase": RC.PANEL_PHASE, "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+                  "proof": RC.SEAT_PROOF_RUNNER_RECORD}
+    host_row = dict(engine_row, proof=RC.SEAT_PROOF_NONE_HOST_SEAT)
+    synth_row = dict(host_row, phase="dispatch-synthesis")
+    assert RC._certification_shape(state, [engine_row]) == "full-panel-confirmed"
+    assert RC._certification_shape(state, [engine_row, synth_row]) == "full-panel-confirmed"
+    assert RC._certification_shape(state, [engine_row, host_row]) == "audited-chain"
+
+
+def test_l4a_r1_the_host_panel_receipt_certifies_on_the_downgraded_shape(tmp_path):
+    receipt, refusal = RC.certify(_session_with_host_seat(tmp_path))
+    assert refusal is None, refusal
+    assert receipt["certificationShape"] == "audited-chain"
+
+
+def test_l4a_r1_a_fresh_emission_refuses_before_any_order_is_written(tmp_path):
+    session_dir = str(tmp_path)
+    assert RD.cmd_next(session_dir, _cfg())["ok"]
+    ok, state = RD.load_state(session_dir)
+    state["pending"] = None
+    state[SC.DISPOSITION_LEDGER_OWNER_FIELD] = "ledger-v2"
+    orders = os.path.join(session_dir, "round-1", "orders")
+    import shutil
+    shutil.rmtree(orders)
+    RD.save_state(session_dir, state)
+    before = _state_bytes(session_dir)
+    out = RD.cmd_next(session_dir)
+    assert out == {"ok": False, "reason": _OWNER_CAUSE}
+    assert _state_bytes(session_dir) == before
+    assert not os.path.exists(orders)
+
+
+def test_l4a_r1_re_emit_refuses_before_superseding_anything(tmp_path, capsys):
+    import test_round_driver_re_emit as RE
+    _repo, _sess, session_dir = RE._stale_session(tmp_path, capsys)
+    _plant_owner(session_dir, "ledger-v2")
+    orders_before = RE._snapshot_order_bytes(session_dir, 1, RD.P_PANEL)
+    state_before = _state_bytes(session_dir)
+    rows_before = len(RD.read_journal(session_dir))
+    out = RD.cmd_re_emit(session_dir, "tester")
+    assert out == {"ok": False, "reason": _OWNER_CAUSE}
+    assert RE._snapshot_order_bytes(session_dir, 1, RD.P_PANEL) == orders_before
+    assert _state_bytes(session_dir) == state_before
+    new_rows = RD.read_journal(session_dir)[rows_before:]
+    assert [r["outcome"] for r in new_rows] == [_OWNER_CAUSE]
+    assert new_rows[0]["cmd"] == "re-emit"
+    assert not any(r.get("outcome") in ("orders-superseded", "orders-emitted") for r in new_rows)
