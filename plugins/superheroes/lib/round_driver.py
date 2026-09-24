@@ -407,6 +407,7 @@ VERIFIED_HEAD_UNRESOLVED_CAUSE = "verified-head-unresolved"
 RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
 RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL
 RELOCATION_EVIDENCE_INDETERMINATE_CAUSE = "relocation-evidence-indeterminate"
+AUDITOR_UNSEATABLE_CAUSE = "auditor-unseatable"
 RELOCATION_EVIDENCE_INDETERMINATE_DETAIL = (
     "relocation evidence in the journal is unreadable or malformed; "
     "cannot determine whether this attempt predates a checkout move"
@@ -531,6 +532,16 @@ class DispositionLedgerOwnerRefusal(ValueError):
         super().__init__(reason)
         self.reason = reason
         self.value = value
+
+
+class AuditorUnseatable(ValueError):
+    """Refusal when a durable-path audit target seats a non-runner-channel auditor."""
+
+    def __init__(self, detail, live_vendors, fixer_vendor):
+        super().__init__(detail)
+        self.detail = detail
+        self.live_vendors = live_vendors
+        self.fixer_vendor = fixer_vendor
 
 
 RECEIPT_FAULT_WRITE = "receipt-write"                 # round-receipt.json could not be written
@@ -985,7 +996,7 @@ def author_justification_filter(findings, prior_comments):
 # independence + certification shape
 # =============================================================================================
 
-def _auditor_vendor(config, fixer_vendor):
+def _auditor_vendor(config, fixer_vendor, runner_only=False):
     """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
     on family, not the dispatch CLI). Independence is NEVER satisfied between two cursor first-party
     models (#651, owner-ratified 2026-07-26): composer and grok share the `xai` family, so a
@@ -993,10 +1004,16 @@ def _auditor_vendor(config, fixer_vendor):
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
     independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
     rider 4a); see test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry."""
-    vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor)
+    vendor, _fam = receipt_disclosures.independent_auditor(
+        config, fixer_vendor, runner_only=runner_only)
     if vendor is not None:
         return vendor, "independent"
     live = _live_vendors(config)
+    if runner_only:
+        for v in live:
+            if session_contract.runner_channel_vendor(v):
+                return v, "degraded"
+        return None, "unseatable"
     return (live[0] if live else fixer_vendor), "degraded"
 
 
@@ -4353,8 +4370,10 @@ def _audit_targets(state, config, audit_targets_map):
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
     occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
-    auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
-    if independence == "degraded":
+    runner_only = bool(state.get("_advanceUsed"))
+    auditor_vendor, independence = _auditor_vendor(
+        config, fixer_vendor, runner_only=runner_only)
+    if independence in ("degraded", "unseatable"):
         state["independenceDegraded"] = True
     targets = []
     seen_keys = set()
@@ -4365,7 +4384,7 @@ def _audit_targets(state, config, audit_targets_map):
         if tid in seen_keys:
             continue
         seen_keys.add(tid)
-        targets.append({
+        row = {
             "id": tid,
             session_contract.FINDING_KEY_FIELD: tid,
             "identity": finding_identity(f),
@@ -4378,11 +4397,13 @@ def _audit_targets(state, config, audit_targets_map):
             "dimension": f.get("dimension"),
             "taxonomy": f.get("taxonomy"),
             "fixerVendor": fixer_vendor,
-            "auditorVendor": auditor_vendor,
             "independence": independence,
             "verdict": f.get("verdict"),
             "evidence": f.get("evidence"),
-        })
+        }
+        if auditor_vendor is not None:
+            row["auditorVendor"] = auditor_vendor
+        targets.append(row)
     return targets
 
 
@@ -6430,6 +6451,11 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         except round_commit.CommitRefused as exc:
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
+        except AuditorUnseatable as exc:
+            return _refuse_cmd(session_dir, "next", AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                               rnd=pending.get("round"), attempt=attempt,
+                               liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
+                               detail=exc.detail)
         except ValueError as exc:
             return _refuse_cmd(session_dir, "next", "order-render-refused", phase=phase,
                                rnd=pending.get("round"), attempt=attempt, detail=str(exc))
@@ -7120,6 +7146,11 @@ def _cmd_re_emit_locked(session_dir, by):
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "re-emit", exc, phase=phase,
                                         rnd=rnd, attempt=new_attempt)
+    except AuditorUnseatable as exc:
+        return _refuse_cmd(session_dir, RE_EMIT_CMD, AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                           rnd=rnd, attempt=new_attempt,
+                           liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
+                           detail=exc.detail)
     except ValueError as exc:
         return _refuse_cmd(session_dir, "re-emit", "order-render-refused", phase=phase,
                            rnd=rnd, attempt=new_attempt, detail=str(exc))
@@ -8111,12 +8142,7 @@ def _vendor_is_external_engine(vendor):
     """True when ``vendor`` is a registered non-claude engine (codex/cursor today).
 
     Unknown vendors fail closed to host transport — they cannot land on the engine stdout branch."""
-    if not isinstance(vendor, str) or not vendor.strip():
-        return False
-    v = vendor.strip()
-    if v == "claude":
-        return False
-    return v in model_registry.vendors()
+    return session_contract.runner_channel_vendor(vendor)
 
 
 def _seat_is_engine(row):
@@ -9056,6 +9082,22 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     that refuses."""
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
+    if phase == P_AUDITS and state.get("_advanceUsed"):
+        targets = pending_payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        cfg = state.get("config") or {}
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            if not session_contract.runner_channel_vendor(target.get("auditorVendor")):
+                detail = (
+                    "The durable-record path requires a fix auditor dispatched through the runner "
+                    "(codex or cursor), but none is among this session's vendors. "
+                    "Start a fresh session seeded with --vendors naming a runner vendor "
+                    "(for example codex or cursor), or use hand next/submit for the whole session."
+                )
+                raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
     seats = {}
     order_hashes = {}
