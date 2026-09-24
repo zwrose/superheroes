@@ -47,6 +47,16 @@ def _is_env_wrapper_token(token):
     return token == "env" or token.endswith("/env")
 
 
+_ENV_OPERAND_OPTIONS = frozenset(("-u", "--unset", "-C", "--chdir"))
+
+
+def _skip_env_operand_option(token):
+    if "=" in token:
+        opt = token.split("=", 1)[0]
+        return opt in _ENV_OPERAND_OPTIONS
+    return token in _ENV_OPERAND_OPTIONS
+
+
 def _command_word_from_tokens(tokens, placeholder=None):
     i = 0
     while i < len(tokens):
@@ -58,10 +68,16 @@ def _command_word_from_tokens(tokens, placeholder=None):
             i += 1
             while i < len(tokens):
                 inner = tokens[i]
-                if _is_assignment_token(inner, placeholder) or inner.startswith("-"):
+                if _is_assignment_token(inner, placeholder):
                     i += 1
-                else:
-                    break
+                    continue
+                if inner.startswith("-"):
+                    if _skip_env_operand_option(inner):
+                        i += 2 if "=" not in inner else 1
+                    else:
+                        i += 1
+                    continue
+                break
             continue
         return token
     return None
@@ -171,12 +187,51 @@ def _collect_name_sources(node):
     return names
 
 
+def _alias_groups(body):
+    parent = {}
+
+    def find(name):
+        if parent.get(name, name) != name:
+            parent[name] = find(parent[name])
+        return parent.get(name, name)
+
+    def union(left, right):
+        root_left = find(left)
+        root_right = find(right)
+        if root_left != root_right:
+            parent[root_right] = root_left
+
+    for stmt in body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target = stmt.targets[0]
+            if isinstance(target, ast.Name) and isinstance(stmt.value, ast.Name):
+                union(target.id, stmt.value.id)
+    groups = {}
+    for name in parent:
+        root = find(name)
+        groups.setdefault(root, set()).add(name)
+    for root, members in list(groups.items()):
+        groups[root].add(root)
+    return groups
+
+
+def _aliases_of(name, alias_groups):
+    for members in alias_groups.values():
+        if name in members:
+            return members
+    return {name}
+
+
 def _scope_tainted_names(body):
     tainted = set()
     assign_sources = {}
+    alias_groups = _alias_groups(body)
 
     def note_spawner_arg(node):
-        tainted.update(_collect_name_sources(node))
+        for source in _collect_name_sources(node):
+            tainted.update(_aliases_of(source, alias_groups))
 
     def scan_stmt(stmt):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -207,9 +262,12 @@ def _scope_tainted_names(body):
         changed = False
         for name, sources in assign_sources.items():
             if sources & tainted and name not in tainted:
-                tainted.add(name)
+                tainted.update(_aliases_of(name, alias_groups))
                 changed = True
-    return tainted
+    expanded = set()
+    for name in tainted:
+        expanded.update(_aliases_of(name, alias_groups))
+    return expanded
 
 
 def _scope_taint_map(tree):
@@ -448,6 +506,11 @@ _FLAG_CASES = [
     ('binary = "claude"\ncmd = [binary, "--bg"]', "indirect-argv"),
     ('subprocess.run(["/usr/local/bin/claude", "-p"])', "path-spelling"),
     ('subprocess.run(["env", "FOO=1", "claude", "-p"])', "env-wrapper"),
+    ('import os\nos.system("env -u FOO claude -p")', "env-unset-operand"),
+    ('import os\nos.system("env --unset=FOO claude -p")', "env-unset-long-equals"),
+    ('import os\nos.system("env -C /tmp claude -p")', "env-chdir-operand"),
+    ('import os\nos.system("env --chdir=/tmp claude -p")', "env-chdir-long-equals"),
+    ('cmd = []\nalias = cmd\ncmd.append("claude")\nsubprocess.run(alias)', "alias-mutator-tainted"),
     ('cmd = ["x"]\nsubprocess.run(cmd)\ncmd.append("claude")', "append-mutator-tainted"),
     ('subprocess.Popen("claude")', "popen-string"),
     ('subprocess.Popen(["--bg"], executable="claude")', "popen-executable-keyword"),

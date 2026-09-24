@@ -936,6 +936,17 @@ def _claude_agent_row_for_launch(rows, launch_id):
     return None
 
 
+def _launch_id_rows(rows, launch_id):
+    """Return every agents row carrying launch_id. Never raises."""
+    if not isinstance(rows, list) or not isinstance(launch_id, str) or not launch_id:
+        return []
+    matched = []
+    for row in rows:
+        if isinstance(row, dict) and row.get("id") == launch_id:
+            matched.append(row)
+    return matched
+
+
 def background_identity_rows(rows, cwd, background_id=None):
     """Return background rows matching cwd identity (and optional id). Never raises."""
     if not isinstance(rows, list):
@@ -971,9 +982,10 @@ def background_identity_rows(rows, cwd, background_id=None):
 def _handle_from_rows(rows, cwd, config_dir, background_id=None):
     """Build a BackgroundHandle when exactly one live identity row carries a pid. Never raises."""
     identity = background_identity_rows(rows, cwd, background_id)
-    if len(identity) != 1:
+    live = [row for row in identity if row.get("state") not in ("stopped", "done")]
+    if len(live) != 1:
         return None
-    row = identity[0]
+    row = live[0]
     pid = row.get("pid")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid < 2:
         return None
@@ -1002,15 +1014,15 @@ def acquire_background_handle(config_dir, cwd, background_id=None, wait_seconds=
         if listing_ok:
             last_ok = True
             identity = background_identity_rows(rows, cwd, background_id)
-            handle = _handle_from_rows(rows, cwd, config_dir, background_id)
-            if handle is not None:
-                return handle, "ok"
             if identity:
                 live = [row for row in identity if row.get("state") not in ("stopped", "done")]
                 if not live:
                     return None, "ended"
                 if len(live) > 1:
                     return None, "ambiguous"
+            handle = _handle_from_rows(rows, cwd, config_dir, background_id)
+            if handle is not None:
+                return handle, "ok"
         if _NOW() >= deadline:
             if not last_ok:
                 return None, "agents-unreadable"
@@ -1234,11 +1246,22 @@ def _background_stop(launch_id, config_dir, cwd):
     rows_before, ok_before = _claude_agents_rows(config_dir, cwd)
     if not ok_before:
         return "stop-unconfirmed"
-    identity = background_identity_rows(rows_before, cwd, launch_id)
-    if not identity or all(row.get("state") in ("stopped", "done") for row in identity):
+    id_rows = _launch_id_rows(rows_before, launch_id)
+    if not id_rows:
         return "already-ended"
+    live_id_rows = [
+        row for row in id_rows if row.get("state") not in ("stopped", "done")
+    ]
+    if not live_id_rows:
+        return "already-ended"
+    saw_live_by_id = True
+    identity = background_identity_rows(rows_before, cwd, launch_id)
+    if not identity:
+        return "stop-unconfirmed"
     handle, status = acquire_background_handle(config_dir, cwd, launch_id)
     if status == "ended":
+        return "already-ended"
+    if status == "unlisted" and saw_live_by_id:
         return "already-ended"
     if handle is not None:
         outcome = retire(handle)

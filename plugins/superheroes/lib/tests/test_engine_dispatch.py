@@ -18427,7 +18427,7 @@ def _claude_stop_invariant_problems(source_text, relpath):
                     continue
                 subcmd = arg0.elts[0].value
                 if subcmd == "stop":
-                    if fn_name != "retire":
+                    if relpath != "lib/engine_dispatch.py" or fn_name != "retire":
                         problems.append(
                             "claude-stop-outside-retire:%s:%s" % (relpath, fn_name),
                         )
@@ -18529,6 +18529,11 @@ def test_claude_stop_invariant_enumeration():
             "def other():\n    _claude_cli(['stop', x], c)\n",
             "lib/x.py",
             "claude-stop-outside-retire:lib/x.py:other",
+        ),
+        (
+            "def retire():\n    _claude_cli(['stop', x], c)\n",
+            "lib/other.py",
+            "claude-stop-outside-retire:lib/other.py:retire",
         ),
         (
             "def other():\n    BackgroundHandle('a', 2, '/w', '/c')\n",
@@ -18854,7 +18859,7 @@ def test_retire_done_row_still_issues_stop(monkeypatch):
     assert calls == [["stop", "id-done"]]
 
 
-def test_background_stop_same_id_live_row_under_prefix_child_only_is_already_ended(
+def test_background_stop_same_id_live_row_under_prefix_child_only_is_stop_unconfirmed(
     tmp_path, monkeypatch,
 ):
     cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
@@ -18874,8 +18879,73 @@ def test_background_stop_same_id_live_row_under_prefix_child_only_is_already_end
     monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
     monkeypatch.setattr(ED, "_HANDLE_WAIT_SECONDS", 0)
     monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
-    assert ED._background_stop(launch_id, cfg, cwd) == "already-ended"
+    assert ED._background_stop(launch_id, cfg, cwd) == "stop-unconfirmed"
     assert not any(c[0] == "stop" for c in calls)
+
+
+def test_background_stop_same_id_live_row_missing_identity_metadata_is_stop_unconfirmed(
+    tmp_path, monkeypatch,
+):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    cwd = os.path.realpath(_repo(tmp_path))
+    harness["agents_rows"] = [
+        {"id": launch_id, "state": "working", "pid": 4242},
+    ]
+    calls = []
+
+    def cli(args, config_dir, cwd=None, timeout=30):
+        if args[:1] == ["agents"]:
+            return 0, json.dumps(harness["agents_rows"]), ""
+        calls.append(list(args))
+        return 0, "", ""
+
+    monkeypatch.setattr(ED, "_claude_cli", cli)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    monkeypatch.setattr(ED, "_HANDLE_WAIT_SECONDS", 0)
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    assert ED._background_stop(launch_id, cfg, cwd) == "stop-unconfirmed"
+    assert not any(c[0] == "stop" for c in calls)
+
+
+def test_background_stop_live_then_stopped_same_pid_is_already_ended(
+    tmp_path, monkeypatch,
+):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    cwd = os.path.realpath(_repo(tmp_path))
+    working_row = _bg_agent_row(launch_id, session_id, cwd=cwd)
+    stopped_row = _bg_agent_row(launch_id, session_id, state="stopped", cwd=cwd)
+    listings = iter([[working_row], [stopped_row]])
+
+    def cli(args, config_dir, cwd=None, timeout=30):
+        if args[:1] == ["agents"]:
+            return 0, json.dumps(next(listings, [])), ""
+        return 0, "", ""
+
+    monkeypatch.setattr(ED, "_claude_cli", cli)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    monkeypatch.setattr(ED, "_HANDLE_WAIT_SECONDS", 0)
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    assert ED._background_stop(launch_id, cfg, cwd) == "already-ended"
+
+
+def test_background_stop_live_then_empty_listing_is_already_ended(
+    tmp_path, monkeypatch,
+):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    cwd = os.path.realpath(_repo(tmp_path))
+    live_row = _bg_agent_row(launch_id, session_id, cwd=cwd)
+    listings = iter([[live_row], []])
+
+    def cli(args, config_dir, cwd=None, timeout=30):
+        if args[:1] == ["agents"]:
+            return 0, json.dumps(next(listings, [])), ""
+        return 0, "", ""
+
+    monkeypatch.setattr(ED, "_claude_cli", cli)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    monkeypatch.setattr(ED, "_HANDLE_WAIT_SECONDS", 0)
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    assert ED._background_stop(launch_id, cfg, cwd) == "already-ended"
 
 
 def test_claude_cli_invalid_args_never_spawns(monkeypatch):
