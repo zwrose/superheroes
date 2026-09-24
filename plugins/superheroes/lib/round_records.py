@@ -345,28 +345,9 @@ def roster_slots(roster):
 # paths — every builder is fenced inside the session dir
 # =============================================================================================
 
-def landing_dir(session_dir, rnd, phase):
-    record_paths._require_token("phase", phase)
-    return record_paths._guard_within(session_dir,
-                                      os.path.join(record_paths.round_dir(session_dir, rnd),
-                                                   "landing", phase))
-
-
-def landing_path(session_dir, rnd, phase, skey, attempt):
-    return record_paths._guard_within(
-        session_dir,
-        os.path.join(landing_dir(session_dir, rnd, phase),
-                     record_paths._seat_filename(skey, attempt)))
-
-
-def bare_payload_path(session_dir, rnd, phase, skey, attempt):
-    """Host-seat payload-only landing slot — sibling to the full-envelope `landing_path`."""
-    record_paths._require_token("skey", skey)
-    record_paths._require_index("attempt", attempt)
-    return record_paths._guard_within(
-        session_dir,
-        os.path.join(landing_dir(session_dir, rnd, phase),
-                     "%s.a%d.payload.json" % (skey, attempt)))
+landing_dir = record_paths.landing_dir
+landing_path = record_paths.landing_path
+bare_payload_path = record_paths.bare_payload_path
 
 
 def order_prompt_path(session_dir, rnd, phase, skey, attempt):
