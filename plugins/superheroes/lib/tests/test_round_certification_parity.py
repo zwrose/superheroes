@@ -38,6 +38,27 @@ def _load_state(session_dir):
         return json.load(fh)
 
 
+def _seat_map_for_driver_parity(writer_seat_map):
+    """Strip writer-only certifiedPanel before comparing to the driver seatMap."""
+    if not isinstance(writer_seat_map, dict):
+        return writer_seat_map
+    seats = writer_seat_map.get("seats")
+    if not isinstance(seats, dict):
+        return writer_seat_map
+    stripped_seats = {}
+    for seat_name, row in seats.items():
+        if isinstance(row, dict):
+            assert isinstance(row.get("certifiedPanel"), bool), (
+                "writer seatMap.seats[%r] must carry certifiedPanel as bool" % seat_name
+            )
+            stripped_seats[seat_name] = {
+                key: val for key, val in row.items() if key != "certifiedPanel"
+            }
+        else:
+            stripped_seats[seat_name] = row
+    return dict(writer_seat_map, seats=stripped_seats)
+
+
 def _assert_findings_parity(session_dir, driver_findings, cert_findings):
     state = _load_state(session_dir)
     state_rows = [f for f in (state.get("findings") or []) if isinstance(f, dict)]
@@ -61,7 +82,12 @@ def _assert_receipt_parity(session_dir):
     for key in driver_receipt:
         if key in PARITY_FIELD_EXCEPTIONS:
             continue
-        assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+        if key == "seatMap":
+            assert _seat_map_for_driver_parity(cert_receipt["seatMap"]) == driver_receipt[
+                "seatMap"
+            ], "mismatch on key %r" % key
+        else:
+            assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
     _assert_findings_parity(
         session_dir, driver_receipt["findings"], cert_receipt["findings"]
     )
@@ -188,7 +214,12 @@ def test_materialized_state_round_trip_matches_driver_receipt(tmp_path, label, b
         for key in driver_receipt:
             if key in PARITY_FIELD_EXCEPTIONS:
                 continue
-            assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+            if key == "seatMap":
+                assert _seat_map_for_driver_parity(cert_receipt["seatMap"]) == driver_receipt[
+                    "seatMap"
+                ], "mismatch on key %r" % key
+            else:
+                assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
         _assert_findings_parity(
             materialized, driver_receipt["findings"], cert_receipt["findings"]
         )
