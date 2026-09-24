@@ -44,6 +44,10 @@ import round_records  # noqa: E402
 import sanitized_view  # noqa: E402
 import session_contract  # noqa: E402
 
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from session_checkout import enter_checkout, make_checkout  # noqa: E402
+
 # =============================================================================================
 # the diffs — a BIG round-1 diff (so the gap-sweep phase is on the path) and its post-fix head
 # =============================================================================================
@@ -346,6 +350,7 @@ def _fixture_repo(tmp_path, name):
         if not target.exists():
             target.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8")
     repo_root.mkdir(parents=True, exist_ok=True)
+    make_checkout(repo_root)
     return str(repo_root)
 
 
@@ -369,7 +374,9 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
         with open(meta_path, "w", encoding="utf-8") as fh:
             json.dump(meta, fh, sort_keys=True)
             fh.write("\n")
-    cfg_over.setdefault("repoRoot", _fixture_repo(tmp_path, name))
+    repo_root = _fixture_repo(tmp_path, name)
+    cfg_over.setdefault("repoRoot", repo_root)
+    enter_checkout(repo_root)
     out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
     assert out["ok"], out
     return session_dir, gitdir, head_diff_path
