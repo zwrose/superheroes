@@ -18392,7 +18392,10 @@ def _top_level_function(tree, name):
 
 
 def _claude_stop_invariant_problems(source_text, relpath):
-    """Return invariant violation tokens for one lib source file. Never raises."""
+    """Return invariant violation tokens for one lib source file. Never raises.
+
+    Matches direct ``_claude_cli(...)`` and attribute ``<module>._claude_cli(...)`` calls only.
+    """
     try:
         tree = ast.parse(source_text, filename=relpath)
     except SyntaxError:
@@ -18512,7 +18515,16 @@ def _claude_stop_invariant_scan():
     return problems
 
 
-def test_claude_stop_invariant_enumeration():
+def test_no_claude_stop_in_enumerated_shapes_outside_retire():
+    """Guard ``_claude_cli`` stop calls in enumerated shapes outside module-level ``retire``.
+
+    Flags a ``_claude_cli`` stop call — spelled as a direct ``_claude_cli(...)`` or
+    ``<module>._claude_cli(...)`` call — outside the module-level ``retire`` in
+    ``lib/engine_dispatch.py`` (plus the other tokens ``_claude_stop_invariant_problems``
+    already emits). Does not see ``_claude_cli`` reached through an alias
+    (``cli = _claude_cli; cli([...])``), which is an accepted residual closed by the later
+    runtime spawn chokepoint.
+    """
     assert _claude_stop_invariant_scan() == []
 
 

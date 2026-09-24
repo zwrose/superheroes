@@ -1,4 +1,21 @@
-"""Static census: claude process argv literals only in engine_adapter (#1273, c14-l4a-D1)."""
+"""Regression guard over enumerated spellings of claude executable literals in process argv.
+
+Flags a claude executable literal reaching process argv outside ``lib/engine_adapter.py`` in
+the shapes the case tables below enumerate: list/tuple displays, ``+``/``+=`` composition, a
+name bound to the literal, mutators ``append``/``extend``/``insert`` on a spawned name,
+spawner ``executable=`` and argv keywords, and command strings passed to ``shlex.split``/
+``str.split``/``os.system``/``os.popen``/a ``shell=True`` spawner (including behind ``env``
+and ``NAME=value`` wrappers).
+
+This census does **not** prove "no claude launch outside the adapter". Accepted residuals
+(none used in shipped code today; the by-construction guarantee is a runtime spawn chokepoint
+in a later layer):
+
+(a) a command string built by assignment or concatenation before it reaches the spawner;
+(b) a helper function that builds and returns argv;
+(c) a vendor-pair tuple returned into a spawner;
+(d) ``_claude_cli`` called through an alias (that one belongs to the stop-home census).
+"""
 import ast
 import os
 import shlex
@@ -492,8 +509,8 @@ def _census_problems(violations):
     return sorted(problems)
 
 
-def test_no_claude_argv_outside_engine_adapter():
-    """axis: violation set outside engine_adapter is exactly launcher compose_launch (#1273)."""
+def test_no_claude_argv_in_enumerated_shapes_outside_engine_adapter():
+    """axis: claude argv literals in enumerated shapes outside engine_adapter (#1273)."""
     problems = _census_problems(_all_violations())
     expected = ["claude-argv-outside-adapter:lib/launcher.py:1102"]
     assert problems == expected, "\n".join(problems)
