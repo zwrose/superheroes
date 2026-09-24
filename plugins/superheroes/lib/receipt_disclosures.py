@@ -116,6 +116,16 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "gateGuidanceRowCarried": dict_list,
 }
 
+# Ride the receipt's per-round entries; never read into a verdict or a degraded line.
+RECORD_ONLY_DISCLOSURE_CHANNELS = (
+    "canaryUnverified",
+    "canaryFailed",
+    "canaryOutcomeFailed",
+    "canaryPlantUndetected",
+    "canaryVerified",
+    "controlProbe",
+)
+
 
 def _state_version(state):
     if not isinstance(state, dict):
@@ -314,18 +324,6 @@ def seat_map_unjudgeable(state):
     return bool(seat_map_receipts.unjudgeable_receipts(state, author_family(state)))
 
 
-def _probe_record_only_declared(declared):
-    """#1272 l4b: sampled-probe channels ride rounds[]; never drive degraded prose."""
-    return (
-        declared.get("canaryVerified"),
-        declared.get("canaryUnverified"),
-        declared.get("canaryFailed"),
-        declared.get("canaryOutcomeFailed"),
-        declared.get("canaryPlantUndetected"),
-        declared.get("controlProbe"),
-    )
-
-
 def build_degraded_prose(state, form):
     cfg = state.get("config") or {}
     degraded_out = []
@@ -372,7 +370,6 @@ def build_degraded_prose(state, form):
     for rkey in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
         rrec = state["rounds"][rkey]
         declared = receipt_round_disclosures(rrec, form, state)
-        _probe_record_only_declared(declared)
         for row in (declared.get("fellOpen") or []):
             degraded_out.append(
                 "reviewer-fell-open (round %s): seat %s configured %s forfeited (%s) → re-ran on %s; "
@@ -487,6 +484,7 @@ __all__ = (
     "ROUND_ENTRY_KEY_FORMS",
     "DISCLOSE_ON_PRESENCE",
     "RESUMABLE_DISCLOSURE_CHANNELS",
+    "RECORD_ONLY_DISCLOSURE_CHANNELS",
     "VENDOR_SOURCE_DEFAULTED",
     "str_list",
     "dict_list",

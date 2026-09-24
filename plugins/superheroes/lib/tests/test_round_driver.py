@@ -4021,15 +4021,26 @@ def test_panel_round_channels_are_all_accounted_for():
 def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
     """The census is the whole story only if `build_receipt` and the resume both READ the constant
     rather than a hand-copied literal list — and only if every named channel is really consumed by
-    the receipt (a fossil channel would pass the census while disclosing nothing)."""
+    the receipt (a fossil channel would pass the census while disclosing nothing). Record-only
+    probe channels are exempt from the read census when they are named in
+    `RECORD_ONLY_DISCLOSURE_CHANNELS` and their values reach the receipt round entry."""
     tree, ast_mod = _round_driver_ast()
     for fn in ("build_receipt", "_restore_round_disclosures"):
         names = {n.id for n in ast_mod.walk(_fn_node(tree, ast_mod, fn))
                  if isinstance(n, ast_mod.Name)}
         assert "RESUMABLE_DISCLOSURE_CHANNELS" in names, \
             "%s must read the channel set from its one home" % fn
+    record_only = set(RD.RECORD_ONLY_DISCLOSURE_CHANNELS)
+    assert record_only <= set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
     src = _disclosure_channel_consumer_source()
     for chan in RD.RESUMABLE_DISCLOSURE_CHANNELS:
+        if chan in record_only:
+            state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+            state["rounds"] = {"1": {chan: _ALL_CHANNELS[chan]}}
+            receipt = RD.build_receipt(state)
+            assert _round_channels(receipt, 1).get(chan) == _ALL_CHANNELS[chan], (
+                "record-only channel %r must reach receipt rounds[]" % chan)
+            continue
         assert source_obj_accesses_key(src, "rec|rrec|declared", chan), \
             "%r is named restorable but no round record read consumes it" % chan
 
