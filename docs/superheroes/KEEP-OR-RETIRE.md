@@ -282,7 +282,9 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — the host offers no native batch watcher; auto-re-arm redesign is queued
-  at the front door while the silent-death class it targets still recurs in field evidence.
+  at the front door while the silent-death class it targets still recurs in field evidence. Its loop
+  passes over benign wakes; that rides this entry's
+  condition.
 
 #### B3 — Heartbeat
 
@@ -1885,7 +1887,7 @@ file, returns exactly that set.
   are unreliable. **delete-when:** the background-session trial receipt marks transcript-mtime
   liveness not needed.
 - `plugins/superheroes/skills/showrunner/reference/wave-watch.md` — harness background-task arming
-  pattern with manual re-arm after each event. **delete-when:** the background-session trial receipt
+  pattern with manual re-arm after each lane-ending event. **delete-when:** the background-session trial receipt
   marks wave-watch arming not needed.
 - `plugins/superheroes/skills/showrunner-resume/SKILL.md` — duplicate-loop check via process listing
   before background arming. **delete-when:** a durable batch watcher makes the duplicate-loop check
