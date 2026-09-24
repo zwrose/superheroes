@@ -11697,6 +11697,36 @@ def test_run_execution_record_codex_engaged_by_payload(tmp_path):
     assert record["observation"]["read"] == "engaged"
 
 
+def test_run_execution_record_engine_model_from_resolved_inputs(tmp_path):
+    """Round-trip: resolvedInputs.engineModel on run-opened surfaces on the execution record."""
+    run_dir = str(tmp_path / "engine-model-resolved")
+    _execution_record_completed_attempt(tmp_path, run_dir, stdout=_VALID_FINDINGS_STDOUT)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["resolvedInputs"] = {"engineModel": "gpt-5.6-sol"}
+    with open(ED._journal_path(run_dir), "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    record, error = ED.run_execution_record(run_dir)
+    assert error is None
+    assert record["engineModel"] == "gpt-5.6-sol"
+
+    run_dir_absent = str(tmp_path / "engine-model-absent")
+    _execution_record_completed_attempt(tmp_path, run_dir_absent, stdout=_VALID_FINDINGS_STDOUT)
+    records_absent, _ = ED._journal_read(run_dir_absent)
+    for rec in records_absent:
+        if rec.get("kind") == "run-opened":
+            rec.pop("engineModel", None)
+            rec.pop("resolvedInputs", None)
+    with open(ED._journal_path(run_dir_absent), "w", encoding="utf-8") as fh:
+        for rec in records_absent:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    record_absent, error_absent = ED.run_execution_record(run_dir_absent)
+    assert error_absent is None
+    assert "engineModel" not in record_absent
+
+
 def test_run_execution_record_codex_investigated_disclosure_stamps_unknown_read(tmp_path):
     """Round-trip: codex empty payload with accepted investigated paths stamps unknown read."""
     run_dir = str(tmp_path / "codex-investigated-disclosure")

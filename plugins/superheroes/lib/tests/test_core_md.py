@@ -2753,6 +2753,32 @@ def test_write_engine_pref_pins_refused_invalid_pin_byte_identical(tmp_path):
     assert open(path, encoding="utf-8").read() == before
 
 
+def test_write_engine_pref_pins_refused_astra_pin_returns_detail(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    res = CM.write_engine_pref_pins(
+        repo, "codexModels", {"reviewer-deep": "gpt-6-astra"}, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
+    assert "reviewer-deep" in res["detail"]
+    assert res["detail"]["reviewer-deep"].startswith("pin-probe-pending:")
+
+
+def test_write_engine_pref_pins_codex_pin_ignored_note_when_reviewer_engine_claude(tmp_path):
+    repo, store = _write_core_for_pin_tests(
+        tmp_path, prefs={"reviewer": "claude", "implementation": "claude"})
+    res = CM.write_engine_pref_pins(
+        repo, "codexModels", {"reviewer": "gpt-5.6-terra"}, root=store)
+    assert res["action"] == "written"
+    assert "notes" in res
+    assert any(
+        "codexModels.reviewer applies to the review panel's codex seats"
+        in note
+        and "the single-seat reviewer role's engine is claude, so that seat does not use it"
+        in note
+        for note in res["notes"]
+    )
+
+
 def test_write_engine_pref_pins_refused_invalid_seat_pin_byte_identical(tmp_path):
     repo, store = _write_core_for_pin_tests(tmp_path)
     path = CM.core_path(repo, store)

@@ -2,6 +2,7 @@
 """Disclosure-channel vocabulary, selection rule, and degraded-prose collector — leaf module."""
 import model_registry
 import seat_map_receipts
+import session_contract
 
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
@@ -268,7 +269,62 @@ def seat_map_unjudgeable(state):
     return bool(seat_map_receipts.unjudgeable_receipts(state, author_family(state)))
 
 
-def build_degraded_prose(state, form):
+def latest_recorded_events(journal):
+    if not isinstance(journal, list):
+        return []
+    latest = {}
+    for event in journal:
+        if not isinstance(event, dict) or event.get("outcome") != "recorded":
+            continue
+        seat = event.get("seat")
+        phase = event.get("phase")
+        rnd = event.get("round")
+        attempt = event.get("attempt")
+        provenance = event.get("provenance")
+        if not isinstance(seat, str) or not seat:
+            ident = event.get("recordIdentity")
+            if isinstance(ident, dict):
+                seat = ident.get("seat")
+                phase = ident.get("phase", phase)
+                attempt = ident.get("attempt", attempt)
+        if not isinstance(seat, str) or not seat:
+            continue
+        occurrence = event.get("occurrence", 0)
+        key = (phase, rnd, attempt, seat, occurrence)
+        identity = {
+            "seat": seat,
+            "phase": phase,
+            "round": rnd,
+            "attempt": attempt,
+            "occurrence": occurrence,
+            "provenance": provenance,
+        }
+        latest[key] = (identity, event)
+    return list(latest.values())
+
+
+def _is_missing_seat_record(event):
+    return (event.get("cmd") == "record-missing"
+            or event.get("casToken") == session_contract.SEAT_MISSING_SCHEMA)
+
+
+def _native_in_session_seats(journal):
+    disclosed = set()
+    for identity, event in latest_recorded_events(journal):
+        if _is_missing_seat_record(event):
+            continue
+        seat = identity["seat"]
+        transport = event.get(session_contract.SEAT_TRANSPORT_KEY)
+        if transport in session_contract.SEAT_TRANSPORTS_DISCLOSED:
+            disclosed.add(seat)
+        elif transport in session_contract.SEAT_TRANSPORTS:
+            continue
+        else:
+            disclosed.add(seat)
+    return sorted(disclosed)
+
+
+def build_degraded_prose(state, form, journal=None):
     cfg = state.get("config") or {}
     degraded_out = []
     if degraded(state):
@@ -527,6 +583,13 @@ def build_degraded_prose(state, form):
     )
     if _run_unj and seat_map_unjudgeable(state):
         degraded_out.append(_run_unj)
+    native_seats = _native_in_session_seats(journal)
+    if native_seats:
+        degraded_out.append(
+            "unprobed native seat(s) %s: seats with no runner execution record — run in-session on "
+            "the host model, fallen open to it, or landed by hand — are declared live, never "
+            "probed; their engagement rests on the seat's own record"
+            % ", ".join(native_seats))
     return degraded_out, skipped_blockers
 
 

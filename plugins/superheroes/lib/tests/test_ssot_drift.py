@@ -175,7 +175,8 @@ def test_complete_codex_policy_single_sourced():
                 "skills/configure/reference/set-up.md",
                 "skills/configure/reference/view-and-tune.md"):
         doc = _read(rel)
-        documented_ids = set(re.findall(r"gpt-5\.6-(?:sol|terra)", doc))
+        id_pattern = r"(?<![A-Za-z0-9._-])gpt-[0-9][A-Za-z0-9._-]*(?![A-Za-z0-9._-])"
+        documented_ids = {m.rstrip(".") for m in re.findall(id_pattern, doc)}
         assert documented_ids == expected_ids, "%s Codex model IDs drifted from model_registry" % rel
         mapping_text = _one(re.findall(r"Codex tier map:\s*([^\n]+(?:\n(?!\s*\n)[^\n]+)?)", doc),
                             "Codex tier map", rel, "tier=model, ...")
@@ -1340,6 +1341,7 @@ def test_wave_watch_suppressible_events_in_wave_watch_doc():
 _CONCRETE_MODEL_TOKENS = (
     "gpt-5.6-terra",
     "gpt-5.6-sol",
+    "gpt-6-astra",
     "gpt-5.5",
     "gpt-5.6-luna",
     "composer-2.5",

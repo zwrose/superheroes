@@ -7405,6 +7405,13 @@ def run_execution_record(run_dir):
         if isinstance(result_digest, str) and result_digest and isinstance(result_kind, str) and result_kind:
             record["resultDigest"] = result_digest
             record["resultKind"] = result_kind
+        resolved = opened.get("resolvedInputs")
+        if isinstance(resolved, dict):
+            engine_model = resolved.get("engineModel")
+        else:
+            engine_model = opened.get("engineModel")
+        if isinstance(engine_model, str) and engine_model:
+            record["engineModel"] = engine_model
         return record, None
     except Exception:
         return None, "internal-error"

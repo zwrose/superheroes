@@ -177,13 +177,19 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
   `reviewer`, `reviewer-deep`, `code-fixer`, `implementer`, and `pilot`; valid
-  model IDs are `gpt-5.6-terra` and `gpt-5.6-sol`. Codex tier map:
-  haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
-  Show the current engine preferences and
-  effective model first, merge only the requested role into the existing object, and preserve every
-  sibling key. Before writing, validate the selected model/effort with
-  `engine_pref.valid_codex_model_effort`; reject an invalid (model, effort) pair and leave the prior
-  valid config unchanged. `max` is owner opt-in only — never proposed as a default.
+  model IDs are `gpt-5.6-terra`, `gpt-5.6-sol`, and `gpt-6-astra` (probe-pending — refused
+  `pin-probe-pending` while its registry row is probe-pending; it is eligible only for
+  `reviewer-deep`, and pinning it on any other role is refused `pin-role-not-eligible`).
+  Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol; an unpinned project never
+  dispatches Astra and Sol stays the default deep cell. A pinned model runs at the effort its role's
+  registry allowlist resolves for it — Sol at `high` on `reviewer`, `code-fixer` and `implementer`
+  and `xhigh` on `reviewer-deep`, Terra at `high`, and Astra at `high` once its probe passes — the
+  role's `enginePreferences.effort` setting is not
+  consulted for a pinned model. Show the current engine preferences and effective model first, merge
+  only the requested role into the existing object, and preserve every sibling key. Before writing,
+  validate the selected model with `model_registry.codex_pin_verdict`; reject an invalid model
+  and leave the prior valid config unchanged. `max` is owner opt-in only — never proposed as a
+  default.
 
   ```json
   {
@@ -198,18 +204,21 @@ action that owns it, leaving the rest of the calibration untouched:
   ```
 
   A Codex pin applies only while that role's engine is `codex`; switching the role to Claude or
-  Cursor ignores it. Per-run preflight model overrides have highest precedence, followed by this
-  persistent pin, then the shared-tier GPT-5.6 mapping.
+  Cursor ignores it. For `reviewer` and `reviewer-deep`, the pin now reaches the review panel's
+  codex seat — it no longer only changes the calibration readout; when the pinned cell is not live
+  the seat falls back to the default cell with a `role-pin-not-live` degradation, and a pin the
+  tier's allowlist does not admit falls back with `role-pin-not-honorable`. Per-run preflight model
+  overrides have highest precedence, followed by this persistent pin, then the shared-tier GPT-5.6
+  mapping.
 
 - **`enginePreferences.effort`** — a `{role_kind: effort_token}` map under `core.md`'s
   `enginePreferences` block. Valid role-kind keys are `review`, `review-deep`, `build`, `fix`,
   `brief-check`, and `pilot` (role **kinds**, not dispatch role names — `build`, never
-  `implementation`). This map governs **Codex model-pin validation** (`engine_pref.normalize_codex_pin_map`
-  calls `resolve_effort` to decide whether a pinned model + effort pair is valid) and **configure
-  display** only — it does **not** set the effort a dispatch actually runs at. Dispatch effort comes
-  from the registry or a per-seat pin (`enginePreferences.seatPins`), resolved through
-  `dispatch_guard` / `seat_map`; use the per-role engine and model-tier tune actions above for
-  those knobs.
+  `implementation`). This map governs **configure display** and non-pin Codex effort resolution only
+  — it does **not** set the effort a **pinned** model runs at (that comes from the model's own
+  registry rung). Dispatch effort for unpinned roles comes from the registry or a per-seat pin
+  (`enginePreferences.seatPins`), resolved through `dispatch_guard` / `seat_map`; use the per-role
+  engine and model-tier tune actions above for those knobs.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

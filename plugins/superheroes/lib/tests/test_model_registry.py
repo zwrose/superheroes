@@ -123,8 +123,8 @@ def test_model_family():
 
 def test_derivation_helpers():
     assert MR.known_claude_models() == ("haiku", "sonnet", "opus", "fable")
-    assert MR.codex_models() == ("gpt-5.6-terra", "gpt-5.6-sol")
-    assert MR.codex_model_strength() == ("gpt-5.6-terra", "gpt-5.6-sol")
+    assert MR.codex_models() == ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra")
+    assert MR.codex_model_strength() == ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra")
     assert MR.codex_pin_roles() == (
         "reviewer",
         "reviewer-deep",
@@ -499,3 +499,116 @@ def test_claude_dispatch_tokens_excludes_fable_override_only():
 def test_claude_dispatch_tokens_round_trip_through_parse_dispatch_token():
     for token in MR.claude_dispatch_tokens():
         assert MR.parse_dispatch_token("claude", token) is not None, token
+
+
+_REVIEWER_DEEP_CLAUDE = ("opus-5", "xhigh")
+_REVIEWER_DEEP_CODEX = ("gpt-5.6-sol", "xhigh")
+_REVIEWER_DEEP_CURSOR = ("cursor-grok-4.6", "xhigh")
+_REVIEWER_CLAUDE = ("sonnet-5", "high")
+_REVIEWER_CODEX = ("gpt-5.6-terra", "high")
+_REVIEWER_CURSOR = ("cursor-grok-4.6", "xhigh")
+_VERIFIER_CLAUDE = ("opus-5", "high")
+_VERIFIER_CODEX = ("gpt-5.6-sol", "high")
+_VERIFIER_CURSOR = ("cursor-grok-4.6", "xhigh")
+
+
+def test_matrix_cells_reviewer_roles_unchanged_at_base():
+    assert MR.matrix_config("reviewer-deep", "claude") == _REVIEWER_DEEP_CLAUDE
+    assert MR.matrix_config("reviewer-deep", "codex") == _REVIEWER_DEEP_CODEX
+    assert MR.matrix_config("reviewer-deep", "cursor") == _REVIEWER_DEEP_CURSOR
+    assert MR.matrix_config("reviewer", "claude") == _REVIEWER_CLAUDE
+    assert MR.matrix_config("reviewer", "codex") == _REVIEWER_CODEX
+    assert MR.matrix_config("reviewer", "cursor") == _REVIEWER_CURSOR
+    assert MR.matrix_config("verifier", "claude") == _VERIFIER_CLAUDE
+    assert MR.matrix_config("verifier", "codex") == _VERIFIER_CODEX
+    assert MR.matrix_config("verifier", "cursor") == _VERIFIER_CURSOR
+
+
+def test_pending_astra_hidden_from_allowlist_but_probe_role_admits():
+    assert MR.allowlist("reviewer-deep", "codex") == ((_REVIEWER_DEEP_CODEX[0], _REVIEWER_DEEP_CODEX[1]),)
+    assert MR.allowlist("registration-probe", "codex") == (("gpt-6-astra", "high"),)
+    assert MR.codex_effort_for_kind("review") == MR.matrix_config("reviewer", "codex")[1]
+    r = MR.resolve_dispatch("registration-probe", "codex")
+    assert r["ok"] is True
+    assert r["effort"] == "high"
+
+
+def test_pending_astra_rejected_on_reviewer_deep_explicit_dispatch():
+    r = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-6-astra", None)
+    assert r["ok"] is False
+
+
+def test_escalate_from_sol_xhigh_does_not_return_pending_astra():
+    result = MR.escalate("codex", "gpt-5.6-sol", "xhigh")
+    assert result is not None
+    assert result[1] != "gpt-6-astra"
+
+
+def test_codex_pin_verdict_pending_astra_on_reviewer_deep():
+    ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+    assert ok is False
+    assert reason.startswith("pin-probe-pending:")
+
+
+def test_codex_pin_verdict_registered_astra_on_reviewer_deep(monkeypatch):
+    models = dict(MR._MODELS)
+    codex = dict(models["codex"])
+    astra = dict(codex["gpt-6-astra"])
+    astra.pop("registration", None)
+    codex["gpt-6-astra"] = astra
+    models["codex"] = codex
+    monkeypatch.setattr(MR, "_MODELS", models)
+    ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-6-astra")
+    assert ok is True
+    assert reason is None
+    r = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-6-astra", None)
+    assert r["ok"] is True
+    assert r["effort"] == "high"
+    assert r["effort_source"] == "resolved-unique"
+    ok_sol, _ = MR.codex_pin_verdict("reviewer-deep", "gpt-5.6-sol")
+    assert ok_sol is True
+    r_sol = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-5.6-sol", None)
+    assert r_sol["ok"] is True
+    assert r_sol["effort"] == "xhigh"
+
+
+def test_codex_pin_verdict_astra_on_reviewer_refused_pin_role(monkeypatch):
+    models = dict(MR._MODELS)
+    codex = dict(models["codex"])
+    astra = dict(codex["gpt-6-astra"])
+    astra.pop("registration", None)
+    codex["gpt-6-astra"] = astra
+    models["codex"] = codex
+    monkeypatch.setattr(MR, "_MODELS", models)
+    ok, reason = MR.codex_pin_verdict("reviewer", "gpt-6-astra")
+    assert ok is False
+    assert reason.startswith("pin-role-not-eligible:")
+
+
+def test_codex_pin_verdict_terra_accepted_on_reviewer_deep_and_pilot():
+    ok, reason = MR.codex_pin_verdict("reviewer-deep", "gpt-5.6-terra")
+    assert ok is True
+    assert reason is None
+    ok, reason = MR.codex_pin_verdict("pilot", "gpt-5.6-terra")
+    assert ok is True
+    assert reason is None
+
+
+def test_codex_pin_verdict_non_str_inputs():
+    ok, reason = MR.codex_pin_verdict(42, "gpt-5.6-sol")
+    assert ok is False
+    assert "unknown role" in reason
+    ok, reason = MR.codex_pin_verdict("reviewer", 123)
+    assert ok is False
+    assert "unknown model" in reason
+
+
+def test_host_family_table():
+    assert MR.host_family("claude-opus-5") == "anthropic"
+    assert MR.host_family("opus") == "anthropic"
+    assert MR.host_family("gpt-6-astra") == "openai"
+    assert MR.host_family("composer-2.5") == "xai"
+    assert MR.host_family("") is None
+    assert MR.host_family(None) is None
+    assert MR.host_family(123) is None
+    assert MR.host_family("mystery") is None

@@ -13,18 +13,63 @@ the MEMORY.md head on all spawn paths (probe-verified #627 F1, Claude Code
 FIRST and UNCONDITIONALLY; it must NOT be gated behind a work-item lookup, or it
 would be suppressed on exactly the compacted-discovery path it exists for.
 
-No env export (CLAUDE_ENV_FILE is not provisioned on SessionStart — spike-confirmed).
-Always exits 0.
+When `CLAUDE_ENV_FILE` is set, appends `SUPERHEROES_HOST_MODEL` from the payload
+(best-effort, never raises). Always exits 0.
 """
 import argparse
 import json
 import os
+import re
+import shlex
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
 
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SOURCES = {"startup", "resume", "clear", "compact"}
+_HOST_MODEL_RE = re.compile(r"^[A-Za-z0-9._:/\[\]-]{1,128}$")
+
+
+def _host_model(payload):
+    """Shape-checked host model from the SessionStart payload, or empty."""
+    model = payload.get("model")
+    if isinstance(model, str):
+        value = model.strip()
+    elif isinstance(model, dict):
+        mid = model.get("id")
+        value = mid.strip() if isinstance(mid, str) else ""
+    else:
+        value = ""
+    if not _HOST_MODEL_RE.match(value):
+        return ""
+    return value
+
+
+def _write_host_model_env(value):
+    env_file = os.environ.get("CLAUDE_ENV_FILE")
+    if not env_file:
+        return
+    try:
+        with open(env_file, "a", encoding="utf-8") as fh:
+            fh.write("export SUPERHEROES_HOST_MODEL=%s\n" % shlex.quote(value))
+    except OSError as exc:
+        sys.stderr.write(
+            "superheroes session_start: could not write host model env (%s)\n"
+            % type(exc).__name__)
+
+
+def _append_host_model_section(boot, value):
+    if not boot:
+        return boot
+    if value:
+        line = "Host model (read from the session-start hook payload): %s" % value
+    else:
+        line = (
+            "Host model: unknown — the session-start hook payload carried no readable model; "
+            "seat composition falls back to the claude host's family for the families it cannot "
+            "read and discloses it on the seat map as host-model-unknown."
+        )
+    return boot + "\n\n### Host model\n" + line
 
 
 def _bootstrap(cwd, transcript_path, host, source=None):
@@ -60,7 +105,11 @@ def main():
     cwd = payload.get("cwd") or os.getcwd()
     transcript_path = payload.get("transcript_path")
 
+    host_model = _host_model(payload)
+    _write_host_model_env(host_model)
+
     boot = _bootstrap(cwd, transcript_path, args.host, source=source)   # always-on, gated by nothing
+    boot = _append_host_model_section(boot, host_model)
     if boot:
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {"hookEventName": "SessionStart",

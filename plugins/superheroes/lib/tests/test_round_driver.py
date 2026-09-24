@@ -6272,6 +6272,7 @@ _SEAT_MAP_RECEIPTS_CALLERS = frozenset({
     "unexcused_violations",
     "pin_excused_records",
     "unjudgeable_receipts",
+    "round_governing_map",
     "round_governing_unjudgeable",
     "emit_receipt_seat_map",
 })
