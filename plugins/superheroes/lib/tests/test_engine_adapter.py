@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import hashlib
 import json
@@ -658,6 +659,182 @@ def test_build_argv_claude_write_omits_allowed_tools():
     assert "--allowedTools" not in argv
 
 
+def test_build_argv_claude_background_review_exact_shape():
+    res = EA.build_argv_result(
+        _seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "background"},
+    )
+    assert res["reason"] is None
+    assert res["argv"] == [
+        "claude", "--bg", "--model", "sonnet", "--effort", "high", "--restricted",
+    ]
+
+
+def test_build_argv_claude_background_write_exact_shape():
+    res = EA.build_argv_result(
+        _seat("claude", "sonnet-5", "high"), "build", {"claudeMode": "background"},
+    )
+    assert res["reason"] is None
+    assert res["argv"] == [
+        "claude", "--bg", "--model", "sonnet", "--effort", "high",
+        "--permission-mode", "acceptEdits", "--restricted",
+    ]
+
+
+def test_build_argv_claude_background_omits_print_flags():
+    res = EA.build_argv_result(
+        _seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "background"},
+    )
+    argv = res["argv"]
+    assert "-p" not in argv
+    assert "--output-format" not in argv
+    assert "--json-schema" not in argv
+    assert argv == [
+        "claude", "--bg", "--model", "sonnet", "--effort", "high", "--restricted",
+    ]
+
+
+def test_build_argv_claude_print_mode_explicit_unchanged():
+    for mode in (None, "print"):
+        opts = {"claudeMode": mode} if mode is not None else {}
+        argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "review", opts)
+        assert argv == [
+            "claude", "-p", "--model", "sonnet", "--effort", "high",
+            "--output-format", "stream-json", "--verbose", "--restricted",
+        ]
+
+
+def test_build_argv_unknown_claude_mode_refuses():
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", "high"), "review", {"claudeMode": 123})
+    assert res["reason"] == "unknown-claude-mode"
+    assert "accepted modes: print, background" in res["detail"]
+    res = EA.build_argv_result(_seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "printt"})
+    assert res["reason"] == "unknown-claude-mode"
+
+
+def test_build_argv_claude_mode_unsupported_on_codex():
+    res = EA.build_argv_result(
+        _seat("codex", "gpt-5.6-sol", "high"), "review", {"claudeMode": "background"},
+    )
+    assert res["reason"] == "claude-mode-unsupported"
+    assert "not supported for engine codex" in res["detail"]
+
+
+def test_build_argv_codex_cursor_unchanged_with_claude_mode_none():
+    codex = EA.build_argv_result(_seat("codex", "gpt-5.6-sol", "high"), "review", {})
+    cursor = EA.build_argv_result(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
+    assert codex["reason"] is None
+    assert cursor["reason"] is None
+    assert codex["argv"] == [
+        "codex", "exec", "--sandbox", "read-only", "-m", "gpt-5.6-sol",
+        "-c", "model_reasoning_effort=high", "-",
+    ]
+    assert cursor["argv"] == [
+        "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust", "-f",
+        "--sandbox", "enabled", "--output-format", "stream-json",
+    ]
+
+
+def test_build_argv_claude_fable_refuses_in_background_mode():
+    res = EA.build_argv_result(
+        _seat("claude", "fable-5.1", "high"), "review", {"claudeMode": "background"},
+    )
+    assert res["reason"] == "fable-unrunnable"
+
+
+def _claude_transcript_fixture_rows():
+    return [
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-read-1",
+                    "name": "Read",
+                    "input": {"path": "foo.py"},
+                }],
+            },
+        },
+        {"type": "user", "toolEndsTurn": True},
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-so-1",
+                    "name": "StructuredOutput",
+                    "input": {"ok": True, "signal": "ok"},
+                }],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-so-2",
+                    "name": "StructuredOutput",
+                    "input": {"ok": False, "signal": "needs_context"},
+                }],
+            },
+        },
+        {"type": "system", "subtype": "turn_duration", "duration_ms": 1200},
+    ]
+
+
+def test_claude_transcript_readers_realistic_fixture():
+    rows = _claude_transcript_fixture_rows()
+    assert EA.claude_transcript_result(rows) == {"ok": False, "signal": "needs_context"}
+    assert EA.claude_transcript_tool_calls(rows) == 1
+    assert EA.claude_transcript_turn_ended(rows) is True
+
+
+def test_claude_transcript_result_no_structured_output():
+    rows = [{"type": "assistant", "message": {"content": []}}]
+    assert EA.claude_transcript_result(rows) is None
+
+
+def test_claude_transcript_turn_ended_signals():
+    assert EA.claude_transcript_turn_ended([{"type": "user", "toolEndsTurn": True}]) is True
+    assert EA.claude_transcript_turn_ended(
+        [{"type": "system", "subtype": "turn_duration"}],
+    ) is True
+    assert EA.claude_transcript_turn_ended([{"type": "user"}]) is False
+
+
+def test_claude_launch_id_measured_acknowledgement():
+    assert EA.claude_launch_id("backgrounded · a1b2c3d4\n") == "a1b2c3d4"
+    assert EA.claude_launch_id("") is None
+    assert EA.claude_launch_id("error: something failed\n") is None
+    assert EA.claude_launch_id("backgrounded · abcdefg\n") is None
+    assert EA.claude_launch_id("backgrounded · ABCD1234\n") is None
+    assert EA.claude_launch_id("prefix backgrounded · a1b2c3d4\n") is None
+
+
+def test_claude_launch_id_skips_leading_non_matching_lines():
+    stdout = (
+        "Starting background session...\n"
+        "Tip: use /tasks to list sessions\n"
+        "backgrounded · a1b2c3d4\n"
+        "More help text follows\n"
+    )
+    assert EA.claude_launch_id(stdout) == "a1b2c3d4"
+
+
+def test_claude_launch_id_none_and_non_string():
+    assert EA.claude_launch_id(None) is None
+    assert EA.claude_launch_id(7) is None
+
+
+def test_jsonl_dict_line_readers_skip_garbage():
+    stream = "not json\n" + json.dumps(["not", "a", "dict"]) + "\n" + json.dumps({
+        "type": "assistant",
+        "message": {"content": []},
+    }) + "\n"
+    objs = list(EA._iter_jsonl_dict_lines(stream))
+    assert len(objs) == 1
+    assert objs[0]["type"] == "assistant"
+
+
 def test_registered_engine_models_detail_claude_lists_every_id():
     detail = EA._registered_engine_models_detail("claude")
     for model_id in EA.model_registry.claude_models():
@@ -671,7 +848,7 @@ def test_build_argv_claude_fail_closed_edges():
         assert res["reason"] == "unregistered-engine-model"
         assert "haiku-4.5" in res["detail"]
     # 2 fable-5 or token fable → fable-unrunnable
-    res = EA.build_argv_result(_seat("claude", "fable-5", "high"), "review", {})
+    res = EA.build_argv_result(_seat("claude", "fable-5.1", "high"), "review", {})
     assert res["reason"] == "fable-unrunnable"
     res = EA.build_argv_result(_seat("claude", "fable", "high"), "review", {})
     assert res["reason"] == "fable-unrunnable"
@@ -1915,6 +2092,89 @@ def test_build_argv_result_cursor_argv_unchanged():
     assert base["reason"] is None
     assert "--json" not in base["argv"]
 
+
+_BUILDER_SESSION_ID = "550e8400-e29b-41d4-a716-446655440000"
+
+
+def test_claude_builder_argv_exact_argv():
+    res = EA.claude_builder_argv("sonnet", _BUILDER_SESSION_ID, "build this")
+    assert res["reason"] is None
+    assert res["argv"] == [
+        "claude", "--model", "sonnet", "--session-id", _BUILDER_SESSION_ID, "-p", "build this",
+    ]
+
+
+def test_claude_builder_argv_omits_bg_effort_and_restricted():
+    res = EA.claude_builder_argv("sonnet", _BUILDER_SESSION_ID, "prompt")
+    argv = res["argv"]
+    for flag in ("--bg", "--effort", "--restricted"):
+        assert flag not in argv
+
+
+def test_claude_builder_argv_unknown_claude_tier_refusal():
+    res = EA.claude_builder_argv("bogus", _BUILDER_SESSION_ID, "prompt")
+    assert res["reason"] == "unknown-claude-tier"
+    res = EA.claude_builder_argv(True, _BUILDER_SESSION_ID, "prompt")
+    assert res["reason"] == "unknown-claude-tier"
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param("not-a-uuid", id="not-a-uuid"),
+        pytest.param("550E8400-E29B-41D4-A716-446655440000", id="uppercase"),
+        pytest.param("{550e8400-e29b-41d4-a716-446655440000}", id="braced"),
+    ],
+)
+def test_claude_builder_argv_session_id_invalid(session_id):
+    res = EA.claude_builder_argv("sonnet", session_id, "prompt")
+    assert res["reason"] == "builder-session-id-invalid"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace"),
+    ],
+)
+def test_claude_builder_argv_builder_prompt_missing_refusal(prompt):
+    res = EA.claude_builder_argv("sonnet", _BUILDER_SESSION_ID, prompt)
+    assert res["reason"] == "builder-prompt-missing"
+
+
+def test_claude_builder_argv_refusal_order_token_before_session_id():
+    res = EA.claude_builder_argv("bogus", "not-a-uuid", "prompt")
+    assert res["reason"] == "unknown-claude-tier"
+
+
+def test_claude_builder_argv_refusal_order_session_id_before_prompt():
+    res = EA.claude_builder_argv("sonnet", "not-a-uuid", "   ")
+    assert res["reason"] == "builder-session-id-invalid"
+
+
+def test_claude_cli_argv_valid_list():
+    assert EA.claude_cli_argv(["agents", "--json"]) == ["claude", "agents", "--json"]
+
+
+def test_claude_cli_argv_empty_string_element_returns_none():
+    assert EA.claude_cli_argv(["stop", ""]) is None
+
+
+def test_claude_cli_argv_non_list_returns_none():
+    assert EA.claude_cli_argv("agents") is None
+
+
+def test_build_argv_claude_uses_claude_executable_constant():
+    res = EA.build_argv_result(
+        _seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "background"},
+    )
+    assert res["argv"][0] == EA.CLAUDE_EXECUTABLE
+
+
 def test_cursor_tool_calls_counts_distinct_call_ids():
     lines = [
         '{"type":"tool_call","call_id":"a","subtype":"started"}',
@@ -2251,6 +2511,16 @@ def test_parse_result_review_rejected_findings_path_scrubs_secret():
 _HOLLOW_MEMBER_MALFORMED = {"ok": False, "reason": "unreadable"}
 
 
+def _hollow_family_shape(parsed, member_shape_wanted, member_shape_got):
+    return {
+        "parsed": parsed,
+        "topLevelKeys": [],
+        "keysTruncated": False,
+        "memberShapeWanted": member_shape_wanted,
+        "memberShapeGot": member_shape_got,
+    }
+
+
 @pytest.mark.parametrize("stdout", [
     json.dumps({"findings": [{}]}),
     json.dumps({"findings": [{}, {}]}),
@@ -2504,9 +2774,11 @@ def test_review_payload_shape_echo_nonce_second_path_agrees_with_parse():
     nonce = "shape-nonce"
     stdout = json.dumps(RFS.example_findings_object(nonce)["findings"])
     shape = EA.review_payload_shape(stdout, echo_nonce=nonce)
-    assert shape == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    assert shape == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        "engaged-finding-member",
+        "list:count=1,hollow=1,substantive=0",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2565,9 +2837,11 @@ def test_review_payload_shape_investigated_placeholder_echo_agrees_with_parse():
     placeholder = RFS._placeholder_string("investigated-path", nonce)
     stdout = json.dumps({"findings": [], "investigated": [placeholder]})
     shape = EA.review_payload_shape(stdout, echo_nonce=nonce)
-    assert shape == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    assert shape == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        "non-placeholder-investigated-path",
+        "list:count=1,placeholder-echo=1",
+    )
     assert EA.parse_result("codex", "review", stdout, echo_nonce=nonce) == _HOLLOW_MEMBER_MALFORMED
 
 
@@ -2620,9 +2894,12 @@ def _findings_member_hollow_via_parse(stdout):
 
 def _findings_member_hollow_via_shape(stdout):
     shape = EA.review_payload_shape(stdout)
-    return shape == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    if shape is None:
+        return False
+    return shape["parsed"] in (
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        EA.SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER,
+    )
 
 
 @pytest.mark.parametrize("member,expect_hollow", [
@@ -2710,16 +2987,133 @@ def test_finding_substance_keys_canonical_subset_of_schema():
 ])
 def test_review_payload_shape_hollow_object_branch(stdout):
     res = EA.review_payload_shape(stdout)
-    assert res == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    assert res == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        "engaged-finding-member",
+        "list:count=1,hollow=1,substantive=0",
+    )
 
 
 def test_review_payload_shape_hollow_bare_array():
     res = EA.review_payload_shape(json.dumps([{}]))
-    assert res == {
-        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
+    assert res == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_HOLLOW_MEMBER,
+        "engaged-finding-member",
+        "list:count=1,hollow=1,substantive=0",
+    )
+
+
+def test_review_payload_shape_findings_partial_hollow_member():
+    # axis: populated findings list with substantive and hollow members is not plain hollow
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_hollow_member_grade.md (BP1)
+    good = {"severity": "Minor", "title": "t", "body": "b"}
+    stdout = json.dumps({"findings": [good, {}]})
+    res = EA.review_payload_shape(stdout)
+    assert res == _hollow_family_shape(
+        EA.SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER,
+        "engaged-finding-member",
+        "list:count=2,hollow=1,substantive=1",
+    )
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_review_payload_shape_verdicts_partial_hollow_member():
+    # axis: populated verdicts list with valid and invalid members is not plain hollow
+    good = {"id": "v1", "verdict": "CONFIRMED", "reason": "seen"}
+    stdout = json.dumps({"verdicts": [good, {"id": "", "verdict": "CONFIRMED"}]})
+    res = EA.review_payload_shape(stdout)
+    assert res == _hollow_family_shape(
+        EA.SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER,
+        "valid-verdict-member",
+        "list:count=2,invalid=1,valid=1",
+    )
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_hollow_family_diagnostic_carries_member_shape_fields():
+    # axis: hollow-family diagnostics always carry bounded wanted/got member-shape fields
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_hollow_member_grade.md (BP2)
+    res = EA.review_payload_shape(json.dumps({"findings": [{}]}))
+    assert res["memberShapeWanted"] == "engaged-finding-member"
+    assert res["memberShapeGot"] == "list:count=1,hollow=1,substantive=0"
+
+
+# Derived from the production registry, not hand-spelled: a hollow-family constant is any
+# SHAPE_* name in engine_adapter's own REVIEW_PAYLOAD_SHAPES tuple whose identifier carries
+# "HOLLOW_MEMBER" — the naming convention _hollow_family_diagnostic's callers use. If a new
+# hollow-family shape is minted at the constructor home and added to REVIEW_PAYLOAD_SHAPES,
+# this set picks it up without an edit here; a rename likewise tracks automatically. This
+# does not, by itself, catch a hollow-family value spelled as a bare string literal outside
+# the constructor (no SHAPE_* identifier involved) — that axis is not covered by this census.
+_HOLLOW_FAMILY_SHAPE_CONSTANTS = tuple(
+    name for name in dir(EA)
+    if name.startswith("SHAPE_") and "HOLLOW_MEMBER" in name
+    and getattr(EA, name) in EA.REVIEW_PAYLOAD_SHAPES
+)
+
+
+def _hollow_family_shape_constant_line_ranges(source):
+    """Return (home_start, home_end, constructor_start, constructor_end) line ranges."""
+    tree = ast.parse(source)
+    home_start = home_end = None
+    constructor_start = constructor_end = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Name)
+                        and target.id == "SHAPE_FINDINGS_HOLLOW_MEMBER"):
+                    home_start = node.lineno
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Name)
+                        and target.id == "REVIEW_PAYLOAD_SHAPES"):
+                    home_end = node.end_lineno
+        if isinstance(node, ast.FunctionDef) and node.name == "_hollow_family_diagnostic":
+            constructor_start = node.lineno
+            constructor_end = node.end_lineno
+    return home_start, home_end, constructor_start, constructor_end
+
+
+def _hollow_family_shape_constant_refs(source):
+    """Collect line numbers of hollow-family SHAPE_* constant references."""
+    tree = ast.parse(source)
+    refs = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _HOLLOW_FAMILY_SHAPE_CONSTANTS:
+            refs.append((node.id, node.lineno))
+        elif isinstance(node, ast.Attribute) and node.attr in _HOLLOW_FAMILY_SHAPE_CONSTANTS:
+            refs.append((node.attr, node.lineno))
+    return refs
+
+
+def test_hollow_member_shape_tokens_minted_only_via_constructor():
+    # axis: hollow-family SHAPE_* tokens are minted only at the constructor home
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_hollow_member_grade.md (BP3)
+    # population guard: the derived census must not silently collapse to empty (which would
+    # make the `stray == []` assertion below vacuously true for every constant).
+    assert set(_HOLLOW_FAMILY_SHAPE_CONSTANTS) == {
+        "SHAPE_FINDINGS_HOLLOW_MEMBER",
+        "SHAPE_VERDICTS_HOLLOW_MEMBER",
+        "SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER",
+        "SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER",
     }
+    adapter_path = os.path.join(_HERE, "..", "engine_adapter.py")
+    with open(adapter_path, encoding="utf-8") as fh:
+        source = fh.read()
+    home_start, home_end, constructor_start, constructor_end = (
+        _hollow_family_shape_constant_line_ranges(source))
+    assert home_start is not None
+    assert home_end is not None
+    assert constructor_start is not None
+    assert constructor_end is not None
+    allowed = set(range(home_start, home_end + 1)) | set(
+        range(constructor_start, constructor_end + 1))
+    stray = [
+        "%s:%d" % (name, line)
+        for name, line in _hollow_family_shape_constant_refs(source)
+        if line not in allowed
+    ]
+    assert stray == []
 
 
 def test_salvage_from_artifact_hollow_findings_requires_manual_read():
@@ -3805,9 +4199,11 @@ def test_review_payload_shape_verdicts_not_a_list():
 
 def test_review_payload_shape_verdicts_hollow_member():
     res = EA.review_payload_shape(json.dumps({"verdicts": [{"id": "", "verdict": "CONFIRMED"}]}))
-    assert res == {
-        "parsed": EA.SHAPE_VERDICTS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
-    }
+    assert res == _hollow_family_shape(
+        EA.SHAPE_VERDICTS_HOLLOW_MEMBER,
+        "valid-verdict-member",
+        "list:count=1,invalid=1,valid=0",
+    )
 
 
 def test_review_payload_shape_placeholder_literal_refusal():
@@ -3822,6 +4218,7 @@ def test_review_payload_shapes_includes_verdict_tokens():
     for token in (EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,
                   EA.SHAPE_OBJECT_VERDICTS_NOT_A_LIST,
                   EA.SHAPE_VERDICTS_HOLLOW_MEMBER,
+                  EA.SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER,
                   EA.SHAPE_PLACEHOLDER_LITERAL_REFUSAL):
         assert token in EA.REVIEW_PAYLOAD_SHAPES
 

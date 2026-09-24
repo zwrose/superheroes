@@ -7,17 +7,26 @@ import sys
 import model_registry
 import pytest
 import record_paths
+import round_records
 
 import round_certification as RC
 import session_contract
 from round_certification_fixtures import (
     DEFAULT_FINDINGS_RESULT_SHA,
     DEFAULT_PANEL_PAYLOAD_SHA,
+    HEAD_SHA,
     MUST_REFUSE_FIXTURES,
     write_session,
+    write_certifiable_session,
+    _binding_fields,
+    _dispatch_journal_with_binding,
+    _FIX_PRESENT_BYTES,
+    _hand_landed_binding_journal_row,
+    _head_content_read_row,
+    _write_head_content_blobs,
 )
 
-HEAD = "a" * 40
+HEAD = HEAD_SHA
 
 QUALIFICATION_HELPER_CENSUS = (
     "_execution_binding_matches_journal",
@@ -27,82 +36,6 @@ QUALIFICATION_HELPER_CENSUS = (
 )
 
 
-def _binding_fields(nonce="test-nonce", *, result_digest=None):
-    digest = result_digest if isinstance(result_digest, str) and result_digest else ("e" * 64)
-    return {
-        "source": "runner",
-        "runnerNonce": nonce,
-        "recordDigest": "d" * 64,
-        "resultDigest": digest,
-        "resultKind": "findings",
-    }
-
-
-def _dispatch_journal_with_binding(
-    seat="code-reviewer",
-    payload_sha=DEFAULT_PANEL_PAYLOAD_SHA,
-    *,
-    nonce="test-nonce",
-    attempt=0,
-    head_sha=HEAD,
-    read="engaged",
-):
-    evidence = {
-        "read": read,
-        "source": "runner",
-        "telemetry": "tool-calls",
-        "stdoutBytes": 10,
-        "wallSeconds": 1.0,
-        "toolCalls": 1,
-        **_binding_fields(nonce, result_digest=DEFAULT_FINDINGS_RESULT_SHA),
-    }
-    row = {
-        "cmd": "record-result",
-        "outcome": "recorded",
-        "phase": RC.PANEL_PHASE,
-        "round": 1,
-        "attempt": attempt,
-        "seat": seat,
-        "occurrence": 0,
-        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
-        "payloadSha256": payload_sha,
-        "executionEvidence": evidence,
-        "recordIdentity": {
-            "phase": RC.PANEL_PHASE,
-            "seat": seat,
-            "occurrence": 0,
-            "attempt": attempt,
-        },
-    }
-    if head_sha is not None:
-        row["headSha"] = head_sha
-    return row
-
-
-def _hand_landed_binding_journal_row(seat, payload_sha, evidence, *, attempt=0):
-    return {
-        "cmd": "record-result",
-        "outcome": "recorded",
-        "phase": RC.PANEL_PHASE,
-        "round": 1,
-        "attempt": attempt,
-        "seat": seat,
-        "provenance": RC.PROVENANCE_HAND_LANDED,
-        "payloadSha256": payload_sha,
-        "executionEvidence": {
-            field: evidence[field]
-            for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
-        },
-        "recordIdentity": {
-            "phase": RC.PANEL_PHASE,
-            "seat": seat,
-            "occurrence": 0,
-            "attempt": attempt,
-        },
-    }
-
-
-_FIX_PRESENT_BYTES = b"fix present\n"
 _FIX_PRESENT_DIGEST = hashlib.sha256(_FIX_PRESENT_BYTES).hexdigest()
 
 
@@ -116,75 +49,187 @@ def _fix_content_disposition_receipt(**overrides):
     return receipt
 
 
-def _head_content_read_row(path, content_bytes, head=HEAD):
-    digest = hashlib.sha256(content_bytes).hexdigest()
-    return {
-        "headSha": head,
-        "path": path,
-        "contentDigest": digest,
-        "bytes": len(content_bytes),
-        "readAt": "2026-01-01T00:00:00Z",
-        "source": "git-show",
-        "readError": None,
-    }, digest
-
-
-def _head_content_blobs_for_findings(findings, head=HEAD):
-    reads = []
-    files = {}
-    for finding in findings:
-        if not isinstance(finding, dict):
-            continue
-        if finding.get("disposition") != "fixed":
-            continue
-        path = finding.get("file")
-        if not isinstance(path, str) or not path:
-            continue
-        row, digest = _head_content_read_row(path, _FIX_PRESENT_BYTES, head)
-        reads.append(row)
-        files[path] = base64.b64encode(_FIX_PRESENT_BYTES).decode("ascii")
-    if not reads:
-        return None
-    return {
-        "schema": session_contract.HEAD_CONTENT_BLOBS_SCHEMA,
-        "headSha": head,
-        "files": files,
-        "reads": reads,
+def _envelope_execution_evidence_from_journal(journal_evidence):
+    observation = {
+        "read": journal_evidence.get("read", "engaged"),
+        "source": journal_evidence.get("source", "runner"),
+        "telemetry": journal_evidence.get("telemetry", "tool-calls"),
+        "stdoutBytes": journal_evidence.get("stdoutBytes", 10),
+        "wallSeconds": journal_evidence.get("wallSeconds", 1.0),
+        "tokens": None,
+        "toolCalls": journal_evidence.get("toolCalls", 1),
     }
+    out = {
+        key: journal_evidence[key]
+        for key in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
+        if key in journal_evidence
+    }
+    out["observation"] = observation
+    if isinstance(journal_evidence.get("engineModel"), str) and journal_evidence["engineModel"]:
+        out["engineModel"] = journal_evidence["engineModel"]
+    return out
 
 
-def _write_head_content_blobs(session_dir, blobs):
-    path = os.path.join(session_dir, RC.HEAD_CONTENT_BLOBS_FILE)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(blobs, fh, sort_keys=True)
-
-
-def write_certifiable_session(tmp_path, **kwargs):
-    """Session with binding telemetry and head-content evidence for fixed findings."""
-    state = kwargs.get("state")
-    if state is None:
-        state = {}
-    elif not isinstance(state, dict):
-        state = {}
-    kwargs = dict(kwargs)
-    kwargs["state"] = state
-    if kwargs.get("journal_lines") is None:
-        kwargs["journal_lines"] = [_dispatch_journal_with_binding()]
-    session_dir = write_session(tmp_path, **kwargs)
-    findings = (state.get("findings") if state else None) or []
-    blobs = _head_content_blobs_for_findings(findings)
-    if blobs is None:
-        blobs = _head_content_blobs_for_findings(
-            [
+# axis: legacy journal row with no transport field is the writer's input surface, not driver-produced.
+def test_receipt_seat_model_none_when_transport_absent(tmp_path):
+    seat = "test-reviewer"
+    binding = _binding_fields("dispatch-model-nonce", result_digest=DEFAULT_FINDINGS_RESULT_SHA)
+    journal_evidence = {
+        **binding,
+        "read": "engaged",
+        "source": "runner",
+        "telemetry": "tool-calls",
+        "stdoutBytes": 10,
+        "wallSeconds": 1.0,
+        "toolCalls": 1,
+        "engineModel": "gpt-5.6-sol",
+    }
+    journal_row = _dispatch_journal_with_binding(
+        seat=seat,
+        nonce="dispatch-model-nonce",
+    )
+    journal_row["executionEvidence"] = journal_evidence
+    ctx, _ = RC._load_context(
+        write_certifiable_session(
+            tmp_path,
+            journal_lines=[journal_row],
+            envelopes=[
                 {
-                    "id": "F1",
-                    "file": "a.py",
-                    "disposition": "fixed",
+                    "seat": seat,
+                    "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
+                    "executionEvidence": _envelope_execution_evidence_from_journal(
+                        journal_evidence
+                    ),
                 }
-            ]
+            ],
         )
-    _write_head_content_blobs(session_dir, blobs)
-    return session_dir
+    )
+    row = RC._collect_seats(ctx)[0]
+    assert row["model"] is None
+
+
+def _forbidden_driver_module_names():
+    # Built from pieces so this test's own source does not trip the constant census.
+    return ("round_" + "driver", "test_round_" + "driver_integration")
+
+
+def _driver_import_census(path):
+    import ast
+
+    forbidden = _forbidden_driver_module_names()
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = ast.parse(source, filename=path)
+    saw_import = False
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            saw_import = True
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in forbidden or any(part in forbidden for part in alias.name.split(".")):
+                    violations.append(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and (
+                node.module in forbidden
+                or any(part in forbidden for part in node.module.split("."))
+            ):
+                violations.append(node.module)
+            for alias in node.names:
+                if alias.name in forbidden:
+                    violations.append(alias.name)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in ("import_module", "__import__"):
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        if arg.value in forbidden:
+                            violations.append(arg.value)
+            elif isinstance(func, ast.Attribute) and func.attr in (
+                "import_module", "spec_from_file_location",
+            ):
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        if arg.value in forbidden:
+                            violations.append(arg.value)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if any(name in node.value for name in forbidden):
+                violations.append(node.value)
+    return saw_import, violations
+
+
+def test_driver_import_census_rejects_qualified_from_import(tmp_path):
+    probe = tmp_path / "probe_import.py"
+    driver_name = "round_" + "driver"
+    probe.write_text(
+        "from plugins.superheroes.lib import %s\n" % driver_name,
+        encoding="utf-8",
+    )
+    saw_import, violations = _driver_import_census(str(probe))
+    assert saw_import
+    assert violations, "qualified from-import must be flagged"
+
+
+# axis: writer-side tests and fixtures never import or name the round driver at any depth.
+def _writer_module_import_snippet():
+    import ast
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "test_round_certification.py")
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = ast.parse(source, filename=path)
+    stdlib = frozenset(sys.builtin_module_names) | frozenset((
+        "ast", "base64", "hashlib", "json", "os", "re", "subprocess", "tempfile",
+    ))
+    chunks = []
+    for node in tree.body:
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split(".")[0] for alias in node.names]
+        else:
+            roots = [node.module.split(".")[0]] if node.module else []
+        if any(root == "pytest" for root in roots):
+            continue
+        if roots and all(root in stdlib for root in roots):
+            continue
+        segment = ast.get_source_segment(source, node)
+        if segment:
+            chunks.append(segment.strip())
+    return "\n".join(chunks)
+
+
+def test_writer_tests_run_with_no_driver():
+    here = os.path.dirname(os.path.abspath(__file__))
+    targets = (
+        os.path.join(here, "test_round_certification.py"),
+        os.path.join(here, "round_certification_fixtures.py"),
+    )
+    for path in targets:
+        saw_import, violations = _driver_import_census(path)
+        assert saw_import, "census must parse imports in %s" % path
+        assert not violations, "forbidden driver reference in %s: %s" % (path, violations)
+    lib_dir = os.path.dirname(here)
+    tests_dir = here
+    snippet = """
+import sys
+sys.path.insert(0, %r)
+sys.path.insert(0, %r)
+%s
+_forbidden = ("round_" + "driver", "test_round_" + "driver_integration")
+for _name in list(sys.modules):
+    if _name.split(".")[-1] in _forbidden:
+        raise AssertionError("forbidden driver module loaded: " + _name)
+""" % (lib_dir, tests_dir, _writer_module_import_snippet())
+    import subprocess
+
+    proc = subprocess.run(
+        [sys.executable, "-c", snippet],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
 
 
 def test_certify_clean_session_returns_receipt(tmp_path):
@@ -1356,37 +1401,6 @@ def test_meta_producer_arbitrary_key_cannot_bypass_unrun_review(tmp_path):
     receipt, refusal = RC.certify(session_dir)
     assert receipt is None
     assert refusal["class"] == "unrun-review"
-
-
-def test_materialized_session_preserves_checked_base_guard(tmp_path):
-    session_dir = write_certifiable_session(
-        tmp_path,
-        name="checked-guard",
-        state={"config": {"fixerVendor": "claude", "baseGuard": RC.BASE_GUARD_CHECKED, "headSha": HEAD}},
-        envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
-    )
-    with open(os.path.join(session_dir, RC.STATE_FILE), encoding="utf-8") as fh:
-        state = json.load(fh)
-    import round_driver as RD
-
-    materialized = RD._materialize_run_loop_session(state, 1, source_session_dir=session_dir)
-    try:
-        with open(os.path.join(materialized, RC.STATE_FILE), encoding="utf-8") as fh:
-            materialized_state = json.load(fh)
-        assert materialized_state["config"]["baseGuard"] == RC.BASE_GUARD_CHECKED
-        blobs = _head_content_blobs_for_findings(materialized_state.get("findings") or [])
-        if blobs is None:
-            blobs = _head_content_blobs_for_findings(
-                [{"id": "F1", "file": "a.py", "disposition": "fixed"}]
-            )
-        _write_head_content_blobs(materialized, blobs)
-        receipt, refusal = RC.certify(materialized)
-        assert refusal is None, refusal
-        assert receipt["baseGuard"] == RC.BASE_GUARD_CHECKED
-    finally:
-        import shutil
-
-        shutil.rmtree(materialized, ignore_errors=True)
 
 
 def test_fixed_disposition_fix_still_present_at_head_certifies(tmp_path):
