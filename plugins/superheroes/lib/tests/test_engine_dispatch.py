@@ -12,6 +12,11 @@ import time
 
 import pytest
 
+from bite_support import (
+    _ended_with_completion_stamp,
+    _stamp_ended_from_native_result,
+)
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Sentinel for monkeypatch.setattr two-argument form (target, name) without private pytest API.
@@ -1343,10 +1348,10 @@ def test_review_unregistered_model_refusal_leaves_no_dispatch_review_temp_dir(tm
 
 def test_timeout_mid_stream_partial_output_rejected(tmp_path):
     repo_root = _repo(tmp_path)
-    partial = json.dumps({"findings": [{"id": "partial"}]})
+    # Unreadable stdout maps to a malformed native result — still forfeits via admission.
     fake = FakeRunner([
-        (partial, True, 0, ""),
-        (partial, True, 0, ""),
+        ("not json", True, 0, ""),
+        ("not json", True, 0, ""),
     ])
     res = ED.dispatch_review(
         seat=_codex_seat(),
@@ -3544,42 +3549,41 @@ def test_native_write_timeout_with_valid_result_admits(tmp_path, monkeypatch):
     assert grade["admittedAfterTimeout"] is True
 
 
-# axis: a native write result written during the SIGTERM/SIGKILL grace window — i.e. AFTER the
-# wall-cap deadline, not before it — must be rejected, not silently admitted as a clean success.
-def test_native_write_timeout_result_written_after_deadline_rejected(tmp_path, monkeypatch):
+# axis: a native write result whose completion stamp is after the monotonic deadline must be
+# rejected, not silently admitted as a clean success.
+def test_native_write_timeout_result_written_after_deadline_rejected(tmp_path):
     native_write = _native_write_result_json()
-    script = (
-        "import signal, sys, time\n"
-        "_path = None\n"
-        "args = sys.argv[1:]\n"
-        "for i, arg in enumerate(args):\n"
-        "    if arg == '-o' and i + 1 < len(args):\n"
-        "        _path = args[i + 1]\n"
-        "        break\n"
-        "def _write_after_term(signum, frame):\n"
-        "    if _path:\n"
-        "        open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
-        "signal.signal(signal.SIGTERM, _write_after_term)\n"
-        "while True:\n"
-        "    time.sleep(0.02)\n"
-        % native_write
+    payload = json.loads(native_write)
+    deadline_mono = 10.0
+    run_dir, state, _ended = _codex_native_write_grade_state(
+        tmp_path, str(tmp_path / "after-deadline"),
+        ended_overrides=_ended_with_completion_stamp(
+            payload,
+            complete_at=deadline_mono + 1.0,
+            deadline_mono=deadline_mono,
+            exit=1,
+            timedOut=True,
+            timeoutAt=1000.0,
+            at=time.time(),
+            capSeconds=1,
+        ),
+        payload=payload,
     )
-    run_dir, state, ended = _run_codex_native_write_timeout_script(
-        tmp_path, monkeypatch, script,
-    )
-    assert ended["timedOut"] is True
-    assert ended.get("timeoutAt") is not None
     result_path = ED._native_result_path(run_dir, 1)
-    assert os.path.isfile(result_path)
-    assert os.stat(result_path).st_mtime > ended["timeoutAt"]
+    with open(result_path, "w", encoding="utf-8") as fh:
+        fh.write(native_write + "\n")
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("ok") is not True
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "timeout-native-result-unadmitted"
-    assert grade.get("admissionDetail") == "native-result-after-timeout"
+    assert grade.get("admissionDetail") == "result-completion-after-deadline"
 
 
-def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None):
+def _journal_test_attempt_ended(run_dir, attempt, ended):
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": attempt, **ended})
+
+
+def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None, payload=None):
     prompt_path = os.path.join(run_dir, "prompt.txt")
     os.makedirs(run_dir, exist_ok=True)
     open(prompt_path, "w").write("go\n")
@@ -3587,6 +3591,8 @@ def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None):
     _journal_codex_run_for_engine_files(
         run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
     )
+    if payload is None:
+        payload = json.loads(_native_write_result_json())
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     ended = {
@@ -3595,28 +3601,37 @@ def _codex_native_write_grade_state(tmp_path, run_dir, *, ended_overrides=None):
     }
     if ended_overrides:
         ended.update(ended_overrides)
+    _journal_test_attempt_ended(run_dir, 1, ended)
     state["attempts"][1] = {"ended": ended}
     return run_dir, state, ended
 
 
-# axis: a native result written after the recorded cap but before the poll instant is refused.
+# axis: a native result whose completion stamp is after the monotonic deadline is refused.
 def test_native_write_timeout_poll_gap_result_after_cap_refused(tmp_path):
-    run_dir = str(tmp_path / "poll-gap")
-    timeout_at = 1000.0
-    poll_at = 1000.25
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    deadline_mono = 10.0
     run_dir, state, _ended = _codex_native_write_grade_state(
-        tmp_path, run_dir,
-        ended_overrides={"timeoutAt": timeout_at, "at": poll_at},
+        tmp_path, str(tmp_path / "poll-gap"),
+        ended_overrides=_ended_with_completion_stamp(
+            payload,
+            complete_at=deadline_mono + 0.5,
+            deadline_mono=deadline_mono,
+            exit=1,
+            timedOut=True,
+            timeoutAt=1000.0,
+            at=1000.25,
+            capSeconds=1,
+        ),
+        payload=payload,
     )
     result_path = ED._native_result_path(run_dir, 1)
-    gap_mtime = timeout_at + 0.05
     with open(result_path, "w", encoding="utf-8") as fh:
-        fh.write(_native_write_result_json() + "\n")
-    os.utime(result_path, (gap_mtime, gap_mtime))
+        fh.write(native_write + "\n")
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "timeout-native-result-unadmitted"
-    assert grade.get("admissionDetail") == "native-result-after-timeout"
+    assert grade.get("admissionDetail") == "result-completion-after-deadline"
     assert grade.get("ok") is not True
 
 
@@ -3643,58 +3658,31 @@ def test_native_write_timeout_at_is_cap_not_poll_time(tmp_path, monkeypatch):
     assert ended["at"] - ended["timeoutAt"] >= 2.0
 
 
-# axis: P2 background timeout records timeoutAt and refuses a native result written after it.
-def test_background_timeout_records_timeout_at_and_rejects_late_native_write(
-    tmp_path, monkeypatch,
-):
-    cfg, launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-write-timeout")
-    os.makedirs(run_dir)
-    prompt_path = os.path.join(run_dir, "prompt.txt")
-    open(prompt_path, "w").write("go\n")
-    seat = _codex_seat(role=_WRITE_ROLE)
-    argv = _codex_argv_for_run(seat, "build", run_dir)
-    argv, native_err, native_schema_path = ED._open_native_channel_argv(
-        run_dir, "codex", list(argv), ED.RUN_KIND_WRITE,
+# axis: write admission after deadline forfeits codex argv native result.
+def test_write_admission_completion_after_deadline_forfeits_codex_argv(tmp_path):
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    deadline_mono = 10.0
+    run_dir, state, ended = _codex_native_write_grade_state(
+        tmp_path, str(tmp_path / "bg-write-timeout"),
+        ended_overrides=_ended_with_completion_stamp(
+            payload,
+            complete_at=deadline_mono + 1.0,
+            deadline_mono=deadline_mono,
+            exit=1,
+            timedOut=True,
+            timeoutAt=1000.0,
+            at=time.time(),
+            capSeconds=30,
+        ),
+        payload=payload,
     )
-    assert native_err is None, native_err
-    opened = {
-        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "codex",
-        "roleKind": "build", "orderId": "bg-timeout-test", "argv": argv,
-        "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
-        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
-        "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
-        "supervisorPid": 1, "at": time.time(),
-        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
-    }
-    if native_schema_path is not None:
-        opened["nativeSchemaPath"] = native_schema_path
-    ED._journal_append(run_dir, opened)
-    cap = opened["timeout"]
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
-    progress_path = os.path.join(run_dir, "progress.jsonl")
-    native_result_path = ED._native_result_path(run_dir, 1)
-    ED._run_engine_files_background(
-        run_dir, 1, opened, list(argv), run_dir, prompt_path,
-        stdout_path, stderr_path, cap, progress_path, native_result_path,
-        resume_launch_id=launch_id, resume_session_id=session_id,
-        prior_wall_seconds=cap,
-    )
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["timedOut"] is True
-    assert isinstance(ended["timeoutAt"], (int, float))
-    with open(native_result_path, "w", encoding="utf-8") as fh:
-        fh.write(_native_write_result_json() + "\n")
-    late_mtime = ended["timeoutAt"] + 0.05
-    os.utime(native_result_path, (late_mtime, late_mtime))
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        fh.write(native_write + "\n")
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "timeout-native-result-unadmitted"
-    assert grade.get("admissionDetail") == "native-result-after-timeout"
+    assert grade.get("admissionDetail") == "result-completion-after-deadline"
     assert grade.get("ok") is not True
 
 
@@ -3732,29 +3720,41 @@ def test_injected_capture_timeout_records_timeout_at(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "timeout_at_value",
+    "deadline_overrides",
     [
-        pytest.param("missing", id="absent"),
-        pytest.param(None, id="none"),
-        pytest.param("not-a-number", id="non-numeric"),
+        pytest.param({}, id="absent"),
+        pytest.param({ERC.FIELD_DEADLINE_MONO: None}, id="none-deadline-mono"),
+        pytest.param({ERC.FIELD_DEADLINE_MONO: "not-a-number"}, id="non-numeric-deadline-mono"),
+        pytest.param(
+            {ERC.FIELD_DEADLINE_MONO: 10.0, ERC.FIELD_DEADLINE_EPOCH: ""},
+            id="empty-deadline-epoch",
+        ),
     ],
 )
 def test_timed_out_write_without_recorded_deadline_forfeits(
-    tmp_path, timeout_at_value,
+    tmp_path, deadline_overrides, request,
 ):
-    ended_overrides = {"timedOut": True}
-    if timeout_at_value != "missing":
-        ended_overrides["timeoutAt"] = timeout_at_value
-    run_dir = str(tmp_path / ("deadline-%s" % timeout_at_value))
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    ended_overrides = {
+        "timedOut": True,
+        "timeoutAt": 1000.0,
+        "exit": 1,
+        "at": time.time(),
+        "capSeconds": 1,
+    }
+    ended_overrides.update(deadline_overrides)
+    run_dir = str(tmp_path / request.node.callspec.id)
     run_dir, state, _ended = _codex_native_write_grade_state(
-        tmp_path, run_dir, ended_overrides=ended_overrides,
+        tmp_path, run_dir, ended_overrides=ended_overrides, payload=payload,
     )
     result_path = ED._native_result_path(run_dir, 1)
     with open(result_path, "w", encoding="utf-8") as fh:
-        fh.write(_native_write_result_json() + "\n")
+        fh.write(native_write + "\n")
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
-    assert grade.get("detail") == "timeout-deadline-unrecorded"
+    assert grade.get("detail") == "timeout-native-result-unadmitted"
+    assert grade.get("admissionDetail") == "timeout-deadline-unrecorded"
     assert grade.get("ok") is not True
 
 
@@ -4250,7 +4250,8 @@ def test_dispatch_review_timeout_forfeit_has_no_engagement(tmp_path):
         build_view=_fake_build_view(tmp_path),
     )
     assert res["forfeited"] is True
-    assert res.get("engagement") is None
+    assert res.get("engagement") is not None
+    assert res["engagement"]["read"] == "unknown"
 
 
 def test_dispatch_review_nonzero_exit_forfeit_has_no_engagement(tmp_path):
@@ -4800,12 +4801,12 @@ def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_VALID_FINDINGS_STDOUT)
     _sync_native_review_result_from_stdout(run_dir, _VALID_FINDINGS_STDOUT)
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
         "at": time.time(),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 2, "childPid": 99999, "at": time.time(),
     })
@@ -4819,12 +4820,12 @@ def _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir):
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_VALID_FINDINGS_STDOUT)
     _sync_native_review_result_from_stdout(run_dir, _VALID_FINDINGS_STDOUT)
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
         "at": time.time(),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(120)"],
         start_new_session=True,
@@ -5575,11 +5576,11 @@ def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, ru
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     patch_path = os.path.join(view["path"], "SUPERHEROES_REVIEW_DIFF.patch")
@@ -5638,11 +5639,11 @@ def test_grade_review_view_meta_config_path_rejects_config_only_investigation(tm
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     patch_path = os.path.join(view["path"], "SUPERHEROES_REVIEW_DIFF.patch")
@@ -9599,10 +9600,19 @@ def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
     _sync_native_review_result_from_stdout(run_dir, stdout)
+    ended = _stamp_ended_from_native_result(run_dir, {
+        "exit": 0, "timedOut": False, "signal": None,
+        "refusal": None, "at": time.time(), "wallSeconds": 1.0, "stdoutBytes": len(stdout),
+    })
     records, _ = ED._journal_read(run_dir)
     for rec in records:
         if rec.get("kind") == "run-opened":
             rec["prBodySourcePath"] = os.path.join(str(tmp_path), "session", "pr-body.md")
+    records = [
+        rec for rec in records
+        if not (rec.get("kind") == "attempt-ended" and rec.get("attempt") == 1)
+    ]
+    records.append({"kind": "attempt-ended", "attempt": 1, **ended})
     path = ED._journal_path(run_dir)
     with open(path, "w", encoding="utf-8") as fh:
         for rec in records:
@@ -11567,8 +11577,9 @@ def _native_review_grade_state(
     write_result=True,
     write_schema=True,
     attempt=1,
+    run_name="run",
 ):
-    run_dir = str(tmp_path / "run")
+    run_dir = str(tmp_path / run_name)
     repo_root = _repo(tmp_path)
     os.makedirs(run_dir, exist_ok=True)
     if schema is None:
@@ -11599,17 +11610,23 @@ def _native_review_grade_state(
     }
     if expected_result_kind is not None:
         opened["expectedResultKind"] = expected_result_kind
+    ended = {
+        "exit": 0,
+        "timedOut": False,
+        "refusal": None,
+        "stdoutBytes": len(stdout),
+        "wallSeconds": 1.0,
+    }
+    if write_result:
+        envelope = _wrap_native_review_result(branch)
+        scrubbed = ED._scrub_native_payload(envelope)
+        ended.update(ERC.completion_stamp(1.0, ERC.canonical_payload_digest(scrubbed)))
+        _journal_test_attempt_ended(run_dir, attempt, ended)
     state = {
         "opened": opened,
         "attempts": {
             attempt: {
-                "ended": {
-                    "exit": 0,
-                    "timedOut": False,
-                    "refusal": None,
-                    "stdoutBytes": len(stdout),
-                    "wallSeconds": 1.0,
-                },
+                "ended": ended,
             },
         },
     }
@@ -11662,6 +11679,7 @@ def _execution_record_completed_attempt(
     }
     if ended_overrides:
         ended.update(ended_overrides)
+    ended = _stamp_ended_from_native_result(run_dir, ended, 1)
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
@@ -11754,6 +11772,10 @@ def _codex_native_runner(branch, stderr_tail=""):
     return runner
 
 
+def _opened_for_load_test():
+    return {"engine": "codex"}
+
+
 # axis: _load_native_result_json reads a regular file with O_NOFOLLOW open.
 def test_load_native_result_json_reads_regular_file(tmp_path):
     run_dir = str(tmp_path / "run")
@@ -11762,7 +11784,11 @@ def test_load_native_result_json_reads_regular_file(tmp_path):
     result_path = ED._native_result_path(run_dir, 1)
     with open(result_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    _journal_test_attempt_ended(
+        run_dir, 1,
+        _ended_with_completion_stamp(payload, exit=0, timedOut=False),
+    )
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert detail is None
     assert obj == payload
 
@@ -11775,7 +11801,7 @@ def test_load_native_result_json_refuses_symlink_to_valid_file(tmp_path):
     real_path.write_text('{"result": {"ok": true}}\n', encoding="utf-8")
     result_path = ED._native_result_path(run_dir, 1)
     os.symlink(str(real_path), result_path)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-missing"
 
@@ -11786,7 +11812,7 @@ def test_load_native_result_json_fifo_returns_missing_without_blocking(tmp_path)
     os.makedirs(run_dir)
     result_path = ED._native_result_path(run_dir, 1)
     os.mkfifo(result_path)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-missing"
 
@@ -11801,7 +11827,7 @@ def test_load_native_result_json_directory_and_dangling_symlink_are_missing(tmp_
         os.makedirs(result_path)
     else:
         os.symlink(str(tmp_path / "missing-target"), result_path)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-missing"
 
@@ -11813,7 +11839,7 @@ def test_load_native_result_json_oversized(tmp_path):
     result_path = ED._native_result_path(run_dir, 1)
     with open(result_path, "wb") as fh:
         fh.write(b"x" * (ERC.NATIVE_RESULT_MAX_BYTES + 1))
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-oversized"
 
@@ -11834,7 +11860,7 @@ def test_load_native_result_json_oversized_by_read_length(tmp_path, monkeypatch)
         return os.stat_result(fields)
 
     monkeypatch.setattr(ED.os, "fstat", fake_fstat)
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-oversized"
 
@@ -11846,7 +11872,7 @@ def test_load_native_result_json_malformed_utf8_and_json(tmp_path):
     result_path = ED._native_result_path(run_dir, 1)
     with open(result_path, "wb") as fh:
         fh.write(b"\xff\xfe")
-    obj, detail = ED._load_native_result_json(run_dir, 1)
+    obj, detail = ED._load_native_result_json(run_dir, 1, _opened_for_load_test())
     assert obj is None
     assert detail == "native-result-malformed"
 
@@ -11855,7 +11881,7 @@ def test_load_native_result_json_malformed_utf8_and_json(tmp_path):
     result_path2 = ED._native_result_path(run_dir2, 1)
     with open(result_path2, "w", encoding="utf-8") as fh:
         fh.write("not-json\n")
-    obj2, detail2 = ED._load_native_result_json(run_dir2, 1)
+    obj2, detail2 = ED._load_native_result_json(run_dir2, 1, _opened_for_load_test())
     assert obj2 is None
     assert detail2 == "native-result-malformed"
 
@@ -12084,9 +12110,17 @@ def test_grade_native_review_attempt_result_malformed_json(tmp_path):
 
 
 def test_grade_native_review_attempt_result_malformed_no_result_key(tmp_path):
-    run_dir, state = _native_review_grade_state(tmp_path, _native_review_branch("findings"))
+    run_dir, state = _native_review_grade_state(
+        tmp_path, _native_review_branch("findings"), write_result=False,
+    )
     with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
         json.dump({"findings": []}, fh)
+    ended = _stamp_ended_from_native_result(run_dir, {
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": 0, "wallSeconds": 1.0,
+    })
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    state["attempts"][1]["ended"] = ended
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "native-result-malformed"
@@ -12303,12 +12337,12 @@ def test_run_execution_record_native_parse_binding_survives_view_removal(tmp_pat
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "signal": None,
         "refusal": None, "at": time.time(),
         "wallSeconds": 1.0, "stdoutBytes": len(stream),
     })
+    ED._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     state = ED._journal_state(ED._journal_read(run_dir)[0])
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
@@ -12986,7 +13020,9 @@ def test_admit_native_review_semantic_guards_use_adapter_not_scrub_branch(tmp_pa
     assert grade.get("detail") == "native-result-malformed"
     placeholder = _native_review_branch("findings")
     placeholder["findings"][0]["id"] = EA.REVIEW_BASE_TEMPLATE_ID
-    run_dir2, state2 = _native_review_grade_state(tmp_path, placeholder)
+    run_dir2, state2 = _native_review_grade_state(
+        tmp_path, placeholder, run_name="run-placeholder",
+    )
     grade2 = ED._grade_review_attempt(run_dir2, state2, 1)
     assert grade2.get("forfeit") is True
     assert grade2.get("detail") == "native-result-malformed"
@@ -14141,6 +14177,11 @@ def _claude_seat(model="sonnet", effort="high", role=_REVIEW_ROLE):
 def _reviewer_claude_seat():
     cell = MR.matrix_config("reviewer", "claude")
     return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": "reviewer"}
+
+
+def _implementer_claude_seat():
+    cell = MR.matrix_config("implementer", "claude")
+    return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": _WRITE_ROLE}
 
 
 def _reviewer_deep_claude_seat():
@@ -16000,4 +16041,1593 @@ def test_claude_print_mode_unchanged_by_background_flow(tmp_path, monkeypatch):
     assert ended["stdoutResult"] == "materialized"
     assert "launchId" not in ended
     assert "transcriptResult" not in ended
+
+
+# --- result completion producers (#1273 WO-B) ---
+
+_COMPLETION_KEYS = (
+    ERC.FIELD_RESULT_COMPLETE_AT,
+    ERC.FIELD_RESULT_COMPLETE_EPOCH,
+    ERC.FIELD_RESULT_COMPLETE_SHA256,
+)
+
+
+def _assert_completion_keys(ended, payload):
+    for key in _COMPLETION_KEYS:
+        assert key in ended
+    if isinstance(payload, dict):
+        payload = ED._scrub_native_payload(payload)
+    assert ended[ERC.FIELD_RESULT_COMPLETE_SHA256] == ERC.canonical_payload_digest(payload)
+
+
+def _install_fake_claude(monkeypatch, tmp_path, script_body):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text("#!/usr/bin/env python3\n" + script_body, encoding="utf-8")
+    fake_claude.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+
+def _journal_claude_stdout_run_for_engine_files(tmp_path, run_dir, prompt_path, monkeypatch):
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _reviewer_claude_seat()
+    argv = _claude_argv_for_run(seat, "review", run_dir)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "claude", list(argv), ED.RUN_KIND_REVIEW,
+    )
+    assert native_err is None, native_err
+    record = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "engine": "claude",
+        "roleKind": ED.RUN_KIND_REVIEW, "orderId": "completion-producer",
+        "argv": argv, "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, record)
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    return argv
+
+
+def _journal_claude_stdout_write_run_for_engine_files(tmp_path, run_dir, prompt_path, monkeypatch):
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _implementer_claude_seat()
+    argv = _claude_argv_for_run(seat, "build", run_dir)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "claude", list(argv), ED.RUN_KIND_WRITE,
+    )
+    assert native_err is None, native_err
+    record = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "claude",
+        "roleKind": "build", "orderId": "completion-producer-write",
+        "argv": argv, "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, record)
+    ED._journal_append(run_dir, {
+        "kind": "engine-launching", "attempt": 1, "childPid": 1, "at": time.time(),
+    })
+    return argv
+
+
+def _large_claude_result_stream(
+        result_payload, *, min_result_line_bytes=None, max_result_line_bytes=None,
+):
+    """Build a claude stdout stream whose final result JSON line meets size bounds.
+
+    With min_result_line_bytes only (default), pads until the serialized result line is
+    at or above the floor. With max_result_line_bytes, pads to the largest line strictly
+    below that ceiling (binary search on pad length, then one-byte refinement).
+    """
+    pad_path = ()
+    pad_key = "report"
+    if isinstance(result_payload, dict) and "result" in result_payload:
+        branch = result_payload["result"]
+        if isinstance(branch, dict):
+            if branch.get("resultKind") == "verdicts" and branch.get("verdicts"):
+                pad_path = ("result", "verdicts", 0)
+                pad_key = "reason"
+            elif branch.get("resultKind") == "findings" and branch.get("findings"):
+                pad_path = ("result", "findings", 0)
+                pad_key = "body"
+            elif branch.get("resultKind") == "ruling":
+                pad_path = ("result",)
+                pad_key = "reason"
+            else:
+                pad_path = ("result",)
+                pad_key = "report"
+    elif isinstance(result_payload, dict) and "report" in result_payload:
+        pad_path = ()
+        pad_key = "report"
+
+    def _trial_with_extra(extra):
+        trial_payload = json.loads(json.dumps(result_payload))
+        if pad_path:
+            node = trial_payload
+            for step in pad_path:
+                node = node[step]
+            node[pad_key] = (node.get(pad_key) or "") + extra
+        elif isinstance(trial_payload, dict):
+            trial_payload[pad_key] = (trial_payload.get(pad_key) or "") + extra
+        line = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "structured_output": trial_payload,
+            "session_id": "sess-1",
+        }, separators=(",", ":"))
+        return trial_payload, line, len(line.encode("utf-8"))
+
+    effective_min = min_result_line_bytes
+    if effective_min is None:
+        effective_min = 20000 if max_result_line_bytes is None else 1
+
+    if max_result_line_bytes is not None:
+        lo, hi = 0, max_result_line_bytes * 2
+        best_extra = ""
+        best = None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            extra = "x" * mid
+            trial_payload, line, line_bytes = _trial_with_extra(extra)
+            if line_bytes < max_result_line_bytes:
+                best_extra = extra
+                best = (trial_payload, line, line_bytes)
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        if best is None:
+            raise ValueError(
+                "cannot build result line below max_result_line_bytes=%s"
+                % max_result_line_bytes
+            )
+        trial_payload, line, line_bytes = best
+        extra = best_extra
+        while True:
+            trial_payload, line, next_bytes = _trial_with_extra(extra + "x")
+            if next_bytes >= max_result_line_bytes:
+                break
+            trial_payload, line, line_bytes = trial_payload, line, next_bytes
+            extra += "x"
+        if line_bytes < effective_min:
+            raise ValueError(
+                "largest line below max_result_line_bytes=%s is %s bytes, below min %s"
+                % (max_result_line_bytes, line_bytes, effective_min)
+            )
+        return _claude_event_stream(result=trial_payload), trial_payload, line_bytes
+
+    extra = ""
+    while True:
+        trial_payload, line, line_bytes = _trial_with_extra(extra)
+        if line_bytes >= effective_min:
+            return _claude_event_stream(result=trial_payload), trial_payload, line_bytes
+        extra += "x" * 500
+
+
+def _patch_stdout_completion_bounds(monkeypatch, max_stdout_capture):
+    """Patch stdout cap and derived stampable line bound for readable bound tests."""
+    monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", max_stdout_capture)
+    stampable = (
+        max_stdout_capture
+        - len(ED._truncation_marker(
+            ED.CAP_STREAM_STDOUT, ED._STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES,
+        ).encode("utf-8"))
+    )
+    monkeypatch.setattr(ED, "_STDOUT_STAMPABLE_LINE_MAX", stampable)
+    return max_stdout_capture, stampable
+
+
+def _stdout_last_line_byte_length(stdout_path):
+    with open(stdout_path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        end = fh.tell()
+        line_end = end
+        while line_end > 0:
+            fh.seek(line_end - 1)
+            if fh.read(1) in b"\r\n \t":
+                line_end -= 1
+            else:
+                break
+        pos = line_end
+        while pos > 0:
+            fh.seek(pos - 1)
+            if fh.read(1) == b"\n":
+                return line_end - pos
+            pos -= 1
+        return line_end
+
+
+def test_completion_producer_argv_delivery_records_stamp(tmp_path, monkeypatch):
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    script = (
+        "import sys\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % native_write
+    )
+    run_dir = str(tmp_path / "argv-completion")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+
+
+def test_completion_producer_prompt_delivery_records_stamp(tmp_path, monkeypatch):
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    script = (
+        "import sys\n"
+        "_stdin = sys.stdin.read()\n"
+        "_prefix = %r\n"
+        "_path = None\n"
+        "for _line in _stdin.splitlines():\n"
+        "    if _line.startswith(_prefix):\n"
+        "        _path = _line[len(_prefix):].strip()\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % (ERC.RESULT_FILE_LINE_PREFIX, native_write)
+    )
+    run_dir = str(tmp_path / "prompt-completion")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    argv = _journal_cursor_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_cursor(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+
+
+def test_completion_producer_stdout_delivery_fast_exit_records_stamp(tmp_path, monkeypatch):
+    """axis: fast-exit observation — stamp must exist when the child exits between heartbeats."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream = _claude_event_stream(result=structured)
+    # Emit after one poll period so the first iteration sees empty stdout; the stamp must
+    # come from a later poll-iteration observation, not the rc branch alone (BP-B1).
+    script = (
+        "import sys, time\n"
+        "time.sleep(0.25)\n"
+        "sys.stdout.write(%r)\n"
+        % stream
+    )
+    run_dir = str(tmp_path / "stdout-fast-exit")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 60)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, structured)
+
+
+def test_completion_producer_stdout_large_result_lingering_child_admits(tmp_path, monkeypatch):
+    """axis: large stdout result line — stamp before exit even when child lingers."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream, structured, result_line_bytes = _large_claude_result_stream(structured)
+    assert result_line_bytes >= 20000
+    script = (
+        "import sys, time\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.6)\n"
+        % stream
+    )
+    run_dir = str(tmp_path / "stdout-large-linger")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert _stdout_last_line_byte_length(stdout_path) >= 20000
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["timedOut"] is False
+    assert ended["stdoutResult"] == "materialized"
+    _assert_completion_keys(ended, structured)
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_producer_stdout_large_result_immediate_exit_admits(tmp_path, monkeypatch):
+    """axis: large stdout result line — stamp on immediate exit."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream, structured, result_line_bytes = _large_claude_result_stream(structured)
+    assert result_line_bytes >= 20000
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir = str(tmp_path / "stdout-large-fast")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert _stdout_last_line_byte_length(stdout_path) >= 20000
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["timedOut"] is False
+    assert ended["stdoutResult"] == "materialized"
+    _assert_completion_keys(ended, structured)
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_producer_stdout_large_result_multi_chunk_read_admits(tmp_path, monkeypatch):
+    """axis: result line larger than one read chunk reassembles and admits with digest intact."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    chunk = ED._STDOUT_COMPLETION_READ_CHUNK
+    stream, structured, result_line_bytes = _large_claude_result_stream(
+        structured, min_result_line_bytes=chunk + 1024,
+    )
+    assert result_line_bytes > chunk
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir = str(tmp_path / "stdout-multi-chunk")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert _stdout_last_line_byte_length(stdout_path) > chunk
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, structured)
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_producer_stdout_large_result_before_cap_admits_after_timeout(
+        tmp_path, monkeypatch,
+):
+    """axis: large stdout write result stamped before cap admits after timeout."""
+    payload = json.loads(_native_write_result_json())
+    stream, payload, result_line_bytes = _large_claude_result_stream(payload)
+    assert result_line_bytes >= 20000
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % stream
+    )
+    run_dir = str(tmp_path / "stdout-large-timeout")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    real_observe = ED._observe_stdout_completion
+    stamp_seen = {"flag": False}
+    attempt_timeout = 5
+
+    def _observe_with_stamp_flag(obs_state, stdout_path, *, terminal=False):
+        real_observe(obs_state, stdout_path, terminal=terminal)
+        if obs_state.get("stamp") is not None:
+            stamp_seen["flag"] = True
+
+    class _TimeProxy:
+        def __init__(self, real):
+            self._real = real
+
+        def monotonic(self):
+            base = self._real.monotonic()
+            if stamp_seen["flag"]:
+                return base + float(attempt_timeout) + 10.0
+            return base
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(ED, "_observe_stdout_completion", _observe_with_stamp_flag)
+    monkeypatch.setattr(ED, "time", _TimeProxy(time))
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, attempt_timeout,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert _stdout_last_line_byte_length(stdout_path) >= 20000
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["timedOut"] is True
+    _assert_completion_keys(ended, payload)
+    state = ED._journal_state(records)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("admittedAfterTimeout") is True
+
+
+def test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal(
+        tmp_path, monkeypatch,
+):
+    """axis: terminal observation stamps when trailing line hides the result from pre-check."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream = _claude_event_stream(result=structured)
+    stream_body = stream if stream.endswith("\n") else stream + "\n"
+    result_line = stream_body.rstrip("\n").split("\n")[-1]
+    prefix = stream_body[:stream_body.rfind(result_line) + len(result_line)]
+    release_path = str(tmp_path / "release-trailing")
+    script = (
+        "import os, sys\n"
+        "prefix = %r\n"
+        "release = %r\n"
+        "sys.stdout.write(prefix)\n"
+        "sys.stdout.flush()\n"
+        "while not os.path.exists(release):\n"
+        "    pass\n"
+        "sys.stdout.write('\\nwarning: done\\n')\n"
+        % (prefix, release_path)
+    )
+    run_dir = str(tmp_path / "stdout-trailing-line")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    real_observe = ED._observe_stdout_completion
+    released = {"done": False}
+
+    def _observe_release_after_first(obs_state, stdout_path_arg, *, terminal=False):
+        real_observe(obs_state, stdout_path_arg, terminal=terminal)
+        if not terminal and not released["done"]:
+            released["done"] = True
+            open(release_path, "w", encoding="utf-8").close()
+
+    monkeypatch.setattr(ED, "_observe_stdout_completion", _observe_release_after_first)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert released["done"] is True
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, structured)
+
+
+def test_completion_producer_transcript_delivery_records_stamp(tmp_path, monkeypatch):
+    cfg, launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "transcript-completion")
+    opened = _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=1))
+    _run_bg_engine_files(tmp_path, run_dir, opened)
+    ended = _bg_attempt_ended(run_dir)
+    _assert_completion_keys(ended, structured)
+
+
+def test_completion_producer_rewrite_keeps_first_digest(tmp_path, monkeypatch):
+    """axis: edge 8 — first observation wins; a later rewrite must not replace the digest."""
+    first = _native_write_result_json(report="first")
+    second = _native_write_result_json(report="second rewritten")
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        "    time.sleep(0.6)\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % (first, second)
+    )
+    run_dir, state, ended = _run_codex_native_write_timeout_script(
+        tmp_path, monkeypatch, script, timeout=2,
+    )
+    first_payload = json.loads(first)
+    _assert_completion_keys(ended, first_payload)
+    assert ended[ERC.FIELD_RESULT_COMPLETE_SHA256] != ERC.canonical_payload_digest(
+        json.loads(second),
+    )
+
+
+def test_completion_producer_timed_out_foreground_carries_deadline_stamp(tmp_path, monkeypatch):
+    native_write = _native_write_result_json()
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % native_write
+    )
+    run_dir, _state, ended = _run_codex_native_write_timeout_script(
+        tmp_path, monkeypatch, script,
+    )
+    assert ended["timedOut"] is True
+    assert ERC.FIELD_DEADLINE_MONO in ended
+    assert ERC.FIELD_DEADLINE_EPOCH in ended
+    if ERC.FIELD_RESULT_COMPLETE_EPOCH in ended:
+        assert ended[ERC.FIELD_DEADLINE_EPOCH] == ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
+
+
+def test_supervise_bg_budget_exhaustion_carries_deadline_not_completion(tmp_path, monkeypatch):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "bg-budget-deadline-stamp")
+    opened = _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    cap = opened["timeout"]
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1,
+        "childPid": None, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "background-launched", "attempt": 1,
+        "launchId": launch_id, "bgSessionId": session_id, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-suspended", "attempt": 1,
+        "launchId": launch_id, "bgSessionId": session_id,
+        "wallSeconds": cap, "transcriptRowCursor": 0,
+        "at": time.time(),
+    })
+    monkeypatch.setattr(ED, "_spawn_attempt", lambda *a, **k: (False, "blocked"))
+    ED._supervise(
+        run_dir, run_kind=ED.RUN_KIND_REVIEW, deadline=time.monotonic() + 5,
+    )
+    ended = _bg_attempt_ended(run_dir)
+    assert ERC.FIELD_DEADLINE_MONO in ended
+    assert ERC.FIELD_DEADLINE_EPOCH in ended
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+
+
+# --- admission completion window (#1273 WO-C) ---
+
+
+def _write_payload_obj():
+    return json.loads(_native_write_result_json())
+
+
+def _review_payload_envelope():
+    return _wrap_native_review_result(_native_review_branch("findings"))
+
+
+def _write_admission_codex_argv(tmp_path, ended, payload):
+    run_dir = str(tmp_path / "write-argv")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    os.makedirs(run_dir, exist_ok=True)
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+        fh.write("\n")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _write_admission_cursor_prompt(tmp_path, ended, payload):
+    run_dir = str(tmp_path / "write-prompt")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    os.makedirs(run_dir, exist_ok=True)
+    open(prompt_path, "w").write("go\n")
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    _journal_cursor_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+        fh.write("\n")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload):
+    run_dir = str(tmp_path / "write-stdout")
+    os.makedirs(run_dir)
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = {"vendor": "claude", "model": "sonnet", "effort": "high", "role": "build"}
+    argv = _claude_argv_for_run(seat, "build", run_dir)
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "claude", list(argv), ED.RUN_KIND_WRITE,
+    )
+    assert native_err is None, native_err
+    record = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "claude",
+        "roleKind": "build", "orderId": "admission-write-stdout",
+        "argv": argv, "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if native_schema_path is not None:
+        record["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, record)
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+        fh.write("\n")
+    ended = dict(ended, stdoutResult="materialized")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _review_admission_codex_argv(tmp_path, ended, envelope):
+    branch = envelope["result"]
+    run_dir, state = _native_review_grade_state(tmp_path, branch, write_result=False)
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, separators=(",", ":"))
+        fh.write("\n")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _review_admission_cursor_prompt(tmp_path, ended, envelope):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "review-prompt")
+    _plant_native_cursor_review_journal(tmp_path, run_dir, repo_root)
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, separators=(",", ":"))
+        fh.write("\n")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "review-stdout")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    _plant_claude_review_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, separators=(",", ":"))
+        fh.write("\n")
+    ended = dict(ended, stdoutResult="materialized")
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+def _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope):
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "review-transcript")
+    cfg, _launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
+    _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, separators=(",", ":"))
+        fh.write("\n")
+    ended = dict(ended, transcriptResult="materialized", transcriptToolCalls=0)
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    return run_dir, state
+
+
+_WRITE_ADMISSION_DELIVERIES = ("argv", "prompt", "stdout")
+_REVIEW_ADMISSION_DELIVERIES = ("argv", "prompt", "stdout", "transcript")
+
+
+@pytest.mark.parametrize("delivery", _WRITE_ADMISSION_DELIVERIES)
+def test_write_admission_complete_before_deadline_admits(tmp_path, delivery, monkeypatch):
+    payload = _write_payload_obj()
+    ended = _ended_with_completion_stamp(
+        payload, complete_at=5.0, deadline_mono=10.0,
+        exit=1, timedOut=True, timeoutAt=1000.0,
+    )
+    if delivery == "argv":
+        run_dir, state = _write_admission_codex_argv(tmp_path, ended, payload)
+    elif delivery == "prompt":
+        run_dir, state = _write_admission_cursor_prompt(tmp_path, ended, payload)
+    else:
+        run_dir, state = _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("admittedAfterTimeout") is True
+
+
+@pytest.mark.parametrize("delivery", _WRITE_ADMISSION_DELIVERIES)
+def test_write_admission_complete_after_deadline_forfeits(tmp_path, delivery, monkeypatch):
+    payload = _write_payload_obj()
+    ended = _ended_with_completion_stamp(
+        payload, complete_at=11.0, deadline_mono=10.0,
+        exit=1, timedOut=True, timeoutAt=1000.0,
+    )
+    if delivery == "argv":
+        run_dir, state = _write_admission_codex_argv(tmp_path, ended, payload)
+    elif delivery == "prompt":
+        run_dir, state = _write_admission_cursor_prompt(tmp_path, ended, payload)
+    else:
+        run_dir, state = _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "timeout-native-result-unadmitted"
+    assert grade.get("admissionDetail") == "result-completion-after-deadline"
+
+
+@pytest.mark.parametrize("delivery", _WRITE_ADMISSION_DELIVERIES)
+def test_write_admission_no_completion_stamp_forfeits(tmp_path, delivery, monkeypatch):
+    payload = _write_payload_obj()
+    ended = {"exit": 0, "timedOut": False, "refusal": None}
+    if delivery == "argv":
+        run_dir, state = _write_admission_codex_argv(tmp_path, ended, payload)
+    elif delivery == "prompt":
+        run_dir, state = _write_admission_cursor_prompt(tmp_path, ended, payload)
+    else:
+        run_dir, state = _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-unrecorded"
+
+
+@pytest.mark.parametrize("delivery", _REVIEW_ADMISSION_DELIVERIES)
+def test_review_admission_complete_before_deadline_admits(tmp_path, delivery, monkeypatch):
+    envelope = _review_payload_envelope()
+    ended = _ended_with_completion_stamp(
+        envelope, complete_at=5.0, deadline_mono=10.0,
+        exit=0, timedOut=False,
+    )
+    if delivery == "argv":
+        run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
+    elif delivery == "prompt":
+        run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
+    elif delivery == "stdout":
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
+    else:
+        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+
+
+@pytest.mark.parametrize("delivery", _REVIEW_ADMISSION_DELIVERIES)
+def test_review_admission_complete_after_deadline_forfeits(tmp_path, delivery, monkeypatch):
+    envelope = _review_payload_envelope()
+    ended = _ended_with_completion_stamp(
+        envelope, complete_at=11.0, deadline_mono=10.0,
+        exit=0, timedOut=False,
+    )
+    if delivery == "argv":
+        run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
+    elif delivery == "prompt":
+        run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
+    elif delivery == "stdout":
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
+    else:
+        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-after-deadline"
+
+
+@pytest.mark.parametrize("delivery", _REVIEW_ADMISSION_DELIVERIES)
+def test_review_admission_no_completion_stamp_forfeits(tmp_path, delivery, monkeypatch):
+    envelope = _review_payload_envelope()
+    ended = {"exit": 0, "timedOut": False, "refusal": None}
+    if delivery == "argv":
+        run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
+    elif delivery == "prompt":
+        run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
+    elif delivery == "stdout":
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
+    else:
+        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-unrecorded"
+
+
+def test_admission_payload_rewrite_forfeits_mismatch(tmp_path):
+    first = _write_payload_obj()
+    second = json.loads(_native_write_result_json(report="rewritten after stamp"))
+    ended = _ended_with_completion_stamp(
+        first, complete_at=5.0, deadline_mono=10.0,
+        exit=1, timedOut=True, timeoutAt=1000.0,
+    )
+    run_dir, state = _write_admission_codex_argv(tmp_path, ended, second)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "timeout-native-result-unadmitted"
+    assert grade.get("admissionDetail") == "result-completion-payload-mismatch"
+
+
+def test_admission_clean_exit_with_valid_stamp_admits(tmp_path):
+    payload = _write_payload_obj()
+    ended = _ended_with_completion_stamp(payload, complete_at=1.0, exit=0, timedOut=False)
+    run_dir, state = _write_admission_codex_argv(tmp_path, ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert "admittedAfterTimeout" not in grade
+
+
+def test_admission_scalar_payload_forfeits_unrecorded(tmp_path):
+    run_dir = str(tmp_path / "scalar")
+    os.makedirs(run_dir)
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    result_path = ED._native_result_path(run_dir, 1)
+    with open(result_path, "w", encoding="utf-8") as fh:
+        fh.write("42\n")
+    ended = {"exit": 0, "timedOut": False, "refusal": None}
+    _journal_test_attempt_ended(run_dir, 1, ended)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][1] = {"ended": ended}
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-unrecorded"
+
+
+def test_admission_second_attempt_without_stamp_does_not_inherit_first(tmp_path):
+    payload = _write_payload_obj()
+    run_dir = str(tmp_path / "two-attempts")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    os.makedirs(run_dir, exist_ok=True)
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    ended1 = _ended_with_completion_stamp(payload, complete_at=1.0, exit=0, timedOut=False)
+    _journal_test_attempt_ended(run_dir, 1, ended1)
+    ended2 = {"exit": 0, "timedOut": False, "refusal": None, "attempt": 2}
+    _journal_test_attempt_ended(run_dir, 2, ended2)
+    with open(ED._native_result_path(run_dir, 2), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+        fh.write("\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    state["attempts"][2] = {"ended": ended2}
+    grade = ED._grade_write_attempt(run_dir, state, 2)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-unrecorded"
+
+
+def test_completion_producer_native_file_fast_exit_records_stamp(tmp_path, monkeypatch):
+    """axis: fast native-file exit — stamp when child writes between observations."""
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    script = (
+        "import sys, time\n"
+        "time.sleep(0.25)\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % native_write
+    )
+    run_dir = str(tmp_path / "native-fast-exit")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 60)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+
+
+def test_completion_producer_natural_exit_after_cap_forfeits(tmp_path, monkeypatch):
+    """axis: natural exit just after wall cap — deadline present, late stamp forfeits."""
+    native_write = _native_write_result_json()
+    script = (
+        "import sys\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % native_write
+    )
+    real_deadline_stamp = ED.engine_result_channel.deadline_stamp
+    forced_deadline = time.monotonic() - 1.0
+
+    def _injected_deadline_stamp(_mono_deadline):
+        return real_deadline_stamp(forced_deadline)
+
+    monkeypatch.setattr(
+        ED.engine_result_channel, "deadline_stamp", _injected_deadline_stamp,
+    )
+    run_dir, state, ended = _run_codex_native_write_timeout_script(
+        tmp_path, monkeypatch, script, timeout=1e9,
+    )
+    assert ended["timedOut"] is False
+    assert ERC.FIELD_DEADLINE_MONO in ended
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("detail") == "result-completion-after-deadline"
+
+
+def test_completion_producer_transcript_scrubbed_digest_admits(tmp_path, monkeypatch):
+    """axis: transcript producer stamps scrubbed digest matching on-disk materialization."""
+    cfg, _launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    run_dir = str(tmp_path / "transcript-scrub-stamp")
+    opened = _plant_claude_background_journal(
+        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
+    )
+    structured = _wrap_native_review_result(_native_review_branch("findings"))
+    branch = structured["result"]
+    branch["findings"][0]["body"] = "log shows Bearer " + ("a" * 32)
+    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=1))
+    _run_bg_engine_files(tmp_path, run_dir, opened)
+    ended = _bg_attempt_ended(run_dir)
+    _assert_completion_keys(ended, structured)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+
+
+# --- incremental stdout completion e2e (#1273 WO-B) ---
+
+
+def _run_claude_stdout_review_script(tmp_path, monkeypatch, script_body, *, timeout=30):
+    run_dir = str(tmp_path / "stdout-review")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script_body)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, timeout,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    return run_dir, state, ended, stdout_path
+
+
+def test_completion_stdout_unterminated_final_result_stamps_at_terminal(
+        tmp_path, monkeypatch,
+):
+    """axis: terminal observation parses the trailing unterminated line.
+
+    Red edit: remove the leftover-line parse in _observe_stdout_completion's
+    terminal block (the ``if not overflow and buf:`` branch).
+    """
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream = _claude_event_stream(result=structured).rstrip("\n")
+    assert not stream.endswith("\n")
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir, state, ended, stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    with open(stdout_path, "rb") as fh:
+        stdout_bytes = fh.read()
+    assert stdout_bytes[-1:] != b"\n"
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_stdout_two_results_admits_last_stamp_and_materialized(
+        tmp_path, monkeypatch,
+):
+    """axis: two stdout result events — stamp and materializer must follow the last."""
+    first = _wrap_native_review_result(_native_review_branch("findings"))
+    second = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream = _claude_event_stream(result=first) + _claude_event_stream(result=second)
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    _assert_completion_keys(ended, second)
+    with open(ED._native_result_path(run_dir, 1), encoding="utf-8") as fh:
+        materialized = json.load(fh)
+    assert materialized == second
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_stdout_second_result_after_deadline_forfeits(tmp_path, monkeypatch):
+    """axis: last stamped event after the monotonic deadline forfeits, not payload-mismatch."""
+    first = json.loads(_native_write_result_json(report="first result"))
+    second = json.loads(_native_write_result_json(report="second result"))
+    first_stream = _claude_event_stream(result=first)
+    second_stream = _claude_event_stream(result=second)
+    script = (
+        "import signal, sys, time\n"
+        "second = %r\n"
+        "def _on_term(signum, frame):\n"
+        "    sys.stdout.write(second)\n"
+        "    sys.stdout.flush()\n"
+        "signal.signal(signal.SIGTERM, _on_term)\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % (second_stream, first_stream)
+    )
+    run_dir = str(tmp_path / "stdout-after-deadline")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_write_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    attempt_timeout = 2
+    real_observe = ED._observe_stdout_completion
+    late_stamp = {"active": False}
+    run_start = {"t": None}
+
+    def _observe_late_second(obs_state, stdout_path_arg, *, terminal=False):
+        if terminal:
+            with open(stdout_path_arg, "rb") as fh:
+                if second_stream.encode("utf-8") in fh.read():
+                    late_stamp["active"] = True
+        real_observe(obs_state, stdout_path_arg, terminal=terminal)
+
+    class _TimeProxy:
+        def __init__(self, real):
+            self._real = real
+
+        def monotonic(self):
+            if late_stamp["active"] and run_start["t"] is not None:
+                return run_start["t"] + float(attempt_timeout) + 1.0
+            val = self._real.monotonic()
+            if run_start["t"] is None:
+                run_start["t"] = val
+            return val
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(ED, "_observe_stdout_completion", _observe_late_second)
+    monkeypatch.setattr(ED, "time", _TimeProxy(time))
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, attempt_timeout,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    assert ended["timedOut"] is True
+    _assert_completion_keys(ended, second)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("admissionDetail") == ERC.REFUSAL_RESULT_COMPLETION_AFTER_DEADLINE
+
+
+def test_completion_stdout_grace_window_second_result_stamps_last(tmp_path, monkeypatch):
+    """axis: terminal observation after termination must stamp a grace-window second result."""
+    first = _wrap_native_review_result(_native_review_branch("findings"))
+    second = _wrap_native_review_result(_native_review_branch("verdicts"))
+    first_stream = _claude_event_stream(result=first)
+    second_stream = _claude_event_stream(result=second)
+    script = (
+        "import signal, sys, time\n"
+        "def _on_term(signum, frame):\n"
+        "    sys.stdout.write(%r)\n"
+        "    sys.stdout.flush()\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, _on_term)\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % (second_stream, first_stream)
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    _assert_completion_keys(ended, second)
+    with open(ED._native_result_path(run_dir, 1), encoding="utf-8") as fh:
+        materialized = json.load(fh)
+    assert materialized == second
+
+
+def test_completion_stdout_evicted_result_forfeits_unrecorded(tmp_path, monkeypatch):
+    """axis: a stamped result pushed out of the retained tail clears the stamp."""
+    structured = _wrap_native_review_result(_native_review_branch("findings"))
+    result_stream = _claude_event_stream(result=structured)
+    filler_line = json.dumps({
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": "x" * 500}]},
+    }, separators=(",", ":")) + "\n"
+    filler_bytes = len(filler_line.encode("utf-8"))
+    filler_budget = ED._cap_content_budget(
+        ED.MAX_STDOUT_CAPTURE, ED.CAP_STREAM_STDOUT, ED.MAX_STDOUT_CAPTURE * 2,
+    )
+    filler_count = (filler_budget // filler_bytes) + (ED.MAX_STDOUT_CAPTURE // filler_bytes) + 1
+    script = (
+        "import sys\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.write(%r * %d)\n"
+        % (result_stream, filler_line, filler_count)
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+    digest = ERC.canonical_payload_digest(ED._scrub_native_payload(structured))
+    verdict, detail = ERC.completion_window(ended, digest)
+    assert verdict == "forfeit"
+    assert detail == ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
+
+
+def test_completion_stdout_trailing_whitespace_incremental_reads_admit(
+        tmp_path, monkeypatch,
+):
+    """axis: megabytes of trailing whitespace must not re-read from offset zero."""
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_stream = _claude_event_stream(result=structured)
+    whitespace_bytes = 3 * 1024 * 1024
+    chunk_bytes = ED._STDOUT_COMPLETION_READ_CHUNK
+    script = (
+        "import sys, time\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.flush()\n"
+        "remaining = %d\n"
+        "while remaining > 0:\n"
+        "    n = min(%d, remaining)\n"
+        "    sys.stdout.write(' ' * n)\n"
+        "    sys.stdout.flush()\n"
+        "    remaining -= n\n"
+        "    time.sleep(0.05)\n"
+        % (result_stream, whitespace_bytes, chunk_bytes)
+    )
+    run_dir = str(tmp_path / "stdout-whitespace")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    argv = _journal_claude_stdout_run_for_engine_files(
+        tmp_path, run_dir, prompt_path, monkeypatch,
+    )
+    _install_fake_claude(monkeypatch, tmp_path, script)
+    real_observe = ED._observe_stdout_completion
+    offset_spans = []
+
+    def _observe_track_reads(obs_state, stdout_path_arg, *, terminal=False):
+        before = obs_state.get("offset", 0)
+        real_observe(obs_state, stdout_path_arg, terminal=terminal)
+        after = obs_state.get("offset", 0)
+        if after > before:
+            offset_spans.append((before, after))
+
+    monkeypatch.setattr(ED, "_observe_stdout_completion", _observe_track_reads)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    final_size = os.path.getsize(stdout_path)
+    assert offset_spans
+    assert offset_spans[0][0] == 0
+    for index in range(1, len(offset_spans)):
+        assert offset_spans[index][0] == offset_spans[index - 1][1]
+    assert offset_spans[-1][1] == final_size
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_stdout_truncated_final_line_forfeits_unrecorded(
+        tmp_path, monkeypatch,
+):
+    """axis: a partial final stdout line must not produce a completion stamp."""
+    structured = _wrap_native_review_result(_native_review_branch("findings"))
+    partial = (
+        '{"type":"result","subtype":"success","is_error":false,'
+        '"structured_output":{"result":{"resultKind":"findings"'
+    )
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "partial = %r\n"
+        "for ch in partial:\n"
+        "    sys.stdout.write(ch)\n"
+        "    sys.stdout.flush()\n"
+        "    time.sleep(0.01)\n"
+        "while True:\n"
+        "    time.sleep(0.05)\n"
+        % partial
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script, timeout=1,
+    )
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+    digest = ERC.canonical_payload_digest(ED._scrub_native_payload(structured))
+    verdict, detail = ERC.completion_window(ended, digest)
+    assert verdict == "forfeit"
+    assert detail == ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED
+
+
+def test_completion_stdout_over_bound_line_bounded_buffer(tmp_path, monkeypatch):
+    """axis: partial-line buffer stays bounded — over-long line is released, not accumulated.
+
+    Calls _observe_stdout_completion directly because the buffer-bound property has no
+    end-to-end expression; the companion e2e block asserts such a line is never stamped.
+    """
+    patched_cap = 16384
+    patched_stampable = 16328
+    patched_chunk = 256
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
+    monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", patched_chunk)
+    max_buf_allowed = patched_stampable + patched_chunk
+    over_body_len = patched_stampable + patched_chunk + 100
+    over_line = ("x" * over_body_len) + "\n"
+    stdout_path = tmp_path / "over-bound-line.stdout"
+    stdout_path.write_bytes(over_line.encode("utf-8"))
+    obs_state = {"offset": 0, "buf": b"", "overflow": False}
+    max_buf_seen = 0
+    overflow_seen = False
+    real_drain = ED._drain_stdout_completion_bytes
+
+    def _tracking_drain(state, data, file_offset_before):
+        real_drain(state, data, file_offset_before)
+        nonlocal max_buf_seen, overflow_seen
+        buflen = len(state.get("buf", b""))
+        if buflen > max_buf_seen:
+            max_buf_seen = buflen
+        if state.get("overflow"):
+            overflow_seen = True
+
+    monkeypatch.setattr(ED, "_drain_stdout_completion_bytes", _tracking_drain)
+    ED._observe_stdout_completion(obs_state, str(stdout_path), terminal=True)
+    assert max_buf_seen <= max_buf_allowed
+    assert overflow_seen is True
+
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    script = "import sys\nsys.stdout.write(%r)\n" % over_line
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    for key in _COMPLETION_KEYS:
+        assert key not in ended
+
+
+def test_completion_stdout_at_bound_line_admits(tmp_path, monkeypatch):
+    """axis: a valid result line just inside the stampable bound is stamped and admitted."""
+    patched_cap = 16384
+    patched_stampable = 16328
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    stream, structured, result_line_bytes = _large_claude_result_stream(
+        structured, max_result_line_bytes=patched_stampable,
+    )
+    assert result_line_bytes < patched_stampable
+    file_bytes = len(stream.encode("utf-8"))
+    assert file_bytes < patched_cap
+    script = "import sys\nsys.stdout.write(%r)\n" % stream
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    assert os.path.getsize(_stdout_path) < patched_cap
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_stdout_large_under_cap_still_admits(tmp_path, monkeypatch):
+    """axis: stamped result survives when stdout is large but still at or under the cap."""
+    patched_cap = 16384
+    patched_stampable = 16328
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
+    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
+    result_stream, structured, result_line_bytes = _large_claude_result_stream(
+        structured, min_result_line_bytes=1,
+    )
+    result_bytes = len(result_stream.encode("utf-8"))
+    pad_bytes = patched_cap - result_bytes
+    assert pad_bytes > 0
+    filler = ("z" * (pad_bytes - 1)) + "\n"
+    assert result_bytes + len(filler.encode("utf-8")) == patched_cap
+    script = (
+        "import sys\n"
+        "sys.stdout.write(%r)\n"
+        "sys.stdout.write(%r)\n"
+        % (result_stream, filler)
+    )
+    run_dir, state, ended, stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    assert os.path.getsize(stdout_path) == patched_cap
+    content_budget = ED._cap_content_budget(
+        patched_cap, ED.CAP_STREAM_STDOUT, patched_cap,
+    )
+    assert patched_cap - 0 > content_budget
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_stdout_overflow_does_not_suppress_following_result(
+        tmp_path, monkeypatch,
+):
+    """axis: overflow on one over-bound line must not leak into the next valid result line."""
+    patched_cap = 16384
+    patched_stampable = 16328
+    patched_chunk = 256
+    _patch_stdout_completion_bounds(monkeypatch, patched_cap)
+    monkeypatch.setattr(ED, "_STDOUT_COMPLETION_READ_CHUNK", patched_chunk)
+    structured = _wrap_native_review_result(_native_review_branch("findings"))
+    result_stream, structured, _result_line_bytes = _large_claude_result_stream(
+        structured, min_result_line_bytes=patched_chunk * 2,
+    )
+    result_line = result_stream
+    over_body_len = patched_stampable + 2 * patched_chunk
+    over_line = ("x" * over_body_len) + "\n"
+    over_line_bytes = len(over_line.encode("utf-8"))
+    bound_cross_chunk = (patched_stampable // patched_chunk) + 1
+    assert bound_cross_chunk * patched_chunk > patched_stampable
+    assert bound_cross_chunk * patched_chunk <= over_body_len
+    over_newline_offset = over_body_len
+    over_newline_chunk = over_newline_offset // patched_chunk
+    result_newline_offset = over_line_bytes + len(result_line.encode("utf-8")) - 1
+    result_newline_chunk = result_newline_offset // patched_chunk
+    assert result_newline_chunk > over_newline_chunk
+    split_at = patched_chunk
+    head = result_line[:split_at]
+    tail = result_line[split_at:]
+    script = (
+        "import sys\n"
+        "over = %r\n"
+        "head = %r\n"
+        "tail = %r\n"
+        "sys.stdout.write(over)\n"
+        "sys.stdout.flush()\n"
+        "sys.stdout.write(head)\n"
+        "sys.stdout.flush()\n"
+        "sys.stdout.write(tail)\n"
+        % (over_line, head, tail)
+    )
+    run_dir, state, ended, _stdout_path = _run_claude_stdout_review_script(
+        tmp_path, monkeypatch, script,
+    )
+    _assert_completion_keys(ended, structured)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_completion_producer_argv_delivery_admits_with_stamp(tmp_path, monkeypatch):
+    """axis: argv delivery still admits through the shared terminal observation path."""
+    native_write = _native_write_result_json()
+    payload = json.loads(native_write)
+    script = (
+        "import sys\n"
+        "_path = None\n"
+        "args = sys.argv[1:]\n"
+        "for i, arg in enumerate(args):\n"
+        "    if arg == '-o' and i + 1 < len(args):\n"
+        "        _path = args[i + 1]\n"
+        "        break\n"
+        "if _path:\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % native_write
+    )
+    run_dir = str(tmp_path / "argv-admits")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _codex_seat(role=_WRITE_ROLE)
+    argv = _journal_codex_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_codex(monkeypatch, tmp_path, script)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    ended = [r for r in records if r.get("kind") == "attempt-ended"][-1]
+    _assert_completion_keys(ended, payload)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade.get("detail") is None
+
+
+def test_admission_scrubbed_digest_binds_admitted_object(tmp_path):
+    """axis: admission returns the scrubbed digest subject, not a distinct raw rewrite."""
+    secret = "Bearer " + ("a" * 32)
+    raw_with_secret = _write_payload_obj()
+    raw_with_secret["report"] = "found " + secret
+    raw_redacted = dict(raw_with_secret)
+    raw_redacted["report"] = "found Bearer [REDACTED]"
+    scrubbed = ED._scrub_native_payload(raw_with_secret)
+    ended = _ended_with_completion_stamp(
+        raw_with_secret, complete_at=5.0, deadline_mono=10.0,
+        exit=0, timedOut=False,
+    )
+    run_dir, state = _write_admission_codex_argv(tmp_path, ended, raw_redacted)
+    obj, detail = ED._load_native_result_json(run_dir, 1, state["opened"])
+    assert detail is None
+    assert obj == scrubbed
+    assert secret not in json.dumps(obj)
+
+
+@pytest.mark.parametrize("delivery", _REVIEW_ADMISSION_DELIVERIES)
+def test_review_admission_timed_out_complete_before_deadline_admits(
+        tmp_path, delivery, monkeypatch,
+):
+    envelope = _review_payload_envelope()
+    ended = _ended_with_completion_stamp(
+        envelope, complete_at=5.0, deadline_mono=10.0,
+        exit=1, timedOut=True, timeoutAt=1000.0,
+    )
+    if delivery == "argv":
+        run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
+    elif delivery == "prompt":
+        run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
+    elif delivery == "stdout":
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
+    else:
+        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
 

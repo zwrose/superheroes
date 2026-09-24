@@ -6,6 +6,12 @@ Codex and cursor are both native-channel engines; result delivery differs by eng
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import os
+import uuid
+
 import engine_adapter
 import model_registry
 import payload_contracts
@@ -71,6 +77,140 @@ _RESULT_DELIVERY_BY_ENGINE = {
 _RESULT_DELIVERY_BY_MODE = {
     MODE_BACKGROUND: RESULT_DELIVERY_TRANSCRIPT,
 }
+
+FIELD_RESULT_COMPLETE_AT = "resultCompleteAt"
+FIELD_RESULT_COMPLETE_EPOCH = "resultCompleteEpoch"
+FIELD_RESULT_COMPLETE_SHA256 = "resultCompleteSha256"
+FIELD_DEADLINE_MONO = "deadlineMono"
+FIELD_DEADLINE_EPOCH = "deadlineEpoch"
+
+REFUSAL_RESULT_COMPLETION_UNRECORDED = "result-completion-unrecorded"
+REFUSAL_RESULT_COMPLETION_AFTER_DEADLINE = "result-completion-after-deadline"
+REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH = "result-completion-payload-mismatch"
+
+_mono_epoch_cache = None
+
+
+def _is_real_number(value):
+    """True for int/float that is not bool. Never raises."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return True
+
+
+def _is_valid_sha256_hex(value):
+    """True when value is a 64-character lowercase hex string. Never raises."""
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    hex_chars = "0123456789abcdef"
+    for ch in value:
+        if ch not in hex_chars:
+            return False
+    return True
+
+
+def mono_epoch():
+    """Return this process's clock identity; computed once and cached. Never raises."""
+    global _mono_epoch_cache
+    if _mono_epoch_cache is None:
+        _mono_epoch_cache = "%d-%s" % (os.getpid(), uuid.uuid4().hex)
+    return _mono_epoch_cache
+
+
+def canonical_payload_digest(obj):
+    """Canonical JSON digest for native result objects; None when not a serializable dict. Never raises."""
+    if not isinstance(obj, dict):
+        return None
+    try:
+        raw = json.dumps(
+            obj,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    return payload_digest(raw)
+
+
+def payload_digest(data):
+    """Return lowercase hex sha256 of bytes or UTF-8 str; None for other types. Never raises."""
+    if isinstance(data, bytes):
+        raw = data
+    elif isinstance(data, str):
+        raw = data.encode("utf-8", errors="replace")
+    else:
+        return None
+    return hashlib.sha256(raw).hexdigest()
+
+
+def completion_stamp(mono_now, payload_sha256):
+    """Stamp completion fields for a just-observed channel result. Never raises."""
+    if not _is_real_number(mono_now):
+        return None
+    if not _is_valid_sha256_hex(payload_sha256):
+        return None
+    return {
+        FIELD_RESULT_COMPLETE_AT: float(mono_now),
+        FIELD_RESULT_COMPLETE_EPOCH: mono_epoch(),
+        FIELD_RESULT_COMPLETE_SHA256: payload_sha256,
+    }
+
+
+def deadline_stamp(mono_deadline):
+    """Stamp deadline fields for a timeout cap. Never raises."""
+    if not _is_real_number(mono_deadline):
+        return None
+    return {
+        FIELD_DEADLINE_MONO: float(mono_deadline),
+        FIELD_DEADLINE_EPOCH: mono_epoch(),
+    }
+
+
+def completion_window(ended, payload_sha256):
+    """Evaluate completion vs deadline on an attempt-ended record. Never raises."""
+    # axis: result-completion-unrecorded — missing or unusable completion stamp
+    if not isinstance(ended, dict):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    complete_at = ended.get(FIELD_RESULT_COMPLETE_AT)
+    if isinstance(complete_at, bool) or not isinstance(complete_at, (int, float)):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    complete_epoch = ended.get(FIELD_RESULT_COMPLETE_EPOCH)
+    if not isinstance(complete_epoch, str) or not complete_epoch:
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    recorded_digest = ended.get(FIELD_RESULT_COMPLETE_SHA256)
+    if not _is_valid_sha256_hex(recorded_digest):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    # axis: result-completion-payload-mismatch — digest does not match admitted bytes
+    if not _is_valid_sha256_hex(payload_sha256):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH)
+    if not hmac.compare_digest(payload_sha256, recorded_digest):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH)
+
+    if FIELD_DEADLINE_MONO not in ended:
+        return ("no-deadline", None)
+
+    deadline_mono = ended.get(FIELD_DEADLINE_MONO)
+    if isinstance(deadline_mono, bool) or not isinstance(deadline_mono, (int, float)):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    deadline_epoch = ended.get(FIELD_DEADLINE_EPOCH)
+    if (
+        not isinstance(deadline_epoch, str)
+        or not deadline_epoch
+        or deadline_epoch != complete_epoch
+    ):
+        return ("forfeit", REFUSAL_RESULT_COMPLETION_UNRECORDED)
+
+    # axis: result-completion-after-deadline — completion instant strictly after cap
+    if float(complete_at) <= float(deadline_mono):
+        return ("admit", None)
+    return ("forfeit", REFUSAL_RESULT_COMPLETION_AFTER_DEADLINE)
 
 
 def _derive_result_delivery_by_engine_mode():

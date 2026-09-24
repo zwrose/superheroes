@@ -137,7 +137,9 @@ needing to run commands does not route to claude today. `<tok>` is the registry'
 token (`haiku`, `sonnet`, `opus`); `fable` refuses `fable-unrunnable`.
 
 The typed result is the `structured_output` member of the **last** `{"type":"result"}` event on
-stdout — the final response `--json-schema` governs. The runner **materializes** it to
+stdout — the final response `--json-schema` governs. That same observation records
+`resultCompleteAt`, `resultCompleteEpoch`, and `resultCompleteSha256` on the attempt-ended record
+before the process is terminated. The runner **materializes** it to
 `<run-dir>/native-result-<n>.json` at attempt end; `attempt-ended.stdoutResult` records
 `materialized`, `absent`, `error`, or `occupied`. Only a `materialized` attempt is loaded;
 `occupied` forfeits `native-result-path-occupied`; `absent` (no `result` event, `is_error: true`,
@@ -170,7 +172,9 @@ Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`,
 `claude-mode-background-write`, `run-dir-claude-mode-mismatch`, the background attempt refusals
 above, plus the shared native family `native-result-missing`, `native-result-oversized`,
 `native-result-malformed`, `native-result-schema-invalid`, `native-result-report-blank`,
-`native-result-path-occupied`, `native-schema-unreadable`, `marker-channel-retired`; the adapter
+`native-result-path-occupied`, `result-completion-unrecorded`, `result-completion-after-deadline`,
+`result-completion-payload-mismatch`, `timeout-deadline-unrecorded`, `native-schema-unreadable`,
+`marker-channel-retired`; the adapter
 refusals `unregistered-engine-model`, `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
 
 Not in this release: the launcher's hand-built argv retiring into the adapter, the watcher and
@@ -321,7 +325,9 @@ run that predates the field reads as marker.
 On a successful codex write, the terminal result carries `report` (the scrubbed report text). On
 forfeit, it carries `detail` from the native admission vocabulary: `native-schema-unreadable`,
 `native-result-missing`, `native-result-oversized`, `native-result-malformed`,
-`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`, or
+`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`,
+`result-completion-unrecorded`, `result-completion-after-deadline`,
+`result-completion-payload-mismatch`, `timeout-deadline-unrecorded`, or
 `marker-channel-retired`. The dirty-tree forfeit keeps `detail: worktree-dirtied-by-attempt` and
 carries `attemptDetail`.
 
@@ -358,7 +364,9 @@ binds the attempt prompt for cursor (`orderPromptSha256` is the caller's order i
 
 Refusal tokens a consumer can now meet on cursor: `native-result-missing`,
 `native-result-oversized`, `native-result-malformed`, `native-result-schema-invalid`,
-`native-result-report-blank`, `native-result-path-occupied`, `attempt-prompt-occupied`,
+`native-result-report-blank`, `native-result-path-occupied`, `result-completion-unrecorded`,
+`result-completion-after-deadline`, `result-completion-payload-mismatch`,
+`timeout-deadline-unrecorded`, `attempt-prompt-occupied`,
 `attempt-prompt-unwritable`, `native-schema-unreadable`, `prompt-unreadable`,
 `prompt-tampered`,
 `marker-channel-retired`. Tokens that

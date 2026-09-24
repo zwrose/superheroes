@@ -1396,6 +1396,7 @@ def _run_engine_files_background(
     bg_resumable = False
     timed_out = False
     timeout_at = None
+    completion_stamp = None
     wall_cap = _attempt_bg_wall_cap(opened, attempt)
     wall_seconds = round(_NOW() - start, 1) + prior_wall_seconds
 
@@ -1421,6 +1422,12 @@ def _run_engine_files_background(
             if engine_adapter.claude_transcript_turn_ended(rows_after_cursor):
                 payload = engine_adapter.claude_transcript_result(rows)
                 tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+                if payload is not None and completion_stamp is None:
+                    scrubbed = _scrub_native_payload(payload)
+                    completion_stamp = engine_result_channel.completion_stamp(
+                        _NOW(),
+                        engine_result_channel.canonical_payload_digest(scrubbed),
+                    )
                 result_path = _native_result_path(run_dir_real, attempt)
                 if result_path is None:
                     transcript_result = "error"
@@ -1453,6 +1460,12 @@ def _run_engine_files_background(
                 if engine_adapter.claude_transcript_turn_ended(rows_after_cursor):
                     payload = engine_adapter.claude_transcript_result(rows)
                     tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
+                    if payload is not None and completion_stamp is None:
+                        scrubbed = _scrub_native_payload(payload)
+                        completion_stamp = engine_result_channel.completion_stamp(
+                            _NOW(),
+                            engine_result_channel.canonical_payload_digest(scrubbed),
+                        )
                     result_path = _native_result_path(run_dir_real, attempt)
                     if result_path is None:
                         transcript_result = "error"
@@ -1522,8 +1535,12 @@ def _run_engine_files_background(
         ended_record["transcriptToolCalls"] = tool_calls
     if bg_stop is not None:
         ended_record["bgStop"] = bg_stop
+    _apply_completion_stamp(
+        ended_record, engine_result_channel.deadline_stamp(deadline),
+    )
     if timed_out:
         ended_record["timeoutAt"] = timeout_at
+    _apply_completion_stamp(ended_record, completion_stamp)
     _journal_bg_ended(ended_record)
 
 
@@ -2182,6 +2199,17 @@ def _truncation_marker(stream, observed_bytes):
         raise ValueError("unknown cap stream: %r" % (stream,))
     return "%s%d%s\n" % (prefix, int(observed_bytes), STDOUT_TRUNCATION_MARKER_SUFFIX)
 
+
+# Stampable stdout line bound — one home with MAX_STDOUT_CAPTURE tail-cap semantics.
+_STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES = 10**20 - 1
+_STDOUT_STAMPABLE_LINE_MAX = (
+    MAX_STDOUT_CAPTURE
+    - len(_truncation_marker(
+        CAP_STREAM_STDOUT, _STDOUT_TRUNCATION_MARKER_WORST_CASE_OBSERVED_BYTES,
+    ).encode("utf-8"))
+)
+# Worst-case reserve: marker length grows with the digit count of observed bytes,
+# so a bound from this poll's file size can be wider than admission's; this cannot drift.
 
 _STDOUT_TRUNCATION_MARKER_RE = re.compile(
     r"^%s(\d+)%s\n" % (
@@ -3695,6 +3723,211 @@ def _sample_stream_sizes(stdout_path, stderr_path):
     return stdout_sz, stderr_sz
 
 
+def _apply_completion_stamp(ended_record, stamp):
+    """Merge a completion stamp onto an attempt-ended record when present. Never raises."""
+    if isinstance(stamp, dict):
+        ended_record.update(stamp)
+
+
+_STDOUT_COMPLETION_READ_CHUNK = 65536
+
+
+def _process_stdout_completion_line(obs_state, line_bytes, line_start):
+    """Apply one complete stdout line to the completion stamp. Never raises."""
+    try:
+        text = line_bytes.decode("utf-8", errors="ignore").rstrip("\r").strip()
+        if not text:
+            return
+        obj = json.loads(text)
+        if not isinstance(obj, dict) or obj.get("type") != "result":
+            return
+        if obj.get("is_error") is True or "structured_output" not in obj:
+            obs_state["stamp"] = None
+            obs_state["stamp_line_start"] = None
+            return
+        digest = engine_result_channel.canonical_payload_digest(
+            _scrub_native_payload(obj["structured_output"]),
+        )
+        stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
+        if stamp is None or digest is None:
+            obs_state["stamp"] = None
+            obs_state["stamp_line_start"] = None
+            return
+        obs_state["stamp"] = stamp
+        obs_state["stamp_line_start"] = line_start
+    except Exception:
+        return
+
+
+def _drain_stdout_completion_bytes(obs_state, data, file_offset_before):
+    """Split newly read stdout bytes on newlines and stamp complete result events. Never raises."""
+    buf = obs_state.get("buf", b"")
+    overflow = obs_state.get("overflow", False)
+    line_start = file_offset_before - len(buf)
+    pos = 0
+    while pos < len(data):
+        nl = data.find(b"\n", pos)
+        if nl < 0:
+            tail = data[pos:]
+            if overflow:
+                obs_state["buf"] = b""
+            else:
+                new_buf = buf + tail
+                if len(new_buf) > _STDOUT_STAMPABLE_LINE_MAX:
+                    overflow = True
+                    obs_state["buf"] = b""
+                else:
+                    obs_state["buf"] = new_buf
+            obs_state["overflow"] = overflow
+            return
+        segment = data[pos:nl]
+        if not overflow:
+            _process_stdout_completion_line(obs_state, buf + segment, line_start)
+        buf = b""
+        overflow = False
+        line_start = file_offset_before + nl + 1
+        pos = nl + 1
+    obs_state["buf"] = buf
+    obs_state["overflow"] = overflow
+
+
+def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
+    """Incrementally stamp stdout delivery completion on complete result lines. Never raises.
+
+    Each poll reads only new bytes from the stdout file. Non-terminal polls process
+    complete lines only; the terminal call drains remaining bytes and parses any
+    trailing buffered line as final."""
+    try:
+        offset = obs_state.get("offset", 0)
+        with open(stdout_path, "rb") as fh:
+            fh.seek(offset)
+            while True:
+                chunk = fh.read(_STDOUT_COMPLETION_READ_CHUNK)
+                if not chunk:
+                    break
+                file_offset_before = offset
+                offset += len(chunk)
+                obs_state["offset"] = offset
+                _drain_stdout_completion_bytes(obs_state, chunk, file_offset_before)
+        if terminal:
+            buf = obs_state.get("buf", b"")
+            overflow = obs_state.get("overflow", False)
+            if not overflow and buf:
+                line_start = offset - len(buf)
+                _process_stdout_completion_line(obs_state, buf, line_start)
+            obs_state["buf"] = b""
+            obs_state["overflow"] = False
+        stamp = obs_state.get("stamp")
+        stamp_line_start = obs_state.get("stamp_line_start")
+        if stamp is not None and stamp_line_start is not None:
+            # Retention must match _bounded_stdout_cap_from_file, not the partial-line
+            # buffer bound (_STDOUT_STAMPABLE_LINE_MAX answers a different question).
+            # offset at terminal observation is the final file size (no writer is alive —
+            # this runs after proc.wait), same observed the materializer read uses, so
+            # eviction tracks admission exactly. An earlier poll cannot evict prematurely:
+            # offset - stamp_line_start only grows while the content budget only shrinks.
+            if (
+                offset > MAX_STDOUT_CAPTURE
+                and offset - stamp_line_start
+                > _cap_content_budget(MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT, offset)
+            ):
+                obs_state["stamp"] = None
+                obs_state["stamp_line_start"] = None
+    except (OSError, MemoryError):
+        return
+    except Exception:
+        return
+
+
+def _observe_native_file_completion(
+        obs_state, run_dir_real, attempt, *, terminal=False,
+):
+    """Stamp argv/prompt delivery completion on first stable file plateau. Never raises."""
+    if obs_state.get("stamp") is not None:
+        return
+    result_path = _native_result_path(run_dir_real, attempt)
+    if result_path is None:
+        return
+    try:
+        # Producer-side size guard only — not on WO-C's admission-path census.
+        size = os.path.getsize(result_path)
+    except OSError:
+        return
+    if size == 0:
+        return
+    prev = obs_state.get("prev_size", 0)
+    if not terminal:
+        if prev == 0:
+            obs_state["prev_size"] = size
+            return
+        if size != prev:
+            obs_state["prev_size"] = size
+            obs_state.pop("parse_failed_at_size", None)
+            return
+        if obs_state.get("parse_failed_at_size") == size:
+            return
+    elif size != prev:
+        obs_state["prev_size"] = size
+        obs_state.pop("parse_failed_at_size", None)
+    obj, detail = _read_native_result_file(result_path)
+    if detail or not isinstance(obj, dict):
+        obs_state["parse_failed_at_size"] = size
+        return
+    digest = engine_result_channel.canonical_payload_digest(_scrub_native_payload(obj))
+    stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
+    if stamp is not None:
+        obs_state["stamp"] = stamp
+
+
+def _observe_attempt_completions(
+        delivery, stdout_obs, native_obs, run_dir_real, attempt, stdout_path,
+        *, terminal=False,
+):
+    """Poll-loop observation hook for stdout and native-file deliveries. Never raises."""
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        _observe_stdout_completion(stdout_obs, stdout_path, terminal=terminal)
+    elif delivery in (
+        engine_result_channel.RESULT_DELIVERY_ARGV,
+        engine_result_channel.RESULT_DELIVERY_PROMPT,
+    ):
+        _observe_native_file_completion(
+            native_obs, run_dir_real, attempt, terminal=terminal,
+        )
+
+
+def _completion_payload_for_delivery(
+        delivery, run_dir_real, attempt, opened, stdout, stdout_path,
+):
+    """Derive the payload object a delivery stamps, or None. Never raises."""
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        env = engine_adapter.claude_result_envelope(stdout)
+        if (not isinstance(env, dict)
+                or env.get("is_error") is True
+                or "structured_output" not in env):
+            return None
+        return _scrub_native_payload(env["structured_output"])
+    if delivery == engine_result_channel.RESULT_DELIVERY_TRANSCRIPT:
+        rows = _read_transcript_rows(stdout_path)
+        if rows is None:
+            return None
+        payload = engine_adapter.claude_transcript_result(rows)
+        if payload is None:
+            return None
+        return _scrub_native_payload(payload)
+    if delivery in (
+        engine_result_channel.RESULT_DELIVERY_ARGV,
+        engine_result_channel.RESULT_DELIVERY_PROMPT,
+    ):
+        result_path = _native_result_path(run_dir_real, attempt)
+        if result_path is None:
+            return None
+        obj, detail = _read_native_result_file(result_path)
+        if detail or not isinstance(obj, dict):
+            return None
+        return _scrub_native_payload(obj)
+    return None
+
+
 def _fold_stream_activity(stdout_path, stderr_path, prev_stdout, prev_stderr,
                           last_activity_at, activity_stream):
     """Final post-reap sample (BC-7): fold mtime/size growth into activity telemetry."""
@@ -3889,7 +4122,19 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     activity_stream = None
     prev_stdout = 0
     prev_stderr = 0
+    stdout_completion_obs = {
+        "stamp": None,
+        "offset": 0,
+        "buf": b"",
+        "overflow": False,
+        "stamp_line_start": None,
+    }
+    native_completion_obs = {"stamp": None, "prev_size": 0}
     while True:
+        _observe_attempt_completions(
+            delivery, stdout_completion_obs, native_completion_obs,
+            run_dir_real, attempt, stdout_path,
+        )
         rc = proc.poll()
         now = time.monotonic()
         if now - last_beat >= HEARTBEAT_INTERVAL:
@@ -3923,6 +4168,10 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         proc.wait(timeout=2)
     except Exception:
         pass
+    _observe_attempt_completions(
+        delivery, stdout_completion_obs, native_completion_obs,
+        run_dir_real, attempt, stdout_path, terminal=True,
+    )
     stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
     last_activity_at, silence_seconds, activity_stream = _fold_stream_activity(
         stdout_path, stderr_path, prev_stdout, prev_stderr,
@@ -3949,8 +4198,15 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "capSeconds": timeout,
         "dispatchPath": dispatch_path,
     }
+    _apply_completion_stamp(
+        ended_record, engine_result_channel.deadline_stamp(start + timeout),
+    )
     if timed_out:
         ended_record["timeoutAt"] = timeout_at
+    completion_stamp = stdout_completion_obs.get("stamp")
+    if completion_stamp is None:
+        completion_stamp = native_completion_obs.get("stamp")
+    _apply_completion_stamp(ended_record, completion_stamp)
     if prompt_bytes is not None:
         ended_record["promptBytes"] = prompt_bytes
     if stdout_observed is not None:
@@ -4076,6 +4332,23 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     except OSError:
         pass
 
+    completion_stamp = None
+    try:
+        inj_delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
+    except (engine_result_channel.UnknownEngineError, ValueError):
+        inj_delivery = None
+    if inj_delivery is not None:
+        inj_payload = _completion_payload_for_delivery(
+            inj_delivery, run_dir_real, attempt, opened, stdout, stdout_path,
+        )
+        if inj_payload is not None:
+            completion_stamp = engine_result_channel.completion_stamp(
+                time.monotonic(),
+                engine_result_channel.canonical_payload_digest(inj_payload),
+            )
+
     stdout_result = _materialize_stdout_result(
         run_dir_real, attempt, opened, stdout_path,
     )
@@ -4121,16 +4394,10 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
             ended["stdoutResult"] = stdout_result
     if timed_out:
         ended["timeoutAt"] = timeout_deadline_wall
+    _apply_completion_stamp(ended, engine_result_channel.deadline_stamp(t0 + timeout))
+    _apply_completion_stamp(ended, completion_stamp)
     _journal_append(run_dir_real, ended)
     return True, ""
-
-
-def _recorded_timeout_deadline(ended):
-    """Return the ended record's persisted wall-cap deadline, or None if unusable."""
-    timeout_at = ended.get("timeoutAt")
-    if isinstance(timeout_at, bool) or not isinstance(timeout_at, (int, float)):
-        return None
-    return float(timeout_at)
 
 
 def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None, resume=False):
@@ -4427,11 +4694,8 @@ def _native_review_forfeit(engagement, detail, *, payload_shape=None, **extra):
     return result
 
 
-def _load_native_result_json(run_dir_real, attempt):
-    """Load native result JSON via fd. Returns (obj, None) or (None, detail). Never raises."""
-    path = _native_result_path(run_dir_real, attempt)
-    if path is None:
-        return None, "native-result-missing"
+def _read_native_result_file(path):
+    """Read native result JSON via bounded fd. Returns (obj, None) or (None, detail). Never raises."""
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
         # axis: the result path is opened without following a symlink and without blocking; a symlink, FIFO or absent entry reads as native-result-missing.
@@ -4472,9 +4736,43 @@ def _load_native_result_json(run_dir_real, attempt):
         os.close(fd)
 
 
-def _read_native_review_envelope(run_dir_real, attempt, engagement):
+def _load_native_result_json(run_dir_real, attempt, opened):
+    """Load native result JSON via fd. Returns (obj, None) or (None, detail). Never raises."""
+    path = _native_result_path(run_dir_real, attempt)
+    if path is None:
+        return None, "native-result-missing"
+    obj, detail = _read_native_result_file(path)
+    if detail:
+        return None, detail
+    records, _corrupt = _journal_read(run_dir_real)
+    state = _journal_state(records)
+    attempt_rec = state.get("attempts", {}).get(attempt)
+    ended = attempt_rec.get("ended") if isinstance(attempt_rec, dict) else None
+    if not isinstance(ended, dict):
+        return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
+    if ended.get("timedOut"):
+        deadline_mono = ended.get(engine_result_channel.FIELD_DEADLINE_MONO)
+        deadline_epoch = ended.get(engine_result_channel.FIELD_DEADLINE_EPOCH)
+        if (
+            isinstance(deadline_mono, bool)
+            or not isinstance(deadline_mono, (int, float))
+            or not isinstance(deadline_epoch, str)
+            or not deadline_epoch
+        ):
+            return None, "timeout-deadline-unrecorded"
+    digest_obj = _scrub_native_payload(obj) if isinstance(obj, dict) else obj
+    digest = engine_result_channel.canonical_payload_digest(digest_obj)
+    if digest is None:
+        return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
+    verdict, detail = engine_result_channel.completion_window(ended, digest)
+    if verdict == "forfeit":
+        return None, detail
+    return digest_obj, None
+
+
+def _read_native_review_envelope(run_dir_real, attempt, engagement, opened):
     """Load and unwrap a native review result envelope. Returns (envelope, branch) or a forfeit."""
-    envelope, detail = _load_native_result_json(run_dir_real, attempt)
+    envelope, detail = _load_native_result_json(run_dir_real, attempt, opened)
     if detail == "native-result-missing":
         shape = engine_result_channel.native_review_payload_shape("native-result-missing")
         return _native_review_forfeit(engagement, "native-result-missing", payload_shape=shape)
@@ -4483,6 +4781,8 @@ def _read_native_review_envelope(run_dir_real, attempt, engagement):
     if detail == "native-result-malformed":
         shape = engine_result_channel.native_review_payload_shape("native-result-malformed")
         return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
+    if detail:
+        return _native_review_forfeit(engagement, detail)
     if not isinstance(envelope, dict) or "result" not in envelope:
         shape = engine_result_channel.native_review_payload_shape(
             "native-result-malformed", envelope=envelope if isinstance(envelope, dict) else None)
@@ -4586,38 +4886,18 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
     return declared, None
 
 
-def _admit_native_write_result(run_dir_real, attempt, opened, *, timeout_deadline=None):
-    """Single admission authority for the native write channel (codex, cursor). Never raises.
-
-    `timeout_deadline` is the attempt's recorded wall-cap deadline read from the ended record's
-    `timeoutAt` field — not an instant the caller computed. A native result whose file was last
-    written strictly after that instant was produced during the SIGTERM/SIGKILL grace window, not
-    before the cap — the timeout contract promises admission only for a result complete before
-    the wall cap, so such a result is rejected rather than silently admitted.
-    """
+def _admit_native_write_result(run_dir_real, attempt, opened):
+    """Single admission authority for the native write channel (codex, cursor). Never raises."""
     gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
     if gate is not None:
         return gate
-    obj, detail = _load_native_result_json(run_dir_real, attempt)
+    obj, detail = _load_native_result_json(run_dir_real, attempt, opened)
     if detail:
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
             "detail": detail,
         }
-
-    if timeout_deadline is not None:
-        result_path = _native_result_path(run_dir_real, attempt)
-        try:
-            mtime = os.stat(result_path).st_mtime if result_path else None
-        except OSError:
-            mtime = None
-        if mtime is None or mtime > timeout_deadline:
-            return {
-                "forfeit": True,
-                "reason": dispatch_outcome.REASON_FORFEITED,
-                "detail": "native-result-after-timeout",
-            }
 
     declared, schema_err = _verify_native_schema(opened, RUN_KIND_WRITE)
     if schema_err:
@@ -4676,7 +4956,7 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
             gate["detail"],
             payload_shape=engine_result_channel.native_review_payload_shape(gate["detail"]),
         )
-    loaded = _read_native_review_envelope(run_dir_real, attempt, engagement)
+    loaded = _read_native_review_envelope(run_dir_real, attempt, engagement, opened)
     if not isinstance(loaded, tuple):
         return loaded
     envelope, branch = loaded
@@ -4845,11 +5125,12 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     if ended.get("guardRefusal"):
         return _grade_spawn_guard_refusal(ended)
-    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+    if ended.get("refusal"):
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
-        if ended.get("refusal"):
-            result["detail"] = ended["refusal"]
+        result["detail"] = ended["refusal"]
         return result
+    if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     try:
         with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
@@ -4913,18 +5194,7 @@ def _grade_write_attempt(run_dir_real, state, attempt):
 
     admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        if ended.get("timedOut"):
-            timeout_deadline = _recorded_timeout_deadline(ended)
-            if timeout_deadline is None:
-                return {
-                    "forfeit": True,
-                    "reason": dispatch_outcome.REASON_FORFEITED,
-                    "detail": "timeout-deadline-unrecorded",
-                }
-        else:
-            timeout_deadline = None
-        admitted = _admit_native_write_result(
-            run_dir_real, attempt, opened, timeout_deadline=timeout_deadline)
+        admitted = _admit_native_write_result(run_dir_real, attempt, opened)
         if not admitted.get("forfeit"):
             if ended.get("timedOut"):
                 # axis: the process still had to be terminated at the wall cap even though its
@@ -5277,7 +5547,11 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         _stop_live_background_sessions(
                             state, opened, run_dir_real=run_dir_real,
                         )
-                        _journal_append(run_dir_real, {
+                        # axis: supervisor budget exhaustion — deadline only, no completion
+                        # stamp: this record is written in the supervisor process, so its epoch
+                        # differs from any run-child's and WO-A's epoch-equality check must forfeit
+                        # any completion claimed across that boundary.
+                        budget_ended = {
                             "kind": "attempt-ended", "attempt": latest,
                             "exit": None, "timedOut": True, "signal": None,
                             "refusal": None, "at": time.time(),
@@ -5286,7 +5560,12 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             "capSeconds": _attempt_bg_wall_cap(opened, latest),
                             "launchId": suspended.get("launchId"),
                             "bgSessionId": suspended.get("bgSessionId"),
-                        })
+                        }
+                        _apply_completion_stamp(
+                            budget_ended,
+                            engine_result_channel.deadline_stamp(time.monotonic()),
+                        )
+                        _journal_append(run_dir_real, budget_ended)
                         time.sleep(SUPERVISOR_POLL_INTERVAL)
                         continue
                     ok_spawn, detail = _spawn_attempt(

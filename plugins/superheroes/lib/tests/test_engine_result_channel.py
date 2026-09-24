@@ -720,10 +720,17 @@ def test_ruling_new_issues_detailed_entry_validates_and_survives_grading(tmp_pat
         "nativeSchemaPath": schema_path,
         "expectedResultKind": "ruling",
     }
+    envelope = _wrap_result(branch)
+    scrubbed = ed._scrub_native_payload(envelope)
+    ended = {
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": 0, "wallSeconds": 1.0,
+    }
+    ended.update(ERC.completion_stamp(1.0, ERC.canonical_payload_digest(scrubbed)))
+    ed._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     state = {
         "opened": opened,
-        "attempts": {1: {"ended": {"exit": 0, "timedOut": False, "refusal": None,
-                                   "stdoutBytes": 0, "wallSeconds": 1.0}}},
+        "attempts": {1: {"ended": ended}},
     }
     grade = ed._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
@@ -856,3 +863,216 @@ def test_engine_output_byte_cap_single_home():
     assert ERC.NATIVE_RESULT_MAX_BYTES == home
     assert ed.MAX_STDOUT_CAPTURE == home
     assert home == 8 * 1024 * 1024
+
+
+# --- result completion contract (#1273 WO-A) ---
+
+_DIGEST_X = ERC.payload_digest(b"x")
+
+
+def _completion_record(mono_at, digest=_DIGEST_X, **extra):
+    stamp = ERC.completion_stamp(mono_at, digest)
+    assert stamp is not None
+    record = dict(stamp)
+    record.update(extra)
+    return record
+
+
+def test_mono_epoch_stable_and_non_empty():
+    first = ERC.mono_epoch()
+    second = ERC.mono_epoch()
+    assert isinstance(first, str)
+    assert first
+    assert first == second
+
+
+def test_payload_digest_bytes_and_str_agree():
+    digest = ERC.payload_digest(b"x")
+    assert digest == ERC.payload_digest("x")
+    assert digest == "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+
+
+def test_payload_digest_returns_none_for_non_bytes_str():
+    assert ERC.payload_digest(1) is None
+    assert ERC.payload_digest(None) is None
+
+
+def test_payload_digest_surrogate_string_never_raises():
+    lone = "a\ud800b"
+    digest = ERC.payload_digest(lone)
+    assert digest is not None
+    assert len(digest) == 64
+
+
+@pytest.mark.parametrize("mono_at,deadline_mono", [
+    (10.0, 20.0),
+    (15.0, 15.0),
+])
+def test_completion_stamp_round_trips_through_completion_window(mono_at, deadline_mono):
+    ended = _completion_record(mono_at)
+    ended.update(ERC.deadline_stamp(deadline_mono))
+    assert ERC.completion_window(ended, _DIGEST_X) == ("admit", None)
+
+
+def test_completion_window_no_deadline_key():
+    ended = _completion_record(10.0)
+    assert ERC.completion_window(ended, _DIGEST_X) == ("no-deadline", None)
+
+
+@pytest.mark.parametrize("ended", [None, [], "x"])
+def test_completion_window_non_dict_ended_forfeits_unrecorded(ended):
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_empty_dict_forfeits_unrecorded():
+    assert ERC.completion_window({}, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_missing_completion_epoch_forfeits_unrecorded():
+    ended = _completion_record(10.0)
+    del ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_epoch_mismatch_forfeits_unrecorded():
+    ended = _completion_record(10.0)
+    ended.update(ERC.deadline_stamp(20.0))
+    ended[ERC.FIELD_DEADLINE_EPOCH] = ended[ERC.FIELD_DEADLINE_EPOCH] + "-other"
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_bool_complete_at_forfeits_unrecorded():
+    ended = {
+        ERC.FIELD_RESULT_COMPLETE_AT: True,
+        ERC.FIELD_RESULT_COMPLETE_EPOCH: ERC.mono_epoch(),
+        ERC.FIELD_RESULT_COMPLETE_SHA256: _DIGEST_X,
+        ERC.FIELD_DEADLINE_MONO: 20.0,
+        ERC.FIELD_DEADLINE_EPOCH: ERC.mono_epoch(),
+    }
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_bool_deadline_mono_forfeits_unrecorded():
+    ended = _completion_record(10.0)
+    ended[ERC.FIELD_DEADLINE_MONO] = False
+    ended[ERC.FIELD_DEADLINE_EPOCH] = ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_equality_at_deadline_admits():
+    ended = _completion_record(15.0)
+    ended.update(ERC.deadline_stamp(15.0))
+    assert ERC.completion_window(ended, _DIGEST_X) == ("admit", None)
+
+
+def test_completion_window_deadline_without_completion_forfeits_unrecorded():
+    ended = {ERC.FIELD_DEADLINE_MONO: 20.0, ERC.FIELD_DEADLINE_EPOCH: ERC.mono_epoch()}
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+@pytest.mark.parametrize("bad_payload", [
+    None,
+    "",
+    "A" * 64,
+    "a" * 63,
+])
+def test_completion_window_bad_payload_sha256_forfeits_mismatch(bad_payload):
+    ended = _completion_record(10.0)
+    assert ERC.completion_window(ended, bad_payload) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH,
+    )
+
+
+def test_completion_window_valid_different_digest_forfeits_payload_mismatch():
+    ended = _completion_record(10.0, digest=_DIGEST_X)
+    digest_b = ERC.payload_digest(b"y")
+    assert digest_b is not None
+    assert digest_b != _DIGEST_X
+    assert ERC.completion_window(ended, digest_b) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH,
+    )
+
+
+def test_completion_window_nested_complete_at_forfeits_unrecorded():
+    ended = {
+        ERC.FIELD_RESULT_COMPLETE_AT: {"a": 1},
+        ERC.FIELD_RESULT_COMPLETE_EPOCH: ERC.mono_epoch(),
+        ERC.FIELD_RESULT_COMPLETE_SHA256: _DIGEST_X,
+    }
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_after_deadline_forfeits():
+    ended = _completion_record(25.0)
+    ended.update(ERC.deadline_stamp(20.0))
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_AFTER_DEADLINE,
+    )
+
+
+@pytest.mark.parametrize("mono_now", [True, False, "x", None, {}])
+def test_completion_stamp_bad_mono_now_returns_none(mono_now):
+    assert ERC.completion_stamp(mono_now, _DIGEST_X) is None
+
+
+@pytest.mark.parametrize("digest", [None, "", "A" * 64, "a" * 63, 1])
+def test_completion_stamp_bad_digest_returns_none(digest):
+    assert ERC.completion_stamp(10.0, digest) is None
+
+
+@pytest.mark.parametrize("mono_deadline", [True, False, "x", None, {}])
+def test_deadline_stamp_bad_mono_deadline_returns_none(mono_deadline):
+    assert ERC.deadline_stamp(mono_deadline) is None
+
+
+# --- canonical_payload_digest (#1273 WO-B) ---
+
+
+def test_canonical_payload_digest_stable_across_key_order():
+    first = ERC.canonical_payload_digest({"a": 1, "b": 2})
+    second = ERC.canonical_payload_digest({"b": 2, "a": 1})
+    assert first is not None
+    assert first == second
+
+
+@pytest.mark.parametrize("bad_obj", [
+    [],
+    "x",
+    {"nested": {1, 2}},
+    {"value": float("nan")},
+])
+def test_canonical_payload_digest_returns_none_for_edge_one_inputs(bad_obj):
+    assert ERC.canonical_payload_digest(bad_obj) is None
+
+
+@pytest.mark.parametrize("bad_digest", [
+    "+" + "a" * 63,
+    "a_" + "a" * 62,
+    "A" * 64,
+    "a" * 63,
+    "a" * 65,
+    1,
+])
+def test_is_valid_sha256_hex_rejects_non_canonical_shapes(bad_digest):
+    assert ERC._is_valid_sha256_hex(bad_digest) is False
+
+
+def test_is_valid_sha256_hex_accepts_hashlib_output():
+    digest = ERC.payload_digest(b"x")
+    assert ERC._is_valid_sha256_hex(digest) is True

@@ -1737,3 +1737,465 @@ def test_claude_probe_second_mode_runs_when_first_refuses(tmp_path, monkeypatch)
     assert payload["modeLegs"]["background"]["completionDetection"]["ok"] is True
     assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
     assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "native-result-missing"
+
+
+DO = _load("dispatch_outcome", "dispatch_outcome.py")
+
+_COMPLETION_BOUNDARY_CELLS = (
+    ("codex", "default"),
+    ("cursor", "default"),
+    ("claude", "print"),
+    ("claude", "background"),
+)
+_DEADLINE_MONO = 100.0
+_BEFORE_CAP_AT = 50.0
+_AFTER_CAP_AT = 101.0
+_AT_CAP_AT = 100.0
+
+
+def _native_review_envelope():
+    return {"result": _native_verdicts_branch()}
+
+
+def _envelope_digest(envelope):
+    scrubbed = ED._scrub_native_payload(envelope)
+    return ERC.canonical_payload_digest(scrubbed)
+
+
+def _claude_home(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+
+def _patch_journal_completion_stamps(
+        monkeypatch, envelope, *, complete_at, deadline_mono=None, timed_out=False,
+        omit_completion=False, wrong_epoch=False):
+    # probe() calls engine_dispatch imported by conformance_probe, not the test's ED copy.
+    real_append = CP.engine_dispatch._journal_append
+    digest = _envelope_digest(envelope)
+
+    def patched_append(run_dir, record):
+        if isinstance(record, dict) and record.get("kind") == "attempt-ended":
+            record = dict(record)
+            for key in (
+                ERC.FIELD_RESULT_COMPLETE_AT,
+                ERC.FIELD_RESULT_COMPLETE_EPOCH,
+                ERC.FIELD_RESULT_COMPLETE_SHA256,
+                ERC.FIELD_DEADLINE_MONO,
+                ERC.FIELD_DEADLINE_EPOCH,
+            ):
+                record.pop(key, None)
+            record["timedOut"] = timed_out
+            if timed_out:
+                record["timeoutAt"] = record.get("at", time.time())
+            if not omit_completion and digest:
+                stamp = ERC.completion_stamp(complete_at, digest)
+                if stamp:
+                    if wrong_epoch:
+                        stamp = dict(stamp)
+                        stamp[ERC.FIELD_RESULT_COMPLETE_EPOCH] = "wrong-epoch"
+                    record.update(stamp)
+            if deadline_mono is not None:
+                dl = ERC.deadline_stamp(deadline_mono)
+                if dl:
+                    record.update(dl)
+        return real_append(run_dir, record)
+
+    monkeypatch.setattr(CP.engine_dispatch, "_journal_append", patched_append)
+
+
+def _codex_boundary_runner(envelope):
+    stdout = _codex_event_stream(action_items=2)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        if "-o" in argv:
+            result_path = argv[argv.index("-o") + 1]
+        else:
+            result_path = ERC.result_file_path_from_prompt(
+                prompt_bytes.decode("utf-8", "ignore"))
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(envelope, fh, separators=(",", ":"))
+            fh.write("\n")
+        return stdout, False, 0, ""
+
+    return runner
+
+
+def _cursor_boundary_runner(envelope):
+    stdout = _cursor_event_stream(tool_calls=2)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = ERC.result_file_path_from_prompt(
+            prompt_bytes.decode("utf-8", "ignore"))
+        with open(result_path, "w", encoding="utf-8") as fh:
+            json.dump(envelope, fh, separators=(",", ":"))
+            fh.write("\n")
+        return stdout, False, 0, ""
+
+    return runner
+
+
+def _claude_print_boundary_runner(envelope):
+    structured = {"result": envelope["result"]}
+    stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stdout, False, 0, ""
+
+    return runner
+
+
+def _claude_background_boundary_runner(envelope):
+    background_lines = [
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use", "id": "tool-0", "name": "Glob", "input": {},
+            }]},
+        }),
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use", "id": "so1", "name": "StructuredOutput",
+                "input": {"result": envelope["result"]},
+            }]},
+        }),
+        json.dumps({"type": "user", "toolEndsTurn": True}),
+    ]
+    stdout = "\n".join(background_lines) + "\n"
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return stdout, False, 0, ""
+
+    return runner
+
+
+def _boundary_run_engine(engine, envelope):
+    if engine == "codex":
+        return _codex_boundary_runner(envelope)
+    if engine == "cursor":
+        return _cursor_boundary_runner(envelope)
+    print_runner = _claude_print_boundary_runner(envelope)
+    background_runner = _claude_background_boundary_runner(envelope)
+
+    def claude_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        if "--bg" in argv:
+            return background_runner(argv, prompt_bytes, timeout, progress_cb, cwd)
+        return print_runner(argv, prompt_bytes, timeout, progress_cb, cwd)
+
+    return claude_runner
+
+
+def _claude_green_run_engine(envelope):
+    structured = {"result": envelope["result"]}
+    print_stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
+    background_lines = [
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use", "id": "tool-0", "name": "Glob", "input": {},
+            }]},
+        }),
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use", "id": "so1", "name": "StructuredOutput",
+                "input": {"result": envelope["result"]},
+            }]},
+        }),
+        json.dumps({"type": "user", "toolEndsTurn": True}),
+    ]
+    background_stdout = "\n".join(background_lines) + "\n"
+    print_runner = _claude_print_boundary_runner(envelope)
+    background_runner = _claude_background_boundary_runner(envelope)
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        if "--bg" in argv:
+            return background_runner(argv, prompt_bytes, timeout, progress_cb, cwd)
+        return print_runner(argv, prompt_bytes, timeout, progress_cb, cwd)
+
+    return runner
+
+
+def _run_probe_completion_boundary(
+        tmp_path, monkeypatch, engine, mode, envelope, stamp_kw, *,
+        claude_home=False):
+    if claude_home or engine == "claude":
+        _claude_home(monkeypatch, tmp_path)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    _patch_journal_completion_stamps(monkeypatch, envelope, **stamp_kw)
+    runner = _boundary_run_engine(engine, envelope)
+    return CP.probe(
+        engine, repo_root=repo, run_dir=run_dir, timeout=30, run_engine=runner,
+        build_view=_fake_build_view(tmp_path),
+    )
+
+
+@pytest.mark.parametrize("engine,mode", _COMPLETION_BOUNDARY_CELLS)
+def test_probe_completion_before_cap_admits(tmp_path, monkeypatch, engine, mode):
+    # axis: completion observed before deadline → native result admitted
+    envelope = _native_review_envelope()
+    payload, code, _stderr = _run_probe_completion_boundary(
+        tmp_path, monkeypatch, engine, mode, envelope,
+        {
+            "complete_at": _BEFORE_CAP_AT,
+            "deadline_mono": _DEADLINE_MONO,
+            "timed_out": False,
+        },
+        claude_home=(engine == "claude"),
+    )
+    leg = payload["modeLegs"][mode]["resultProduction"]
+    assert leg["ok"] is True
+    assert leg["detail"] != "result-completion-after-deadline"
+    if engine != "claude":
+        assert code == 0
+
+
+@pytest.mark.parametrize("engine,mode", _COMPLETION_BOUNDARY_CELLS)
+def test_probe_completion_after_cap_forfeits(tmp_path, monkeypatch, engine, mode):
+    # axis: completion after deadline → result-completion-after-deadline forfeit
+    envelope = _native_review_envelope()
+    payload, code, _stderr = _run_probe_completion_boundary(
+        tmp_path, monkeypatch, engine, mode, envelope,
+        {
+            "complete_at": _AFTER_CAP_AT,
+            "deadline_mono": _DEADLINE_MONO,
+            "timed_out": False,
+        },
+        claude_home=(engine == "claude"),
+    )
+    leg = payload["modeLegs"][mode]["resultProduction"]
+    assert leg["ok"] is False
+    assert leg["detail"] == "result-completion-after-deadline"
+    assert code == 1
+
+
+def _seed_claude_mode_journal(tmp_path, monkeypatch, reused_mode):
+    _claude_home(monkeypatch, tmp_path)
+    repo = _repo(tmp_path)
+    seed_run = str(tmp_path / "seed-run")
+    envelope = _native_review_envelope()
+    payload, code, _ = CP.probe(
+        "claude", repo_root=repo, run_dir=seed_run, timeout=30,
+        run_engine=_claude_green_run_engine(envelope),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code == 0
+    return seed_run
+
+
+def _claude_preflight_parent(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "print").mkdir()
+    (run_dir / "background").mkdir()
+    return run_dir
+
+
+def test_probe_preflight_aborts_all_modes_when_one_mode_reused(tmp_path, monkeypatch):
+    # axis: reused mode in preflight → no dispatch for any mode
+    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch, "print")
+    run_dir = _claude_preflight_parent(tmp_path)
+    shutil.copytree(os.path.join(seed_run, "print"), run_dir / "print", dirs_exist_ok=True)
+    calls = []
+
+    def recording_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        calls.append({"argv": list(argv), "cwd": cwd})
+        return "", False, 0, ""
+
+    payload, code, _stderr = CP.probe(
+        "claude", repo_root=_repo(tmp_path), run_dir=str(run_dir), timeout=30,
+        run_engine=recording_runner, build_view=_fake_build_view(tmp_path),
+    )
+    assert len(calls) == 0
+    assert code == 1
+    for mode in CP._modes_for_engine("claude"):
+        detail = payload["modeLegs"][mode]["resultProduction"]["detail"]
+        assert detail == DO.DETAIL_RUN_DIR_REUSED
+
+
+def test_probe_preflight_aborts_when_print_mode_reused_first_in_order(tmp_path, monkeypatch):
+    # axis: edge 6 — reused first mode (print) blocks background dispatch
+    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch, "print")
+    run_dir = _claude_preflight_parent(tmp_path)
+    shutil.copytree(os.path.join(seed_run, "print"), run_dir / "print", dirs_exist_ok=True)
+    calls = []
+
+    def recording_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        calls.append(1)
+        return "", False, 0, ""
+
+    payload, code, _ = CP.probe(
+        "claude", repo_root=_repo(tmp_path), run_dir=str(run_dir), timeout=30,
+        run_engine=recording_runner, build_view=_fake_build_view(tmp_path),
+    )
+    assert CP._modes_for_engine("claude")[0] == "print"
+    assert len(calls) == 0
+    assert code == 1
+    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == DO.DETAIL_RUN_DIR_REUSED
+
+
+def test_probe_preflight_aborts_when_background_mode_reused_second_in_order(tmp_path, monkeypatch):
+    # axis: edge 6 — reused second mode (background) blocks print dispatch
+    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch, "background")
+    run_dir = _claude_preflight_parent(tmp_path)
+    shutil.copytree(os.path.join(seed_run, "background"), run_dir / "background", dirs_exist_ok=True)
+    calls = []
+
+    def recording_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        calls.append(1)
+        return "", False, 0, ""
+
+    payload, code, _ = CP.probe(
+        "claude", repo_root=_repo(tmp_path), run_dir=str(run_dir), timeout=30,
+        run_engine=recording_runner, build_view=_fake_build_view(tmp_path),
+    )
+    assert CP._modes_for_engine("claude")[1] == "background"
+    assert len(calls) == 0
+    assert code == 1
+    assert payload["modeLegs"]["print"]["resultProduction"]["detail"] == DO.DETAIL_RUN_DIR_REUSED
+
+
+def test_probe_preflight_aborts_all_modes_on_setup_error(tmp_path, monkeypatch):
+    # axis: setup_error in one mode → no dispatch for any mode
+    _claude_home(monkeypatch, tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "print").write_text("not-a-directory", encoding="utf-8")
+    (run_dir / "background").mkdir()
+    calls = []
+
+    def recording_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        calls.append(1)
+        return "", False, 0, ""
+
+    payload, code, _stderr = CP.probe(
+        "claude", repo_root=_repo(tmp_path), run_dir=str(run_dir), timeout=30,
+        run_engine=recording_runner, build_view=_fake_build_view(tmp_path),
+    )
+    assert len(calls) == 0
+    assert code == 1
+    for mode in CP._modes_for_engine("claude"):
+        detail = payload["modeLegs"][mode]["resultProduction"]["detail"]
+        assert detail == "run-dir-not-a-directory" or detail.startswith("run-dir-setup-failed:")
+
+
+def test_probe_successful_cell_journal_carries_completion_stamp(tmp_path, monkeypatch):
+    # axis: R10 — successful probe cell stamps completion on attempt-ended
+    envelope = _native_review_envelope()
+    _patch_journal_completion_stamps(
+        monkeypatch, envelope,
+        complete_at=_BEFORE_CAP_AT,
+        deadline_mono=_DEADLINE_MONO,
+        timed_out=False,
+    )
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    payload, code, _stderr = CP.probe(
+        "codex", repo_root=repo, run_dir=run_dir, timeout=30,
+        run_engine=_codex_boundary_runner(envelope),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code == 0
+    mode_run_dir = payload["modeLegs"]["default"]["resultProduction"]["evidence"]["runDir"]
+    records, _ = ED._journal_read(mode_run_dir)
+    ended = next(r for r in records if r.get("kind") == "attempt-ended")
+    assert ERC.FIELD_RESULT_COMPLETE_AT in ended
+    assert ERC.FIELD_RESULT_COMPLETE_EPOCH in ended
+    assert ERC.FIELD_RESULT_COMPLETE_SHA256 in ended
+    assert ERC.FIELD_DEADLINE_EPOCH in ended
+    assert ended[ERC.FIELD_DEADLINE_EPOCH] == ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
+
+
+def test_probe_completion_without_deadline_admits(tmp_path, monkeypatch):
+    # axis: edge 1 — completion stamp with no deadline on a clean run
+    envelope = _native_review_envelope()
+    payload, code, _ = _run_probe_completion_boundary(
+        tmp_path, monkeypatch, "codex", "default", envelope,
+        {"complete_at": _BEFORE_CAP_AT, "timed_out": False},
+    )
+    assert code == 0
+    assert payload["modeLegs"]["default"]["resultProduction"]["ok"] is True
+
+
+def test_probe_completion_with_deadline_but_no_stamp_forfeits(tmp_path, monkeypatch):
+    # axis: edge 2 — deadline present, completion stamp omitted
+    envelope = _native_review_envelope()
+    payload, code, _ = _run_probe_completion_boundary(
+        tmp_path, monkeypatch, "codex", "default", envelope,
+        {
+            "complete_at": _BEFORE_CAP_AT,
+            "deadline_mono": _DEADLINE_MONO,
+            "timed_out": False,
+            "omit_completion": True,
+        },
+    )
+    assert code == 1
+    assert payload["modeLegs"]["default"]["resultProduction"]["detail"] == (
+        "result-completion-unrecorded"
+    )
+
+
+def test_probe_completion_epoch_mismatch_forfeits(tmp_path, monkeypatch):
+    # axis: edge 3 — completion and deadline epochs differ
+    envelope = _native_review_envelope()
+    payload, code, _ = _run_probe_completion_boundary(
+        tmp_path, monkeypatch, "codex", "default", envelope,
+        {
+            "complete_at": _BEFORE_CAP_AT,
+            "deadline_mono": _DEADLINE_MONO,
+            "timed_out": False,
+            "wrong_epoch": True,
+        },
+    )
+    assert code == 1
+    assert payload["modeLegs"]["default"]["resultProduction"]["detail"] == (
+        "result-completion-unrecorded"
+    )
+
+
+def test_probe_completion_exactly_at_cap_admits(tmp_path, monkeypatch):
+    # axis: edge 4 — resultCompleteAt exactly equal to deadlineMono admits
+    envelope = _native_review_envelope()
+    payload, code, _ = _run_probe_completion_boundary(
+        tmp_path, monkeypatch, "codex", "default", envelope,
+        {
+            "complete_at": _AT_CAP_AT,
+            "deadline_mono": _DEADLINE_MONO,
+            "timed_out": False,
+        },
+    )
+    assert code == 0
+    assert payload["modeLegs"]["default"]["resultProduction"]["ok"] is True
+
+
+def test_probe_completion_payload_mismatch_forfeits(tmp_path, monkeypatch):
+    # axis: edge 5 — admitted payload differs from digest stamped on ended record
+    stamped_envelope = _native_review_envelope()
+    admitted_envelope = _native_review_envelope()
+    admitted_envelope["result"] = dict(admitted_envelope["result"])
+    admitted_envelope["result"]["reason"] = "rewritten-after-stamp"
+    _patch_journal_completion_stamps(
+        monkeypatch, stamped_envelope,
+        complete_at=_BEFORE_CAP_AT,
+        deadline_mono=_DEADLINE_MONO,
+        timed_out=False,
+    )
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    payload, code, _ = CP.probe(
+        "codex", repo_root=repo, run_dir=run_dir, timeout=30,
+        run_engine=_codex_boundary_runner(admitted_envelope),
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert code == 1
+    assert payload["modeLegs"]["default"]["resultProduction"]["detail"] == (
+        "result-completion-payload-mismatch"
+    )
