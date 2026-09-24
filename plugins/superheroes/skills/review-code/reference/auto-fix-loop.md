@@ -345,23 +345,34 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 > # Per external seat — the orchestrator sets these before this recipe runs:
-> #   $SEAT_KEY       roster seat key (e.g. code-reviewer) — indexes $SEAT_MAP.seats
+> #   $SEAT_KEY       panel: roster seat key (e.g. code-reviewer) — indexes $SEAT_MAP.seats;
+> #                   any other phase of a durable-record session: the manifest's seat key (skey)
+> #   $SEAT_MANIFEST  unset for the panel; for dispatch-verifiers / -scoped-finder / -gap-sweep /
+> #                   -audits on a durable-record session, the phase's orders manifest
+> #                   ($SESSION_DIR/round-N/orders/<phase>/manifest.aK.json) — the driver seated
+> #                   those seats there, and $SEAT_MAP holds only the panel (round-driver.md
+> #                   § Seat-time runner proof)
+> #   $SEAT_RESULT_KIND findings (panel, scoped finder, gap sweep), verdicts (verifier), ruling (audit)
 > #   $SEAT_PROMPT    emitted order path for this seat
 > #   $RUN_DIR        fresh run directory (created by first dispatch-review)
 > #   $SEAT_PROGRESS  progress file outside $RUN_DIR
 > case "$SEAT_KEY" in ""|null)
->   echo "dispatch-review: SEAT_KEY unset — cannot resolve seat map entry (fail closed)." >&2; exit 1;; esac
-> SEAT_CELL=$(printf '%s' "$SEAT_MAP" | jq -c ".seats[\"$SEAT_KEY\"] // empty")
+>   echo "dispatch-review: SEAT_KEY unset — cannot resolve the seat's entry (fail closed)." >&2; exit 1;; esac
+> if [ -n "${SEAT_MANIFEST:-}" ]; then
+>   SEAT_CELL=$(jq -c ".seats[\"$SEAT_KEY\"] // empty" "$SEAT_MANIFEST"); SEAT_ROLE_KEY=role
+> else
+>   SEAT_CELL=$(printf '%s' "$SEAT_MAP" | jq -c ".seats[\"$SEAT_KEY\"] // empty"); SEAT_ROLE_KEY=tier
+> fi
 > case "$SEAT_CELL" in ""|null)
->   echo "dispatch-review: seat map has no entry for SEAT_KEY=$SEAT_KEY (fail closed)." >&2; exit 1;; esac
+>   echo "dispatch-review: no seat entry for SEAT_KEY=$SEAT_KEY (fail closed)." >&2; exit 1;; esac
 > SEAT_VENDOR=$(printf '%s' "$SEAT_CELL" | jq -r '.vendor // empty')
 > SEAT_ENGINE_MODEL=$(printf '%s' "$SEAT_CELL" | jq -r '.model // empty')
-> SEAT_TIER=$(printf '%s' "$SEAT_CELL" | jq -r '.tier // empty')
+> SEAT_TIER=$(printf '%s' "$SEAT_CELL" | jq -r ".$SEAT_ROLE_KEY // empty")
 > SEAT_EFFORT=$(printf '%s' "$SEAT_CELL" | jq -r '.effort // empty')
 > if [ -z "$SEAT_VENDOR" ] || [ "$SEAT_VENDOR" = "null" ] || \
 >    [ -z "$SEAT_ENGINE_MODEL" ] || [ "$SEAT_ENGINE_MODEL" = "null" ] || \
 >    [ -z "$SEAT_TIER" ] || [ "$SEAT_TIER" = "null" ]; then
->   echo "dispatch-review: seat map entry for SEAT_KEY=$SEAT_KEY is malformed (fail closed)." >&2; exit 1
+>   echo "dispatch-review: seat entry for SEAT_KEY=$SEAT_KEY is malformed (fail closed)." >&2; exit 1
 > fi
 > if [ "$SEAT_EFFORT" = "null" ]; then SEAT_EFFORT_JSON=null; else SEAT_EFFORT_JSON="\"$SEAT_EFFORT\""; fi
 > SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
@@ -371,7 +382,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
->   --expected-result-kind findings \
+>   --expected-result-kind "${SEAT_RESULT_KIND:-findings}" \
 >   --run-dir "$RUN_DIR" --max-wait 12 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
@@ -379,7 +390,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
->   --expected-result-kind findings \
+>   --expected-result-kind "${SEAT_RESULT_KIND:-findings}" \
 >   --run-dir "$RUN_DIR" --max-wait 540 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```

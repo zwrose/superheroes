@@ -89,8 +89,8 @@ BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND = "execution-evidence-head-unbou
 BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE = "certified-head-unresolvable"
 
 # What proves a recorded seat ran, as each receipt seat row names it (#1272 layer 4a).
-SEAT_PROOF_RUNNER_RECORD = "runner-record"
-SEAT_PROOF_HAND_LANDED = "hand-landed-evidence"
+SEAT_PROOF_RUNNER_RECORD = session_contract.PROOF_RUNNER_RECORD
+SEAT_PROOF_HAND_LANDED = session_contract.PROOF_HAND_LANDED
 
 RECEIPT_FORM_CERTIFIED = receipt_disclosures.RECEIPT_FORM_CERTIFIED
 VENDOR_SOURCE_DEFAULTED = "defaulted"

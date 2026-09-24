@@ -83,8 +83,8 @@ RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = (
     "the orders for this attempt were emitted before the session moved checkouts and "
     "may already have run in the old checkout; run `re-emit` and dispatch the new attempt"
 )
-AUDIT_PROVENANCE_RUNNER_RECORD = "runner-record"
-AUDIT_PROVENANCE_HAND_LANDED = "hand-landed-evidence"
+AUDIT_PROVENANCE_RUNNER_RECORD = session_contract.PROOF_RUNNER_RECORD
+AUDIT_PROVENANCE_HAND_LANDED = session_contract.PROOF_HAND_LANDED
 AUDIT_PROVENANCE_MIXED = "mixed-evidence"
 AUDIT_PROVENANCE_COLLECTION_MANIFEST = "collection-manifest"
 AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST = "dispatch-manifest"

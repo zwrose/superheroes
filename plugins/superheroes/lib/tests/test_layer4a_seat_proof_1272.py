@@ -564,3 +564,60 @@ def test_l4a_r2_an_unproven_host_synthesis_seat_still_refuses_certification(tmp_
     assert receipt is None
     assert (refusal["class"], refusal["artifact"], refusal["bindingFailure"]) == (
         "unrun-review", "synthesis", "execution-evidence-absent")
+
+
+# --- review round 6 fixes -----------------------------------------------------------------------
+
+def test_l4a_r6_the_seat_proof_words_have_one_home():
+    # axis: the receipt's proof rows and the round's audit provenance spell one contract, defined once
+    import round_records as RR
+    assert RC.SEAT_PROOF_RUNNER_RECORD is SC.PROOF_RUNNER_RECORD
+    assert RC.SEAT_PROOF_HAND_LANDED is SC.PROOF_HAND_LANDED
+    assert RR.AUDIT_PROVENANCE_RUNNER_RECORD is SC.PROOF_RUNNER_RECORD
+    assert RR.AUDIT_PROVENANCE_HAND_LANDED is SC.PROOF_HAND_LANDED
+    words = {SC.PROOF_RUNNER_RECORD, SC.PROOF_HAND_LANDED}
+    homes = set()
+    for name in sorted(os.listdir(_LIB)):
+        if not name.endswith(".py"):
+            continue
+        with open(os.path.join(_LIB, name), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        if any(isinstance(n, ast.Constant) and n.value in words for n in ast.walk(tree)):
+            homes.add(name)
+    assert homes == {"session_contract.py"}, homes
+
+
+def _dispatch_recipe_seat_lines():
+    path = os.path.join(os.path.dirname(_LIB), "skills", "review-code", "reference",
+                        "auto-fix-loop.md")
+    with open(path, encoding="utf-8") as fh:
+        lines = [ln[2:] if ln.startswith("> ") else ln.lstrip(">") for ln in fh.read().splitlines()]
+    start = next(i for i, ln in enumerate(lines) if ln.startswith('case "$SEAT_KEY" in'))
+    end = next(i for i, ln in enumerate(lines) if i > start and ln.startswith("SEAT_JSON="))
+    return "\n".join(lines[start:end + 1])
+
+
+def test_l4a_r6_the_dispatch_recipe_builds_a_non_panel_seat_from_its_manifest_entry(tmp_path):
+    # real channel: run the documented recipe's seat block against a durable-record manifest whose
+    # seat is absent from the panel-only seat map; the bundle must be the manifest's cell
+    import shutil
+    import subprocess
+    if shutil.which("jq") is None or shutil.which("bash") is None:
+        import pytest
+        pytest.skip("the recipe needs jq and bash")
+    manifest = tmp_path / "manifest.a0.json"
+    manifest.write_text(json.dumps({"seats": {"verifier-x": {
+        "vendor": "codex", "model": "m-seated", "effort": "high", "role": "verifier"}}}))
+    script = _dispatch_recipe_seat_lines() + '\nprintf "%s" "$SEAT_JSON"\n'
+    env = dict(os.environ, SEAT_KEY="verifier-x", SEAT_MANIFEST=str(manifest),
+               SEAT_MAP=json.dumps({"seats": {"code-reviewer": {
+                   "vendor": "claude", "model": "opus", "tier": "reviewer", "effort": None}}}))
+    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == {"vendor": "codex", "model": "m-seated", "effort": "high",
+                                      "role": "verifier"}
+    env.pop("SEAT_MANIFEST")
+    env["SEAT_KEY"] = "code-reviewer"
+    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)["vendor"] == "claude"

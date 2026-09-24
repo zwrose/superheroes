@@ -28,6 +28,8 @@ __all__ = (
     "SEAT_CHANNEL_HOST",
     "SEAT_CHANNEL_ENGINE",
     "runner_record_vendor",
+    "PROOF_RUNNER_RECORD",
+    "PROOF_HAND_LANDED",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
     "VERIFIED_HEAD_FIELD",
@@ -133,6 +135,12 @@ def runner_record_vendor(vendor, registered):
         return False
     vendor = vendor.strip()
     return vendor in tuple(registered or ()) and vendor not in HOST_SEAT_VENDORS
+
+
+# What proves a recorded seat ran: the runner observed it, or its landing carries hand-landed
+# execution evidence. One home for both the round audit provenance and the receipt seat rows.
+PROOF_RUNNER_RECORD = "runner-record"
+PROOF_HAND_LANDED = "hand-landed-evidence"
 
 
 STATE_FILE = "loop-state.json"
