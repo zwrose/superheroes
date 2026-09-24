@@ -37,6 +37,7 @@ import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import 
 import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
 import review_findings_schema  # noqa: E402  (findings-member schema home; #1145)
 import round_phases  # noqa: E402  (verifier-verdict enum home; verification.VERDICTS re-exports same tuple)
+import claude_modes  # noqa: E402  (claude dispatch-mode vocabulary home; re-exported below)
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
@@ -44,10 +45,11 @@ REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 # literals; engine_dispatch and drift tests import this name, never restate the tuple.
 REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 
-# Claude dispatch modes — single home; engine_result_channel re-exports (CONVENTIONS §11).
-MODE_PRINT = "print"
-MODE_BACKGROUND = "background"
-CLAUDE_MODES = (MODE_PRINT, MODE_BACKGROUND)
+# Claude dispatch modes — home is claude_modes.py; engine_adapter re-exports for consumers
+# (CONVENTIONS §11); engine_result_channel re-exports from here.
+MODE_PRINT = claude_modes.MODE_PRINT
+MODE_BACKGROUND = claude_modes.MODE_BACKGROUND
+CLAUDE_MODES = claude_modes.CLAUDE_MODES
 
 # Non-print claude dispatch modes and the engines that support each. Single home for the
 # capability question; engine_result_channel maps supported pairs to delivery mechanics.
@@ -247,7 +249,11 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "engine-model-effort-conflict",
     "invalid-model-effort",
     "untokenizable",
+    "builder-prompt-missing",
 })
+
+REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
+CLAUDE_EXECUTABLE = "claude"
 
 
 def _refuse(reason, *, detail=None):
@@ -583,10 +589,10 @@ def build_argv_result(seat, role_kind, opts):
                 detail=_untokenizable_detail("claude", engine_model, effort),
             )
         if claude_mode == MODE_BACKGROUND:
-            argv = ["claude", "--bg", "--model", tok, "--effort", effort]
+            argv = [CLAUDE_EXECUTABLE, "--bg", "--model", tok, "--effort", effort]
         else:
             argv = [
-                "claude", "-p", "--model", tok, "--effort", effort,
+                CLAUDE_EXECUTABLE, "-p", "--model", tok, "--effort", effort,
                 "--output-format", "stream-json", "--verbose",
             ]
         if is_read:
@@ -595,6 +601,43 @@ def build_argv_result(seat, role_kind, opts):
             argv += ["--permission-mode", "acceptEdits", "--restricted"]
         return _ok(argv)
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
+
+
+def claude_builder_argv(token, effort, prompt):
+    """Build claude --bg argv for builder sessions. Never raises."""
+    if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
+        return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
+    if effort is not None:
+        if not isinstance(effort, str) or effort not in model_registry.effort_enum("claude"):
+            return _refuse(
+                "invalid-model-effort",
+                detail=(
+                    f"effort {effort!r} is not valid; accepted efforts: "
+                    f"{_format_valid(model_registry.effort_enum('claude'))}"
+                ),
+            )
+    if not isinstance(prompt, str) or not prompt.strip():
+        return _refuse(
+            REFUSAL_BUILDER_PROMPT_MISSING,
+            detail="builder prompt must be a non-empty string",
+        )
+    argv = [CLAUDE_EXECUTABLE, "--bg", "--model", token]
+    if effort is not None:
+        argv += ["--effort", effort]
+    argv.append(prompt)
+    return _ok(argv)
+
+
+def claude_cli_argv(args):
+    """Prefix dispatch-side claude subcommand args. Returns None when invalid. Never raises."""
+    if not isinstance(args, (list, tuple)):
+        return None
+    argv = [CLAUDE_EXECUTABLE]
+    for item in args:
+        if not isinstance(item, str) or not item:
+            return None
+        argv.append(item)
+    return argv
 
 
 def build_argv(seat, role_kind, opts):

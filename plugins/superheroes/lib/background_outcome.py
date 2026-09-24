@@ -10,6 +10,7 @@ REFUSAL_SESSION_UNLISTED = "background-session-unlisted"
 REFUSAL_TRANSCRIPT_AMBIGUOUS = "background-transcript-ambiguous"
 REFUSAL_AGENTS_UNREADABLE = "background-agents-unreadable"
 REFUSAL_SESSION_ENDED_WITHOUT_RESULT = "background-session-ended-without-result"
+REFUSAL_STOP_UNCONFIRMED = "background-stop-unconfirmed"
 
 ALL_REFUSALS = frozenset({
     REFUSAL_LAUNCH_UNACKNOWLEDGED,
@@ -18,4 +19,5 @@ ALL_REFUSALS = frozenset({
     REFUSAL_TRANSCRIPT_AMBIGUOUS,
     REFUSAL_AGENTS_UNREADABLE,
     REFUSAL_SESSION_ENDED_WITHOUT_RESULT,
+    REFUSAL_STOP_UNCONFIRMED,
 })

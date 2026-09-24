@@ -23,6 +23,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import uuid
 import posixpath
 import signal
@@ -41,11 +42,14 @@ import pilot_boundary  # noqa: E402
 import pilot_policy  # noqa: E402
 import pilot_provision  # noqa: E402
 import pilot_slot  # noqa: E402
+import claude_modes  # noqa: E402
 
 LEDGER_ROOT_ENV = "SUPERHEROES_LAUNCH_LEDGER_ROOT"
 LEDGER_DIR_NAME = "superheroes-launch-ledger"
 LEDGER_NAME = "launch-ledger.jsonl"
 SCHEMA = 1
+LAUNCH_MODE_BACKGROUND = claude_modes.MODE_BACKGROUND
+LAUNCH_MODES = (LAUNCH_MODE_BACKGROUND,)
 EVENT_KINDS = ("reserved", "started", "retry", "refused", "outcome", "amendment")
 TERMINAL_OUTCOMES = ("handback", "park", "refusal", "died")
 AMENDMENT_EVENT = "amendment"
@@ -1055,6 +1059,28 @@ def _validate_event_fields(rec):
             evidence = rec["evidence"]
             if not isinstance(evidence, str) or not evidence.strip():
                 return "fold-bad-field:started:evidence"
+        present = [k for k in ("launchMode", "backgroundId", "sessionId") if k in rec]
+        if not present:
+            pass
+        elif len(present) != 3:
+            return "fold-bad-field:started:background"
+        else:
+            launch_mode = rec["launchMode"]
+            if launch_mode not in LAUNCH_MODES:
+                return "fold-bad-field:started:launchMode"
+            background_id = rec["backgroundId"]
+            if (not isinstance(background_id, str)
+                    or not re.fullmatch(r"[0-9a-f]{8}", background_id)):
+                return "fold-bad-field:started:backgroundId"
+            session_id = rec["sessionId"]
+            if not isinstance(session_id, str) or not session_id.strip():
+                return "fold-bad-field:started:sessionId"
+            try:
+                uuid.UUID(session_id)
+            except (ValueError, AttributeError, TypeError):
+                return "fold-bad-field:started:sessionId"
+            if not session_id.startswith(background_id):
+                return "fold-bad-field:started:background"
     elif event == "retry":
         attempt = rec["attempt"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
@@ -1190,6 +1216,8 @@ def fold(records):
                 # lane that overlapped nothing and on every pre-#1054 record — the two are
                 # deliberately indistinguishable, because neither ran over an overlap.
                 "surfaceOverlap": rec.get("surfaceOverlap"),
+                "launchMode": None,
+                "backgroundId": None,
                 # Premise stack fields are absent on pre-stack records and on records whose
                 # premise omits or malforms them — the documented signal is None, not a
                 # missing key.
@@ -1245,6 +1273,10 @@ def fold(records):
             if rec["pid"] not in pids:
                 pids.append(rec["pid"])
             info["pids"] = pids
+            if "launchMode" in rec:
+                info["launchMode"] = rec["launchMode"]
+                info["backgroundId"] = rec["backgroundId"]
+                info["sessionId"] = rec["sessionId"]
         elif event == "retry":
             pass
         elif event in TERMINAL_EVENTS:
@@ -1606,6 +1638,27 @@ def _validate_started_repair(started_repair):
         evidence = started_repair["evidence"]
         if not isinstance(evidence, str) or not evidence.strip():
             return False
+    present = [k for k in ("launchMode", "backgroundId", "sessionId") if k in started_repair]
+    if not present:
+        return True
+    if len(present) != 3:
+        return False
+    launch_mode = started_repair["launchMode"]
+    if launch_mode not in LAUNCH_MODES:
+        return False
+    background_id = started_repair["backgroundId"]
+    if (not isinstance(background_id, str)
+            or not re.fullmatch(r"[0-9a-f]{8}", background_id)):
+        return False
+    session_id = started_repair["sessionId"]
+    if not isinstance(session_id, str) or not session_id.strip():
+        return False
+    try:
+        uuid.UUID(session_id)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    if not session_id.startswith(background_id):
+        return False
     return True
 
 
@@ -1736,6 +1789,10 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                 # path where the ledger was already having trouble (#1054).
                 if started_repair.get("evidence"):
                     started_record["evidence"] = started_repair["evidence"]
+                if "launchMode" in started_repair:
+                    started_record["launchMode"] = started_repair["launchMode"]
+                    started_record["backgroundId"] = started_repair["backgroundId"]
+                    started_record["sessionId"] = started_repair["sessionId"]
                 folded_repair = fold(records + [started_record])
                 if not folded_repair["ok"]:
                     return {

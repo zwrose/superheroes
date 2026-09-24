@@ -2092,6 +2092,74 @@ def test_build_argv_result_cursor_argv_unchanged():
     assert base["reason"] is None
     assert "--json" not in base["argv"]
 
+
+def test_claude_builder_argv_exact_with_effort():
+    res = EA.claude_builder_argv("sonnet", "high", "build this")
+    assert res["reason"] is None
+    assert res["argv"] == ["claude", "--bg", "--model", "sonnet", "--effort", "high", "build this"]
+
+
+def test_claude_builder_argv_exact_without_effort():
+    res = EA.claude_builder_argv("sonnet", None, "build this")
+    assert res["reason"] is None
+    assert res["argv"] == ["claude", "--bg", "--model", "sonnet", "build this"]
+    assert "--effort" not in res["argv"]
+
+
+def test_claude_builder_argv_prompt_is_last_element():
+    res = EA.claude_builder_argv("sonnet", "high", "tail prompt")
+    assert res["argv"][-1] == "tail prompt"
+
+
+def test_claude_builder_argv_omits_restricted_and_print_flags():
+    res = EA.claude_builder_argv("sonnet", "high", "prompt")
+    argv = res["argv"]
+    for flag in ("--restricted", "--permission-mode", "-p", "--session-id"):
+        assert flag not in argv
+
+
+def test_claude_builder_argv_unknown_claude_tier_refusal():
+    res = EA.claude_builder_argv("bogus", "high", "prompt")
+    assert res["reason"] == "unknown-claude-tier"
+
+
+def test_claude_builder_argv_invalid_model_effort_refusal():
+    res = EA.claude_builder_argv("sonnet", "max", "prompt")
+    assert res["reason"] == "invalid-model-effort"
+
+
+def test_claude_builder_argv_builder_prompt_missing_refusal():
+    for prompt in ("", "   ", None, 123):
+        res = EA.claude_builder_argv("sonnet", "high", prompt)
+        assert res["reason"] == "builder-prompt-missing"
+
+
+def test_claude_builder_argv_bool_token_and_non_str_effort_refusals():
+    res = EA.claude_builder_argv(True, "high", "prompt")
+    assert res["reason"] == "unknown-claude-tier"
+    res = EA.claude_builder_argv("sonnet", 123, "prompt")
+    assert res["reason"] == "invalid-model-effort"
+
+
+def test_claude_cli_argv_valid_list():
+    assert EA.claude_cli_argv(["agents", "--json"]) == ["claude", "agents", "--json"]
+
+
+def test_claude_cli_argv_empty_string_element_returns_none():
+    assert EA.claude_cli_argv(["stop", ""]) is None
+
+
+def test_claude_cli_argv_non_list_returns_none():
+    assert EA.claude_cli_argv("agents") is None
+
+
+def test_build_argv_claude_uses_claude_executable_constant():
+    res = EA.build_argv_result(
+        _seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "background"},
+    )
+    assert res["argv"][0] == EA.CLAUDE_EXECUTABLE
+
+
 def test_cursor_tool_calls_counts_distinct_call_ids():
     lines = [
         '{"type":"tool_call","call_id":"a","subtype":"started"}',

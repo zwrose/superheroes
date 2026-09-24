@@ -18331,3 +18331,207 @@ def test_review_admission_timed_out_complete_before_deadline_admits(
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
 
+
+_BO_MOD = importlib.util.spec_from_file_location(
+    "background_outcome", os.path.join(_HERE, "..", "background_outcome.py"))
+background_outcome = importlib.util.module_from_spec(_BO_MOD)
+_BO_MOD.loader.exec_module(background_outcome)
+
+
+def test_claude_cli_spawns_claude_cli_argv(monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        class Out:
+            returncode = 0
+            stdout = "[]"
+            stderr = ""
+        return Out()
+
+    monkeypatch.setattr(ED.subprocess, "run", fake_run)
+    rc, stdout, stderr = ED._claude_cli(["agents", "--json"], "/cfg", cwd="/wt")
+    assert rc == 0
+    assert captured["cmd"] == ED.engine_adapter.claude_cli_argv(["agents", "--json"])
+
+
+_CLAUDE_STOP_CALLERS_EXPECTED = frozenset(
+    {"_background_stop", "claude_session_stop_confirmed"}
+)
+
+
+def _claude_stop_caller_functions():
+    path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if not (isinstance(func, ast.Name) and func.id == "_claude_cli"):
+                continue
+            if not child.args:
+                continue
+            arg0 = child.args[0]
+            if (
+                isinstance(arg0, ast.List)
+                and arg0.elts
+                and isinstance(arg0.elts[0], ast.Constant)
+                and arg0.elts[0].value == "stop"
+            ):
+                found.add(node.name)
+    return found
+
+
+def test_claude_stop_rule_fork_enumeration():
+    found = _claude_stop_caller_functions()
+    problems = []
+    for fn in sorted(found - _CLAUDE_STOP_CALLERS_EXPECTED):
+        problems.append("claude-stop-rule-fork:%s" % fn)
+    for fn in sorted(_CLAUDE_STOP_CALLERS_EXPECTED - found):
+        problems.append("claude-stop-rule-fork-stale:%s" % fn)
+    assert problems == []
+
+
+def test_claude_cli_invalid_args_never_spawns(monkeypatch):
+    called = []
+
+    def fake_run(cmd, **kwargs):
+        called.append(cmd)
+
+    monkeypatch.setattr(ED.subprocess, "run", fake_run)
+    rc, stdout, stderr = ED._claude_cli(["stop", ""], "/cfg", cwd="/wt")
+    assert rc == 127
+    assert stderr == "claude-cli-argv-invalid"
+    assert called == []
+
+
+def test_claude_session_stop_confirmed_empty_launch_id():
+    assert ED.claude_session_stop_confirmed("", "/cfg", "/wt") == (
+        background_outcome.REFUSAL_STOP_UNCONFIRMED
+    )
+
+
+def test_claude_session_stop_confirmed_listing_not_ok(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(ED, "_claude_agents_rows", lambda *a, **k: (None, False))
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == (
+        background_outcome.REFUSAL_STOP_UNCONFIRMED
+    )
+
+
+def test_claude_session_stop_confirmed_no_row_stopped(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(ED, "_claude_agents_rows", lambda *a, **k: ([], True))
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == "stopped"
+
+
+def test_claude_session_stop_confirmed_missing_pid_unconfirmed(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1", "state": "running"}], True),
+    )
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == (
+        background_outcome.REFUSAL_STOP_UNCONFIRMED
+    )
+
+
+def test_claude_session_stop_confirmed_stopped_state_no_pid_stopped(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1", "state": "stopped"}], True),
+    )
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == "stopped"
+
+
+def test_claude_session_stop_confirmed_done_state_no_pid_stopped(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1", "state": "done"}], True),
+    )
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == "stopped"
+
+
+def test_claude_session_stop_confirmed_no_state_no_pid_unconfirmed(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1"}], True),
+    )
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == (
+        background_outcome.REFUSAL_STOP_UNCONFIRMED
+    )
+
+
+def test_claude_session_stop_confirmed_dead_pid_stopped(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1", "pid": 99999}], True),
+    )
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == "stopped"
+
+
+def test_claude_session_stop_confirmed_done_row_still_issues_stop(monkeypatch):
+    calls = []
+    done_row = [{"id": "id-done", "state": "done", "pid": 99999}]
+    monkeypatch.setattr(
+        ED, "_claude_cli",
+        lambda args, *a, **k: calls.append(list(args)) or (0, "", ""),
+    )
+    monkeypatch.setattr(ED, "_claude_agents_rows", lambda *a, **k: (done_row, True))
+    monkeypatch.setattr(
+        ED.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    ED.claude_session_stop_confirmed("id-done", "/cfg", "/wt")
+    assert calls == [["stop", "id-done"]]
+
+
+def test_claude_session_stop_confirmed_live_pid_unconfirmed(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1", "pid": 4242, "state": "running"}], True),
+    )
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == (
+        background_outcome.REFUSAL_STOP_UNCONFIRMED
+    )
+
+
+def test_claude_session_stop_confirmed_kill_oserror_unconfirmed(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1", "pid": 4242}], True),
+    )
+
+    def boom(pid, sig):
+        raise OSError("nope")
+
+    monkeypatch.setattr(ED.os, "kill", boom)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == (
+        background_outcome.REFUSAL_STOP_UNCONFIRMED
+    )
+
+
+def test_review_terminal_forfeit_surfaces_dropped_cause():
+    terminal = ED._review_terminal_forfeit(
+        "codex", ED.dispatch_outcome.REASON_FORFEITED, 2,
+        dropped_cause="stdout-truncated",
+    )
+    assert terminal["droppedCause"] == "stdout-truncated"
+

@@ -848,10 +848,12 @@ _BACKGROUND_POLL_INTERVAL = 2
 
 def _claude_cli(args, config_dir, cwd=None, timeout=_CLAUDE_CLI_DEFAULT_TIMEOUT):
     """Single chokepoint for claude agents/stop reads. Never raises. (#1273)"""
-    env = _scrub_env()
+    env = launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,))
     if isinstance(config_dir, str) and config_dir:
         env["CLAUDE_CONFIG_DIR"] = config_dir
-    cmd = ["claude"] + list(args)
+    cmd = engine_adapter.claude_cli_argv(args)
+    if cmd is None:
+        return 127, "", "claude-cli-argv-invalid"
     try:
         out = subprocess.run(
             cmd,
@@ -919,6 +921,56 @@ def _claude_agent_row_for_launch(rows, launch_id):
         if row_id == launch_id:
             return row
     return None
+
+
+def _stop_confirmed_pid_dead(row):
+    """True when row pid is dead, False when live or unusable, None on kill uncertainty. Never raises."""
+    if not isinstance(row, dict):
+        return True
+    pid = row.get("pid")
+    if pid is None or not isinstance(pid, int) or pid < 2:
+        state = row.get("state")
+        if state in ("stopped", "done"):
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    except OSError:
+        return None
+    return False
+
+
+def claude_session_stop_confirmed(launch_id, config_dir, cwd):
+    """Stop a session and confirm the pid ended. Never raises.
+
+    Fork of _background_stop (claude-stop-rule-fork): unconditional stop plus
+    row-gone-or-pid-dead confirmation vs _background_stop's conditional pre-stop
+    and state-based confirmation. Closes when layer 4a-2 wires the launcher to
+    this function and decides whether _background_stop delegates to it;
+    test_claude_stop_rule_fork_enumeration pins both homes.
+    """
+    if not isinstance(launch_id, str) or not launch_id:
+        return background_outcome.REFUSAL_STOP_UNCONFIRMED
+    _rc, _stdout, _stderr = _claude_cli(["stop", launch_id], config_dir, cwd=cwd)
+    for poll in range(6):
+        rows, listing_ok = _claude_agents_rows(config_dir, cwd)
+        if not listing_ok:
+            return background_outcome.REFUSAL_STOP_UNCONFIRMED
+        row = _claude_agent_row_for_launch(rows, launch_id)
+        if row is None:
+            return "stopped"
+        dead = _stop_confirmed_pid_dead(row)
+        if dead is True:
+            return "stopped"
+        if dead is None:
+            return background_outcome.REFUSAL_STOP_UNCONFIRMED
+        if poll < 5:
+            _SLEEP(0.5)
+    return background_outcome.REFUSAL_STOP_UNCONFIRMED
 
 
 def _session_id_path_safe(session_id):
@@ -990,6 +1042,11 @@ def _read_session_transcript_rows(config_dir, session_id):
     except OSError:
         return [], paths, file_size
     return rows, paths, file_size
+
+
+claude_agents_rows = _claude_agents_rows
+claude_agent_row_for_launch = _claude_agent_row_for_launch
+read_session_transcript_rows = _read_session_transcript_rows
 
 
 def _scrub_native_payload(obj):
@@ -1090,7 +1147,15 @@ def _result_delivery_gate_refusal():
 
 
 def _background_stop(launch_id, config_dir, cwd):
-    """Stop a background session and confirm it ended. Returns stop outcome token."""
+    """Stop a background session and confirm it ended. Returns stop outcome token.
+
+    Fork of claude_session_stop_confirmed (claude-stop-rule-fork): conditional
+    pre-stop and state-based confirmation vs claude_session_stop_confirmed's
+    unconditional stop and row-gone-or-pid-dead confirmation. Closes when layer
+    4a-2 wires the launcher to claude_session_stop_confirmed and decides whether
+    this function delegates to it; test_claude_stop_rule_fork_enumeration pins
+    both homes.
+    """
     if not isinstance(launch_id, str) or not launch_id:
         return "stop-unconfirmed"
     rows_before, ok_before = _claude_agents_rows(config_dir, cwd)
@@ -5455,7 +5520,7 @@ def _stdout_capped_forfeit(engine, observed_bytes, *, run_dir_real=None, state=N
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
                             investigated_rejected=None, investigated_rejected_records=None,
-                            payload_shape=None, detail=None):
+                            payload_shape=None, detail=None, dropped_cause=None):
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         terminal = {
             "ok": False,
@@ -5491,6 +5556,8 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
         result["payloadShape"] = payload_shape
     if detail is not None:
         result["detail"] = detail
+    if isinstance(dropped_cause, str) and dropped_cause:
+        result["droppedCause"] = dropped_cause
     return result
 
 
@@ -5834,7 +5901,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         return _fold_run(run_dir_real, state, _with_run_fields(
                             {"ok": False, "terminal": True,
                              "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                             "detail": "background-stop-unconfirmed",
+                             "detail": background_outcome.REFUSAL_STOP_UNCONFIRMED,
                              "attempts": latest, "forfeited": False},
                             run_dir=run_dir_real, argv=argv,
                         ))
@@ -5865,6 +5932,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         investigated_rejected_records=grade.get("investigatedRejectedRecords"),
                         payload_shape=grade.get("payloadShape"),
                         detail=grade.get("detail"),
+                        dropped_cause=grade.get("droppedCause"),
                     )
                     view = opened.get("viewMeta")
                     if view:
