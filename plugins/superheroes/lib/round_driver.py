@@ -2425,62 +2425,10 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
             if isinstance(eng, str) and eng == vendor:
                 matching.append(probe)
 
-        # axis: every probe is normalized before status — self-asserted outcome cannot certify alone
-        normalized = []
-        for probe in matching:
-            outcome, fault = canary_outcome.normalize(probe)
-            normalized.append((probe, outcome, fault))
-
-        dead = []
-        outcome_failed = []
-        plant_undetected = []
-        passing = []
-        for probe, outcome, fault in normalized:
-            if canary_outcome.is_pass(outcome):
-                passing.append((probe, outcome, fault))
-            elif outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
-                plant_undetected.append((probe, outcome, fault))
-            elif outcome in _CANARY_DISPATCH_FAILURE_OUTCOMES:
-                if probe.get("engaged") is True:
-                    outcome_failed.append((probe, outcome, fault))
-                else:
-                    dead.append((probe, outcome, fault))
-            elif outcome in _CANARY_DEAD_OUTCOMES:
-                dead.append((probe, outcome, fault))
-
-        if dead:
-            deciding, _, fault = sorted(dead, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "dead"
-        elif outcome_failed:
-            deciding, _, fault = sorted(
-                outcome_failed, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "outcome-failed"
-        elif plant_undetected:
-            deciding, _, fault = sorted(
-                plant_undetected, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = canary_outcome.OUTCOME_PLANT_UNDETECTED
-        elif passing:
-            deciding, _, fault = sorted(passing, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "proven"
-        else:
-            deciding = None
-            fault = None
-            st = "unproven"
-
-        if deciding is not None:
-            det = deciding.get("detail")
-            probe_detail = det if isinstance(det, str) else None
-            if fault:
-                detail_s = fault
-                if probe_detail:
-                    detail_s = "%s; %s" % (fault, probe_detail)
-            else:
-                detail_s = probe_detail
-            ev = deciding.get("evidence")
-            evidence = ev if isinstance(ev, dict) else None
-        else:
-            detail_s = None
-            evidence = None
+        judged = _canary_judge_vendor_probes(matching)
+        st = judged["status"]
+        detail_s = judged["detail"]
+        evidence = judged["evidence"]
 
         by_vendor[vendor] = {
             "status": st, "seats": dims_v, "detail": detail_s, "evidence": evidence,
@@ -2528,33 +2476,77 @@ def _normalize_canary_probes(canary_raw):
     return []
 
 
-def _control_probe_outcome_precedence():
-    """Worst-first ordering for duplicate engine tokens (matches canary_liveness precedence)."""
-    dispatch = sorted(
-        o for o in canary_outcome.ALL_OUTCOMES
-        if o not in canary_outcome.PASS_OUTCOMES
-        and o != canary_outcome.OUTCOME_NOT_ENGAGED
-        and o != canary_outcome.OUTCOME_PLANT_UNDETECTED)
-    return ([canary_outcome.OUTCOME_NOT_ENGAGED]
-            + dispatch
-            + [canary_outcome.OUTCOME_PLANT_UNDETECTED, canary_outcome.OUTCOME_OK])
+def _canary_judge_vendor_probes(matching):
+    """Worst probe for one vendor — shared by ``canary_liveness`` and ``_build_control_probe_record``."""
+    # axis: every probe is normalized before status — self-asserted outcome cannot certify alone
+    normalized = []
+    for probe in matching:
+        if not isinstance(probe, dict):
+            continue
+        outcome, fault = canary_outcome.normalize(probe)
+        normalized.append((probe, outcome, fault))
 
+    dead = []
+    outcome_failed = []
+    plant_undetected = []
+    passing = []
+    for probe, outcome, fault in normalized:
+        if canary_outcome.is_pass(outcome):
+            passing.append((probe, outcome, fault))
+        elif outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
+            plant_undetected.append((probe, outcome, fault))
+        elif outcome in _CANARY_DISPATCH_FAILURE_OUTCOMES:
+            if probe.get("engaged") is True:
+                outcome_failed.append((probe, outcome, fault))
+            else:
+                dead.append((probe, outcome, fault))
+        elif outcome in _CANARY_DEAD_OUTCOMES:
+            dead.append((probe, outcome, fault))
 
-_CONTROL_PROBE_OUTCOME_RANK = {
-    token: idx for idx, token in enumerate(_control_probe_outcome_precedence())
-}
+    if dead:
+        deciding, outcome_token, fault = sorted(
+            dead, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = "dead"
+    elif outcome_failed:
+        deciding, outcome_token, fault = sorted(
+            outcome_failed, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = "outcome-failed"
+    elif plant_undetected:
+        deciding, outcome_token, fault = sorted(
+            plant_undetected, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = canary_outcome.OUTCOME_PLANT_UNDETECTED
+    elif passing:
+        deciding, outcome_token, fault = sorted(
+            passing, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = "proven"
+    else:
+        deciding = None
+        outcome_token = None
+        fault = None
+        st = "unproven"
 
+    if deciding is not None:
+        det = deciding.get("detail")
+        probe_detail = det if isinstance(det, str) else None
+        if fault:
+            detail_s = fault
+            if probe_detail:
+                detail_s = "%s; %s" % (fault, probe_detail)
+        else:
+            detail_s = probe_detail
+        ev = deciding.get("evidence")
+        evidence = ev if isinstance(ev, dict) else None
+    else:
+        detail_s = None
+        evidence = None
 
-def _control_probe_worse_token(left, right):
-    if left == "malformed" or right == "malformed":
-        return "malformed"
-    if left is None:
-        return right
-    if right is None:
-        return left
-    lr = _CONTROL_PROBE_OUTCOME_RANK.get(left, 999)
-    rr = _CONTROL_PROBE_OUTCOME_RANK.get(right, 999)
-    return left if lr <= rr else right
+    return {
+        "status": st,
+        "detail": detail_s,
+        "evidence": evidence,
+        "deciding": deciding,
+        "outcomeToken": outcome_token,
+    }
 
 
 def _build_control_probe_record(canary_raw):
@@ -2568,6 +2560,7 @@ def _build_control_probe_record(canary_raw):
     else:
         return {"submitted": True, "vendors": {"<malformed-0>": "malformed"}}
     vendors = {}
+    by_engine = {}
     for index, probe in indexed:
         if not isinstance(probe, dict):
             vendors["<malformed-%d>" % index] = "malformed"
@@ -2576,8 +2569,12 @@ def _build_control_probe_record(canary_raw):
         if not isinstance(engine, str) or not engine:
             vendors["<malformed-%d>" % index] = "malformed"
             continue
-        token, _fault = canary_outcome.normalize(probe)
-        vendors[engine] = _control_probe_worse_token(vendors.get(engine), token)
+        by_engine.setdefault(engine, []).append(probe)
+    for engine, matching in by_engine.items():
+        judged = _canary_judge_vendor_probes(matching)
+        token = judged.get("outcomeToken")
+        if token is not None:
+            vendors[engine] = token
     return {"submitted": True, "vendors": {k: vendors[k] for k in sorted(vendors)}}
 
 

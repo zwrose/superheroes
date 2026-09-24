@@ -237,7 +237,7 @@ def test_control_probe_shapes_per_state():
             "detectedPlant": False, "evidence": {}, "detail": "",
         },
     ]))
-    assert st2["rounds"]["1"]["controlProbe"]["vendors"]["codex"] == "forfeited"
+    assert st2["rounds"]["1"]["controlProbe"]["vendors"]["codex"] == "vacuous"
 
     st3 = RD.new_state(_cfg(leg="panel"))
     RD._fold_panel(st3, st3["config"], _cross_vendor_artifact([]))
@@ -260,6 +260,29 @@ def test_control_probe_shapes_per_state():
     st5 = RD.new_state(_cfg(leg="panel"))
     RD._fold_panel(st5, st5["config"], art)
     assert st5["rounds"]["1"]["controlProbe"] == first
+
+
+def test_control_probe_duplicate_codex_matches_canary_liveness_both_orders():
+    engaged_failure = {
+        "engine": "codex", "outcome": "forfeited", "engaged": True,
+        "detectedPlant": False, "evidence": {}, "detail": "dispatch fail",
+    }
+    dead_probe = {
+        "engine": "codex", "outcome": "vacuous", "engaged": False,
+        "detectedPlant": False, "evidence": {}, "detail": "not engaged",
+    }
+    dims = list(RD.DIMENSIONS)
+    seat_map = _seat_map_vendors({d: "claude" for d in dims})
+    seat_map["seats"]["code-reviewer"] = {"vendor": "codex"}
+    seats = {d: {"findings": []} for d in dims}
+    status = {d: "run" for d in dims}
+    for canary in ([engaged_failure, dead_probe], [dead_probe, engaged_failure]):
+        live = RD.canary_liveness(dims, status, seats, seat_map, {}, canary)
+        judged = RD._canary_judge_vendor_probes(
+            [p for p in canary if isinstance(p, dict) and p.get("engine") == "codex"])
+        record = RD._build_control_probe_record(canary)
+        assert live["byVendor"]["codex"]["status"] == "dead"
+        assert record["vendors"]["codex"] == judged["outcomeToken"]
 
 
 def test_malformed_canary_assemble_not_refused(tmp_path):

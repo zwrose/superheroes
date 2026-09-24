@@ -423,26 +423,25 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > the seat engaged. It runs **after certification**, never during a panel fold and never before the
 > session reaches a **certified** terminal state — uncertified reviews are never probed.
 >
-> **Sampling decision (durable control plane).** A review is **sampled** only when the **order that
-> launched it** says so — the advisor picks the sample at wave preflight and stamps `sampled: true`
-> or `sampled: false` on that launching order. The loop does not infer sampling from panel state.
-> After the **terminal receipt** exists, the orchestrator writes `$SESSION_DIR/control-probe-sample.json`:
-> `{"sampled": <bool from the launching order>, "receiptTerminalState": <the receipt's terminalState>,
-> "probes": [<seat_canary probe JSON per cross-vendor vendor>]}` — `probes` is empty when `sampled` is
-> false. Run `seat_canary.py probe` **only when** `sampled` is true **and** `receiptTerminalState` is
-> `certified`. That file is **never** read into a verdict and **never** edits the receipt.
+> **Sampling — outside the loop.** The review loop **does not decide** whether a review is sampled and
+> **does not record** that decision. No panel fold runs the probe and no loop artifact carries a sampling
+> flag. After a review **certifies**, whoever runs the post-cert competence probe decides whether this
+> review is in the sample (for example the advisor at wave preflight or at vet). When a sample runs,
+> save the result beside the receipt as `$SESSION_DIR/control-probe-sample.json`: the probe JSON per
+> cross-vendor vendor plus the receipt's `terminalState`. **No file means no sample ran.** That file is
+> **never** read into a verdict and **never** edits the receipt. Because the probe is not a gate, a lost
+> or skipped sample costs one competence data point and never a certification — there is no durable
+> in-loop sampling flag.
 >
 > **Panel fold — no probe, no `canaryResult`.** On every loop that follows this doc, no panel fold
 > runs the probe and no panel artifact carries `canaryResult`. The driver's `controlProbe` fold stays a
 > **tolerant recorder** for a legacy `canaryResult` when one is still submitted on an older path; when
 > absent it records `controlProbe: {"submitted": false, "vendors": {}}`. Use
-> `control-probe-sample.json` to audit whether a review was sampled and which post-cert probes ran —
-> not the receipt's `controlProbe` alone.
+> `control-probe-sample.json` to audit which post-cert probes ran — not the receipt's `controlProbe` alone.
 >
-> **Post-certification probe selection.** When sampled and certified, run the probe **once per distinct
-> cross-vendor vendor** among seats that **ran** with zero findings on that vendor's seat(s). A review
-> that is **not** sampled runs no probe (`control-probe-sample.json` with `"sampled": false`, empty
-> `probes`). Select and deduplicate canaries using the same effective-vendor rule as
+> **Post-certification probe selection.** When a sample runs on a **certified** review, run the probe
+> **once per distinct cross-vendor vendor** among seats that **ran** with zero findings on that vendor's
+> seat(s). Select and deduplicate canaries using the same effective-vendor rule as
 > `round_driver.canary_liveness` —
 > trusted `ranManifest` first, configured vendor otherwise — and resolve that effective vendor's
 > model and effort for the seat tier before probing. Exclude seats whose status is not `run`. A seat
@@ -454,7 +453,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-> # Run only after terminal receipt with receiptTerminalState certified and launching order sampled.
+> # Run only after a certified terminal receipt, when the operator chose to sample this review.
 > # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object from
 > # the certified session's round-1 panel fold). $PANEL_SEAT_STATUS — per-dimension status map
 > # (`run` / `missing` / etc.) for that round. $RAN_MANIFEST — trusted `{<dim>: <vendor>}` record
