@@ -1,6 +1,6 @@
 # layer4a ruling evidence bite-proof (issue #1272, WO-D2)
 
-Re-taken at head 018f5240.
+Re-taken at head bf58dd90 (D6 added at the WO-P1 commit).
 
 | ID | guarded element | proving test |
 |---|---|---|
@@ -9,6 +9,7 @@ Re-taken at head 018f5240.
 | D3 | `_validate_execution_evidence` model type check | `test_edge9_bad_model_value_refuses_malformed[]` |
 | D4 | `_independence_block` receipt model | `test_receipt_audit_seat_model_equals_runner_engine_model` |
 | D5 | `_journal_envelope_model_refusal` | `test_journal_envelope_execution_model_mismatch_refuses` |
+| D6 | `_journal_envelope_model_refusal` envelope-model-absent branch | `test_journal_model_with_envelope_model_absent_refuses` |
 
 ## D1 — `_assemble_dispatch_evidence` adoption block
 
@@ -456,4 +457,48 @@ def _journal_envelope_model_refusal(obs, session_dir, seat_entry):
 ```
 .                                                                        [100%]
 1 passed in 0.40s
+```
+
+## D6 — `_journal_envelope_model_refusal` envelope-model-absent branch
+
+**Axis:** journal `executionEvidence.model` present while stored envelope `executionEvidence` has no `model` key must refuse `journal-envelope-mismatch`.
+
+**Guarded code:** `round_certification._journal_envelope_model_refusal` (branch b: `not envelope_has_model`)
+
+**Neutralization:**
+
+```python
+    if envelope_has_model and journal_model != envelope_model:
+```
+
+**Detector:** `test_journal_model_with_envelope_model_absent_refuses`
+
+**Red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_journal_model_with_envelope_model_absent_refuses _____________
+
+    def test_journal_model_with_envelope_model_absent_refuses(tmp_path):
+        """Branch (b): journal carries executionEvidence.model; stored envelope has no model key."""
+        session_dir = _audit_model_cert_session(
+            tmp_path, journal_model="journal-model", envelope_model=None
+        )
+        receipt, refusal = RC.certify(session_dir)
+>       assert receipt is None
+E       AssertionError: assert {'baseGuard': 'checked-stat-bound', 'certification': {'base': 'fetched', 'fullPanel': True, 'independence': 'independe...tificationShape': 'full-panel-confirmed', 'decisions': [{'detail': 'certified', 'kind': 'converged', 'round': 1}], ...} is None
+```
+
+**Restore (quoted restored lines):**
+
+```python
+    if not envelope_has_model or journal_model != envelope_model:
+```
+
+**Green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.43s
 ```

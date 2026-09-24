@@ -581,6 +581,17 @@ def test_journal_envelope_execution_model_mismatch_refuses(tmp_path):
     assert refusal["bindingFailure"] == "journal-envelope-mismatch"
 
 
+def test_journal_model_with_envelope_model_absent_refuses(tmp_path):
+    """Branch (b): journal carries executionEvidence.model; stored envelope has no model key."""
+    session_dir = _audit_model_cert_session(
+        tmp_path, journal_model="journal-model", envelope_model=None
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["bindingFailure"] == "journal-envelope-mismatch"
+
+
 def test_audit_seat_model_from_envelope_execution_evidence(tmp_path):
     """independence.auditSeats[].model reads envelope executionEvidence only."""
     session_dir = _audit_model_cert_session(tmp_path, envelope_model="envelope-model")

@@ -4,16 +4,16 @@ Re-taken at head 3b1ee864 (plus this order's changes).
 
 | ID | guarded element | proving test |
 |---|---|---|
-| C1 | channel condition (`channel == "file"`) | `test_l4a_edge4_engine_stdout_without_telemetry_refuses` |
-| C2 | manifest-sha verification in `_verified_orders_manifest` | `test_l4a_edge6_tampered_manifest_sha_refuses` |
+| C1 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** channel condition (`channel == "file"`) | `test_l4a_edge4_engine_stdout_without_telemetry_refuses` |
+| C2 | manifest-sha verification in `_verified_orders_manifest` | `test_l4a_reuse_orders_emitted_roster_tampered_manifest` |
 | C3 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** post-loop exclusion floor (`_exclusion_floor_refusal`) | `test_l4a_host_channel_refusal_census[no_panel_verifiers-phase_specs0-True]` |
 | C4 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** `uncertifiedSeats` list check in `_validate_receipt_additions` | `test_l4a_edge11_no_uncertified_seats_key_on_receipt` |
 | C5 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** `certifiedPanel` bool check | `test_l4a_edge11_no_certified_panel_validator` |
 | C6 | `auditSeats[].model` check | `test_l4a_edge11_bad_audit_model_refuses` |
 | C7 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** hand-landed floor exemption | `test_l4a_hand_landed_panel_plus_host_refuses_host_seat` |
-| C8 | copied seat-map rows (defect-2 fix) | `test_l4a_t_nomutate_build_receipt_does_not_mutate_state_seat_map_rows` |
+| C8 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** copied seat-map rows (defect-2 fix) | `test_l4a_t_nomutate_build_receipt_does_not_mutate_state_seat_map_rows` |
 | C9 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** `certifiedPanel` provenance label | `test_l4a_seat_map_injected_keys_provenance_census` |
-| C10 | binding condition (`binding == "execution-evidence-absent"`) | `test_l4a_edge10b_host_present_evidence_wrong_head_refuses` |
+| C10 | **RETIRED — element removed by owner ruling 1 = b (PR #1403 comment 5810832062)** binding condition (`binding == "execution-evidence-absent"`) | `test_l4a_edge10b_host_present_evidence_wrong_head_refuses` |
 | C11 | per-seat `unrun-review` refusal for host panel seat (`check_unrun_review`) | `test_l4a_certify_refuses_host_panel_seat` |
 
 ## C1 — channel condition
@@ -87,52 +87,31 @@ if phase not in (P_AUDITS, P_FIXER) and channel == "file":
 
 **Guarded code:** `round_certification._verified_orders_manifest`
 
+Prior detector `test_l4a_edge6_tampered_manifest_sha_refuses` is vacuous after ruling 1 = b (`check_unrun_review` no longer reads the manifest).
+
 **Neutralization:**
 
 ```python
 if False:
 ```
 
-**Detector:** `test_l4a_edge6_tampered_manifest_sha_refuses`
+**Detector:** `test_l4a_reuse_orders_emitted_roster_tampered_manifest`
 
 **Red:**
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_________________ test_l4a_edge6_tampered_manifest_sha_refuses _________________
+____________ test_l4a_reuse_orders_emitted_roster_tampered_manifest ____________
 
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-5348/test_l4a_edge6_tampered_manife0')
-
-    def test_l4a_edge6_tampered_manifest_sha_refuses(tmp_path):
-        seat = "code-reviewer"
-        row = _dispatch_observed_no_telemetry_row(seat, RP.P_PANEL)
-        session_dir, manifest = _session_with_manifest(
-            tmp_path,
-            seat=seat,
-            phase=RP.P_PANEL,
-            channel="file",
-            vendor="claude",
-            journal_lines=[row],
-            envelopes=[{"seat": seat, "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
-        )
-        manifest["seats"][record_paths.storage_key(seat, 0)]["vendor"] = "tampered"
+    def test_l4a_reuse_orders_emitted_roster_tampered_manifest(tmp_path):
+        manifest = _minimal_orders_manifest()
+        session_dir = write_session(tmp_path, journal_lines=[])
         _write_orders_manifest(session_dir, manifest)
-        ctx, err = RC._load_context(session_dir)
-        assert err is None
-        refusal = RC.check_unrun_review(ctx)
-        assert refusal is not None
-        assert refusal["class"] == "unrun-review"
->       assert refusal["artifact"] == seat
-E       AssertionError: assert 'driver-journal.jsonl' == 'code-reviewer'
-E         
-E         - code-reviewer
-E         + driver-journal.jsonl
-
-plugins/superheroes/lib/tests/test_layer4a_uncertified_seats_1272.py:312: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_layer4a_uncertified_seats_1272.py::test_l4a_edge6_tampered_manifest_sha_refuses
-1 failed in 0.19s
+        event = _orders_emitted_journal_row("b" * 64)
+        roster, refusal = RC._orders_emitted_roster_or_refusal(session_dir, event)
+>       assert roster is None
+E       AssertionError: assert [('security-reviewer', 0)] is None
 ```
 
 **Restore (quoted restored lines):**
@@ -145,7 +124,7 @@ if computed_sha != manifest_sha:
 
 ```
 .                                                                        [100%]
-1 passed in 0.17s
+1 passed in 0.18s
 ```
 
 ## C3 — post-loop exclusion floor
