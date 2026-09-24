@@ -177,8 +177,22 @@ above, plus the shared native family `native-result-missing`, `native-result-ove
 `marker-channel-retired`; the adapter
 refusals `unregistered-engine-model`, `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
 
-Not in this release: the launcher's hand-built argv retiring into the adapter, the watcher and
-the steer channel.
+### Builder launch
+
+Builders stay on `claude -p`. The launcher builds the builder command through
+`engine_adapter.claude_builder_argv(token, session_id, prompt)` — the one home for every claude
+command — whose argv is unchanged (`claude --model <tok> --session-id <uuid> -p <prompt>`; effort
+remains pinned through `CLAUDE_CODE_EFFORT_LEVEL`). A caller of `claude_builder_argv` meets the
+signature without `effort` or `--bg` and the refusal `builder-session-id-invalid`.
+
+`launcher.py canary --repo-root <r> --launch-id <id>` reports whether a builder lane is engaged from
+tool calls in that lane's own session transcript. On success the JSON carries `ok`, `reason` (null),
+`launchId`, `sessionId`, `configDir`, `transcriptPath`, `toolCalls`, `truncated`, and `engaged`.
+Refusal tokens: `canary-ledger-unreadable:<state>`, `canary-ledger-fold-refused:<reason>`,
+`canary-lane-unknown`, `canary-session-id-absent`, `canary-config-dir-absent`,
+`canary-transcript-missing`, `canary-transcript-ambiguous`, `canary-transcript-unreadable`,
+`canary-transcript-truncated`. A running builder is steered by a message to its registered session
+name. Background mode remains a review-seat mode only (`--claude-mode background`).
 
 ### Astra and the codex role pin
 

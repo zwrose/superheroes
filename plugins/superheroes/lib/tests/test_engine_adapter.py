@@ -2093,52 +2093,67 @@ def test_build_argv_result_cursor_argv_unchanged():
     assert "--json" not in base["argv"]
 
 
-def test_claude_builder_argv_exact_with_effort():
-    res = EA.claude_builder_argv("sonnet", "high", "build this")
+_BUILDER_SESSION_ID = "550e8400-e29b-41d4-a716-446655440000"
+
+
+def test_claude_builder_argv_exact_argv():
+    res = EA.claude_builder_argv("sonnet", _BUILDER_SESSION_ID, "build this")
     assert res["reason"] is None
-    assert res["argv"] == ["claude", "--bg", "--model", "sonnet", "--effort", "high", "build this"]
+    assert res["argv"] == [
+        "claude", "--model", "sonnet", "--session-id", _BUILDER_SESSION_ID, "-p", "build this",
+    ]
 
 
-def test_claude_builder_argv_exact_without_effort():
-    res = EA.claude_builder_argv("sonnet", None, "build this")
-    assert res["reason"] is None
-    assert res["argv"] == ["claude", "--bg", "--model", "sonnet", "build this"]
-    assert "--effort" not in res["argv"]
-
-
-def test_claude_builder_argv_prompt_is_last_element():
-    res = EA.claude_builder_argv("sonnet", "high", "tail prompt")
-    assert res["argv"][-1] == "tail prompt"
-
-
-def test_claude_builder_argv_omits_restricted_and_print_flags():
-    res = EA.claude_builder_argv("sonnet", "high", "prompt")
+def test_claude_builder_argv_omits_bg_effort_and_restricted():
+    res = EA.claude_builder_argv("sonnet", _BUILDER_SESSION_ID, "prompt")
     argv = res["argv"]
-    for flag in ("--restricted", "--permission-mode", "-p", "--session-id"):
+    for flag in ("--bg", "--effort", "--restricted"):
         assert flag not in argv
 
 
 def test_claude_builder_argv_unknown_claude_tier_refusal():
-    res = EA.claude_builder_argv("bogus", "high", "prompt")
+    res = EA.claude_builder_argv("bogus", _BUILDER_SESSION_ID, "prompt")
+    assert res["reason"] == "unknown-claude-tier"
+    res = EA.claude_builder_argv(True, _BUILDER_SESSION_ID, "prompt")
     assert res["reason"] == "unknown-claude-tier"
 
 
-def test_claude_builder_argv_invalid_model_effort_refusal():
-    res = EA.claude_builder_argv("sonnet", "max", "prompt")
-    assert res["reason"] == "invalid-model-effort"
+@pytest.mark.parametrize(
+    "session_id",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param("not-a-uuid", id="not-a-uuid"),
+        pytest.param("550E8400-E29B-41D4-A716-446655440000", id="uppercase"),
+        pytest.param("{550e8400-e29b-41d4-a716-446655440000}", id="braced"),
+    ],
+)
+def test_claude_builder_argv_session_id_invalid(session_id):
+    res = EA.claude_builder_argv("sonnet", session_id, "prompt")
+    assert res["reason"] == "builder-session-id-invalid"
 
 
-def test_claude_builder_argv_builder_prompt_missing_refusal():
-    for prompt in ("", "   ", None, 123):
-        res = EA.claude_builder_argv("sonnet", "high", prompt)
-        assert res["reason"] == "builder-prompt-missing"
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace"),
+    ],
+)
+def test_claude_builder_argv_builder_prompt_missing_refusal(prompt):
+    res = EA.claude_builder_argv("sonnet", _BUILDER_SESSION_ID, prompt)
+    assert res["reason"] == "builder-prompt-missing"
 
 
-def test_claude_builder_argv_bool_token_and_non_str_effort_refusals():
-    res = EA.claude_builder_argv(True, "high", "prompt")
+def test_claude_builder_argv_refusal_order_token_before_session_id():
+    res = EA.claude_builder_argv("bogus", "not-a-uuid", "prompt")
     assert res["reason"] == "unknown-claude-tier"
-    res = EA.claude_builder_argv("sonnet", 123, "prompt")
-    assert res["reason"] == "invalid-model-effort"
+
+
+def test_claude_builder_argv_refusal_order_session_id_before_prompt():
+    res = EA.claude_builder_argv("sonnet", "not-a-uuid", "   ")
+    assert res["reason"] == "builder-session-id-invalid"
 
 
 def test_claude_cli_argv_valid_list():

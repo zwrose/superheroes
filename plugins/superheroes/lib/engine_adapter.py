@@ -14,6 +14,7 @@ import re
 import stat as _stat
 import subprocess
 import sys
+import uuid
 from collections import namedtuple
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -250,9 +251,11 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "invalid-model-effort",
     "untokenizable",
     "builder-prompt-missing",
+    "builder-session-id-invalid",
 })
 
 REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
+REFUSAL_BUILDER_SESSION_ID_INVALID = "builder-session-id-invalid"
 CLAUDE_EXECUTABLE = "claude"
 
 
@@ -603,28 +606,32 @@ def build_argv_result(seat, role_kind, opts):
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
 
 
-def claude_builder_argv(token, effort, prompt):
-    """Build claude --bg argv for builder sessions. Never raises."""
+def claude_builder_argv(token, session_id, prompt):
+    """Build the print-mode claude argv for a builder session. Never raises."""
     if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
         return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
-    if effort is not None:
-        if not isinstance(effort, str) or effort not in model_registry.effort_enum("claude"):
-            return _refuse(
-                "invalid-model-effort",
-                detail=(
-                    f"effort {effort!r} is not valid; accepted efforts: "
-                    f"{_format_valid(model_registry.effort_enum('claude'))}"
-                ),
-            )
+    if not isinstance(session_id, str):
+        return _refuse(
+            REFUSAL_BUILDER_SESSION_ID_INVALID,
+            detail="a canonical lowercase UUID string",
+        )
+    try:
+        canonical = str(uuid.UUID(session_id))
+    except (ValueError, AttributeError, TypeError):
+        canonical = None
+    if canonical is None or canonical != session_id:
+        return _refuse(
+            REFUSAL_BUILDER_SESSION_ID_INVALID,
+            detail="a canonical lowercase UUID string",
+        )
     if not isinstance(prompt, str) or not prompt.strip():
         return _refuse(
             REFUSAL_BUILDER_PROMPT_MISSING,
             detail="builder prompt must be a non-empty string",
         )
-    argv = [CLAUDE_EXECUTABLE, "--bg", "--model", token]
-    if effort is not None:
-        argv += ["--effort", effort]
-    argv.append(prompt)
+    argv = [
+        CLAUDE_EXECUTABLE, "--model", token, "--session-id", session_id, "-p", prompt,
+    ]
     return _ok(argv)
 
 
