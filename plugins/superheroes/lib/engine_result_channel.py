@@ -47,13 +47,27 @@ _CHANNEL_BY_ENGINE = {
     "claude": CHANNEL_NATIVE,
 }
 
+MODE_PRINT = engine_adapter.MODE_PRINT
+MODE_BACKGROUND = engine_adapter.MODE_BACKGROUND
+CLAUDE_MODES = engine_adapter.CLAUDE_MODES
+
 RESULT_DELIVERY_ARGV = "argv"      # the shell appends -o <path> --output-schema <schema>
 RESULT_DELIVERY_PROMPT = "prompt"  # the shell names <path> in a per-attempt prompt block
 RESULT_DELIVERY_STDOUT = "stdout"  # the shell passes --json-schema <schema> on argv; the runner materializes the final result event's structured_output to the result path
+RESULT_DELIVERY_TRANSCRIPT = "transcript"  # the shell reads the typed result from background transcript rows
+RESULT_DELIVERY_MEMBERS = frozenset({
+    RESULT_DELIVERY_ARGV,
+    RESULT_DELIVERY_PROMPT,
+    RESULT_DELIVERY_STDOUT,
+    RESULT_DELIVERY_TRANSCRIPT,
+})
 _RESULT_DELIVERY_BY_ENGINE = {
     "codex": RESULT_DELIVERY_ARGV,
     "cursor": RESULT_DELIVERY_PROMPT,
     "claude": RESULT_DELIVERY_STDOUT,
+}
+_RESULT_DELIVERY_BY_ENGINE_MODE = {
+    ("claude", MODE_BACKGROUND): RESULT_DELIVERY_TRANSCRIPT,
 }
 
 RESULT_FILE_LINE_PREFIX = "Result file (write exactly this path; nothing else is graded): "
@@ -169,20 +183,48 @@ def channel_for(engine):
     return _CHANNEL_BY_ENGINE[engine]
 
 
-def result_delivery(engine):
+def claude_mode_ok(mode):
+    """True when mode is absent or one of the declared claude dispatch modes."""
+    return mode is None or mode in CLAUDE_MODES
+
+
+def normalize_claude_mode(mode):
+    """Treat omitted journal mode as print for continuation comparison (#1273)."""
+    if mode is None:
+        return MODE_PRINT
+    return mode
+
+
+def result_delivery(engine, mode=None):
     """How a native-channel engine receives its result path; None for a marker-channel engine."""
     if not isinstance(engine, str) or engine not in _CHANNEL_BY_ENGINE:
         raise UnknownEngineError(
             "unknown engine %r; registered engines: %s"
             % (engine, ", ".join(model_registry.vendors()))
         )
+    if mode is not None and mode not in CLAUDE_MODES:
+        raise ValueError(
+            "unknown claude mode %r; declared modes: %s"
+            % (mode, ", ".join(CLAUDE_MODES))
+        )
     channel = _CHANNEL_BY_ENGINE[engine]
     if channel == CHANNEL_MARKER:
         return None
-    delivery = _RESULT_DELIVERY_BY_ENGINE.get(engine)
-    if delivery is None:
-        raise ValueError("native engine %r has no result delivery entry" % (engine,))
-    return delivery
+    if mode is None or mode == MODE_PRINT:
+        delivery = _RESULT_DELIVERY_BY_ENGINE.get(engine)
+        if delivery is None:
+            raise ValueError("native engine %r has no result delivery entry" % (engine,))
+        return delivery
+    if not engine_adapter.claude_mode_supported(engine, mode):
+        raise ValueError(
+            "engine %r has no delivery for mode %r" % (engine, mode)
+        )
+    mode_delivery = _RESULT_DELIVERY_BY_ENGINE_MODE.get((engine, mode))
+    if mode_delivery is not None:
+        return mode_delivery
+    raise ValueError(
+        "engine %r has no delivery for mode %r" % (engine, mode)
+    )
 
 
 def file_result_contract(schema_text, result_path, run_kind=RUN_KIND_REVIEW):
@@ -782,6 +824,12 @@ def write_result_contract_from_schema(schema, delivery=None):
             "flag governs; it is the report object matching the declared schema. "
             "Print nothing else as a result; stdout is telemetry."
         )
+    elif delivery == RESULT_DELIVERY_TRANSCRIPT:
+        graded_line = (
+            "The graded result is the StructuredOutput tool_use input in the background session "
+            "transcript; it is the report object matching the declared schema. "
+            "The --json-schema flag governs that typed output."
+        )
     else:
         graded_line = "The final response must be exactly one JSON object matching the declared output schema."
     lines = [
@@ -819,6 +867,12 @@ def review_result_contract_from_schema(schema, delivery=None):
             "The graded result is your structured output — the typed final response the --json-schema flag governs; "
             "its root has exactly one property `result` wrapping the graded branch. "
             "Print nothing else as a result; stdout is telemetry."
+        )
+    elif delivery == RESULT_DELIVERY_TRANSCRIPT:
+        result_line = (
+            "The graded result is the StructuredOutput tool_use input in the background session transcript; "
+            "the --json-schema flag governs that typed output. "
+            "Its root has exactly one property `result` wrapping the graded branch."
         )
     else:
         result_line = (

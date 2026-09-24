@@ -92,6 +92,9 @@ REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
 _REVIEW_RESULT_KINDS_CHOICES_CONTRACT = (
     "choices:" + ",".join(str(kind) for kind in REVIEW_RESULT_KINDS)
 )
+_CLAUDE_MODES_CHOICES_CONTRACT = (
+    "choices:" + ",".join(str(mode) for mode in engine_result_channel.CLAUDE_MODES)
+)
 RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
 RUN_KIND_WRITE = "write"
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
@@ -132,6 +135,8 @@ MAX_STDERR_CAPTURE = 64 * 1024
 MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
 MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
+MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH = "run-dir-claude-mode-mismatch"
+MODE_REFUSAL_CLAUDE_MODE_NOT_DISPATCHABLE = "claude-mode-not-dispatchable"
 PR_BODY_REFUSAL_RUN_DIR_MISMATCH = "run-dir-pr-body-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
@@ -173,6 +178,28 @@ def _mode_invalid_refusal(rejected_mode):
             "detail": MODE_REFUSAL_INVALID,
             "mode": sanitized_view.MODE_REVIEW,
             "rejectedMode": _coerce_rejected_mode(rejected_mode)}
+
+
+def _claude_mode_unknown_detail(value):
+    return "claude-mode-unknown:%s" % _coerce_rejected_mode(value)
+
+
+def _claude_mode_unsupported_detail(vendor):
+    return "claude-mode-unsupported:%s" % vendor
+
+
+def _claude_mode_entry_refusal(
+    entry_reason, detail, *, run_dir=None, mode=None, repo_root=None, engine=None,
+    run_kind=RUN_KIND_REVIEW,
+):
+    return _entry_refusal_terminal(
+        {"ok": False, "entryReason": entry_reason, "detail": detail, "mode": mode},
+        run_dir=run_dir,
+        mode=mode,
+        repo_root=repo_root,
+        engine=engine,
+        run_kind=run_kind,
+    )
 
 
 def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
@@ -444,10 +471,9 @@ def _native_schema_path(run_dir_real):
 
 def _native_channel_suffix(opened):
     """Return native-channel argv suffix for this run's result delivery mode."""
-    try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
-    except Exception:
-        return ()
+    delivery = engine_result_channel.result_delivery(
+        opened.get("engine"), opened.get("claudeMode"),
+    )
     if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
         return ()
     schema_path = opened.get("nativeSchemaPath")
@@ -455,7 +481,10 @@ def _native_channel_suffix(opened):
         return ()
     if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
         return ("--output-schema", schema_path)
-    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+    if delivery in (
+        engine_result_channel.RESULT_DELIVERY_STDOUT,
+        engine_result_channel.RESULT_DELIVERY_TRANSCRIPT,
+    ):
         try:
             with open(schema_path, "r", encoding="utf-8") as fh:
                 text = fh.read().rstrip("\n")
@@ -490,7 +519,9 @@ def _spawn_native_result_argv(run_dir_real, attempt, opened, spawn_argv):
         return False, spawn_argv, result_path, "native-result-path-occupied"
     # axis: prompt-delivered path is handed in _stage_attempt_prompt; argv delivery appends -o here.
     try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
     except Exception:
         delivery = None
     if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
@@ -505,7 +536,9 @@ def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
 
     Returns (prompt_path, sha256_or_None, refusal)."""
     try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
     except Exception:
         delivery = None
     if result_path is None or delivery != engine_result_channel.RESULT_DELIVERY_PROMPT:
@@ -565,7 +598,9 @@ def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
     return path, hashlib.sha256(content.encode("utf-8")).hexdigest(), None
 
 
-def _open_native_channel_argv(run_dir_real, engine, argv, run_kind, expected_result_kind=None):
+def _open_native_channel_argv(
+    run_dir_real, engine, argv, run_kind, expected_result_kind=None, claude_mode=None,
+):
     """Write native schema and extend argv for native-channel opens. Returns (argv, error_token, schema_path)."""
     if engine_result_channel.channel_for(engine) != engine_result_channel.CHANNEL_NATIVE:
         return list(argv), None, None
@@ -583,10 +618,13 @@ def _open_native_channel_argv(run_dir_real, engine, argv, run_kind, expected_res
     except OSError:
         return None, "native-schema-unwritable", None
     schema_text = json.dumps(schema, separators=(",", ":"))
-    delivery = engine_result_channel.result_delivery(engine)
+    delivery = engine_result_channel.result_delivery(engine, claude_mode)
     if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
         argv_out = list(argv) + ["--output-schema", schema_path]
-    elif delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+    elif delivery in (
+        engine_result_channel.RESULT_DELIVERY_STDOUT,
+        engine_result_channel.RESULT_DELIVERY_TRANSCRIPT,
+    ):
         argv_out = list(argv) + ["--json-schema", schema_text]
     else:
         argv_out = list(argv)
@@ -614,6 +652,9 @@ def _canonical_spawn_argv(opened):
     role_kind = expected_role_kind
     cwd = opened.get("cwd")
     opts = {"cwd": cwd} if cwd else {}
+    claude_mode = opened.get("claudeMode")
+    if claude_mode is not None:
+        opts["claudeMode"] = claude_mode
     built = engine_adapter.build_argv_result(seat, role_kind, opts)
     if built.get("reason") is not None:
         return None, "engine-config:%s" % built["reason"]
@@ -769,29 +810,14 @@ def _claude_child_env(opened, base=None):
     return env, pins
 
 
-def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
-    """Materialize claude stdout delivery's structured_output to the native result path. (#1273)"""
-    try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
-    except Exception:
-        return None
-    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
-        return None
-    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
-    result_path = _native_result_path(run_dir_real, attempt)
-    if result_path is None:
-        return "error"
-    env = engine_adapter.claude_result_envelope(stdout)
-    if (not isinstance(env, dict)
-            or env.get("is_error") is True
-            or "structured_output" not in env):
-        # axis: a path planted during the run occupies the materializer even without a result event.
-        try:
-            os.lstat(result_path)
-        except FileNotFoundError:
-            return "absent"
-        return "occupied"
-    payload = json.dumps(env["structured_output"], separators=(",", ":")) + "\n"
+_NATIVE_MATERIALIZER_DELIVERIES = frozenset({
+    engine_result_channel.RESULT_DELIVERY_STDOUT,
+    engine_result_channel.RESULT_DELIVERY_TRANSCRIPT,
+})
+
+
+def _write_native_result_payload(result_path, payload_obj):
+    payload = json.dumps(payload_obj, separators=(",", ":")) + "\n"
     try:
         fd = os.open(
             result_path,
@@ -810,13 +836,77 @@ def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
     return "materialized"
 
 
-def _stdout_delivery_gate(run_dir_real, attempt, opened):
-    """Refuse admission when stdout delivery did not materialize a native result. (#1273)"""
+def _native_result_materialization_status(result_path, payload_obj):
+    if payload_obj is None:
+        try:
+            os.lstat(result_path)
+        except FileNotFoundError:
+            return "absent"
+        return "occupied"
+    return _write_native_result_payload(result_path, payload_obj)
+
+
+def _read_transcript_rows(stdout_path):
+    rows = []
     try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
-    except Exception:
+        with open(stdout_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
         return None
-    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
+    return rows
+
+
+def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
+    """Materialize stdout/transcript delivery to the native result path. (#1273)"""
+    delivery = engine_result_channel.result_delivery(
+        opened.get("engine"), opened.get("claudeMode"),
+    )
+    if delivery not in _NATIVE_MATERIALIZER_DELIVERIES:
+        return None
+    result_path = _native_result_path(run_dir_real, attempt)
+    if result_path is None:
+        return "error"
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
+        env = engine_adapter.claude_result_envelope(stdout)
+        if (not isinstance(env, dict)
+                or env.get("is_error") is True
+                or "structured_output" not in env):
+            return _native_result_materialization_status(result_path, None)
+        return _native_result_materialization_status(
+            result_path, env["structured_output"],
+        )
+    rows = _read_transcript_rows(stdout_path)
+    if rows is None:
+        return "error"
+    payload_obj = engine_adapter.claude_transcript_result(rows)
+    return _native_result_materialization_status(result_path, payload_obj)
+
+
+def _result_delivery_gate_refusal():
+    return {
+        "forfeit": True,
+        "reason": dispatch_outcome.REASON_FORFEITED,
+        "detail": "result-delivery-unresolved",
+    }
+
+
+def _stdout_delivery_gate(run_dir_real, attempt, opened):
+    """Refuse admission when stdout/transcript delivery did not materialize a native result. (#1273)"""
+    try:
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
+    except (engine_result_channel.UnknownEngineError, ValueError):
+        return _result_delivery_gate_refusal()
+    if delivery not in _NATIVE_MATERIALIZER_DELIVERIES:
         return None
     records, _corrupt = _journal_read(run_dir_real)
     state = _journal_state(records)
@@ -1003,6 +1093,8 @@ def _build_resolved_inputs(
     progress_path,
     progress_path_source,
     engine_model_opts,
+    claude_mode=None,
+    claude_mode_source=resolved_inputs_vocab.DEFAULT,
 ):
     snapshot = {}
     model_source = seat.get("modelSource", resolved_inputs_vocab.CALLER)
@@ -1034,6 +1126,7 @@ def _build_resolved_inputs(
     _put_resolved(snapshot, "baseSha", base_sha, base_sha_source)
     _put_resolved(snapshot, "diffBase", diff_base, diff_base_source)
     _put_resolved(snapshot, "progressPath", progress_path, progress_path_source)
+    _put_resolved(snapshot, "claudeMode", claude_mode, claude_mode_source)
     journal_root, journal_root_source = _journal_root_with_source(run_dir_real)
     _put_resolved(snapshot, "journalRoot", journal_root, journal_root_source)
     return snapshot
@@ -3287,6 +3380,14 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
 
 
 def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
+    opened = state.get("opened")
+    if isinstance(opened, dict):
+        claude_mode = opened.get("claudeMode")
+        if claude_mode == engine_result_channel.MODE_BACKGROUND:
+            return False, "%s:%s" % (
+                MODE_REFUSAL_CLAUDE_MODE_NOT_DISPATCHABLE,
+                engine_result_channel.MODE_BACKGROUND,
+            )
     if state.get("abandonRequested"):
         return False, "abandon-requested"
     alive, who = _run_live_evidence(state)
@@ -4627,7 +4728,8 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
                      progress_path, repo_root=None, mode="review",
                      expected_result_kind=None, pr_body_source_path=None,
-                     echo_nonce=None, base_prompt=None, resolved_inputs=None):
+                     echo_nonce=None, base_prompt=None, resolved_inputs=None,
+                     claude_mode=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -4664,6 +4766,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     channel = engine_result_channel.channel_for(engine)
     argv, native_err, native_schema_path = _open_native_channel_argv(
         run_dir_real, engine, argv, RUN_KIND_REVIEW, expected_result_kind,
+        claude_mode=claude_mode,
     )
     if native_err:
         return False, native_err
@@ -4675,6 +4778,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "roleKind": RUN_KIND_REVIEW,
         "orderId": order_id,
         "mode": mode,
+        "claudeMode": claude_mode,
         "channel": channel,
         "argv": argv,
         "cwd": cwd,
@@ -4716,7 +4820,8 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                     retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
                     run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, order_id=None, diff_base=None,
-                    mode=None, expected_result_kind=None, pr_body_path=None, session_dir=None,
+                    mode=None, claude_mode=None, expected_result_kind=None,
+                    pr_body_path=None, session_dir=None,
                     **kwargs):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
@@ -4775,6 +4880,13 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                     run_dir=run_dir,
                     mode=mode or sanitized_view.MODE_REVIEW,
                 )
+        if claude_mode is not None and not engine_result_channel.claude_mode_ok(claude_mode):
+            return _claude_mode_entry_refusal(
+                "claude-mode-unknown",
+                _claude_mode_unknown_detail(claude_mode),
+                run_dir=run_dir,
+                mode=mode or sanitized_view.MODE_REVIEW,
+            )
         entry = seat_bundle.resolve_entry(
             seat, verb="dispatch-review", mode=mode,
             mode_for_role_check=seat_bundle.dispatch_review_mode_for_role_check(
@@ -4801,6 +4913,18 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                 run_dir=run_dir,
                 mode=mode or sanitized_view.MODE_REVIEW,
             )
+        if (
+            claude_mode is not None
+            and not engine_adapter.claude_mode_supported(entry.get("vendor"), claude_mode)
+        ):
+            return _claude_mode_entry_refusal(
+                "claude-mode-unsupported",
+                _claude_mode_unsupported_detail(entry.get("vendor")),
+                run_dir=run_dir,
+                mode=mode or sanitized_view.MODE_REVIEW,
+                repo_root=repo_root,
+                engine=entry.get("vendor"),
+            )
         result = _dispatch_review_impl(
             entry, prompt_path=prompt_path,
             repo_root=repo_root, timeout=timeout, timeout_source=timeout_source,
@@ -4809,7 +4933,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
             build_view=build_view, run_dir=run_dir, run_dir_supplied=run_dir_supplied,
             max_wait=max_wait, max_wait_source=max_wait_source, order_id=order_id,
             diff_base=diff_base, mode=mode, resolved_mode=resolved_mode,
-            expected_result_kind=expected_result_kind,
+            claude_mode=claude_mode, expected_result_kind=expected_result_kind,
             pr_body_path=pr_body_path, session_dir=session_dir)
         stamped = dict(result)
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
@@ -4838,7 +4962,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                           build_view=sanitized_view.build_sanitized_view,
                           run_dir=None, run_dir_supplied=False, max_wait=None,
                           max_wait_source=resolved_inputs_vocab.DEFAULT, order_id=None, diff_base=None,
-                          mode=None, resolved_mode=None, expected_result_kind=None,
+                          mode=None, claude_mode=None, resolved_mode=None,
+                          resolved_claude_mode=None, expected_result_kind=None,
                           pr_body_path=None, session_dir=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
@@ -4848,6 +4973,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
     if resolved_mode is None:
         resolved_mode = {"mode": None}
     resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
+    if resolved_claude_mode is None:
+        resolved_claude_mode = {"claudeMode": claude_mode}
 
     ok, wait_detail = _validate_max_wait(max_wait)
     if not ok:
@@ -4977,6 +5104,20 @@ def _dispatch_review_impl(seat, *, prompt_path,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=argv, engine=engine,
                     )
+                journal_claude_mode = opened.get("claudeMode")
+                resolved_claude_mode["claudeMode"] = journal_claude_mode
+                if (
+                    claude_mode is not None
+                    and engine_result_channel.normalize_claude_mode(claude_mode)
+                    != engine_result_channel.normalize_claude_mode(journal_claude_mode)
+                ):
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv, engine=engine,
+                    )
                 journal_result_kind = opened.get("expectedResultKind")
                 if expected_result_kind is not None and expected_result_kind != journal_result_kind:
                     return _finish_preflight_terminal(
@@ -5014,6 +5155,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
 
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
+            resolved_claude_mode["claudeMode"] = claude_mode
             try:
                 view = build_view(
                     repo_detail,
@@ -5032,6 +5174,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
             view_path = view["path"]
             cwd = os.path.realpath(view_path)
             opts = {"cwd": cwd}
+            if resolved_claude_mode["claudeMode"] is not None:
+                opts["claudeMode"] = resolved_claude_mode["claudeMode"]
             built = engine_adapter.build_argv_result(seat, role_kind, opts)
             if built["reason"] is not None:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -5057,7 +5201,9 @@ def _dispatch_review_impl(seat, *, prompt_path,
             _prompt_section_sep = "\n\n"
             if expected_result_kind == "findings":
                 fed_prompt += _prompt_section_sep + review_findings_schema.example_prompt_block(echo_nonce)
-            delivery = engine_result_channel.result_delivery(engine)
+            delivery = engine_result_channel.result_delivery(
+                engine, resolved_claude_mode["claudeMode"],
+            )
             if engine_result_channel.channel_for(engine) == engine_result_channel.CHANNEL_NATIVE:
                 native_schema = engine_result_channel.declared_schema(
                     engine, RUN_KIND_REVIEW, expected_result_kind,
@@ -5084,6 +5230,11 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 resolved_inputs_vocab.CALLER
                 if expected_result_kind is not None
                 else resolved_inputs_vocab.DECLARED_NONE
+            )
+            claude_mode_source = (
+                resolved_inputs_vocab.CALLER
+                if claude_mode is not None
+                else resolved_inputs_vocab.DEFAULT
             )
             resolved_inputs = _build_resolved_inputs(
                 seat=seat,
@@ -5122,6 +5273,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                     if progress_path is not None
                     else resolved_inputs_vocab.RESOLVED
                 ),
+                claude_mode=resolved_claude_mode["claudeMode"],
+                claude_mode_source=claude_mode_source,
                 engine_model_opts={"cwd": cwd},
             )
             ok_open, open_detail = _open_review_run(
@@ -5135,6 +5288,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 pr_body_source_path=os.path.realpath(pr_body_path) if pr_body_set else None,
                 echo_nonce=echo_nonce, base_prompt=base_prompt,
                 resolved_inputs=resolved_inputs,
+                claude_mode=resolved_claude_mode["claudeMode"],
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -5217,7 +5371,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
                     repo_root=None, expected_items=None, baseline_dirty=None,
-                    sibling_baseline=None, resolved_inputs=None):
+                    sibling_baseline=None, resolved_inputs=None, claude_mode=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -5229,7 +5383,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             base = src.read()
         base_prompt_sha256 = hashlib.sha256(base.encode("utf-8")).hexdigest()
         channel = engine_result_channel.channel_for(engine)
-        delivery = engine_result_channel.result_delivery(engine)
+        delivery = engine_result_channel.result_delivery(engine, claude_mode)
         if channel == engine_result_channel.CHANNEL_NATIVE:
             try:
                 native_schema = engine_result_channel.declared_schema(engine, RUN_KIND_WRITE)
@@ -5265,7 +5419,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     echo_nonce = secrets.token_hex(16)
 
     argv, native_err, native_schema_path = _open_native_channel_argv(
-        run_dir_real, engine, list(argv), RUN_KIND_WRITE,
+        run_dir_real, engine, list(argv), RUN_KIND_WRITE, claude_mode=claude_mode,
     )
     if native_err:
         return False, native_err
@@ -5276,6 +5430,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "engine": engine,
         "roleKind": "build",
         "orderId": order_id,
+        "claudeMode": claude_mode,
         "channel": channel,
         "argv": argv,
         "cwd": cwd,
@@ -5314,8 +5469,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
 def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                    order_id=None, base_sha=None, timeout=_PARAM_UNSET,
                    retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
-                   run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, expected_items=None,
-                   expected_items_file=None, **kwargs):
+                   run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, claude_mode=None,
+                   expected_items=None, expected_items_file=None, **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -5354,6 +5509,13 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                 ),
                 run_dir=run_dir,
             )
+        if claude_mode is not None and not engine_result_channel.claude_mode_ok(claude_mode):
+            return _claude_mode_entry_refusal(
+                "claude-mode-unknown",
+                _claude_mode_unknown_detail(claude_mode),
+                run_dir=run_dir,
+                run_kind=RUN_KIND_WRITE,
+            )
         resolved = seat_bundle.resolve_entry(seat, verb="dispatch-write")
         if not resolved.get("ok"):
             allowlist_verdict = resolved.get("allowlistVerdict")
@@ -5372,14 +5534,25 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                 _seat_dispatch_refusal(resolved),
                 run_dir=run_dir,
             )
+        if (
+            claude_mode is not None
+            and not engine_adapter.claude_mode_supported(resolved.get("vendor"), claude_mode)
+        ):
+            return _claude_mode_entry_refusal(
+                "claude-mode-unsupported",
+                _claude_mode_unsupported_detail(resolved.get("vendor")),
+                run_dir=run_dir,
+                engine=resolved.get("vendor"),
+                run_kind=RUN_KIND_WRITE,
+            )
         return _dispatch_write_impl(
             resolved, prompt_path=prompt_path, cwd=cwd, order_id=order_id,
             base_sha=base_sha, timeout=timeout, timeout_source=timeout_source,
             retry_timeout=retry_timeout, retry_timeout_source=retry_timeout_source,
             progress_path=progress_path, run_engine=run_engine, run_dir=run_dir,
             run_dir_supplied=run_dir_supplied, max_wait=max_wait,
-            max_wait_source=max_wait_source, expected_items=expected_items,
-            expected_items_file=expected_items_file,
+            max_wait_source=max_wait_source, claude_mode=claude_mode,
+            expected_items=expected_items, expected_items_file=expected_items_file,
         )
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -5403,7 +5576,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          progress_path=None,
                          run_engine=_run_engine, run_dir=None, run_dir_supplied=False,
                          max_wait=None, max_wait_source=resolved_inputs_vocab.DEFAULT,
-                         expected_items=None,
+                         claude_mode=None, expected_items=None,
                          expected_items_file=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
@@ -5484,6 +5657,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
     run_dir_real = rd_detail
 
     caller_omitted_expected = expected_items is None and expected_items_file is None
+    resolved_claude_mode = {"claudeMode": claude_mode}
 
     try:
         records, _corrupt = _journal_read(run_dir_real)
@@ -5491,6 +5665,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
         opened = state.get("opened")
 
         opts = {"cwd": cwd_real}
+        if resolved_claude_mode["claudeMode"] is not None:
+            opts["claudeMode"] = resolved_claude_mode["claudeMode"]
         built = engine_adapter.build_argv_result(seat, role_kind, opts)
         if built["reason"] is not None:
             return _write_preflight_terminal(
@@ -5519,6 +5695,19 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": seat_detail,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=opened.get("argv") or argv,
+                )
+            journal_claude_mode = opened.get("claudeMode")
+            resolved_claude_mode["claudeMode"] = journal_claude_mode
+            if (
+                claude_mode is not None
+                and engine_result_channel.normalize_claude_mode(claude_mode)
+                != engine_result_channel.normalize_claude_mode(journal_claude_mode)
+            ):
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
@@ -5629,6 +5818,11 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 base_sha_source = resolved_inputs_vocab.RESOLVED
             else:
                 base_sha_source = resolved_inputs_vocab.DECLARED_NONE
+            claude_mode_source = (
+                resolved_inputs_vocab.CALLER
+                if claude_mode is not None
+                else resolved_inputs_vocab.DEFAULT
+            )
             resolved_inputs = _build_resolved_inputs(
                 seat=seat,
                 role_kind=role_kind,
@@ -5662,6 +5856,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                     if progress_path is not None
                     else resolved_inputs_vocab.RESOLVED
                 ),
+                claude_mode=resolved_claude_mode["claudeMode"],
+                claude_mode_source=claude_mode_source,
                 engine_model_opts={"cwd": cwd_real},
             )
             ok_lease, lease_detail, _token, lease_path = _acquire_worktree_lease(
@@ -5684,6 +5880,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 baseline_dirty=baseline_dirty,
                 sibling_baseline=sibling_baseline,
                 resolved_inputs=resolved_inputs,
+                claude_mode=resolved_claude_mode["claudeMode"],
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
@@ -6230,6 +6427,9 @@ def build_parser():
                          "expression, branch name or tag is refused")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
+    cc.add_argument(d, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
+                    choices=engine_result_channel.CLAUDE_MODES,
+                    help="background is declared but is not dispatchable")
     cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
@@ -6251,6 +6451,9 @@ def build_parser():
     cc.add_argument(w, "--progress-file", contract="free-text", default=None)
     cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
+    cc.add_argument(w, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
+                    choices=engine_result_channel.CLAUDE_MODES,
+                    help="background is declared but is not dispatchable")
 
     p = sub.add_parser("dispatch-poll")
     cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)
@@ -6293,6 +6496,7 @@ def main(argv):
                                   progress_path=args.progress_file, run_dir=args.run_dir,
                                   max_wait=args.max_wait, order_id=args.order_id,
                                   diff_base=args.diff_base, mode=args.mode,
+                                  claude_mode=args.claude_mode,
                                   expected_result_kind=args.expected_result_kind,
                                   pr_body_path=args.pr_body_path, session_dir=args.session_dir)
             classification = dispatch_outcome.classify_dispatch_result(res)
@@ -6303,6 +6507,7 @@ def main(argv):
                                  run_dir=args.run_dir, timeout=args.timeout,
                                  retry_timeout=args.retry_timeout, max_wait=args.max_wait,
                                  progress_path=args.progress_file,
+                                 claude_mode=args.claude_mode,
                                  expected_items=args.expect_item,
                                  expected_items_file=args.expect_items_file)
             classification = dispatch_outcome.classify_dispatch_result(res)
