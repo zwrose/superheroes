@@ -1,6 +1,7 @@
 """Static census: claude process argv literals only in engine_adapter (#1273, c14-l4a-D1)."""
 import ast
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -26,11 +27,63 @@ def _is_claude_literal(value):
     return isinstance(value, str) and (value == "claude" or value.endswith("/claude"))
 
 
-def _first_token_is_claude(value):
+_FSTRING_PLACEHOLDER = "\x00"
+
+
+def _tokenize_command_string(value):
+    try:
+        return shlex.split(value)
+    except ValueError:
+        return value.split()
+
+
+def _is_assignment_token(token, placeholder=None):
+    if placeholder and placeholder in token:
+        return "=" in token.split(placeholder)[0]
+    return "=" in token and not token.startswith("=")
+
+
+def _is_env_wrapper_token(token):
+    return token == "env" or token.endswith("/env")
+
+
+def _command_word_from_tokens(tokens, placeholder=None):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if _is_assignment_token(token, placeholder):
+            i += 1
+            continue
+        if _is_env_wrapper_token(token):
+            i += 1
+            while i < len(tokens):
+                inner = tokens[i]
+                if _is_assignment_token(inner, placeholder) or inner.startswith("-"):
+                    i += 1
+                else:
+                    break
+            continue
+        return token
+    return None
+
+
+def _command_word_is_claude(value, placeholder=None):
     if not isinstance(value, str) or not value.strip():
         return False
-    token = value.split()[0]
-    return token == "claude" or token.endswith("/claude")
+    word = _command_word_from_tokens(_tokenize_command_string(value), placeholder)
+    if word is None:
+        return False
+    return word == "claude" or word.endswith("/claude")
+
+
+def _render_joinedstr_for_command(node):
+    parts = []
+    for value in node.values:
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            parts.append(value.value)
+        elif isinstance(value, ast.FormattedValue):
+            parts.append(_FSTRING_PLACEHOLDER)
+    return "".join(parts)
 
 
 def _joined_str_first_token_is_claude(node):
@@ -39,9 +92,8 @@ def _joined_str_first_token_is_claude(node):
     first = node.values[0]
     if isinstance(first, ast.FormattedValue):
         return False
-    if isinstance(first, ast.Constant) and isinstance(first.value, str):
-        return _first_token_is_claude(first.value)
-    return False
+    rendered = _render_joinedstr_for_command(node)
+    return _command_word_is_claude(rendered, placeholder=_FSTRING_PLACEHOLDER)
 
 
 def _dotted_name(node):
@@ -296,7 +348,7 @@ def _allowed_constant(node, parent, grandparent, scope_taints, parents):
 
 def _string_command_node(node):
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return _first_token_is_claude(node.value)
+        return _command_word_is_claude(node.value)
     if isinstance(node, ast.JoinedStr):
         return _joined_str_first_token_is_claude(node)
     return False
@@ -408,6 +460,12 @@ _FLAG_CASES = [
     ('argv = ["claude" if x else "claude2"]', "ifexp-display"),
     ('CLAUDE_EXECUTABLE = "claude"', "name-binding"),
     ('bad = ["claude"]\nif x == [["claude"]]: pass', "compare-nested-list"),
+    ('import os\nos.system("env FOO=1 claude -p")', "string-os-system-env-wrapper"),
+    ('import os\nos.popen("FOO=1 claude -p")', "string-os-popen-assignment"),
+    ('import shlex\nshlex.split("env FOO=1 claude -p")', "string-shlex-env-wrapper"),
+    ('"env -i /usr/bin/claude -p".split()', "string-split-env-option-path"),
+    ('subprocess.run("A=1 B=2 claude", shell=True)', "string-spawner-two-assignments"),
+    ('v = "1"\nf"env FOO={v} claude -p".split()', "string-split-fstring-env-assignment"),
 ]
 
 _PASS_CASES = [
@@ -420,6 +478,8 @@ _PASS_CASES = [
     ('print(input="claude")', "keyword-non-spawn"),
     ('def f():\n return "claude", VENDOR_SOURCE_DEFAULTED', "vendor-source-pair"),
     ('f"{x} claude".split()', "fstring-formatted-first"),
+    ('import os\nos.system("env FOO=1 echo claude")', "string-env-wrapper-other-command"),
+    ('"FOO=claude run".split()', "string-assignment-value-not-command"),
 ]
 
 _EDGE_FLAG_CASES = [
