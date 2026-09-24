@@ -68,3 +68,15 @@ def make_checkout(path):
     if len(head) != 40:
         raise RuntimeError("git rev-parse HEAD in %s returned %r" % (path, head))
     return head
+
+
+def enter_checkout(path):
+    """Make `path` a checkout (as `make_checkout`), chdir into it, and return its HEAD.
+
+    Callable from any test module with no fixture handoff. The cwd is restored at teardown: the
+    lib conftest's autouse `_isolate_store_root` runs `monkeypatch.chdir(tmp_path)` for every lib
+    test, pytest's MonkeyPatch records the original cwd at that first chdir, and its undo
+    `os.chdir`s back to it — which also undoes this later raw `os.chdir`."""
+    head = make_checkout(path)
+    os.chdir(str(path))
+    return head
