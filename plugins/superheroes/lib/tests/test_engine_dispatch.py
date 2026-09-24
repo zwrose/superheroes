@@ -18906,12 +18906,20 @@ def test_background_stop_same_id_live_row_under_prefix_child_only_is_stop_unconf
         calls.append(list(args))
         return 0, "", ""
 
+    acquire_calls = []
+
+    def recorder(*args, **kwargs):
+        acquire_calls.append((args, kwargs))
+        return (None, "unlisted")
+
     monkeypatch.setattr(ED, "_claude_cli", cli)
     monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
     monkeypatch.setattr(ED, "_HANDLE_WAIT_SECONDS", 0)
     monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(ED, "acquire_background_handle", recorder)
     assert ED._background_stop(launch_id, cfg, cwd) == "stop-unconfirmed"
     assert not any(c[0] == "stop" for c in calls)
+    assert acquire_calls == []
 
 
 def test_background_stop_same_id_live_row_missing_identity_metadata_is_stop_unconfirmed(
