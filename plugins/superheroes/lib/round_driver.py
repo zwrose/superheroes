@@ -6420,6 +6420,9 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fault = _terminal_receipt_gate(session_dir, state)
             if fault:
                 return _receipt_fault_response(fault)
+        refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, "next")
+        if refusal is not None:
+            return refusal
         return _next_response(session_dir, state, pend, "next")
     step = _advance(state, state["config"])
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
@@ -6437,6 +6440,9 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                 session_dir, pending["round"], P_VERIFY,
                 round_records.storage_key("verify"), attempt),
         })
+    refusal = _disposition_ledger_owner_refusal(session_dir, state, pending, "next")
+    if refusal is not None:
+        return refusal
     state["pending"] = pending
     phase = pending.get("phase")
     if isinstance(phase, str) and phase.startswith("dispatch-"):
@@ -6507,16 +6513,22 @@ def _refuse_base_guard(session_dir, reason, detail=None, value=None):
     return 1
 
 
-def _next_response(session_dir, state, pending, cmd):
+def _disposition_ledger_owner_refusal(session_dir, state, pending, cmd):
+    """Refuse hand-out when the disposition-ledger owner is unrecognized (non-terminal only)."""
     action = pending.get("action") if isinstance(pending, dict) else None
-    if (action != P_TERMINAL
-            and session_contract.disposition_ledger_owner_classification(state)
+    if action == P_TERMINAL:
+        return None
+    if (session_contract.disposition_ledger_owner_classification(state)
             == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED):
         phase = pending.get("phase") if isinstance(pending, dict) else None
         rnd = pending.get("round") if isinstance(pending, dict) else None
         attempt = pending.get("attempt") if isinstance(pending, dict) else None
         return _refuse_cmd(session_dir, cmd, DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE,
                            phase=phase, rnd=rnd, attempt=attempt)
+    return None
+
+
+def _next_response(session_dir, state, pending, cmd):
     expected_hash = state_hash(state)
     return {
         "ok": True,
@@ -7042,6 +7054,10 @@ def _cmd_re_emit_locked(session_dir, by):
     rnd = pending.get("round")
     old_attempt = pending.get("attempt")
 
+    refusal = _disposition_ledger_owner_refusal(session_dir, state, pending, RE_EMIT_CMD)
+    if refusal is not None:
+        return refusal
+
     relocation = _relocation_lookup(session_dir, rnd, phase, old_attempt)
     if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
         return _refuse_relocation_evidence_indeterminate(
@@ -7087,6 +7103,8 @@ def _cmd_re_emit_locked(session_dir, by):
             superseded_attempt, superseded_row = completed
             anchor = _orders_anchor(state, session_dir, rnd, phase, superseded_attempt)
             response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
+            if not response.get("ok"):
+                return response
             response["superseded"] = {
                 "attempt": superseded_attempt,
                 "manifestSha256": ((anchor or {}).get("manifestSha256")
@@ -7157,6 +7175,8 @@ def _cmd_re_emit_locked(session_dir, by):
 
     save_state(session_dir, state)
     response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
+    if not response.get("ok"):
+        return response
     response["superseded"] = {
         "attempt": old_attempt,
         "manifestSha256": anchor.get("manifestSha256"),

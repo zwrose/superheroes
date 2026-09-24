@@ -13,6 +13,7 @@ Re-taken at head 3b1ee864 (plus this order's changes).
 | C7 | hand-landed `qualified.append` (defect-1 fix) | `test_l4a_t_floor_hand_landed_qualifying_panel_plus_host_uncertified_no_refusal` |
 | C8 | copied seat-map rows (defect-2 fix) | `test_l4a_t_nomutate_build_receipt_does_not_mutate_state_seat_map_rows` |
 | C9 | `certifiedPanel` provenance label | `test_l4a_seat_map_injected_keys_provenance_census` |
+| C10 | binding condition (`binding == "execution-evidence-absent"`) | `test_l4a_edge10b_host_present_evidence_wrong_head_refuses` |
 
 ## C1 — channel condition
 

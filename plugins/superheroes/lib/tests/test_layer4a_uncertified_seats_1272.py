@@ -738,6 +738,29 @@ def test_l4a_edge10_host_with_telemetry_certified_not_named(tmp_path):
     assert not (ctx.get("uncertified_seats") or [])
 
 
+def test_l4a_edge10b_host_present_evidence_wrong_head_refuses(tmp_path):
+    """Host file-channel seat with runner evidence bound to a stale head must refuse, not disclose."""
+    seat = "code-reviewer"
+    row = _dispatch_journal_with_binding(seat=seat, head_sha="b" * 40)
+    session_dir, _ = _session_with_manifest(
+        tmp_path,
+        seat=seat,
+        phase=RP.P_PANEL,
+        channel="file",
+        vendor="claude",
+        journal_lines=[row],
+        envelopes=[{"seat": seat, "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
+    )
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    refusal = RC.check_unrun_review(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["artifact"] == seat
+    assert refusal.get("bindingFailure") != "execution-evidence-absent"
+    assert not ctx.get("uncertified_seats")
+
+
 # --- T-floor-hand: hand-landed qualifying panel + host uncertified → no floor refusal ----
 
 

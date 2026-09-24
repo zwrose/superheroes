@@ -12,7 +12,8 @@ new issues.
 - Target identifier (echo verbatim in your result): {{TARGET_ID}}
 
 ## Independence
-You are **never** the fixer's vendor. Judge only from the diff, the repo, and the target record.
+When an independent runner-channel vendor is live, you are never the fixer's vendor. Judge only from
+the diff, the repo, and the target record.
 
 ## Your task
 Return exactly one audit result for this target. Judge whether the fix clearly addresses the
