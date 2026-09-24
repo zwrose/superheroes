@@ -428,6 +428,99 @@ def test_result_delivery_registered_engines():
     assert ERC.result_delivery("claude") == ERC.RESULT_DELIVERY_STDOUT
 
 
+@pytest.mark.parametrize("vendor,expected", [
+    ("codex", ERC.RESULT_DELIVERY_ARGV),
+    ("cursor", ERC.RESULT_DELIVERY_PROMPT),
+    ("claude", ERC.RESULT_DELIVERY_STDOUT),
+])
+def test_result_delivery_print_default_identity(vendor, expected):
+    assert ERC.result_delivery(vendor) == expected
+    assert ERC.result_delivery(vendor, None) == expected
+    assert ERC.result_delivery(vendor, ERC.MODE_PRINT) == expected
+
+
+def test_claude_modes_reexported_from_adapter():
+    assert ERC.MODE_PRINT == EA.MODE_PRINT
+    assert ERC.MODE_BACKGROUND == EA.MODE_BACKGROUND
+    assert ERC.CLAUDE_MODES == EA.CLAUDE_MODES
+
+
+def test_result_delivery_members_closed():
+    assert ERC.RESULT_DELIVERY_MEMBERS == frozenset({
+        ERC.RESULT_DELIVERY_ARGV,
+        ERC.RESULT_DELIVERY_PROMPT,
+        ERC.RESULT_DELIVERY_STDOUT,
+        ERC.RESULT_DELIVERY_TRANSCRIPT,
+    })
+
+
+def test_result_delivery_contract_builders_cover_all_members():
+    review_schema = ERC.declared_schema("claude", ERC.RUN_KIND_REVIEW)
+    write_schema = ERC.declared_schema("claude", ERC.RUN_KIND_WRITE)
+    for delivery in ERC.RESULT_DELIVERY_MEMBERS:
+        assert ERC.review_result_contract_from_schema(review_schema, delivery=delivery)
+        assert ERC.write_result_contract_from_schema(write_schema, delivery=delivery)
+
+
+def test_normalize_claude_mode_treats_omitted_as_print():
+    assert ERC.normalize_claude_mode(None) == ERC.MODE_PRINT
+    assert ERC.normalize_claude_mode(ERC.MODE_PRINT) == ERC.MODE_PRINT
+
+
+def test_result_delivery_claude_background_transcript():
+    assert ERC.result_delivery("claude", ERC.MODE_BACKGROUND) == ERC.RESULT_DELIVERY_TRANSCRIPT
+
+
+def _adapter_non_print_capability_pairs():
+    pairs = set()
+    for mode, engines in EA._NON_PRINT_CLAUDE_MODE_ENGINES.items():
+        for engine in engines:
+            pairs.add((engine, mode))
+    return pairs
+
+
+def test_non_print_claude_mode_capability_delivery_agree():
+    # axis: adapter capability table and derived delivery map stay in bidirectional lockstep
+    adapter_pairs = _adapter_non_print_capability_pairs()
+    delivery_pairs = set(ERC._RESULT_DELIVERY_BY_ENGINE_MODE)
+    missing_delivery = adapter_pairs - delivery_pairs
+    assert not missing_delivery, (
+        "adapter declares non-print (engine, mode) pairs with no delivery: %r"
+        % sorted(missing_delivery)
+    )
+    ghost_delivery = delivery_pairs - adapter_pairs
+    assert not ghost_delivery, (
+        "derived delivery map has (engine, mode) pairs adapter does not declare: %r"
+        % sorted(ghost_delivery)
+    )
+
+
+@pytest.mark.parametrize("vendor", ["codex", "cursor"])
+def test_result_delivery_background_refuses_non_claude(vendor):
+    with pytest.raises(ValueError, match="has no delivery for mode"):
+        ERC.result_delivery(vendor, ERC.MODE_BACKGROUND)
+
+
+def test_result_delivery_undeclared_mode_refuses():
+    with pytest.raises(ValueError, match="unknown claude mode"):
+        ERC.result_delivery("claude", "bogus")
+
+
+def test_result_delivery_unknown_engine_before_bad_mode():
+    with pytest.raises(ERC.UnknownEngineError):
+        ERC.result_delivery("bogus", "bogus")
+
+
+@pytest.mark.parametrize("mode,expected", [
+    (None, True),
+    (ERC.MODE_PRINT, True),
+    (ERC.MODE_BACKGROUND, True),
+    ("bogus", False),
+])
+def test_claude_mode_ok(mode, expected):
+    assert ERC.claude_mode_ok(mode) is expected
+
+
 def test_result_delivery_unknown_engine_refuses():
     with pytest.raises(ERC.UnknownEngineError):
         ERC.result_delivery("bogus")
@@ -627,10 +720,17 @@ def test_ruling_new_issues_detailed_entry_validates_and_survives_grading(tmp_pat
         "nativeSchemaPath": schema_path,
         "expectedResultKind": "ruling",
     }
+    envelope = _wrap_result(branch)
+    scrubbed = ed._scrub_native_payload(envelope)
+    ended = {
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": 0, "wallSeconds": 1.0,
+    }
+    ended.update(ERC.completion_stamp(1.0, ERC.canonical_payload_digest(scrubbed)))
+    ed._journal_append(run_dir, {"kind": "attempt-ended", "attempt": 1, **ended})
     state = {
         "opened": opened,
-        "attempts": {1: {"ended": {"exit": 0, "timedOut": False, "refusal": None,
-                                   "stdoutBytes": 0, "wallSeconds": 1.0}}},
+        "attempts": {1: {"ended": ended}},
     }
     grade = ed._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
@@ -701,6 +801,61 @@ def test_verdict_reason_required_in_contract_and_schema():
     assert ok
 
 
+def _malformed_ruling_branch_with_spurious_findings_list():
+    """Ruling branch that structurally matches findings via a present-but-null key."""
+    contract, reason = PC.payload_contract(PC.P_AUDITS)
+    assert reason is None
+    ruling_val = contract["enums"]["ruling"][0]
+    return {
+        "resultKind": "ruling",
+        "findings": None,
+        "verdicts": None,
+        "investigated": ["path/to/file.py"],
+        "id": "audit-seat",
+        "ruling": ruling_val,
+        "reason": "grounds",
+    }
+
+
+def test_native_branch_narrowing_consults_payload_key_home_for_ruling():
+    # axis: ruling is narrowed like every other kind — not exempt by omission
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_h_payload_key_home.md
+    branch = _malformed_ruling_branch_with_spurious_findings_list()
+    assert "ruling" in EA._recognised_review_kinds(branch)
+    assert "findings" in EA._recognised_review_kinds(branch)
+    shape = ERC.native_review_payload_shape(
+        "native-result-schema-invalid", branch=branch)
+    assert shape["parsed"] != EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS
+    assert [
+        k for k in EA._recognised_review_kinds(branch)
+        if (key := EA.review_payload_key(k)) is not None
+        and branch.get(key) is not None
+    ] == ["ruling"]
+
+
+def test_native_branch_narrowing_null_payload_key_not_carried():
+    # axis: present-but-null payload keys for covered kinds stop matching
+    branch = _valid_review_branch("ruling")
+    assert "verdicts" in EA._recognised_review_kinds(branch)
+    assert EA.review_payload_carried(branch, "verdicts") == (False, None)
+    narrowed = [
+        k for k in EA._recognised_review_kinds(branch)
+        if EA.review_payload_carried(branch, k)[0]
+    ]
+    assert "verdicts" not in narrowed
+
+
+def test_native_branch_narrowing_present_but_null_grouping_not_second_kind():
+    # axis: present-but-null grouping key does not count as a second matched kind
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/c14_l3a_h_payload_key_home.md
+    branch = _valid_review_branch("findings")
+    assert "grouping" in EA._recognised_review_kinds(branch)
+    assert EA.review_payload_carried(branch, "grouping") == (True, None)
+    shape = ERC.native_review_payload_shape(
+        "native-result-schema-invalid", branch=branch)
+    assert shape["parsed"] != EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS
+
+
 def test_engine_output_byte_cap_single_home():
     # axis: ENGINE_OUTPUT_MAX_BYTES is the single literal home for the 8 MiB cap
     home = EA.ENGINE_OUTPUT_MAX_BYTES
@@ -708,3 +863,229 @@ def test_engine_output_byte_cap_single_home():
     assert ERC.NATIVE_RESULT_MAX_BYTES == home
     assert ed.MAX_STDOUT_CAPTURE == home
     assert home == 8 * 1024 * 1024
+
+
+# --- result completion contract (#1273 WO-A) ---
+
+_DIGEST_X = ERC.payload_digest(b"x")
+
+
+def _completion_record(mono_at, digest=_DIGEST_X, **extra):
+    stamp = ERC.completion_stamp(mono_at, digest)
+    assert stamp is not None
+    record = dict(stamp)
+    record.update(extra)
+    return record
+
+
+def test_mono_epoch_stable_and_non_empty():
+    first = ERC.mono_epoch()
+    second = ERC.mono_epoch()
+    assert isinstance(first, str)
+    assert first
+    assert first == second
+
+
+def test_payload_digest_bytes_and_str_agree():
+    digest = ERC.payload_digest(b"x")
+    assert digest == ERC.payload_digest("x")
+    assert digest == "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+
+
+def test_payload_digest_returns_none_for_non_bytes_str():
+    assert ERC.payload_digest(1) is None
+    assert ERC.payload_digest(None) is None
+
+
+def test_payload_digest_surrogate_string_never_raises():
+    lone = "a\ud800b"
+    digest = ERC.payload_digest(lone)
+    assert digest is not None
+    assert len(digest) == 64
+
+
+@pytest.mark.parametrize("mono_at,deadline_mono", [
+    (10.0, 20.0),
+    (15.0, 15.0),
+])
+def test_completion_stamp_round_trips_through_completion_window(mono_at, deadline_mono):
+    ended = _completion_record(mono_at)
+    ended.update(ERC.deadline_stamp(deadline_mono))
+    assert ERC.completion_window(ended, _DIGEST_X) == ("admit", None)
+
+
+def test_completion_window_no_deadline_key():
+    ended = _completion_record(10.0)
+    assert ERC.completion_window(ended, _DIGEST_X) == ("no-deadline", None)
+
+
+@pytest.mark.parametrize("ended", [None, [], "x"])
+def test_completion_window_non_dict_ended_forfeits_unrecorded(ended):
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_empty_dict_forfeits_unrecorded():
+    assert ERC.completion_window({}, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_missing_completion_epoch_forfeits_unrecorded():
+    ended = _completion_record(10.0)
+    del ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_epoch_mismatch_forfeits_unrecorded():
+    ended = _completion_record(10.0)
+    ended.update(ERC.deadline_stamp(20.0))
+    ended[ERC.FIELD_DEADLINE_EPOCH] = ended[ERC.FIELD_DEADLINE_EPOCH] + "-other"
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_bool_complete_at_forfeits_unrecorded():
+    ended = {
+        ERC.FIELD_RESULT_COMPLETE_AT: True,
+        ERC.FIELD_RESULT_COMPLETE_EPOCH: ERC.mono_epoch(),
+        ERC.FIELD_RESULT_COMPLETE_SHA256: _DIGEST_X,
+        ERC.FIELD_DEADLINE_MONO: 20.0,
+        ERC.FIELD_DEADLINE_EPOCH: ERC.mono_epoch(),
+    }
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_bool_deadline_mono_forfeits_unrecorded():
+    ended = _completion_record(10.0)
+    ended[ERC.FIELD_DEADLINE_MONO] = False
+    ended[ERC.FIELD_DEADLINE_EPOCH] = ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_equality_at_deadline_admits():
+    ended = _completion_record(15.0)
+    ended.update(ERC.deadline_stamp(15.0))
+    assert ERC.completion_window(ended, _DIGEST_X) == ("admit", None)
+
+
+def test_completion_window_deadline_without_completion_forfeits_unrecorded():
+    ended = {ERC.FIELD_DEADLINE_MONO: 20.0, ERC.FIELD_DEADLINE_EPOCH: ERC.mono_epoch()}
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+@pytest.mark.parametrize("bad_payload", [
+    None,
+    "",
+    "A" * 64,
+    "a" * 63,
+])
+def test_completion_window_bad_payload_sha256_forfeits_mismatch(bad_payload):
+    ended = _completion_record(10.0)
+    assert ERC.completion_window(ended, bad_payload) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH,
+    )
+
+
+def test_completion_window_valid_different_digest_forfeits_payload_mismatch():
+    ended = _completion_record(10.0, digest=_DIGEST_X)
+    digest_b = ERC.payload_digest(b"y")
+    assert digest_b is not None
+    assert digest_b != _DIGEST_X
+    assert ERC.completion_window(ended, digest_b) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_PAYLOAD_MISMATCH,
+    )
+
+
+def test_completion_window_nested_complete_at_forfeits_unrecorded():
+    ended = {
+        ERC.FIELD_RESULT_COMPLETE_AT: {"a": 1},
+        ERC.FIELD_RESULT_COMPLETE_EPOCH: ERC.mono_epoch(),
+        ERC.FIELD_RESULT_COMPLETE_SHA256: _DIGEST_X,
+    }
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_UNRECORDED,
+    )
+
+
+def test_completion_window_after_deadline_forfeits():
+    ended = _completion_record(25.0)
+    ended.update(ERC.deadline_stamp(20.0))
+    assert ERC.completion_window(ended, _DIGEST_X) == (
+        "forfeit", ERC.REFUSAL_RESULT_COMPLETION_AFTER_DEADLINE,
+    )
+
+
+@pytest.mark.parametrize("mono_now", [True, False, "x", None, {}])
+def test_completion_stamp_bad_mono_now_returns_none(mono_now):
+    assert ERC.completion_stamp(mono_now, _DIGEST_X) is None
+
+
+@pytest.mark.parametrize("digest", [None, "", "A" * 64, "a" * 63, 1])
+def test_completion_stamp_bad_digest_returns_none(digest):
+    assert ERC.completion_stamp(10.0, digest) is None
+
+
+@pytest.mark.parametrize("mono_deadline", [True, False, "x", None, {}])
+def test_deadline_stamp_bad_mono_deadline_returns_none(mono_deadline):
+    assert ERC.deadline_stamp(mono_deadline) is None
+
+
+# --- canonical_payload_digest (#1273 WO-B) ---
+
+
+def test_canonical_payload_digest_stable_across_key_order():
+    first = ERC.canonical_payload_digest({"a": 1, "b": 2})
+    second = ERC.canonical_payload_digest({"b": 2, "a": 1})
+    assert first is not None
+    assert first == second
+
+
+def test_canonical_payload_digest_literal():
+    # axis: the literal hex is the cross-process contract for canonical_payload_digest
+    payload = {
+        "z": "café",
+        "a": {"nested": True},
+        "m": [1, "two", {"three": 3}],
+        "b": 2,
+    }
+    assert ERC.canonical_payload_digest(payload) == (
+        "2b185d042f72ca66e7d6e6d19e9c6fb8ef2c3f124ab59b41a4ef585fc4814bef"
+    )
+
+
+@pytest.mark.parametrize("bad_obj", [
+    [],
+    "x",
+    {"nested": {1, 2}},
+    {"value": float("nan")},
+])
+def test_canonical_payload_digest_returns_none_for_edge_one_inputs(bad_obj):
+    assert ERC.canonical_payload_digest(bad_obj) is None
+
+
+@pytest.mark.parametrize("bad_digest", [
+    "+" + "a" * 63,
+    "a_" + "a" * 62,
+    "A" * 64,
+    "a" * 63,
+    "a" * 65,
+    1,
+])
+def test_is_valid_sha256_hex_rejects_non_canonical_shapes(bad_digest):
+    assert ERC._is_valid_sha256_hex(bad_digest) is False
+
+
+def test_is_valid_sha256_hex_accepts_hashlib_output():
+    digest = ERC.payload_digest(b"x")
+    assert ERC._is_valid_sha256_hex(digest) is True

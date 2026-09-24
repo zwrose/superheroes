@@ -14,12 +14,19 @@ _MODELS: dict[str, dict[str, dict]] = {
     "claude": {
         "haiku-4.5": {"family": "anthropic", "dispatch": "haiku", "override_only": False},
         "sonnet-5": {"family": "anthropic", "dispatch": "sonnet", "override_only": False},
-        "opus-5": {"family": "anthropic", "dispatch": "opus", "override_only": False},
-        "fable-5": {"family": "anthropic", "dispatch": "fable", "override_only": True},
+        "opus-5.5": {"family": "anthropic", "dispatch": "opus", "override_only": False},
+        "fable-5.1": {"family": "anthropic", "dispatch": "fable", "override_only": True},
     },
     "codex": {
         "gpt-5.6-terra": {"family": "openai", "dispatch": "gpt-5.6-terra", "override_only": False},
         "gpt-5.6-sol": {"family": "openai", "dispatch": "gpt-5.6-sol", "override_only": False},
+        "gpt-6-astra": {
+            "family": "openai",
+            "dispatch": "gpt-6-astra",
+            "override_only": False,
+            "efforts": ("high",),
+            "pin_roles": ("reviewer-deep",),
+        },
     },
     # family is an independence-accounting key (panel maker exclusion), not vendor attribution.
     # Both cursor first-party models share ONE family so a ladder rung-up does not change the
@@ -55,13 +62,14 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
     "claude": (
         ("haiku-4.5", "medium"),
         ("sonnet-5", "high"),
-        ("opus-5", "high"),
-        ("opus-5", "xhigh"),
+        ("opus-5.5", "high"),
+        ("opus-5.5", "xhigh"),
     ),
     "codex": (
         ("gpt-5.6-terra", "high"),
         ("gpt-5.6-sol", "high"),
         ("gpt-5.6-sol", "xhigh"),
+        ("gpt-6-astra", "high"),
     ),
     "cursor": (
         ("composer-2.5", None),
@@ -81,7 +89,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": ("composer-2.5", None),
     },
     "doc-reviser": {
-        "claude": ("opus-5", "high"),
+        "claude": ("opus-5.5", "high"),
         "codex": ("gpt-5.6-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
@@ -91,22 +99,22 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer-deep": {
-        "claude": ("opus-5", "xhigh"),
+        "claude": ("opus-5.5", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "verifier": {
-        "claude": ("opus-5", "high"),
+        "claude": ("opus-5.5", "high"),
         "codex": ("gpt-5.6-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "brief-check": {
-        "claude": ("opus-5", "xhigh"),
+        "claude": ("opus-5.5", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "synthesis": {
-        "claude": ("opus-5", "high"),
+        "claude": ("opus-5.5", "high"),
         "codex": None,
         "cursor": None,
     },
@@ -120,7 +128,15 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "codex": None,
         "cursor": None,
     },
+    "registration-probe": {
+        "claude": None,
+        "codex": ("gpt-6-astra", "high"),
+        "cursor": None,
+    },
 }
+
+# auditor seats at the verifier's cells until an owner call separates them
+_MATRIX["auditor"] = dict(_MATRIX["verifier"])
 
 _ROLE_META: dict[str, dict] = {
     "orchestrator": {
@@ -154,6 +170,14 @@ _ROLE_META: dict[str, dict] = {
         "read_write": "read",
         "pin_eligible": False,
         "owner_tunable": True,
+    },
+    "auditor": {
+        "model_tier_role": False,
+        "engine_pref_key": "reviewer",
+        "codex_kind": None,
+        "read_write": "read",
+        "pin_eligible": False,
+        "owner_tunable": False,
     },
     "mechanical": {
         "model_tier_role": True,
@@ -211,7 +235,17 @@ _ROLE_META: dict[str, dict] = {
         "pin_eligible": False,
         "owner_tunable": False,
     },
+    "registration-probe": {
+        "model_tier_role": False,
+        "engine_pref_key": None,
+        "codex_kind": "review",
+        "read_write": "read",
+        "pin_eligible": False,
+        "owner_tunable": False,
+    },
 }
+
+_HOST_MODEL_PREFIX_FAMILY = (("claude-", "anthropic"), ("gpt-", "openai"))
 
 # --- Claude tier-alias resolution (verified, not assumed; issue #639) ---------------------------
 # Claude dispatch tokens are tier ALIASES (`opus`, `sonnet`, `haiku`, `fable`): the harness resolves
@@ -226,13 +260,13 @@ _ROLE_META: dict[str, dict] = {
 #
 # Probed live with `claude -p --model <alias>`; re-run and re-stamp on a harness upgrade.
 CLAUDE_ALIAS_RESOLUTION = {
-    "harness": "claude-code/2.1.219",
-    "verified": "2026-07-26",
+    "harness": "claude-code/2.1.280",
+    "verified": "2026-09-23",
     "resolved": {
         "haiku": "claude-haiku-4-5-20251001",
         "sonnet": "claude-sonnet-5",
-        "opus": "claude-opus-5",
-        "fable": "claude-fable-5",
+        "opus": "claude-opus-5-5",
+        "fable": "claude-fable-5-1",
     },
 }
 
@@ -292,7 +326,14 @@ def matrix_config(role: str, vendor: str) -> tuple[str, str | None] | None:
 
 
 def ladder(vendor: str) -> tuple[tuple[str, str | None], ...]:
-    return _LADDERS.get(vendor, ())
+    raw = _LADDERS.get(vendor, ())
+    out: list[tuple[str, str | None]] = []
+    for model_id, effort in raw:
+        rec = _MODELS.get(vendor, {}).get(model_id, {})
+        if rec.get("registration") == "probe-pending":
+            continue
+        out.append((model_id, effort))
+    return tuple(out)
 
 
 def effort_enum(vendor: str) -> tuple[str, ...]:
@@ -372,7 +413,7 @@ def validate_config(
 def escalate(
     vendor: str, model_id: str, effort: str | None
 ) -> tuple[str, str, str | None] | None:
-    rungs = _LADDERS.get(vendor)
+    rungs = ladder(vendor)
     if not rungs:
         return None
     pos = None
@@ -387,7 +428,10 @@ def escalate(
         return (vendor, nxt_m, nxt_e)
     vi = VENDORS.index(vendor)
     next_vendor = VENDORS[(vi + 1) % len(VENDORS)]
-    first_m, first_e = _LADDERS[next_vendor][0]
+    next_rungs = ladder(next_vendor)
+    if not next_rungs:
+        return None
+    first_m, first_e = next_rungs[0]
     return (next_vendor, first_m, first_e)
 
 
@@ -483,6 +527,59 @@ def codex_peer_for_claude_tier(claude_short: str) -> str:
 
 def codex_pin_roles() -> tuple[str, ...]:
     return _CODEX_PIN_ROLES
+
+
+def codex_pin_verdict(role: object, model: object) -> tuple[bool, str | None]:
+    """The ONLY place a codex per-role pin is judged. Never raises. The pin must resolve on the role's own codex allowlist so the writer, the composer and the dispatch guard agree."""
+    if not _is_str(role):
+        return False, "unknown role %r rejected" % role
+    if not _is_str(model):
+        return False, "unknown model %r rejected" % model
+    if role not in _CODEX_PIN_ROLES:
+        return False, "unknown role %r rejected" % role
+    codex_models = _MODELS.get("codex", {})
+    if model not in codex_models:
+        return False, "unknown model %r rejected" % model
+    rec = codex_models[model]
+    if rec.get("registration") == "probe-pending":
+        return (
+            False,
+            "pin-probe-pending: %s is not yet a valid pin — its registration waits on the "
+            "security-lens probe's recorded pass" % model,
+        )
+    pin_roles = rec.get("pin_roles")
+    if pin_roles and role not in pin_roles:
+        eligible = ", ".join(pin_roles)
+        return (
+            False,
+            "pin-role-not-eligible: %s is a valid pin only for %s" % (model, eligible),
+        )
+    resolved = resolve_dispatch(role, "codex", model, None)
+    if not resolved.get("ok"):
+        return (
+            False,
+            "pin-not-on-allowlist: %s is not on the %s codex allowlist [%s]"
+            % (model, role, _allowlist_park_text(allowlist(role, "codex"))),
+        )
+    return True, None
+
+
+def host_family(model_str: object) -> str | None:
+    """Map a host model id or dispatch token to its maker family. Never raises."""
+    if not _is_str(model_str) or not model_str:
+        return None
+    s = model_str
+    bracket = s.rfind("[")
+    if bracket != -1:
+        s = s[:bracket]
+    for vendor in VENDORS:
+        for model_id, rec in _MODELS[vendor].items():
+            if s == model_id or s == rec.get("dispatch"):
+                return rec["family"]
+    for prefix, family in _HOST_MODEL_PREFIX_FAMILY:
+        if s.startswith(prefix):
+            return family
+    return None
 
 
 def codex_role_kind() -> dict[str, str]:

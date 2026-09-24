@@ -4,6 +4,9 @@ A new outcome member is a fall-open vector (#732 pattern): consumers that compar
 against the old members silently mis-handle the new one. ``test_dispatch_outcome_census.py``
 keeps producers and consumers honest — no module outside this file may name an outcome
 token as a literal.
+
+Run-dir refusal detail tokens (``run-dir-is-symlink``, ``run-dir-not-empty-unopened``,
+``run-dir-reused``) also live here; ``test_run_dir_refusal_census.py`` binds them.
 """
 REASON_FORFEITED = "forfeited"
 REASON_VACUOUS = "vacuous"
@@ -38,6 +41,16 @@ STAGE_DELIVERED = "delivered"
 
 CLASSIFICATION_REFUSAL = "refusal"
 CLASSIFICATION_RESULT = "result"
+
+DETAIL_RUN_DIR_IS_SYMLINK = "run-dir-is-symlink"
+DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED = "run-dir-not-empty-unopened"
+DETAIL_RUN_DIR_REUSED = "run-dir-reused"
+
+ALL_RUN_DIR_REFUSAL_DETAILS = frozenset({
+    DETAIL_RUN_DIR_IS_SYMLINK,
+    DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED,
+    DETAIL_RUN_DIR_REUSED,
+})
 
 
 def exit_code(classification):

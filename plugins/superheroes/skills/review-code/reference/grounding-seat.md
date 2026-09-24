@@ -55,8 +55,8 @@ python3 -B "$ROOT_DIR/lib/grounding_stage.py" stage --session-dir "$SESSION_DIR"
 
 An **engine** seat reads `SUPERHEROES_PR_BODY.md` relative to its working directory (the
 sanitized view root), materialized by
-`dispatch-review --pr-body-path <file> --session-dir "$SESSION_DIR"`; **those two flags are
-an inseparable pair — supplying one without the other is refused.** A **native host** seat
+`dispatch-review --pr-body-path <file> --session-dir "$SESSION_DIR"` (the pairing and its
+refusal token are declared at `skills/workhorse/reference/dispatch-entry.md`). A **native host** seat
 reads the absolute `<session>/grounding/pr-body.md` named in its order. Any other vendor
 path refuses `stage-unreachable-for-vendor`. Both verbs take `--vendor-path {engine,native}`
 and pass it to the same chokepoint validator.
