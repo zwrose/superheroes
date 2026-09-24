@@ -18,14 +18,16 @@ import struct
 import subprocess
 import sys
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import background_outcome  # noqa: E402
 import config_dir  # noqa: E402
+import engine_adapter  # noqa: E402
+import engine_dispatch  # noqa: E402
 import engine_pref  # noqa: E402
 import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
@@ -58,6 +60,14 @@ OPUS_TIER = "opus"
 OPUS_DEFAULT_EFFORT = "medium"
 
 STANDING_EXCLUSIONS = {"releasePRsExcluded": True, "forcePush": "never"}
+
+# The dispatch shell's claude refusal family (engine_dispatch run-open), applied to a launch.
+CONFIG_DIR_UNRESOLVABLE = "config-dir-unusable:unresolvable"
+CONFIG_DIR_NOT_A_DIRECTORY = "config-dir-unusable:not-a-directory"
+# How long the `claude --bg` acknowledging process may take to print its id and exit, and how
+# long a stop may take to end the session's process before the stop counts as unconfirmed.
+_ACK_WAIT_SECONDS = 30
+_STOP_CONFIRM_SECONDS = 10
 
 _SETTLE_SECONDS = 20
 _MAX_ATTEMPTS = 3
@@ -1069,6 +1079,15 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     }
 
 
+def _config_dir_refusal(path):
+    """The dispatch shell's claude token for a config root a lane cannot run under, or None."""
+    if path is None:
+        return CONFIG_DIR_UNRESOLVABLE
+    if not os.path.isdir(path):
+        return CONFIG_DIR_NOT_A_DIRECTORY
+    return None
+
+
 def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, effort=None):
     """Compose prompt and argv. Never raises."""
     loader = doctrine_loader or launch_doctrine.load
@@ -1094,18 +1113,21 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     effort_result = _resolve_effort(effort, token)
     if not effort_result["ok"]:
         return effort_result
-    session_id = str(uuid.uuid4())
-    # The same argv is reused if launch_build retries, so the session id is reused
-    # too. That is safe because the only retrying path is spawn-oserror, where
-    # Popen raised and no child ever started — every other failure is terminal
-    # with no re-spawn.
-    argv = ["claude", "--model", token, "--session-id", session_id, "-p", prompt]
+    # The adapter is the one home for a claude argv; a builder is its background role kind.
+    # No session id is minted: `claude --bg` assigns its own (it ignores --session-id), so the
+    # launcher learns it from the per-account listing after the launch acknowledges.
+    built = engine_adapter.build_argv_result(
+        {"vendor": "claude", "model": token, "effort": effort_result["effort"]},
+        engine_adapter.ROLE_KIND_BUILDER,
+        {"claudeMode": engine_adapter.MODE_BACKGROUND, "prompt": prompt},
+    )
+    if built.get("reason") is not None:
+        return _fail("builder-argv-refused:%s" % built["reason"], detail=built.get("detail"))
     return {
         "ok": True,
         "reason": None,
         "prompt": prompt,
-        "argv": argv,
-        "sessionId": session_id,
+        "argv": built["argv"],
         "model": token,
         "modelResolution": {
             "tier": resolution["tier"],
@@ -1211,6 +1233,7 @@ def _spawn_attempt(
     cwd=None,
     evidence=None,
     effort=None,
+    deadline=None,
 ):
     """Spawn one attempt in the build worktree; return dict with ok, proc, reason.
 
@@ -1234,20 +1257,23 @@ def _spawn_attempt(
     if resolved["ok"]:
         child_env[hb.HEARTBEAT_ROOT_ENV] = resolved["root"]
     # The config root is PINNED here rather than left to inheritance (#1246). A spawned
-    # `claude -p` child with no CLAUDE_CONFIG_DIR dies "OAuth session expired" — an error
-    # that reads as an auth failure and is really an unset variable — so a caller who forgot
-    # the export killed an unattended lane. Pinning it at the one place a child is born is
-    # what makes the export impossible to forget, exactly as the effort pin below does.
+    # claude child with no CLAUDE_CONFIG_DIR dies "OAuth session expired" — an error that reads
+    # as an auth failure and is really an unset variable — and a background session launched
+    # without it lands under the DEFAULT account, invisible to this launcher's listing (LEDGERS
+    # §5.4). Pinning it at the one place a child is born is what makes the export impossible to
+    # forget, exactly as the effort pin below does.
     # This is NOT an override: `spawn_config_dir` reads a caller-provided value first, so a
     # deliberate export wins and only the default is supplied. It is also the SAME call the
     # `reserved` record makes, on the same `env` and the same `cwd` (the record passes the
     # worktree path this spawn runs in) — so the recorded configDir and the injected value
-    # agree by construction, not by two sites happening to derive the same answer. None means
-    # no absolute root could be derived: inject nothing and leave the inherited value alone,
-    # matching the record, which omits the field on exactly that branch.
+    # agree by construction, not by two sites happening to derive the same answer.
     config_dir = spawn_config_dir(env=env, cwd=cwd)
-    if config_dir is not None:
-        child_env[CONFIG_DIR_ENV] = config_dir
+    # Rechecked here, at the spawn boundary, as the dispatch shell does: the root can vanish
+    # between the pre-reservation gate and the spawn.
+    config_refusal = _config_dir_refusal(config_dir)
+    if config_refusal is not None:
+        return {"ok": False, "reason": config_refusal, "proc": None}
+    child_env[CONFIG_DIR_ENV] = config_dir
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
     # Assignment, not defaulting: the launching session's ambient effort variables are already
     # in `child_env` via `_scrub_env`, so a pinned effort must overwrite the documented input or
@@ -1278,20 +1304,52 @@ def _spawn_attempt(
     out_fh.close()
     err_fh.close()
 
+    # The spawned process only acknowledges; the lane is the background session it opened.
+    # `started` is written for the SESSION (its pid, from the listing), because every watcher
+    # on every checkout probes `started.pid` — the acknowledging process exits in seconds and
+    # would read as a dead builder.
+    shake = _background_handshake(proc, log_path, cwd, config_dir, deadline)
+    background_id = shake.get("backgroundId")
     started = {
         "event": "started",
         "launchId": launch_id,
         "ts": time.time(),
         "schema": ll.SCHEMA,
         "attempt": attempt,
-        "pid": proc.pid,
+        "pid": shake.get("pid"),
         "logPath": log_path,
         "errPath": err_path,
     }
+    if background_id is not None:
+        started["backgroundId"] = background_id
+    if shake.get("sessionId") is not None:
+        started["sessionId"] = shake["sessionId"]
+    pins = {CONFIG_DIR_ENV: config_dir}
+    if effort is not None:
+        pins[EFFORT_ENV] = effort
+    started["envPins"] = pins
     if isinstance(evidence, str) and evidence.strip():
         started["evidence"] = evidence
+
+    if not shake["ok"]:
+        failed = {"ok": False, "reason": shake["reason"], "proc": proc,
+                  "detail": shake.get("detail"), "backgroundId": background_id}
+        if background_id is None:
+            return failed
+        failed["stop"] = _stop_background(background_id, config_dir, cwd, shake.get("pid"), proc)
+        if failed["stop"] == "stopped":
+            return failed
+        # A session that may still be running is never recorded as refused. With its pid known
+        # it is recorded as a started lane, so every watcher sees it live; without one the lane
+        # stays reserved-only and the result names the id to reconcile.
+        failed["refused"] = True
+        if started["pid"] is not None:
+            _append_under_lock(repo_root, started, env=env)
+        return failed
+
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
+        _stop_background(background_id, config_dir, cwd, started["pid"], proc)
         term = _terminalize(
             repo_root,
             launch_id,
@@ -1303,7 +1361,7 @@ def _spawn_attempt(
             started_repair=dict(
                 {
                     "attempt": attempt,
-                    "pid": proc.pid,
+                    "pid": started["pid"],
                     "logPath": log_path,
                     "errPath": err_path,
                 },
@@ -1313,22 +1371,107 @@ def _spawn_attempt(
         fail_reason = _terminalization_reason(term, append_result["reason"])
         return {"ok": False, "reason": fail_reason, "proc": None, "refused": True}
 
-    return {"ok": True, "proc": proc}
+    return {"ok": True, "proc": proc, "pid": started["pid"], "backgroundId": background_id,
+            "sessionId": started["sessionId"]}
 
 
-def _observe_settle(proc, settle_seconds, deadline=None):
+def _pid_alive(pid, proc=None):
+    """True while ``pid`` runs. The launcher's own child is read through poll() so an exited
+    child is never mistaken for a live one while it waits to be reaped. Never raises."""
+    if proc is not None and proc.pid == pid:
+        return proc.poll() is None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _read_ack(log_path):
+    try:
+        with open(log_path, "rb") as fh:
+            data = fh.read(64 * 1024)
+    except OSError:
+        return None
+    return engine_adapter.claude_launch_id(data.decode("utf-8", errors="replace"))
+
+
+def _background_handshake(proc, log_path, cwd, config_dir, deadline):
+    """Grade a `claude --bg` launch. An acknowledgement alone is never a launched lane: the
+    session must be listed under the lane's config root, in the lane's worktree, with a pid and
+    a session id. Returns ok with backgroundId/sessionId/pid, or a background_outcome token.
+    Never raises."""
+    limit = time.monotonic() + _ACK_WAIT_SECONDS
+    if deadline is not None:
+        limit = min(limit, deadline)
+    rc = proc.poll()
+    while rc is None and time.monotonic() < limit:
+        time.sleep(0.1)
+        rc = proc.poll()
+    background_id = _read_ack(log_path)
+    refusal = {"ok": False, "backgroundId": background_id}
+    if rc is None or rc != 0:
+        detail = "ack-timeout" if rc is None else "exit:%s" % rc
+        return dict(refusal, reason=background_outcome.REFUSAL_LAUNCH_FAILED, detail=detail)
+    if background_id is None:
+        return dict(refusal, reason=background_outcome.REFUSAL_LAUNCH_UNACKNOWLEDGED)
+    row, reason = None, background_outcome.REFUSAL_AGENTS_UNREADABLE
+    for pause in (0, 1):
+        time.sleep(pause)
+        rows, listing_ok = engine_dispatch.claude_agents_rows(config_dir, cwd)
+        if not listing_ok:
+            continue
+        row = engine_dispatch.claude_agent_row_for_launch(rows, background_id)
+        if row is not None:
+            break
+        reason = background_outcome.REFUSAL_SESSION_UNLISTED
+    if row is None:
+        return dict(refusal, reason=reason, detail="row-absent")
+    pid = row.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 2:
+        pid = None
+    refusal["pid"] = pid
+    session_id = row.get("sessionId")
+    row_cwd = row.get("cwd")
+    if not ll.valid_background_session_id(session_id, background_id):
+        return dict(refusal, reason=background_outcome.REFUSAL_SESSION_UNLISTED, detail="session-id")
+    if pid is None:
+        return dict(refusal, reason=background_outcome.REFUSAL_SESSION_UNLISTED, detail="pid")
+    if not isinstance(row_cwd, str) or os.path.realpath(row_cwd) != os.path.realpath(cwd):
+        return dict(refusal, reason=background_outcome.REFUSAL_SESSION_UNLISTED, detail="cwd")
+    return {"ok": True, "backgroundId": background_id, "sessionId": session_id, "pid": pid}
+
+
+def _stop_background(background_id, config_dir, cwd, pid, proc=None):
+    """Stop a session the launcher is not keeping. `stopped` only when confirmed: the stop
+    command succeeded and, when the session pid is known, that pid is gone. Never raises."""
+    rc, _out, _err = engine_dispatch.claude_cli(["stop", background_id], config_dir, cwd=cwd)
+    if rc != 0:
+        return "stop-unconfirmed"
+    if pid is None:
+        return "stopped"
+    limit = time.monotonic() + _STOP_CONFIRM_SECONDS
+    while _pid_alive(pid, proc):
+        if time.monotonic() >= limit:
+            return "stop-unconfirmed"
+        time.sleep(0.2)
+    return "stopped"
+
+
+def _observe_session_settle(proc, pid, settle_seconds, deadline=None):
+    """Watch the lane's session pid through the settle window: "deadline", "exited", or None
+    when it is still running at the end of the window."""
     settle_deadline = time.monotonic() + settle_seconds
-    while time.monotonic() < settle_deadline:
+    while True:
         if deadline is not None and time.monotonic() >= deadline:
             return "deadline"
-        rc = proc.poll()
-        if rc is not None:
-            return rc
+        if not _pid_alive(pid, proc):
+            return "exited"
+        if time.monotonic() >= settle_deadline:
+            return None
         time.sleep(0.1)
-    if deadline is not None and time.monotonic() >= deadline:
-        return "deadline"
-    rc = proc.poll()
-    return rc
 
 
 def launch_build(
@@ -1398,6 +1541,11 @@ def launch_build(
                 foreign_override = True
     else:
         seat = {"instance": None, "reason": "seat-pid-absent"}
+    config_refusal = _config_dir_refusal(requested)
+    if config_refusal is not None:
+        return _fail(  # pre-reservation: the lane's config root must exist before anything runs
+            config_refusal, requestedInstance=requested, launchId=launch_id,
+        )
 
     preflight_result = walk_preflight(
         checks_input,
@@ -1564,7 +1712,6 @@ def launch_build(
         "effort": compose_result["effort"] or "",
         "effortSource": compose_result["effortSource"],
         "worktree": worktree_path,
-        "sessionId": compose_result["sessionId"],
     }
     config_dir = spawn_config_dir(env=env, cwd=worktree_path)
     if config_dir is not None:
@@ -1681,9 +1828,15 @@ def launch_build(
             cwd=worktree_path,
             evidence=overlap_evidence,
             effort=compose_result["effort"],
+            deadline=deadline,
         )
+        background_extra = {
+            key: spawn_result[key]
+            for key in ("detail", "backgroundId", "stop")
+            if spawn_result.get(key) is not None
+        }
         if spawn_result.get("refused"):
-            return _post_reserve_fail(spawn_result["reason"])
+            return _post_reserve_fail(spawn_result["reason"], **background_extra)
         if spawn_result.get("oserror"):
             if attempt >= max_attempts:
                 term = _terminalize(
@@ -1753,14 +1906,15 @@ def launch_build(
                 False,
                 spawn_result["reason"],
                 stage="spawn",
+                proc=spawn_result.get("proc"),
                 env=env,
             )
             reason = _terminalization_reason(term, spawn_result["reason"])
-            return _post_reserve_fail(reason)
+            return _post_reserve_fail(reason, **background_extra)
 
         child_ever_spawned = True
         proc = spawn_result["proc"]
-        rc = _observe_settle(proc, settle_seconds, deadline=deadline)
+        rc = _observe_session_settle(proc, spawn_result["pid"], settle_seconds, deadline=deadline)
         if rc == "deadline":
             term = _terminalize(
                 repo_root,
@@ -1778,7 +1932,9 @@ def launch_build(
                 "ok": True,
                 "reason": None,
                 "launchId": launch_id,
-                "pid": proc.pid,
+                "pid": spawn_result["pid"],
+                "backgroundId": spawn_result["backgroundId"],
+                "sessionId": spawn_result["sessionId"],
                 "logPath": log_path,
                 "errPath": err_path,
                 "attempt": attempt,
@@ -1790,20 +1946,17 @@ def launch_build(
                 "warnings": warnings,
             }
 
-        evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
+        # The session is not the launcher's child, so its exit code is not observable here.
         term = _terminalize(
             repo_root,
             launch_id,
             True,
-            evidence,
-            evidence=evidence,
+            "session-exited",
+            evidence="session-exited",
             proc=proc,
             env=env,
         )
-        if rc == 0:
-            reason = _terminalization_reason(term, "settle-exit-zero-uncertain")
-            return _post_reserve_fail(reason)
-        reason = _terminalization_reason(term, "settle-nonzero-exit")
+        reason = _terminalization_reason(term, "settle-session-exited")
         return _post_reserve_fail(reason)
 
 

@@ -247,7 +247,19 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "engine-model-effort-conflict",
     "invalid-model-effort",
     "untokenizable",
+    "builder-requires-background",
 })
+
+# The launcher's role kind: a headless builder opened as a claude background session. Unlike
+# "build"/"fix" it carries no --restricted and no --permission-mode — a builder runs under the
+# target instance's own settings, exactly as the print-mode builder it replaces did.
+ROLE_KIND_BUILDER = "builder"
+
+
+def claude_cli_argv(args):
+    """The argv for a claude management verb (``agents``, ``stop``). The ONE other claude argv
+    in the tree lives here beside build_argv_result, so no module outside this file mints one."""
+    return ["claude"] + [str(a) for a in args]
 
 
 def _refuse(reason, *, detail=None):
@@ -473,6 +485,13 @@ def build_argv_result(seat, role_kind, opts):
     is_read = role_kind == "review"
     claude_tier = opts.get("model")
     claude_mode = opts.get("claudeMode")
+    is_builder = role_kind == ROLE_KIND_BUILDER
+    if is_builder and claude_mode != MODE_BACKGROUND:
+        return _refuse(
+            "builder-requires-background",
+            detail="role kind %r opens a background session; claudeMode must be %r, got %r"
+            % (ROLE_KIND_BUILDER, MODE_BACKGROUND, claude_mode),
+        )
     if claude_mode is not None and claude_mode != MODE_PRINT:
         modes_label = ", ".join(CLAUDE_MODES)
         if not isinstance(claude_mode, str):
@@ -570,7 +589,12 @@ def build_argv_result(seat, role_kind, opts):
         fable_id = fable_parsed[0] if fable_parsed else None
         if fable_id is not None and engine_model == fable_id:
             return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail("fable"))
-        ok, _reason = model_registry.validate_config("claude", engine_model, effort)
+        if is_builder and effort is None:
+            # None is the launcher's documented inherit case: the model is still checked
+            # against the registry, and no --effort flag is emitted.
+            ok = engine_model in model_registry.claude_models()
+        else:
+            ok, _reason = model_registry.validate_config("claude", engine_model, effort)
         if not ok:
             return _refuse(
                 "invalid-model-effort",
@@ -582,6 +606,13 @@ def build_argv_result(seat, role_kind, opts):
                 "untokenizable",
                 detail=_untokenizable_detail("claude", engine_model, effort),
             )
+        if is_builder:
+            # The prompt is positional after `--` (probed on 2.1.281: --bg takes it that way
+            # and ignores --session-id, so no session id is minted here).
+            argv = ["claude", "--bg", "--model", tok]
+            if effort is not None:
+                argv += ["--effort", effort]
+            return _ok(argv + ["--", str(opts.get("prompt") or "")])
         if claude_mode == MODE_BACKGROUND:
             argv = ["claude", "--bg", "--model", tok, "--effort", effort]
         else:

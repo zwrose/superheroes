@@ -21,6 +21,7 @@ from test_launcher import (  # noqa: E402
     _ledger_env,
     _make_spawn_fn,
     _valid_premise,
+    _autouse_background_standins,  # noqa: F401 — autouse fixture, applies here by import
 )
 
 
@@ -253,7 +254,9 @@ def _scenario_settle_nonzero_exit(repo, log_dir, surfaces, batch_id, monkeypatch
         settle_seconds=10,
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-nonzero-exit"
+    # R28 re-pin (C14 4a): the lane is a background session, not the launcher's child, so its
+    # exit code is unobservable and both exits settle as one token.
+    assert result["reason"] == "settle-session-exited"
     launch_id = result["launchId"]
     _, folded = _assert_p1(repo)
     records = _read_ledger(repo)["records"]
@@ -278,7 +281,9 @@ def _scenario_settle_exit_zero(repo, log_dir, surfaces, batch_id, monkeypatch, i
         settle_seconds=10,
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-exit-zero-uncertain"
+    # R28 re-pin (C14 4a): the lane is a background session, not the launcher's child, so its
+    # exit code is unobservable and both exits settle as one token.
+    assert result["reason"] == "settle-session-exited"
     launch_id = result["launchId"]
     _, folded = _assert_p1(repo)
     records = _read_ledger(repo)["records"]

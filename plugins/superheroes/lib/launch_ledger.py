@@ -1053,6 +1053,16 @@ def _validate_event_fields(rec):
             evidence = rec["evidence"]
             if not isinstance(evidence, str) or not evidence.strip():
                 return "fold-bad-field:started:evidence"
+        # Optional on a lane launched as a background session: the listing's id, the session
+        # id it assigned, and the pins the session was spawned under. An older reader ignores
+        # all three; this one validates each against its declared grammar.
+        if "backgroundId" in rec and not valid_background_id(rec["backgroundId"]):
+            return "fold-bad-field:started:backgroundId"
+        if "sessionId" in rec and not valid_background_session_id(
+                rec["sessionId"], rec.get("backgroundId")):
+            return "fold-bad-field:started:sessionId"
+        if "envPins" in rec and not _valid_env_pins(rec["envPins"]):
+            return "fold-bad-field:started:envPins"
     elif event == "retry":
         attempt = rec["attempt"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
@@ -1068,6 +1078,38 @@ def _validate_event_fields(rec):
         if optional_err:
             return optional_err
     return None
+
+
+_BACKGROUND_ID_HEX = frozenset("0123456789abcdef")
+_ENV_PIN_CONFIG = "CLAUDE_CONFIG_DIR"
+_ENV_PIN_KEYS = frozenset({_ENV_PIN_CONFIG, "CLAUDE_CODE_EFFORT_LEVEL"})
+
+
+def valid_background_id(value):
+    """A background session's listing id: exactly eight lowercase hex characters."""
+    return (isinstance(value, str) and len(value) == 8
+            and all(ch in _BACKGROUND_ID_HEX for ch in value))
+
+
+def valid_background_session_id(session_id, background_id):
+    """A background session id: a UUID that begins with its listing id."""
+    if not valid_background_id(background_id) or not isinstance(session_id, str):
+        return False
+    try:
+        uuid.UUID(session_id)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return session_id.startswith(background_id + "-")
+
+
+def _valid_env_pins(pins):
+    if not isinstance(pins, dict) or _ENV_PIN_CONFIG not in pins:
+        return False
+    if set(pins) - _ENV_PIN_KEYS:
+        return False
+    if not all(isinstance(v, str) and v.strip() for v in pins.values()):
+        return False
+    return os.path.isabs(pins[_ENV_PIN_CONFIG])
 
 
 def fold(records):
@@ -1209,6 +1251,21 @@ def fold(records):
                     "launches": {},
                     "batchDeclarations": batch_declarations,
                 }
+            pins = rec.get("envPins")
+            if (pins is not None and info.get("configDir") is not None
+                    and pins[_ENV_PIN_CONFIG] != info["configDir"]):
+                return {"ok": False, "reason": "fold-bad-field:started:envPins",
+                        "launches": {}, "batchDeclarations": batch_declarations}
+            session_id = rec.get("sessionId")
+            if session_id is not None:
+                # A background lane's session id is learned after the launch, so it rides the
+                # `started` record and wins; a reserved one that disagrees is a corrupt stream.
+                if info.get("sessionId") not in (None, session_id):
+                    return {"ok": False, "reason": "fold-bad-field:started:sessionId",
+                            "launches": {}, "batchDeclarations": batch_declarations}
+                info["sessionId"] = session_id
+            if "backgroundId" in rec:
+                info["backgroundId"] = rec["backgroundId"]
             info["attempts"] += 1
             info["started"] = True
             info["pid"] = rec["pid"]

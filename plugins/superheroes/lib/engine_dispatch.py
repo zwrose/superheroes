@@ -858,7 +858,7 @@ def _claude_cli(args, config_dir, cwd=None, timeout=_CLAUDE_CLI_DEFAULT_TIMEOUT)
     env = _scrub_env()
     if isinstance(config_dir, str) and config_dir:
         env["CLAUDE_CONFIG_DIR"] = config_dir
-    cmd = ["claude"] + list(args)
+    cmd = engine_adapter.claude_cli_argv(args)
     try:
         out = subprocess.run(
             cmd,
@@ -911,6 +911,21 @@ def _claude_agents_rows(config_dir, cwd):
     if rows is None:
         return None, False
     return rows, True
+
+
+def claude_cli(args, config_dir, cwd=None, timeout=_CLAUDE_CLI_DEFAULT_TIMEOUT):
+    """Public face of the claude agents/stop chokepoint, for the launcher. Never raises."""
+    return _claude_cli(args, config_dir, cwd=cwd, timeout=timeout)
+
+
+def claude_agents_rows(config_dir, cwd):
+    """Public face of the per-account background listing, for the launcher. Never raises."""
+    return _claude_agents_rows(config_dir, cwd)
+
+
+def claude_agent_row_for_launch(rows, launch_id):
+    """Public face of the listing-row lookup by launch id, for the launcher."""
+    return _claude_agent_row_for_launch(rows, launch_id)
 
 
 def _claude_agent_row_for_launch(rows, launch_id):

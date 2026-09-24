@@ -108,6 +108,43 @@ def _autouse_seat_config_matches_spawn(monkeypatch):
     monkeypatch.setattr(L, "seat_config_dir", _matching_seat)
 
 
+STANDIN_BACKGROUND_ID = "ab12cd34"
+STANDIN_SESSION_ID = STANDIN_BACKGROUND_ID + "-0000-4000-8000-000000000000"
+
+
+def _standin_handshake(proc, log_path, cwd, config_dir, deadline):
+    """The stand-in child plays the listed background session: its pid is the session pid."""
+    return {"ok": True, "backgroundId": STANDIN_BACKGROUND_ID,
+            "sessionId": STANDIN_SESSION_ID, "pid": proc.pid}
+
+
+def _standin_stop(background_id, config_dir, cwd, pid, proc=None):
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    if proc is not None:
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+    return "stopped"
+
+
+@pytest.fixture(autouse=True)
+def _autouse_background_standins(monkeypatch, tmp_path):
+    # axis: the stand-in child speaks no `claude --bg` handshake and there is no real listing,
+    # so both seams are replaced; the handshake's own grading is tested against the real seam
+    # in test_launcher_background.py. The lane's config root must exist (the launch refuses
+    # `config-dir-unusable:*` otherwise), so an unset one gets a real directory here.
+    monkeypatch.setattr(L, "_background_handshake", _standin_handshake)
+    monkeypatch.setattr(L, "_stop_background", _standin_stop)
+    if not os.environ.get("CLAUDE_CONFIG_DIR"):
+        cfg = tmp_path / "standin-claude-config"
+        cfg.mkdir(exist_ok=True)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+
+
 @pytest.fixture
 def unpatched_seat_config_dir(monkeypatch):
     monkeypatch.setattr(L, "seat_config_dir", _REAL_SEAT_CONFIG_DIR)
@@ -145,6 +182,13 @@ def _valid_premise(repo, **overrides):
 def _spawn_cwd(tmp_path):
     """A build-worktree stand-in: `_spawn_attempt` refuses a cwd that is the repo root."""
     path = tmp_path / "build-worktree"
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def _existing_config_dir(tmp_path, name):
+    """A config root that exists — the launch refuses `config-dir-unusable:*` otherwise."""
+    path = tmp_path / name
     path.mkdir(parents=True, exist_ok=True)
     return str(path)
 
@@ -583,43 +627,28 @@ def test_model_default_opus(tmp_path):
     result = L.compose_launch(repo, 656, premise)
     assert result["ok"] is True
     assert result["model"] == "opus"
-    assert result["argv"][2] == "opus"
+    assert result["argv"][:4] == ["claude", "--bg", "--model", "opus"]
 
 
 def test_compose_argv_shape(tmp_path):
-  # axis: composed argv carries --model with registry token
+  # axis: R28 re-pin (C14 4a) — a builder is a background session: `--bg`, the registry token,
+  # the prompt positional after `--`, and no --session-id (--bg assigns its own) and no -p
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo)
     result = L.compose_launch(repo, 656, premise, model="sonnet")
     assert result["ok"] is True
-    assert result["argv"] == [
-        "claude", "--model", "sonnet", "--session-id", result["sessionId"],
-        "-p", result["prompt"],
-    ]
+    assert result["argv"] == ["claude", "--bg", "--model", "sonnet", "--", result["prompt"]]
+    assert "sessionId" not in result
 
 
-def test_compose_argv_carries_session_id(tmp_path):
-  # axis: --session-id precedes -p and matches the returned sessionId
-    import uuid as _uuid
+def test_compose_opus_argv_carries_the_pinned_effort(tmp_path):
+  # axis: the resolved opus effort rides the argv as well as the env pin
     repo = _init_repo(tmp_path / "repo")
-    premise = _valid_premise(repo)
-    result = L.compose_launch(repo, 656, premise)
+    result = L.compose_launch(repo, 656, _valid_premise(repo))
     assert result["ok"] is True
-    argv = result["argv"]
-    sid_index = argv.index("--session-id")
-    assert argv[sid_index + 1] == result["sessionId"]
-    _uuid.UUID(result["sessionId"])
-    assert argv.index("-p") == sid_index + 2
-
-
-def test_compose_launch_mints_distinct_session_ids(tmp_path):
-  # axis: each compose_launch call gets its own session id
-    repo = _init_repo(tmp_path / "repo")
-    premise = _valid_premise(repo)
-    first = L.compose_launch(repo, 656, premise)
-    second = L.compose_launch(repo, 656, premise)
-    assert first["ok"] is True and second["ok"] is True
-    assert first["sessionId"] != second["sessionId"]
+    assert result["argv"] == [
+        "claude", "--bg", "--model", "opus", "--effort", "medium", "--", result["prompt"],
+    ]
 
 
 def _write_core_with_builder_tier(repo, prefs):
@@ -1333,12 +1362,12 @@ def test_retry_nonzero_exit_parks_no_retry(tmp_path, monkeypatch):
         backoff_seconds=(0,),
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-nonzero-exit"
+    assert result["reason"] == "settle-session-exited"
     assert calls["n"] == 1
     records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "nonzero-exit:1"
+    assert parks[0]["evidence"] == "session-exited"
     retries = [r for r in records if r.get("event") == "retry"]
     assert retries == []
 
@@ -1364,7 +1393,7 @@ def test_nonzero_exit_parks_even_when_worktree_dirty(tmp_path, monkeypatch):
         settle_seconds=0.3,
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-nonzero-exit"
+    assert result["reason"] == "settle-session-exited"
     parks = [
         r for r in ll.read(repo)["records"]
         if r.get("event") == "outcome" and r.get("outcome") == "park"
@@ -1387,13 +1416,13 @@ def test_settle_exit_zero_uncertain(tmp_path, monkeypatch):
         settle_seconds=0.5,
     )
     assert result["ok"] is False
-    assert result["reason"] == "settle-exit-zero-uncertain"
+    assert result["reason"] == "settle-session-exited"
     parks = [
         r for r in ll.read(repo)["records"]
         if r.get("event") == "outcome" and r.get("outcome") == "park"
     ]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "exit-zero"
+    assert parks[0]["evidence"] == "session-exited"
 
 
 def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
@@ -1424,22 +1453,20 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert calls["n"] == 2
     assert len(spawn_argv) == 2
-    sid_index = spawn_argv[0].index("--session-id")
-    session_id = spawn_argv[0][sid_index + 1]
-    assert spawn_argv[1][sid_index + 1] == session_id
+    assert spawn_argv[1] == spawn_argv[0]
     records = ll.read(repo)["records"]
     reserved = [r for r in records if r.get("event") == "reserved"][0]
-    assert reserved["sessionId"] == session_id
-    reserved_sid_index = reserved["argv"].index("--session-id")
-    assert reserved["argv"][reserved_sid_index + 1] == session_id
+    assert "sessionId" not in reserved
+    assert reserved["argv"] == spawn_argv[0]
     retries = [r for r in records if r.get("event") == "retry"]
     assert len(retries) == 1
     assert retries[0]["attempt"] == 1
     assert retries[0]["reason"] == "spawn-oserror"
 
 
-def test_launch_build_reserved_session_id_matches_spawn_argv(tmp_path, monkeypatch):
-  # axis: reserved record sessionId matches spawned --session-id and stored argv
+def test_launch_build_session_id_rides_started_and_argv_matches_spawn(tmp_path, monkeypatch):
+  # axis: R28 re-pin (C14 4a) — the reserved record stores the spawned argv and no session id;
+  # the listed session's id arrives on `started`, with the listing id and the env pins
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
@@ -1460,14 +1487,17 @@ def test_launch_build_reserved_session_id_matches_spawn_argv(tmp_path, monkeypat
     )
     assert result["ok"] is True
     assert len(spawn_argv) == 1
-    sid_index = spawn_argv[0].index("--session-id")
-    session_id = spawn_argv[0][sid_index + 1]
-    reserved = [
-        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
-    ][0]
-    assert reserved["sessionId"] == session_id
-    reserved_sid_index = reserved["argv"].index("--session-id")
-    assert reserved["argv"][reserved_sid_index + 1] == session_id
+    records = ll.read(repo)["records"]
+    reserved = [r for r in records if r.get("event") == "reserved"][0]
+    started = [r for r in records if r.get("event") == "started"][0]
+    assert "sessionId" not in reserved
+    assert reserved["argv"] == spawn_argv[0]
+    assert started["sessionId"] == STANDIN_SESSION_ID == result["sessionId"]
+    assert started["backgroundId"] == STANDIN_BACKGROUND_ID == result["backgroundId"]
+    assert started["envPins"] == {
+        "CLAUDE_CONFIG_DIR": reserved["configDir"], "CLAUDE_CODE_EFFORT_LEVEL": "medium",
+    }
+    assert ll.fold(records)["launches"][result["launchId"]]["sessionId"] == STANDIN_SESSION_ID
     try:
         os.kill(result["pid"], signal.SIGTERM)
     except ProcessLookupError:
@@ -1479,7 +1509,7 @@ def test_launch_build_reserved_config_dir_matches_the_child_env(tmp_path, monkey
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
-    other_instance = str(tmp_path / "claude-two")
+    other_instance = _existing_config_dir(tmp_path, "claude-two")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", other_instance)
     spawned_envs = []
 
@@ -1518,6 +1548,7 @@ def test_launch_build_records_the_default_config_root_when_unset(tmp_path, monke
     log_dir = str(tmp_path / "logs")
     home = tmp_path / "home"
     home.mkdir()
+    (home / ".claude").mkdir()  # R28: the launch now requires the resolved root to exist
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("HOME", str(home))
 
@@ -1541,12 +1572,10 @@ def test_launch_build_records_the_default_config_root_when_unset(tmp_path, monke
         pass
 
 
-def test_relative_config_dir_override_records_the_childs_effective_root(
-    tmp_path, monkeypatch,
-):
-  # axis: a relative override resolves against the CHILD's cwd — the build worktree — so
-  # the recorded root is where the transcript actually lands, not an omission and not the
-  # launcher's own cwd
+def test_relative_config_dir_override_refuses_before_reservation(tmp_path, monkeypatch):
+  # axis: R28 re-pin (C14 4a) — a relative override resolves against the build worktree, which
+  # does not exist yet, so it can hold no credentials: the launch refuses with the dispatch
+  # shell's token before reserving anything, instead of spawning a lane that dies unauthenticated
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
 
     repo = _init_repo(tmp_path / "repo")
@@ -1560,19 +1589,10 @@ def test_relative_config_dir_override_records_the_childs_effective_root(
         spawn_fn=_make_spawn_fn("sleep"),
         settle_seconds=0.2,
     )
-    assert result["ok"] is True, result
-    reserved = [
-        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
-    ][0]
-    assert reserved["configDir"] == os.path.join(
-        reserved["worktree"], "relative", "config",
-    )
-    # And the recorded value is one the grammar accepts, not one that refuses the launch.
-    assert ll.fold(ll.read(repo)["records"])["ok"] is True
-    try:
-        os.kill(result["pid"], signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    assert result["ok"] is False
+    assert result["reason"] == "config-dir-unusable:not-a-directory"
+    assert result["requestedInstance"].endswith(os.path.join("relative", "config"))
+    assert ll.read(repo)["records"] == []
 
 
 def _config_dir_reporting_spawn(report_path):
@@ -1628,6 +1648,7 @@ def test_spawned_child_receives_the_config_dir_default_in_its_environment(
     _ledger_env(tmp_path, monkeypatch)
     home = tmp_path / "home"
     home.mkdir()
+    (home / ".claude").mkdir()  # R28: the launch now requires the resolved root to exist
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("HOME", str(home))
     report = str(tmp_path / "child-config-dir.txt")
@@ -1664,7 +1685,7 @@ def test_spawned_child_config_dir_pin_never_overrides_a_deliberate_export(
   # is not watching.
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    other_instance = str(tmp_path / "claude-two")
+    other_instance = _existing_config_dir(tmp_path, "claude-two")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", other_instance)
     report = str(tmp_path / "child-config-dir.txt")
@@ -1704,7 +1725,7 @@ def test_spawned_child_config_dir_pin_agrees_with_the_record_on_a_padded_export(
   # caller's exact bytes" change from silently reopening that divergence.
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    intended = str(tmp_path / "claude-padded")
+    intended = _existing_config_dir(tmp_path, "claude-padded")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", intended + "  ")
     report = str(tmp_path / "child-config-dir.txt")
@@ -1732,10 +1753,8 @@ def test_spawned_child_config_dir_pin_agrees_with_the_record_on_a_padded_export(
         pass
 
 
-def test_spawned_child_config_dir_pin_resolves_a_relative_export(tmp_path, monkeypatch):
-  # axis: #1246 x #1036 — a relative export is handed to the child already resolved against
-  # the build worktree it runs in. Same directory the child would have reached on its own,
-  # and byte-identical to the recorded value, so the watcher and the child agree.
+def test_spawned_child_never_starts_under_a_relative_export(tmp_path, monkeypatch):
+  # axis: R28 re-pin (C14 4a) — the relative export is refused before any child exists
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
@@ -1750,18 +1769,8 @@ def test_spawned_child_config_dir_pin_resolves_a_relative_export(tmp_path, monke
         spawn_fn=_config_dir_reporting_spawn(report),
         settle_seconds=0.2,
     )
-    assert result["ok"] is True, result
-    reserved = [
-        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
-    ][0]
-    reported = _await_child_report(report)
-    assert reported == os.path.join(reserved["worktree"], "relative", "config")
-    assert os.path.isabs(reported)
-    assert reported == reserved["configDir"]
-    try:
-        os.kill(result["pid"], signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    assert result["reason"] == "config-dir-unusable:not-a-directory"
+    assert not os.path.exists(report)
 
 
 def test_spawn_config_dir_expands_home_in_the_override(monkeypatch, tmp_path):
@@ -2323,7 +2332,7 @@ def test_edge5_nonzero_exit_in_settle_parks(tmp_path, monkeypatch):
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "nonzero-exit:1"
+    assert parks[0]["evidence"] == "session-exited"
     assert refused == []
 
 
@@ -2345,7 +2354,7 @@ def test_edge6_zero_exit_in_settle_parks(tmp_path, monkeypatch):
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     refused = [r for r in records if r.get("event") == "refused"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "exit-zero"
+    assert parks[0]["evidence"] == "session-exited"
     assert refused == []
 
 
@@ -2991,7 +3000,7 @@ def test_c2_edge9_zero_exit_parks(tmp_path, monkeypatch):
     records = ll.read(repo)["records"]
     parks = [r for r in records if r.get("event") == "outcome" and r.get("outcome") == "park"]
     assert len(parks) == 1
-    assert parks[0]["evidence"] == "exit-zero"
+    assert parks[0]["evidence"] == "session-exited"
 
 
 def test_c2_edge10_child_alive_after_settle_no_terminal(tmp_path, monkeypatch):
@@ -4907,9 +4916,10 @@ def test_no_launch_build_return_drops_the_overlap_warnings():
     exempt = [ln for ln in lines if 'reserve_result["reason"]' in ln]
     assert len(exempt) == 1, exempt
     # Pre-reservation refusals return before any reservation exists, so they have no overlap
-    # to disclose. Pinned at exactly two so the exemption cannot quietly widen.
+    # to disclose. Pinned at exactly three so the exemption cannot quietly widen (R28, C14 4a:
+    # the third is the config-root gate, which runs beside the two instance-pin refusals).
     pre_reservation = [ln for ln in lines if "# pre-reservation:" in ln]
-    assert len(pre_reservation) == 2, pre_reservation
+    assert len(pre_reservation) == 3, pre_reservation
 
 
 def test_prespawn_refusal_returns_the_overlap_warnings(tmp_path, monkeypatch):
@@ -5613,11 +5623,10 @@ def test_launch_relative_config_dir_match_proceeds(
         spawn_fn=_make_spawn_fn("sleep"),
         settle_seconds=0.2,
     )
-    assert result["ok"] is True, result
-    try:
-        os.kill(result["pid"], signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    # R28 re-pin (C14 4a): the pin gate passes (the axis), and the launch then refuses because
+    # a relative root inside a not-yet-created worktree cannot exist.
+    assert result["reason"] not in ("launch-foreign-instance-pin", "launch-seat-instance-undetermined")
+    assert result["reason"] == "config-dir-unusable:not-a-directory", result
 
 
 def test_launch_relative_config_dir_mismatch_refuses(
@@ -5715,10 +5724,11 @@ def test_allow_foreign_instance_flag_permits_mismatch_and_records_override(
 ):
     # axis: --allow-foreign-instance proceeds on mismatch and stamps foreignInstanceAllowed
     repo = _init_repo(tmp_path / "repo")
+    launcher_pin = _existing_config_dir(tmp_path, "launcher-pin")  # R28: the launch now requires the root to exist
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", launcher_pin)
     monkeypatch.setattr(
         L,
         "seat_config_dir",
@@ -5751,10 +5761,11 @@ def test_allow_foreign_instance_on_undetermined_seat_omits_seat_instance(
 ):
     # axis: flag on undetermined seat proceeds with foreignInstanceAllowed and no seatInstance
     repo = _init_repo(tmp_path / "repo")
+    launcher_pin = _existing_config_dir(tmp_path, "launcher-pin")  # R28: the launch now requires the root to exist
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-pin")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", launcher_pin)
     monkeypatch.setattr(
         L,
         "seat_config_dir",
@@ -5787,14 +5798,15 @@ def test_allow_foreign_instance_on_matching_launch_writes_no_override_field(
 ):
     # axis: flag passed when nothing to override writes no foreignInstanceAllowed key
     repo = _init_repo(tmp_path / "repo")
+    same_pin = _existing_config_dir(tmp_path, "same-pin")  # R28: the launch now requires the root to exist
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/same-pin")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", same_pin)
     monkeypatch.setattr(
         L,
         "seat_config_dir",
-        lambda env=None: {"instance": "/tmp/same-pin", "reason": None},
+        lambda env=None: {"instance": same_pin, "reason": None},
     )
     result = L.launch_build(
         repo,
@@ -5845,14 +5857,15 @@ def test_launch_proceeds_when_requested_config_dir_is_none(tmp_path, monkeypatch
 def test_seat_instance_on_successful_reserved_record(tmp_path, monkeypatch):
     # axis: normal successful launch writes seatInstance on the reserved record
     repo = _init_repo(tmp_path / "repo")
+    same_pin = _existing_config_dir(tmp_path, "same-pin")  # R28: the launch now requires the root to exist
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/same-pin")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", same_pin)
     monkeypatch.setattr(
         L,
         "seat_config_dir",
-        lambda env=None: {"instance": "/tmp/same-pin", "reason": None},
+        lambda env=None: {"instance": same_pin, "reason": None},
     )
     result = L.launch_build(
         repo,
@@ -5867,7 +5880,7 @@ def test_seat_instance_on_successful_reserved_record(tmp_path, monkeypatch):
     reserved = [
         r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
     ][0]
-    assert reserved["seatInstance"] == "/tmp/same-pin"
+    assert reserved["seatInstance"] == same_pin
     try:
         os.kill(result["pid"], signal.SIGTERM)
     except ProcessLookupError:
@@ -5879,14 +5892,15 @@ def test_seat_instance_on_accounting_reservation_after_preflight_refusal(
 ):
     # axis: _try_reserve_for_refusal accounting reservation carries seatInstance
     repo = _init_repo(tmp_path / "repo")
+    same_pin = _existing_config_dir(tmp_path, "same-pin")  # R28: the launch now requires the root to exist
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
     monkeypatch.setenv("CLAUDE_PID", "4242")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/same-pin")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", same_pin)
     monkeypatch.setattr(
         L,
         "seat_config_dir",
-        lambda env=None: {"instance": "/tmp/same-pin", "reason": None},
+        lambda env=None: {"instance": same_pin, "reason": None},
     )
     checks = _all_checks()
     checks["engine-auth"] = {"state": "fail", "reason": "no auth"}
@@ -5902,7 +5916,7 @@ def test_seat_instance_on_accounting_reservation_after_preflight_refusal(
     reserved = [
         r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
     ][0]
-    assert reserved["seatInstance"] == "/tmp/same-pin"
+    assert reserved["seatInstance"] == same_pin
 
 
 def test_cli_launch_parser_threads_allow_foreign_instance(tmp_path, monkeypatch):

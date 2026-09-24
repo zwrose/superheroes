@@ -239,10 +239,14 @@ def _evidence_from_dispatch(res):
         "toolCalls": eng.get("toolCalls"),
         "stdoutBytes": eng.get("stdoutBytes"),
         "wallSeconds": eng.get("wallSeconds"),
+        # Where toolCalls was read from — a background claude seat's comes from its session
+        # transcript (`claude-transcript`), never from anything the seat authored.
+        "engagementSource": eng.get("source"),
     }
 
 
-def run_canary(seat_key, seat_config, *, repo_root, dispatch=None, timeout=300):
+def run_canary(seat_key, seat_config, *, repo_root, dispatch=None, timeout=300,
+               claude_mode=None):
     """Dispatch the planted-defect fixture through the real seat path and score ENGAGEMENT.
 
     ``seat_key`` and ``seat_config`` (with ``tier`` from the seat map) supply seat identity; the
@@ -278,6 +282,7 @@ def run_canary(seat_key, seat_config, *, repo_root, dispatch=None, timeout=300):
                 repo_root=repo_root,
                 timeout=timeout,
                 expected_result_kind="findings",
+                **({"claude_mode": claude_mode} if claude_mode is not None else {}),
             )
         except Exception as exc:
             return {
@@ -360,7 +365,9 @@ def main(argv):
     p.add_argument("--seat-key", required=True)
     p.add_argument("--tier", required=True,
                    help="Seat-map tier (registry role name) for this probe")
-    p.add_argument("--engine", required=True, choices=("codex", "cursor"))
+    p.add_argument("--engine", required=True, choices=("codex", "cursor", "claude"))
+    p.add_argument("--claude-mode", default=None, choices=engine_adapter.CLAUDE_MODES,
+                   help="claude only: print (stdout telemetry) or background (transcript)")
     p.add_argument("--engine-model", required=True)
     # Optional, defaulting to None (#963): the registry's cursor implementer/code-fixer config is
     # effort-LESS — ("composer-2.5", None) — and no effort STRING can express that, so a required
@@ -385,6 +392,7 @@ def main(argv):
         seat_config,
         repo_root=args.repo_root,
         timeout=args.timeout,
+        claude_mode=args.claude_mode,
     )
     sys.stdout.write(json.dumps(res) + "\n")
     return 0
