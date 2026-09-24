@@ -34,7 +34,8 @@ HEAD = HEAD_SHA
 def _stored_revision(envelope, cited_head=None):
     """What a `recorded` row carries for a stored envelope: the chokepoint's revision identity
     (``round_records.recorded_row_fields``) plus the journal transport stamp."""
-    fields = round_records.recorded_row_fields(envelope, cited_head)
+    fields = round_records.recorded_row_fields(
+        envelope, cited_head, round_records.stored_cited_head_source(envelope))
     fields.update(RD._journal_transport_fields(envelope))
     return fields
 
@@ -101,7 +102,9 @@ def _driver_panel_recorded_rows(tmp_path, native_seat, runner_seat):
                 session_dir, pend["round"], pend["phase"],
                 round_records.storage_key(seat, occurrence), pend["attempt"],
             )
-            run_dir = tdi._execution_run_dir(tmp_path, order_path, [])
+            run_dir = tdi._execution_run_dir(
+                tmp_path, order_path, [],
+                view_head_sha=RD._anchor_cited_head(state, session_dir, pend["round"], pend["phase"], pend["attempt"]))
             tdi._dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
             out = RD.cmd_record_result(
                 session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
@@ -245,6 +248,7 @@ def _record_runner_seat_with_resolved_inputs(tmp_path, runner_seat):
         assert snapshot["engineModel"] == "gpt-5.6-sol"
         run_dir = tdi._execution_run_dir(
             tmp_path, order_path, [], resolved_inputs=snapshot,
+            view_head_sha=RD._anchor_cited_head(state, session_dir, pend["round"], pend["phase"], pend["attempt"]),
         )
         tdi._dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
         out = RD.cmd_record_result(

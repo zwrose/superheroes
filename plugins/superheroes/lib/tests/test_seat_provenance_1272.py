@@ -447,7 +447,8 @@ def _write_native_ruling_result(run_dir, repo_root, seat):
         fh.write("\n")
 
 
-def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit-e2e"):
+def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit-e2e",
+                             view_head_sha="abc123fake"):
     """Build a codex run directory whose parsed ruling binds to an audit seat envelope."""
     run_dir = str(tmp_path / "audit-evidence-run")
     journal_root = str(tmp_path / "audit-journal-root")
@@ -459,7 +460,7 @@ def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit
         fh.write("gitdir: /fake/worktree\n")
     view_path = str(tmp_path / "audit-evidence-view")
     os.makedirs(view_path, exist_ok=True)
-    view_meta = {"headSha": "abc123fake", "stripped": [], "path": view_path}
+    view_meta = {"headSha": view_head_sha, "stripped": [], "path": view_path}
     with open(order_path, encoding="utf-8") as fh:
         base_prompt = fh.read()
     notice = sanitized_view.sanitized_view_notice(view_meta, mode="review")
@@ -537,8 +538,8 @@ def test_dispatch_observed_non_object_payload_refuses_evidence_binding(tmp_path)
     base_envelope = {"phase": RD.P_PANEL, "orderSha256": record["orderPromptSha256"]}
     for bad_payload in ([], "x", None):
         envelope = dict(base_envelope, payload=bad_payload)
-        assembled, refusal, extra = RD._assemble_dispatch_evidence(
-            session_dir, envelope, run_dir)
+        assembled, refusal, extra, _source = RD._assemble_dispatch_evidence(
+            session_dir, envelope, run_dir, "abc123fake", RD.P_PANEL)
         assert assembled is None
         assert refusal == "evidence-result-mismatch"
         assert extra == {"resultDigest": record["resultDigest"], "resultKind": record["resultKind"]}
@@ -555,7 +556,8 @@ def test_dispatch_observed_audit_seat_binds_runner_evidence_end_to_end(tmp_path)
         session_dir, pend["round"], pend["phase"],
         round_records.storage_key(seat), pend["attempt"])
     assert os.path.isfile(order_path), order_path
-    run_dir = _audit_execution_run_dir(tmp_path, order_path, seat)
+    anchor_head = _anchor_head_sha(session_dir) or "abc123fake"
+    run_dir = _audit_execution_run_dir(tmp_path, order_path, seat, view_head_sha=anchor_head)
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     assert record["resultKind"] == "ruling"

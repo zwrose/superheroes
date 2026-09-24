@@ -409,7 +409,7 @@ ingesting):
 | `executionEvidence` | Optional runner telemetry block (`source`, `runnerNonce`, `recordDigest`, `observation`) stamped by `record-result --evidence-run-dir` for `dispatch-observed` seats |
 | `provenance` | One of `dispatch-observed`, `hand-landed`, `orchestrator-fulfilled` — required at v2; emission stubs for dispatch phases carry `dispatch-observed`. On `dispatch-audits`, an unenumerated value refuses **`provenance-unknown`**; a landing whose vendor provenance cannot be derived from a runner record refuses **`provenance-underivable`** at `record-result`/sweep (dispatch-observed without minted evidence, hand-landed without `executionEvidence`, or `executionEvidence.source` outside `model_registry.VENDORS`). |
 | `envelopeSha256` | SHA-256 over canonical `{"payload": <payload>, "executionEvidence": <evidence-or-null>}`; required at ingest — an absent or mismatched value is refused **`envelope-torn`** |
-| `headSha` | Optional; the emission stub carries the head the driver bound into the orders anchor at emission — when present it must equal the anchor's head (refused **`head-anchor-mismatch`**), and an envelope carrying one against an anchor that has none is refused **`head-anchor-unanchored`** |
+| `headSha` | Optional; the emission stub carries the head the driver bound into the orders anchor at emission — when present it must equal the anchor's head (refused **`head-anchor-mismatch`**), and an envelope carrying one against an anchor that has none is refused **`head-anchor-unanchored`**. On a `dispatch-observed` seat whose evidence is minted from a runner **review** run, `record-result` stamps `headSha` from the runner view only when the landed envelope omitted it; a seat-declared `headSha` that disagrees with the runner-observed view is refused **`head-anchor-mismatch`** rather than overwritten |
 
 All other fields match `seat-result/1`. The emission stub never carries `recordedAt`, `payloadSha256`,
 `executionEvidence`, or `envelopeSha256` — the orchestrator stamps `recordedAt` and `payloadSha256`
@@ -452,9 +452,13 @@ file.
 
 The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and journaled as
 `orders-emitted`; ingestion checks envelopes against that anchor (`manifest-anchor-mismatch` when
-they disagree). The anchor and the hashed manifest also carry the emission head as `headSha`, which
-every `recorded` journal row carries as `citedHead` — the head the order was bound to at emission,
-not a runner-observed view head.
+they disagree). The anchor and the hashed manifest also carry the emission head as `headSha`. Every
+`recorded` journal row declares how its `citedHead` was derived via `citedHeadSource`. For a seat
+whose evidence is minted from a runner **review** run, the cited head is the runner-observed view
+head and must equal the emission anchor head — disagreement refuses `view-head-anchor-mismatch` at
+record time and stores nothing; an underivable run kind or absent view head refuses
+`view-head-underivable`. A **write** run has no sanitized view: the row keeps the emission-anchor
+citation and declares `order-anchor`.
 
 **Order-input ownership.** Orders cite round-scoped paths that must exist before a seat can run.
 The driver materializes them before order emit (see also the inline comment at

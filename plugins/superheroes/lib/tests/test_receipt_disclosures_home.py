@@ -143,7 +143,8 @@ def test_native_in_session_disclosure_reappended_missing_cas_token_not_named():
 
 def test_native_in_session_disclosure_journal_stored_revision_missing_not_named():
     envelope = _missing_env(seat="code-reviewer")
-    fields = round_records.recorded_row_fields(envelope, None)
+    fields = round_records.recorded_row_fields(
+        envelope, None, round_records.stored_cited_head_source(envelope))
     fields.update(round_driver._journal_transport_fields(envelope))
     assert fields["casToken"] == "seat-missing/1"
     event = {

@@ -168,7 +168,7 @@ def production_recorded_journal_row(envelope, *, seat, phase=PANEL_PHASE, attemp
         row["headSha"] = head_sha
     if extra:
         row.update(extra)
-    row.update(RR.recorded_row_fields(envelope, head_sha))
+    row.update(RR.recorded_row_fields(envelope, head_sha, RR.CITED_HEAD_SOURCE_ORDER_ANCHOR))
     return row
 
 

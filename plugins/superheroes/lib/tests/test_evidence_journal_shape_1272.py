@@ -81,8 +81,8 @@ def test_journal_line_not_an_object_refuses_evidence_binding(tmp_path, monkeypat
     envelope = {"orderSha256": "0" * 64, "payload": {"findings": []}}
     session_dir = str(tmp_path / "session")
     os.makedirs(session_dir, exist_ok=True)
-    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-        session_dir, envelope, run_dir)
+    assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+        session_dir, envelope, run_dir, "abc123fake", round_driver.P_PANEL)
     assert assembled is None
     assert refusal == "evidence-run-dir-unreadable"
     assert extra == {"detail": "journal-corrupt:journal-line-not-object"}
@@ -132,8 +132,8 @@ def test_assemble_dispatch_evidence_refuses_cross_kind_subject_disagreement(tmp_
 
     engine_dispatch.run_execution_record = _patched
     try:
-        assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-            session_dir, envelope, "fake-run-dir")
+        assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+            session_dir, envelope, "fake-run-dir", "a" * 64, round_driver.P_PANEL)
     finally:
         engine_dispatch.run_execution_record = real_record
     assert assembled is None
@@ -144,6 +144,8 @@ def test_assemble_dispatch_evidence_refuses_cross_kind_subject_disagreement(tmp_
         base_record,
         resultKind="findings",
         resultDigest=round_records.payload_sha256(payload["findings"]),
+        runKind=engine_dispatch.RUN_KIND_REVIEW,
+        viewHeadSha="a" * 64,
     )
 
     def _findings_patched(_run_dir):
@@ -151,10 +153,11 @@ def test_assemble_dispatch_evidence_refuses_cross_kind_subject_disagreement(tmp_
 
     engine_dispatch.run_execution_record = _findings_patched
     try:
-        assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-            session_dir, envelope, "fake-run-dir")
+        assembled, refusal, extra, cited_head_source = round_driver._assemble_dispatch_evidence(
+            session_dir, envelope, "fake-run-dir", "a" * 64, round_driver.P_PANEL)
     finally:
         engine_dispatch.run_execution_record = real_record
     assert assembled is not None
     assert refusal is None
     assert extra == {}
+    assert cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW

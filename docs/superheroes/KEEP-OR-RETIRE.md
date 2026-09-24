@@ -1931,3 +1931,7 @@ file, returns exactly that set.
 - `plugins/superheroes/skills/workhorse/reference/dispatch-mechanics.md` — 540 s continuation and
   short launch slice recipes for turn-end survival. **delete-when:** the background-session trial
   receipt marks turn-end slice recipes not needed.
+- `plugins/superheroes/lib/round_driver.py` — the `order-anchor` cited-head derivation retained for
+  write runs and for records landed without a runner run directory. **delete-when:** every seat's
+  evidence is minted from a runner record, so `runner-view` is the only derivation a `recorded` row
+  can declare.
