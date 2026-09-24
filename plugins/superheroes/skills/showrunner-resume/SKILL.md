@@ -107,9 +107,9 @@ The check is **fail-closed:** a hit, an ambiguous reading, an unavailable listin
 
 **Arming is a background task, always.** Cite `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/wave-watch.md` for the arming pattern and its flags rather than restating them.
 
-This skill does **not** take that reference's suggestion of a one-off foreground spot check before arming. The one-off watch verb polls until something actionable happens or its window expires; against a quiet live lane it blocks for the whole window. That is why it is not used here.
+The reference's one-off check returns at once and is safe before arming — the cheap catch for a mistyped batch id.
 
-**Residual:** the check and the arm are two steps, so two advisor seats resuming the same project at the same moment could both find nothing and both arm. This skill rests on there being one advisor seat per project; do not imply the check is atomic.
+**Residual:** the check and the arm are two steps, so two advisor seats resuming the same project at the same moment could both find nothing and both arm; `loop` itself also refuses a second live loop on the same batch (`loop-already-live`), so two seats racing to arm end with one watcher and one refusal, not two watchers. This skill rests on there being one advisor seat per project; do not imply the check is atomic.
 
 ## Step 7 — report in three lines
 
@@ -163,7 +163,7 @@ Watches: wave-e not armed — no row-2 lane in the batch. Owner: #350 is ready b
 
 A seat that blocks in the foreground is a seat the owner cannot reach.
 
-Three instances: the one-off watch verb is not used at all; the terminal-outcome verb runs in the foreground only with a zero wait; arming is a background task only.
+Three instances: the one-off watch verb returns at once and never waits; the terminal-outcome verb runs in the foreground only with a zero wait; arming is a background task only.
 
 ## Failure modes
 
@@ -187,6 +187,5 @@ Three instances: the one-off watch verb is not used at all; the terminal-outcome
 | Treating a missing heartbeat as a dead builder | → a missing read satisfies no row; see Step 4. |
 | Using the newest CI run instead of workflow+sha | Select the run for the remote head commit the receipt names. |
 | Killing a duplicate watcher before arming | The duplicate check is read-only; never kill on either reading. |
-| Running a foreground one-off watch before arming | Cite wave-watch for arming only; the spot check blocks on quiet lanes. |
 | Passing `--allow-foreign-instance` on your own judgment | Only on the owner's instruction, naming the instance. |
 | Waiting in the foreground for a live child to exit | Use `--await-exit 0` in the foreground; positive waits are background tasks. |
