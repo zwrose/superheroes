@@ -55,7 +55,7 @@ def _orders_manifest_path(session_dir, rnd, attempt):
     return round_driver._orders_manifest_path(session_dir, rnd, P_AUDITS, attempt)
 
 
-def _audits_emit_fixture(tmp_path, *, submit_used=False, vendor="claude"):
+def _audits_emit_fixture(tmp_path, *, submit_used=False, advance_used=False, vendor="claude"):
     session_dir, _gitdir, _head_path = _claude_only_session(tmp_path)
     state = _state(session_dir)
     state["step"] = P_AUDITS
@@ -63,6 +63,8 @@ def _audits_emit_fixture(tmp_path, *, submit_used=False, vendor="claude"):
     state["pending"] = None
     if submit_used:
         state["_submitUsed"] = True
+    if advance_used:
+        state["_advanceUsed"] = True
     target = _audit_target(vendor=vendor)
     state["_auditTargets"] = [target]
     round_driver.save_state(session_dir, state)
@@ -123,7 +125,7 @@ def test_t1_edge7_unknown_vendor_not_runner_channel():
 
 
 def test_t2_emit_orders_manifest_refuses_claude_auditor(tmp_path):
-    session_dir, state, target = _audits_emit_fixture(tmp_path)
+    session_dir, state, target = _audits_emit_fixture(tmp_path, advance_used=True)
     manifest_path = _orders_manifest_path(session_dir, 1, 0)
     assert not os.path.exists(manifest_path)
     with pytest.raises(round_driver.AuditorUnseatable):
@@ -134,7 +136,7 @@ def test_t2_emit_orders_manifest_refuses_claude_auditor(tmp_path):
 
 
 def test_t2_cmd_next_refuses_claude_auditor(tmp_path):
-    session_dir, _state_obj, _target = _audits_emit_fixture(tmp_path)
+    session_dir, _state_obj, _target = _audits_emit_fixture(tmp_path, advance_used=True)
     manifest_path = _orders_manifest_path(session_dir, 1, 0)
     out = round_driver.cmd_next(session_dir)
     assert out["ok"] is False
@@ -144,6 +146,20 @@ def test_t2_cmd_next_refuses_claude_auditor(tmp_path):
     assert len(rows) == 1
 
 
+def test_t2b_emit_orders_manifest_refuses_missing_auditor_vendor(tmp_path):
+    session_dir, state, target = _audits_emit_fixture(tmp_path, advance_used=True)
+    target_no_vendor = {k: v for k, v in target.items() if k != "auditorVendor"}
+    state["_auditTargets"] = [target_no_vendor]
+    round_driver.save_state(session_dir, state)
+    manifest_path = _orders_manifest_path(session_dir, 1, 0)
+    assert not os.path.exists(manifest_path)
+    with pytest.raises(round_driver.AuditorUnseatable):
+        round_driver._emit_orders_manifest(
+            session_dir, state, 1, P_AUDITS, 0, [target_no_vendor["id"]],
+            journal_cmd="next", pending_payload=_audits_payload([target_no_vendor]))
+    assert not os.path.exists(manifest_path)
+
+
 # T3 — edge 4: hand path bypasses auditor-unseatable refusal at emission
 
 
@@ -151,6 +167,18 @@ def test_t3_submit_used_emit_not_refused(tmp_path):
     session_dir, _state_obj, _target = _audits_emit_fixture(tmp_path, submit_used=True)
     out = round_driver.cmd_next(session_dir)
     assert out.get("reason") != round_driver.AUDITOR_UNSEATABLE_CAUSE
+
+
+def test_t6_emit_orders_manifest_allows_claude_without_latch(tmp_path):
+    session_dir, state, target = _audits_emit_fixture(tmp_path)
+    try:
+        round_driver._emit_orders_manifest(
+            session_dir, state, 1, P_AUDITS, 0, [target["id"]],
+            journal_cmd="next", pending_payload=_audits_payload([target]))
+    except round_driver.AuditorUnseatable:
+        pytest.fail("auditor-unseatable refusal must not fire without advance latch")
+    except Exception:
+        pass  # downstream render errors are fine; guard did not refuse
 
 
 # T4 — one-home census

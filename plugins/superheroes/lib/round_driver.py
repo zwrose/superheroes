@@ -4370,7 +4370,7 @@ def _audit_targets(state, config, audit_targets_map):
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
     occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
-    runner_only = not state.get("_submitUsed")
+    runner_only = bool(state.get("_advanceUsed"))
     auditor_vendor, independence = _auditor_vendor(
         config, fixer_vendor, runner_only=runner_only)
     if independence in ("degraded", "unseatable"):
@@ -9072,7 +9072,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     that refuses."""
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
-    if phase == P_AUDITS and not state.get("_submitUsed"):
+    if phase == P_AUDITS and state.get("_advanceUsed"):
         targets = pending_payload.get("targets")
         if not isinstance(targets, list):
             targets = []
@@ -9080,8 +9080,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         for target in targets:
             if not isinstance(target, dict):
                 continue
-            if ("auditorVendor" in target
-                    and not session_contract.runner_channel_vendor(target.get("auditorVendor"))):
+            if not session_contract.runner_channel_vendor(target.get("auditorVendor")):
                 detail = (
                     "The durable-record path requires a fix auditor dispatched through the runner "
                     "(codex or cursor), but none is among this session's vendors. "
