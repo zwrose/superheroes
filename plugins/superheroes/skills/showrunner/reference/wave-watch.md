@@ -121,7 +121,8 @@ that result** — but a `timer` result carries no `alsoObserved` at all, so a la
 suppressed is invisible in that arm's output. Use `--log` to keep sight of a suppressed lane across
 a long arm chain. Only the four **lane-keyed** events are suppressible: `lane-terminal`,
 `lane-blocked`, `builder-exited`, `lane-stale`.
-`pr-set-changed` and `timer` are not lane-keyed; naming them is a refusal (`ignore-event-invalid`).
+`pr-set-changed`, `stack-state-changed`, and `timer` are not per-lane suppressible; naming
+them is a refusal (`ignore-event-invalid`).
 A malformed pair is a refusal (`ignore-event-invalid`), never a silent drop.
 
 **Pattern — the exception, not the routine:** when `loop` wakes you on an event you have **verified**
@@ -132,9 +133,9 @@ events still do**. Within a single `loop` invocation, the first unsuppressed act
 the loop; persistence across invocations is **your** job — pass `--ignore-event` on re-arm. The tool
 does not dedupe suppressed pairs across invocations by itself. **Do not pre-arm `--ignore-event` for
 `lane-stale` as a matter of course**: an arm that ignores every lane's stale signal has quietly
-reduced the watcher to `pr-set-changed`, and the wave's wedges arrive as surprises. If you find
-yourself suppressing the same event on most lanes of a wave, that is a field observation to record
-(the promise or the second chance is wrong), not a pattern to keep.
+reduced the watcher to `stack-state-changed` and `pr-set-changed`, and the wave's wedges arrive as
+surprises. If you find yourself suppressing the same event on most lanes of a wave, that is a field
+observation to record (the promise or the second chance is wrong), not a pattern to keep.
 
 ## Before treating `lane-stale` as a wedge
 
@@ -240,17 +241,69 @@ The watcher prints **one JSON line on stdout**; **exit 0 on an event, exit 1 on 
 - `lane-terminal`
 - `lane-blocked`
 - `builder-exited`
+- `stack-state-changed`
 - `pr-set-changed`
 - `lane-stale`
 - `timer`
 
 **Precedence**, highest first:
 
-`lane-terminal` > `lane-blocked` > `builder-exited` > `pr-set-changed` > `lane-stale` > `timer`
+`lane-terminal` > `lane-blocked` > `builder-exited` > `stack-state-changed` > `pr-set-changed` > `lane-stale` > `timer`
 
 When an event fires, co-occurring lower-precedence lane signals from the same interval ride along
 under `alsoObserved` (launch ids only) — read it, or you will act on one lane and miss its
 siblings. A `timer` result has no `alsoObserved`.
+
+When **`stack-state-changed`** fires, the payload carries one entry per stack the batch's
+launches name, plus a `flags` list:
+
+- `stacks` — one object per distinct stack number stamped on any lane in the batch, sorted by
+  `stack`: `stack` (the stack number), `state` (complete — `STACK_STATE_COMPLETE` — or incomplete
+  — `STACK_STATE_INCOMPLETE`), `layersPlanned` (the agreed layer count when known, else `null`),
+  `missingPositions` (sorted positions still incomplete — empty when the state is complete), and
+  `reason` (planned count unknown — `STACK_REASON_LAYERS_PLANNED_UNKNOWN`, planned count disagreed
+  — `STACK_REASON_LAYERS_PLANNED_DISAGREED`, or membership unresolved —
+  `STACK_REASON_MEMBERSHIP_UNRESOLVED` when the stack could not be evaluated; otherwise `null` — a
+  complete stack, or an incomplete one whose `missingPositions` name the layers not yet READY).
+- `flags` — observations that ride with the snapshot; today the only flag is the idle-seat flag —
+  `FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` — each entry naming `stack`, `position` (the vetted layer),
+  and `flag`.
+
+The wire values for `state`, `reason`, and `flag` are the constants in `lib/wave_watch.py` and are
+deliberately not restated here.
+
+**Complete** (`STACK_STATE_COMPLETE`) means every position from `1` through `layersPlanned` has a
+stack member whose vet reads READY at that pull request's **current** head — the stack goes on the
+click list whole. Stop watching the batch only when every stack in the payload is complete; while
+another stack in it is still incomplete, keep watching as the stack-state baseline limit below
+describes. A position the watcher could not read
+— its read budget ran out, or a pull-request or verdict read was refused — counts as not READY,
+and the result's `degraded` list carries `stack-signal-unavailable`. **Incomplete**
+(`STACK_STATE_INCOMPLETE`) with `reason` null means `missingPositions` names the layers not yet
+READY — keep watching; those layers are still owed. **Planned count unknown**
+(`STACK_REASON_LAYERS_PLANNED_UNKNOWN`) means no lane in the batch recorded `layersPlanned` —
+completion cannot be judged; fix the launch premise. **Planned count disagreed**
+(`STACK_REASON_LAYERS_PLANNED_DISAGREED`) means the batch's lanes recorded different
+`layersPlanned` — reconcile the premises before trusting completion. **Membership unresolved**
+(`STACK_REASON_MEMBERSHIP_UNRESOLVED`) means the stack's membership could not be read — verify the
+stack link (GraphQL `stackEntry`) before acting. **`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD`** observes a
+vetted layer whose next planned position (`position + 1`) is within `layersPlanned` but no launch
+in the batch occupies it — a seat the wave could fill now, without waiting for a merge.
+
+When **`pr-set-changed`** fires, the payload carries the open PR set plus what moved:
+
+- `prs` — sorted open PR numbers after the change
+- `prsAdded` / `prsRemoved` — sorted numbers that joined or left the open set
+- `stacks` — one entry per distinct stack any changed PR belongs to, sorted by stack
+  number: `{"stack": <int>, "prs": [<every member in position order>]}`. A member read
+  returns the whole stack, so the advisor sees one unit move, not unrelated PRs.
+- `ungrouped` — sorted changed PRs that belong to no stack (or whose membership read
+  refused). When stack membership is unavailable, `stack-signal-unavailable` rides on the
+  result and grouping is partial — the original `prs` / `prsAdded` / `prsRemoved` keys
+  are unchanged. Stack membership is read through `lib/stack_check.py`'s `read_membership`
+  — the single membership reader, never re-implemented here — and the read is bounded by
+  **one** budget covering the whole read, so an unresolvable read degrades to
+  `stack-signal-unavailable` rather than returning partial membership.
 
 When **`pr-set-changed`** sends you to read a lane's CI, select the run by **workflow name and head
 sha** — never `gh run list --limit 1`. The newest run on a branch is whatever workflow happened to
@@ -305,6 +358,9 @@ it can fire before the watch loop ever runs; neither `ledger-unreadable` on the 
 - `heartbeat-unreadable`
 - `pid-probe-uncertain`
 - `pr-signal-unavailable`
+- `stack-signal-unavailable` — stack membership for one or more changed PRs could not be
+  read before the watcher's deadline; grouping is partial and `ungrouped` carries what
+  could not be resolved
 - `lane-never-stamped`
 - `pr-signal-never-sampled`
 - `log-unwritable`
@@ -326,6 +382,17 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 - **PR-set baseline:** within one `loop` invocation, the PR baseline threads across internal arms,
   so a PR change landing between timer arms **is** reported. The gap remains **open between separate
   invocations** and for bare `run`, where the baseline is rebuilt per call.
+- **Stack-state baseline:** within one `loop` invocation, the stack-state baseline threads across
+  timer arms, so a stack that becomes complete between arms is reported once. Each new invocation
+  starts without one: a watch armed on a batch whose stack is already complete, or that already
+  carries the idle-seat flag (`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD`), returns `stack-state-changed`
+  on its first arm,
+  and every re-arm reports it again until the stack merges.
+  Because `loop` ends on this event, a batch that holds more than one stack loses its wait once any
+  stack is complete: the invocation that reported it has exited, and every re-arm reports that
+  stack again at once until it merges. Until then, check the batch with a spot `run` on your own
+  cadence (each result lists every stack's state), and stop watching the batch only when every
+  stack in the payload is complete.
 - **A mistyped batch id is indistinguishable from a quiet batch** — but the verb matters. Bare
   `run` produces a calm `timer`, not a refusal. `loop` treats every `timer` as non-terminal and
   re-arms; with no `--max-total-seconds` bound it produces **nothing on stdout** until something
