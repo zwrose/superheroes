@@ -260,6 +260,20 @@ process prose, as opposed to code and its tests. The pin rule applies to tests o
 A pre-existing test going red on a later change that did not touch the test. A regression in the
 test's own module counts. Its one consequence is a line on the [keep list](#keep-list).
 
+## Native stacks
+
+### Stack
+
+A GitHub-side object numbering an ordered set of pull requests over one base branch. Every multi-PR
+child of this project is a native stack; an exception is owner-ruled and recorded. See
+[native-stacks.md](native-stacks.md) for the object model and tooling.
+
+### Layer
+
+One pull request in a stack, at one position, based on the branch of the layer below. See
+[native-stacks.md](native-stacks.md) § What a layer is and the workhorse charter §2 for the lane
+lifecycle.
+
 ## Threat and component tags
 
 ### Threat tags
