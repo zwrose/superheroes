@@ -52,6 +52,7 @@ _DECOMPOSITION_H2_HEADINGS = [
     "The coverage map",
     "The contract register",
     "Seam-first sequencing",
+    "Stacked layers — one surface per layer",
     "Verbatim injection into child bodies",
     "The adversarial package read",
     "Re-entry after a substantive amendment",

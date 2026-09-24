@@ -122,7 +122,9 @@ QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
 def _order_lint_text(order_text, context):
     """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's."""
     ph = context.get("placeholders") if isinstance(context.get("placeholders"), dict) else {}
-    text = order_text
+    # Mask an inlined implementer template first: an elision landing inside it would break the
+    # verbatim match the lint's own mask needs, and the two doors would grade differently.
+    text, _ = order_lint.mask_template(order_text)
     for quoted in (ph.get("GATE_GUIDANCE"), ph.get("VERIFY_COMMAND"), context.get("ratified_residuals")):
         if isinstance(quoted, str) and quoted.strip():
             text = text.replace(quoted, QUOTED_DATA_LINT_ELISION, 1)
