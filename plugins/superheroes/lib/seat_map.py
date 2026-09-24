@@ -77,13 +77,14 @@ def _cell(
     """The one resolver from (tier, vendor) to (model, effort) for seating and needed-set.
 
     For codex at a panel tier with a role pin, returns the pinned cell when dispatch resolves and
-    the pin is on that tier's allowlist; otherwise the matrix cell. The third tuple element
+    the pin is on that tier's allowlist and only a pin ``codex_pin_verdict`` accepts; otherwise the matrix cell. The third tuple element
     describes an attempted role pin: ``{"pin": <model>, "honored": bool}`` or ``None``."""
     role_pins = role_pins or {}
     if vendor == "codex" and tier in _PANEL_PIN_TIERS and tier in role_pins:
         pin = role_pins[tier]
+        ok, _reason = model_registry.codex_pin_verdict(tier, pin)
         resolved = model_registry.resolve_dispatch(tier, "codex", pin, None)
-        if resolved.get("ok"):
+        if ok and resolved.get("ok"):
             model = resolved["model_id"]
             effort = resolved["effort"]
             if is_allowed(tier, vendor, model, effort):

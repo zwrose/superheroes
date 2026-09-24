@@ -177,13 +177,16 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
   `reviewer`, `reviewer-deep`, `code-fixer`, `implementer`, and `pilot`; valid
-  model IDs are `gpt-5.6-terra`, `gpt-5.6-sol`, and `gpt-6-astra` (probe-pending — refused
-  `pin-probe-pending` while its registry row is probe-pending; it is eligible only for
-  `reviewer-deep`, and pinning it on any other role is refused `pin-role-not-eligible`).
+  model IDs are `gpt-5.6-terra`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for
+  `reviewer-deep` at effort `high`; pinning it on any other role is refused
+  `pin-role-not-eligible`). A pin must
+  also resolve on its role's own codex allowlist, else it is refused `pin-not-on-allowlist` (Terra
+  on `reviewer-deep`; any model on `pilot`, which has no codex cell — it remains a valid role key
+  but admits no codex model).
   Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol; an unpinned project never
   dispatches Astra and Sol stays the default deep cell. A pinned model runs at the effort its role's
   registry allowlist resolves for it — Sol at `high` on `reviewer`, `code-fixer` and `implementer`
-  and `xhigh` on `reviewer-deep`, Terra at `high`, and Astra at `high` once its probe passes — the
+  and `xhigh` on `reviewer-deep`, Terra at `high`, and Astra at `high` — the
   role's `enginePreferences.effort` setting is not
   consulted for a pinned model. Show the current engine preferences and effective model first, merge
   only the requested role into the existing object, and preserve every sibling key. Before writing,
@@ -207,7 +210,8 @@ action that owns it, leaving the rest of the calibration untouched:
   Cursor ignores it. For `reviewer` and `reviewer-deep`, the pin now reaches the review panel's
   codex seat — it no longer only changes the calibration readout; when the pinned cell is not live
   the seat falls back to the default cell with a `role-pin-not-live` degradation, and a pin the
-  tier's allowlist does not admit falls back with `role-pin-not-honorable`. Per-run preflight model
+  tier's allowlist does not admit falls back with `role-pin-not-honorable` carrying the refusal's
+  reason. Per-run preflight model
   overrides have highest precedence, followed by this persistent pin, then the shared-tier GPT-5.6
   mapping.
 
