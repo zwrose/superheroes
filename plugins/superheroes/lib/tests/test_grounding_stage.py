@@ -2101,6 +2101,38 @@ def test_dod_empty_table_accepted(tmp_path):
     assert _dod_claims(manifest) == []
 
 
+def test_read_region_returns_text_when_marker_present():
+    body = (
+        "<!-- superheroes:advisor-vet -->\n"
+        "**Verdict: READY** · abcdef0123456789abcdef0123456789abcdef01\n"
+    )
+    region_text, refusal = GS.read_region(body, "advisor-vet")
+    assert refusal is None
+    assert region_text == (
+        "**Verdict: READY** · abcdef0123456789abcdef0123456789abcdef01"
+    )
+
+
+def test_read_region_returns_none_when_marker_absent():
+    body = "## Summary\nNo advisor-vet region in this body.\n"
+    region_text, refusal = GS.read_region(body, "advisor-vet")
+    assert region_text is None
+    assert refusal is None
+
+
+def test_read_region_returns_refusal_when_marker_duplicated():
+    marker = GS.REGION_MARKERS["advisor-vet"]
+    body = _duplicate_marker_body(marker)
+    region_text, refusal = GS.read_region(body, "advisor-vet")
+    assert region_text is None
+    assert refusal == "region-marker-duplicated"
+
+
+def test_read_region_raises_for_unknown_region_name():
+    with pytest.raises(ValueError):
+        GS.read_region("body", "not-a-region")
+
+
 def test_region_start_line_aligns_with_region_text(tmp_path):
     body = (
         "<!-- superheroes:dod-table -->\n"
