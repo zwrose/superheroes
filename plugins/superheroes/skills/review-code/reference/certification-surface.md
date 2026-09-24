@@ -45,7 +45,8 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `rounds` | Per-round projection with disclosure channels via `receipt_disclosures` |
 | `findings` | Projected findings with dispositions and disposition proofs. Surviving Minor or Nit findings without a recorded disposition are omitted here and appear in `disclosures.survivingNonBlocking` instead. When state carries `dispositionLedgerOwner: "ledger"`, the disposition ledger is the durable owner of record — the writer's finding set is **seeded from the ledger** and every key it holds is graded, with a live row for the same key supplying the graded shape where one is still open. The writer does not yet read the ledger exclusively, so a live row can still supply a disposition family; the exclusive read — with its refusal for a live disposition the ledger does not hold — lands in a later layer. A `mergedInto` entry is graded through its representative; a chain that does not resolve refuses `disposition-without-receipt`. |
 | `decisions` | Loop decision log |
-| `seatMap` | Union projection from seat-map receipts |
+| `seatMap` | Union projection from seat-map receipts; each `seats[*]` row may carry `certifiedPanel` (`true` when the seat is a certified panel seat, `false` when named in `disclosures.uncertifiedSeats`) |
+| `independence` | Audit independence block: `status`, `basis`, `fixerVendor`, `fixerFamily`, `declaredVendors`, `auditSeats[]` (`seat`, `round`, `vendor`, `family`, `model`), and when degraded `sameFamilySeats` |
 | `scriptRan` | Journal summary (`invocations`, `byPhase`) |
 | `degraded` | Degraded-prose lines from `build_degraded_prose` |
 | `skippedBlockers` | Owner-skipped judgment blockers (required, possibly empty) |
@@ -53,7 +54,7 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `terminalState` | `certified`, `cap`, or `cannot-certify` |
 | `terminalCause` | `null` when certified; otherwise `{kind, reason}` from the terminal-cause table |
 | `seats` | Per collected seat: `seat`, `phase`, `round`, `attempt`, `provenance` |
-| `disclosures` | `{importantOutOfScope: [...], survivingNonBlocking: [...]}` — `importantOutOfScope`: Important findings with valid out-of-scope follow-up; `survivingNonBlocking`: surviving Minor or Nit findings without a recorded disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`) |
+| `disclosures` | `{importantOutOfScope: [...], survivingNonBlocking: [...], uncertifiedSeats: [...]}` — `importantOutOfScope`: Important findings with valid out-of-scope follow-up; `survivingNonBlocking`: surviving Minor or Nit findings without a recorded disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`); `uncertifiedSeats` (always present, possibly empty): each row `seat`, `phase`, `round`, `attempt`, `occurrence`, `vendor`, `channel`, `reason` |
 | `provenanceLabels` | `{derived: [...], makerAuthored: [...]}` naming which keys are journal-derived |
 
 Optional keys when present in state: `base` (pinned-base metadata), `policyApplied`.
@@ -68,7 +69,7 @@ Four escape classes (`REFUSAL_CLASSES`). Each refusal is `{class, artifact, deta
 
 | Class | Refuses on | Artifact names |
 | --- | --- | --- |
-| `unrun-review` | A dispatch-observed or hand-landed seat lacks qualifying execution telemetry on the certified head | Seat key or envelope path |
+| `unrun-review` | A dispatch-observed or hand-landed seat lacks qualifying execution telemetry on the certified head; a host-channel (`file`) seat is not refused here — it is named in `disclosures.uncertifiedSeats` instead; the class also fires when every recorded `dispatch-panel` seat is host-channel (`no recorded dispatch-panel seat carries runner evidence`) | Seat key, envelope path, or journal file |
 | `same-family-seat` | The seat map records same-family degradation, or registry lookup finds an undeclared seat in the maker's model family | First offending seat key |
 | `unfetched-findings` | Journal seat never closed; envelope missing or unreadable; journal/envelope hash disagreement; unreadable session/journal/state; orchestrator-fulfilled provenance on receipt | Path, seat key, or state file |
 | `disposition-without-receipt` | Base guard did not run; finding without disposition when severity is Critical (`Critical finding may not take the non-blocking path`) or Important (`finding has no disposition recorded`); severity outside the closed contract; fixed/refuted/out-of-scope disposition lacks required proof on certified head; Critical out-of-scope | Finding id or `loop-state.json` |
