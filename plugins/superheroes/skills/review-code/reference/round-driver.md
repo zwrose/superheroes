@@ -8,6 +8,7 @@
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
 - [Actions and payloads](#actions-and-payloads)
+- [The re-dispatch carry](#the-re-dispatch-carry)
 - [Journal and receipt](#journal-and-receipt)
 - [Certification shapes](#certification-shapes)
 - [Invariants](#invariants)
@@ -468,7 +469,9 @@ The driver materializes them before order emit (see also the inline comment at
   orders render (the orchestrator supplies `headDiff` inline or via `headDiffPath` at fixer
   `submit`; the driver then materializes the file the audit/scoped order cites).
 - **`round-<N>/fix-batch.json`** — `_ensure_fix_batch_file` from state `_fixBatch` / `fixBatch` when
-  the fixer order renders. If the orchestrator pre-writes this file and the bytes differ from the
+  the fixer order renders. Each row carries `priorAudit {round, ruling, reason}` (the last audit
+  ruling on that finding) and `gateRuling {round, disposition, reason}` (the last owner-gate ruling),
+  derived at render time from the loop record by finding key. If the orchestrator pre-writes this file and the bytes differ from the
   driver's re-derivation, the driver **replaces** it silently — do not treat a hand-written
   `fix-batch.json` as authoritative over loop state.
 
@@ -685,6 +688,19 @@ cannot is an overclaim.
 | `present-stall-menu` | The **audit-stall owner gate** — reached only after one invisible self-recovery (never for a judgment blocker; those go to `present-judgment`). Present `payload.choices` (three-choice menu: `one-more-round`, `accept-the-disclosed-risk`, `hold`; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a stalled audit target that is CONFIRMED with evidence; `one-more-round` only when offered — once per session). Submit `{choice}`. **`hold`** → terminal `held`, certification withheld (absorbs the retired scope-reduction choice). **`accept-the-disclosed-risk`** → certifies when eligible. **`one-more-round`** → not a terminal: clears the stall once, re-enters `dispatch-fixer` → `dispatch-audits` with the stalled targets as the batch (journaled; recorded on the round); an empty/unresolvable stall-target snapshot parks `cannot-certify` instead of re-entering. |
 | `terminal` | Stop looping; read `payload.verdict` and `payload.certification`; surface honestly in the End-of-Loop Summary. |
 
+## The re-dispatch carry
+
+A finding the loop re-dispatches in a later round never reaches the fixer as its original text alone —
+every fixer order's `fix-batch.json` row carries `priorAudit` and `gateRuling` as above; the
+owner-gate guidance block renders the latest `fix-with-guidance` ruling on any finding in the batch
+from any earlier round, marked `Ruled in round N`; the routing sites (`_fold_judgment`,
+`_fold_stall`, `_fold_audits`) do not know about it — the materializer does; history rows are keyed
+by `findingKey` (the marker the writers stamp on `judgmentDispositions` entries and audit rows;
+`session_contract.finding_identity_key` is the one derivation), never by a row's `id`. **Limitation,
+stated plainly:** the carry reads the live loop record (`state.rounds`); across a `recordsPath`
+resume the gate ruling is restored (`judgmentDispositions` is a resumable channel) and the prior
+audit is not (`audits` is not), until a disposition ledger owns a finding's history.
+
 ## Journal and receipt
 
 **Journal (`driver-journal.jsonl`).** One JSON object per line: `{cmd, phase, round, attempt, outcome, ts}`.
@@ -770,7 +786,7 @@ surface in `disclosures`, not as silent clean.
   `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted
   channel names that fired for the certification shape (`independence`, `base`, `same-family`,
   `seat-map-violation`, `unproven-liveness`, `seat-pin`, `seat-map-unavailable`))
-- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`runner-record` | `hand-landed-evidence` | `mixed-evidence` | `collection-manifest` — derived from the adapter's per-seat `provenanceSource` on the durable-record path; `collection-manifest` on a hand `submit` at any version — visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapUnjudgeable`, `seatMapViolations`, `vacuousSeats`, `engagedArtifactSeats`, `canaryUnverified`, `canaryFailed`, `canaryOutcomeFailed`, `canaryPlantUndetected`, `canaryVerified`, `adapterProvenance`, `recordOrphansIgnored`, `orderVendorProvenanceGaps`, `priorCommentsUnavailable`, `verifyPasses`, `judgmentDispositions` (owner per-finding judgment dispositions — including free-text guidance on a `fix-with-guidance` ruling, so a resumed run's receipt still shows what the owner instructed), `gateGuidanceRowCarried` (fix-batch row carried the guidance key while the fold recorded none — never rendered as owner guidance), `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice` (the disclosure-channel names here are drift-pinned to `round_driver.RESUMABLE_DISCLOSURE_CHANNELS` by a test — a channel added to the registry must be added to this line)
+- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`runner-record` | `hand-landed-evidence` | `mixed-evidence` | `collection-manifest` — derived from the adapter's per-seat `provenanceSource` on the durable-record path; `collection-manifest` on a hand `submit` at any version — visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapUnjudgeable`, `seatMapViolations`, `vacuousSeats`, `engagedArtifactSeats`, `canaryUnverified`, `canaryFailed`, `canaryOutcomeFailed`, `canaryPlantUndetected`, `canaryVerified`, `adapterProvenance`, `recordOrphansIgnored`, `orderVendorProvenanceGaps`, `priorCommentsUnavailable`, `verifyPasses`, `judgmentDispositions` (owner per-finding judgment dispositions — including free-text guidance on a `fix-with-guidance` ruling, so a resumed run's receipt still shows what the owner instructed), `gateGuidanceRowCarried` (fix-batch row carried the guidance key while the fold recorded none — never rendered as owner guidance), `unverified`, `authorJustifiedDrops`, `compileDrops` (each drop's `reason` is one of `uncited — no file:line`, `line is not an integer` — a non-integer citation is never reported as out of scope; a numeric string is coerced first — `outside the round diff scope`; gap sweep and scoped finder append their drops to the same channel), `selfRecovery`, `stallChoice` (the disclosure-channel names here are drift-pinned to `round_driver.RESUMABLE_DISCLOSURE_CHANNELS` by a test — a channel added to the registry must be added to this line)
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
 **Seat-map storage (#681).** The driver stores each round's submitted seat map as an append-only
