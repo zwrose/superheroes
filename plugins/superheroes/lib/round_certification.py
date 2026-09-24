@@ -1033,10 +1033,6 @@ def _read_head_content_blobs(session_dir):
     return session_contract.classify_head_content_read(blobs=blobs)
 
 
-def _fix_content_proof_path(finding, by_key=None):
-    return session_contract.fix_proof_path(finding, by_key)
-
-
 def _fix_still_present_at_head(ctx, finding, receipt, by_key=None):
     fid = finding.get("id") or finding.get("title") or "finding"
     head = receipt.get("headSha") or _certified_head_sha(ctx)
