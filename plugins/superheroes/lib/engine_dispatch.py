@@ -936,6 +936,9 @@ def _stop_confirmed_pid_dead(row):
         return True
     pid = row.get("pid")
     if pid is None or not isinstance(pid, int) or pid < 2:
+        state = row.get("state")
+        if state in ("stopped", "done"):
+            return True
         return False
     try:
         os.kill(pid, 0)

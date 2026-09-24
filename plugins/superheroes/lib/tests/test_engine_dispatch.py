@@ -18425,6 +18425,38 @@ def test_claude_session_stop_confirmed_missing_pid_unconfirmed(monkeypatch):
     )
 
 
+def test_claude_session_stop_confirmed_stopped_state_no_pid_stopped(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1", "state": "stopped"}], True),
+    )
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == "stopped"
+
+
+def test_claude_session_stop_confirmed_done_state_no_pid_stopped(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1", "state": "done"}], True),
+    )
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == "stopped"
+
+
+def test_claude_session_stop_confirmed_no_state_no_pid_unconfirmed(monkeypatch):
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(
+        ED, "_claude_agents_rows",
+        lambda *a, **k: ([{"id": "id-1"}], True),
+    )
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == (
+        background_outcome.REFUSAL_STOP_UNCONFIRMED
+    )
+
+
 def test_claude_session_stop_confirmed_dead_pid_stopped(monkeypatch):
     monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
     monkeypatch.setattr(
