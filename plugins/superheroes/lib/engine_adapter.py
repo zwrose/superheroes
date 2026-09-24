@@ -14,6 +14,7 @@ import re
 import stat as _stat
 import subprocess
 import sys
+import uuid
 from collections import namedtuple
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,12 +38,35 @@ import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import 
 import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
 import review_findings_schema  # noqa: E402  (findings-member schema home; #1145)
 import round_phases  # noqa: E402  (verifier-verdict enum home; verification.VERDICTS re-exports same tuple)
+import claude_modes  # noqa: E402  (claude dispatch-mode vocabulary home; re-exported below)
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
 # Re-export result-kind enum for consumers (CONVENTIONS §11 Pattern 1). Producers emit these
 # literals; engine_dispatch and drift tests import this name, never restate the tuple.
 REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
+
+# Claude dispatch modes — home is claude_modes.py; engine_adapter re-exports for consumers
+# (CONVENTIONS §11); engine_result_channel re-exports from here.
+MODE_PRINT = claude_modes.MODE_PRINT
+MODE_BACKGROUND = claude_modes.MODE_BACKGROUND
+CLAUDE_MODES = claude_modes.CLAUDE_MODES
+
+# Non-print claude dispatch modes and the engines that support each. Single home for the
+# capability question; engine_result_channel maps supported pairs to delivery mechanics.
+_NON_PRINT_CLAUDE_MODE_ENGINES = {
+    MODE_BACKGROUND: frozenset({"claude"}),
+}
+
+
+def claude_mode_supported(vendor, mode):
+    """True when vendor accepts this claude dispatch mode (print is universal)."""
+    if mode is None or mode == MODE_PRINT:
+        return True
+    allowed = _NON_PRINT_CLAUDE_MODE_ENGINES.get(mode)
+    if allowed is None:
+        return False
+    return vendor in allowed
 
 # Write tail signals graded by _grade_build_report_obj (CONVENTIONS §11).
 WRITE_SIGNAL_ENUM = ("ok", "plan_wrong", "needs_context")
@@ -63,6 +87,8 @@ SHAPE_OBJECT_VERDICTS_NOT_A_LIST = "object-verdicts-not-a-list"
 SHAPE_ARRAY_NOT_ALL_OBJECTS = "array-not-all-objects"
 SHAPE_FINDINGS_HOLLOW_MEMBER = "findings-hollow-member"
 SHAPE_VERDICTS_HOLLOW_MEMBER = "verdicts-hollow-member"
+SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER = "findings-partial-hollow-member"
+SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER = "verdicts-partial-hollow-member"
 SHAPE_PLACEHOLDER_LITERAL_REFUSAL = "placeholder-literal-refusal"
 SHAPE_NO_PARSEABLE_JSON = "no-parseable-json"
 SHAPE_EMPTY_STDOUT = "empty-stdout"
@@ -74,8 +100,10 @@ REVIEW_PAYLOAD_SHAPES = (
     SHAPE_OBJECT_FINDINGS_NOT_A_LIST,   # a JSON object parsed with a `findings` key that is not a list
     SHAPE_OBJECT_VERDICTS_NOT_A_LIST,   # a JSON object parsed with a `verdicts` key that is not a list
     SHAPE_ARRAY_NOT_ALL_OBJECTS,        # a bare top-level array parsed, but not every element is an object
-    SHAPE_FINDINGS_HOLLOW_MEMBER,       # a findings array parsed with at least one hollow object member
-    SHAPE_VERDICTS_HOLLOW_MEMBER,       # a verdicts array parsed with at least one hollow object member
+    SHAPE_FINDINGS_HOLLOW_MEMBER,       # a findings array parsed with only hollow object members
+    SHAPE_VERDICTS_HOLLOW_MEMBER,       # a verdicts array parsed with only invalid members
+    SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER,  # findings list carries substantive and hollow members
+    SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER,  # verdicts list carries valid and invalid members
     SHAPE_PLACEHOLDER_LITERAL_REFUSAL,  # an item carries a review-base template literal in id or severity
     SHAPE_NO_PARSEABLE_JSON,            # stdout was non-empty but held no parseable top-level JSON value
     SHAPE_EMPTY_STDOUT,                 # stdout was empty or whitespace only
@@ -215,12 +243,20 @@ _ARTIFACT_TRACEBACK_FIRST_LINE_RE = re.compile(
 BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "unknown-engine",
     "unknown-claude-tier",
+    "unknown-claude-mode",
+    "claude-mode-unsupported",
     "fable-unrunnable",
     "unregistered-engine-model",
     "engine-model-effort-conflict",
     "invalid-model-effort",
     "untokenizable",
+    "builder-prompt-missing",
+    "builder-session-id-invalid",
 })
+
+REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
+REFUSAL_BUILDER_SESSION_ID_INVALID = "builder-session-id-invalid"
+CLAUDE_EXECUTABLE = "claude"
 
 
 def _refuse(reason, *, detail=None):
@@ -445,6 +481,27 @@ def build_argv_result(seat, role_kind, opts):
     cwd = opts.get("cwd")
     is_read = role_kind == "review"
     claude_tier = opts.get("model")
+    claude_mode = opts.get("claudeMode")
+    if claude_mode is not None and claude_mode != MODE_PRINT:
+        modes_label = ", ".join(CLAUDE_MODES)
+        if not isinstance(claude_mode, str):
+            return _refuse(
+                "unknown-claude-mode",
+                detail="unknown claude mode %r; accepted modes: %s"
+                % (claude_mode, modes_label),
+            )
+        if claude_mode not in CLAUDE_MODES:
+            return _refuse(
+                "unknown-claude-mode",
+                detail="unknown claude mode %r; accepted modes: %s"
+                % (claude_mode, modes_label),
+            )
+        if not claude_mode_supported(vendor, claude_mode):
+            return _refuse(
+                "claude-mode-unsupported",
+                detail="claude mode %r is not supported for engine %s"
+                % (claude_mode, vendor),
+            )
     if claude_tier is not None:
         if not isinstance(claude_tier, str) or claude_tier not in model_registry.known_claude_models():
             return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(claude_tier))
@@ -518,7 +575,9 @@ def build_argv_result(seat, role_kind, opts):
         )
         if refusal_reason is not None:
             return _refuse(refusal_reason, detail=refusal_detail)
-        if engine_model == "fable-5":
+        fable_parsed = model_registry.parse_dispatch_token("claude", "fable")
+        fable_id = fable_parsed[0] if fable_parsed else None
+        if fable_id is not None and engine_model == fable_id:
             return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail("fable"))
         ok, _reason = model_registry.validate_config("claude", engine_model, effort)
         if not ok:
@@ -532,16 +591,60 @@ def build_argv_result(seat, role_kind, opts):
                 "untokenizable",
                 detail=_untokenizable_detail("claude", engine_model, effort),
             )
-        argv = [
-            "claude", "-p", "--model", tok, "--effort", effort,
-            "--output-format", "stream-json", "--verbose",
-        ]
+        if claude_mode == MODE_BACKGROUND:
+            argv = [CLAUDE_EXECUTABLE, "--bg", "--model", tok, "--effort", effort]
+        else:
+            argv = [
+                CLAUDE_EXECUTABLE, "-p", "--model", tok, "--effort", effort,
+                "--output-format", "stream-json", "--verbose",
+            ]
         if is_read:
             argv += ["--restricted"]
         else:
             argv += ["--permission-mode", "acceptEdits", "--restricted"]
         return _ok(argv)
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
+
+
+def claude_builder_argv(token, session_id, prompt):
+    """Build the print-mode claude argv for a builder session. Never raises."""
+    if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
+        return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
+    if not isinstance(session_id, str):
+        return _refuse(
+            REFUSAL_BUILDER_SESSION_ID_INVALID,
+            detail="a canonical lowercase UUID string",
+        )
+    try:
+        canonical = str(uuid.UUID(session_id))
+    except (ValueError, AttributeError, TypeError):
+        canonical = None
+    if canonical is None or canonical != session_id:
+        return _refuse(
+            REFUSAL_BUILDER_SESSION_ID_INVALID,
+            detail="a canonical lowercase UUID string",
+        )
+    if not isinstance(prompt, str) or not prompt.strip():
+        return _refuse(
+            REFUSAL_BUILDER_PROMPT_MISSING,
+            detail="builder prompt must be a non-empty string",
+        )
+    argv = [
+        CLAUDE_EXECUTABLE, "--model", token, "--session-id", session_id, "-p", prompt,
+    ]
+    return _ok(argv)
+
+
+def claude_cli_argv(args):
+    """Prefix dispatch-side claude subcommand args. Returns None when invalid. Never raises."""
+    if not isinstance(args, (list, tuple)):
+        return None
+    argv = [CLAUDE_EXECUTABLE]
+    for item in args:
+        if not isinstance(item, str) or not item:
+            return None
+        argv.append(item)
+    return argv
 
 
 def build_argv(seat, role_kind, opts):
@@ -736,8 +839,8 @@ def _is_codex_event_object(obj):
     return isinstance(obj, dict) and obj.get("type") in _CODEX_EVENT_TYPES
 
 
-def _iter_codex_event_lines(stdout):
-    """Yield parsed JSON objects from codex JSONL stdout. Never raises."""
+def _iter_jsonl_dict_lines(stdout):
+    """Yield parsed JSON dicts from JSONL stdout; skip unparseable and non-dict lines. Never raises."""
     if not isinstance(stdout, str) or not stdout:
         return
     for line in stdout.splitlines():
@@ -759,22 +862,6 @@ def _is_claude_event_object(obj):
     return isinstance(obj, dict) and obj.get("type") in _CLAUDE_EVENT_TYPES
 
 
-def _iter_claude_event_lines(stdout):
-    """Yield parsed JSON objects from claude stream-json stdout. Never raises."""
-    if not isinstance(stdout, str) or not stdout:
-        return
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(obj, dict):
-            yield obj
-
-
 def claude_tool_calls(stdout):
     """Count distinct tool_use ids in claude stream-json stdout; int or None. Never raises.
 
@@ -784,7 +871,7 @@ def claude_tool_calls(stdout):
             return None
         parsed_any = False
         tool_ids = set()
-        for obj in _iter_claude_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not _is_claude_event_object(obj):
                 continue
             parsed_any = True
@@ -818,11 +905,110 @@ def claude_result_envelope(stdout):
         if not isinstance(stdout, str) or not stdout:
             return None
         last = None
-        for obj in _iter_claude_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not isinstance(obj, dict) or obj.get("type") != "result":
                 continue
             last = obj
         return last
+    except Exception:
+        return None
+
+
+def claude_transcript_result(rows):
+    """Return the input dict of the last StructuredOutput tool_use in transcript rows, or None."""
+    try:
+        if not isinstance(rows, list):
+            return None
+        last_input = None
+        for row in rows:
+            if not isinstance(row, dict) or row.get("type") != "assistant":
+                continue
+            message = row.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") != "StructuredOutput":
+                    continue
+                inp = block.get("input")
+                if isinstance(inp, dict):
+                    last_input = inp
+        return last_input
+    except Exception:
+        return None
+
+
+def claude_transcript_tool_calls(rows):
+    """Count distinct non-StructuredOutput tool_use ids in transcript rows; int or None."""
+    try:
+        if not isinstance(rows, list):
+            return None
+        parsed_any = False
+        tool_ids = set()
+        for row in rows:
+            if not _is_claude_event_object(row):
+                continue
+            parsed_any = True
+            if row.get("type") != "assistant":
+                continue
+            message = row.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") == "StructuredOutput":
+                    continue
+                block_id = block.get("id")
+                if isinstance(block_id, str) and block_id:
+                    tool_ids.add(block_id)
+        if not parsed_any:
+            return None
+        return len(tool_ids)
+    except Exception:
+        return None
+
+
+def claude_transcript_turn_ended(rows):
+    """True when transcript rows signal turn end via toolEndsTurn or turn_duration."""
+    try:
+        if not isinstance(rows, list):
+            return False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if row.get("toolEndsTurn") is True:
+                return True
+            if row.get("type") == "system" and row.get("subtype") == "turn_duration":
+                return True
+        return False
+    except Exception:
+        return False
+
+
+_CLAUDE_LAUNCH_ID_RE = re.compile(r"^backgrounded · ([0-9a-f]{8})$")
+
+
+def claude_launch_id(stdout):
+    """Return the 8-char session id from a background launch acknowledgement line, or None."""
+    try:
+        if not isinstance(stdout, str):
+            return None
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            match = _CLAUDE_LAUNCH_ID_RE.match(line)
+            if match:
+                return match.group(1)
+        return None
     except Exception:
         return None
 
@@ -832,7 +1018,7 @@ def is_codex_event_stream(stdout):
     try:
         if not isinstance(stdout, str) or not stdout:
             return False
-        for obj in _iter_codex_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if _is_codex_event_object(obj):
                 return True
         return False
@@ -847,7 +1033,7 @@ def codex_tool_calls(stdout):
             return None
         count = 0
         parsed_any = False
-        for obj in _iter_codex_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not _is_codex_event_object(obj):
                 continue
             parsed_any = True
@@ -872,7 +1058,7 @@ def codex_event_tokens(stdout):
             return None
         parsed_any = False
         last_usage = None
-        for obj in _iter_codex_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not _is_codex_event_object(obj):
                 continue
             parsed_any = True
@@ -1699,6 +1885,17 @@ _REVIEW_PAYLOAD_SEMANTICS = {
 }
 
 
+def review_payload_key(kind):
+    """Return the payload key for kind from the home registry. Never raises."""
+    try:
+        record = _REVIEW_PAYLOAD_SEMANTICS.get(kind)
+        if record is None:
+            return None
+        return record.key
+    except Exception:
+        return None
+
+
 def review_payload_carried(result, kind):
     """Whether a review result carries a payload for kind, and the value. Never raises."""
     try:
@@ -1769,6 +1966,101 @@ def _bound_top_level_keys(obj):
     return keys, keys_truncated
 
 
+def _findings_list_member_counts(findings, *, echo_nonce=None):
+    """Return (substantive, hollow) dict-member counts for a findings list."""
+    substantive = 0
+    hollow = 0
+    if not isinstance(findings, list):
+        return substantive, hollow
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        if _finding_is_substantive(item, echo_nonce=echo_nonce):
+            substantive += 1
+        else:
+            hollow += 1
+    return substantive, hollow
+
+
+def _findings_list_hollow_grade(findings, *, echo_nonce=None):
+    """Return 'plain' or 'partial' when a findings list has hollow members, else None."""
+    substantive, hollow = _findings_list_member_counts(findings, echo_nonce=echo_nonce)
+    if hollow == 0:
+        return None
+    if substantive > 0:
+        return "partial"
+    return "plain"
+
+
+def _findings_list_shape_got(findings, *, echo_nonce=None):
+    """Bounded member-shape summary for a findings list."""
+    count = len(findings) if isinstance(findings, list) else 0
+    substantive, hollow = _findings_list_member_counts(findings, echo_nonce=echo_nonce)
+    return "list:count=%d,hollow=%d,substantive=%d" % (count, hollow, substantive)
+
+
+def _verdicts_list_member_counts(verdicts):
+    """Return (valid, invalid) member counts for a verdicts list."""
+    valid = 0
+    invalid = 0
+    if not isinstance(verdicts, list):
+        return valid, invalid
+    for item in verdicts:
+        if _verdict_is_valid(item):
+            valid += 1
+        else:
+            invalid += 1
+    return valid, invalid
+
+
+def _verdicts_list_hollow_grade(verdicts):
+    """Return 'plain' or 'partial' when a verdicts list has invalid members, else None."""
+    valid, invalid = _verdicts_list_member_counts(verdicts)
+    if invalid == 0:
+        return None
+    if valid > 0:
+        return "partial"
+    return "plain"
+
+
+def _verdicts_list_shape_got(verdicts):
+    """Bounded member-shape summary for a verdicts list."""
+    count = len(verdicts) if isinstance(verdicts, list) else 0
+    valid, invalid = _verdicts_list_member_counts(verdicts)
+    return "list:count=%d,invalid=%d,valid=%d" % (count, invalid, valid)
+
+
+def _investigated_list_shape_got(paths, *, echo_nonce=None):
+    """Bounded member-shape summary for an investigated path list."""
+    if not isinstance(paths, list):
+        return "not-a-list"
+    count = len(paths)
+    placeholder = sum(
+        1 for path in paths
+        if _investigated_path_is_placeholder_echo(path, echo_nonce=echo_nonce)
+    )
+    return "list:count=%d,placeholder-echo=%d" % (count, placeholder)
+
+
+def _hollow_family_diagnostic(list_kind, grade, *, member_shape_wanted, member_shape_got):
+    """Single mint for hollow-family payload-shape diagnostics. Never raises."""
+    if list_kind == "findings":
+        parsed = (SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER if grade == "partial"
+                  else SHAPE_FINDINGS_HOLLOW_MEMBER)
+    elif list_kind == "verdicts":
+        parsed = (SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER if grade == "partial"
+                  else SHAPE_VERDICTS_HOLLOW_MEMBER)
+    else:
+        parsed = SHAPE_FINDINGS_HOLLOW_MEMBER
+    return {
+        "parsed": parsed,
+        "topLevelKeys": [],
+        "keysTruncated": False,
+        "memberShapeWanted": member_shape_wanted,
+        "memberShapeGot": member_shape_got,
+    }
+
+
 def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
     """Findings-kind shape diagnostic for a recognised review object. Never raises."""
     if "findings" not in obj:
@@ -1777,8 +2069,12 @@ def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
             accepted, _ = _scrub_investigated(investigated)
             if accepted:
                 if _investigated_list_all_placeholder_echo(accepted, echo_nonce=echo_nonce):
-                    return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                            "topLevelKeys": [], "keysTruncated": False}
+                    return _hollow_family_diagnostic(
+                        "investigated", "plain",
+                        member_shape_wanted="non-placeholder-investigated-path",
+                        member_shape_got=_investigated_list_shape_got(
+                            accepted, echo_nonce=echo_nonce),
+                    )
                 return None
         top_keys, keys_truncated = _bound_top_level_keys(obj)
         return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
@@ -1791,15 +2087,22 @@ def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                 "topLevelKeys": [], "keysTruncated": False}
     if _findings_list_has_hollow_member(findings, echo_nonce=echo_nonce):
-        return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                "topLevelKeys": [], "keysTruncated": False}
+        return _hollow_family_diagnostic(
+            "findings", _findings_list_hollow_grade(findings, echo_nonce=echo_nonce),
+            member_shape_wanted="engaged-finding-member",
+            member_shape_got=_findings_list_shape_got(findings, echo_nonce=echo_nonce),
+        )
     investigated = obj.get("investigated")
     if isinstance(investigated, list) and investigated:
         accepted, _ = _scrub_investigated(investigated)
         if accepted and _investigated_list_all_placeholder_echo(
                 accepted, echo_nonce=echo_nonce):
-            return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                    "topLevelKeys": [], "keysTruncated": False}
+            return _hollow_family_diagnostic(
+                "investigated", "plain",
+                member_shape_wanted="non-placeholder-investigated-path",
+                member_shape_got=_investigated_list_shape_got(
+                    accepted, echo_nonce=echo_nonce),
+            )
     return None
 
 
@@ -1813,8 +2116,11 @@ def _review_payload_shape_verdicts_obj(obj):
         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                 "topLevelKeys": [], "keysTruncated": False}
     if _verdicts_list_has_hollow_member(verdicts):
-        return {"parsed": SHAPE_VERDICTS_HOLLOW_MEMBER,
-                "topLevelKeys": [], "keysTruncated": False}
+        return _hollow_family_diagnostic(
+            "verdicts", _verdicts_list_hollow_grade(verdicts),
+            member_shape_wanted="valid-verdict-member",
+            member_shape_got=_verdicts_list_shape_got(verdicts),
+        )
     return None
 
 
@@ -1850,7 +2156,9 @@ def review_payload_shape(stdout, fed_prompt=None, *, echo_nonce=None):
     Returns {"parsed": <one of REVIEW_PAYLOAD_SHAPES>,
              "topLevelKeys": [str, ...],      # [] unless `parsed` is object-without-findings
                                                # or object-both-payload-keys
-             "keysTruncated": bool}
+             "keysTruncated": bool,
+             "memberShapeWanted": str,          # hollow-family only — required member shape
+             "memberShapeGot": str}            # hollow-family only — bounded shape read
     Returns None when `stdout` DOES parse as a valid review payload — there is nothing to diagnose.
     Never raises."""
     try:
@@ -1886,8 +2194,12 @@ def review_payload_shape(stdout, fed_prompt=None, *, echo_nonce=None):
                         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                                 "topLevelKeys": [], "keysTruncated": False}
                     if _findings_list_has_hollow_member(arr, echo_nonce=echo_nonce):
-                        return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                                "topLevelKeys": [], "keysTruncated": False}
+                        return _hollow_family_diagnostic(
+                            "findings", _findings_list_hollow_grade(arr, echo_nonce=echo_nonce),
+                            member_shape_wanted="engaged-finding-member",
+                            member_shape_got=_findings_list_shape_got(
+                                arr, echo_nonce=echo_nonce),
+                        )
                     return None
                 return {"parsed": SHAPE_ARRAY_NOT_ALL_OBJECTS,
                         "topLevelKeys": [], "keysTruncated": False}

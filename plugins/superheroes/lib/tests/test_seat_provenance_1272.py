@@ -7,6 +7,8 @@ import time
 
 import pytest
 
+from bite_support import _stamp_ended_from_native_result
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
@@ -482,11 +484,13 @@ def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit
     )
     assert ok, detail
     _write_native_ruling_result(run_dir, repo_root, seat)
-    engine_dispatch._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 0.1, "stdoutBytes": len(stdout),
         "at": time.time(),
+    }, 1)
+    engine_dispatch._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, **ended,
     })
     with open(os.path.join(run_dir, "attempt-1.stdout"), "wb") as fh:
         fh.write(stdout.encode("utf-8"))

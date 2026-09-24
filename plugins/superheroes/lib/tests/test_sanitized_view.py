@@ -3884,15 +3884,29 @@ def test_review_diff_ancestry_old_git_shallow_echo_refuses_before_census_or_patc
 
 
 @pytest.mark.parametrize(
-    "bad_base",
+    ("bad_base", "expected_detail"),
     [
-        "HEAD", "HEAD~5", "HEAD^", "main", "main^", "origin/main", "v1.0", "@",
-        "-HEAD", "--upload-pack=evil", "   ", "deadbeef",
-        "0" * 39, "0" * 41, "0" * 63, "0" * 65, "g" + "0" * 39,
+        ("HEAD", "sanitized-view-diff-base-unresolved"),
+        ("HEAD~5", "sanitized-view-diff-base-unresolved"),
+        ("HEAD^", "sanitized-view-diff-base-unresolved"),
+        ("main", "sanitized-view-diff-base-unresolved"),
+        ("main^", "sanitized-view-diff-base-unresolved"),
+        ("origin/main", "sanitized-view-diff-base-unresolved"),
+        ("v1.0", "sanitized-view-diff-base-unresolved"),
+        ("@", "sanitized-view-diff-base-unresolved"),
+        ("-HEAD", "sanitized-view-diff-base-unresolved"),
+        ("--upload-pack=evil", "sanitized-view-diff-base-unresolved"),
+        ("   ", "sanitized-view-diff-base-unresolved"),
+        ("deadbeef", "sanitized-view-diff-base-abbreviated"),
+        ("0" * 39, "sanitized-view-diff-base-abbreviated"),
+        ("0" * 41, "sanitized-view-diff-base-unresolved"),
+        ("0" * 63, "sanitized-view-diff-base-unresolved"),
+        ("0" * 65, "sanitized-view-diff-base-unresolved"),
+        ("g" + "0" * 39, "sanitized-view-diff-base-unresolved"),
     ],
 )
 def test_stage_review_diff_refuses_unpinned_base_before_any_git(
-    tmp_path, monkeypatch, bad_base
+    tmp_path, monkeypatch, bad_base, expected_detail
 ):
     """A base that is not a pinned commit OID refuses before any git command runs."""
     spawned = []
@@ -3910,8 +3924,24 @@ def test_stage_review_diff_refuses_unpinned_base_before_any_git(
             bad_base,
             time.monotonic(),
         )
-    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+    assert exc.value.detail == expected_detail
     assert spawned == []
+
+
+@pytest.mark.parametrize("abbrev", ["deadbeef", "0" * 39])
+def test_require_pinned_commit_oid_names_abbreviated_id(abbrev):
+    # axis: abbreviated hex commit ids get their own refusal token
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._require_pinned_commit_oid(abbrev)
+    assert exc.value.detail == "sanitized-view-diff-base-abbreviated"
+
+
+@pytest.mark.parametrize("bad", ["not-a-real-ref-abc123", "0" * 41])
+def test_require_pinned_commit_oid_non_hex_stays_unresolved(bad):
+    # axis: non-hex and over-39 hex keep the unresolved token
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._require_pinned_commit_oid(bad)
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
 
 
 def test_config_override_bundles_carry_commit_graph_pin():

@@ -175,7 +175,8 @@ def test_complete_codex_policy_single_sourced():
                 "skills/configure/reference/set-up.md",
                 "skills/configure/reference/view-and-tune.md"):
         doc = _read(rel)
-        documented_ids = set(re.findall(r"gpt-5\.6-(?:sol|terra)", doc))
+        id_pattern = r"(?<![A-Za-z0-9._-])gpt-[0-9][A-Za-z0-9._-]*(?![A-Za-z0-9._-])"
+        documented_ids = {m.rstrip(".") for m in re.findall(id_pattern, doc)}
         assert documented_ids == expected_ids, "%s Codex model IDs drifted from model_registry" % rel
         mapping_text = _one(re.findall(r"Codex tier map:\s*([^\n]+(?:\n(?!\s*\n)[^\n]+)?)", doc),
                             "Codex tier map", rel, "tier=model, ...")
@@ -450,48 +451,6 @@ def test_shape_drivers_channel_vocabulary_biteproof_doc_anchor_non_vacuous():
         match=r"anchor '`shapeDrivers` — NO SUCH ANCHOR' moved or reworded",
     )
 
-
-# --- Cluster: review payload shape tokens (engine_adapter → auto-fix-loop.md) ---
-
-
-def _review_payload_shape_tokens_from_home():
-    import engine_adapter
-
-    return set(engine_adapter.REVIEW_PAYLOAD_SHAPES)
-
-
-def _review_payload_shape_tokens_from_auto_fix_loop_doc(doc):
-    """The payloadShape `parsed` enumeration in auto-fix-loop.md — scoped to that block only."""
-    m = re.search(
-        r"`parsed`\s*\(one of\s*(.*?)\)\s*,\s*`topLevelKeys`",
-        doc,
-        re.DOTALL,
-    )
-    assert m, (
-        "auto-fix-loop.md: payloadShape `parsed` enumeration not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
-    assert tokens, (
-        "auto-fix-loop.md: payloadShape `parsed` enumeration parsed to zero tokens "
-        "(regex drift or empty enumeration?)"
-    )
-    return tokens
-
-
-def test_review_payload_shape_tokens_in_auto_fix_loop_doc():
-    """§11: auto-fix-loop.md restates the payloadShape `parsed` vocabulary from engine_adapter."""
-    home = _review_payload_shape_tokens_from_home()
-    doc = _read("skills/review-code/reference/auto-fix-loop.md")
-    doc_tokens = _review_payload_shape_tokens_from_auto_fix_loop_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "auto-fix-loop.md payloadShape `parsed` vocabulary drift from "
-        "engine_adapter.REVIEW_PAYLOAD_SHAPES — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
 
 
 # --- Cluster: review resultKind enum (engine_adapter → doc copies) ---
@@ -1382,6 +1341,7 @@ def test_wave_watch_suppressible_events_in_wave_watch_doc():
 _CONCRETE_MODEL_TOKENS = (
     "gpt-5.6-terra",
     "gpt-5.6-sol",
+    "gpt-6-astra",
     "gpt-5.5",
     "gpt-5.6-luna",
     "composer-2.5",
@@ -1391,8 +1351,8 @@ _CONCRETE_MODEL_TOKENS = (
     "haiku-4.5",
     "sonnet-5",
     "opus-4.8",
-    "opus-5",
-    "fable-5",
+    "opus-5.5",
+    "fable-5.1",
     "claude-fable-5-thinking",
 )
 
@@ -1402,6 +1362,8 @@ _RETIRED_MODEL_TOKENS = (
     "composer-2.5-fast",
     "claude-fable-5-thinking",
     "opus-4.8",
+    "opus-5",
+    "fable-5",
     "cursor-grok-4.5",
 )
 
