@@ -736,7 +736,7 @@ def test_build_argv_codex_cursor_unchanged_with_claude_mode_none():
 
 def test_build_argv_claude_fable_refuses_in_background_mode():
     res = EA.build_argv_result(
-        _seat("claude", "fable-5", "high"), "review", {"claudeMode": "background"},
+        _seat("claude", "fable-5.1", "high"), "review", {"claudeMode": "background"},
     )
     assert res["reason"] == "fable-unrunnable"
 
@@ -848,7 +848,7 @@ def test_build_argv_claude_fail_closed_edges():
         assert res["reason"] == "unregistered-engine-model"
         assert "haiku-4.5" in res["detail"]
     # 2 fable-5 or token fable → fable-unrunnable
-    res = EA.build_argv_result(_seat("claude", "fable-5", "high"), "review", {})
+    res = EA.build_argv_result(_seat("claude", "fable-5.1", "high"), "review", {})
     assert res["reason"] == "fable-unrunnable"
     res = EA.build_argv_result(_seat("claude", "fable", "high"), "review", {})
     assert res["reason"] == "fable-unrunnable"

@@ -250,7 +250,9 @@ the declared one (`native-schema-unreadable` otherwise); the file must be a regu
 size cap that decodes as JSON (`native-result-missing`, `native-result-oversized`,
 `native-result-malformed`); it must validate against the declared schema
 (`native-result-schema-invalid`); on a write, its `report` must be non-blank
-(`native-result-report-blank`); and an entry already at the result path when an attempt would spawn
+(`native-result-report-blank`); on a write, a result admitted although the process had to be stopped
+at the wall cap is marked `admittedAfterTimeout: true` rather than reading as a clean exit; and an
+entry already at the result path when an attempt would spawn
 refuses that attempt (`native-result-path-occupied`); every native attempt requires a usable
 completion stamp (`result-completion-unrecorded` when missing or unusable, and when a deadline is
 present its epoch must match the stamp's); every attempt-ended record also carries the wall-cap
@@ -270,8 +272,11 @@ incrementally reads stdout for complete `{"type":"result"}` lines and holds the 
 it when it is admissible; it observes once more before terminating the process group and drains any
 trailing bytes once after the group is reaped; the typed file is materialized from that held event,
 so stdout is read once for the result and never re-read or re-split; if the final read fails, or
-the file shrinks below what was already read, nothing is materialized; it still never repairs a
-malformed file. **Claude background mode** never reads stdout
+the file shrinks below what was already read, nothing is materialized and the dropped result is
+reported as `stdout-result-dropped` with its cause (`final-read-failed`, `shrunk-below-read`,
+`bytes-changed`); just before a held result is saved, the bytes it was parsed from are re-checked
+by digest and a mismatch drops it the same way; it still never repairs a malformed file. **Claude
+background mode** never reads stdout
 for a result — the transcript path above. Claude adds `config-dir-unusable:<why>` at run-open and
 the adapter refusals `unregistered-engine-model`,
 `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
@@ -290,9 +295,11 @@ attempt end; `timeoutAt` remains for display only on timed-out attempts). Admiss
 those stamped fields in one loader every native
 path passes through: it recomputes the payload digest and requires it to match the recorded one, so
 a result rewritten after its stamp cannot be admitted on the earlier stamp. For claude print the
-completion instant is the runner's observation, bounded by the attempt poll interval (0.2 s) — a
-result completing inside that final window before the cap may be stamped just after it and forfeit;
-that is the safe direction.
+completion instant is the runner's observation, lagging by up to one attempt poll interval (0.2 s)
+plus the time to process that poll — a result completing inside that final window before the cap
+may be stamped just after it and forfeit; that is the safe direction. Write forfeits name
+`nonzero-exit` when the engine exited non-zero before the cap, and `timeout-no-admission` when the
+cap was hit with nothing admitted.
 Progress and engagement telemetry come from codex's JSONL event stream on `--json`
 (`engagement.source: "codex-events"`); cursor's stream-json event stream (`engagement.source:
 "cursor-stream"`, `tool_call` events counted by distinct call id); claude's stream-json event stream

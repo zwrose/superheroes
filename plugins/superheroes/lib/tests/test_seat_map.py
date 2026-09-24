@@ -150,7 +150,7 @@ def test_verify_maker_family_violation():
         "seats": {
             "security-reviewer": {
                 "vendor": "claude",
-                "model": "opus-5",
+                "model": "opus-5.5",
                 "effort": "xhigh",
                 "tier": "reviewer-deep",
                 "family": "anthropic",
@@ -258,7 +258,7 @@ def _full_seats_template(**overrides):
         },
         "security-reviewer": {
             "vendor": "claude",
-            "model": "opus-5",
+            "model": "opus-5.5",
             "effort": "xhigh",
             "tier": "reviewer-deep",
             "family": "anthropic",
@@ -306,7 +306,7 @@ def _seats_without_maker_collision(maker_family):
     seats = _full_seats_template()
     anthropic_cfg = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -392,7 +392,7 @@ def test_verify_critical_diversity_violation():
     seats = _full_seats_template()
     seats["security-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -400,7 +400,7 @@ def test_verify_critical_diversity_violation():
     }
     seats["premortem-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -408,7 +408,7 @@ def test_verify_critical_diversity_violation():
     }
     seats["code-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -785,7 +785,7 @@ def test_verify_unknown_liveness_is_a_violation():
     seats = _full_seats_template()
     seats["test-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -853,7 +853,7 @@ def test_verify_malformed_liveness_is_a_violation():
     seats = _full_seats_template()
     seats["code-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -942,7 +942,7 @@ def test_unexcused_maker_family_under_liveness_read_error_degradation():
         "seats": {
             "test-reviewer": {
                 "vendor": "claude",
-                "model": "opus-5",
+                "model": "opus-5.5",
                 "effort": "xhigh",
                 "tier": "reviewer-deep",
                 "family": "anthropic",
@@ -1026,7 +1026,7 @@ def test_legacy_cache_only_constraint_still_marks_liveness_synthesized():
         "seats": {
             "test-reviewer": {
                 "vendor": "claude",
-                "model": "opus-5",
+                "model": "opus-5.5",
                 "effort": "xhigh",
                 "tier": "reviewer-deep",
                 "family": "anthropic",
@@ -1454,7 +1454,7 @@ def test_unexcused_e5_pinned_seat_excuses_strong_tier_via_pin():
     }
     seats["premortem-reviewer"] = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -1639,7 +1639,7 @@ def test_unexcused_critical_diversity_pin_not_causal_f3a():
     """FIX-2 F3a: pin on one critical seat does not excuse when diversity was achievable."""
     anthropic_cfg = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -1929,6 +1929,109 @@ def test_resolvable_families_unknown_live_cells_source_returns_none(cells_source
     assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
 
 
+# axis: probed family check resolves codex cells through codexRolePins on the seat map.
+def test_resolvable_families_reads_codex_role_pin():
+    seat_map = {
+        "liveCellsSource": "probed",
+        "liveCells": [["codex", "gpt-6-astra", "high"]],
+        "degradations": [],
+        "livenessPinScoped": False,
+        "codexRolePins": {"reviewer-deep": "gpt-6-astra"},
+    }
+    cfg = {"tier": "reviewer-deep"}
+    fams = SM._resolvable_families_for_seat(
+        seat_map, "security-reviewer", cfg, tier="reviewer-deep",
+    )
+    assert "openai" in fams
+
+
+@pytest.mark.parametrize(
+    "bad_pins",
+    [
+        pytest.param(None, id="null"),
+        pytest.param("x", id="non-dict"),
+        pytest.param({"not-a-role": "gpt-6-astra"}, id="unknown-role"),
+        pytest.param({"reviewer-deep": ""}, id="empty-value"),
+        pytest.param({"reviewer-deep": 7}, id="non-string-value"),
+    ],
+)
+def test_resolvable_families_malformed_role_pins_unusable(bad_pins):
+    # axis: malformed codexRolePins makes family evidence unusable without raising
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    seat_map["codexRolePins"] = bad_pins
+    assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
+
+
+# axis: build omits codexRolePins when no pins are configured.
+def test_build_records_codex_role_pins_only_when_present():
+    live_cells = [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    kwargs = dict(
+        roster=SM.PANEL_ROSTER,
+        live_vendors=THREE_VENDORS,
+        author_family="xai",
+        narrative_family="anthropic",
+        seed=0,
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    without = SM.build(**kwargs, codex_role_pins={})
+    assert "codexRolePins" not in without
+    with_pin = SM.build(**kwargs, codex_role_pins={"reviewer-deep": "gpt-6-astra"})
+    assert with_pin["codexRolePins"] == {"reviewer-deep": "gpt-6-astra"}
+
+
+def test_compose_receipt_carries_codex_role_pins(tmp_path, capsys, monkeypatch):
+    # axis: compose receipt carries codexRolePins and family check reads it back
+    import preflight_probe as pp
+
+    live_vendors = ["claude", "codex", "cursor"]
+    live_cells = [
+        ["codex", "gpt-6-astra", "high"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+
+    def fake_live_vendors_for_composition(*args, **kwargs):
+        return (live_vendors, live_cells, {}, [], "probed", {
+            "servedFromCache": False,
+            "probedAt": None,
+            "remainingTtl": None,
+        })
+
+    monkeypatch.setattr(pp, "live_vendors_for_composition", fake_live_vendors_for_composition)
+
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"codexModels": {"reviewer-deep": "gpt-6-astra"}})
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--configured-engines",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "cursor",
+            "--host-model",
+            "composer-2.5",
+            "--repo-root",
+            repo,
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["codexRolePins"] == {"reviewer-deep": "gpt-6-astra"}
+    seat_map = dict(receipt)
+    seat_map["livenessPinScoped"] = False
+    cfg = {"tier": "reviewer-deep"}
+    fams = SM._resolvable_families_for_seat(
+        seat_map, "security-reviewer", cfg, tier="reviewer-deep",
+    )
+    assert "openai" in fams
+
+
 def test_live_cells_sources_closed_set_membership():
     # axis: recognizer keys on the closed tuple — member changes must update this pin
     assert SM.LIVE_CELLS_SOURCES == ("probed", "synthesized", "unprobed")
@@ -2016,6 +2119,15 @@ def test_normalize_pins_refuses_a_pin_map_that_is_not_an_object(value):
 def test_normalize_pins_absent_map_is_not_a_refusal():
     assert SM.normalize_pins(None) == ({}, [])
     assert SM.normalize_pins({}) == ({}, [])
+
+
+# axis: pin normalization does not rewrite legacy model ids at the admission boundary
+def test_normalize_pins_preserves_legacy_claude_label():
+    normalized, errors = SM.normalize_pins(
+        {"code-reviewer": {"vendor": "claude", "model": "opus-5", "effort": "xhigh"}}
+    )
+    assert errors == []
+    assert normalized["code-reviewer"]["model"] == "opus-5"
 
 
 def test_build_string_pin_resolves_as_vendor():
@@ -2213,7 +2325,7 @@ def test_dod_ab3_arm_g_pinned_codex_sol_honored():
 def test_census_seated_cells_appear_in_live_cells():
     # bite-axis: a seated cell absent from the probed live set is caught
     live_cells = [
-        ["claude", "opus-5", "xhigh"],
+        ["claude", "opus-5.5", "xhigh"],
         ["codex", "gpt-5.6-sol", "xhigh"],
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
@@ -2355,7 +2467,7 @@ def test_inv3_canonical_families():
     seats = {
         seat: {
             "vendor": "claude",
-            "model": "opus-5",
+            "model": "opus-5.5",
             "effort": "xhigh",
             "tier": "reviewer-deep",
             "family": f"invented-{i}",
@@ -2526,7 +2638,7 @@ def _all_claude_roster_seats():
     """Every roster seat on claude (anthropic family) — the measured INV-16/A case substrate."""
     anthropic_cfg = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": "anthropic",
@@ -2541,6 +2653,29 @@ def _all_claude_roster_seats():
             cfg["effort"] = "high"
         seats[seat] = cfg
     return seats
+
+
+def test_to_receipt_malformed_codex_role_pins_cannot_excuse_critical_diversity():
+    # axis: malformed codexRolePins survives receipt round-trip and cannot launder violations
+    seat_map = {
+        "seats": _all_claude_roster_seats(),
+        "authorFamily": "xai",
+        "liveVendors": list(THREE_VENDORS),
+        "liveCellsSource": "synthesized",
+        "livenessPinScoped": False,
+        "codexRolePins": {"bad-role": "gpt-6-astra"},
+    }
+    before = SM.classify_violations(seat_map, "xai")
+    assert any(
+        v.get("constraint") == "critical-diversity" for v in before["unexcused"]
+    )
+    receipt = SM.to_receipt(seat_map, "xai")
+    assert receipt["codexRolePins"] == {"bad-role": "gpt-6-astra"}
+    after = SM.classify_violations(receipt, "xai")
+    assert any(
+        v.get("constraint") == "critical-diversity" for v in after["unexcused"]
+    )
+    assert not after["excusedByLiveness"]
 
 
 def test_inv16_a_self_asserted_author_family_basis():
@@ -2578,7 +2713,7 @@ def test_inv16_a_no_author_family_basis():
 @pytest.mark.parametrize("seat", ["test-reviewer", "grounding-seat"])
 def test_inv16_c_unresolvable_vendor_violation_unexcused(seat):
     tier = "reviewer" if seat == "grounding-seat" else "reviewer-deep"
-    model = "sonnet-5" if seat == "grounding-seat" else "opus-5"
+    model = "sonnet-5" if seat == "grounding-seat" else "opus-5.5"
     effort = "high" if seat == "grounding-seat" else "xhigh"
     seats = _full_seats_template()
     seats[seat] = {
@@ -2709,7 +2844,7 @@ def test_assert_side_no_cfg_family_reads_outside_build():
 def _pinned_critical_seats_without_family(seats):
     pin_anthropic = {
         "vendor": "claude",
-        "model": "opus-5",
+        "model": "opus-5.5",
         "effort": "xhigh",
         "tier": "reviewer-deep",
         "source": "pinned",
@@ -3044,6 +3179,31 @@ def test_codex_role_pin_astra_registered_seats_at_high():
         assert cfg["model"] == "gpt-6-astra"
         assert cfg["effort"] == "high"
         assert cfg["source"] == "role-pinned"
+
+
+# axis: probed family check falls back to matrix when honored role pin is not live.
+def test_verify_maker_family_with_unavailable_role_pin_and_live_matrix_cell():
+    kw = dict(
+        roster=SM.PANEL_ROSTER,
+        live_vendors=["claude", "codex"],
+        author_family="anthropic",
+        narrative_family="openai",
+        seed=0,
+        pins={
+            "code-reviewer": {"vendor": "claude"},
+            "test-reviewer": {"vendor": "claude"},
+        },
+        live_cells=[["codex", "gpt-5.6-sol", "xhigh"]],
+        live_cells_source="probed",
+    )
+    without_pin = SM.build(**kw)
+    with_pin = SM.build(**kw, codex_role_pins={"reviewer-deep": "gpt-6-astra"})
+    assert any(
+        v.get("constraint") == "maker-family" for v in SM.verify(without_pin, "anthropic")
+    )
+    assert any(
+        v.get("constraint") == "maker-family" for v in SM.verify(with_pin, "anthropic")
+    )
 
 
 # axis: registered gpt-6-astra role-pin falls back to matrix when Astra is not in live cells.

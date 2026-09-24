@@ -69,6 +69,25 @@ def panel_pin_tiers() -> frozenset[str]:
     return _PANEL_PIN_TIERS
 
 
+def _read_codex_role_pins(seat_map: dict) -> tuple[dict[str, str] | None, bool]:
+    """Read ``codexRolePins`` from a seat map — absent, validated mapping, or unusable."""
+    if "codexRolePins" not in seat_map:
+        return None, True
+    raw = seat_map.get("codexRolePins")
+    if raw is None:
+        return None, False
+    if not isinstance(raw, dict):
+        return None, False
+    pins: dict[str, str] = {}
+    for role, pin in raw.items():
+        if role not in _PANEL_PIN_TIERS:
+            return None, False
+        if not isinstance(pin, str) or not pin:
+            return None, False
+        pins[role] = pin
+    return pins, True
+
+
 def _cell(
     tier: str,
     vendor: str,
@@ -192,7 +211,11 @@ def _live_cells_fields_for_receipt(seat_map: dict) -> tuple[list, object]:
     live = seat_map.get("liveVendors")
     if isinstance(live, list) and live:
         roster = tuple(seat_map.get("seats", {}).keys()) or PANEL_ROSTER
-        synthesized = _synthesize_live_cells(live, roster, None)
+        role_pins, pins_usable = _read_codex_role_pins(seat_map)
+        if "codexRolePins" in seat_map and not pins_usable:
+            return [], liveness_cache.LIVE_CELLS_SOURCE_UNPROBED
+        pin_arg = role_pins if pins_usable and role_pins else None
+        synthesized = _synthesize_live_cells(live, roster, None, codex_role_pins=pin_arg)
         return sorted([list(c) for c in synthesized]), receipt_source
     return [], receipt_source
 
@@ -219,6 +242,10 @@ def _resolvable_families_for_seat(
         return None
     known_vendors = set(vendors())
     tier = tier or _seat_tier(seat, cfg)
+    role_pins, pins_usable = _read_codex_role_pins(seat_map)
+    if not pins_usable:
+        return None
+    pin_arg = role_pins if role_pins else None
     families: set[str] = set()
     if cells_source == liveness_cache.LIVE_CELLS_SOURCE_PROBED:
         raw_cells = seat_map.get("liveCells")
@@ -234,11 +261,19 @@ def _resolvable_families_for_seat(
                 return None
             live_cell_set.add(normalized)
         for vendor in known_vendors:
-            model, effort, _pin = _cell(tier, vendor, None)
+            model, effort, pin_info = _cell(tier, vendor, pin_arg)
             if model is None:
                 continue
             if (vendor, model, effort) not in live_cell_set:
-                continue
+                if pin_info and pin_info.get("honored") and vendor != "claude":
+                    matrix_model, matrix_effort, _mp = _cell(tier, vendor, None)
+                    if matrix_model is None:
+                        continue
+                    model, effort = matrix_model, matrix_effort
+                    if (vendor, model, effort) not in live_cell_set:
+                        continue
+                else:
+                    continue
             fam = family_for(tier, vendor)
             if fam is None or not is_allowed(tier, vendor, model, effort):
                 continue
@@ -259,7 +294,7 @@ def _resolvable_families_for_seat(
             if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
                 return None
         for vendor in live:
-            model, effort, _pin = _cell(tier, vendor, None)
+            model, effort, _pin = _cell(tier, vendor, pin_arg)
             if model is None:
                 continue
             fam = family_for(tier, vendor)
@@ -368,7 +403,7 @@ def normalize_pins(pins):
     errors: list[str] = []
     for seat, pin in pins.items():
         if isinstance(pin, dict):
-            normalized[seat] = pin
+            normalized[seat] = dict(pin)
         elif isinstance(pin, str):
             normalized[seat] = {"vendor": pin}
         else:
@@ -908,6 +943,8 @@ def build(
     }
     if resolved_cells_source is not None:
         result["liveCellsSource"] = resolved_cells_source
+    if role_pins:
+        result["codexRolePins"] = dict(role_pins)
     # ONE predicate decides "was the maker unavoidable?" — recording it here from the finished map
     # keeps build() and verify() from disagreeing on the same seat (#670 review, two seats).
     seen = {(d.get("constraint"), d.get("seat")) for d in degradations if isinstance(d, dict)}
@@ -1222,6 +1259,11 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
     }
+    role_pins, pins_usable = _read_codex_role_pins(seat_map)
+    if pins_usable and role_pins:
+        out["codexRolePins"] = dict(role_pins)
+    elif "codexRolePins" in seat_map:
+        out["codexRolePins"] = seat_map["codexRolePins"]
     return out
 
 

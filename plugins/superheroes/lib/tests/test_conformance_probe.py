@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -875,6 +876,65 @@ def test_grade_legs_rejects_injected_seam_record_without_stamp():
     legs = CP._grade_legs(terminal, state, False)
     assert legs["progressTelemetry"]["ok"] is False
     assert legs["progressTelemetry"]["detail"] == "telemetry-absent"
+
+
+def test_probe_accepts_pathlib_run_dir(tmp_path):
+    # axis: pathlib.Path run_dir and repo_root behave like their str forms
+    repo = _repo(tmp_path)
+    stdout = _codex_event_stream(action_items=2)
+    run_dir_str = tmp_path / "run-str"
+    run_dir_str.mkdir()
+    fake_str = FakeRunner([(stdout, False, 0, "")])
+    payload_str, code_str, _ = CP.probe(
+        "codex", repo_root=repo, run_dir=str(run_dir_str), timeout=30, run_engine=fake_str,
+        build_view=_fake_build_view(tmp_path),
+    )
+    run_dir_path = tmp_path / "run-path"
+    run_dir_path.mkdir()
+    fake_path = FakeRunner([(stdout, False, 0, "")])
+    payload_path, code_path, _ = CP.probe(
+        "codex", repo_root=pathlib.Path(repo), run_dir=run_dir_path, timeout=30,
+        run_engine=fake_path, build_view=_fake_build_view(tmp_path),
+    )
+    assert code_str == code_path == 0
+    assert payload_str["ok"] == payload_path["ok"]
+
+
+def test_probe_accepts_bytes_run_dir(tmp_path):
+    # axis: bytes run_dir decodes to str and behaves like that str
+    repo = _repo(tmp_path)
+    stdout = _codex_event_stream(action_items=2)
+    run_dir_str_path = tmp_path / "run-str"
+    run_dir_str_path.mkdir()
+    run_dir_str = str(run_dir_str_path)
+    fake_str = FakeRunner([(stdout, False, 0, "")])
+    payload_str, code_str, _ = CP.probe(
+        "codex", repo_root=repo, run_dir=run_dir_str, timeout=30, run_engine=fake_str,
+        build_view=_fake_build_view(tmp_path),
+    )
+    run_dir_bytes_path = tmp_path / "run-bytes"
+    run_dir_bytes_path.mkdir()
+    fake_bytes = FakeRunner([(stdout, False, 0, "")])
+    payload_bytes, code_bytes, _ = CP.probe(
+        "codex", repo_root=repo, run_dir=str(run_dir_bytes_path).encode("utf-8"), timeout=30,
+        run_engine=fake_bytes, build_view=_fake_build_view(tmp_path),
+    )
+    assert code_str == code_bytes == 0
+    assert payload_str["ok"] == payload_bytes["ok"]
+
+
+class _MalformedPathLike:
+    def __fspath__(self):
+        return 42
+
+
+@pytest.mark.parametrize("run_dir", [object(), _MalformedPathLike()])
+def test_probe_refuses_non_path_run_dir(tmp_path, run_dir):
+    # axis: non-path run_dir refuses with run-dir-invalid instead of raising
+    repo = _repo(tmp_path)
+    payload, code, _ = CP.probe("codex", repo_root=repo, run_dir=run_dir, timeout=30)
+    assert code == 1
+    assert "run-dir-invalid" in payload["legs"]["resultProduction"]["detail"]
 
 
 def test_probe_injected_seam_stamps_last_activity_at(tmp_path):
@@ -1979,7 +2039,7 @@ def test_probe_completion_after_cap_forfeits(tmp_path, monkeypatch, engine, mode
     assert code == 1
 
 
-def _seed_claude_mode_journal(tmp_path, monkeypatch, reused_mode):
+def _seed_claude_mode_journal(tmp_path, monkeypatch):
     _claude_home(monkeypatch, tmp_path)
     repo = _repo(tmp_path)
     seed_run = str(tmp_path / "seed-run")
@@ -2003,7 +2063,7 @@ def _claude_preflight_parent(tmp_path):
 
 def test_probe_preflight_aborts_all_modes_when_one_mode_reused(tmp_path, monkeypatch):
     # axis: reused mode in preflight → no dispatch for any mode
-    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch, "print")
+    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch)
     run_dir = _claude_preflight_parent(tmp_path)
     shutil.copytree(os.path.join(seed_run, "print"), run_dir / "print", dirs_exist_ok=True)
     calls = []
@@ -2025,7 +2085,7 @@ def test_probe_preflight_aborts_all_modes_when_one_mode_reused(tmp_path, monkeyp
 
 def test_probe_preflight_aborts_when_print_mode_reused_first_in_order(tmp_path, monkeypatch):
     # axis: edge 6 — reused first mode (print) blocks background dispatch
-    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch, "print")
+    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch)
     run_dir = _claude_preflight_parent(tmp_path)
     shutil.copytree(os.path.join(seed_run, "print"), run_dir / "print", dirs_exist_ok=True)
     calls = []
@@ -2046,7 +2106,7 @@ def test_probe_preflight_aborts_when_print_mode_reused_first_in_order(tmp_path, 
 
 def test_probe_preflight_aborts_when_background_mode_reused_second_in_order(tmp_path, monkeypatch):
     # axis: edge 6 — reused second mode (background) blocks print dispatch
-    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch, "background")
+    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch)
     run_dir = _claude_preflight_parent(tmp_path)
     shutil.copytree(os.path.join(seed_run, "background"), run_dir / "background", dirs_exist_ok=True)
     calls = []

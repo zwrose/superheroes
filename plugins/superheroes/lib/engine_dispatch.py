@@ -1049,6 +1049,7 @@ def _read_transcript_rows(stdout_path):
 
 def _materialize_stdout_result(
         run_dir_real, attempt, opened, stdout_path, stdout_event,
+        stdout_obs_state=None,
 ):
     """Materialize stdout/transcript delivery to the native result path. (#1273)
 
@@ -1062,6 +1063,9 @@ def _materialize_stdout_result(
     if result_path is None:
         return "error"
     if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        if stdout_obs_state is not None:
+            _held_stdout_bytes_unchanged(stdout_obs_state, stdout_path)
+            stdout_event = stdout_obs_state.get("event")
         env = stdout_event
         if (not isinstance(env, dict)
                 or env.get("is_error") is True
@@ -1585,6 +1589,14 @@ def _stdout_delivery_gate(run_dir_real, attempt, opened):
             "reason": dispatch_outcome.REASON_FORFEITED,
             "detail": "native-result-path-occupied",
         }
+    dropped = ended.get("stdoutResultDropped")
+    if isinstance(dropped, str) and dropped:
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "stdout-result-dropped",
+            "droppedCause": dropped,
+        }
     return {
         "forfeit": True,
         "reason": dispatch_outcome.REASON_FORFEITED,
@@ -1697,9 +1709,11 @@ def _resolved_inputs_status_from_opened(opened):
 
 
 def _continuation_seat_tuple(snapshot):
+    vendor = snapshot.get("engine")
+    model = snapshot.get("model")
     return (
-        snapshot.get("engine"),
-        snapshot.get("model"),
+        vendor,
+        model,
         snapshot.get("effort"),
         snapshot.get("role"),
     )
@@ -3724,6 +3738,54 @@ def _apply_completion_stamp(ended_record, stamp):
 _STDOUT_COMPLETION_READ_CHUNK = 65536
 
 
+def _record_stdout_drop_cause(obs_state, cause):
+    """Record why a held stdout result was dropped. First cause wins. Never raises."""
+    if obs_state.get("drop_cause") is None:
+        obs_state["drop_cause"] = cause
+
+
+def _clear_held_stdout_result(obs_state):
+    """Clear held stdout result fields. Never raises."""
+    obs_state["event"] = None
+    obs_state["stamp"] = None
+    obs_state["stamp_line_start"] = None
+    obs_state["stamp_line_len"] = None
+    obs_state["stamp_line_sha256"] = None
+
+
+def _held_stdout_bytes_unchanged(obs_state, stdout_path):
+    """Verify held stdout result line bytes are unchanged at save time. Never raises."""
+    if obs_state.get("event") is None or obs_state.get("stamp_line_start") is None:
+        return True
+    stamp_line_len = obs_state.get("stamp_line_len")
+    stamp_line_sha256 = obs_state.get("stamp_line_sha256")
+    if stamp_line_len is None or stamp_line_sha256 is None:
+        _clear_held_stdout_result(obs_state)
+        _record_stdout_drop_cause(obs_state, "bytes-changed")
+        return False
+    try:
+        with open(stdout_path, "rb") as fh:
+            fh.seek(obs_state["stamp_line_start"])
+            line_bytes = fh.read(stamp_line_len)
+        if len(line_bytes) != stamp_line_len:
+            _clear_held_stdout_result(obs_state)
+            _record_stdout_drop_cause(obs_state, "bytes-changed")
+            return False
+        if hashlib.sha256(line_bytes).hexdigest() != stamp_line_sha256:
+            _clear_held_stdout_result(obs_state)
+            _record_stdout_drop_cause(obs_state, "bytes-changed")
+            return False
+        return True
+    except OSError:
+        _clear_held_stdout_result(obs_state)
+        _record_stdout_drop_cause(obs_state, "final-read-failed")
+        return False
+    except Exception:
+        _clear_held_stdout_result(obs_state)
+        _record_stdout_drop_cause(obs_state, "final-read-failed")
+        return False
+
+
 def _process_stdout_completion_line(obs_state, line_bytes, line_start):
     """Apply one complete stdout line to the completion stamp. Never raises."""
     try:
@@ -3737,6 +3799,8 @@ def _process_stdout_completion_line(obs_state, line_bytes, line_start):
         if obj.get("is_error") is True or "structured_output" not in obj:
             obs_state["stamp"] = None
             obs_state["stamp_line_start"] = None
+            obs_state["stamp_line_len"] = None
+            obs_state["stamp_line_sha256"] = None
             return
         digest = engine_result_channel.canonical_payload_digest(
             _scrub_native_payload(obj["structured_output"]),
@@ -3745,9 +3809,13 @@ def _process_stdout_completion_line(obs_state, line_bytes, line_start):
         if stamp is None or digest is None:
             obs_state["stamp"] = None
             obs_state["stamp_line_start"] = None
+            obs_state["stamp_line_len"] = None
+            obs_state["stamp_line_sha256"] = None
             return
         obs_state["stamp"] = stamp
         obs_state["stamp_line_start"] = line_start
+        obs_state["stamp_line_len"] = len(line_bytes)
+        obs_state["stamp_line_sha256"] = hashlib.sha256(line_bytes).hexdigest()
     except Exception:
         return
 
@@ -3791,9 +3859,7 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
     complete lines only; the terminal call drains remaining bytes and parses any
     trailing buffered line as final."""
     if obs_state.get("poisoned"):
-        obs_state["event"] = None
-        obs_state["stamp"] = None
-        obs_state["stamp_line_start"] = None
+        _clear_held_stdout_result(obs_state)
         return
     try:
         offset = obs_state.get("offset", 0)
@@ -3801,12 +3867,11 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
             fh.seek(0, os.SEEK_END)
             file_size = fh.tell()
             if file_size < offset:
-                obs_state["event"] = None
-                obs_state["stamp"] = None
-                obs_state["stamp_line_start"] = None
+                _clear_held_stdout_result(obs_state)
                 obs_state["buf"] = b""
                 obs_state["overflow"] = False
                 obs_state["poisoned"] = True
+                _record_stdout_drop_cause(obs_state, "shrunk-below-read")
                 return
             fh.seek(offset)
             while True:
@@ -3838,20 +3903,16 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
                 and offset - stamp_line_start
                 > _cap_content_budget(MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT, offset)
             ):
-                obs_state["stamp"] = None
-                obs_state["stamp_line_start"] = None
-                obs_state["event"] = None
+                _clear_held_stdout_result(obs_state)
     except (OSError, MemoryError):
         if terminal:
-            obs_state["event"] = None
-            obs_state["stamp"] = None
-            obs_state["stamp_line_start"] = None
+            _clear_held_stdout_result(obs_state)
+            _record_stdout_drop_cause(obs_state, "final-read-failed")
         return
     except Exception:
         if terminal:
-            obs_state["event"] = None
-            obs_state["stamp"] = None
-            obs_state["stamp_line_start"] = None
+            _clear_held_stdout_result(obs_state)
+            _record_stdout_drop_cause(obs_state, "final-read-failed")
         return
 
 
@@ -4144,8 +4205,11 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "buf": b"",
         "overflow": False,
         "stamp_line_start": None,
+        "stamp_line_len": None,
+        "stamp_line_sha256": None,
         "event": None,
         "poisoned": False,
+        "drop_cause": None,
     }
     native_completion_obs = {"stamp": None, "prev_size": 0}
     while True:
@@ -4202,6 +4266,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     stdout_result = _materialize_stdout_result(
         run_dir_real, attempt, opened, stdout_path,
         stdout_completion_obs.get("event"),
+        stdout_completion_obs,
     )
     _, stdout_observed, stdout_rewrite_failed = _cap_file_tail(
         stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
@@ -4250,6 +4315,9 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         ended_record["activityStream"] = None
     if stdout_result is not None:
         ended_record["stdoutResult"] = stdout_result
+    drop_cause = stdout_completion_obs.get("drop_cause")
+    if drop_cause is not None:
+        ended_record["stdoutResultDropped"] = drop_cause
     _journal_append(run_dir_real, ended_record)
 
 
@@ -4977,10 +5045,15 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
     """Single admission authority for the native review channel (codex, cursor). Never raises."""
     gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
     if gate is not None:
+        extra = {}
+        dropped = gate.get("droppedCause")
+        if dropped is not None:
+            extra["droppedCause"] = dropped
         return _native_review_forfeit(
             engagement,
             gate["detail"],
             payload_shape=engine_result_channel.native_review_payload_shape(gate["detail"]),
+            **extra,
         )
     loaded = _read_native_review_envelope(run_dir_real, attempt, engagement, opened)
     if not isinstance(loaded, tuple):
@@ -5216,7 +5289,11 @@ def _grade_write_attempt(run_dir_real, state, attempt):
         return result
 
     if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
-        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "nonzero-exit",
+        }
 
     admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
@@ -5244,6 +5321,7 @@ def _grade_write_attempt(run_dir_real, state, attempt):
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "timeout-no-admission",
         }
 
     return _marker_arm_retired_grade()
@@ -5724,6 +5802,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                     if "report" in grade:
                         result["report"] = grade["report"]
+                    if grade.get("admittedAfterTimeout"):
+                        result["admittedAfterTimeout"] = True
                     return _fold_run(run_dir_real, state, result)
 
                 if grade.get("guard_refusal"):

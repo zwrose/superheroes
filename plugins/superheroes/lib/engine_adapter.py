@@ -566,7 +566,9 @@ def build_argv_result(seat, role_kind, opts):
         )
         if refusal_reason is not None:
             return _refuse(refusal_reason, detail=refusal_detail)
-        if engine_model == "fable-5":
+        fable_parsed = model_registry.parse_dispatch_token("claude", "fable")
+        fable_id = fable_parsed[0] if fable_parsed else None
+        if fable_id is not None and engine_model == fable_id:
             return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail("fable"))
         ok, _reason = model_registry.validate_config("claude", engine_model, effort)
         if not ok:
