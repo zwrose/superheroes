@@ -1206,6 +1206,18 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — load-bearing dispatch text substrate wired through `round_driver`.
 
+#### E12 — Native-stack doctrine (`rubric/native-stacks.md`)
+
+- **Component.** The native-stack doctrine file (`rubric/native-stacks.md`); it costs one more
+  doctrine surface to keep true as GitHub's preview tooling changes.
+- **Condition.** Citation-based, 45 days: receipts relying on the file's rules over its window. On
+  firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** capability-gap — the file exists to compensate for a model that reaches for the
+  pre-native mental model; evidence observed on the Claude family.
+
 ### F. Config & calibration
 
 #### F1 — Configure + calibration + modes
