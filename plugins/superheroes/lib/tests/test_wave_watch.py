@@ -2635,7 +2635,11 @@ def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch):
         "flags": [],
     }
     cap = ww.PASSED_OVER_CAP
-    sequence = [dict(benign) for _ in range(cap + 1)]
+    sequence = []
+    for arm in range(1, cap + 2):
+        event = dict(benign)
+        event["stacks"] = [{"arm": arm}]
+        sequence.append(event)
     sequence.append({
         "ok": True,
         "event": "lane-terminal",
@@ -2650,6 +2654,9 @@ def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch):
     )
     assert result["passedOverCount"] == cap + 1
     assert len(result["passedOver"]) == cap
+    retained_arms = [entry["arm"] for entry in result["passedOver"]]
+    assert retained_arms == list(range(2, cap + 2))
+    assert result["passedOver"][-1]["stacks"] == [{"arm": cap + 1}]
 
 
 def test_loop_ceiling_after_benign_non_timer_returns_timer(tmp_path, monkeypatch):
@@ -4309,26 +4316,10 @@ def test_run_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
 
 
 def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
-    pr_sets = [{10}, {10, 99}]
-    recorded = []
-    arm = [0]
-    real_run = ww.watch_arm
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
 
     def membership_reader(*, pr, repo, **kwargs):
-        recorded.append(pr)
         return {"ok": False, "reason": sc.REASON_NOT_LINKED}
-
-    def run_fn(repo_root, batch_id, **kwargs):
-        arm[0] += 1
-        call_kwargs = dict(kwargs)
-        call_kwargs["gh_run"] = _gh_pr_list_with_repo_view(pr_sets)
-        call_kwargs["max_seconds"] = 2
-        call_kwargs["interval_seconds"] = 1
-        call_kwargs["membership_reader"] = kwargs["membership_reader"]
-        call_kwargs["sleep"] = lambda _d: None
-        return real_run(repo_root, batch_id, **call_kwargs)
 
     terminal = {
         "ok": True,
@@ -4353,6 +4344,11 @@ def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
         },
         terminal,
     ])
+    forwarded_readers = []
+
+    def run_fn(*args, **kwargs):
+        forwarded_readers.append(kwargs["membership_reader"])
+        return scripted_run_fn(*args, **kwargs)
 
     result = ww.loop(
         repo,
@@ -4360,13 +4356,15 @@ def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
         max_seconds=2,
         interval_seconds=1,
         sleep=lambda _d: None,
-        run_fn=scripted_run_fn,
+        run_fn=run_fn,
         membership_reader=membership_reader,
     )
 
     assert result["event"] == "lane-terminal"
     assert result["passedOverCount"] == 1
     assert violations == []
+    assert forwarded_readers
+    assert all(reader is membership_reader for reader in forwarded_readers)
 
 
 # --- stack-state-changed (#1340 layer 2f) -------------------------------------
