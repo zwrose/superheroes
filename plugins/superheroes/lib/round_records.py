@@ -75,6 +75,7 @@ SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
 EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind",
                              "observation")
+EXECUTION_EVIDENCE_OPTIONAL_FIELDS = ("engineModel",)
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
@@ -88,6 +89,7 @@ _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK = {
     "resultDigest": lambda value: isinstance(value, str) and value,
     "resultKind": lambda value: isinstance(value, str) and value,
     "observation": lambda value: isinstance(value, dict),
+    "engineModel": lambda value: isinstance(value, str) and value,
 }
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
 # payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.
@@ -468,7 +470,8 @@ def _execution_evidence_has_pointer(value):
 def _validate_execution_evidence(evidence):
     if not isinstance(evidence, dict):
         return ("execution-evidence-malformed", {})
-    extra_top = set(evidence.keys()) - set(EXECUTION_EVIDENCE_FIELDS)
+    allowed = set(EXECUTION_EVIDENCE_FIELDS) | set(EXECUTION_EVIDENCE_OPTIONAL_FIELDS)
+    extra_top = set(evidence.keys()) - allowed
     if extra_top:
         return ("execution-evidence-unknown-field", {
             "field": sorted(extra_top)[0],
@@ -478,6 +481,13 @@ def _validate_execution_evidence(evidence):
         if field not in evidence:
             return ("execution-evidence-malformed", {})
     for field in EXECUTION_EVIDENCE_FIELDS:
+        if field not in _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK:
+            return ("execution-evidence-malformed", {})
+        if not _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):
+            return ("execution-evidence-malformed", {})
+    for field in EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
+        if field not in evidence:
+            continue
         if field not in _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK:
             return ("execution-evidence-malformed", {})
         if not _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):

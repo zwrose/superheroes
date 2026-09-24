@@ -14,10 +14,30 @@ __all__ = (
     "SEAT_MISSING_SCHEMA",
     "FIX_FOLD_HEAD_KEY",
     "WRITE_RESULT_KIND",
+    "SEAT_TRANSPORT_KEY",
+    "SEAT_TRANSPORT_RUNNER",
+    "SEAT_TRANSPORT_NATIVE",
+    "SEAT_TRANSPORT_HAND_LANDED",
+    "SEAT_TRANSPORT_ORCHESTRATOR",
+    "SEAT_TRANSPORTS",
+    "SEAT_TRANSPORTS_DISCLOSED",
     "canonical",
     "payload_sha256",
     "finding_identity_key",
 )
+
+SEAT_TRANSPORT_KEY = "transport"
+SEAT_TRANSPORT_RUNNER = "runner"
+SEAT_TRANSPORT_NATIVE = "native-subagent"
+SEAT_TRANSPORT_HAND_LANDED = "hand-landed"
+SEAT_TRANSPORT_ORCHESTRATOR = "orchestrator"
+SEAT_TRANSPORTS = (
+    SEAT_TRANSPORT_RUNNER,
+    SEAT_TRANSPORT_NATIVE,
+    SEAT_TRANSPORT_HAND_LANDED,
+    SEAT_TRANSPORT_ORCHESTRATOR,
+)
+SEAT_TRANSPORTS_DISCLOSED = (SEAT_TRANSPORT_NATIVE, SEAT_TRANSPORT_HAND_LANDED)
 
 # Result kind a write run's execution record carries — binds the run's own report, not a payload key.
 WRITE_RESULT_KIND = "evidence"

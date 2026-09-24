@@ -622,6 +622,37 @@ def test_compose_launch_mints_distinct_session_ids(tmp_path):
     assert first["sessionId"] != second["sessionId"]
 
 
+def test_compose_launch_argv_is_the_adapter_argv(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    r = L.compose_launch(repo, 656, premise, model="sonnet")
+    assert r["ok"] is True
+    import engine_adapter as _ea
+
+    expected = _ea.claude_builder_argv(r["model"], r["sessionId"], r["prompt"])
+    assert r["argv"] == expected["argv"]
+    assert r["argv"][:2] == ["claude", "--model"]
+    assert r["argv"][3:6] == ["--session-id", r["sessionId"], "-p"]
+
+
+def test_compose_launch_propagates_adapter_refusal(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+
+    def _refuse_builder(token, session_id, prompt):
+        return {
+            "ok": False,
+            "argv": [],
+            "reason": "builder-session-id-invalid",
+            "detail": "a canonical lowercase UUID string",
+        }
+
+    monkeypatch.setattr(L.engine_adapter, "claude_builder_argv", _refuse_builder)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is False
+    assert result["reason"] == "builder-session-id-invalid"
+
+
 def _write_core_with_builder_tier(repo, prefs):
     import importlib.util as _u
     _lib = os.path.join(_HERE, "..")
@@ -7508,3 +7539,347 @@ def test_lookup_stack_entry_pr_slug_refusal_carries_detail(tmp_path):
     assert result["ok"] is False
     assert result["reason"] == "stack-read-unavailable"
     assert result["detail"] == "slug detail"
+
+
+# --- canary ------------------------------------------------------------------
+
+
+def _canary_reserved(repo, launch_id, session_id, config_dir, **extra):
+    rec = {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-canary",
+        "repoId": ll.repo_identity(repo) or "test",
+        "issue": 1273,
+        "surfaces": ["plugins/superheroes/lib/launcher.py"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "sonnet",
+        "sessionId": session_id,
+        "configDir": config_dir,
+    }
+    rec.update(extra)
+    assert ll.reserve(repo, rec)["ok"] is True
+
+
+def _assistant_tool_use(tool_id, name="Read"):
+    return {
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "id": tool_id,
+                "name": name,
+                "input": {},
+            }],
+        },
+    }
+
+
+def _write_canary_transcript(config_dir, session_id, rows, bucket="x"):
+    project_dir = os.path.join(str(config_dir), "projects", bucket)
+    os.makedirs(project_dir, exist_ok=True)
+    path = os.path.join(project_dir, session_id + ".jsonl")
+    with open(path, "w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+    return path
+
+
+def test_canary_happy_engaged_from_transcript(tmp_path, monkeypatch):
+  # axis: tool_calls from lane transcript; StructuredOutput excluded
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    launch_id = "launch-canary-happy"
+    rows = [
+        _assistant_tool_use("tool-1"),
+        _assistant_tool_use("tool-2"),
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "so-1",
+                    "name": "StructuredOutput",
+                    "input": {},
+                }],
+            },
+        },
+    ]
+    path = _write_canary_transcript(config_dir, session_id, rows)
+    _canary_reserved(repo, launch_id, session_id, str(config_dir))
+    result = L.canary(repo, launch_id)
+    assert result["ok"] is True
+    assert result["toolCalls"] == 2
+    assert result["engaged"] is True
+    assert result["truncated"] is False
+    assert result["transcriptPath"] == path
+
+
+def test_canary_zero_tool_calls_not_engaged(tmp_path, monkeypatch):
+  # axis: parsed transcript with no tool_use → engaged false
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    session_id = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+    launch_id = "launch-canary-idle"
+    _write_canary_transcript(
+        config_dir, session_id, [{"type": "assistant", "message": {"content": []}}],
+    )
+    _canary_reserved(repo, launch_id, session_id, str(config_dir))
+    result = L.canary(repo, launch_id)
+    assert result["ok"] is True
+    assert result["toolCalls"] == 0
+    assert result["engaged"] is False
+    assert result["truncated"] is False
+
+
+@pytest.mark.parametrize("state", ["missing", "unreadable", "interiorCorrupt", "tornTail"])
+def test_canary_ledger_unreadable_states(tmp_path, monkeypatch, state):
+  # axis: canary-ledger-unreadable for every non-ok ledger state
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+
+    def fake_read(repo_root, env=None):
+        return {"state": state, "records": []}
+
+    monkeypatch.setattr(L.ll, "read", fake_read)
+    result = L.canary(repo, "any-launch")
+    assert result["ok"] is False
+    assert result["reason"] == "canary-ledger-unreadable:%s" % state
+
+
+def test_canary_ledger_fold_refused(tmp_path, monkeypatch):
+  # axis: canary-ledger-fold-refused
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    ll.append(repo, {
+        "event": "started",
+        "launchId": "orphan",
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": 1,
+    })
+    result = L.canary(repo, "orphan")
+    assert result["ok"] is False
+    assert result["reason"].startswith("canary-ledger-fold-refused:")
+
+
+def test_canary_lane_unknown(tmp_path, monkeypatch):
+  # axis: canary-lane-unknown
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    assert ll.declare_batch(repo, "canary-empty", 1)["ok"] is True
+    result = L.canary(repo, "nope")
+    assert result["ok"] is False
+    assert result["reason"] == "canary-lane-unknown"
+
+
+def test_canary_session_id_absent(tmp_path, monkeypatch):
+  # axis: canary-session-id-absent
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    launch_id = "launch-no-session"
+    rec = {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-canary",
+        "repoId": ll.repo_identity(repo) or "test",
+        "issue": 1273,
+        "surfaces": ["x"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "sonnet",
+        "configDir": str(config_dir),
+    }
+    assert ll.reserve(repo, rec)["ok"] is True
+    result = L.canary(repo, launch_id)
+    assert result["ok"] is False
+    assert result["reason"] == "canary-session-id-absent"
+
+
+def test_canary_config_dir_absent(tmp_path, monkeypatch):
+  # axis: canary-config-dir-absent — no fallback to caller env
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    caller_cfg = tmp_path / "caller-cfg"
+    caller_cfg.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(caller_cfg))
+    launch_id = "launch-no-config"
+    session_id = "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee"
+    _write_canary_transcript(
+        caller_cfg, session_id, [{"type": "assistant", "message": {"content": []}}],
+    )
+    rec = {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-canary",
+        "repoId": ll.repo_identity(repo) or "test",
+        "issue": 1273,
+        "surfaces": ["x"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "sonnet",
+        "sessionId": session_id,
+    }
+    assert ll.reserve(repo, rec)["ok"] is True
+    result = L.canary(repo, launch_id)
+    assert result["ok"] is False
+    assert result["reason"] == "canary-config-dir-absent"
+
+
+def test_canary_transcript_missing(tmp_path, monkeypatch):
+  # axis: canary-transcript-missing
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    session_id = "dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee"
+    _canary_reserved(repo, "launch-missing-tx", session_id, str(config_dir))
+    result = L.canary(repo, "launch-missing-tx")
+    assert result["ok"] is False
+    assert result["reason"] == "canary-transcript-missing"
+
+
+def test_canary_transcript_ambiguous(tmp_path, monkeypatch):
+  # axis: canary-transcript-ambiguous — two project buckets
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    session_id = "eeeeeeee-bbbb-cccc-dddd-eeeeeeeeeeee"
+    idle_row = [{"type": "assistant", "message": {"content": []}}]
+    _write_canary_transcript(config_dir, session_id, idle_row, bucket="a")
+    _write_canary_transcript(config_dir, session_id, idle_row, bucket="b")
+    _canary_reserved(repo, "launch-ambig", session_id, str(config_dir))
+    result = L.canary(repo, "launch-ambig")
+    assert result["ok"] is False
+    assert result["reason"] == "canary-transcript-ambiguous"
+
+
+def test_canary_transcript_unreadable(tmp_path, monkeypatch):
+  # axis: canary-transcript-unreadable — non-JSON lines only
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    session_id = "ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee"
+    project_dir = os.path.join(str(config_dir), "projects", "x")
+    os.makedirs(project_dir)
+    path = os.path.join(project_dir, session_id + ".jsonl")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not json\nstill not json\n")
+    _canary_reserved(repo, "launch-bad-tx", session_id, str(config_dir))
+    result = L.canary(repo, "launch-bad-tx")
+    assert result["ok"] is False
+    assert result["reason"] == "canary-transcript-unreadable"
+
+
+def test_canary_transcript_truncated_zero_tool_calls(tmp_path, monkeypatch):
+  # axis: canary-transcript-truncated when tail has no tool calls
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr(L.engine_dispatch, "MAX_STDOUT_CAPTURE", 400)
+    session_id = "11111111-bbbb-cccc-dddd-eeeeeeeeeeee"
+    launch_id = "launch-trunc-zero"
+    rows = [_assistant_tool_use("early-tool")]
+    rows.extend([
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "x" * 200}]},
+        }
+        for _ in range(20)
+    ])
+    _write_canary_transcript(config_dir, session_id, rows)
+    _canary_reserved(repo, launch_id, session_id, str(config_dir))
+    result = L.canary(repo, launch_id)
+    assert result["ok"] is False
+    assert result["reason"] == "canary-transcript-truncated"
+
+
+def test_canary_transcript_truncated_engaged_when_tail_has_tools(tmp_path, monkeypatch):
+  # axis: truncated but tool call in retained tail → ok engaged
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr(L.engine_dispatch, "MAX_STDOUT_CAPTURE", 400)
+    session_id = "22222222-bbbb-cccc-dddd-eeeeeeeeeeee"
+    launch_id = "launch-trunc-engaged"
+    rows = [
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "y" * 200}]},
+        }
+        for _ in range(20)
+    ]
+    rows.append(_assistant_tool_use("tail-tool"))
+    _write_canary_transcript(config_dir, session_id, rows)
+    _canary_reserved(repo, launch_id, session_id, str(config_dir))
+    result = L.canary(repo, launch_id)
+    assert result["ok"] is True
+    assert result["engaged"] is True
+    assert result["truncated"] is True
+    assert result["toolCalls"] == 1
+
+
+def test_canary_launcher_no_private_engine_dispatch_access():
+  # axis: launcher must not touch private engine_dispatch names (E5)
+    import ast
+
+    with open(_MOD, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=_MOD)
+    problems = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        if not isinstance(node.value, ast.Name) or node.value.id != "engine_dispatch":
+            continue
+        if node.attr.startswith("_"):
+            problems.append("launcher-private-engine-dispatch:%d" % node.lineno)
+    assert problems == []
+
+
+def test_cli_canary_lane_unknown(tmp_path, monkeypatch):
+  # axis: CLI canary prints JSON refusal and exits 1
+    import io
+    from contextlib import redirect_stdout
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    assert ll.declare_batch(repo, "canary-empty-cli", 1)["ok"] is True
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        exit_code = L.main(["canary", "--repo-root", repo, "--launch-id", "nope"])
+    assert exit_code == 1
+    payload = json.loads(buf.getvalue())
+    assert payload["reason"] == "canary-lane-unknown"

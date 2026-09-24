@@ -21,6 +21,7 @@ import round_adapters  # noqa: E402
 # (`seat_bundle.resolve_entry`), so any dispatch entry imports it.
 _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "audits",
+    "claude_modes",
     "dispatch_allowlist",
     "dispatch_outcome",
     "engine_adapter",
