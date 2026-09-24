@@ -534,6 +534,16 @@ class DispositionLedgerOwnerRefusal(ValueError):
         self.value = value
 
 
+class AuditorUnseatable(ValueError):
+    """Refusal when a durable-path audit target seats a non-runner-channel auditor."""
+
+    def __init__(self, detail, live_vendors, fixer_vendor):
+        super().__init__(detail)
+        self.detail = detail
+        self.live_vendors = live_vendors
+        self.fixer_vendor = fixer_vendor
+
+
 RECEIPT_FAULT_WRITE = "receipt-write"                 # round-receipt.json could not be written
 RECEIPT_FAULT_CERTIFICATION = "certification-artifact"  # certification receipt/refusal artifact could not be written
 RECEIPT_FAULT_VERIFY = "receipt-verify"               # the on-disk receipt failed re-verification
@@ -6441,6 +6451,11 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         except round_commit.CommitRefused as exc:
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
+        except AuditorUnseatable as exc:
+            return _refuse_cmd(session_dir, "next", AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                               rnd=pending.get("round"), attempt=attempt,
+                               liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
+                               detail=exc.detail)
         except ValueError as exc:
             return _refuse_cmd(session_dir, "next", "order-render-refused", phase=phase,
                                rnd=pending.get("round"), attempt=attempt, detail=str(exc))
@@ -7121,6 +7136,11 @@ def _cmd_re_emit_locked(session_dir, by):
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "re-emit", exc, phase=phase,
                                         rnd=rnd, attempt=new_attempt)
+    except AuditorUnseatable as exc:
+        return _refuse_cmd(session_dir, RE_EMIT_CMD, AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                           rnd=rnd, attempt=new_attempt,
+                           liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
+                           detail=exc.detail)
     except ValueError as exc:
         return _refuse_cmd(session_dir, "re-emit", "order-render-refused", phase=phase,
                            rnd=rnd, attempt=new_attempt, detail=str(exc))
@@ -8115,27 +8135,6 @@ def _vendor_is_external_engine(vendor):
     return session_contract.runner_channel_vendor(vendor)
 
 
-def _auditor_unseatable_refusal(session_dir, state, cmd):
-    if state.get("_submitUsed"):
-        return None
-    cfg = state.get("config") or {}
-    auditor, _independence = _auditor_vendor(cfg, cfg.get("fixerVendor"), runner_only=True)
-    if auditor is not None:
-        return None
-    detail = (
-        "The durable-record path requires a fix auditor dispatched through the runner "
-        "(codex or cursor), but none is among this session's vendors. "
-        "Start a fresh session seeded with --vendors naming a runner vendor "
-        "(for example codex or cursor), or use hand next/submit for the whole session."
-    )
-    return _refuse_cmd(
-        session_dir, cmd, AUDITOR_UNSEATABLE_CAUSE,
-        liveVendors=_live_vendors(cfg),
-        fixerVendor=cfg.get("fixerVendor"),
-        detail=detail,
-    )
-
-
 def _seat_is_engine(row):
     """True when the seat's vendor is an external engine (sandboxed stdout transport)."""
     return _vendor_is_external_engine(row.get("vendor"))
@@ -9073,6 +9072,23 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     that refuses."""
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
+    if phase == P_AUDITS and not state.get("_submitUsed"):
+        targets = pending_payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        cfg = state.get("config") or {}
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            if ("auditorVendor" in target
+                    and not session_contract.runner_channel_vendor(target.get("auditorVendor"))):
+                detail = (
+                    "The durable-record path requires a fix auditor dispatched through the runner "
+                    "(codex or cursor), but none is among this session's vendors. "
+                    "Start a fresh session seeded with --vendors naming a runner vendor "
+                    "(for example codex or cursor), or use hand next/submit for the whole session."
+                )
+                raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
     seats = {}
     order_hashes = {}
@@ -9665,9 +9681,6 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                     "hand-submit fold paths are mutually exclusive per session. For this phase, compile "
                     "the artifact and `submit` — do not use `advance` (this session's latch refuses it) "
                     "or `record-result`."))
-    refusal = _auditor_unseatable_refusal(session_dir, state, "record-result")
-    if refusal is not None:
-        return refusal
     if seat is None and not sweep:
         return _refuse_cmd(session_dir, "record-result", "seat-required")
     phase, rnd, cur_attempt, refusal = _pending_of(
@@ -10064,9 +10077,6 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
                     "hand-submit fold paths are mutually exclusive per session. For this phase, compile "
                     "the artifact and `submit` — do not use `advance` (this session's latch refuses it) "
                     "or `record-missing`."))
-    refusal = _auditor_unseatable_refusal(session_dir, state, "record-missing")
-    if refusal is not None:
-        return refusal
     phase, rnd, cur_attempt, refusal = _pending_of(
         session_dir, state, "record-missing", expect_round=expect_round,
         expect_phase=expect_phase)
@@ -10801,9 +10811,6 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
                                detail=side.get("detail"))
         return {"ok": True, "terminal": state.get("terminal"), "idempotent": True,
                 "sidecar": side.get("path"), "sidecarRepaired": bool(side.get("repaired"))}
-    refusal = _auditor_unseatable_refusal(session_dir, state, "advance")
-    if refusal is not None:
-        return refusal
     if state.get("_submitUsed"):
         return _refuse_cmd(session_dir, "advance", "advance-submit-interleaved")
     phase, rnd, attempt, refusal = _pending_of(session_dir, state, "advance")

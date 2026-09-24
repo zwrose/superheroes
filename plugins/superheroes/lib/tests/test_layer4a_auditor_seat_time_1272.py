@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""#1272 layer 4a WO-B — auditor seating: runner-channel only on the durable-record path."""
+"""#1272 layer 4a WO-B2 — auditor refusal at dispatch-audits order emission."""
 import importlib.util
 import inspect
 import os
@@ -24,7 +24,11 @@ _SPEC.loader.exec_module(_TDI)
 
 _bootstrap = _TDI._bootstrap
 _state = _TDI._state
-_fake_git = _TDI._fake_git
+_land = _TDI._land
+_payload_for = _TDI._payload_for
+_blocking_finding = _TDI._blocking_finding
+FINDING_SEAT = _TDI.FINDING_SEAT
+P_AUDITS = round_driver.P_AUDITS
 
 
 def _journal_refused(session_dir, cmd, reason):
@@ -36,6 +40,33 @@ def _journal_refused(session_dir, cmd, reason):
 
 def _claude_only_session(tmp_path):
     return _bootstrap(tmp_path, vendors=["claude"])
+
+
+def _audit_target(seat="finding::src/f00.py::2", vendor="claude"):
+    return {"id": seat, "identity": "unchecked index", "auditorVendor": vendor,
+            "file": "src/f00.py", "line": 2, "title": "missing bounds guard"}
+
+
+def _audits_payload(targets):
+    return {"targets": targets}
+
+
+def _orders_manifest_path(session_dir, rnd, attempt):
+    return round_driver._orders_manifest_path(session_dir, rnd, P_AUDITS, attempt)
+
+
+def _audits_emit_fixture(tmp_path, *, submit_used=False, vendor="claude"):
+    session_dir, _gitdir, _head_path = _claude_only_session(tmp_path)
+    state = _state(session_dir)
+    state["step"] = P_AUDITS
+    state["round"] = 1
+    state["pending"] = None
+    if submit_used:
+        state["_submitUsed"] = True
+    target = _audit_target(vendor=vendor)
+    state["_auditTargets"] = [target]
+    round_driver.save_state(session_dir, state)
+    return session_dir, state, target
 
 
 # T1 — unit tests on _auditor_vendor / independent_auditor (edges 1–3, 6–7)
@@ -88,55 +119,38 @@ def test_t1_edge7_unknown_vendor_not_runner_channel():
     assert independence == "independent"
 
 
-# T2 — edge 4 through real durable-path verbs
+# T2 — durable-path dispatch-audits emission refuses non-runner auditors
 
 
-def test_t2_edge4_record_result_auditor_unseatable(tmp_path):
-    session_dir, _gitdir, _head_path = _claude_only_session(tmp_path)
-    out = round_driver.cmd_record_result(session_dir, sweep=True)
+def test_t2_emit_orders_manifest_refuses_claude_auditor(tmp_path):
+    session_dir, state, target = _audits_emit_fixture(tmp_path)
+    manifest_path = _orders_manifest_path(session_dir, 1, 0)
+    assert not os.path.exists(manifest_path)
+    with pytest.raises(round_driver.AuditorUnseatable):
+        round_driver._emit_orders_manifest(
+            session_dir, state, 1, P_AUDITS, 0, [target["id"]],
+            journal_cmd="next", pending_payload=_audits_payload([target]))
+    assert not os.path.exists(manifest_path)
+
+
+def test_t2_cmd_next_refuses_claude_auditor(tmp_path):
+    session_dir, _state_obj, _target = _audits_emit_fixture(tmp_path)
+    manifest_path = _orders_manifest_path(session_dir, 1, 0)
+    out = round_driver.cmd_next(session_dir)
     assert out["ok"] is False
     assert out["reason"] == round_driver.AUDITOR_UNSEATABLE_CAUSE
-    rows = _journal_refused(session_dir, "record-result", round_driver.AUDITOR_UNSEATABLE_CAUSE)
+    assert not os.path.exists(manifest_path)
+    rows = _journal_refused(session_dir, "next", round_driver.AUDITOR_UNSEATABLE_CAUSE)
     assert len(rows) == 1
 
 
-def test_t2_edge4_record_missing_auditor_unseatable(tmp_path):
-    session_dir, _gitdir, _head_path = _claude_only_session(tmp_path)
-    state = _state(session_dir)
-    pend = state["pending"]
-    out = round_driver.cmd_record_missing(
-        session_dir, "code-reviewer", pend["attempt"], "no-artifact")
-    assert out["ok"] is False
-    assert out["reason"] == round_driver.AUDITOR_UNSEATABLE_CAUSE
-    rows = _journal_refused(session_dir, "record-missing", round_driver.AUDITOR_UNSEATABLE_CAUSE)
-    assert len(rows) == 1
+# T3 — edge 4: hand path bypasses auditor-unseatable refusal at emission
 
 
-def test_t2_edge4_advance_auditor_unseatable(tmp_path):
-    session_dir, gitdir, _head_path = _claude_only_session(tmp_path)
-    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
-    assert out["ok"] is False
-    assert out["reason"] == round_driver.AUDITOR_UNSEATABLE_CAUSE
-    rows = _journal_refused(session_dir, "advance", round_driver.AUDITOR_UNSEATABLE_CAUSE)
-    assert len(rows) == 1
-
-
-# T3 — edge 5: hand path bypasses auditor-unseatable refusal
-
-
-def test_t3_edge5_submit_used_no_auditor_unseatable_refusal(tmp_path):
-    session_dir, gitdir, _head_path = _claude_only_session(tmp_path)
-    state = _state(session_dir)
-    state["_submitUsed"] = True
-    round_driver.save_state(session_dir, state)
-    out = round_driver.cmd_record_result(session_dir, sweep=True)
-    assert out["ok"] is False
-    assert out["reason"] != round_driver.AUDITOR_UNSEATABLE_CAUSE
-    assert out["reason"] == "record-submit-interleaved"
-    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
-    assert out["ok"] is False
-    assert out["reason"] != round_driver.AUDITOR_UNSEATABLE_CAUSE
-    assert out["reason"] == "advance-submit-interleaved"
+def test_t3_submit_used_emit_not_refused(tmp_path):
+    session_dir, _state_obj, _target = _audits_emit_fixture(tmp_path, submit_used=True)
+    out = round_driver.cmd_next(session_dir)
+    assert out.get("reason") != round_driver.AUDITOR_UNSEATABLE_CAUSE
 
 
 # T4 — one-home census
@@ -156,3 +170,19 @@ def test_t4_one_home_runner_channel_vendor_census():
         if "def runner_channel_vendor" in text:
             defs.append(path)
     assert defs == [os.path.join(lib_dir, "session_contract.py")]
+
+
+# T5 — record-result on panel is not refused for claude-only durable sessions
+
+
+def test_t5_record_result_panel_not_refused(tmp_path):
+    session_dir, _gitdir, head_path = _claude_only_session(tmp_path)
+    state = _state(session_dir)
+    pend = state["pending"]
+    assert pend["phase"] == round_driver.P_PANEL
+    findings = [_blocking_finding("missing bounds guard", 2)]
+    _land(session_dir, state, pend, FINDING_SEAT,
+          _payload_for(session_dir, state, pend, FINDING_SEAT, findings, head_path))
+    out = round_driver.cmd_record_result(session_dir, FINDING_SEAT)
+    assert out["ok"] is True
+    assert out.get("reason") != round_driver.AUDITOR_UNSEATABLE_CAUSE
