@@ -8150,8 +8150,8 @@ def _seat_is_engine(row):
     return _vendor_is_external_engine(row.get("vendor"))
 
 
-CHANNEL_FILE = "file"
-CHANNEL_STDOUT = "stdout"
+CHANNEL_FILE = session_contract.CHANNEL_FILE
+CHANNEL_STDOUT = session_contract.CHANNEL_STDOUT
 
 # Phases whose seats an orchestrator dispatches through `dispatch-review` — a READ-ONLY sandbox on
 # an external engine. `dispatch-fixer` is deliberately absent: it is a foreground in-place writer,

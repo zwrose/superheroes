@@ -225,6 +225,9 @@ def recorded_row_fields(stored_envelope, cited_head, cited_head_source):
         if all(field in evidence for field in EXECUTION_EVIDENCE_FIELDS):
             execution_evidence = {field: evidence[field]
                                   for field in EXECUTION_EVIDENCE_FIELDS}
+            for field in EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
+                if field in evidence:
+                    execution_evidence[field] = evidence[field]
     return {
         "payloadSha256": stored_envelope.get("payloadSha256"),
         "casToken": envelope_cas_token(stored_envelope),

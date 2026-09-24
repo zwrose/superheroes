@@ -19,6 +19,8 @@ __all__ = (
     "PANEL_PHASE",
     "FIXER_PHASE",
     "AUDITS_PHASE",
+    "CHANNEL_FILE",
+    "CHANNEL_STDOUT",
     "HEAD_CONTENT_BLOBS_FILE",
     "HEAD_CONTENT_BLOBS_SCHEMA",
     "SEAT_MISSING_SCHEMA",
@@ -130,6 +132,8 @@ def journal_is_re_emit_orders_superseded(event):
 PANEL_PHASE = "dispatch-panel"
 FIXER_PHASE = "dispatch-fixer"
 AUDITS_PHASE = "dispatch-audits"
+CHANNEL_FILE = "file"
+CHANNEL_STDOUT = "stdout"
 HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 HEAD_CONTENT_BLOBS_SCHEMA = "head-content-blobs/2"
 SEAT_MISSING_SCHEMA = "seat-missing/1"

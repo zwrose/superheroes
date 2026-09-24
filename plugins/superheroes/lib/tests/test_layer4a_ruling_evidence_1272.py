@@ -396,67 +396,51 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
         "resultKind": "findings",
         "observation": dict(obs_fields, source="cursor"),
     }
+    def _stored_envelope(payload, payload_sha, evidence):
+        return {
+            "schema": "seat-result/2",
+            "payloadSha256": payload_sha,
+            "payload": payload,
+            "executionEvidence": evidence,
+            "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
+            "envelopeSha256": RR.envelope_sha256(payload, evidence),
+        }
+
+    def _recorded_journal_row(envelope, seat, phase, payload_sha):
+        row = {
+            "cmd": "record-result",
+            "outcome": "recorded",
+            "phase": phase,
+            "round": 1,
+            "attempt": 0,
+            "seat": seat,
+            "occurrence": 0,
+            "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
+            "payloadSha256": payload_sha,
+            "headSha": HEAD_SHA,
+            "citedHead": HEAD_SHA,
+            "recordIdentity": {
+                "phase": phase,
+                "seat": seat,
+                "occurrence": 0,
+                "attempt": 0,
+            },
+        }
+        row.update(RR.recorded_row_fields(
+            envelope, HEAD_SHA, RR.CITED_HEAD_SOURCE_ORDER_ANCHOR))
+        return row
+
+    panel_envelope = _stored_envelope(
+        DEFAULT_PANEL_PAYLOAD, DEFAULT_PANEL_PAYLOAD_SHA, panel_evidence)
+    fixer_envelope = _stored_envelope(
+        DEFAULT_PANEL_PAYLOAD, DEFAULT_PANEL_PAYLOAD_SHA, fixer_evidence)
+    audit_envelope = _stored_envelope(audit_payload, audit_payload_sha, audit_evidence)
     journal_lines = [
-        {
-            "cmd": "record-result",
-            "outcome": "recorded",
-            "phase": RC.PANEL_PHASE,
-            "round": 1,
-            "attempt": 0,
-            "seat": "code-reviewer",
-            "occurrence": 0,
-            "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
-            "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
-            "headSha": HEAD_SHA,
-            "citedHead": HEAD_SHA,
-            "executionEvidence": panel_evidence,
-            "recordIdentity": {
-                "phase": RC.PANEL_PHASE,
-                "seat": "code-reviewer",
-                "occurrence": 0,
-                "attempt": 0,
-            },
-        },
-        {
-            "cmd": "record-result",
-            "outcome": "recorded",
-            "phase": "dispatch-fixer",
-            "round": 1,
-            "attempt": 0,
-            "seat": "dispatch-fixer",
-            "occurrence": 0,
-            "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
-            "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
-            "headSha": HEAD_SHA,
-            "citedHead": HEAD_SHA,
-            "executionEvidence": fixer_evidence,
-            "recordIdentity": {
-                "phase": "dispatch-fixer",
-                "seat": "dispatch-fixer",
-                "occurrence": 0,
-                "attempt": 0,
-            },
-        },
-        {
-            "cmd": "record-result",
-            "outcome": "recorded",
-            "phase": AUDIT_PHASE,
-            "round": 1,
-            "attempt": 0,
-            "seat": audit_seat,
-            "occurrence": 0,
-            "provenance": RR.PROVENANCE_DISPATCH_OBSERVED,
-            "payloadSha256": audit_payload_sha,
-            "headSha": HEAD_SHA,
-            "citedHead": HEAD_SHA,
-            "executionEvidence": audit_evidence,
-            "recordIdentity": {
-                "phase": AUDIT_PHASE,
-                "seat": audit_seat,
-                "occurrence": 0,
-                "attempt": 0,
-            },
-        },
+        _recorded_journal_row(
+            panel_envelope, "code-reviewer", RC.PANEL_PHASE, DEFAULT_PANEL_PAYLOAD_SHA),
+        _recorded_journal_row(
+            fixer_envelope, "dispatch-fixer", "dispatch-fixer", DEFAULT_PANEL_PAYLOAD_SHA),
+        _recorded_journal_row(audit_envelope, audit_seat, AUDIT_PHASE, audit_payload_sha),
     ]
     envelopes = [
         {

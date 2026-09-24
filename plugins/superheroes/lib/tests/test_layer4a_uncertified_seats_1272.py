@@ -172,9 +172,78 @@ def test_l4a_edge1_host_panel_uncertified_named_not_refused(tmp_path):
     row = uncertified[0]
     assert row["seat"] == "code-reviewer"
     assert row["phase"] == RP.P_PANEL
-    assert row["channel"] == "file"
+    assert row["channel"] == SC.CHANNEL_FILE
     assert row["reason"] == "host-seat-no-runner-record"
     assert row["vendor"] == "claude"
+
+
+def test_l4a_certify_receipt_discloses_host_uncertified_seat(tmp_path):
+    """End-to-end: certified receipt names host seat in disclosures.uncertifiedSeats."""
+    host_seat = "code-reviewer"
+    engine_seat = "security-reviewer"
+    host_row = _dispatch_observed_no_telemetry_row(host_seat, RP.P_PANEL)
+    host_row["headSha"] = HEAD
+    host_row["citedHead"] = HEAD
+    engine_row = _dispatch_journal_with_binding(seat=engine_seat, head_sha=HEAD)
+    engine_row["phase"] = RP.P_PANEL
+    engine_row["seat"] = engine_seat
+    engine_row["recordIdentity"]["phase"] = RP.P_PANEL
+    engine_row["recordIdentity"]["seat"] = engine_seat
+    skey_host, host_entry = _manifest_seat_entry(host_seat, SC.CHANNEL_FILE, "claude")
+    skey_engine, engine_entry = _manifest_seat_entry(engine_seat, SC.CHANNEL_STDOUT, "codex")
+    manifest = {
+        "schema": "orders-manifest/1",
+        "session": "test-session-001",
+        "round": 1,
+        "phase": RP.P_PANEL,
+        "attempt": 0,
+        "orders": "not-emitted",
+        "seats": {skey_host: host_entry, skey_engine: engine_entry},
+    }
+    manifest_sha = SC.sha256_text(SC.canonical(manifest))
+    session_dir = write_certifiable_session(
+        tmp_path,
+        journal_lines=[
+            host_row,
+            engine_row,
+            _orders_emitted_journal_row(manifest_sha),
+        ],
+        envelopes=[
+            {"seat": host_seat, "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA},
+            {"seat": engine_seat, "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA},
+        ],
+        state={
+            "config": {
+                "fixerVendor": "cursor",
+                "baseGuard": RC.BASE_GUARD_CHECKED,
+                "headSha": HEAD,
+            },
+            "seatMapReceipts": [{
+                "round": "1",
+                "map": {
+                    "seats": {
+                        host_seat: {"vendor": "claude", "model": "sonnet"},
+                        engine_seat: {"vendor": "codex", "model": "gpt"},
+                    },
+                },
+            }],
+        },
+    )
+    _write_orders_manifest(session_dir, manifest)
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt["disclosures"]["uncertifiedSeats"] == [{
+        "seat": host_seat,
+        "phase": RP.P_PANEL,
+        "round": 1,
+        "attempt": 0,
+        "occurrence": 0,
+        "vendor": "claude",
+        "channel": SC.CHANNEL_FILE,
+        "reason": "host-seat-no-runner-record",
+    }]
+    assert receipt["seatMap"]["seats"][host_seat]["certifiedPanel"] is False
+    assert receipt["seatMap"]["seats"][engine_seat]["certifiedPanel"] is True
 
 
 # --- edge 2: host on other dispatch phases → uncertified, named --------------------------
@@ -484,7 +553,7 @@ def test_l4a_t_floor_hand_landed_qualifying_panel_plus_host_uncertified_no_refus
     assert len(uncertified) == 1
     assert uncertified[0]["seat"] == host_seat
     assert uncertified[0]["phase"] == RP.P_PANEL
-    assert uncertified[0]["channel"] == "file"
+    assert uncertified[0]["channel"] == SC.CHANNEL_FILE
 
 
 # --- T-nomutate: _build_receipt must not mutate state seat-map rows ---------------------

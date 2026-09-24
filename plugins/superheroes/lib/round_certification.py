@@ -78,6 +78,7 @@ EXECUTION_ONLY_BINDING = session_contract.EXECUTION_ONLY_BINDING
 PANEL_PHASE = session_contract.PANEL_PHASE
 FIXER_PHASE = session_contract.FIXER_PHASE
 AUDITS_PHASE = session_contract.AUDITS_PHASE
+CHANNEL_FILE = session_contract.CHANNEL_FILE
 P_FIXER = session_contract.FIXER_PHASE
 P_AUDITS = session_contract.AUDITS_PHASE
 
@@ -1228,7 +1229,9 @@ def check_unrun_review(ctx):
             )
             if not ok:
                 channel, vendor = _recorded_seat_channel(ctx, seat_entry)
-                if phase not in (P_AUDITS, P_FIXER) and channel == "file":
+                if (phase not in (P_AUDITS, P_FIXER)
+                        and channel == CHANNEL_FILE
+                        and binding == "execution-evidence-absent"):
                     uncertified_seats.append({
                         "seat": seat,
                         "phase": phase,
@@ -1236,7 +1239,7 @@ def check_unrun_review(ctx):
                         "attempt": attempt,
                         "occurrence": occurrence,
                         "vendor": vendor,
-                        "channel": "file",
+                        "channel": CHANNEL_FILE,
                         "reason": "host-seat-no-runner-record",
                     })
                     if phase == PANEL_PHASE:
