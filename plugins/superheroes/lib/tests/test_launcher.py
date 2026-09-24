@@ -5507,6 +5507,110 @@ def test_seat_config_dir_never_raises_when_reader_raises(monkeypatch, unpatched_
     assert result["reason"] == "seat-snapshot-unreadable"
 
 
+def test_seat_config_dir_reads_versioned_binary_instance(
+    monkeypatch, unpatched_seat_config_dir,
+):
+    # axis: versioned Claude Code binary layout resolves instance (T-B8-1)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(
+        L,
+        "_read_seat_snapshot",
+        lambda pid: {
+            "exec_path": "/Users/u/.local/share/claude/versions/2.1.278",
+            "argv": [],
+            "env": {
+                "HOME": "/Users/u",
+                "CLAUDE_CONFIG_DIR": "/Users/u/.claude-four",
+            },
+        },
+    )
+    result = L.seat_config_dir()
+    assert result == {
+        "instance": os.path.normpath("/Users/u/.claude-four"),
+        "reason": None,
+    }
+
+
+@pytest.mark.parametrize("exec_path", [
+    None,
+    "",
+    "/Users/u/.local/share/notclaude/versions/2.1.278",
+    "/Users/u/.local/share/claude/versions/latest",
+    "/Users/u/.local/share/claude/bin/2.1.278",
+    "/usr/bin/python3",
+])
+def test_seat_config_dir_reports_seat_not_claude_for_non_runtime_exec(
+    monkeypatch, unpatched_seat_config_dir, exec_path,
+):
+    # axis: non-runtime exec paths are seat-not-claude (T-B8-2)
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    snapshot = {
+        "exec_path": exec_path,
+        "argv": [],
+        "env": {"HOME": "/Users/u", "CLAUDE_CONFIG_DIR": "/Users/u/.claude-four"},
+    }
+    monkeypatch.setattr(L, "_read_seat_snapshot", lambda pid: snapshot)
+    result = L.seat_config_dir()
+    assert result["instance"] is None
+    assert result["reason"] == "seat-not-claude"
+
+
+def test_launch_versioned_binary_foreign_instance_pin(
+    tmp_path, monkeypatch, unpatched_seat_config_dir,
+):
+    # axis: versioned seat binary foreign pin refuses without flag (T-B8-3)
+    worktree = str(tmp_path / "build-wt")
+    monkeypatch.setattr(
+        L,
+        "build_worktree_path",
+        lambda repo_root, issue, launch_id, env=None: worktree,
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/launcher-requested")
+    monkeypatch.setenv("CLAUDE_PID", "4242")
+    monkeypatch.setattr(
+        L,
+        "_read_seat_snapshot",
+        lambda pid: {
+            "exec_path": "/Users/u/.local/share/claude/versions/2.1.278",
+            "argv": [],
+            "env": {
+                "HOME": "/Users/u",
+                "CLAUDE_CONFIG_DIR": "/Users/u/.claude-four",
+            },
+        },
+    )
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "launch-foreign-instance-pin"
+    assert result["seatInstance"] == os.path.normpath("/Users/u/.claude-four")
+    assert result["requestedInstance"] == os.path.normpath("/tmp/launcher-requested")
+
+    pass_result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        allow_foreign_instance=True,
+    )
+    assert pass_result["ok"] is True, pass_result
+    try:
+        os.kill(pass_result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
 def test_launch_foreign_instance_pin_refuses_mismatch(tmp_path, monkeypatch):
     # axis: mismatched config roots refuse with both instances named
     repo = _init_repo(tmp_path / "repo")
@@ -5996,3 +6100,1411 @@ def test_launch_refusal_record_keeps_failed_check(tmp_path, monkeypatch):
     assert auth, preflight_checks
     assert auth[0]["state"] == "fail"
     assert "codex" in auth[0].get("evidence", "")
+
+
+# --- stack premise fields (I1) and layer gate (I2) ---------------------------
+
+
+def _stack_premise(repo, **overrides):
+    base = _valid_premise(repo, stack=1, layerPosition=1)
+    base.update(overrides)
+    return base
+
+
+def _membership_ok(position, head_sha, pr_number=1352, members=None):
+    out = {
+        "ok": True,
+        "queried": {
+            "number": pr_number,
+            "position": position,
+            "headRefOid": head_sha,
+            "headRefName": "branch",
+            "baseRefName": "main",
+        },
+    }
+    if members is not None:
+        out["members"] = members
+    return out
+
+
+def _pr_lookup_ok(pr=1352, repo="owner/repo"):
+    return {"ok": True, "pr": pr, "repo": repo}
+
+
+@pytest.mark.parametrize("premise_overrides", [
+    {"stack": 1},
+    {"layerPosition": 2},
+])
+def test_premise_stack_fields_incomplete(tmp_path, premise_overrides):
+  # axis: premise-stack-fields-incomplete
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    premise.update(premise_overrides)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-fields-incomplete"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("stack", "1"),
+    ("stack", True),
+    ("stack", 0),
+    ("layerPosition", "2"),
+    ("layerPosition", True),
+    ("layerPosition", 0),
+])
+def test_premise_stack_field_invalid(tmp_path, field, value):
+  # axis: premise-stack-field-invalid
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo)
+    premise[field] = value
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-field-invalid"
+
+
+def test_premise_stack_fields_valid_survive_stamp(tmp_path):
+  # axis: valid stack fields copied into stamped premise
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, stack=3, layerPosition=2)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is True
+    assert result["premise"]["stack"] == 3
+    assert result["premise"]["layerPosition"] == 2
+
+
+def test_premise_stack_fields_absent_unchanged(tmp_path):
+  # axis: absent stack fields leave stamped premise unchanged
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is True
+    assert "stack" not in result["premise"]
+    assert "layerPosition" not in result["premise"]
+
+
+def test_premise_layers_planned_without_stack_pair_refuses(tmp_path):
+  # axis: premise-stack-layers-planned-incomplete
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo, layersPlanned=3)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-layers-planned-incomplete"
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "3", 3.0])
+def test_premise_layers_planned_invalid(tmp_path, value):
+  # axis: premise-stack-layers-planned-invalid
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, layersPlanned=value)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-layers-planned-invalid"
+
+
+def test_premise_layers_planned_under_position_refuses(tmp_path):
+  # axis: premise-stack-layers-planned-under-position
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, stack=1, layerPosition=3, layersPlanned=2)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-stack-layers-planned-under-position"
+
+
+@pytest.mark.parametrize("layers_planned", [3, 5])
+def test_premise_layers_planned_at_or_above_position_passes(tmp_path, layers_planned):
+  # axis: layersPlanned equal to or greater than layerPosition passes validation
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, stack=1, layerPosition=3, layersPlanned=layers_planned)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is True
+
+
+def test_premise_layers_planned_survives_stamp(tmp_path):
+  # axis: layersPlanned copied into stamped premise
+    repo = _init_repo(tmp_path / "repo")
+    premise = _stack_premise(repo, stack=2, layerPosition=1, layersPlanned=4)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is True
+    assert result["premise"]["layersPlanned"] == 4
+
+
+def test_stack_gate_slug_resolver_refusal_maps_to_stack_read_unavailable(
+    tmp_path, monkeypatch,
+):
+  # axis: resolve_repo_slug refusal maps to stack-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def refusing_resolver(*args, **kwargs):
+        return None, {"reason": "stack-unreadable", "detail": "injected"}
+
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", refusing_resolver)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=gh_run, deadline=deadline,
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+
+
+def test_stack_gate_slug_resolver_receives_scrubbed_env_and_budget(
+    tmp_path, monkeypatch,
+):
+  # axis: resolve_repo_slug receives scrubbed env and remaining gate budget
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    premise = _stack_premise(repo, stack=1, layerPosition=2)
+    captured = []
+
+    def tracking_resolver(repo_root, *, deadline=None, run=None, env=None):
+        captured.append({
+            "repo_root": repo_root,
+            "deadline": deadline,
+            "run": run,
+            "env": env,
+        })
+        return "owner/repo", None
+
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", tracking_resolver)
+    monkeypatch.setenv("GIT_DIR", "/bogus/nonexistent/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/bogus/nonexistent")
+
+    def pr_list_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "pr", "list"]:
+            pr_list = [{"number": 1352, "headRefOid": head, "state": "OPEN"}]
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps(pr_list), "",
+            )
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    result = L.launch_build(
+        repo,
+        656,
+        premise,
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=pr_list_gh_run, deadline=deadline,
+        ),
+        membership_reader=lambda **kwargs: _membership_ok(1, head),
+    )
+    assert result["ok"] is True
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["repo_root"] == repo
+    assert call["deadline"] is not None
+    assert call["deadline"] > 0
+    assert call["env"] is not None
+    for key in ll.GIT_SCRUB_VARS:
+        assert key not in call["env"], key
+    assert ll.LEDGER_ROOT_ENV not in call["env"]
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_stack_gate_bottom_layer_skips_reader(tmp_path, monkeypatch):
+  # axis: bottom layer skips gate without reading GitHub
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    calls = []
+
+    def tracking_reader(**kwargs):
+        calls.append(kwargs)
+        return _membership_ok(0, head)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=1),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        membership_reader=tracking_reader,
+        pr_lookup=lambda *a, **k: (_ for _ in ()).throw(AssertionError("pr_lookup called")),
+    )
+    assert result["ok"] is True
+    assert calls == []
+    assert result["stackGate"] == {"applied": False, "reason": "bottom-layer"}
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_stack_gate_zero_entry_candidates_refuses(tmp_path, monkeypatch):
+  # axis: zero entry PR candidates refuses base-not-layer-head
+    monkeypatch.setattr(
+        L.stack_check.shutil, "which",
+        lambda name: "/usr/bin/gh" if name == "gh" else None,
+    )
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def empty_pr_list_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"nameWithOwner": "owner/repo"}), "",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            return subprocess.CompletedProcess(argv, 0, "[]", "")
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=empty_pr_list_gh_run, deadline=deadline,
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "base-not-layer-head"
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "stack" for r in refused)
+
+
+def test_stack_gate_two_entry_candidates_refuses(tmp_path, monkeypatch):
+  # axis: ambiguous entry PR lookup refuses stack-read-unavailable
+    monkeypatch.setattr(
+        L.stack_check.shutil, "which",
+        lambda name: "/usr/bin/gh" if name == "gh" else None,
+    )
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    membership_calls = []
+
+    def reader(**kwargs):
+        membership_calls.append(dict(kwargs))
+        return _membership_ok(1, head)
+
+    def two_pr_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"nameWithOwner": "owner/repo"}), "",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            pr_list = [
+                {"number": 100, "headRefOid": head, "state": "OPEN"},
+                {"number": 101, "headRefOid": head, "state": "OPEN"},
+            ]
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps(pr_list), "",
+            )
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=two_pr_gh_run, deadline=deadline,
+        ),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+    assert "detail" not in result
+    assert membership_calls == []
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "stack" for r in refused)
+
+
+def test_stack_gate_repo_view_failure_refuses(tmp_path, monkeypatch):
+  # axis: gh repo view failure refuses stack-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def failing_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(argv, 1, "", "error")
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=failing_gh_run, deadline=deadline,
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+
+
+def test_stack_gate_pr_list_unparseable_refuses(tmp_path, monkeypatch):
+  # axis: gh pr list unparseable refuses stack-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def bad_pr_list_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"nameWithOwner": "owner/repo"}), "",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            return subprocess.CompletedProcess(argv, 0, "not-json", "")
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=bad_pr_list_gh_run, deadline=deadline,
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+
+
+def test_stack_gate_not_linked_refuses(tmp_path, monkeypatch):
+  # axis: membership not-linked refuses base-not-layer-head
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(**kwargs):
+        return {"ok": False, "reason": L.stack_check.REASON_NOT_LINKED}
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "base-not-layer-head"
+
+
+def test_stack_gate_stack_unreadable_refuses_with_detail(tmp_path, monkeypatch):
+  # axis: membership stack-unreadable refuses stack-read-unavailable with detail
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def reader(**kwargs):
+        return {"ok": False, "reason": "stack-unreadable"}
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+    assert result["detail"] == "stack-unreadable"
+
+
+def test_stack_gate_position_mismatch_refuses(tmp_path, monkeypatch):
+  # axis: position mismatch refuses base-not-layer-head
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(**kwargs):
+        return _membership_ok(2, head)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "base-not-layer-head"
+
+
+def test_stack_gate_head_mismatch_refuses(tmp_path, monkeypatch):
+  # axis: head mismatch refuses base-not-layer-head
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    stale = "0" * 40
+
+    def reader(**kwargs):
+        return _membership_ok(1, stale)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "base-not-layer-head"
+
+
+def test_stack_gate_order_mismatch_refuses_with_detail(tmp_path, monkeypatch):
+  # bite-axis: membership order-mismatch maps to gate order-mismatch with reader detail
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    reader_detail = "collected positions are not exactly 1..size"
+
+    def reader(**kwargs):
+        return {
+            "ok": False,
+            "reason": L.stack_check.REASON_ORDER_MISMATCH,
+            "detail": reader_detail,
+        }
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "order-mismatch"
+    assert result["detail"] == reader_detail
+
+
+def test_stack_gate_layer_position_occupied_refuses(tmp_path, monkeypatch):
+  # bite-axis: claimed layerPosition already present in membership refuses layer-position-occupied
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    members = [
+        {"position": 1, "number": 1352, "headRefOid": head, "headRefName": "b1", "baseRefName": "main"},
+        {"position": 2, "number": 9999, "headRefOid": "a" * 40, "headRefName": "b2", "baseRefName": "main"},
+    ]
+
+    def reader(**kwargs):
+        return _membership_ok(1, head, members=members)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=1, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "layer-position-occupied"
+
+
+def test_stack_gate_layer_position_free_passes(tmp_path, monkeypatch):
+  # bite-axis: claimed layerPosition absent from membership passes when layer below agrees
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    members = [
+        {"position": 1, "number": 1352, "headRefOid": head, "headRefName": "b1", "baseRefName": "main"},
+    ]
+
+    def reader(**kwargs):
+        return _membership_ok(1, head, members=members)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=7, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["stackGate"]["applied"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def _gate_graphql_member(position, number, head_oid, head_name=None):
+    return {
+        "position": position,
+        "pullRequest": {
+            "number": number,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": head_name or ("branch-%d" % position),
+            "headRefOid": head_oid,
+            "baseRefName": "main",
+        },
+    }
+
+
+def _gate_graphql_pull_request(pr_number, position, stack_number, stack_size, nodes, head_oid):
+    return {
+        "number": pr_number,
+        "baseRefName": "main",
+        "headRefName": "branch-%d" % position,
+        "headRefOid": head_oid,
+        "stackEntry": {
+            "position": position,
+            "stack": {
+                "number": stack_number,
+                "size": stack_size,
+                "baseRefName": "main",
+                "entries": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": nodes,
+                },
+            },
+        },
+    }
+
+
+def _gate_graphql_ok(pull_request):
+    from types import SimpleNamespace
+    payload = {"data": {"repository": {"pullRequest": pull_request}}}
+    return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+
+def _gate_graphql_run(handlers):
+    queues = {key: [value, value] for key, value in handlers.items()}
+
+    def run(argv, **kwargs):
+        key = tuple(argv)
+        if key not in queues or not queues[key]:
+            raise AssertionError("unexpected gh argv: %r" % (argv,))
+        return queues[key].pop(0)
+
+    return run
+
+
+def test_stack_gate_real_membership_reader_end_to_end(tmp_path, monkeypatch):
+  # bite-axis: gate agrees with real stack_check.read_membership via stub run= transport
+    sc = L.stack_check
+    monkeypatch.setattr(sc.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    pr_number = 1352
+    stack_number = 7
+    page_size = sc.DEFAULT_PAGE_SIZE
+    owner, name = "owner", "repo"
+    argv_key = tuple(sc._graphql_argv(owner, name, pr_number, page_size))
+
+    pass_page = _gate_graphql_pull_request(
+        pr_number,
+        1,
+        stack_number,
+        1,
+        [_gate_graphql_member(1, pr_number, head)],
+        head,
+    )
+    pass_run = _gate_graphql_run({argv_key: _gate_graphql_ok(pass_page)})
+
+    def pass_reader(**kwargs):
+        return sc.read_membership(run=pass_run, **kwargs)
+
+    pass_result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=stack_number, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(pr=pr_number, repo="owner/repo"),
+        membership_reader=pass_reader,
+    )
+    assert pass_result["ok"] is True
+    assert pass_result["stackGate"]["applied"] is True
+    try:
+        os.kill(pass_result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+    refuse_page = _gate_graphql_pull_request(
+        pr_number,
+        1,
+        stack_number,
+        2,
+        [
+            _gate_graphql_member(1, pr_number, head),
+            _gate_graphql_member(2, 9999, "b" * 40),
+        ],
+        head,
+    )
+    refuse_run = _gate_graphql_run({argv_key: _gate_graphql_ok(refuse_page)})
+
+    def refuse_reader(**kwargs):
+        return sc.read_membership(run=refuse_run, **kwargs)
+
+    refuse_result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=stack_number, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(pr=pr_number, repo="owner/repo"),
+        membership_reader=refuse_reader,
+    )
+    assert refuse_result["ok"] is False
+    assert refuse_result["reason"] == "layer-position-occupied"
+
+
+def test_stack_gate_full_agreement_proceeds(tmp_path, monkeypatch):
+  # axis: full stack gate agreement proceeds with stackGate applied
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    captured = []
+
+    def reader(**kwargs):
+        captured.append(dict(kwargs))
+        assert kwargs["pr"] == 1352
+        assert kwargs["repo"] == "owner/repo"
+        assert kwargs["expect_stack"] == 7
+        return _membership_ok(1, head)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=7, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(pr=1352, repo="owner/repo"),
+        membership_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["stackGate"] == {
+        "applied": True,
+        "stack": 7,
+        "layerPosition": 2,
+        "entryPr": 1352,
+        "layerBelowHead": head,
+    }
+    assert len(captured) == 1
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_stack_gate_passes_when_github_heads_are_uppercase(tmp_path, monkeypatch):
+  # axis: stack gate compares commit ids case-insensitively (T-CASE-STACK)
+    sc = L.stack_check
+    monkeypatch.setattr(sc.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    head_upper = head.upper()
+
+    def uppercase_gh_run(argv, **kwargs):
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps({"nameWithOwner": "owner/repo"}), "",
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            pr_list = [
+                {"number": 1352, "headRefOid": head_upper, "state": "OPEN"},
+            ]
+            return subprocess.CompletedProcess(
+                argv, 0, json.dumps(pr_list), "",
+            )
+        raise AssertionError("unexpected gh call: %s" % argv)
+
+    def reader(**kwargs):
+        return _membership_ok(1, head_upper)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _stack_premise(repo, stack=7, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda r, sha, env=None, gh_run=None, deadline=None: L._lookup_stack_entry_pr(
+            r, sha, env=env, gh_run=uppercase_gh_run, deadline=deadline,
+        ),
+        membership_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["stackGate"]["applied"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+# --- dependency premise field and gate (I3) ----------------------------------
+
+
+import grounding_stage as gs  # noqa: E402
+
+_VET_MARKER = gs.REGION_MARKERS["advisor-vet"]
+
+
+def _dependency_premise(repo, dependency, **overrides):
+    base = _valid_premise(repo, dependency=dependency)
+    base.update(overrides)
+    return base
+
+
+def _ready_vet_body(head_sha):
+    return _VET_MARKER + "\n**Verdict: READY** · " + head_sha
+
+
+def _pr_vet_state_ok(head_sha, body="", state="OPEN", pr_number=701, is_draft=False):
+    return {
+        "number": pr_number,
+        "state": state,
+        "isDraft": is_draft,
+        "headRefOid": head_sha,
+        "body": body,
+    }
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "3", 3.0])
+def test_premise_dependency_invalid(tmp_path, value):
+  # axis: premise-dependency-invalid
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo, dependency=value)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == "premise-dependency-invalid"
+
+
+def test_dependency_gate_without_stack_runs(tmp_path, monkeypatch):
+  # axis: dependency without stack still runs the dependency gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    calls = []
+
+    def reader(pr, repo_name, **kwargs):
+        calls.append((pr, repo_name))
+        return _pr_vet_state_ok(head, _ready_vet_body(head)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert calls == [(701, "owner/repo")]
+    assert result["dependencyGate"]["applied"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_and_stack_gates_dependency_first(tmp_path, monkeypatch):
+  # axis: dependency gate runs before stack gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    order = []
+
+    def dep_reader(pr, repo_name, **kwargs):
+        order.append("dependency")
+        return _pr_vet_state_ok(head, _ready_vet_body(head)), None
+
+    def stack_reader(**kwargs):
+        order.append("stack")
+        return _membership_ok(1, head)
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701, stack=7, layerPosition=2),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=dep_reader,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=stack_reader,
+    )
+    assert result["ok"] is True
+    assert order == ["dependency", "stack"]
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_absent_skips_reader(tmp_path, monkeypatch):
+  # axis: gate never fires when premise names no dependency
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def reader(*args, **kwargs):
+        raise AssertionError("pr_vet_reader should not run")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert "dependencyGate" not in result
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_deadline_exhausted_refuses(tmp_path, monkeypatch):
+  # axis: deadline exhausted refuses dependency-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        total_deadline_seconds=0,
+        pr_vet_reader=lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("reader should not run"),
+        ),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "dependency" for r in refused)
+
+
+def test_dependency_gate_slug_refusal_refuses_with_detail(tmp_path, monkeypatch):
+  # axis: slug resolver refusal refuses dependency-read-unavailable with detail
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def refusing_resolver(*args, **kwargs):
+        return None, {"reason": "stack-unreadable", "detail": "injected slug detail"}
+
+    monkeypatch.setattr(L.stack_check, "resolve_repo_slug", refusing_resolver)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert result["detail"] == "injected slug detail"
+
+
+def test_dependency_gate_pr_read_refusal_refuses_with_detail(tmp_path, monkeypatch):
+  # axis: dependency read failure refuses dependency-read-unavailable with detail
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+
+    def refusing_reader(pr, repo_name, **kwargs):
+        return None, {"reason": "stack-unreadable", "detail": "read failed"}
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=refusing_reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert result["detail"] == "read failed"
+
+
+def test_dependency_gate_launcher_lifecycle_fallback_refuses(tmp_path, monkeypatch):
+  # axis: launcher fallback refuses unrecognised lifecycle from injected reader
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, state="UNKNOWN"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert result["detail"] == "UNKNOWN"
+
+
+def test_dependency_gate_unrecognised_pr_state_refuses(tmp_path, monkeypatch):
+  # axis: unrecognised dependency PR state refuses dependency-read-unavailable
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        L.stack_check.shutil, "which",
+        lambda name: "/usr/bin/gh" if name == "gh" else None,
+    )
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def _gh_run(*args, **kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "state": "UNKNOWN",
+                "isDraft": False,
+                "headRefOid": head,
+                "body": "",
+            }),
+            stderr="",
+        )
+
+    def reader(pr, repo_name, **kwargs):
+        return L.stack_check.read_pr_vet_state(pr, repo_name, run=_gh_run, **kwargs)
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert "UNKNOWN" in result.get("detail", "")
+
+
+def test_dependency_gate_closed_unmerged_refuses(tmp_path, monkeypatch):
+  # axis: closed-unmerged dependency refuses dependency-closed-unmerged
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, state="CLOSED"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-closed-unmerged"
+    assert result["detail"] == "701"
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert any(r.get("stage") == "dependency" for r in refused)
+
+
+def test_dependency_gate_merged_passes_not_gated(tmp_path, monkeypatch):
+  # axis: merged dependency passes without applying gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, state="MERGED"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": False,
+        "reason": "dependency-not-open",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_draft_not_ready_passes(tmp_path, monkeypatch):
+  # axis: OPEN draft with READY verdict passes dependency-not-ready, not applied
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(
+            head, _ready_vet_body(head), state="OPEN", is_draft=True,
+        ), None
+
+    def refusing_vet(*args, **kwargs):
+        raise AssertionError("draft dependency must not consult verdict")
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+    monkeypatch.setattr(L.stack_check, "read_vet_verdict", refusing_vet)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": False,
+        "reason": "dependency-not-ready",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_vet_refusal_refuses(tmp_path, monkeypatch):
+  # axis: unreadable vet refuses dependency-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, body="no vet marker"), None
+
+    def refusing_vet(body, head_sha):
+        return None, {
+            "reason": L.stack_check.REASON_VET_UNREADABLE,
+            "detail": "vet unreadable",
+        }
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+    monkeypatch.setattr(L.stack_check, "read_vet_verdict", refusing_vet)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-read-unavailable"
+    assert result["detail"] == "vet unreadable"
+
+
+def test_dependency_gate_not_ready_passes(tmp_path, monkeypatch):
+  # axis: VET_NOT_READY passes as dependency-not-ready
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, body="no vet marker"), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": False,
+        "reason": "dependency-not-ready",
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_ready_base_match_passes(tmp_path, monkeypatch):
+  # axis: READY dependency with matching base passes applied gate
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head, _ready_vet_body(head)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"] == {
+        "applied": True,
+        "dependency": 701,
+        "dependencyHead": head,
+        "verdict": L.stack_check.VERDICT_READY,
+    }
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_passes_when_github_head_is_uppercase(tmp_path, monkeypatch):
+  # axis: dependency gate compares commit ids case-insensitively (T-CASE-DEP)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    head_upper = head.upper()
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(head_upper, _ready_vet_body(head_upper)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is True
+    assert result["dependencyGate"]["applied"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_dependency_gate_ready_base_mismatch_refuses(tmp_path, monkeypatch):
+  # axis: READY dependency with wrong base refuses dependency-open-ready-pr
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    dep_head = "a" * 40
+
+    def reader(pr, repo_name, **kwargs):
+        return _pr_vet_state_ok(dep_head, _ready_vet_body(dep_head)), None
+
+    monkeypatch.setattr(
+        L.stack_check, "resolve_repo_slug",
+        lambda *a, **k: ("owner/repo", None),
+    )
+
+    result = L.launch_build(
+        repo,
+        656,
+        _dependency_premise(repo, 701),
+        _all_checks(),
+        log_dir,
+        pr_vet_reader=reader,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "dependency-open-ready-pr"
+    assert result["detail"] == dep_head
+
+
+def test_launcher_scrub_env_matches_ledger_default(tmp_path, monkeypatch):
+  # axis: launcher child env removes exactly GIT_SCRUB_VARS and LEDGER_ROOT_ENV
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    captured = []
+    premise = _valid_premise(repo)
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        captured.append(dict(child_env))
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    monkeypatch.setenv("GIT_DIR", "/bogus/nonexistent/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/bogus/nonexistent")
+    monkeypatch.setenv("UNRELATED_KEEP_ME", "stay")
+
+    result = L.launch_build(
+        repo,
+        656,
+        premise,
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    assert len(captured) == 1
+    child_env = captured[0]
+    stripped = set(ll.GIT_SCRUB_VARS) | {ll.LEDGER_ROOT_ENV}
+    for key in stripped:
+        assert key not in child_env, key
+    assert child_env["UNRELATED_KEEP_ME"] == "stay"
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_lookup_stack_entry_pr_slug_refusal_carries_detail(tmp_path):
+  # axis: slug refusal detail passes through stack-read-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    head = _head_sha(repo)
+
+    def refusing_resolver(*args, **kwargs):
+        return None, {"reason": "stack-unreadable", "detail": "slug detail"}
+
+    original = L.stack_check.resolve_repo_slug
+    L.stack_check.resolve_repo_slug = refusing_resolver
+    try:
+        result = L._lookup_stack_entry_pr(repo, head)
+    finally:
+        L.stack_check.resolve_repo_slug = original
+    assert result["ok"] is False
+    assert result["reason"] == "stack-read-unavailable"
+    assert result["detail"] == "slug detail"
