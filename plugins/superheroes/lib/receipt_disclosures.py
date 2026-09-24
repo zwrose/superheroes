@@ -45,6 +45,17 @@ def canary_verified_shape(value):
     return isinstance(value, dict) and all(isinstance(k, str) for k in value)
 
 
+def control_probe_shape(value):
+    if not isinstance(value, dict):
+        return False
+    if not isinstance(value.get("submitted"), bool):
+        return False
+    vendors = value.get("vendors")
+    if not isinstance(vendors, dict):
+        return False
+    return all(isinstance(k, str) and isinstance(v, str) for k, v in vendors.items())
+
+
 def adapter_provenance_shape(value):
     if not isinstance(value, dict):
         return False
@@ -95,6 +106,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "canaryOutcomeFailed": canary_failed_shape,
     "canaryPlantUndetected": canary_failed_shape,
     "canaryVerified": canary_verified_shape,
+    "controlProbe": control_probe_shape,
     "adapterProvenance": adapter_provenance_shape,
     "recordOrphansIgnored": str_list,
     "orderVendorProvenanceGaps": order_vendor_provenance_gaps_shape,
@@ -383,113 +395,19 @@ def build_degraded_prose(state, form):
                 "engaged-artifact-seat (round %s): seat(s) %s produced a review our transport "
                 "could not carry — they do not count toward certification; salvaged artifacts "
                 "are available for independent verification" % (rkey, ", ".join(eng_art)))
-        cuv = declared.get("canaryUnverified")
-        if cuv:
-            cv = declared.get("canaryVerified")
-            verified_vendors = []
-            if isinstance(cv, dict):
-                if cv and all(isinstance(v, dict) for v in cv.values()):
-                    verified_vendors = sorted(cv)
-                elif cv:
-                    verified_vendors = ["(probe submitted)"]
-            probe_note = ""
-            if verified_vendors:
-                probe_note = " (engaged probe recorded for vendor(s) %s)" % ", ".join(verified_vendors)
-            degraded_out.append(
-                "canary-unverified (round %s): cross-vendor seat(s) %s returned zero findings "
-                "with no engaged control probe for their vendor%s — external-seat liveness unverified"
-                % (rkey, ", ".join(cuv), probe_note))
-        cf = declared.get("canaryFailed")
-        if cf:
-            seats_down = cf.get("seats") if isinstance(cf, dict) else []
-            detail = cf.get("detail") if isinstance(cf, dict) else None
-            evidence = cf.get("evidence") if isinstance(cf, dict) else None
-            engaged_failure = isinstance(cf, dict) and cf.get("engagedFailure") is True
-            if isinstance(cf, dict) and isinstance(cf.get("vendors"), dict):
-                parts = []
-                for vendor, vinfo in sorted(cf["vendors"].items()):
-                    if not isinstance(vinfo, dict):
-                        continue
-                    ev = vinfo.get("evidence")
-                    ev_note = ""
-                    if isinstance(ev, dict) and ev:
-                        ev_note = "; evidence=%s" % ev
-                    default_detail = "outcome failure" if engaged_failure else "engaged not true"
-                    parts.append(
-                        "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or default_detail, ev_note))
-                default_detail = "outcome failure" if engaged_failure else "engaged not true"
-                detail_str = "; ".join(parts) if parts else (detail or default_detail)
-            else:
-                default_detail = "outcome failure" if engaged_failure else "engaged not true"
-                detail_str = detail or default_detail
-                if evidence and isinstance(evidence, dict):
-                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            if engaged_failure:
-                degraded_out.append(
-                    "canary-outcome-failed (round %s): the control probe was engaged but "
-                    "reported outcome failure (%s) — cross-vendor seat(s) %s remain run; panel "
-                    "certification withheld" % (
-                        rkey, detail_str, ", ".join(seats_down or [])))
-            else:
-                degraded_out.append(
-                    "canary-failed (round %s): the control probe showed no engagement (%s) — "
-                    "cross-vendor seat(s) %s downgraded to never-ran" % (
-                        rkey, detail_str, ", ".join(seats_down or [])))
-        cof = declared.get("canaryOutcomeFailed")
-        if cof:
-            seats_outcome_failed = cof.get("seats") if isinstance(cof, dict) else []
-            detail = cof.get("detail") if isinstance(cof, dict) else None
-            evidence = cof.get("evidence") if isinstance(cof, dict) else None
-            if isinstance(cof, dict) and isinstance(cof.get("vendors"), dict):
-                parts = []
-                for vendor, vinfo in sorted(cof["vendors"].items()):
-                    if not isinstance(vinfo, dict):
-                        continue
-                    ev = vinfo.get("evidence")
-                    ev_note = ""
-                    if isinstance(ev, dict) and ev:
-                        ev_note = "; evidence=%s" % ev
-                    parts.append(
-                        "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or "outcome failure", ev_note))
-                detail_str = "; ".join(parts) if parts else (detail or "outcome failure")
-            else:
-                detail_str = detail or "outcome failure"
-                if evidence and isinstance(evidence, dict):
-                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            degraded_out.append(
-                "canary-outcome-failed (round %s): the control probe was engaged but "
-                "reported outcome failure (%s) — cross-vendor seat(s) %s remain run; panel "
-                "certification withheld" % (
-                    rkey, detail_str, ", ".join(seats_outcome_failed or [])))
-        cpu = declared.get("canaryPlantUndetected")
-        if cpu:
-            seats_undetected = cpu.get("seats") if isinstance(cpu, dict) else []
-            detail = cpu.get("detail") if isinstance(cpu, dict) else None
-            evidence = cpu.get("evidence") if isinstance(cpu, dict) else None
-            if isinstance(cpu, dict) and isinstance(cpu.get("vendors"), dict):
-                parts = []
-                for vendor, vinfo in sorted(cpu["vendors"].items()):
-                    if not isinstance(vinfo, dict):
-                        continue
-                    ev = vinfo.get("evidence")
-                    ev_note = ""
-                    if isinstance(ev, dict) and ev:
-                        ev_note = "; evidence=%s" % ev
-                    parts.append(
-                        "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or "plant not detected", ev_note))
-                detail_str = "; ".join(parts) if parts else (detail or "plant not detected")
-            else:
-                detail_str = detail or "plant not detected"
-                if evidence and isinstance(evidence, dict):
-                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            degraded_out.append(
-                "canary-plant-undetected (round %s): the control probe was engaged but missed "
-                "the planted defect (%s) — cross-vendor seat(s) %s remain run; panel "
-                "certification withheld" % (
-                    rkey, detail_str, ", ".join(seats_undetected or [])))
+        # Record-only sampled-probe channels (#1272 l4b): ride rounds[]; no degraded prose.
+        if declared.get("canaryVerified") is not None:
+            pass
+        if declared.get("canaryUnverified") is not None:
+            pass
+        if declared.get("canaryFailed") is not None:
+            pass
+        if declared.get("canaryOutcomeFailed") is not None:
+            pass
+        if declared.get("canaryPlantUndetected") is not None:
+            pass
+        if declared.get("controlProbe") is not None:
+            pass
         roi = declared.get("recordOrphansIgnored")
         if roi:
             degraded_out.append(
@@ -575,6 +493,7 @@ __all__ = (
     "bool_value",
     "canary_failed_shape",
     "canary_verified_shape",
+    "control_probe_shape",
     "adapter_provenance_shape",
     "order_vendor_provenance_gaps_shape",
     "normalize_adapter_provenance",
