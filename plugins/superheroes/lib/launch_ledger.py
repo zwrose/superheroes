@@ -1009,6 +1009,31 @@ def _validate_batch_declared(rec):
     return None
 
 
+def _background_fields_problem(rec):
+    present = [k for k in ("launchMode", "backgroundId", "sessionId") if k in rec]
+    if not present:
+        return None
+    if len(present) != 3:
+        return "fold-bad-field:started:background"
+    launch_mode = rec["launchMode"]
+    if launch_mode not in LAUNCH_MODES:
+        return "fold-bad-field:started:launchMode"
+    background_id = rec["backgroundId"]
+    if (not isinstance(background_id, str)
+            or not re.fullmatch(r"[0-9a-f]{8}", background_id)):
+        return "fold-bad-field:started:backgroundId"
+    session_id = rec["sessionId"]
+    if not isinstance(session_id, str) or not session_id.strip():
+        return "fold-bad-field:started:sessionId"
+    try:
+        uuid.UUID(session_id)
+    except (ValueError, AttributeError, TypeError):
+        return "fold-bad-field:started:sessionId"
+    if not session_id.startswith(background_id):
+        return "fold-bad-field:started:background"
+    return None
+
+
 def _validate_event_fields(rec):
     event = rec["event"]
     if event == "reserved":
@@ -1057,28 +1082,9 @@ def _validate_event_fields(rec):
             evidence = rec["evidence"]
             if not isinstance(evidence, str) or not evidence.strip():
                 return "fold-bad-field:started:evidence"
-        present = [k for k in ("launchMode", "backgroundId", "sessionId") if k in rec]
-        if not present:
-            pass
-        elif len(present) != 3:
-            return "fold-bad-field:started:background"
-        else:
-            launch_mode = rec["launchMode"]
-            if launch_mode not in LAUNCH_MODES:
-                return "fold-bad-field:started:launchMode"
-            background_id = rec["backgroundId"]
-            if (not isinstance(background_id, str)
-                    or not re.fullmatch(r"[0-9a-f]{8}", background_id)):
-                return "fold-bad-field:started:backgroundId"
-            session_id = rec["sessionId"]
-            if not isinstance(session_id, str) or not session_id.strip():
-                return "fold-bad-field:started:sessionId"
-            try:
-                uuid.UUID(session_id)
-            except (ValueError, AttributeError, TypeError):
-                return "fold-bad-field:started:sessionId"
-            if not session_id.startswith(background_id):
-                return "fold-bad-field:started:background"
+        problem = _background_fields_problem(rec)
+        if problem:
+            return problem
     elif event == "retry":
         attempt = rec["attempt"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
@@ -1613,26 +1619,7 @@ def _validate_started_repair(started_repair):
         evidence = started_repair["evidence"]
         if not isinstance(evidence, str) or not evidence.strip():
             return False
-    present = [k for k in ("launchMode", "backgroundId", "sessionId") if k in started_repair]
-    if not present:
-        return True
-    if len(present) != 3:
-        return False
-    launch_mode = started_repair["launchMode"]
-    if launch_mode not in LAUNCH_MODES:
-        return False
-    background_id = started_repair["backgroundId"]
-    if (not isinstance(background_id, str)
-            or not re.fullmatch(r"[0-9a-f]{8}", background_id)):
-        return False
-    session_id = started_repair["sessionId"]
-    if not isinstance(session_id, str) or not session_id.strip():
-        return False
-    try:
-        uuid.UUID(session_id)
-    except (ValueError, AttributeError, TypeError):
-        return False
-    if not session_id.startswith(background_id):
+    if _background_fields_problem(started_repair):
         return False
     return True
 
