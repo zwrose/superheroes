@@ -848,7 +848,7 @@ _BACKGROUND_POLL_INTERVAL = 2
 
 def _claude_cli(args, config_dir, cwd=None, timeout=_CLAUDE_CLI_DEFAULT_TIMEOUT):
     """Single chokepoint for claude agents/stop reads. Never raises. (#1273)"""
-    env = _scrub_env()
+    env = launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,))
     if isinstance(config_dir, str) and config_dir:
         env["CLAUDE_CONFIG_DIR"] = config_dir
     cmd = engine_adapter.claude_cli_argv(args)
