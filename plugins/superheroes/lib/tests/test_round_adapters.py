@@ -111,7 +111,7 @@ def _drive_on(session_dir, respond, max_steps=80):
 
 # --- envelopes ----------------------------------------------------------------
 
-def _result_env(seat, payload, vendor="claude", model="opus-5", occurrence=None):
+def _result_env(seat, payload, vendor="claude", model="opus-5.5", occurrence=None):
     env = {"schema": RR.SEAT_RESULT_SCHEMA, "seat": seat, "attempt": 0, "vendor": vendor,
            "model": model, "payload": payload}
     if occurrence is not None:
@@ -121,7 +121,7 @@ def _result_env(seat, payload, vendor="claude", model="opus-5", occurrence=None)
 
 def _missing_env(seat, reason=None, vendor="claude", occurrence=None):
     env = {"schema": RR.SEAT_MISSING_SCHEMA, "seat": seat, "attempt": 0, "vendor": vendor,
-           "model": "opus-5", "reason": reason or RR.MISSING_REASONS[0]}
+           "model": "opus-5.5", "reason": reason or RR.MISSING_REASONS[0]}
     if occurrence is not None:
         env["occurrence"] = occurrence
     return env
@@ -602,7 +602,7 @@ def test_edge_occurrence_beyond_the_roster():
 
 def test_edge_seat_result_envelope_with_no_payload_key():
     envelope = {"schema": RR.SEAT_RESULT_SCHEMA, "seat": RA.SEAT_SCOPED, "attempt": 0,
-                "vendor": "claude", "model": "opus-5"}
+                "vendor": "claude", "model": "opus-5.5"}
     artifact, reason = RA.assemble(RD.P_SCOPED, [envelope], {}, {})
     assert artifact is None and reason == "seat-result-missing-payload:%s" % RA.SEAT_SCOPED
 

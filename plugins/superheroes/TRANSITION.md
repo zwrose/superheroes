@@ -137,7 +137,9 @@ needing to run commands does not route to claude today. `<tok>` is the registry'
 token (`haiku`, `sonnet`, `opus`); `fable` refuses `fable-unrunnable`.
 
 The typed result is the `structured_output` member of the **last** `{"type":"result"}` event on
-stdout — the final response `--json-schema` governs. The runner **materializes** it to
+stdout — the final response `--json-schema` governs. That same observation records
+`resultCompleteAt`, `resultCompleteEpoch`, and `resultCompleteSha256` on the attempt-ended record
+before the process is terminated. The runner **materializes** it to
 `<run-dir>/native-result-<n>.json` at attempt end; `attempt-ended.stdoutResult` records
 `materialized`, `absent`, `error`, or `occupied`. Only a `materialized` attempt is loaded;
 `occupied` forfeits `native-result-path-occupied`; `absent` (no `result` event, `is_error: true`,
@@ -156,14 +158,61 @@ open with `config-dir-unusable:<why>` (`attempts: 0`). At spawn the same value i
 child env together with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>`, and `engine-started.env` records
 both pins.
 
-Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`, plus the shared native
-family `native-result-missing`, `native-result-oversized`, `native-result-malformed`,
-`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`,
-`native-schema-unreadable`, `marker-channel-retired`; the adapter refusals `unregistered-engine-model`,
-`fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
+Two dispatch modes via `--claude-mode {print,background}` (default `print`). **Print** delivers
+through stdout: the runner materializes the last `{"type":"result"}` envelope's
+`structured_output` to `<run-dir>/native-result-<n>.json`. **Background** delivers through the
+session transcript on `dispatch-review` only — a write dispatch in background mode refuses
+`claude-mode-background-write` before spawn; a continuation with a disagreeing mode refuses
+`run-dir-claude-mode-mismatch`. Background attempt outcomes can carry
+the refusal tokens in `lib/background_outcome.py` (`ALL_REFUSALS`).
+Background telemetry is read from the session
+transcript's tool calls, not from stdout.
 
-Not in this release: background mode (`claude --bg`), the launcher's hand-built argv retiring into
-the adapter, the watcher and the steer channel, Astra.
+Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`,
+`claude-mode-background-write`, `run-dir-claude-mode-mismatch`, the background attempt refusals
+above, plus the shared native family `native-result-missing`, `native-result-oversized`,
+`native-result-malformed`, `native-result-schema-invalid`, `native-result-report-blank`,
+`native-result-path-occupied`, `result-completion-unrecorded`, `result-completion-after-deadline`,
+`result-completion-payload-mismatch`, `timeout-deadline-unrecorded`, `native-schema-unreadable`,
+`marker-channel-retired`; the adapter
+refusals `unregistered-engine-model`, `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
+
+### Builder launch
+
+Builders stay on `claude -p`. The launcher builds the builder command through
+`engine_adapter.claude_builder_argv(token, session_id, prompt)` — the one home for every claude
+command — whose argv is unchanged (`claude --model <tok> --session-id <uuid> -p <prompt>`; effort
+remains pinned through `CLAUDE_CODE_EFFORT_LEVEL`). A caller of `claude_builder_argv` meets the
+signature without `effort` or `--bg` and the refusal `builder-session-id-invalid`.
+
+`launcher.py canary --repo-root <r> --launch-id <id>` reports whether a builder lane is engaged from
+tool calls in that lane's own session transcript. On success the JSON carries `ok`, `reason` (null),
+`launchId`, `sessionId`, `configDir`, `transcriptPath`, `toolCalls`, `truncated`, and `engaged`.
+Refusal tokens: `canary-ledger-unreadable:<state>`, `canary-ledger-fold-refused:<reason>`,
+`canary-lane-unknown`, `canary-session-id-absent`, `canary-config-dir-absent`,
+`canary-transcript-missing`, `canary-transcript-ambiguous`, `canary-transcript-unreadable`,
+`canary-transcript-truncated`. A running builder is steered by a message to its registered session
+name. Background mode remains a review-seat mode only (`--claude-mode background`).
+
+### Astra and the codex role pin
+
+`gpt-6-astra` is registered as the codex top rung and a valid `reviewer-deep` pin at effort `high`.
+A consumer meets:
+
+- the `registration-probe` role the registration probe dispatches under — today its only cell is
+  Astra (`gpt-6-astra` at `high`), which has passed; it stays for any model registered
+  probe-pending later;
+- `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
+  wave is re-attempted with a different run dir);
+- pin refusal tokens `pin-probe-pending` (for a future probe-pending model), `pin-role-not-eligible`,
+  and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — Terra
+  is refused on `reviewer-deep`, and every codex `pilot` pin is refused);
+- `seat_map compose` flags `--host-model` and `--implementation-engine` and degradations
+  `host-model-unknown`, `role-pin-not-live`, `role-pin-not-honorable`;
+- `SUPERHEROES_HOST_MODEL`, exported by the session-start hook from the host payload (empty when
+  absent or malformed);
+- the receipt's per-seat `model` field (read from the dispatch record, `null` when unrecorded) and
+  its unprobed-native disclosure line for claude seats with no runner execution evidence.
 
 ### Dispatch CLI arguments
 
@@ -310,7 +359,9 @@ run that predates the field reads as marker.
 On a successful codex write, the terminal result carries `report` (the scrubbed report text). On
 forfeit, it carries `detail` from the native admission vocabulary: `native-schema-unreadable`,
 `native-result-missing`, `native-result-oversized`, `native-result-malformed`,
-`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`, or
+`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`,
+`result-completion-unrecorded`, `result-completion-after-deadline`,
+`result-completion-payload-mismatch`, `timeout-deadline-unrecorded`, or
 `marker-channel-retired`. The dirty-tree forfeit keeps `detail: worktree-dirtied-by-attempt` and
 carries `attemptDetail`.
 
@@ -347,7 +398,9 @@ binds the attempt prompt for cursor (`orderPromptSha256` is the caller's order i
 
 Refusal tokens a consumer can now meet on cursor: `native-result-missing`,
 `native-result-oversized`, `native-result-malformed`, `native-result-schema-invalid`,
-`native-result-report-blank`, `native-result-path-occupied`, `attempt-prompt-occupied`,
+`native-result-report-blank`, `native-result-path-occupied`, `result-completion-unrecorded`,
+`result-completion-after-deadline`, `result-completion-payload-mismatch`,
+`timeout-deadline-unrecorded`, `attempt-prompt-occupied`,
 `attempt-prompt-unwritable`, `native-schema-unreadable`, `prompt-unreadable`,
 `prompt-tampered`,
 `marker-channel-retired`. Tokens that

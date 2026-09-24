@@ -196,7 +196,8 @@ slice (12–45 s is the measured range above).
 The sanctioned way to dispatch a long-running **external reviewer** seat is `dispatch-review`. The
 seat's delivery contract is in `rubric/review-base.md` ("Findings output format"); `auto-fix-loop.md`
 documents the runner's result mechanics — read both before authoring seat prompts; this subsection is
-the at-dispatch-time summary only. For the full CLI argument surface, read
+the at-dispatch-time summary only. For the full CLI argument surface — including the
+`--session-dir`/`--pr-body-path` pairing and its refusal token — read
 `skills/workhorse/reference/dispatch-entry.md`.
 
 ### Result channels
@@ -209,8 +210,10 @@ All three dispatchable engines — **codex**, **cursor**, and **claude** — use
 `Result file (write exactly this path; nothing else is graded): <path>` and the declared schema
 quoted in a fenced block) — under the argv `cursor-agent --model <tok> -p --trust -f --sandbox
 enabled --output-format stream-json` for both roles (`--mode plan` is gone: plan mode cannot write
-the file). **Claude** receives `--json-schema <declared schema JSON>` on argv at run-open and the
-prompt on stdin under `claude -p --model <tok> --effort <effort> --output-format stream-json
+the file). Builder lanes are not dispatched through this runner — the launcher starts them as
+`claude -p` sessions whose command comes from `engine_adapter.claude_builder_argv`; background mode
+is for review seats only. **Claude** receives `--json-schema <declared schema JSON>` on argv at
+run-open and the prompt on stdin under `claude -p --model <tok> --effort <effort> --output-format stream-json
 --verbose`, plus `--restricted` for review or `--permission-mode acceptEdits --restricted`
 for write; a claude write dispatch is edit-only inside the run cwd because no OS sandbox is
 available through this CLI, so an order needing to run commands does not route to claude today.
@@ -218,7 +221,25 @@ The runner materializes the `structured_output` from the last `{"type":"result"}
 on stdout to `<run-dir>/native-result-<n>.json` at attempt end. `attempt-ended.stdoutResult`
 records `materialized`, `absent`, `error`, or `occupied` — only `materialized` is loaded;
 `occupied` forfeits `native-result-path-occupied`; `absent` and `error` forfeit
-`native-result-missing`. At run-open the shell resolves `CLAUDE_CONFIG_DIR` through
+`native-result-missing`. **Print mode** is the default: omit `--claude-mode` or pass
+`--claude-mode print`. **Background mode** is selected with `--claude-mode background` on
+`dispatch-review` only — a write dispatch in background mode refuses before anything spawns
+(`claude-mode-background-write`, `attempts: 0`), because a detached session outlives the
+process whose liveness the worktree lease is keyed on, so the lease could be reclaimed while
+the session may still be editing. A run's mode is fixed when the run opens; a continuation
+that supplies a disagreeing `--claude-mode` refuses `run-dir-claude-mode-mismatch` with
+`attempts: 0`. In background mode the launch child acknowledges and exits; the runner resolves
+the session through the per-account agent listing, polls the session transcript until the turn
+ends, and materializes the last structured-output payload to the same
+`<run-dir>/native-result-<n>.json` path print mode uses, where the same admission gate loads
+it — a launch acknowledgement alone is not a result. A background session does not end when
+its turn does; it stays live until stopped, so every terminal path stops it and confirms the
+stop (`bgStop` records `stopped`, `already-ended`, or `stop-unconfirmed` — an unconfirmed stop
+is recorded, not assumed). When a slice expires before the turn ends, the attempt is suspended
+with the launch and session ids and a transcript cursor; a continuation re-attaches to that
+session rather than launching a second one. Background telemetry comes from the session
+transcript's tool calls (`attempt-ended.transcriptToolCalls`), not from stdout — the background
+argv carries no event stream. At run-open the shell resolves `CLAUDE_CONFIG_DIR` through
 `lib/config_dir.resolve(env, cwd)`, records it as `run-opened.configDir`, and refuses at open with
 `config-dir-unusable:<why>` when it is not an existing directory; at spawn the same value is injected
 with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>` (`engine-started.env` records both pins). Telemetry
@@ -231,18 +252,56 @@ the declared one (`native-schema-unreadable` otherwise); the file must be a regu
 size cap that decodes as JSON (`native-result-missing`, `native-result-oversized`,
 `native-result-malformed`); it must validate against the declared schema
 (`native-result-schema-invalid`); on a write, its `report` must be non-blank
-(`native-result-report-blank`); and an entry already at the result path when an attempt would spawn
-refuses that attempt (`native-result-path-occupied`). Cursor adds attempt-prompt refusals:
+(`native-result-report-blank`); on a write, a result admitted although the process had to be stopped
+at the wall cap is marked `admittedAfterTimeout: true` rather than reading as a clean exit; and an
+entry already at the result path when an attempt would spawn
+refuses that attempt (`native-result-path-occupied`); every native attempt requires a usable
+completion stamp (`result-completion-unrecorded` when missing or unusable, and when a deadline is
+present its epoch must match the stamp's); every attempt-ended record also carries the wall-cap
+deadline on the same clock (`deadlineMono`/`deadlineEpoch` stamped from `start + timeout` at attempt
+end), and a timed-out attempt refuses when those deadline fields are missing or unusable
+(`timeout-deadline-unrecorded`), then `result-completion-after-deadline`
+when completion is strictly after the cap — exactly at the cap admits,
+`result-completion-payload-mismatch` when the admitted payload is not the one the stamp was taken
+over). Cursor adds attempt-prompt refusals:
 `attempt-prompt-occupied` (any pre-existing entry at the attempt-prompt path — file, symlink,
 dangling symlink, directory — the engine learns the run dir from the result path, so a first attempt
 could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (the staged source
-prompt's bytes no longer match the digest bound at run-open). Every refusal is a forfeit or an attempt
-refusal — the runner never scans stdout for a result and never repairs a malformed file. Claude adds
-`config-dir-unusable:<why>` at run-open and the adapter refusals `unregistered-engine-model`,
+prompt's bytes no longer match the digest bound at run-open). For **codex and cursor**, every
+refusal is a forfeit or an attempt refusal — the runner never scans stdout for a result and never
+repairs a malformed file. **Claude print mode** is the exception on the first half: the runner
+incrementally reads stdout for complete `{"type":"result"}` lines and holds the last one, stamping
+it when it is admissible; it observes once more before terminating the process group and drains any
+trailing bytes once after the group is reaped; the typed file is materialized from that held event,
+so stdout is read once for the result and never re-read or re-split; if the final read fails, or
+the file shrinks below what was already read, nothing is materialized and the dropped result is
+reported as `stdout-result-dropped` with its cause (`final-read-failed`, `shrunk-below-read`,
+`bytes-changed`); just before a held result is saved, the bytes it was parsed from are re-checked
+by digest and a mismatch drops it the same way; it still never repairs a malformed file. **Claude
+background mode** never reads stdout
+for a result — the transcript path above. Claude adds `config-dir-unusable:<why>` at run-open and
+the adapter refusals `unregistered-engine-model`,
 `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
 
-Completion is the process exit plus the typed file — for codex and cursor the file the engine writes
-directly, for claude the materialized structured output; a missing or invalid file forfeits.
+Completion is engine-owned and recorded as a monotonic instant, not inferred from process exit or
+file mtime: each attempt-ended record carries `resultCompleteAt`, `resultCompleteEpoch`, and
+`resultCompleteSha256` (a digest of the payload complete at that instant). **Codex and cursor**
+stamp the first moment the result file parses as complete JSON; **claude print** stamps when the
+poll loop first observes a complete `{"type":"result"}` line on stdout — each poll advances an
+incremental read, with one final drain after the process is reaped — and later materialization to
+the result path is not the completion time; a final line with no trailing newline is complete only
+at end of file, so it is stamped at that final drain; **claude background** stamps the supervisor's record of the result's arrival
+in the transcript rows; the in-process seam stamps its own capture. Every attempt-ended record also
+carries `deadlineMono` and `deadlineEpoch` (the wall cap on that clock, stamped unconditionally at
+attempt end; `timeoutAt` remains for display only on timed-out attempts). Admission compares only
+those stamped fields in one loader every native
+path passes through: it recomputes the payload digest and requires it to match the recorded one, so
+a result rewritten after its stamp cannot be admitted on the earlier stamp. For claude print the
+completion instant is the runner's observation, lagging by up to one attempt poll interval (0.2 s)
+plus the time to process that poll — a result completing inside that final window before the cap
+may be stamped just after it and forfeit; that is the safe direction. Write forfeits name
+`nonzero-exit` when the engine exited non-zero before the cap, and `timeout-no-admission` when the
+cap was hit with nothing admitted.
 Progress and engagement telemetry come from codex's JSONL event stream on `--json`
 (`engagement.source: "codex-events"`); cursor's stream-json event stream (`engagement.source:
 "cursor-stream"`, `tool_call` events counted by distinct call id); claude's stream-json event stream

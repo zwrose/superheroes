@@ -77,6 +77,7 @@ SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
 EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind",
                              "observation")
+EXECUTION_EVIDENCE_OPTIONAL_FIELDS = ("engineModel",)
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
@@ -90,6 +91,7 @@ _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK = {
     "resultDigest": lambda value: isinstance(value, str) and value,
     "resultKind": lambda value: isinstance(value, str) and value,
     "observation": lambda value: isinstance(value, dict),
+    "engineModel": lambda value: isinstance(value, str) and value,
 }
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
 # payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.
@@ -160,6 +162,21 @@ class IncompleteRevisionIdentity(ValueError):
         super().__init__("incomplete revision identity: missing %s" % (self.missing,))
 
 
+def execution_evidence_fields(evidence):
+    """Mandatory execution-evidence members plus each optional field when present, or None when a
+    mandatory member is missing — the one projection a journal row and a dispatch record copy."""
+    if not isinstance(evidence, dict):
+        return None
+    if not all(field in evidence for field in EXECUTION_EVIDENCE_FIELDS):
+        return None
+    out = {field: evidence[field] for field in EXECUTION_EVIDENCE_FIELDS}
+    for field in EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
+        val = evidence.get(field)
+        if isinstance(val, str) and val:
+            out[field] = val
+    return out
+
+
 def recorded_row_fields(stored_envelope, cited_head):
     """THE builder for revision identity on a `recorded` journal row.
 
@@ -171,12 +188,7 @@ def recorded_row_fields(stored_envelope, cited_head):
     schema = stored_envelope.get("schema")
     if schema not in SEAT_RESULT_SCHEMAS and schema != SEAT_MISSING_SCHEMA:
         raise IncompleteRevisionIdentity(REVISION_IDENTITY_FIELDS)
-    evidence = stored_envelope.get("executionEvidence")
-    execution_evidence = None
-    if isinstance(evidence, dict):
-        if all(field in evidence for field in EXECUTION_EVIDENCE_FIELDS):
-            execution_evidence = {field: evidence[field]
-                                  for field in EXECUTION_EVIDENCE_FIELDS}
+    execution_evidence = execution_evidence_fields(stored_envelope.get("executionEvidence"))
     return {
         "payloadSha256": stored_envelope.get("payloadSha256"),
         "casToken": envelope_cas_token(stored_envelope),
@@ -528,7 +540,8 @@ def _execution_evidence_has_pointer(value):
 def _validate_execution_evidence(evidence):
     if not isinstance(evidence, dict):
         return ("execution-evidence-malformed", {})
-    extra_top = set(evidence.keys()) - set(EXECUTION_EVIDENCE_FIELDS)
+    allowed = set(EXECUTION_EVIDENCE_FIELDS) | set(EXECUTION_EVIDENCE_OPTIONAL_FIELDS)
+    extra_top = set(evidence.keys()) - allowed
     if extra_top:
         return ("execution-evidence-unknown-field", {
             "field": sorted(extra_top)[0],
@@ -538,6 +551,13 @@ def _validate_execution_evidence(evidence):
         if field not in evidence:
             return ("execution-evidence-malformed", {})
     for field in EXECUTION_EVIDENCE_FIELDS:
+        if field not in _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK:
+            return ("execution-evidence-malformed", {})
+        if not _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):
+            return ("execution-evidence-malformed", {})
+    for field in EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
+        if field not in evidence:
+            continue
         if field not in _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK:
             return ("execution-evidence-malformed", {})
         if not _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):
