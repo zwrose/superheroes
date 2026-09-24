@@ -210,8 +210,10 @@ All three dispatchable engines — **codex**, **cursor**, and **claude** — use
 `Result file (write exactly this path; nothing else is graded): <path>` and the declared schema
 quoted in a fenced block) — under the argv `cursor-agent --model <tok> -p --trust -f --sandbox
 enabled --output-format stream-json` for both roles (`--mode plan` is gone: plan mode cannot write
-the file). **Claude** receives `--json-schema <declared schema JSON>` on argv at run-open and the
-prompt on stdin under `claude -p --model <tok> --effort <effort> --output-format stream-json
+the file). Builder lanes are not dispatched through this runner — the launcher starts them as
+`claude -p` sessions whose command comes from `engine_adapter.claude_builder_argv`; background mode
+is for review seats only. **Claude** receives `--json-schema <declared schema JSON>` on argv at
+run-open and the prompt on stdin under `claude -p --model <tok> --effort <effort> --output-format stream-json
 --verbose`, plus `--restricted` for review or `--permission-mode acceptEdits --restricted`
 for write; a claude write dispatch is edit-only inside the run cwd because no OS sandbox is
 available through this CLI, so an order needing to run commands does not route to claude today.
