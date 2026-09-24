@@ -1,0 +1,9 @@
+{
+  "schema": "vet-verdict-form/1",
+  "separator": " · ",
+  "tokens": [
+    {"token": "**Verdict: READY**", "verdict": "READY"},
+    {"token": "**Verdict: NOT-READY**", "verdict": "NOT-READY"},
+    {"token": "**Verdict: PARKED**", "verdict": "PARKED"}
+  ]
+}
