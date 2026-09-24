@@ -88,6 +88,52 @@ def _manifest_seat_entry(seat, channel, vendor, *, occurrence=0):
     }
 
 
+def _qualifying_dispatch_row(seat, phase):
+    row = _dispatch_journal_with_binding(seat=seat)
+    row["phase"] = phase
+    row["seat"] = seat
+    row["recordIdentity"]["phase"] = phase
+    row["recordIdentity"]["seat"] = seat
+    return row
+
+
+def _multi_phase_session(tmp_path, phase_specs, *, rnd=1, attempt=0):
+    """Build a session with one orders-manifest per phase in ``phase_specs``."""
+    journal_lines = []
+    all_envelopes = []
+    manifests = []
+    for phase, seat_configs in phase_specs.items():
+        manifest_seats = {}
+        for cfg in seat_configs:
+            journal_lines.append(cfg["row"])
+            skey, entry = _manifest_seat_entry(
+                cfg["seat"], cfg["channel"], cfg["vendor"])
+            manifest_seats[skey] = entry
+            all_envelopes.append(cfg.get("envelope", {
+                "seat": cfg["seat"],
+                "phase": phase,
+                "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA,
+            }))
+        manifest = {
+            "schema": "orders-manifest/1",
+            "session": "test-session-001",
+            "round": rnd,
+            "phase": phase,
+            "attempt": attempt,
+            "orders": "not-emitted",
+            "seats": manifest_seats,
+        }
+        manifest_sha = SC.sha256_text(SC.canonical(manifest))
+        journal_lines.append(_orders_emitted_journal_row(
+            manifest_sha, phase=phase, rnd=rnd, attempt=attempt))
+        manifests.append(manifest)
+    session_dir = write_session(
+        tmp_path, journal_lines=journal_lines, envelopes=all_envelopes)
+    for manifest in manifests:
+        _write_orders_manifest(session_dir, manifest)
+    return session_dir
+
+
 def _session_with_manifest(
     tmp_path,
     *,
@@ -246,7 +292,7 @@ def test_l4a_certify_receipt_discloses_host_uncertified_seat(tmp_path):
     assert receipt["seatMap"]["seats"][engine_seat]["certifiedPanel"] is True
 
 
-# --- edge 2: host on other dispatch phases → uncertified, named --------------------------
+# --- edge 2: sole host on non-panel phase with no panel row → floor refuses ---------------
 
 
 @pytest.mark.parametrize("phase", (
@@ -269,9 +315,10 @@ def test_l4a_edge2_host_non_panel_phase_uncertified_named(tmp_path, phase):
     )
     ctx, err = RC._load_context(session_dir)
     assert err is None
-    assert RC.check_unrun_review(ctx) is None
-    uncertified = ctx.get("uncertified_seats") or []
-    assert any(r["seat"] == seat and r["phase"] == phase for r in uncertified)
+    refusal = RC.check_unrun_review(ctx)
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["artifact"] == RC.JOURNAL_FILE
 
 
 # --- edge 3: host on audits/fixer → refuses as today -------------------------------------
@@ -419,6 +466,157 @@ def test_l4a_edge7_seat_missing_from_manifest_refuses(tmp_path):
     assert refusal is not None
     assert refusal["class"] == "unrun-review"
     assert refusal["artifact"] == seat
+
+
+# --- exclusion-floor census: post-loop predicate over collected seats --------------------
+
+
+@pytest.mark.parametrize("case_id,phase_specs,expect_refusal", (
+    (
+        "no_panel_verifiers",
+        {RP.P_VERIFIERS: [{
+            "seat": "verifier-seat",
+            "channel": "file",
+            "vendor": "claude",
+            "row": _dispatch_observed_no_telemetry_row("verifier-seat", RP.P_VERIFIERS),
+        }]},
+        True,
+    ),
+    (
+        "no_panel_gapsweep",
+        {RP.P_GAPSWEEP: [{
+            "seat": "gapsweep-seat",
+            "channel": "file",
+            "vendor": "claude",
+            "row": _dispatch_observed_no_telemetry_row("gapsweep-seat", RP.P_GAPSWEEP),
+        }]},
+        True,
+    ),
+    (
+        "no_panel_scoped",
+        {RP.P_SCOPED: [{
+            "seat": "scoped-seat",
+            "channel": "file",
+            "vendor": "claude",
+            "row": _dispatch_observed_no_telemetry_row("scoped-seat", RP.P_SCOPED),
+        }]},
+        True,
+    ),
+    (
+        "no_panel_synthesis",
+        {RP.P_SYNTHESIS: [{
+            "seat": "synthesis-seat",
+            "channel": "file",
+            "vendor": "claude",
+            "row": _dispatch_observed_no_telemetry_row("synthesis-seat", RP.P_SYNTHESIS),
+        }]},
+        True,
+    ),
+    (
+        "all_panel_excluded_plus_qualified_audit",
+        {
+            RP.P_PANEL: [{
+                "seat": "code-reviewer",
+                "channel": "file",
+                "vendor": "claude",
+                "row": _dispatch_observed_no_telemetry_row("code-reviewer", RP.P_PANEL),
+            }],
+            RP.P_AUDITS: [{
+                "seat": "audit-seat",
+                "channel": "stdout",
+                "vendor": "codex",
+                "row": _qualifying_dispatch_row("audit-seat", RP.P_AUDITS),
+            }],
+        },
+        True,
+    ),
+    (
+        "all_panel_excluded_plus_excluded_nonpanel",
+        {
+            RP.P_PANEL: [{
+                "seat": "code-reviewer",
+                "channel": "file",
+                "vendor": "claude",
+                "row": _dispatch_observed_no_telemetry_row("code-reviewer", RP.P_PANEL),
+            }],
+            RP.P_VERIFIERS: [{
+                "seat": "verifier-seat",
+                "channel": "file",
+                "vendor": "claude",
+                "row": _dispatch_observed_no_telemetry_row("verifier-seat", RP.P_VERIFIERS),
+            }],
+        },
+        True,
+    ),
+    (
+        "one_qualified_panel_plus_excluded_mixed",
+        {
+            RP.P_PANEL: [
+                {
+                    "seat": "security-reviewer",
+                    "channel": "stdout",
+                    "vendor": "codex",
+                    "row": _qualifying_dispatch_row("security-reviewer", RP.P_PANEL),
+                },
+                {
+                    "seat": "code-reviewer",
+                    "channel": "file",
+                    "vendor": "claude",
+                    "row": _dispatch_observed_no_telemetry_row("code-reviewer", RP.P_PANEL),
+                },
+            ],
+            RP.P_VERIFIERS: [{
+                "seat": "verifier-seat",
+                "channel": "file",
+                "vendor": "claude",
+                "row": _dispatch_observed_no_telemetry_row("verifier-seat", RP.P_VERIFIERS),
+            }],
+            RP.P_GAPSWEEP: [{
+                "seat": "gapsweep-seat",
+                "channel": "file",
+                "vendor": "claude",
+                "row": _dispatch_observed_no_telemetry_row("gapsweep-seat", RP.P_GAPSWEEP),
+            }],
+            RP.P_SCOPED: [{
+                "seat": "scoped-seat",
+                "channel": "file",
+                "vendor": "claude",
+                "row": _dispatch_observed_no_telemetry_row("scoped-seat", RP.P_SCOPED),
+            }],
+            RP.P_SYNTHESIS: [{
+                "seat": "synthesis-seat",
+                "channel": "file",
+                "vendor": "claude",
+                "row": _dispatch_observed_no_telemetry_row("synthesis-seat", RP.P_SYNTHESIS),
+            }],
+        },
+        False,
+    ),
+))
+def test_l4a_exclusion_floor_census(tmp_path, case_id, phase_specs, expect_refusal):
+    session_dir = _multi_phase_session(tmp_path, phase_specs)
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    refusal = RC.check_unrun_review(ctx)
+    if expect_refusal:
+        assert refusal is not None
+        assert refusal["class"] == "unrun-review"
+        assert refusal["artifact"] == RC.JOURNAL_FILE
+    else:
+        assert refusal is None
+        uncertified = ctx.get("uncertified_seats") or []
+        expected_slots = {
+            ("code-reviewer", RP.P_PANEL, 1, 0, 0),
+            ("verifier-seat", RP.P_VERIFIERS, 1, 0, 0),
+            ("gapsweep-seat", RP.P_GAPSWEEP, 1, 0, 0),
+            ("scoped-seat", RP.P_SCOPED, 1, 0, 0),
+            ("synthesis-seat", RP.P_SYNTHESIS, 1, 0, 0),
+        }
+        actual_slots = {
+            (r["seat"], r["phase"], r["round"], r["attempt"], r.get("occurrence", 0))
+            for r in uncertified
+        }
+        assert actual_slots == expected_slots
 
 
 # --- edge 8: every panel seat uncertified → floor refusal --------------------------------

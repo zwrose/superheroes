@@ -1175,6 +1175,63 @@ def _recorded_seat_channel(ctx, seat_entry):
     return channel, vendor
 
 
+def _seat_entry_slot(seat_entry):
+    return (
+        seat_entry["seat"],
+        seat_entry.get("phase"),
+        seat_entry["round"],
+        seat_entry["attempt"],
+        seat_entry.get("occurrence", 0),
+    )
+
+
+def _uncertified_slot(row):
+    return (
+        row["seat"],
+        row["phase"],
+        row["round"],
+        row["attempt"],
+        row.get("occurrence", 0),
+    )
+
+
+def _exclusion_floor_refusal(seats, qualified, uncertified_seats):
+    if not uncertified_seats:
+        return None
+    qualified_slots = {_seat_entry_slot(q) for q in qualified}
+    all_slots = {_seat_entry_slot(s) for s in seats}
+    excluded_slots = all_slots - qualified_slots
+    uncertified_slots = {_uncertified_slot(u) for u in uncertified_seats}
+    if not any(q.get("phase") == PANEL_PHASE for q in qualified):
+        n = len(uncertified_seats)
+        return _refusal(
+            "unrun-review",
+            JOURNAL_FILE,
+            "no runner-evidenced panel seat qualified while %d seat(s) were excluded; "
+            "no recorded dispatch-panel seat carries runner evidence; "
+            "every panel seat was host-channel" % (n,),
+        )
+    if excluded_slots != uncertified_slots:
+        unnamed = sorted(excluded_slots - uncertified_slots)
+        if unnamed:
+            parts = ["%s/%s r%s a%s o%s" % slot for slot in unnamed]
+            return _refusal(
+                "unrun-review",
+                JOURNAL_FILE,
+                "excluded seat slot(s) not named in uncertified_seats: %s"
+                % ", ".join(parts),
+            )
+        extra = sorted(uncertified_slots - excluded_slots)
+        parts = ["%s/%s r%s a%s o%s" % slot for slot in extra]
+        return _refusal(
+            "unrun-review",
+            JOURNAL_FILE,
+            "uncertified_seats names slot(s) not excluded from certification: %s"
+            % ", ".join(parts),
+        )
+    return None
+
+
 def check_unrun_review(ctx):
     state = ctx["state"]
     journal = ctx["journal"]
@@ -1183,8 +1240,7 @@ def check_unrun_review(ctx):
     seats = _collect_seats(ctx)
     uncertified_seats = []
     ctx["uncertified_seats"] = uncertified_seats
-    panel_certified = False
-    panel_had_uncertified = False
+    qualified = []
     for seat_entry in seats:
         seat = seat_entry["seat"]
         provenance = seat_entry.get("provenance")
@@ -1242,8 +1298,6 @@ def check_unrun_review(ctx):
                         "channel": CHANNEL_FILE,
                         "reason": "host-seat-no-runner-record",
                     })
-                    if phase == PANEL_PHASE:
-                        panel_had_uncertified = True
                     continue
                 return _refusal(
                     "unrun-review",
@@ -1251,8 +1305,7 @@ def check_unrun_review(ctx):
                     "dispatch-observed seat lacks qualifying execution telemetry",
                     binding_failure=binding,
                 )
-            if phase == PANEL_PHASE:
-                panel_certified = True
+            qualified.append(seat_entry)
         elif provenance == PROVENANCE_HAND_LANDED:
             env, path = _load_envelope(
                 session_dir,
@@ -1290,16 +1343,8 @@ def check_unrun_review(ctx):
                     "hand-landed seat lacks qualifying execution-evidence binding",
                     binding_failure=binding,
                 )
-            if phase == PANEL_PHASE:
-                panel_certified = True
-    if panel_had_uncertified and not panel_certified:
-        return _refusal(
-            "unrun-review",
-            JOURNAL_FILE,
-            "no recorded dispatch-panel seat carries runner evidence; "
-            "every panel seat was host-channel",
-        )
-    return None
+            qualified.append(seat_entry)
+    return _exclusion_floor_refusal(seats, qualified, uncertified_seats)
 
 
 def check_same_family_seat(ctx):
