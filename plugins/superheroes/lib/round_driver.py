@@ -177,6 +177,8 @@ SCHEMA_VERSION = 2
 STATE_FILE = session_contract.STATE_FILE
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
+RE_EMIT_CMD = session_contract.RE_EMIT_CMD
+ORDERS_SUPERSEDED_OUTCOME = session_contract.ORDERS_SUPERSEDED_OUTCOME
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
@@ -410,9 +412,12 @@ JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
 DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
 VERIFIED_HEAD_UNRESOLVED_CAUSE = "verified-head-unresolved"
-
-FIXED_DISPOSITION_FINALIZATION_VERIFY_NOT_PASS_CAUSE = (
-    "fixed-disposition-finalization-verify-not-pass"
+RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
+RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL
+RELOCATION_EVIDENCE_INDETERMINATE_CAUSE = "relocation-evidence-indeterminate"
+RELOCATION_EVIDENCE_INDETERMINATE_DETAIL = (
+    "relocation evidence in the journal is unreadable or malformed; "
+    "cannot determine whether this attempt predates a checkout move"
 )
 
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
@@ -622,8 +627,9 @@ def _journal_faulted(session_dir):
     return os.path.exists(os.path.join(session_dir, JOURNAL_FAULT_FILE))
 
 
-def read_journal(session_dir):
+def read_journal(session_dir, *, report_lossy=False):
     out = []
+    lossy = False
     path = os.path.join(session_dir, JOURNAL_FILE)
     try:
         with open(path, encoding="utf-8") as fh:
@@ -634,10 +640,24 @@ def read_journal(session_dir):
                 try:
                     out.append(json.loads(line))
                 except ValueError:
+                    # axis: a lossy journal read flags unparseable lines for relocation evidence
+                    if report_lossy:
+                        lossy = True
                     continue
     except OSError:
-        pass
+        if report_lossy:
+            lossy = True
+    except UnicodeError:
+        if report_lossy:
+            lossy = True
+        else:
+            raise
+    if report_lossy:
+        return out, lossy
     return out
+
+
+_RELOCATION_EVIDENCE_INDETERMINATE = object()
 
 
 def read_fault_markers(session_dir):
@@ -6503,6 +6523,277 @@ def _cmd_relocate_locked(session_dir, target_root, by):
     return {"ok": True, "relocated": relocated, "markerRetirement": marker_outcome}
 
 
+def cmd_re_emit(session_dir, by):
+    """Re-emit a stale pending dispatch order at the current head as a new attempt."""
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, "re-emit")
+            if refusal is not None:
+                return refusal
+            return _cmd_re_emit_locked(session_dir, by)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, "re-emit", held)
+
+
+def _journal_has_orders_emitted(session_dir, rnd, phase, attempt):
+    for event in read_journal(session_dir):
+        if event.get("outcome") != "orders-emitted":
+            continue
+        if (event.get("round") == rnd and event.get("phase") == phase
+                and event.get("attempt") == attempt):
+            return True
+    return False
+
+
+def _relocation_after_emission(journal, rnd, phase, attempt):
+    """First qualifying relocated row after the attempt's last orders-emitted.
+
+    Returns the relocation row, ``None`` when no qualifying move exists, or
+    ``_RELOCATION_EVIDENCE_INDETERMINATE`` when a relocated row is present but
+    unreadable — callers must refuse rather than treat indeterminate as absent."""
+    last_emit_idx = None
+    for idx, event in enumerate(journal):
+        # axis: a non-object journal row makes relocation evidence indeterminate
+        if not isinstance(event, dict):
+            return _RELOCATION_EVIDENCE_INDETERMINATE
+        if (event.get("outcome") == "orders-emitted"
+                and event.get("round") == rnd and event.get("phase") == phase
+                and event.get("attempt") == attempt):
+            last_emit_idx = idx
+    # axis: a dispatch attempt with no emission row counts as stale when any move exists (fail closed)
+    start = 0 if last_emit_idx is None else last_emit_idx + 1
+    for event in journal[start:]:
+        if not isinstance(event, dict):
+            return _RELOCATION_EVIDENCE_INDETERMINATE
+        if event.get("outcome") != "relocated":
+            continue
+        old_root = event.get("oldRoot")
+        new_root = event.get("newRoot")
+        if not isinstance(old_root, str) or not isinstance(new_root, str):
+            return _RELOCATION_EVIDENCE_INDETERMINATE
+        if os.path.realpath(old_root) != os.path.realpath(new_root):
+            return event
+    return None
+
+
+def _journal_has_relocated_row(journal):
+    return any(isinstance(event, dict) and event.get("outcome") == "relocated" for event in journal)
+
+
+def _relocation_lookup(session_dir, rnd, phase, attempt):
+    """Tri-state relocation evidence for fence callers: row, absent, or indeterminate."""
+    journal, lossy = read_journal(session_dir, report_lossy=True)
+    if lossy:
+        return _RELOCATION_EVIDENCE_INDETERMINATE
+    for row in journal:
+        if not isinstance(row, dict):
+            return _RELOCATION_EVIDENCE_INDETERMINATE
+    result = _relocation_after_emission(journal, rnd, phase, attempt)
+    if result is _RELOCATION_EVIDENCE_INDETERMINATE:
+        return result
+    # axis: a journal-fault marker makes relocation evidence indeterminate when a move was recorded
+    if _journal_faulted(session_dir) and _journal_has_relocated_row(journal):
+        return _RELOCATION_EVIDENCE_INDETERMINATE
+    return result
+
+
+def _refuse_relocation_evidence_indeterminate(session_dir, cmd, **kwargs):
+    return _refuse_cmd(session_dir, cmd, RELOCATION_EVIDENCE_INDETERMINATE_CAUSE,
+                       detail=RELOCATION_EVIDENCE_INDETERMINATE_DETAIL, **kwargs)
+
+
+def _re_emit_recorded_slots(journal, rnd, phase, attempt):
+    slots = set()
+    for event in journal:
+        if event.get("outcome") != "recorded":
+            continue
+        ident = event.get("recordIdentity")
+        if isinstance(ident, dict):
+            if (event.get("round") == rnd and ident.get("phase") == phase
+                    and ident.get("attempt") == attempt):
+                seat = ident.get("seat") or event.get("seat") or "unknown"
+                slots.add((seat, ident.get("occurrence", 0)))
+        elif (event.get("round") == rnd and event.get("phase") == phase
+              and event.get("attempt") == attempt):
+            seat = event.get("seat") or "unknown"
+            slots.add((seat, event.get("occurrence", 0)))
+    return slots
+
+
+def _re_emit_recorded_seat_labels(journal, rnd, phase, attempt):
+    return sorted(_slot_label(seat, occurrence)
+                  for seat, occurrence in _re_emit_recorded_slots(journal, rnd, phase, attempt))
+
+
+def _re_emit_blocking_result_names(session_dir, journal, rnd, phase, attempt, roster):
+    # axis: a landing or bare entry for an unrecorded old-attempt slot, or one that cannot be checked, blocks re-emit
+    recorded = _re_emit_recorded_slots(journal, rnd, phase, attempt)
+    names = []
+    for seat_key, occurrence in round_records.roster_slots(roster):
+        if (seat_key, occurrence) in recorded:
+            continue
+        skey = round_records.storage_key(seat_key, occurrence)
+        landing = record_paths.landing_path(session_dir, rnd, phase, skey, attempt)
+        bare = record_paths.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+        if record_paths.landing_entry_present(landing):
+            names.append("landing:%s" % skey)
+        if record_paths.landing_entry_present(bare):
+            names.append("bare:%s" % skey)
+    return names
+
+
+def _re_emit_completed_for_attempt(journal, rnd, phase, attempt):
+    """Return (superseded_attempt, superseded_row) when re-emit already committed for ``attempt``."""
+    superseded_row = None
+    for event in journal:
+        if (session_contract.journal_is_re_emit_orders_superseded(event)
+                and event.get("round") == rnd and event.get("phase") == phase
+                and event.get("newAttempt") == attempt):
+            superseded_row = event
+    if superseded_row is None:
+        return None
+    for event in journal:
+        if (event.get("cmd") == RE_EMIT_CMD and event.get("outcome") == "orders-emitted"
+                and event.get("round") == rnd and event.get("phase") == phase
+                and event.get("attempt") == attempt):
+            return superseded_row.get("attempt"), superseded_row
+    return None
+
+
+def _cmd_re_emit_locked(session_dir, by):
+    ok, state = load_state(session_dir)
+    if not ok or state is None:
+        detail = state if not ok else "no state"
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-session-unreadable", detail=detail)
+
+    if state.get("terminal"):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
+    pending = state.get("pending")
+    if not isinstance(pending, dict):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
+    phase = pending.get("phase")
+    if not isinstance(phase, str) or not phase.startswith("dispatch-"):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
+    rnd = pending.get("round")
+    old_attempt = pending.get("attempt")
+
+    relocation = _relocation_lookup(session_dir, rnd, phase, old_attempt)
+    if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+        return _refuse_relocation_evidence_indeterminate(
+            session_dir, "re-emit", phase=phase, rnd=rnd, attempt=old_attempt)
+
+    anchor = _orders_anchor(state, session_dir, rnd, phase, old_attempt)
+    if anchor is None or not _journal_has_orders_emitted(session_dir, rnd, phase, old_attempt):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-anchor",
+                           phase=phase, rnd=rnd, attempt=old_attempt)
+
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir)
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot")
+    if not isinstance(repo_root, str) or not repo_root:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
+                           detail="session repo root is unset")
+    head_res = store_core.run_git_result(repo_root, "rev-parse", "HEAD")
+    if (head_res.status in (store_core.GIT_UNAVAILABLE, store_core.GIT_DECLINED)
+            or not head_res.out):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
+                           detail="HEAD unresolvable in session repo root")
+
+    live_head = head_res.out
+    anchor_head = anchor.get("headSha")
+    if not isinstance(anchor_head, str) or not anchor_head:
+        anchor_head = _session_certified_head(session_dir, state)
+    if not isinstance(anchor_head, str) or not anchor_head:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
+                           detail="no headSha on anchor and no session certified head")
+
+    if anchor_head.lower() != live_head.lower():
+        return _refuse_cmd(
+            session_dir, "re-emit", "re-emit-head-moved",
+            anchorHead=anchor_head, liveHead=live_head,
+            detail=("the head moved outside the loop; a seat recorded at the live head "
+                    "cannot certify while the session's recorded head is the old one; "
+                    "re-emit does not move the session's head"))
+
+    journal = read_journal(session_dir)
+    if relocation is None:
+        completed = _re_emit_completed_for_attempt(journal, rnd, phase, old_attempt)
+        if completed is not None:
+            superseded_attempt, superseded_row = completed
+            anchor = _orders_anchor(state, session_dir, rnd, phase, superseded_attempt)
+            response = _next_response(state["pending"], state_hash(state))
+            response["superseded"] = {
+                "attempt": superseded_attempt,
+                "manifestSha256": ((anchor or {}).get("manifestSha256")
+                                     or superseded_row.get("supersededManifestSha256")),
+            }
+            return response
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-not-stale",
+                           phase=phase, rnd=rnd, attempt=old_attempt)
+
+    old_roster, roster_refusal = _roster_of(session_dir, state, "re-emit", phase, rnd, old_attempt)
+    if roster_refusal is not None:
+        return roster_refusal
+
+    result_names = _re_emit_blocking_result_names(
+        session_dir, journal, rnd, phase, old_attempt, old_roster)
+    if result_names:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-attempt-has-results",
+                           phase=phase, rnd=rnd, attempt=old_attempt, names=result_names)
+
+    # axis: the new attempt is above the pending one even when nothing was accepted
+    new_attempt = max(_next_dispatch_attempt(session_dir, rnd, phase, state), old_attempt + 1)
+    state["pending"] = dict(pending, attempt=new_attempt)
+
+    roster, roster_refusal = _roster_of(session_dir, state, "re-emit", phase, rnd, new_attempt)
+    if roster_refusal is not None:
+        return roster_refusal
+
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    relocation_fields = {
+        "oldRoot": relocation.get("oldRoot"),
+        "newRoot": relocation.get("newRoot"),
+        "oldBranch": relocation.get("oldBranch"),
+        "newBranch": relocation.get("newBranch"),
+        "sessionDir": relocation.get("sessionDir"),
+        "at": relocation.get("at"),
+    }
+    superseded_fields = {
+        "phase": phase, "round": rnd, "attempt": old_attempt, "newAttempt": new_attempt,
+        "supersededManifestSha256": anchor.get("manifestSha256"),
+        "supersededOrderSha256": anchor.get("orders"),
+        "head": live_head,
+        "relocation": relocation_fields,
+        "by": by, "at": at,
+    }
+    recorded_labels = _re_emit_recorded_seat_labels(journal, rnd, phase, old_attempt)
+    if recorded_labels:
+        superseded_fields["supersededRecords"] = recorded_labels
+    superseded_row = _journal_entry_for_commit(
+        session_dir, RE_EMIT_CMD, ORDERS_SUPERSEDED_OUTCOME, **superseded_fields)
+
+    try:
+        _emit_orders_manifest(
+            session_dir, state, rnd, phase, new_attempt, roster,
+            journal_cmd=RE_EMIT_CMD, pending_payload=state["pending"]["payload"],
+            seat_map=_effective_seat_map(state),
+            extra_journal_entries=[superseded_row])
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, "re-emit", exc, phase=phase,
+                                        rnd=rnd, attempt=new_attempt)
+    except ValueError as exc:
+        return _refuse_cmd(session_dir, "re-emit", "order-render-refused", phase=phase,
+                           rnd=rnd, attempt=new_attempt, detail=str(exc))
+
+    save_state(session_dir, state)
+    response = _next_response(state["pending"], state_hash(state))
+    response["superseded"] = {
+        "attempt": old_attempt,
+        "manifestSha256": anchor.get("manifestSha256"),
+    }
+    return response
+
+
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
                _pending_policy_applied=None, _durable_record=None, _policy_journal_entry=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
@@ -6744,6 +7035,21 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "echo-mismatch"})
         return {"ok": False, "reason": "phase/attempt echo does not match the pending step"}
+    if (not _via_advance and isinstance(phase, str) and phase.startswith("dispatch-")):
+        # axis: a hand submit of a dispatch phase emitted before the move is refused; the advance-driven fold is not
+        relocation = _relocation_lookup(session_dir, pending.get("round"), phase, attempt)
+        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": RELOCATION_EVIDENCE_INDETERMINATE_CAUSE})
+            return {"ok": False, "reason": RELOCATION_EVIDENCE_INDETERMINATE_CAUSE,
+                    "detail": RELOCATION_EVIDENCE_INDETERMINATE_DETAIL}
+        if relocation is not None:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE})
+            return {"ok": False, "reason": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
+                    "detail": RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL}
     # The state-hash echo is the anti-stale/fork fence — REQUIRED (#507 v13). A first-time fold with
     # no hash is refused (a missing hash must never fold fail-open); exact replays are already
     # returned as duplicates above, before this point.
@@ -8299,7 +8605,7 @@ def _seat_dispatch_row(state, seat_key, seat_map=None):
 
 
 def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance",
-                          pending_payload=None, seat_map=None):
+                          pending_payload=None, seat_map=None, extra_journal_entries=()):
     """Emit per-slot order prompts, envelope stubs, and the orders manifest for a dispatch phase.
 
     Every roster SLOT is rendered, hashed, and written inside the single `orders-emit` commit
@@ -8424,7 +8730,10 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                                          row, manifest_sha, order_sha, state,
                                          head_sha=certified_head)
             c.add_replace_file(stub_path, round_records.canonical(stub).encode("utf-8"))
-        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        journal_path = os.path.join(session_dir, JOURNAL_FILE)
+        for extra_entry in extra_journal_entries:
+            c.add_journal_append(journal_path, extra_entry)
+        c.add_journal_append(journal_path, journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
         raise exc
@@ -9037,12 +9346,21 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                                        attempt=cur_attempt, seat=seat, headDiffPath=head_path)
     else:
         head_content = None
+    relocation_fenced = False
+    if isinstance(phase, str) and phase.startswith("dispatch-"):
+        relocation = _relocation_lookup(session_dir, rnd, phase, cur_attempt)
+        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+            return _refuse_relocation_evidence_indeterminate(
+                session_dir, "record-result", phase=phase, rnd=rnd, attempt=cur_attempt,
+                seat=_slot_label(seat, occurrence))
+        relocation_fenced = relocation is not None
     plan, landing_refusal = round_records.validate_landing(
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
         supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
         seat_result_schema=seat_schema,
         envelope_override=assembled,
-        evidence_minted=assembled is not None)
+        evidence_minted=assembled is not None,
+        fenced=relocation_fenced)
     if landing_refusal is not None:
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -9123,6 +9441,14 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         if isinstance(detail, round_commit.CommitRefused):
             return _commit_refused_response(session_dir, cmd, detail, phase=phase, rnd=rnd,
                                           attempt=attempt, seat=seat_key)
+    fenced = False
+    if isinstance(phase, str) and phase.startswith("dispatch-"):
+        # axis: a sweep or advance that would ingest a landing for an attempt emitted before the move is refused; one with nothing to ingest is not
+        relocation_fence = _relocation_lookup(session_dir, rnd, phase, attempt)
+        if relocation_fence is _RELOCATION_EVIDENCE_INDETERMINATE:
+            return _refuse_relocation_evidence_indeterminate(
+                session_dir, cmd, phase=phase, rnd=rnd, attempt=attempt)
+        fenced = relocation_fence is not None
     for seat_key, occurrence in round_records.roster_slots(roster):
         try:
             skey = round_records.storage_key(seat_key, occurrence)
@@ -9150,7 +9476,8 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                            attempt=attempt)
     results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
                                           roster=roster, anchor=anchor,
-                                          seat_result_schema=seat_schema)
+                                          seat_result_schema=seat_schema,
+                                          fenced=fenced)
     recorded = []
     stale_strays = []
     for result in results:
@@ -10055,6 +10382,11 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal
+    if isinstance(phase, str) and phase.startswith("dispatch-"):
+        relocation = _relocation_lookup(session_dir, rnd, phase, attempt)
+        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+            return _refuse_relocation_evidence_indeterminate(
+                session_dir, "advance", phase=phase, rnd=rnd, attempt=attempt)
     anchor = _orders_anchor(state, session_dir, rnd, phase, attempt)
 
     # 1. reconcile the two-commit window. THE STORE FILE IS AUTHORITATIVE.
@@ -10799,6 +11131,10 @@ def build_parser():
     cli_contract.add_argument(prl, "--repo-root", contract="repo-root", required=True)
     cli_contract.add_argument(prl, "--by", contract="free-text", required=True)
 
+    pre = sub.add_parser("re-emit")
+    cli_contract.add_argument(pre, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pre, "--by", contract="free-text", required=True)
+
     return parser
 
 
@@ -10986,6 +11322,10 @@ def _dispatch(args):
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
     elif args.cmd == "relocate":
         out = cmd_relocate(args.session_dir, args.repo_root, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == "re-emit":
+        out = cmd_re_emit(args.session_dir, args.by)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     else:

@@ -19,6 +19,7 @@ __all__ = (
     "landing_dir",
     "landing_path",
     "bare_payload_path",
+    "landing_entry_present",
     "RESERVED_PREFIX",
     "_guard_within",
     "_require_token",
@@ -125,3 +126,17 @@ def bare_payload_path(session_dir, rnd, phase, skey, attempt):
         session_dir,
         os.path.join(landing_dir(session_dir, rnd, phase),
                      "%s.a%d.payload.json" % (skey, attempt)))
+
+
+def landing_entry_present(path):
+    """True when the directory entry exists; indeterminate errors count as present (fail closed)."""
+    try:
+        os.lstat(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except NotADirectoryError:
+        return False
+    except OSError:
+        # axis: an lstat error other than not-found counts as present
+        return True

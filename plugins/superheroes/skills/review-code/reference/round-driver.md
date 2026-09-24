@@ -5,7 +5,7 @@
 - [checkpoint](#checkpoint)
 - [Durable-record path](#durable-record-path)
 - [Base guard](#base-guard)
-- [Moving a session — relocate](#moving-a-session--relocate)
+- [Moving a session — relocate and re-emit](#moving-a-session--relocate-and-re-emit)
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Round economy](#round-economy)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
@@ -546,7 +546,7 @@ field.
   re-run Setup's resolve block and check `origin`; confirm `meta.json` has a full commit pin and
   `repoRoot` matches this checkout. When the session belongs to another checkout of the same
   repository at the same head and base, `relocate` moves it (see [Moving a session —
-  relocate](#moving-a-session--relocate)) instead of starting over.
+  relocate and re-emit](#moving-a-session--relocate-and-re-emit)) instead of starting over.
 - **Diff artifact** (`round-diff-required`, `round-diff-unreadable`, `round-diff-empty`,
   `round-diff-malformed`, `round-diff-base-mismatch`, `round-diff-base-unverifiable`,
   `diff-path-not-fresh-state`): fix the diff step and do not proceed with review if the diff
@@ -561,17 +561,18 @@ Git worktrees share one object store, so a pinned base commit can resolve from t
 while `origin` still matches there; `meta.repoRoot` lets the driver refuse `base-repo-root-mismatch`
 when the field is absent or disagrees with `--repo-root`.
 
-## Moving a session — relocate
+## Moving a session — relocate and re-emit
 
 A review session is bound to the checkout that created it — `meta.repoRoot`, which the base guard
 compares (`base-repo-root-mismatch`). Starting a fresh session in a new checkout discards its rounds
-and findings. `relocate` moves the session instead.
+and findings. `relocate` moves the session instead, and `re-emit` re-issues an order the move made stale.
 
 ```bash
 python3 -B "$ROOT_DIR/lib/round_driver.py" relocate --session-dir "$SESSION_DIR" --repo-root "$NEW_CHECKOUT" --by "<who>"
+python3 -B "$ROOT_DIR/lib/round_driver.py" re-emit --session-dir "$SESSION_DIR" --by "<who>"
 ```
 
-The command prints its JSON result on stdout and exits **1** on any refusal (the same convention
+Both commands print their JSON result on stdout and exit **1** on any refusal (the same convention
 as the base guard's refusals), **0** on success.
 
 **relocate** rewrites `meta.json` `repoRoot` and `branch`, and `loop-state.json` `config.repoRoot`
@@ -615,7 +616,55 @@ or recorded but not yet folded — must fold the fixer in the old checkout befor
 | `relocate-inflight-fixer` | the session has a pending `dispatch-fixer` phase that must be folded first |
 | `relocate-locked` | another process holds the session lock |
 
-Orders emitted before the move are not rewritten: they still name the old checkout, so dispatch them only while that checkout stays at the recorded head.
+Malformed or unreadable relocation evidence in the journal refuses
+`relocation-evidence-indeterminate` rather than treating the move as absent or crashing.
+
+**re-emit** acts only on the pending `dispatch-*` order. An order is stale when a `relocated` row
+whose old and new roots differ comes after that attempt's last `orders-emitted` row (an attempt with
+no `orders-emitted` row counts as stale if any such move exists). The driver opens the next attempt
+number, leaves the old attempt's orders, stubs, manifest, and anchor byte-identical, and journals one
+`orders-superseded` row (old attempt, `newAttempt`, the superseded manifest and order hashes, the
+head, the relocation that made it stale — `oldRoot`, `newRoot`, `oldBranch`, `newBranch`,
+`sessionDir`, `at` — `by`, `at`; when journal `recorded` rows exist for the superseded attempt,
+`supersededRecords` (sorted) naming those seat labels) followed by the new attempt's `orders-emitted`
+row. The full roster is re-issued on the new attempt even when only some old-attempt seats were
+recorded. Certification treats a superseded attempt's seat as closed only when neither its landing
+file nor its bare-payload file exists; the new attempt's seats are open. Dispatch the new attempt's
+orders; results recorded against the old attempt are not carried. A retry after a successful re-emit
+(or after crash recovery replays its `orders-emit` transaction) returns the current pending order
+idempotently when the journal already contains the matching `orders-superseded` and `orders-emitted`
+pair for the pending attempt.
+
+| `reason` | condition |
+| --- | --- |
+| `re-emit-session-unreadable` | loop state missing/unparseable |
+| `re-emit-no-pending-order` | no pending order, not a dispatch order, or the session is terminal |
+| `re-emit-no-anchor` | no emission anchor or `orders-emitted` row for the pending attempt |
+| `re-emit-head-unresolved` | the session's checkout does not answer `git rev-parse HEAD`, or no head is anchored or recorded |
+| `re-emit-head-moved` | the checkout's HEAD differs from the head the order was emitted at |
+| `re-emit-not-stale` | no move came after the order was emitted |
+| `re-emit-attempt-has-results` | a landing/bare-payload file for an unrecorded seat exists or cannot be checked |
+| `re-emit-locked` | another process holds the session lock |
+
+Orders emitted before the move are not rewritten, and they may already have run in the old checkout —
+a hand-landed result carries no record of where it ran — so until `re-emit` runs the driver refuses
+`record-attempt-predates-relocation` for results that would be credited to the order's head: a
+single-seat `record-result` without runner evidence, a `record-result --sweep` or an `advance` that
+would ingest a landing, or a hand `submit` of the phase. Not refused: a result recorded with runner
+evidence (it carries the head the runner saw), an `advance` with nothing new to ingest,
+`record-missing`.
+
+Every recorded seat cites the head it saw, and certification refuses a seat whose cited head is not
+the session's recorded head; `re-emit` does not change the session's recorded head, so it refuses
+(`re-emit-head-moved`) when the checkout's HEAD moved after the order was emitted — move the head
+through the loop's own fix fold, or start a new session.
+
+A result that lands for a superseded attempt after `re-emit` keeps that seat open, so certification
+refuses (`unfetched-findings`) rather than certify past it; recovery: read the late landing, and if
+it carries findings compare them with the new attempt's result for the same seat (dispatch the new
+attempt if it has not run), then move the late file aside (never delete) — certification then reads
+the slot as superseded. The same move-aside unblocks `re-emit-attempt-has-results` when a hand-landed
+file for the old attempt was never recorded.
 
 ## Batch concurrency — an independent batch goes out together
 
