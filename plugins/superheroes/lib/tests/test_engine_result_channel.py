@@ -471,6 +471,30 @@ def test_result_delivery_claude_background_transcript():
     assert ERC.result_delivery("claude", ERC.MODE_BACKGROUND) == ERC.RESULT_DELIVERY_TRANSCRIPT
 
 
+def _adapter_non_print_capability_pairs():
+    pairs = set()
+    for mode, engines in EA._NON_PRINT_CLAUDE_MODE_ENGINES.items():
+        for engine in engines:
+            pairs.add((engine, mode))
+    return pairs
+
+
+def test_non_print_claude_mode_capability_delivery_agree():
+    # axis: adapter capability table and derived delivery map stay in bidirectional lockstep
+    adapter_pairs = _adapter_non_print_capability_pairs()
+    delivery_pairs = set(ERC._RESULT_DELIVERY_BY_ENGINE_MODE)
+    missing_delivery = adapter_pairs - delivery_pairs
+    assert not missing_delivery, (
+        "adapter declares non-print (engine, mode) pairs with no delivery: %r"
+        % sorted(missing_delivery)
+    )
+    ghost_delivery = delivery_pairs - adapter_pairs
+    assert not ghost_delivery, (
+        "derived delivery map has (engine, mode) pairs adapter does not declare: %r"
+        % sorted(ghost_delivery)
+    )
+
+
 @pytest.mark.parametrize("vendor", ["codex", "cursor"])
 def test_result_delivery_background_refuses_non_claude(vendor):
     with pytest.raises(ValueError, match="has no delivery for mode"):

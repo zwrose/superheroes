@@ -156,14 +156,25 @@ open with `config-dir-unusable:<why>` (`attempts: 0`). At spawn the same value i
 child env together with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>`, and `engine-started.env` records
 both pins.
 
-Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`, plus the shared native
-family `native-result-missing`, `native-result-oversized`, `native-result-malformed`,
-`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`,
-`native-schema-unreadable`, `marker-channel-retired`; the adapter refusals `unregistered-engine-model`,
-`fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
+Two dispatch modes via `--claude-mode {print,background}` (default `print`). **Print** delivers
+through stdout: the runner materializes the last `{"type":"result"}` envelope's
+`structured_output` to `<run-dir>/native-result-<n>.json`. **Background** delivers through the
+session transcript on `dispatch-review` only — a write dispatch in background mode refuses
+`claude-mode-background-write` before spawn; a continuation with a disagreeing mode refuses
+`run-dir-claude-mode-mismatch`. Background attempt outcomes can carry
+the refusal tokens in `lib/background_outcome.py` (`ALL_REFUSALS`).
+Background telemetry is read from the session
+transcript's tool calls, not from stdout.
 
-Not in this release: background mode (`claude --bg`), the launcher's hand-built argv retiring into
-the adapter, the watcher and the steer channel, Astra.
+Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`,
+`claude-mode-background-write`, `run-dir-claude-mode-mismatch`, the background attempt refusals
+above, plus the shared native family `native-result-missing`, `native-result-oversized`,
+`native-result-malformed`, `native-result-schema-invalid`, `native-result-report-blank`,
+`native-result-path-occupied`, `native-schema-unreadable`, `marker-channel-retired`; the adapter
+refusals `unregistered-engine-model`, `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
+
+Not in this release: the launcher's hand-built argv retiring into the adapter, the watcher and
+the steer channel, Astra.
 
 ### Dispatch CLI arguments
 

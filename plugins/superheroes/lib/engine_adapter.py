@@ -799,23 +799,11 @@ def _iter_jsonl_dict_lines(stdout):
             yield obj
 
 
-def _iter_codex_event_lines(stdout):
-    """Yield parsed JSON objects from codex JSONL stdout. Never raises."""
-    for obj in _iter_jsonl_dict_lines(stdout):
-        yield obj
-
-
 _CLAUDE_EVENT_TYPES = frozenset({"assistant", "user", "system", "result"})
 
 
 def _is_claude_event_object(obj):
     return isinstance(obj, dict) and obj.get("type") in _CLAUDE_EVENT_TYPES
-
-
-def _iter_claude_event_lines(stdout):
-    """Yield parsed JSON objects from claude stream-json stdout. Never raises."""
-    for obj in _iter_jsonl_dict_lines(stdout):
-        yield obj
 
 
 def claude_tool_calls(stdout):
@@ -827,7 +815,7 @@ def claude_tool_calls(stdout):
             return None
         parsed_any = False
         tool_ids = set()
-        for obj in _iter_claude_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not _is_claude_event_object(obj):
                 continue
             parsed_any = True
@@ -861,7 +849,7 @@ def claude_result_envelope(stdout):
         if not isinstance(stdout, str) or not stdout:
             return None
         last = None
-        for obj in _iter_claude_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not isinstance(obj, dict) or obj.get("type") != "result":
                 continue
             last = obj
@@ -964,7 +952,6 @@ def claude_launch_id(stdout):
             match = _CLAUDE_LAUNCH_ID_RE.match(line)
             if match:
                 return match.group(1)
-            return None
         return None
     except Exception:
         return None
@@ -975,7 +962,7 @@ def is_codex_event_stream(stdout):
     try:
         if not isinstance(stdout, str) or not stdout:
             return False
-        for obj in _iter_codex_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if _is_codex_event_object(obj):
                 return True
         return False
@@ -990,7 +977,7 @@ def codex_tool_calls(stdout):
             return None
         count = 0
         parsed_any = False
-        for obj in _iter_codex_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not _is_codex_event_object(obj):
                 continue
             parsed_any = True
@@ -1015,7 +1002,7 @@ def codex_event_tokens(stdout):
             return None
         parsed_any = False
         last_usage = None
-        for obj in _iter_codex_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not _is_codex_event_object(obj):
                 continue
             parsed_any = True

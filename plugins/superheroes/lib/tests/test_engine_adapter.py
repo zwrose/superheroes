@@ -809,16 +809,29 @@ def test_claude_launch_id_measured_acknowledgement():
     assert EA.claude_launch_id("prefix backgrounded · a1b2c3d4\n") is None
 
 
+def test_claude_launch_id_skips_leading_non_matching_lines():
+    stdout = (
+        "Starting background session...\n"
+        "Tip: use /tasks to list sessions\n"
+        "backgrounded · a1b2c3d4\n"
+        "More help text follows\n"
+    )
+    assert EA.claude_launch_id(stdout) == "a1b2c3d4"
+
+
+def test_claude_launch_id_none_and_non_string():
+    assert EA.claude_launch_id(None) is None
+    assert EA.claude_launch_id(7) is None
+
+
 def test_jsonl_dict_line_readers_skip_garbage():
     stream = "not json\n" + json.dumps(["not", "a", "dict"]) + "\n" + json.dumps({
         "type": "assistant",
         "message": {"content": []},
     }) + "\n"
-    claude_objs = list(EA._iter_claude_event_lines(stream))
-    codex_objs = list(EA._iter_codex_event_lines(stream))
-    assert len(claude_objs) == 1
-    assert len(codex_objs) == 1
-    assert claude_objs[0]["type"] == "assistant"
+    objs = list(EA._iter_jsonl_dict_lines(stream))
+    assert len(objs) == 1
+    assert objs[0]["type"] == "assistant"
 
 
 def test_registered_engine_models_detail_claude_lists_every_id():

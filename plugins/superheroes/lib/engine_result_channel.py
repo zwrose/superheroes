@@ -66,9 +66,29 @@ _RESULT_DELIVERY_BY_ENGINE = {
     "cursor": RESULT_DELIVERY_PROMPT,
     "claude": RESULT_DELIVERY_STDOUT,
 }
-_RESULT_DELIVERY_BY_ENGINE_MODE = {
-    ("claude", MODE_BACKGROUND): RESULT_DELIVERY_TRANSCRIPT,
+# Mode → delivery mechanics for non-print claude dispatch; capability (which engines accept
+# each mode) is derived from engine_adapter._NON_PRINT_CLAUDE_MODE_ENGINES — never hand-typed.
+_RESULT_DELIVERY_BY_MODE = {
+    MODE_BACKGROUND: RESULT_DELIVERY_TRANSCRIPT,
 }
+
+
+def _derive_result_delivery_by_engine_mode():
+    derived = {}
+    for mode, engines in engine_adapter._NON_PRINT_CLAUDE_MODE_ENGINES.items():
+        delivery = _RESULT_DELIVERY_BY_MODE.get(mode)
+        if delivery is None:
+            raise ValueError(
+                "non-print claude mode %r declared in engine_adapter has no result "
+                "delivery entry in _RESULT_DELIVERY_BY_MODE"
+                % (mode,)
+            )
+        for engine in engines:
+            derived[(engine, mode)] = delivery
+    return derived
+
+
+_RESULT_DELIVERY_BY_ENGINE_MODE = _derive_result_delivery_by_engine_mode()
 
 RESULT_FILE_LINE_PREFIX = "Result file (write exactly this path; nothing else is graded): "
 

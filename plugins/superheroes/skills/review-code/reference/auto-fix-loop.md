@@ -191,7 +191,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `mode-brief-check-with-diff-base` | `--mode brief-check` and `--diff-base` were both explicitly supplied |
 > | `run-dir-mode-mismatch` | continuation with an explicitly disagreeing `--mode` |
 > | `run-dir-claude-mode-mismatch` | a continuation supplies a `--claude-mode` that disagrees with the one the run was opened with; refused with `attempts: 0`, nothing spawned |
-> | `claude-mode-not-dispatchable` | the run's claude mode is `background`, which the shell declares but cannot dispatch; refused before any attempt starts |
+> | `claude-mode-background-write` | a `dispatch-write` call supplies `--claude-mode background` — background mode is review-only; refused with `attempts: 0`, nothing spawned |
+>
+> **Background attempt refusals** (claude `--claude-mode background` on `dispatch-review` only —
+> attempt outcomes on `attempt-ended.refusal`, not pre-spawn refusals): authoritative token
+> list and meanings live in `lib/background_outcome.py` (`ALL_REFUSALS`).
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to the host model), never a
