@@ -149,6 +149,15 @@ def _scope_tainted_names(tree):
     return tainted
 
 
+def _enclosing_function(node, parents):
+    current = parents.get(node)
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return current.name
+        current = parents.get(current)
+    return "<module>"
+
+
 def _has_compare_ancestor(node, parents):
     current = node
     while current in parents:
@@ -221,7 +230,8 @@ def _violations(source_text, relpath):
         grandparent = parents.get(parent) if parent is not None else None
         allowed, context = _allowed_constant(node, parent, grandparent, tainted_names, parents)
         if not allowed:
-            out.append((relpath, node.lineno, context))
+            function = _enclosing_function(node, parents)
+            out.append((relpath, node.lineno, context, function))
     return out
 
 
@@ -247,25 +257,71 @@ def _all_violations():
     return violations
 
 
+# Layer 4a-2 deletes this entry when it retires the site; claude-argv-exception-stale forces that.
+_RECORDED_EXCEPTIONS = {("lib/launcher.py", "compose_launch"): 1}
+
+
+def _census_problems(violations):
+    groups = {}
+    for relpath, lineno, _context, function in violations:
+        key = (relpath, function)
+        groups.setdefault(key, []).append((relpath, lineno))
+    problems = []
+    for key, hits in groups.items():
+        recorded = _RECORDED_EXCEPTIONS.get(key)
+        if recorded is None:
+            for relpath, lineno in hits:
+                problems.append("claude-argv-outside-adapter:%s:%d" % (relpath, lineno))
+        elif len(hits) != recorded:
+            if len(hits) > recorded:
+                for relpath, lineno in hits:
+                    problems.append("claude-argv-outside-adapter:%s:%d" % (relpath, lineno))
+    for key in _RECORDED_EXCEPTIONS:
+        if key not in groups:
+            problems.append("claude-argv-exception-stale:%s:%s" % (key[0], key[1]))
+    return sorted(problems)
+
+
 def test_no_claude_argv_outside_engine_adapter():
-    """axis: every claude argv literal outside engine_adapter is absent (except launcher WO-B)."""
-    violations = _all_violations()
-    non_launcher = [v for v in violations if v[0] != _LAUNCHER_REL]
-    assert non_launcher == [], non_launcher
+    """axis: violation set outside engine_adapter is exactly the one recorded exception."""
+    problems = _census_problems(_all_violations())
+    assert problems == [], "\n".join(problems)
 
 
-@pytest.mark.xfail(strict=True, reason="launcher argv retired by WO-B")
-def test_launcher_hand_built_argv_is_the_last_violation():
-    violations = _all_violations()
-    launcher_hits = {(v[0], v[1]) for v in violations if v[0] == _LAUNCHER_REL}
-    with open(os.path.join(_PLUGIN_ROOT, _LAUNCHER_REL), encoding="utf-8") as fh:
-        for lineno, line in enumerate(fh, start=1):
-            if '["claude"' in line or "['claude'" in line:
-                expected_line = lineno
-                break
-        else:
-            expected_line = None
-    assert launcher_hits == {(_LAUNCHER_REL, expected_line)}
+def test_census_problems_exact_recorded_exception():
+    violations = [("lib/launcher.py", 1102, "display", "compose_launch")]
+    assert _census_problems(violations) == []
+
+
+def test_census_problems_exception_plus_other_file():
+    violations = [
+        ("lib/launcher.py", 1102, "display", "compose_launch"),
+        ("lib/other.py", 5, "display", "other_fn"),
+    ]
+    assert _census_problems(violations) == ["claude-argv-outside-adapter:lib/other.py:5"]
+
+
+def test_census_problems_exception_plus_other_function():
+    violations = [
+        ("lib/launcher.py", 1102, "display", "compose_launch"),
+        ("lib/launcher.py", 50, "display", "other_fn"),
+    ]
+    assert _census_problems(violations) == ["claude-argv-outside-adapter:lib/launcher.py:50"]
+
+
+def test_census_problems_two_hits_in_excepted_function():
+    violations = [
+        ("lib/launcher.py", 1101, "display", "compose_launch"),
+        ("lib/launcher.py", 1102, "display", "compose_launch"),
+    ]
+    assert _census_problems(violations) == [
+        "claude-argv-outside-adapter:lib/launcher.py:1101",
+        "claude-argv-outside-adapter:lib/launcher.py:1102",
+    ]
+
+
+def test_census_problems_stale_exception():
+    assert _census_problems([]) == ["claude-argv-exception-stale:lib/launcher.py:compose_launch"]
 
 
 _FLAG_CASES = [
