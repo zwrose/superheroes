@@ -18914,6 +18914,7 @@ def test_background_stop_live_then_stopped_same_pid_is_already_ended(
     cwd = os.path.realpath(_repo(tmp_path))
     working_row = _bg_agent_row(launch_id, session_id, cwd=cwd)
     stopped_row = _bg_agent_row(launch_id, session_id, state="stopped", cwd=cwd)
+    stopped_row["pid"] = 4242
     listings = iter([[working_row], [stopped_row]])
 
     def cli(args, config_dir, cwd=None, timeout=30):
@@ -18946,6 +18947,59 @@ def test_background_stop_live_then_empty_listing_is_already_ended(
     monkeypatch.setattr(ED, "_HANDLE_WAIT_SECONDS", 0)
     monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
     assert ED._background_stop(launch_id, cfg, cwd) == "already-ended"
+
+
+def test_background_stop_live_row_without_pid_is_stop_unconfirmed(
+    tmp_path, monkeypatch,
+):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    cwd = os.path.realpath(_repo(tmp_path))
+    live_no_pid = {
+        "kind": "background",
+        "cwd": cwd,
+        "id": launch_id,
+        "state": "working",
+    }
+    calls = []
+
+    def cli(args, config_dir, cwd=None, timeout=30):
+        if args[:1] == ["agents"]:
+            return 0, json.dumps([live_no_pid]), ""
+        calls.append(list(args))
+        return 0, "", ""
+
+    monkeypatch.setattr(ED, "_claude_cli", cli)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    monkeypatch.setattr(ED, "_HANDLE_WAIT_SECONDS", 0)
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    assert ED._background_stop(launch_id, cfg, cwd) == "stop-unconfirmed"
+    assert not any(c[0] == "stop" for c in calls)
+
+
+def test_background_stop_live_row_moves_to_child_cwd_is_stop_unconfirmed(
+    tmp_path, monkeypatch,
+):
+    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
+    cwd = os.path.realpath(_repo(tmp_path))
+    child_cwd = os.path.join(cwd, "child")
+    os.makedirs(child_cwd, exist_ok=True)
+    parent_live = _bg_agent_row(launch_id, session_id, cwd=cwd)
+    child_live = _bg_agent_row(launch_id, session_id, cwd=child_cwd)
+    listings = iter([[parent_live], [child_live]])
+    calls = []
+
+    def cli(args, config_dir, cwd=None, timeout=30):
+        if args[:1] == ["agents"]:
+            return 0, json.dumps(next(listings, [child_live])), ""
+        calls.append(list(args))
+        return 0, "", ""
+
+    monkeypatch.setattr(ED, "_claude_cli", cli)
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    monkeypatch.setattr(ED, "_HANDLE_WAIT_SECONDS", 0)
+    monkeypatch.setattr(ED.os, "kill", lambda pid, sig: None)
+    assert ED._background_stop(launch_id, cfg, cwd) == "stop-unconfirmed"
+    assert not any(c[0] == "stop" for c in calls)
 
 
 def test_claude_cli_invalid_args_never_spawns(monkeypatch):

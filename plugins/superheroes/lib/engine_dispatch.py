@@ -1254,20 +1254,28 @@ def _background_stop(launch_id, config_dir, cwd):
     ]
     if not live_id_rows:
         return "already-ended"
-    saw_live_by_id = True
     identity = background_identity_rows(rows_before, cwd, launch_id)
     if not identity:
         return "stop-unconfirmed"
     handle, status = acquire_background_handle(config_dir, cwd, launch_id)
     if status == "ended":
         return "already-ended"
-    if status == "unlisted" and saw_live_by_id:
-        return "already-ended"
     if handle is not None:
         outcome = retire(handle)
         if outcome == "stopped":
             return "stopped"
         return "stop-unconfirmed"
+    rows_after, ok_after = _claude_agents_rows(config_dir, cwd)
+    if not ok_after:
+        return "stop-unconfirmed"
+    id_rows_after = _launch_id_rows(rows_after, launch_id)
+    if not id_rows_after:
+        return "already-ended"
+    live_id_rows_after = [
+        row for row in id_rows_after if row.get("state") not in ("stopped", "done")
+    ]
+    if not live_id_rows_after:
+        return "already-ended"
     return "stop-unconfirmed"
 
 
