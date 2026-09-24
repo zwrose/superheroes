@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+import claude_modes
 import engine_adapter as ea
 import launch_ledger as ll
 
@@ -21,8 +22,9 @@ _SESSION_ID = "feac172f-474c-424d-86e7-0e50688972c9"
 _STARTED_PID = 424242
 
 
-def test_launch_mode_background_equals_adapter():
-    assert ll.LAUNCH_MODE_BACKGROUND == ea.MODE_BACKGROUND
+def test_launch_mode_background_identity():
+    assert ll.LAUNCH_MODE_BACKGROUND is claude_modes.MODE_BACKGROUND
+    assert ea.MODE_BACKGROUND is claude_modes.MODE_BACKGROUND
 
 
 class _GitShowLoader:

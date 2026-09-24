@@ -37,6 +37,7 @@ import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import 
 import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
 import review_findings_schema  # noqa: E402  (findings-member schema home; #1145)
 import round_phases  # noqa: E402  (verifier-verdict enum home; verification.VERDICTS re-exports same tuple)
+import claude_modes  # noqa: E402  (claude dispatch-mode vocabulary home; re-exported below)
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
@@ -44,10 +45,11 @@ REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 # literals; engine_dispatch and drift tests import this name, never restate the tuple.
 REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 
-# Claude dispatch modes — single home; engine_result_channel re-exports (CONVENTIONS §11).
-MODE_PRINT = "print"
-MODE_BACKGROUND = "background"
-CLAUDE_MODES = (MODE_PRINT, MODE_BACKGROUND)
+# Claude dispatch modes — home is claude_modes.py; engine_adapter re-exports for consumers
+# (CONVENTIONS §11); engine_result_channel re-exports from here.
+MODE_PRINT = claude_modes.MODE_PRINT
+MODE_BACKGROUND = claude_modes.MODE_BACKGROUND
+CLAUDE_MODES = claude_modes.CLAUDE_MODES
 
 # Non-print claude dispatch modes and the engines that support each. Single home for the
 # capability question; engine_result_channel maps supported pairs to delivery mechanics.

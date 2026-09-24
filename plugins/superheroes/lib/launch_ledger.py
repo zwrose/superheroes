@@ -42,13 +42,13 @@ import pilot_boundary  # noqa: E402
 import pilot_policy  # noqa: E402
 import pilot_provision  # noqa: E402
 import pilot_slot  # noqa: E402
+import claude_modes  # noqa: E402
 
 LEDGER_ROOT_ENV = "SUPERHEROES_LAUNCH_LEDGER_ROOT"
 LEDGER_DIR_NAME = "superheroes-launch-ledger"
 LEDGER_NAME = "launch-ledger.jsonl"
 SCHEMA = 1
-# Must equal engine_adapter.MODE_BACKGROUND; drift-pinned by test_launch_mode_background_equals_adapter.
-LAUNCH_MODE_BACKGROUND = "background"
+LAUNCH_MODE_BACKGROUND = claude_modes.MODE_BACKGROUND
 LAUNCH_MODES = (LAUNCH_MODE_BACKGROUND,)
 EVENT_KINDS = ("reserved", "started", "retry", "refused", "outcome", "amendment")
 TERMINAL_OUTCOMES = ("handback", "park", "refusal", "died")
