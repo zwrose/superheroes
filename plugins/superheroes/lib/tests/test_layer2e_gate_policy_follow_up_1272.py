@@ -318,6 +318,35 @@ def test_e5_follow_up_on_stall_hold_not_allowed():
     assert loaded["reason"] == "layer-follow-up-not-allowed"
 
 
+def test_e4b_follow_up_on_not_allowed_disposition_refused_at_write():
+    # axis: e4b — followUp on not-allowed disposition refused at write with rule-scoped message
+    cls = sorted(RGP.judgment_finding_classes())[0]
+    policy_bad = {
+        "schema": RGP.GATE_POLICY_SCHEMA,
+        "default": "park",
+        "rules": [{
+            "gate": RGP.GATE_PRESENT_JUDGMENT,
+            "findingClass": cls,
+            "disposition": "fix-as-suggested",
+            "followUp": dict(_WELL_FORMED),
+        }],
+    }
+    refusal = RGP.validate_policy_for_write(policy_bad)
+    assert refusal is not None and "rules[0].followUp" in refusal
+    assert "fix-as-suggested" in refusal
+    policy_ok = {
+        "schema": RGP.GATE_POLICY_SCHEMA,
+        "default": "park",
+        "rules": [{
+            "gate": RGP.GATE_PRESENT_JUDGMENT,
+            "findingClass": cls,
+            "disposition": "skip",
+            "followUp": dict(_WELL_FORMED),
+        }],
+    }
+    assert RGP.validate_policy_for_write(policy_ok) is None
+
+
 def test_e6_null_follow_up_malformed():
     # axis: e6 — followUp null refused as malformed
     cls = sorted(RGP.judgment_finding_classes())[0]

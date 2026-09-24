@@ -236,8 +236,8 @@ def test_e10_synthesis_non_string_member_refused_at_submit(tmp_path):
     assert journal[-1].get("outcome") == "synthesis-results-shape"
 
 
-def test_grouping_absent_null_empty_falls_open_nonempty_incomplete_refused():
-    """Axis: absent/null/empty grouping falls open; non-empty incomplete grouping refuses."""
+def test_grouping_absent_refused_at_submit_null_empty_fold_nonempty_incomplete_refused():
+    """Axis: absent grouping key refused at submit; null/empty fold; non-empty incomplete refuses."""
     survivors = [
         {"id": "v0", "file": "a.py", "line": 1, "title": "a", "severity": "Important",
          "verdict": "PLAUSIBLE"},
@@ -259,6 +259,19 @@ def test_grouping_absent_null_empty_falls_open_nonempty_incomplete_refused():
         assert RD.synthesis_staged_id_fault(state, artifact) is None
         merged_open = V.merge_and_rank(survivors, artifact.get("grouping"))
         assert sorted(f["id"] for f in merged_open["findings"]) == ["v0", "v1", "v2"]
+
+
+def test_synthesis_results_fault_absent_grouping_key_message_and_controls():
+    """Axis: synthesis_results_fault refuses absent grouping key; null/[] fold; non-dict refused."""
+    fault = RD.synthesis_results_fault({})
+    assert fault is not None
+    assert "synthesis artifact carries no" in fault
+    assert "`grouping`" in fault
+    assert RD.synthesis_results_fault({"grouping": None}) is None
+    assert RD.synthesis_results_fault({"grouping": []}) is None
+    fault_list = RD.synthesis_results_fault([])
+    assert fault_list is not None
+    assert "synthesis artifact is list" in fault_list
 
 
 def test_author_justified_drop_unresolvable_id_parks_at_fold():
