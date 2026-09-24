@@ -391,3 +391,45 @@ def test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root(tmp_pa
             match=r"order-render-refused:%s:order-lint:order-path-unresolved:rubric/no_such_rubric_1339.md"
             % _FIXER_SKEY):
         _emit_fixer(session_dir, state)
+
+
+@pytest.mark.parametrize("eol", ["\r\n", "\r"], ids=["crlf", "cr"])
+def test_verify_command_elision_survives_carriage_returns(tmp_path, monkeypatch, eol):
+    # axis: the owner's verify command is folded through the mask's newline policy before the
+    # budget-tail match, so a CR/CRLF in it cannot defeat the elision and expose `{item}`
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    repo = str(tmp_path / "proj")
+    os.makedirs(repo)
+    verify = "pytest a.py" + eol + "echo {item}"
+    state.setdefault("config", {})["repoRoot"] = repo
+    state["config"]["verifyCommand"] = verify
+    # The production path emits without refusing (no order-placeholder-unfilled).
+    assert "manifestSha256" in _emit_fixer(session_dir, state)
+    order_path = RR.order_prompt_path(session_dir, state["round"], RP.P_FIXER, _FIXER_SKEY, 0)
+    with open(order_path, encoding="utf-8", newline="") as fh:
+        order_text = fh.read()
+    budget = RD._fixer_verify_budget(state.get("fixBatch") or [], state["config"])
+    assert budget.endswith(verify)
+    lint_text = RD._order_lint_text(order_text, {
+        "placeholders": {"VERIFY_BUDGET": budget},
+        "verify_command": verify,
+    })
+    assert "{item}" not in lint_text
+    assert RD.QUOTED_DATA_LINT_ELISION in lint_text
+    assert OL.check_text(lint_text, repo, kind="fixer")["ok"] is True
+
+
+_CRLF_PLACEHOLDER_GUIDANCE = "Keep the {name} field as the owner wrote it.\r\nSecond line of guidance."
+
+
+def test_gate_guidance_elision_survives_crlf(tmp_path, monkeypatch):
+    # axis: owner-gate guidance is folded through the mask's newline policy before the elision
+    # match, so a CRLF in it cannot expose its `{name}` token to the lint
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    _seed_gate_guidance(state, _CRLF_PLACEHOLDER_GUIDANCE)
+    assert "manifestSha256" in _emit_fixer(session_dir, state)
+    lint_text = RD._order_lint_text(
+        "PROLOGUE\n" + OL.normalize_newlines(_CRLF_PLACEHOLDER_GUIDANCE) + "\nEPILOGUE\n",
+        {"placeholders": {"GATE_GUIDANCE": _CRLF_PLACEHOLDER_GUIDANCE}})
+    assert "{name}" not in lint_text
+    assert RD.QUOTED_DATA_LINT_ELISION in lint_text

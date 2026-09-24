@@ -136,8 +136,14 @@ def _order_lint_text(order_text, context):
     # Mask an inlined implementer template first: an elision landing inside it would break the
     # verbatim match the lint's own mask needs, and the two doors would grade differently.
     text, _ = order_lint.mask_template(order_text)
+    # Every quoted string shares the mask's newline policy, so a CR in owner data cannot defeat
+    # the elision against the already-folded text.
     budget = ph.get("VERIFY_BUDGET")
     verify = context.get("verify_command")
+    if isinstance(budget, str):
+        budget = order_lint.normalize_newlines(budget)
+    if isinstance(verify, str):
+        verify = order_lint.normalize_newlines(verify)
     # The budget QUOTES the owner's command as its TAIL (`_fixer_verify_budget` appends it last),
     # so the elision is anchored to that tail. A first-occurrence replace would search from the
     # front and could rewrite a driver-authored target path the owner's command is a substring of
@@ -150,6 +156,8 @@ def _order_lint_text(order_text, context):
         elided = budget[:-len(verify)] + QUOTED_DATA_LINT_ELISION
         text = text.replace(budget, elided, 1)
     for quoted in (ph.get("GATE_GUIDANCE"), context.get("ratified_residuals")):
+        if isinstance(quoted, str):
+            quoted = order_lint.normalize_newlines(quoted)
         if isinstance(quoted, str) and quoted.strip():
             text = text.replace(quoted, QUOTED_DATA_LINT_ELISION, 1)
     return text
