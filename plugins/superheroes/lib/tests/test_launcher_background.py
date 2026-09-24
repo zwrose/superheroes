@@ -120,7 +120,13 @@ def _mutated_names(scope):
 
 def claude_argv_sites(source, rel):
     """Every place ``source`` mints a claude argv: a literal headed by "claude" that is not a
-    pure vendor enumeration, or a pure one that is concatenated onto or grown in place."""
+    pure vendor enumeration, or a pure one that is concatenated onto or grown in place.
+
+    Declared boundary: this is a tripwire over the LITERAL shapes an argv is written in (list,
+    flag-bearing or starred tuple, concatenation, in-place growth), not a proof over every way
+    Python can compute a list — a head spelled through a variable or a join is out of its reach.
+    The invariant itself holds by construction: the launcher and the dispatch shell call the
+    adapter, and the launcher holds no "claude" list at all."""
     tree = ast.parse(source)
     parents = {}
     for node in ast.walk(tree):
