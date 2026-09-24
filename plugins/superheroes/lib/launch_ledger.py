@@ -75,7 +75,7 @@ _AWAIT_EXIT_POLL_SECONDS = 5.0
 # so large that subtracting a nap does not change them (1e308 - 5.0 == 1e308), which is a
 # retry loop that never ends.
 _AWAIT_EXIT_MAX_SECONDS = 1800.0
-_GIT_SCRUB_VARS = (
+GIT_SCRUB_VARS = (
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
@@ -104,11 +104,13 @@ COUNT_RESULT_BLOCKS = ("counts", "amendments", "lanes", "attempts", "laneDetail"
 CHARTER_NAMED_COUNT_BLOCKS = ("lanes", "attempts", "laneDetail")
 
 
-def _scrub_env(env=None):
+def scrub_env(env=None, *, keys=GIT_SCRUB_VARS, roots=(LEDGER_ROOT_ENV,)):
+    """Return a copy of env with every key in keys and roots removed."""
     base = dict(env if env is not None else os.environ)
-    for key in _GIT_SCRUB_VARS:
+    for key in keys:
         base.pop(key, None)
-    base.pop(LEDGER_ROOT_ENV, None)
+    for root in roots:
+        base.pop(root, None)
     return base
 
 
@@ -118,7 +120,7 @@ def _git_scrubbed(repo_root, *args, env=None, timeout=None):
             ["git", "-C", repo_root, *args],
             capture_output=True,
             text=True,
-            env=_scrub_env(env),
+            env=scrub_env(env),
             timeout=timeout,
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -1070,6 +1072,19 @@ def _validate_event_fields(rec):
     return None
 
 
+def is_positive_premise_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _fold_premise_positive_int(premise, key):
+    if not isinstance(premise, dict):
+        return None
+    val = premise.get(key)
+    if is_positive_premise_int(val):
+        return val
+    return None
+
+
 def fold(records):
     """Per-launch state machine over event records.
 
@@ -1175,6 +1190,16 @@ def fold(records):
                 # lane that overlapped nothing and on every pre-#1054 record — the two are
                 # deliberately indistinguishable, because neither ran over an overlap.
                 "surfaceOverlap": rec.get("surfaceOverlap"),
+                # Premise stack fields are absent on pre-stack records and on records whose
+                # premise omits or malforms them — the documented signal is None, not a
+                # missing key.
+                "stack": _fold_premise_positive_int(rec.get("premise"), "stack"),
+                "layerPosition": _fold_premise_positive_int(
+                    rec.get("premise"), "layerPosition",
+                ),
+                "layersPlanned": _fold_premise_positive_int(
+                    rec.get("premise"), "layersPlanned",
+                ),
             }
             continue
 
