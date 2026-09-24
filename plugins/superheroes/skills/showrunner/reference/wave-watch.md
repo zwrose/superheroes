@@ -2,6 +2,8 @@
 
 - [What it is](#what-it-is)
 - [The arming pattern](#the-arming-pattern)
+- [The single-loop rule](#the-single-loop-rule)
+- [What ends a loop and what it passes over](#what-ends-a-loop-and-what-it-passes-over)
 - [One-off check (`run`)](#one-off-check-run)
 - [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)
 - [`--ignore-event` and re-arming](#--ignore-event-and-re-arming)
@@ -18,11 +20,14 @@
 
 `lib/wave_watch.py` is a ledger-driven watcher over one launch batch. It has two verbs:
 
-- **`loop`** — the arming shape. Re-arms internally until the first actionable event or a refusal,
-  then prints one JSON line and exits. Arm as **one harness background task per batch** at wave
-  launch.
-- **`run`** — a one-off foreground spot check. It watches once, prints one JSON line, and exits. It
-  does **not** re-arm.
+- **`loop`** — the arming shape. Re-arms an internal arm (`watch_arm`) and exits only on a
+  **lane-ending** event — `lane-terminal`, `lane-blocked`, `builder-exited`, or `lane-stale` — on a
+  refusal, or at `--max-total-seconds`. The **benign** wakes — `pr-set-changed`, `stack-state-changed`,
+  and `timer` — never end it: each benign non-timer event is passed over, written as a `--log` line in
+  the same `{"arm", "elapsedSeconds", "result"}` shape as timer arms, and recorded in the loop
+  result. Arm as **one harness background task per batch** at wave launch.
+- **`run`** — a true one-shot. One ledger read (and at most one open-PR read, for stack state), no
+  waiting, then one JSON line on stdout and exit. It does **not** re-arm.
 
 **The re-arm lives inside `loop`** — there is no daemon, so there is nothing to orphan. It replaces
 hand-rolled per-session watch loops that kept failing quietly: a double-backgrounded loop that
@@ -31,7 +36,7 @@ ten-hour dead-watcher hole — and each failure looked like a calm wave.
 
 ## The arming pattern
 
-<!-- WORKAROUND: harness background-task arming pattern with manual re-arm after each event
+<!-- WORKAROUND: harness background-task arming pattern with manual re-arm after each lane-ending event
      delete-when: the background-session trial receipt marks wave-watch arming not needed -->
 
 Assign the portable root seam once, then arm one harness **background task per batch**:
@@ -71,10 +76,10 @@ is the loop's `builder-exited` event's to report — re-invoke the verb then.
 
 The arming snippet above omits two flags you should **include on every arm**: `--max-total-seconds`
 (the loop stops re-arming and emits the last `timer`, so prolonged silence eventually becomes a
-message) and `--log PATH` (each timer arm is recorded, so you can see the loop is alive and which
-batch it is watching). Without them, a mistyped or quiet batch under `loop` produces **no stdout at
-all** until something actionable happens — indistinguishable from a healthy quiet wave for as long as
-you leave it running.
+message) and `--log PATH` (each timer arm and each passed-over benign event is recorded, so you can
+see the loop is alive and which batch it is watching). Without them, a mistyped or quiet batch under
+`loop` produces **no stdout at all** until something lane-ending happens — indistinguishable from a
+healthy quiet wave for as long as you leave it running.
 
 In an **interactive** session, a harness background task survives across turns and re-invokes the
 advisor when it exits — that is what keeps you from going blind between turns while `loop` runs.
@@ -88,19 +93,61 @@ Bash timeout on Claude Code has two layers (`hooks/bash_timeout.py`,
 above ~600 s converts the call to background. For the arming pattern, use the harness background-task
 primitive so `loop` survives across turns — do not rely on a foreground arm outliving the turn.
 
+## The single-loop rule
+
+At start, before its first arm, `loop` takes an exclusive kernel lock on a per-batch lock file under
+the launch ledger's per-repository store directory (`wave-watch-locks/`). If another live `loop`
+holds it, the new one refuses **`loop-already-live`** (exit 1, `arms: 0`) and names the live loop in
+**`liveLoop`** — `{"pid", "startedAt", "batch", "log"}`, or `null` when the holder's record could not
+be read. The kernel drops the lock when its holder process dies, so a dead loop never blocks a new
+one and there is no stale lock to clear. If exclusivity cannot be established at all (the store
+refuses, the lock file cannot be made or opened or is not a regular file, the lock call fails for
+another reason) it refuses **`loop-lock-unavailable`** (exit 1, `arms: 0`) with a `detail` naming the
+cause — it never arms without knowing it is alone.
+
+## What ends a loop and what it passes over
+
+Classification lives in two closed sets in `lib/wave_watch.py`:
+
+- **`LANE_ENDING_EVENTS`** — `lane-terminal`, `lane-blocked`, `builder-exited`, `lane-stale`. Any of
+  these ends the `loop` invocation (after printing one JSON line).
+- **`BENIGN_EVENTS`** — `pr-set-changed`, `stack-state-changed`, `timer`. These never end the loop.
+  Each benign **non-timer** event is passed over: the loop re-arms, appends a `--log` line in the
+  same `{"arm", "elapsedSeconds", "result"}` shape as a timer arm (the `result` carries that
+  event), and accumulates **`passedOver`** / **`passedOverCount`** on the final line (see below). A
+  `timer` ends only an internal arm, not the whole `loop`, unless `--max-total-seconds` has been
+  reached.
+
+An event in **neither** set does not end the loop — it fails toward waking you (same as passing over
+for exit purposes: the loop keeps running).
+
+Every `loop` result carries **`passedOver`** — one entry per benign non-timer event passed over in
+that invocation, each `{"arm", "elapsedSeconds", "event", …that event's payload keys}`, keeping the
+100 most recent (`PASSED_OVER_CAP`) — and **`passedOverCount`**, the total passed over (it can exceed
+the list's length). Both are empty or zero when nothing was passed over. `run` results never carry
+them. Within one `loop`, each distinct PR-set change is reported once (the PR baseline advances when
+it fires), and a stack-state change is reported once per change.
+
+At `--max-total-seconds`, `loop` returns a `timer` result carrying the report, even when its last arm
+ended on a benign event.
+
 ## One-off check (`run`)
 
-Use `run` for a **single foreground spot check** — "is anything happening right now?" — not for wave
-arming:
+Use `run` for a **single foreground check** — "what is due right now?" — not for wave arming:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/wave_watch.py" run \
-  --repo-root "$REPO_ROOT" --batch "$BATCH_ID" \
-  --max-seconds 2400 --interval-seconds 60
+  --repo-root "$REPO_ROOT" --batch "$BATCH_ID"
 ```
 
-`run` takes the same flags as `loop` except `--max-total-seconds` and `--log`. It does not re-arm.
+`run` is a true one-shot: one ledger read and at most one open-PR read for stack state, no waiting,
+then exit. Flags: `--repo-root`, `--batch`, `--ignore-launch`, `--ignore-event`. It does **not** take
+`--max-seconds`, `--interval-seconds`, `--max-total-seconds`, or `--log` — passing `--max-seconds` or
+`--interval-seconds` is a usage error. Its reads of GitHub are bounded by a fixed 30-second budget
+(`RUN_READ_BUDGET_SECONDS`). It returns the first event due right now, or `timer` when nothing is
+due. It cannot report `pr-set-changed` (a one-shot has no PR baseline to compare against), and it
+never reports the window-only degradations `lane-never-stamped` or `pr-signal-never-sampled`.
 
 ## `--ignore-launch` and re-arming
 
@@ -129,13 +176,14 @@ A malformed pair is a refusal (`ignore-event-invalid`), never a silent drop.
 benign (for `lane-stale`: pid live **and** transcript fresh — the watcher now checks the transcript
 itself, so a `lane-stale` that still fires is one it could not vouch for), re-arm with
 `--ignore-event <launchId>:<event>` so that exact pair stops waking you **while that lane's other
-events still do**. Within a single `loop` invocation, the first unsuppressed actionable event exits
-the loop; persistence across invocations is **your** job — pass `--ignore-event` on re-arm. The tool
-does not dedupe suppressed pairs across invocations by itself. **Do not pre-arm `--ignore-event` for
-`lane-stale` as a matter of course**: an arm that ignores every lane's stale signal has quietly
-reduced the watcher to `stack-state-changed` and `pr-set-changed`, and the wave's wedges arrive as
-surprises. If you find yourself suppressing the same event on most lanes of a wave, that is a field
-observation to record (the promise or the second chance is wrong), not a pattern to keep.
+events still do**. Within a single `loop` invocation, the first unsuppressed **lane-ending** event
+exits the loop; persistence across invocations is **your** job — pass `--ignore-event` on re-arm.
+The tool does not dedupe suppressed pairs across invocations by itself. **Do not pre-arm
+`--ignore-event` for `lane-stale` as a matter of course**: an arm that ignores every lane's stale
+signal has quietly reduced the watcher's exits to `lane-terminal`, `lane-blocked`, and
+`builder-exited`, and the wave's wedges arrive as surprises. If you find yourself suppressing the
+same event on most lanes of a wave, that is a field observation to record (the promise or the second
+chance is wrong), not a pattern to keep.
 
 ## Before treating `lane-stale` as a wedge
 
@@ -218,6 +266,8 @@ regardless of any promise.
 
 ## Timing flags
 
+`run` takes no timing flags.
+
 Under `loop`, `--max-seconds` is the **per-arm** watch window (default 2400) — how long each internal
 arm watches before a `timer` forces a re-arm. It is **not** how long the advisor's session is
 committed.
@@ -228,25 +278,31 @@ committed.
 not a hard kill**: the loop will not *start* a new arm once the total is reached, and may overrun
 the total by the final arm's rounding plus one evaluation pass.
 
-`--log PATH` appends one JSON line per timer arm — `{"arm": N, "elapsedSeconds": E, "result": {…}}`
-— for post-mortem review. A failing log write never terminates the loop; it discloses
-`log-unwritable`. `run` does not accept `--log` or `--max-total-seconds`.
+`--log PATH` appends one JSON line per timer arm and per passed-over benign non-timer event —
+`{"arm": N, "elapsedSeconds": E, "result": {…}}` — for post-mortem review. A failing log write never
+terminates the loop; it discloses `log-unwritable`. `run` does not accept `--log` or
+`--max-total-seconds`.
 
 ## What it tells you
 
 The watcher prints **one JSON line on stdout**; **exit 0 on an event, exit 1 on a refusal**.
 
-**Events** (`ok=True`):
+**Lane-ending events** (`ok=True`) — a `loop` exits on the first unsuppressed one; a `run` returns the
+first due unsuppressed one:
 
 - `lane-terminal`
 - `lane-blocked`
 - `builder-exited`
-- `stack-state-changed`
-- `pr-set-changed`
 - `lane-stale`
-- `timer`
 
-**Precedence**, highest first:
+**Benign events** — a `loop` passes over and records; a `run` may return `stack-state-changed` when
+due, but never `pr-set-changed`:
+
+- `stack-state-changed` (passed over under `loop`)
+- `pr-set-changed` (passed over under `loop`; not reported by `run`)
+- `timer` (re-arms under `loop`; returned when nothing else is due)
+
+**Precedence among lane-ending and benign signals**, highest first:
 
 `lane-terminal` > `lane-blocked` > `builder-exited` > `stack-state-changed` > `pr-set-changed` > `lane-stale` > `timer`
 
@@ -312,7 +368,8 @@ fire last, which is not necessarily the one whose green you are claiming: a watc
 `skills/showrunner/reference/vet-receipt.md`.
 
 `loop` results — both ok and refusal — carry `arms`, the number of internal arms run in that
-invocation. `run` results never carry `arms`.
+invocation. Every `loop` result also carries `passedOver` and `passedOverCount` (empty or zero when
+nothing was passed over). `run` results never carry `arms`, `passedOver`, or `passedOverCount`.
 
 `lane-stale` is a **wedged builder**: alive but frozen past its own `staleAfterSeconds` promise. It
 fires only when the builder's pid is positively alive — an uncertain probe is not a wedge, and a
@@ -342,13 +399,16 @@ event: a result carrying only `staleSuppressed` is a result where nothing action
 - `store-unresolvable`
 - `ledger-unreadable`
 - `internal-error`
+- `loop-already-live`
+- `loop-lock-unavailable`
 
 The pre-loop validations (`batch-invalid`, `interval-invalid`, `max-seconds-invalid`,
-`max-total-seconds-invalid`, `ignore-event-invalid`, `repo-root-invalid`, `store-unresolvable`)
-refuse immediately — re-arming without fixing the cause just refuses again. `ledger-unreadable` can
-also arrive on the deadline path after the full `--max-seconds` window. `internal-error` comes from
-the top-level exception handler wrapping all of `run()` — including the pre-loop validations — so
-it can fire before the watch loop ever runs; neither `ledger-unreadable` on the deadline path nor
+`max-total-seconds-invalid`, `ignore-event-invalid`, `repo-root-invalid`, `store-unresolvable`,
+`loop-already-live`, `loop-lock-unavailable`) refuse immediately — re-arming without fixing the cause
+just refuses again. A `loop-already-live` refusal carries `liveLoop`. `ledger-unreadable` can also
+arrive on the deadline path after the full `--max-seconds` window. `internal-error` comes from the
+top-level exception handler wrapping all of `run()` — including the pre-loop validations — so it can
+fire before the watch loop ever runs; neither `ledger-unreadable` on the deadline path nor
 `internal-error` is guaranteed at arm time.
 
 **Non-fatal degradations** that ride on a result:
@@ -361,8 +421,8 @@ it can fire before the watch loop ever runs; neither `ledger-unreadable` on the 
 - `stack-signal-unavailable` — stack membership for one or more changed PRs could not be
   read before the watcher's deadline; grouping is partial and `ungrouped` carries what
   could not be resolved
-- `lane-never-stamped`
-- `pr-signal-never-sampled`
+- `lane-never-stamped` (`loop` only — not reported by `run`)
+- `pr-signal-never-sampled` (`loop` only — not reported by `run`)
 - `log-unwritable`
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is
   ambiguous and the lane alerts rather than being suppressed
@@ -379,24 +439,22 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
   re-arms. It is not a background service and does not survive the app closing.
 - **After a resume, re-arm** — the watcher does not persist across compaction or session recovery on
   its own.
-- **PR-set baseline:** within one `loop` invocation, the PR baseline threads across internal arms,
-  so a PR change landing between timer arms **is** reported. The gap remains **open between separate
-  invocations** and for bare `run`, where the baseline is rebuilt per call.
+- **PR-set baseline:** within one `loop` invocation, the PR baseline threads across internal arms, so
+  a PR change landing between timer arms **is** reported (as a passed-over `pr-set-changed` entry at
+  loop exit). The gap remains **open between separate invocations**. Bare `run` never reports a PR
+  change — it has no PR baseline to compare against.
 - **Stack-state baseline:** within one `loop` invocation, the stack-state baseline threads across
-  timer arms, so a stack that becomes complete between arms is reported once. Each new invocation
-  starts without one: a watch armed on a batch whose stack is already complete, or that already
-  carries the idle-seat flag (`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD`), returns `stack-state-changed`
-  on its first arm,
-  and every re-arm reports it again until the stack merges.
-  Because `loop` ends on this event, a batch that holds more than one stack loses its wait once any
-  stack is complete: the invocation that reported it has exited, and every re-arm reports that
-  stack again at once until it merges. Until then, check the batch with a spot `run` on your own
-  cadence (each result lists every stack's state), and stop watching the batch only when every
-  stack in the payload is complete.
+  timer arms, so a stack that becomes complete between arms is reported once (as a passed-over
+  `stack-state-changed` entry at loop exit). `loop` no longer ends on `stack-state-changed` — it
+  passes over and reports it, so a multi-stack batch no longer loses its wait once any stack is
+  complete. Each new invocation still starts without a baseline: a watch armed on a batch whose stack
+  is already complete, or that already carries the idle-seat flag
+  (`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD`), reports `stack-state-changed` on its first arm — as a
+  passed-over entry under `loop`, as the event under `run`.
 - **A mistyped batch id is indistinguishable from a quiet batch** — but the verb matters. Bare
   `run` produces a calm `timer`, not a refusal. `loop` treats every `timer` as non-terminal and
   re-arms; with no `--max-total-seconds` bound it produces **nothing on stdout** until something
-  actionable happens, so a mistyped batch id under `loop` looks exactly like a healthy quiet wave for
+  lane-ending happens, so a mistyped batch id under `loop` looks exactly like a healthy quiet wave for
   as long as you leave it running.
 - **A started lane that has never stamped a heartbeat across the full watch window
   is reported as a `lane-never-stamped` degradation at the deadline** — but
@@ -406,5 +464,5 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 
 The heartbeat sweep (`lib/heartbeat.py`) and `wave_watch` are complementary, not substitutes: the
 sweep is a scheduled, whole-wave read the advisor runs and acts on; the watcher is a blocking arm
-(`loop` at wave launch, or a one-off `run`) that returns the moment one lane does something.
+(`loop` at wave launch, or a one-off `run`) — `loop` returns when a lane ends, `run` returns at once.
 Neither asserts a lane is dead.
