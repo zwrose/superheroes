@@ -18675,6 +18675,20 @@ def test_acquire_background_handle_negative_wait_treated_as_zero(monkeypatch):
     assert calls["n"] == 1
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["backgroundId", "cwd", "configDir"],
+)
+def test_retire_empty_field_handle_unconfirmed(field, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: calls.append(a) or (0, "", ""))
+    values = ["abc12345", 4242, "/wt", "/cfg"]
+    values[{"backgroundId": 0, "cwd": 2, "configDir": 3}[field]] = ""
+    handle = ED.BackgroundHandle._make(values)
+    assert ED.retire(handle) == background_outcome.REFUSAL_STOP_UNCONFIRMED
+    assert calls == []
+
+
 def test_retire_non_handle_zero_cli_calls(monkeypatch):
     calls = []
     monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: calls.append(a) or (0, "", ""))
