@@ -748,18 +748,11 @@ def _spawn_allowlist_verdict(opened, *, journal_corrupt=False):
     }
 
 
-def _scrub_env(env=None):
-    """Remove git routing vars and the journal root from a spawn environment."""
-    base = dict(env if env is not None else os.environ)
-    for key in _GIT_ROUTING_VARS:
-        base.pop(key, None)
-    base.pop(JOURNAL_ROOT_ENV, None)
-    return base
-
-
 def _claude_child_env(opened, base=None):
     """Build the claude child environment and the pins recorded on engine-started. (#1273)"""
-    env = _scrub_env(base)
+    env = launch_ledger.scrub_env(
+        base, keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,),
+    )
     pins = {}
     if opened.get("engine") != "claude":
         return env, pins
@@ -1355,7 +1348,9 @@ def _run_live_evidence(state):
 def _git_scrubbed(cwd, *args, timeout=None):
     return subprocess.run(
         ["git", "-C", cwd, *args],
-        capture_output=True, text=True, env=_scrub_env(), timeout=timeout,
+        capture_output=True, text=True,
+        env=launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,)),
+        timeout=timeout,
     )
 
 
@@ -1363,7 +1358,9 @@ def _git_scrubbed_bytes(cwd, *args, timeout=None):
     """Byte-exact git for the dirt probe: pathnames are bytes, and no channel may rewrite them."""
     return subprocess.run(
         ["git", "-C", cwd, *args],
-        capture_output=True, env=_scrub_env(), timeout=timeout,
+        capture_output=True,
+        env=launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,)),
+        timeout=timeout,
     )
 
 
@@ -2821,7 +2818,9 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, cwd=cwd, start_new_session=True,
-                                env=_scrub_env())
+                                env=launch_ledger.scrub_env(
+                                    keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,),
+                                ))
     except Exception as exc:
         return "", False, 127, ("spawn-failed: %s" % exc)[:_STDERR_TAIL]
 
@@ -3310,7 +3309,8 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
         proc = subprocess.Popen(
             [sys.executable, "-B", _DISPATCH_SCRIPT, "run-child", "--run-dir", run_dir_real],
             stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
-            cwd=run_dir_real, start_new_session=True, env=_scrub_env(),
+            cwd=run_dir_real, start_new_session=True,
+            env=launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,)),
         )
     except Exception as exc:
         try:
