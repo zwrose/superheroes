@@ -299,6 +299,7 @@ _declared_disclosures = receipt_disclosures.declared_disclosures
 _receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 _normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 RESUMABLE_DISCLOSURE_CHANNELS = receipt_disclosures.RESUMABLE_DISCLOSURE_CHANNELS
+RECORD_ONLY_DISCLOSURE_CHANNELS = receipt_disclosures.RECORD_ONLY_DISCLOSURE_CHANNELS
 _DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
 _str_list = receipt_disclosures.str_list
 _dict_list = receipt_disclosures.dict_list
