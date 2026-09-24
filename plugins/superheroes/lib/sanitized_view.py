@@ -176,6 +176,9 @@ def _is_git_object_id_hex(value):
   return all(c in "0123456789abcdef" for c in value.lower())
 
 
+DIFF_BASE_ABBREVIATED_DETAIL = "sanitized-view-diff-base-abbreviated"
+
+
 def _require_pinned_commit_oid(value):
     """Return the pinned commit object id in ``value``, or refuse.
 
@@ -189,7 +192,12 @@ def _require_pinned_commit_oid(value):
     if not isinstance(value, str) or not value.strip():
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     value = value.strip()
-    if value.startswith("-") or not _is_git_object_id_hex(value):
+    if value.startswith("-"):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    if all(c in "0123456789abcdef" for c in value.lower()):
+        if 4 <= len(value) <= 39:
+            raise SanitizedViewError("sanitized-view-diff-base-abbreviated")
+    if not _is_git_object_id_hex(value):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     return value
 
