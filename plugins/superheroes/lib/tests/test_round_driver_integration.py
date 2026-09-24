@@ -46,7 +46,7 @@ import session_contract  # noqa: E402
 
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
-from session_checkout import make_checkout  # noqa: E402
+from session_checkout import enter_checkout, make_checkout  # noqa: E402
 
 # =============================================================================================
 # the diffs — a BIG round-1 diff (so the gap-sweep phase is on the path) and its post-fix head
@@ -354,19 +354,6 @@ def _fixture_repo(tmp_path, name):
     return str(repo_root)
 
 
-_SESSION_CWD = {}
-
-
-@pytest.fixture(autouse=True)
-def _session_cwd(monkeypatch):
-    """Hand `_bootstrap` this test's own `monkeypatch.chdir`: the session's meta.json carries no
-    `repoRoot`, so the driver resolves its repository from the cwd, and the cwd must sit inside
-    the session's checkout (the test's monkeypatch restores the cwd at teardown)."""
-    _SESSION_CWD["chdir"] = monkeypatch.chdir
-    yield
-    _SESSION_CWD.clear()
-
-
 def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     session_dir = str(tmp_path / name)
     os.makedirs(session_dir, exist_ok=True)
@@ -389,7 +376,7 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
             fh.write("\n")
     repo_root = _fixture_repo(tmp_path, name)
     cfg_over.setdefault("repoRoot", repo_root)
-    _SESSION_CWD["chdir"](repo_root)
+    enter_checkout(repo_root)
     out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
     assert out["ok"], out
     return session_dir, gitdir, head_diff_path
