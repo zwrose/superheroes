@@ -1301,8 +1301,6 @@ def _envelope_execution_model(session_dir, seat_entry):
     evidence = env.get("executionEvidence")
     if isinstance(evidence, dict) and "model" in evidence:
         return evidence.get("model")
-    if "model" in env:
-        return env.get("model")
     return None
 
 

@@ -507,3 +507,91 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
     assert refusal is None, refusal
     audit_seats = receipt["independence"]["auditSeats"]
     assert audit_seats[0]["model"] == engine_model
+
+
+def _audit_model_cert_session(tmp_path, *, journal_model=None, envelope_model=None, stub_model=None):
+    """Minimal independence session with one audit seat for envelope model tests."""
+    from round_certification_fixtures import HEAD_SHA, write_session
+    from test_seat_independence_1272 import (
+        AUDIT_PHASE,
+        AUDIT_SEAT,
+        FIXER_PHASE,
+        FIXER_SEAT,
+        _envelope_spec,
+        _execution_evidence,
+        _journal_row,
+    )
+
+    audit_payload = {"findings": [{"id": AUDIT_SEAT, "severity": "Minor", "title": "audit ok"}]}
+    audit_payload_sha = RR.payload_sha256(audit_payload)
+    audit_evidence = _execution_evidence(
+        AUDIT_SEAT, AUDIT_PHASE, 0, 0, source="claude", payload=audit_payload
+    )
+    if envelope_model is not None:
+        audit_evidence = dict(audit_evidence)
+        audit_evidence["model"] = envelope_model
+    audit_envelope = _envelope_spec(AUDIT_SEAT, AUDIT_PHASE, source="claude", payload=audit_payload)
+    audit_envelope["payloadSha256"] = audit_payload_sha
+    audit_envelope["payload"] = audit_payload
+    audit_envelope["executionEvidence"] = audit_evidence
+    if stub_model is not None:
+        audit_envelope["model"] = stub_model
+
+    audit_journal = _journal_row(AUDIT_SEAT, AUDIT_PHASE, source="claude", payload_sha=audit_payload_sha)
+    journal_evidence = dict(audit_evidence)
+    if journal_model is not None:
+        journal_evidence["model"] = journal_model
+    elif journal_model is None and envelope_model is not None and stub_model is None:
+        journal_evidence.pop("model", None)
+    audit_journal["executionEvidence"] = journal_evidence
+
+    return write_session(
+        tmp_path,
+        name="audit-model-%s" % (journal_model or envelope_model or stub_model or "none"),
+        state={
+            "config": {
+                "fixerVendor": "cursor",
+                "baseGuard": RC.BASE_GUARD_CHECKED,
+                "headSha": HEAD_SHA,
+            },
+            "terminal": "converged",
+            "step": "terminal",
+        },
+        journal_lines=[
+            _journal_row("code-reviewer", RC.PANEL_PHASE, source="codex"),
+            _journal_row(FIXER_SEAT, FIXER_PHASE, source="cursor"),
+            audit_journal,
+        ],
+        envelopes=[
+            _envelope_spec("code-reviewer", RC.PANEL_PHASE, source="codex"),
+            _envelope_spec(FIXER_SEAT, FIXER_PHASE, source="cursor"),
+            audit_envelope,
+        ],
+    )
+
+
+def test_journal_envelope_execution_model_mismatch_refuses(tmp_path):
+    """v0 — journal executionEvidence.model disagrees with stored envelope."""
+    session_dir = _audit_model_cert_session(
+        tmp_path, journal_model="journal-model", envelope_model="envelope-model"
+    )
+    receipt, refusal = RC.certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unfetched-findings"
+    assert refusal["bindingFailure"] == "journal-envelope-mismatch"
+
+
+def test_audit_seat_model_from_envelope_execution_evidence(tmp_path):
+    """independence.auditSeats[].model reads envelope executionEvidence only."""
+    session_dir = _audit_model_cert_session(tmp_path, envelope_model="envelope-model")
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt["independence"]["auditSeats"][0]["model"] == "envelope-model"
+
+
+def test_audit_seat_model_ignores_stub_requested_model(tmp_path):
+    """Stub envelope model is not runner-recorded; missing evidence model stays None."""
+    session_dir = _audit_model_cert_session(tmp_path, stub_model="gpt-5.6-sol")
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt["independence"]["auditSeats"][0]["model"] is None
