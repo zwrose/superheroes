@@ -46,6 +46,13 @@ __all__ = (
     "apply_disposition_family",
     "strip_disposition_family",
     "evidence_digest_subject",
+    "SEAT_TRANSPORT_KEY",
+    "SEAT_TRANSPORT_RUNNER",
+    "SEAT_TRANSPORT_NATIVE",
+    "SEAT_TRANSPORT_HAND_LANDED",
+    "SEAT_TRANSPORT_ORCHESTRATOR",
+    "SEAT_TRANSPORTS",
+    "SEAT_TRANSPORTS_DISCLOSED",
     "canonical",
     "payload_sha256",
     "finding_identity_key",
@@ -70,6 +77,19 @@ TRANSIENT_FINDING_FIELDS = frozenset({
     "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
     "disposition", "dispositionReceipt",
 })
+
+SEAT_TRANSPORT_KEY = "transport"
+SEAT_TRANSPORT_RUNNER = "runner"
+SEAT_TRANSPORT_NATIVE = "native-subagent"
+SEAT_TRANSPORT_HAND_LANDED = "hand-landed"
+SEAT_TRANSPORT_ORCHESTRATOR = "orchestrator"
+SEAT_TRANSPORTS = (
+    SEAT_TRANSPORT_RUNNER,
+    SEAT_TRANSPORT_NATIVE,
+    SEAT_TRANSPORT_HAND_LANDED,
+    SEAT_TRANSPORT_ORCHESTRATOR,
+)
+SEAT_TRANSPORTS_DISCLOSED = (SEAT_TRANSPORT_NATIVE, SEAT_TRANSPORT_HAND_LANDED)
 
 # Result kind a write run's execution record carries — binds the run's own report, not a payload key.
 WRITE_RESULT_KIND = "evidence"

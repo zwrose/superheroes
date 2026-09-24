@@ -4919,7 +4919,24 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
 # `independent` return, and post-#651 no vendor can satisfy that branch — every vendor's
 # `code-fixer` and `verifier` roles now resolve to the same family — so it is unreachable, not
 # merely untested. #652 rider 4a deleted that loop; the invariant is pinned by
-# test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry.py.
+# test_auditor_and_code_fixer_families_match_per_vendor in test_model_registry.py.
+
+
+# axis: _auditor_vendor independence follows the auditor role family, not verifier
+def test_auditor_vendor_reads_auditor_role(monkeypatch):
+    real_family_for = RD.model_registry.family_for
+
+    def fake_family_for(role, vendor):
+        if role == "auditor" and vendor == "codex":
+            return "openai"
+        if role == "verifier" and vendor == "codex":
+            return "xai"
+        return real_family_for(role, vendor)
+
+    monkeypatch.setattr(RD.model_registry, "family_for", fake_family_for)
+    auditor, independence = RD._auditor_vendor({"vendors": ["cursor", "codex"]}, "cursor")
+    assert independence == "independent"
+    assert auditor == "codex"
 
 
 def test_auditor_vendor_unknown_fixer_degraded():
@@ -6378,7 +6395,7 @@ _SEAT_MAP_RECEIPTS_CALLERS = frozenset({
     "unexcused_violations",
     "pin_excused_records",
     "unjudgeable_receipts",
-    "round_governing_unjudgeable",
+    "round_governing_map",
     "emit_receipt_seat_map",
 })
 
