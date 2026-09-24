@@ -19,6 +19,7 @@ status files are advisory evidence for supervisor decisions only. Never raises t
 (CONVENTIONS §7.5: engine *selection* fails open; a completed external *result* fails closed.)
 """
 import argparse
+import collections
 import glob
 import hashlib
 import json
@@ -851,6 +852,11 @@ _SLEEP = time.sleep
 _NOW = time.monotonic
 _CLAUDE_CLI_DEFAULT_TIMEOUT = 30
 _BACKGROUND_POLL_INTERVAL = 2
+_HANDLE_WAIT_SECONDS = 30
+
+BackgroundHandle = collections.namedtuple(
+    "BackgroundHandle", ("backgroundId", "pid", "cwd", "configDir"),
+)
 
 
 def _claude_cli(args, config_dir, cwd=None, timeout=_CLAUDE_CLI_DEFAULT_TIMEOUT):
@@ -930,51 +936,119 @@ def _claude_agent_row_for_launch(rows, launch_id):
     return None
 
 
-def _stop_confirmed_pid_dead(row):
-    """True when row pid is dead, False when live or unusable, None on kill uncertainty. Never raises."""
-    if not isinstance(row, dict):
-        return True
-    pid = row.get("pid")
-    if pid is None or not isinstance(pid, int) or pid < 2:
-        state = row.get("state")
-        if state in ("stopped", "done"):
-            return True
-        return False
+def background_identity_rows(rows, cwd, background_id=None):
+    """Return background rows matching cwd identity (and optional id). Never raises."""
+    if not isinstance(rows, list):
+        return []
+    if not isinstance(cwd, str) or not cwd:
+        return []
+    if background_id is not None and not isinstance(background_id, str):
+        return []
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    except OSError:
+        cwd_real = os.path.realpath(cwd)
+    except (OSError, ValueError):
+        return []
+    matched = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("kind") != "background":
+            continue
+        row_cwd = row.get("cwd")
+        if not isinstance(row_cwd, str) or not row_cwd:
+            continue
+        try:
+            if os.path.realpath(row_cwd) != cwd_real:
+                continue
+        except (OSError, ValueError):
+            continue
+        if background_id is not None and row.get("id") != background_id:
+            continue
+        matched.append(row)
+    return matched
+
+
+def _handle_from_rows(rows, cwd, config_dir, background_id=None):
+    """Build a BackgroundHandle when exactly one live identity row carries a pid. Never raises."""
+    identity = background_identity_rows(rows, cwd, background_id)
+    if len(identity) != 1:
         return None
-    return False
+    row = identity[0]
+    pid = row.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 2:
+        return None
+    row_id = row.get("id")
+    if not isinstance(row_id, str) or not row_id:
+        return None
+    try:
+        cwd_real = os.path.realpath(cwd)
+    except (OSError, ValueError):
+        return None
+    return BackgroundHandle(row_id, pid, cwd_real, config_dir)
 
 
-def claude_session_stop_confirmed(launch_id, config_dir, cwd):
-    """Stop a session and confirm the pid ended. Never raises.
-
-    Fork of _background_stop (claude-stop-rule-fork): unconditional stop plus
-    row-gone-or-pid-dead confirmation vs _background_stop's conditional pre-stop
-    and state-based confirmation. Closes when layer 4a-2 wires the launcher to
-    this function and decides whether _background_stop delegates to it;
-    test_claude_stop_rule_fork_enumeration pins both homes.
-    """
-    if not isinstance(launch_id, str) or not launch_id:
-        return background_outcome.REFUSAL_STOP_UNCONFIRMED
-    _rc, _stdout, _stderr = _claude_cli(["stop", launch_id], config_dir, cwd=cwd)
-    for poll in range(6):
+def acquire_background_handle(config_dir, cwd, background_id=None, wait_seconds=None):
+    """Poll agents listing until a handle is available or status is terminal. Never raises."""
+    if wait_seconds is None:
+        wait = _HANDLE_WAIT_SECONDS
+    elif isinstance(wait_seconds, (int, float)):
+        wait = 0.0 if wait_seconds <= 0 else float(wait_seconds)
+    else:
+        wait = _HANDLE_WAIT_SECONDS
+    deadline = _NOW() + wait
+    last_ok = False
+    while True:
         rows, listing_ok = _claude_agents_rows(config_dir, cwd)
-        if not listing_ok:
-            return background_outcome.REFUSAL_STOP_UNCONFIRMED
-        row = _claude_agent_row_for_launch(rows, launch_id)
-        if row is None:
+        if listing_ok:
+            last_ok = True
+            identity = background_identity_rows(rows, cwd, background_id)
+            handle = _handle_from_rows(rows, cwd, config_dir, background_id)
+            if handle is not None:
+                return handle, "ok"
+            if identity:
+                live = [row for row in identity if row.get("state") not in ("stopped", "done")]
+                if not live:
+                    return None, "ended"
+                if len(live) > 1:
+                    return None, "ambiguous"
+        if _NOW() >= deadline:
+            if not last_ok:
+                return None, "agents-unreadable"
+            return None, "unlisted"
+        _SLEEP(_BACKGROUND_POLL_INTERVAL)
+
+
+def _valid_background_handle(handle):
+    if not isinstance(handle, BackgroundHandle):
+        return False
+    if not isinstance(handle.backgroundId, str):
+        return False
+    if not isinstance(handle.pid, int) or isinstance(handle.pid, bool) or handle.pid < 2:
+        return False
+    if not isinstance(handle.cwd, str):
+        return False
+    if not isinstance(handle.configDir, str):
+        return False
+    return True
+
+
+def retire(handle):
+    """Stop a background session and confirm pid exit or row absence. Never raises."""
+    if not _valid_background_handle(handle):
+        return background_outcome.REFUSAL_STOP_UNCONFIRMED
+    _claude_cli(["stop", handle.backgroundId], handle.configDir, cwd=handle.cwd)
+    for poll in range(6):
+        try:
+            os.kill(handle.pid, 0)
+        except ProcessLookupError:
             return "stopped"
-        dead = _stop_confirmed_pid_dead(row)
-        if dead is True:
-            return "stopped"
-        if dead is None:
+        except PermissionError:
+            pass
+        except OSError:
             return background_outcome.REFUSAL_STOP_UNCONFIRMED
+        rows, listing_ok = _claude_agents_rows(handle.configDir, handle.cwd)
+        if listing_ok and not background_identity_rows(rows, handle.cwd, handle.backgroundId):
+            return "stopped"
         if poll < 5:
             _SLEEP(0.5)
     return background_outcome.REFUSAL_STOP_UNCONFIRMED
@@ -1154,38 +1228,23 @@ def _result_delivery_gate_refusal():
 
 
 def _background_stop(launch_id, config_dir, cwd):
-    """Stop a background session and confirm it ended. Returns stop outcome token.
-
-    Fork of claude_session_stop_confirmed (claude-stop-rule-fork): conditional
-    pre-stop and state-based confirmation vs claude_session_stop_confirmed's
-    unconditional stop and row-gone-or-pid-dead confirmation. Closes when layer
-    4a-2 wires the launcher to claude_session_stop_confirmed and decides whether
-    this function delegates to it; test_claude_stop_rule_fork_enumeration pins
-    both homes.
-    """
+    """Stop a background session and confirm it ended. Returns stop outcome token."""
     if not isinstance(launch_id, str) or not launch_id:
         return "stop-unconfirmed"
     rows_before, ok_before = _claude_agents_rows(config_dir, cwd)
     if not ok_before:
         return "stop-unconfirmed"
-    row_before = _claude_agent_row_for_launch(rows_before, launch_id)
-    if row_before is None:
+    identity = background_identity_rows(rows_before, cwd, launch_id)
+    if not identity or all(row.get("state") in ("stopped", "done") for row in identity):
         return "already-ended"
-    if row_before.get("state") in ("stopped", "done"):
+    handle, status = acquire_background_handle(config_dir, cwd, launch_id)
+    if status == "ended":
         return "already-ended"
-    _rc, _stdout, _stderr = _claude_cli(
-        ["stop", launch_id],
-        config_dir,
-        cwd=cwd,
-    )
-    rows_after, ok_after = _claude_agents_rows(config_dir, cwd)
-    if not ok_after:
+    if handle is not None:
+        outcome = retire(handle)
+        if outcome == "stopped":
+            return "stopped"
         return "stop-unconfirmed"
-    row_after = _claude_agent_row_for_launch(rows_after, launch_id)
-    if row_after is None:
-        return "stopped"
-    if row_after.get("state") in ("stopped", "done"):
-        return "stopped"
     return "stop-unconfirmed"
 
 
