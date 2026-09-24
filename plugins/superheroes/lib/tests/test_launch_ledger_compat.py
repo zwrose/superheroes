@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import os
 import subprocess
@@ -22,9 +23,30 @@ _SESSION_ID = "feac172f-474c-424d-86e7-0e50688972c9"
 _STARTED_PID = 424242
 
 
-def test_launch_mode_background_identity():
-    assert ll.LAUNCH_MODE_BACKGROUND is claude_modes.MODE_BACKGROUND
-    assert ea.MODE_BACKGROUND is claude_modes.MODE_BACKGROUND
+def test_background_mode_literal_pinned():
+    assert claude_modes.MODE_BACKGROUND == "background"
+
+
+def _background_mode_literal_problems(path):
+    rel = os.path.relpath(path, _LIB)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            source = fh.read()
+        tree = ast.parse(source, filename=path)
+    except SyntaxError:
+        return [f"background-mode-census-unparseable:{rel}"]
+    problems = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and node.value == "background":
+            problems.append(f"background-mode-literal-outside-home:{rel}:{node.lineno}")
+    return problems
+
+
+def test_background_mode_single_home():
+    problems = []
+    for name in ("launch_ledger.py", "engine_adapter.py"):
+        problems.extend(_background_mode_literal_problems(os.path.join(_LIB, name)))
+    assert problems == []
 
 
 class _GitShowLoader:
@@ -147,3 +169,135 @@ def test_current_reader_folds_background_session_id():
     assert lane["sessionId"] == _SESSION_ID
     assert lane["backgroundId"] == _BACKGROUND_ID
     assert lane["launchMode"] == ll.LAUNCH_MODE_BACKGROUND
+
+
+def _agreement_reserved():
+    return {
+        "event": "reserved",
+        "launchId": "l1",
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "b",
+        "repoId": "test-repo",
+        "issue": 1273,
+        "surfaces": ["a"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc123",
+        "model": "test-model",
+        "worktree": "/tmp/worktree",
+        "configDir": "/tmp/config",
+    }
+
+
+def _agreement_started(**extra):
+    rec = {
+        "event": "started",
+        "launchId": "l1",
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": _STARTED_PID,
+        "logPath": "/tmp/log",
+        "errPath": "/tmp/err",
+    }
+    rec.update(extra)
+    return rec
+
+
+def _agreement_repair(**extra):
+    rec = {
+        "attempt": 1,
+        "pid": _STARTED_PID,
+        "logPath": "/tmp/log",
+        "errPath": "/tmp/err",
+    }
+    rec.update(extra)
+    return rec
+
+
+@pytest.mark.parametrize(
+    "trio_fields,expected_token",
+    [
+        ({}, None),
+        (
+            {
+                "launchMode": ll.LAUNCH_MODE_BACKGROUND,
+                "backgroundId": _BACKGROUND_ID,
+                "sessionId": _SESSION_ID,
+            },
+            None,
+        ),
+        (
+            {"launchMode": ll.LAUNCH_MODE_BACKGROUND, "backgroundId": _BACKGROUND_ID},
+            "fold-bad-field:started:background",
+        ),
+        (
+            {
+                "launchMode": ll.LAUNCH_MODE_BACKGROUND,
+                "sessionId": _SESSION_ID,
+            },
+            "fold-bad-field:started:background",
+        ),
+        (
+            {"backgroundId": _BACKGROUND_ID, "sessionId": _SESSION_ID},
+            "fold-bad-field:started:background",
+        ),
+        (
+            {
+                "launchMode": "foreground",
+                "backgroundId": _BACKGROUND_ID,
+                "sessionId": _SESSION_ID,
+            },
+            "fold-bad-field:started:launchMode",
+        ),
+        (
+            {
+                "launchMode": ll.LAUNCH_MODE_BACKGROUND,
+                "backgroundId": "GGGGGGGG",
+                "sessionId": "GGGGGGGG-0000-4000-8000-000000000001",
+            },
+            "fold-bad-field:started:backgroundId",
+        ),
+        (
+            {
+                "launchMode": ll.LAUNCH_MODE_BACKGROUND,
+                "backgroundId": _BACKGROUND_ID,
+                "sessionId": "feac172f-not-a-valid-uuid",
+            },
+            "fold-bad-field:started:sessionId",
+        ),
+        (
+            {
+                "launchMode": ll.LAUNCH_MODE_BACKGROUND,
+                "backgroundId": _BACKGROUND_ID,
+                "sessionId": "deadbeef-474c-424d-86e7-0e50688972c9",
+            },
+            "fold-bad-field:started:background",
+        ),
+    ],
+    ids=[
+        "absent",
+        "valid",
+        "partial_mode_id",
+        "partial_mode_session",
+        "partial_id_session",
+        "bad_mode",
+        "bad_id",
+        "bad_session",
+        "session_prefix_mismatch",
+    ],
+)
+def test_background_fields_fold_and_repair_agree(trio_fields, expected_token):
+    # axis: fold and _validate_started_repair share one background-field rule
+    started = _agreement_started(**trio_fields)
+    fold_result = ll.fold([_agreement_reserved(), started])
+    repair_ok = ll._validate_started_repair(_agreement_repair(**trio_fields))
+    if expected_token is None:
+        assert fold_result["ok"] is True
+        assert repair_ok is True
+    else:
+        assert fold_result["ok"] is False
+        assert fold_result["reason"] == expected_token
+        assert repair_ok is False
