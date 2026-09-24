@@ -167,6 +167,15 @@ def _has_compare_ancestor(node, parents):
     return False
 
 
+def _enclosing_call(node, parents):
+    current = node
+    while current in parents:
+        current = parents[current]
+        if isinstance(current, ast.Call):
+            return current
+    return None
+
+
 def _allowed_constant(node, parent, grandparent, tainted_names, parents):
     if parent is None:
         return False, "orphan"
@@ -179,6 +188,11 @@ def _allowed_constant(node, parent, grandparent, tainted_names, parents):
     if isinstance(parent, ast.Subscript) and parent.slice is node:
         return True, "subscript"
     if isinstance(parent, ast.keyword):
+        call = _enclosing_call(parent, parents)
+        if call is not None:
+            callee = _dotted_name(call.func)
+            if _is_spawner(callee) or _is_mutator(callee):
+                return False, "spawner-keyword"
         return True, "keyword"
     if isinstance(parent, ast.IfExp):
         return True, "ifexp"
@@ -333,6 +347,7 @@ _FLAG_CASES = [
     ('subprocess.run(["env", "FOO=1", "claude", "-p"])', "env-wrapper"),
     ('cmd = []\ncmd.append("claude")', "append-mutator"),
     ('subprocess.Popen("claude")', "popen-string"),
+    ('subprocess.Popen(["--bg"], executable="claude")', "popen-executable-keyword"),
 ]
 
 _PASS_CASES = [

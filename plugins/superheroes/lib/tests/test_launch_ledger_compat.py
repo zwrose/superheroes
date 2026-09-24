@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+import engine_adapter as ea
 import launch_ledger as ll
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +19,10 @@ _LAUNCH_ID = "bg-compat-l1"
 _BACKGROUND_ID = "feac172f"
 _SESSION_ID = "feac172f-474c-424d-86e7-0e50688972c9"
 _STARTED_PID = 424242
+
+
+def test_launch_mode_background_equals_adapter():
+    assert ll.LAUNCH_MODE_BACKGROUND == ea.MODE_BACKGROUND
 
 
 class _GitShowLoader:

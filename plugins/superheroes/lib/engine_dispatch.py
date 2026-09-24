@@ -931,12 +931,12 @@ def _claude_agent_row_for_launch(rows, launch_id):
 
 
 def _stop_confirmed_pid_dead(row):
-    """True when row pid is absent or not live. Never raises."""
+    """True when row pid is dead, False when live or unusable, None on kill uncertainty. Never raises."""
     if not isinstance(row, dict):
         return True
     pid = row.get("pid")
     if pid is None or not isinstance(pid, int) or pid < 2:
-        return True
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -949,7 +949,14 @@ def _stop_confirmed_pid_dead(row):
 
 
 def claude_session_stop_confirmed(launch_id, config_dir, cwd):
-    """Stop a session and confirm the pid ended. Never raises."""
+    """Stop a session and confirm the pid ended. Never raises.
+
+    Fork of _background_stop (claude-stop-rule-fork): unconditional stop plus
+    row-gone-or-pid-dead confirmation vs _background_stop's conditional pre-stop
+    and state-based confirmation. Closes when layer 4a-2 wires the launcher to
+    this function and decides whether _background_stop delegates to it;
+    test_claude_stop_rule_fork_enumeration pins both homes.
+    """
     if not isinstance(launch_id, str) or not launch_id:
         return background_outcome.REFUSAL_STOP_UNCONFIRMED
     _rc, _stdout, _stderr = _claude_cli(["stop", launch_id], config_dir, cwd=cwd)
@@ -1144,7 +1151,15 @@ def _result_delivery_gate_refusal():
 
 
 def _background_stop(launch_id, config_dir, cwd):
-    """Stop a background session and confirm it ended. Returns stop outcome token."""
+    """Stop a background session and confirm it ended. Returns stop outcome token.
+
+    Fork of claude_session_stop_confirmed (claude-stop-rule-fork): conditional
+    pre-stop and state-based confirmation vs claude_session_stop_confirmed's
+    unconditional stop and row-gone-or-pid-dead confirmation. Closes when layer
+    4a-2 wires the launcher to claude_session_stop_confirmed and decides whether
+    this function delegates to it; test_claude_stop_rule_fork_enumeration pins
+    both homes.
+    """
     if not isinstance(launch_id, str) or not launch_id:
         return "stop-unconfirmed"
     rows_before, ok_before = _claude_agents_rows(config_dir, cwd)

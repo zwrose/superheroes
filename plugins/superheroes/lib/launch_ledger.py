@@ -47,6 +47,7 @@ LEDGER_ROOT_ENV = "SUPERHEROES_LAUNCH_LEDGER_ROOT"
 LEDGER_DIR_NAME = "superheroes-launch-ledger"
 LEDGER_NAME = "launch-ledger.jsonl"
 SCHEMA = 1
+# Must equal engine_adapter.MODE_BACKGROUND; drift-pinned by test_launch_mode_background_equals_adapter.
 LAUNCH_MODE_BACKGROUND = "background"
 LAUNCH_MODES = (LAUNCH_MODE_BACKGROUND,)
 EVENT_KINDS = ("reserved", "started", "retry", "refused", "outcome", "amendment")

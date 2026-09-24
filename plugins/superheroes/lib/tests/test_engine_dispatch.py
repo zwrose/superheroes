@@ -18338,6 +18338,48 @@ def test_claude_cli_spawns_claude_cli_argv(monkeypatch):
     assert captured["cmd"] == ED.engine_adapter.claude_cli_argv(["agents", "--json"])
 
 
+_CLAUDE_STOP_CALLERS_EXPECTED = frozenset(
+    {"_background_stop", "claude_session_stop_confirmed"}
+)
+
+
+def _claude_stop_caller_functions():
+    path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if not (isinstance(func, ast.Name) and func.id == "_claude_cli"):
+                continue
+            if not child.args:
+                continue
+            arg0 = child.args[0]
+            if (
+                isinstance(arg0, ast.List)
+                and arg0.elts
+                and isinstance(arg0.elts[0], ast.Constant)
+                and arg0.elts[0].value == "stop"
+            ):
+                found.add(node.name)
+    return found
+
+
+def test_claude_stop_rule_fork_enumeration():
+    found = _claude_stop_caller_functions()
+    problems = []
+    for fn in sorted(found - _CLAUDE_STOP_CALLERS_EXPECTED):
+        problems.append("claude-stop-rule-fork:%s" % fn)
+    for fn in sorted(_CLAUDE_STOP_CALLERS_EXPECTED - found):
+        problems.append("claude-stop-rule-fork-stale:%s" % fn)
+    assert problems == []
+
+
 def test_claude_cli_invalid_args_never_spawns(monkeypatch):
     called = []
 
@@ -18371,13 +18413,16 @@ def test_claude_session_stop_confirmed_no_row_stopped(monkeypatch):
     assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == "stopped"
 
 
-def test_claude_session_stop_confirmed_missing_pid_stopped(monkeypatch):
+def test_claude_session_stop_confirmed_missing_pid_unconfirmed(monkeypatch):
     monkeypatch.setattr(ED, "_claude_cli", lambda *a, **k: (0, "", ""))
     monkeypatch.setattr(
         ED, "_claude_agents_rows",
         lambda *a, **k: ([{"id": "id-1", "state": "running"}], True),
     )
-    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == "stopped"
+    monkeypatch.setattr(ED, "_SLEEP", lambda s: None)
+    assert ED.claude_session_stop_confirmed("id-1", "/cfg", "/wt") == (
+        background_outcome.REFUSAL_STOP_UNCONFIRMED
+    )
 
 
 def test_claude_session_stop_confirmed_dead_pid_stopped(monkeypatch):
