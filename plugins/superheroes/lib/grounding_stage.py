@@ -458,6 +458,21 @@ def _extract_region(body, marker, scan, marker_name):
     return region_text, line_count, region_start_line
 
 
+def read_region(body, region_name):
+    if region_name not in REGION_MARKERS:
+        raise ValueError("unknown region name: %r" % region_name)
+    scan = _context_scan(body)
+    try:
+        region_text, _line_count, _region_start_line = _extract_region(
+            body, REGION_MARKERS[region_name], scan, region_name,
+        )
+    except _BodyRefusal as exc:
+        return None, exc.reason
+    if region_text is None:
+        return None, None
+    return region_text, None
+
+
 def _split_table_cells(line):
     """Split a markdown table row into cells, honoring backslash-escaped pipes."""
     stripped = line.strip()
