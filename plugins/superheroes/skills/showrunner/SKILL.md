@@ -147,7 +147,7 @@ above).
    against the filed body **before filing**, whether or not the body contains a quoted block; a body
    with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
    filing a drifted or incomplete quote. On `pass`, record the check's own output in the filing
-   note — the `result` line, or `pass` together with `requiredEntries` — not merely a claim that
+   note — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that
    it ran. When the register path and child token are known — the route names them or they are
    derivable — **run the check**; an `undecided` result blocks exactly like `fail`. When they are
    not known and applicability is genuinely unclear, that is a **routing gap, not a reason to
@@ -199,7 +199,7 @@ above).
    **register-consuming child** across **both** directions, whether or not each body contains a
    quoted block. On `fail`, record a blocking package-read finding. On `pass`, record the check's
    own output in the package-read verification record — the `result` line, or `pass` together with
-   `requiredEntries` — not merely a claim that it ran. When the register path and child token are
+   `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child token are
    known — the route names them or they are derivable — **run the check**; an `undecided` result
    blocks exactly like `fail`. When they are not known and applicability is genuinely unclear,
    that is a **routing gap, not a reason to proceed**: raise it with the advisor (a builder
@@ -387,7 +387,9 @@ above).
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
    - **The closure row** — fires when **this vet is the final one**. **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.** **Where more than one candidate closure moment is live — concurrent final vets, or a vet racing a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt.** **Where the last open child closes without a PR — declined scope — the closure receipt is presented to the owner with that close, in the same sitting, and there is still no separate closure trigger.** That no-PR path produces **no PR**, so the receipt reaches the owner with the close itself — an advisor must not conclude that a closure with no PR needs no receipt. When the row fires, the vet **assembles and carries the closure receipt** — Detail:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
-   - **Trust CI-green** as the receipt that the suite passed — do **not** re-run green suites.
+   - **Trust CI green on the recorded head** — including the suite's receipt per
+     `rubric/test-receipt-evidence.md` (run selection per
+     `skills/showrunner/reference/vet-receipt.md` spine field 1) — do **not** re-run green suites.
      Spend vet time on the **adversarial probes the suite does not contain**: does the guard
      actually fire when its target breaks? does the test assert what its name claims? does the
      behavior actually behave? Apply probe mutations as a **targeted, revertible edit through the
@@ -571,6 +573,9 @@ above).
      preserve on a body rewrite; that guarantee is prose with no mechanical check, so the backstop
      below is still yours). **Write to the owner-half register:** the **verdict**; **what was checked, in owner terms**;
      **what accepting it means**; and **what is theirs to decide** — plus a pointer to the receipt.
+     **The verdict's form** lives in
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md` spine field 1 —
+     read it there at vet time; a slot not in that form reads NOT-READY by construction.
      Probes, accounting and dispositions are **mechanism**: collapse them inside `<details>` below
      those four, or leave them to the receipt. Consequence up, mechanism down — *an independent
      reader checked this, and this is what they concluded* is the most merge-relevant single fact on
@@ -730,10 +735,20 @@ above).
    or a craft fix with no material consequence keeps the word. That is your judgment, and you say
    it on the owner half. When you cannot place a post-word change on that line with confidence,
    treat it as an [owner call](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#owner-call) and ask.
+   **The stack is the unit of merge** — whole stacks only, never a vetted prefix; see
+   [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack
+   merges and
+   [merge-train.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md)
+   § Merging a stack; do not re-derive it here.
+   **Read this with what puts a PR back outside the word, above:** a later layer joining the stack
+   **still asks again** — it is outside the word that was given — because this rule governs **what may
+   be listed**, never how far a word reaches.
    **Preconditions for executing inside the word.** Three, and none waives: the review and
    verification evidence the PR's lane requires (a READY vet for a full or light lane, or the
    independent reviewer's final-head receipt for a micro lane, which has no advisor vet by
-   design), CI green on the recorded head, and a branch current with its base.
+   design), CI green on the recorded head — including the suite's receipt per
+     `rubric/test-receipt-evidence.md` (run selection per
+     `skills/showrunner/reference/vet-receipt.md` spine field 1) — and a branch current with its base.
    **Reporting.** Report each merge you execute at once, in the conversation that gave the word,
    as one line: the PR, the head merged, and the scope it rode. A wrong merge is then visible
    within minutes, and the word and the act sit in one thread. There is no separate list of
@@ -750,7 +765,9 @@ above).
    the moment with a word for that release.
    **The floor.** There is no mechanical merge floor.
    **Issuing the merge command is yours alone.** No subagent issues it. The mechanical duties
-   around it (sequencing, branch-update, waiting for CI green, conflict resolution under an
+   around it (sequencing, branch-update, waiting for CI green on the recorded head — including the
+   suite's receipt per `rubric/test-receipt-evidence.md` (run selection per
+   `skills/showrunner/reference/vet-receipt.md` spine field 1), conflict resolution under an
    advisor-authored recipe, and post-merge hygiene) may be handed to a subagent under the three
    conditions below. A merge train's "green" includes post-merge `main` CI, and union fixes ride
    the last open PR, disclosed.
