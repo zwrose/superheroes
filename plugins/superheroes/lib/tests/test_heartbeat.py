@@ -624,6 +624,14 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
 
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
+    # R28 re-pin (C14 4a): the spawn now grades a background handshake and needs an existing
+    # config root. This test's axis is the env handed to the child, so the handshake answers
+    # "not acknowledged" (nothing to record or stop) and the root is a real directory.
+    config_root = tmp_path / "claude-config"
+    config_root.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_root))
+    monkeypatch.setattr(launcher, "_background_handshake", lambda *a: {
+        "ok": False, "reason": "background-launch-unacknowledged", "backgroundId": None})
     launcher._spawn_attempt(
         repo,
         launch_id,

@@ -1405,6 +1405,15 @@ def _background_handshake(proc, log_path, cwd, config_dir, deadline):
     session must be listed under the lane's config root, in the lane's worktree, with a pid and
     a session id. Returns ok with backgroundId/sessionId/pid, or a background_outcome token.
     Never raises."""
+    try:
+        return _grade_background_launch(proc, log_path, cwd, config_dir, deadline)
+    except Exception as exc:  # noqa: BLE001 — an unexpected read is a failed launch, never a lane
+        return {"ok": False, "reason": background_outcome.REFUSAL_LAUNCH_FAILED,
+                "detail": "internal:%s" % type(exc).__name__,
+                "backgroundId": _read_ack(log_path)}
+
+
+def _grade_background_launch(proc, log_path, cwd, config_dir, deadline):
     limit = time.monotonic() + _ACK_WAIT_SECONDS
     if deadline is not None:
         limit = min(limit, deadline)
