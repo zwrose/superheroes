@@ -1553,11 +1553,11 @@ def _ceiling_timer_result(
     loop_degraded,
     passed_over,
     passed_over_count,
-    last_timer_result,
+    last_benign_result,
 ):
     stale_values = None
-    if last_timer_result is not None:
-        stale_values = last_timer_result.get(RESULT_KEY_STALE_SUPPRESSED)
+    if last_benign_result is not None:
+        stale_values = last_benign_result.get(RESULT_KEY_STALE_SUPPRESSED)
     final = _event_result(
         EVENT_TIMER,
         batch_id,
@@ -1850,7 +1850,6 @@ def loop(
             if max_total_seconds is not None
             else None
         )
-        last_timer_result = None
         last_benign_result = None
         log_degradation = None
         if log_path is not None:
@@ -1868,7 +1867,7 @@ def loop(
                         loop_degraded,
                         passed_over,
                         passed_over_count,
-                        last_timer_result,
+                        last_benign_result,
                     )
                     final["arms"] = arms
                     final_degraded = set(final.get("degraded", []))
@@ -1918,7 +1917,6 @@ def loop(
             elapsed = monotonic() - total_start
             event = result.get("event")
             if event == EVENT_TIMER:
-                last_timer_result = result
                 last_benign_result = result
                 log_file, log_degradation = _loop_log_arm_result(
                     log_file,
@@ -1952,7 +1950,7 @@ def loop(
                         loop_degraded,
                         passed_over,
                         passed_over_count,
-                        last_timer_result,
+                        last_benign_result,
                     )
                     final["arms"] = arms
                     final_degraded = set(final.get("degraded", []))

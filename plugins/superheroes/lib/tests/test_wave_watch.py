@@ -2634,7 +2634,8 @@ def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch):
         "stacks": [],
         "flags": [],
     }
-    sequence = [dict(benign) for _ in range(101)]
+    cap = ww.PASSED_OVER_CAP
+    sequence = [dict(benign) for _ in range(cap + 1)]
     sequence.append({
         "ok": True,
         "event": "lane-terminal",
@@ -2647,8 +2648,8 @@ def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch):
     result = ww.loop(
         repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
     )
-    assert result["passedOverCount"] == 101
-    assert len(result["passedOver"]) == 100
+    assert result["passedOverCount"] == cap + 1
+    assert len(result["passedOver"]) == cap
 
 
 def test_loop_ceiling_after_benign_non_timer_returns_timer(tmp_path, monkeypatch):
@@ -2687,6 +2688,61 @@ def test_loop_ceiling_after_benign_non_timer_returns_timer(tmp_path, monkeypatch
     )
     assert result["event"] == "timer"
     assert result["passedOverCount"] == 1
+
+
+def test_loop_ceiling_stale_suppressed_follows_last_benign_arm(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    timer_suppressed = {
+        "ok": True,
+        "event": "timer",
+        "batchId": "batch-982",
+        "degraded": [],
+        "staleSuppressed": [
+            {
+                "launchId": "lane-a",
+                "note": ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH,
+            },
+        ],
+    }
+    pr_stale_observed = {
+        "ok": True,
+        "event": "pr-set-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "prsAdded": [],
+        "prs": [1],
+        "prsRemoved": [],
+        "stacks": [],
+        "ungrouped": [1],
+        "alsoObserved": {"stale": ["lane-a"]},
+    }
+    calls = [0]
+
+    def run_fn(*_args, **_kwargs):
+        calls[0] += 1
+        clock[0] += 3.0
+        if calls[0] == 1:
+            return dict(timer_suppressed)
+        return dict(pr_stale_observed)
+
+    result = ww.loop(
+        repo, "batch-982",
+        max_seconds=10,
+        interval_seconds=1,
+        max_total_seconds=5,
+        monotonic=mono,
+        sleep=lambda _d: None,
+        run_fn=run_fn,
+    )
+    assert result["event"] == "timer"
+    assert "staleSuppressed" not in result
+    assert result["passedOverCount"] == 1
+    assert result["passedOver"][0]["alsoObserved"] == {"stale": ["lane-a"]}
 
 
 def test_loop_benign_non_timer_writes_log_line(tmp_path, monkeypatch):

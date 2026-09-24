@@ -95,25 +95,26 @@ primitive so `loop` survives across turns — do not rely on a foreground arm ou
 
 ## What ends a loop and what it passes over
 
-Classification lives in two closed sets in `lib/wave_watch.py`:
+The authoritative closed sets **`LANE_ENDING_EVENTS`** and **`BENIGN_EVENTS`** live in
+`lib/wave_watch.py` (they partition **`EVENTS`**). Read the member tokens there — do not re-copy
+them into this reference.
 
-- **`LANE_ENDING_EVENTS`** — `lane-terminal`, `lane-blocked`, `builder-exited`, `lane-stale`. Any of
-  these ends the `loop` invocation (after printing one JSON line).
-- **`BENIGN_EVENTS`** — `pr-set-changed`, `stack-state-changed`, `timer`. These never end the loop.
-  Each benign **non-timer** event is passed over: the loop re-arms, appends a `--log` line in the
-  same `{"arm", "elapsedSeconds", "result"}` shape as a timer arm (the `result` carries that
-  event), and accumulates **`passedOver`** / **`passedOverCount`** on the final line (see below). A
-  `timer` ends only an internal arm, not the whole `loop`, unless `--max-total-seconds` has been
-  reached.
+- **`LANE_ENDING_EVENTS`** — membership ends the `loop` invocation (after printing one JSON line).
+- **`BENIGN_EVENTS`** — membership never ends the loop. Each benign **non-timer** event is passed
+  over: the loop re-arms, appends a `--log` line in the same `{"arm", "elapsedSeconds", "result"}`
+  shape as a timer arm (the `result` carries that event), and accumulates **`passedOver`** /
+  **`passedOverCount`** on the final line (see below). A `timer` ends only an internal arm, not the
+  whole `loop`, unless `--max-total-seconds` has been reached.
 
-An event in **neither** set does not end the loop — it fails toward waking you (same as passing over
-for exit purposes: the loop keeps running).
+A successful arm whose `event` is **not** in **`BENIGN_EVENTS`** ends the loop — see
+`_loop_exits_on()` in `lib/wave_watch.py`. That covers every lane-ending token and any unknown token
+alike.
 
 Every `loop` result carries **`passedOver`** — one entry per benign non-timer event passed over in
 that invocation, each `{"arm", "elapsedSeconds", "event", …that event's payload keys}`, keeping the
-100 most recent (`PASSED_OVER_CAP`) — and **`passedOverCount`**, the total passed over (it can exceed
-the list's length). Both are empty or zero when nothing was passed over. `run` results never carry
-them. Within one `loop`, each distinct PR-set change is reported once (the PR baseline advances when
+most recent **`PASSED_OVER_CAP`** entries — and **`passedOverCount`**, the total passed over (it can
+exceed the list's length). Both are empty or zero when nothing was passed over. `run` results never
+carry them. Within one `loop`, each distinct PR-set change is reported once (the PR baseline advances when
 it fires), and a stack-state change is reported once per change.
 
 At `--max-total-seconds`, `loop` returns a `timer` result carrying the report, even when its last arm
