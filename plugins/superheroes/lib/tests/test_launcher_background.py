@@ -345,8 +345,11 @@ def _grade(tmp_path, monkeypatch, *, rc=0, ack="backgrounded · %s\n" % BG_ID,
     log.write_text(ack, encoding="utf-8")
     if rows is None:
         rows = [_row(cwd=str(wt))]
+    monkeypatch.setattr(L, "_LISTING_WAIT_SECONDS", 0.3)
+    monkeypatch.setattr(L, "_LISTING_POLL_SECONDS", 0.05)
+    listings = rows if callable(rows) else (lambda: rows)
     monkeypatch.setattr(L.engine_dispatch, "claude_agents_rows",
-                        lambda cfg, cwd: (rows if listing_ok else None, listing_ok))
+                        lambda cfg, cwd: (listings() if listing_ok else None, listing_ok))
     return _REAL_HANDSHAKE(_Ack(rc), str(log), str(wt), str(tmp_path / "cfg"), deadline)
 
 
@@ -354,6 +357,21 @@ def test_handshake_listed_session_is_a_launch(tmp_path, monkeypatch):
     # axis: D4 — the one passing grade: a listed session in this worktree with its own ids
     shake = _grade(tmp_path, monkeypatch)
     assert shake == {"ok": True, "backgroundId": BG_ID, "sessionId": SESSION_ID, "pid": 5150}
+
+
+def test_handshake_waits_for_the_row_to_carry_its_pid(tmp_path, monkeypatch):
+    # axis: D4 — a fresh session is listed before its process (live on 2.1.281: no pid for ~1 s);
+    # the handshake polls, bounded, and grades the row once the pid is there
+    wt = str(tmp_path / "wt")
+    calls = []
+
+    def listing():
+        calls.append(1)
+        return [_row(cwd=wt, pid=None)] if len(calls) < 3 else [_row(cwd=wt)]
+
+    shake = _grade(tmp_path, monkeypatch, rows=listing)
+    assert shake["ok"] is True and shake["pid"] == 5150
+    assert len(calls) == 3
 
 
 @pytest.mark.parametrize("kw,token,detail", [

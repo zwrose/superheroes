@@ -68,6 +68,8 @@ CONFIG_DIR_NOT_A_DIRECTORY = "config-dir-unusable:not-a-directory"
 # long a stop may take to end the session's process before the stop counts as unconfirmed.
 _ACK_WAIT_SECONDS = 30
 _STOP_CONFIRM_SECONDS = 10
+_LISTING_WAIT_SECONDS = 15
+_LISTING_POLL_SECONDS = 0.5
 
 _SETTLE_SECONDS = 20
 _MAX_ATTEMPTS = 3
@@ -1417,16 +1419,24 @@ def _background_handshake(proc, log_path, cwd, config_dir, deadline):
         return dict(refusal, reason=background_outcome.REFUSAL_LAUNCH_FAILED, detail=detail)
     if background_id is None:
         return dict(refusal, reason=background_outcome.REFUSAL_LAUNCH_UNACKNOWLEDGED)
+    # A fresh session is listed before its process is: on 2.1.281 the row appeared with no pid
+    # and gained one about a second later. So the listing is polled, bounded, until the row
+    # carries its pid; whatever it holds at the bound is what gets graded.
     row, reason = None, background_outcome.REFUSAL_AGENTS_UNREADABLE
-    for pause in (0, 1):
-        time.sleep(pause)
+    limit = time.monotonic() + _LISTING_WAIT_SECONDS
+    if deadline is not None:
+        limit = min(limit, deadline)
+    while True:
         rows, listing_ok = engine_dispatch.claude_agents_rows(config_dir, cwd)
-        if not listing_ok:
-            continue
-        row = engine_dispatch.claude_agent_row_for_launch(rows, background_id)
-        if row is not None:
+        if listing_ok:
+            row = engine_dispatch.claude_agent_row_for_launch(rows, background_id)
+            if row is None:
+                reason = background_outcome.REFUSAL_SESSION_UNLISTED
+            elif isinstance(row.get("pid"), int):
+                break
+        if time.monotonic() >= limit:
             break
-        reason = background_outcome.REFUSAL_SESSION_UNLISTED
+        time.sleep(_LISTING_POLL_SECONDS)
     if row is None:
         return dict(refusal, reason=reason, detail="row-absent")
     pid = row.get("pid")
