@@ -1762,7 +1762,7 @@ def test_hand_landed_write_run_kind_qualifies_without_payload_key():
         recorded_nonces={"hand-landed-nonce"},
     )
     assert ok is True
-    assert failure is None
+    assert failure == RC.EXECUTION_ONLY_BINDING
 
 
 def test_hand_landed_review_kind_absent_from_payload_refuses():

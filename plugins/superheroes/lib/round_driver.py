@@ -38,6 +38,7 @@ not re-implemented.
 """
 import argparse
 import base64
+import binascii
 import errno
 import hashlib
 import json
@@ -406,6 +407,9 @@ _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 # Named refusal when a submit artifact lists the same judgment id with conflicting dispositions.
 JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 
+# Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
+DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
+
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
 POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
@@ -510,6 +514,17 @@ class FixBatchCapRefusal(ValueError):
 
     Raised only from ``_default_config`` when ``fixBatchCap`` is present, not ``None``, and not a
     positive non-bool ``int``."""
+    def __init__(self, reason, value=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.value = value
+
+
+class DispositionLedgerOwnerRefusal(ValueError):
+    """Fold-time refusal for an unrecognized ``dispositionLedgerOwner`` marker — sibling of
+    ``RoundCeilingRefusal``.
+
+    Raised only from ``_fold`` — the single chokepoint every fold passes through."""
     def __init__(self, reason, value=None):
         super().__init__(reason)
         self.reason = reason
@@ -1386,10 +1401,11 @@ def _live_finding_by_key(state, key):
 
 
 def _strip_disposition_family(entry):
-    copy = dict(entry)
-    for field in session_contract.DISPOSITION_FAMILY_FIELDS:
-        copy.pop(field, None)
-    return copy
+    return session_contract.strip_disposition_family(entry)
+
+
+def _apply_disposition_family(target, family):
+    session_contract.apply_disposition_family(target, family)
 
 
 def _backfill_ledger_from_records(state, ledger, seen):
@@ -1400,11 +1416,7 @@ def _backfill_ledger_from_records(state, ledger, seen):
         idx = seen[key]
         entry = ledger[idx]
         if isinstance(entry, dict):
-            family_snapshots[key] = {
-                field: entry[field]
-                for field in session_contract.DISPOSITION_FAMILY_FIELDS
-                if field in entry
-            }
+            family_snapshots[key] = session_contract.disposition_family_snapshot(entry)
     for rec in state.get("_records") or []:
         if not isinstance(rec, dict):
             continue
@@ -1431,9 +1443,8 @@ def _stage_findings(state, compiled):
         return
     ledger = _ensure_disposition_ledger(state)
     seen = _ledger_index_by_key(ledger)
-    first_ledger_owner = state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD) != (
-        session_contract.DISPOSITION_LEDGER_OWNER_VALUE
-    )
+    owner_class = session_contract.disposition_ledger_owner_classification(state)
+    first_ledger_owner = owner_class == "absent"
     if first_ledger_owner:
         _backfill_ledger_from_records(state, ledger, seen)
     round_no = state["round"]
@@ -1451,7 +1462,7 @@ def _stage_findings(state, compiled):
         entry = _strip_disposition_family(dict(finding))
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
         if (isinstance(existing, dict)
-                and existing.get("disposition") is not None
+                and session_contract.has_disposition_family(existing)
                 and existing.get("dispositionRound") == round_no):
             for field in session_contract.DISPOSITION_FAMILY_FIELDS:
                 if field in existing:
@@ -1486,21 +1497,17 @@ def _record_disposition(state, key, disposition, round_no, **fields):
         entry[session_contract.RAISED_ROUND_FIELD] = state.get("round", round_no)
     else:
         entry = {session_contract.FINDING_KEY_FIELD: key}
-    entry["disposition"] = disposition
-    entry["dispositionRound"] = round_no
+    family = {"disposition": disposition, "dispositionRound": round_no}
     for fname, val in fields.items():
         if val is not None:
-            entry[fname] = val
+            family[fname] = val
+    _apply_disposition_family(entry, family)
     if key in seen:
         ledger[seen[key]] = entry
     else:
         ledger.append(entry)
     if live is not None:
-        live["disposition"] = disposition
-        live["dispositionRound"] = round_no
-        for fname, val in fields.items():
-            if val is not None:
-                live[fname] = val
+        _apply_disposition_family(live, family)
 
 
 def _record_merged_into(state, key, into_key):
@@ -1514,11 +1521,14 @@ def _record_merged_into(state, key, into_key):
         entry[session_contract.RAISED_ROUND_FIELD] = state.get("round", state["round"])
     else:
         entry = {session_contract.FINDING_KEY_FIELD: key}
-    entry[session_contract.MERGED_INTO_FIELD] = into_key
+    family = {session_contract.MERGED_INTO_FIELD: into_key}
+    _apply_disposition_family(entry, family)
     if key in seen:
         ledger[seen[key]] = entry
     else:
         ledger.append(entry)
+    if live is not None:
+        _apply_disposition_family(live, family)
 
 
 def _fix_receipt_content_fields(session_dir, head_sha, file_path):
@@ -1592,18 +1602,35 @@ def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
     return receipt
 
 
+def _fixed_ledger_rows(state):
+    """Fixed disposition-ledger rows as ordered (key, entry) pairs plus the by_key map.
+
+    A pure read: a ledger that is not a list yields no rows and is never repaired here, so no
+    read path can launder a malformed ledger past the fold chokepoint's ``bc-03`` refusal."""
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
+    if not isinstance(ledger, list):
+        return [], {}
+    seen = _ledger_index_by_key(ledger)
+    by_key = {
+        key: ledger[idx]
+        for key, idx in seen.items()
+        if isinstance(ledger[idx], dict)
+    }
+    rows = []
+    for key, idx in list(seen.items()):
+        entry = ledger[idx]
+        if not isinstance(entry, dict) or entry.get("disposition") != "fixed":
+            continue
+        rows.append((key, entry))
+    return rows, by_key
+
+
 def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
     """Stamp verify on fixed receipts when audits folded before verify in the same round."""
     if verify_result is None:
         return
-    ledger = _ensure_disposition_ledger(state)
-    seen = _ledger_index_by_key(ledger)
-    for key, idx in list(seen.items()):
-        entry = ledger[idx]
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("disposition") != "fixed":
-            continue
+    rows, _by_key = _fixed_ledger_rows(state)
+    for key, entry in rows:
         if entry.get("dispositionRound") != round_no:
             continue
         receipt = entry.get("dispositionReceipt")
@@ -1611,16 +1638,16 @@ def _backfill_fixed_disposition_verify_receipts(state, round_no, verify_result):
             continue
         updated_receipt = dict(receipt)
         updated_receipt["verifyResult"] = verify_result
-        entry = dict(entry)
-        entry["dispositionReceipt"] = updated_receipt
-        ledger[idx] = entry
-        live = _live_finding_by_key(state, key)
-        if live is not None:
-            live_receipt = live.get("dispositionReceipt")
-            if isinstance(live_receipt, dict) and live_receipt.get("verifyResult") is None:
-                live_receipt = dict(live_receipt)
-                live_receipt["verifyResult"] = verify_result
-                live["dispositionReceipt"] = live_receipt
+        # The writer applies a WHOLE family and pops every member the family omits, so the
+        # stamp carries the row's existing family forward. Passing the receipt alone would
+        # delete `mergedInto` (and the refuted/out-of-scope reasons) from a retained row and
+        # turn a refusing unresolved-merge chain into a certifiable independent disposition —
+        # a fail-direction inversion, not a cosmetic loss.
+        family = session_contract.disposition_family_snapshot(entry)
+        family.pop("disposition", None)
+        family.pop("dispositionRound", None)
+        family = dict(family, dispositionReceipt=updated_receipt)
+        _record_disposition(state, key, "fixed", round_no, **family)
 
 
 def _archive_departures(state, departing):
@@ -2159,6 +2186,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     `changed_subjects_seam` is threaded to the fixer fold: run_loop passes the injected seam (the
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
     wires the real git derivation. It is inert for every other phase."""
+    if session_contract.disposition_ledger_owner_classification(state) == "unrecognized":
+        raise DispositionLedgerOwnerRefusal(DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE)
     artifact = artifact if isinstance(artifact, dict) else {}
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
@@ -3336,7 +3365,7 @@ def _fold_judgment(state, config, artifact):
             follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
             disp_kwargs = {"outOfScopeReason": reason.strip()}
             if follow_up is not None:
-                disp_kwargs["followUp"] = follow_up
+                disp_kwargs = dict(disp_kwargs, followUp=follow_up)
             _record_disposition(state, fid, "out-of-scope", state["round"], **disp_kwargs)
             continue
         g = dict(f)
@@ -3558,7 +3587,8 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         else:
             _record_round(state, "fixFoldHead", head)
             _record_fix_content_on_findings(state, session_dir, artifact, head)
-            _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
+            _merge_head_content_blobs(
+                session_dir, state, head, _fixed_ledger_content_paths(state, artifact))
     queue = state.get("_fixQueue") or []
     if queue:
         cap = _fix_batch_cap(config)
@@ -4670,7 +4700,7 @@ def _fold_stall(state, config, artifact):
                 continue
             disp_kwargs = {"outOfScopeReason": "owner accepted the disclosed risk (stall gate)"}
             if follow_up is not None:
-                disp_kwargs["followUp"] = follow_up
+                disp_kwargs = dict(disp_kwargs, followUp=follow_up)
             _record_disposition(state, key, "out-of-scope", state["round"], **disp_kwargs)
         _terminal_converged(state, config, full_panel=False,
                             note="owner accepted the disclosed (CONFIRMED) risk")
@@ -5367,17 +5397,94 @@ def _resolve_repo_root(session_dir, state):
     return os.path.realpath(root) if root else None
 
 
-def _fixed_finding_paths(state):
+def _fixed_ledger_content_paths(state, artifact=None):
+    """Proof paths for fixed ledger rows plus any fix-batch paths at the certified head."""
+    rows, _by_key = _fixed_ledger_rows(state)
     paths = []
     seen = set()
-    for finding in (state.get("findings") or []) if isinstance(state, dict) else []:
-        if not isinstance(finding, dict) or finding.get("disposition") != "fixed":
-            continue
-        path = finding.get("file")
+    for key, entry in rows:
+        _ = key
+        path = entry.get("file")
         if isinstance(path, str) and path and path not in seen:
             seen.add(path)
             paths.append(path)
+    for path in _fix_batch_paths(state, artifact):
+        if path not in seen:
+            seen.add(path)
+            paths.append(path)
     return paths
+
+
+def _merge_head_content_blobs(session_dir, state, head_sha, paths):
+    """Write or merge head-content reads bound to a named head (#1271 layer 2).
+
+    Every row records a read that actually happened; presence is never written here."""
+    if not session_dir:
+        return
+    try:
+        head = head_sha
+        if not isinstance(head, str) or not head:
+            return
+        if not paths:
+            return
+        repo_root = _resolve_repo_root(session_dir, state)
+        existing = _read_head_content_blobs_file(session_dir) or {}
+        files = dict(existing.get("files") or {})
+        reads = [row for row in (existing.get("reads") or []) if isinstance(row, dict)]
+        indexed = {(row.get("headSha"), row.get("path")): i for i, row in enumerate(reads)}
+        read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for path in paths:
+            row, raw = _head_content_read_row(repo_root, head, path, read_at)
+            key = (head, path)
+            if key in indexed:
+                reads[indexed[key]] = row
+            else:
+                indexed[key] = len(reads)
+                reads.append(row)
+            if row.get("readError") is None and raw is not None:
+                files[path] = base64.b64encode(raw).decode("ascii")
+            else:
+                files.pop(path, None)
+        blobs = {
+            "schema": HEAD_CONTENT_BLOBS_SCHEMA,
+            "headSha": head,
+            "files": files,
+            "reads": reads,
+        }
+        out_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
+        round_commit.atomic_write_bytes(
+            out_path, (json.dumps(blobs, sort_keys=True) + "\n").encode("utf-8"))
+    except Exception:
+        pass
+
+
+def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None, paths=None):
+    """Write or merge head-content reads bound to a named head (#1271 layer 2).
+
+    Every row records a read that actually happened; presence is never written here."""
+    if not session_dir:
+        return
+    head = head_sha or _session_certified_head(session_dir, state)
+    if not isinstance(head, str) or not head:
+        return
+    try:
+        if paths is None:
+            paths = _fixed_ledger_content_paths(state, artifact)
+        _merge_head_content_blobs(session_dir, state, head, paths)
+    except Exception:
+        pass
+
+
+def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
+    """The one terminal step both certification legs reach — persists head-content blobs.
+
+    It is deliberately empty of receipt finalization: #1272 layer 2g plugs the certified-head
+    re-bind in here, and this chokepoint exists so that both legs get it at once."""
+    if not session_dir:
+        return
+    head = head_sha or _session_certified_head(session_dir, state)
+    if isinstance(head, str) and head:
+        _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
 
 
 def _fix_batch_paths(state, artifact=None):
@@ -5499,54 +5606,6 @@ def _record_fix_content_on_findings(state, session_dir, artifact, head):
         receipt["fixContentBytes"] = row.get("bytes")
 
 
-def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None, paths=None):
-    """Write or merge head-content reads bound to a named head (#1271 layer 2).
-
-    Every row records a read that actually happened; presence is never written here."""
-    if not session_dir:
-        return
-    try:
-        head = head_sha or _session_certified_head(session_dir, state)
-        if not isinstance(head, str) or not head:
-            return
-        if paths is None:
-            paths = _fixed_finding_paths(state)
-            for path in _fix_batch_paths(state, artifact):
-                if path not in paths:
-                    paths.append(path)
-        if not paths:
-            return
-        repo_root = _resolve_repo_root(session_dir, state)
-        existing = _read_head_content_blobs_file(session_dir) or {}
-        files = dict(existing.get("files") or {})
-        reads = [row for row in (existing.get("reads") or []) if isinstance(row, dict)]
-        indexed = {(row.get("headSha"), row.get("path")): i for i, row in enumerate(reads)}
-        read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        for path in paths:
-            row, raw = _head_content_read_row(repo_root, head, path, read_at)
-            key = (head, path)
-            if key in indexed:
-                reads[indexed[key]] = row
-            else:
-                indexed[key] = len(reads)
-                reads.append(row)
-            if row.get("readError") is None and raw is not None:
-                files[path] = base64.b64encode(raw).decode("ascii")
-            else:
-                files.pop(path, None)
-        blobs = {
-            "schema": HEAD_CONTENT_BLOBS_SCHEMA,
-            "headSha": head,
-            "files": files,
-            "reads": reads,
-        }
-        out_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
-        round_commit.atomic_write_bytes(
-            out_path, (json.dumps(blobs, sort_keys=True) + "\n").encode("utf-8"))
-    except Exception:
-        pass
-
-
 def _write_certification_artifacts(session_dir):
     """Write certification-receipt.json or certification-refusal.json beside round-receipt.json.
 
@@ -5639,10 +5698,18 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
         if finding.get("disposition") == "fixed":
             receipt = finding.get("dispositionReceipt")
             if not isinstance(receipt, dict):
-                finding["dispositionReceipt"] = {"headSha": head, "verifyResult": "pass"}
+                family = session_contract.disposition_family_snapshot(finding)
+                family = dict(
+                    family,
+                    dispositionReceipt={"headSha": head, "verifyResult": "pass"},
+                )
+                session_contract.apply_disposition_family(finding, family)
             elif not receipt.get("headSha"):
                 receipt["headSha"] = head
     meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head, "producer": "run-loop"}
+    repo_root = cfg.get("repoRoot")
+    if isinstance(repo_root, str) and repo_root:
+        meta["repoRoot"] = repo_root
     _apply_grounded_mode(meta, session_mode.resolve(meta, cfg))
     round_commit.atomic_write_bytes(
         os.path.join(session_dir, round_records.META_FILE),
@@ -5650,7 +5717,7 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     save_state(session_dir, state_copy)
     if source_session_dir:
         _copy_session_tree(source_session_dir, session_dir)
-        _persist_head_content_blobs(session_dir, state_copy, head_sha=head)
+        _finalize_certification_inputs(session_dir, state_copy, head_sha=head)
         return session_dir
     shutil.rmtree(session_dir, ignore_errors=True)
     return None
@@ -5755,7 +5822,11 @@ def run_loop(seams, config=None):
                 if fault is not None:
                     _record_round_append(state, "verifierArtifactFault",
                                          {"fault": fault, "round": state["round"]})
-            _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
+            try:
+                _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
+            except DispositionLedgerOwnerRefusal as refusal:
+                _park_cannot_certify(state, refusal.reason)
+                return _run_loop_certified_receipt(state, guard)
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the
             # synthesis fold must re-settle the delta rather than the round-1 path.
@@ -6027,7 +6098,13 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             state = prep["state"]
             round_no = prep["round_no"]
             art_hash = prep["art_hash"]
-            _fold(state, state["config"], phase, artifact, session_dir=session_dir)
+            try:
+                _fold(state, state["config"], phase, artifact, session_dir=session_dir)
+            except DispositionLedgerOwnerRefusal:
+                _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                              "round": round_no, "attempt": attempt,
+                                              "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
+                return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
             if _via_advance and _pending_policy_applied is not None:
                 applied = state.get("_policyApplied")
                 if not isinstance(applied, list):
@@ -6207,6 +6284,12 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "hash-mismatch"})
         return {"ok": False, "reason": "state-hash mismatch — the state moved under a stale submit"}
+
+    if session_contract.disposition_ledger_owner_classification(state) == "unrecognized":
+        _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                      "round": pending.get("round"), "attempt": attempt,
+                                      "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
+        return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
 
     # #845: the panel seat-key invariant, at the chokepoint. A `seats` map keyed by findings-file
     # stems instead of `payload.dimensions` submits `ok` today and fails phases later with empty
@@ -6402,17 +6485,14 @@ def _finalize_receipt(session_dir, state):
     evidence — did not persist) is a RECEIPT DEFECT: return a reason so the CLI fails closed (the
     orchestrator must treat it as a park), never certifying on a missing/short receipt (#507 v14).
     Returns None on success."""
+    certified_head = _session_certified_head(session_dir, state)
+    _finalize_certification_inputs(session_dir, state, head_sha=certified_head)
     try:
         _write_receipt(session_dir, state)
     except ReceiptWriteError as exc:
         return ReceiptFault(
             "terminal receipt write failed (%s) — cannot certify; treat as park" % exc,
             exc.kind)
-    _persist_head_content_blobs(
-        session_dir,
-        state,
-        head_sha=_session_certified_head(session_dir, state),
-    )
     cert_fault = _write_certification_artifacts(session_dir)
     if cert_fault:
         return cert_fault
@@ -8788,8 +8868,9 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
         "reason": reason,
         "evidence": evidence,
         "occurrence": occurrence,
-        "citedHeadSource": round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR,
     }
+    envelope = round_records.envelope_bind_cited_head_source(
+        envelope, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
     try:
         lpath = round_records.landing_path(
             session_dir, rnd, phase, round_records.storage_key(seat, occurrence), cur_attempt)
@@ -9305,8 +9386,8 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
         envelope["provenance"] = round_records.PROVENANCE_ORCHESTRATOR_FULFILLED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, None)
-    envelope["citedHeadSource"] = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
-    return envelope
+    return round_records.envelope_bind_cited_head_source(
+        envelope, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
 
 
 def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt, config,
