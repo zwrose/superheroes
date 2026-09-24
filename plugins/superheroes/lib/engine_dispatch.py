@@ -923,56 +923,6 @@ def _claude_agent_row_for_launch(rows, launch_id):
     return None
 
 
-def _stop_confirmed_pid_dead(row):
-    """True when row pid is dead, False when live or unusable, None on kill uncertainty. Never raises."""
-    if not isinstance(row, dict):
-        return True
-    pid = row.get("pid")
-    if pid is None or not isinstance(pid, int) or pid < 2:
-        state = row.get("state")
-        if state in ("stopped", "done"):
-            return True
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    except OSError:
-        return None
-    return False
-
-
-def claude_session_stop_confirmed(launch_id, config_dir, cwd):
-    """Stop a session and confirm the pid ended. Never raises.
-
-    Fork of _background_stop (claude-stop-rule-fork): unconditional stop plus
-    row-gone-or-pid-dead confirmation vs _background_stop's conditional pre-stop
-    and state-based confirmation. Closes when layer 4a-2 wires the launcher to
-    this function and decides whether _background_stop delegates to it;
-    test_claude_stop_rule_fork_enumeration pins both homes.
-    """
-    if not isinstance(launch_id, str) or not launch_id:
-        return background_outcome.REFUSAL_STOP_UNCONFIRMED
-    _rc, _stdout, _stderr = _claude_cli(["stop", launch_id], config_dir, cwd=cwd)
-    for poll in range(6):
-        rows, listing_ok = _claude_agents_rows(config_dir, cwd)
-        if not listing_ok:
-            return background_outcome.REFUSAL_STOP_UNCONFIRMED
-        row = _claude_agent_row_for_launch(rows, launch_id)
-        if row is None:
-            return "stopped"
-        dead = _stop_confirmed_pid_dead(row)
-        if dead is True:
-            return "stopped"
-        if dead is None:
-            return background_outcome.REFUSAL_STOP_UNCONFIRMED
-        if poll < 5:
-            _SLEEP(0.5)
-    return background_outcome.REFUSAL_STOP_UNCONFIRMED
-
-
 def _session_id_path_safe(session_id):
     """Reject session ids that escape the projects tree or expand globs. Never raises."""
     if not isinstance(session_id, str) or not session_id:
@@ -1044,8 +994,6 @@ def _read_session_transcript_rows(config_dir, session_id):
     return rows, paths, file_size
 
 
-claude_agents_rows = _claude_agents_rows
-claude_agent_row_for_launch = _claude_agent_row_for_launch
 read_session_transcript_rows = _read_session_transcript_rows
 
 
@@ -1147,15 +1095,7 @@ def _result_delivery_gate_refusal():
 
 
 def _background_stop(launch_id, config_dir, cwd):
-    """Stop a background session and confirm it ended. Returns stop outcome token.
-
-    Fork of claude_session_stop_confirmed (claude-stop-rule-fork): conditional
-    pre-stop and state-based confirmation vs claude_session_stop_confirmed's
-    unconditional stop and row-gone-or-pid-dead confirmation. Closes when layer
-    4a-2 wires the launcher to claude_session_stop_confirmed and decides whether
-    this function delegates to it; test_claude_stop_rule_fork_enumeration pins
-    both homes.
-    """
+    """Stop a background session and confirm it ended. Returns stop outcome token."""
     if not isinstance(launch_id, str) or not launch_id:
         return "stop-unconfirmed"
     rows_before, ok_before = _claude_agents_rows(config_dir, cwd)
