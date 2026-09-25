@@ -56,7 +56,8 @@ with no reply it posts on the issue and stops, as a park. A build the owner driv
 the session. The builder never sets its own estimate.
 
 **The tripwire resolves by message.** The builder counts at every commit, in the full and light
-lanes. **Crossing twice the estimate is the tripwire**; the first commit past 2× is the crossing,
+lanes. **Crossing twice the estimate is the tripwire**; for a range estimate, twice its upper end is the
+line (for 40–90, 180). The first commit past 2× is the crossing,
 even when a later count falls back under it. At that commit the builder
 messages the advisor session its order names — the count, the estimate, and a proposed split — and
 writes or dispatches no more code until the reply, waiting in-turn as the host tool map says. The

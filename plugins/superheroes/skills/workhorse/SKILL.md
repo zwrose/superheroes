@@ -63,7 +63,7 @@ charter states today.
 
 **Light lane — shape for the builder**
 
-- **No build brief and no pre-code brief check** (§4–§5 are full-lane only).
+- **No build brief and no pre-code brief check** (§4–§5 are full-lane only, except §4's size step).
 - **You type the implementation** in this session rather than dispatching work orders (§7).
 - **Review before handback is one independent cross-vendor reviewer** — not the full `review-code`
   panel loop — and that reviewer must be **outside the maker family** (you typed the change, so you
@@ -130,7 +130,7 @@ A routed issue carries exactly one of the advisor's four routes — `discovery`,
 
 - **`build-ready`** → the owner starting the issue is your go-ahead; no discovery needed — set up the
   workspace (§2), run the preflight (§3); **in the full lane** write the brief (§4); **in the light
-  lane** skip §4–§5 and build per Build lanes (you type the implementation).
+  lane** skip §4–§5 except §4's size step, and build per Build lanes (you type the implementation).
 - **`discovery`** → **route it back and stop.** You do not elicit requirements in a build session:
   discovery ends in an owner-approved spec, and that spec is what a build starts from. Report on the
   issue that it reached a builder still needing discovery, and hand it to the advisor —
@@ -433,7 +433,7 @@ which runs in both lanes.
 
 ~20–40 lines, **posted on the issue** and carried into the PR. Six items, in order:
 
-1. **Shape** — what gets built where; expected diff size as THREE numbers — non-test changed lines (additions plus deletions outside `tests/`; the input to the scope check below), test-code lines (derived from the DoD: one fixture per row, one bite-proof per guarded element, one census per invariant), and **record lines** — the committed prose receipts the build owes, chiefly the bite-proof records under `lib/tests/bite_proofs/`. Budget the third bucket separately because it is receipts, not test code: the two-number form had nowhere to put it, so PR #1129 landed **648 unbudgeted record lines** while both of its estimated buckets came in on target. The scope check and the size step below read the **non-test** number only — record lines never enlarge the size you may ship without disclosure.
+1. **Shape** — what gets built where; expected diff size as THREE numbers — non-test changed lines (counted as `review-discipline.md` § Size defines them; the input to the scope check below), test-code lines (derived from the DoD: one fixture per row, one bite-proof per guarded element, one census per invariant), and **record lines** — the committed prose receipts the build owes, chiefly the bite-proof records under `lib/tests/bite_proofs/`. Budget the third bucket separately because it is receipts, not test code: the two-number form had nowhere to put it, so PR #1129 landed **648 unbudgeted record lines** while both of its estimated buckets came in on target. The scope check and the size step below read the **non-test** number only — record lines never enlarge the size you may ship without disclosure.
 2. **Contracts & state** — new/changed interfaces and data shapes; where state lives and who mutates it.
 3. **Reuse plan** — what existing code you build on; what you checked for before writing new.
 4. **Hard seams** — the 2–3 riskiest spots and how each is handled; conscious deferrals stated.
