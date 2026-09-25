@@ -1254,7 +1254,9 @@ def horizon_validity_exercise(*, inputs, now):
 
 
 # WORKAROUND: env-var transport of connection detail across multi-account ownership probes
-# delete-when: the background-session trial receipt marks multi-account provisioning transport not needed
+# delete-when: a lane launched without the config-dir pin is observed landing under the account its
+# launcher intended, and one supervision view — the one that carries lane work state, not only
+# names — is observed spanning every account's lanes
 @pilot_conformance.register("ownership-probe", surfaces=_OWNERSHIP_PROBE_SURFACES)
 def ownership_probe_exercise(*, inputs, now):
     probe_inputs, skip_reason = _exercise_key(inputs, "ownership_probe")

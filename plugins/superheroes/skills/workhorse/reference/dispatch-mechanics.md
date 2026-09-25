@@ -161,7 +161,10 @@ readers.
 ## Launch slice vs continuation slice
 
 <!-- WORKAROUND: 540 s continuation and short launch slice recipes for turn-end survival
-     delete-when: the background-session trial receipt marks turn-end slice recipes not needed -->
+     delete-when: a headless supervising session is observed being notified of each lane's finish
+     in time to act on it, inside the turn and not at its boundary, for every lane of a wave and not
+     merely for most lanes, so that ending a turn stops costing the result; the supervising process
+     surviving a turn boundary does not satisfy this on its own -->
 
 Every `dispatch-review` / `dispatch-write` call names a `--max-wait` **slice** on that `--run-dir`.
 The slice you choose depends on whether the run is a **launch** or a **continuation**:

@@ -1163,7 +1163,9 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
 
 
 # WORKAROUND: headless builders must survive parent session exit via detached spawn
-# delete-when: the background-session trial receipt marks detached spawn not needed
+# delete-when: the builders this launcher spawns are observed surviving their spawner's turn end on
+# the path it actually spawns, and the service that holds them has been exercised or its failure is
+# accepted by the owner, on the record and cited by id, as a known unexercised class
 def _default_spawn(argv, cwd, out_fh, err_fh, child_env):
     return subprocess.Popen(
         argv,
@@ -1237,7 +1239,8 @@ def _overlap_evidence(warnings):
 
 
 # WORKAROUND: launcher refuses spawn when cwd is the primary checkout (own-worktree)
-# delete-when: the background-session trial receipt marks launcher worktree enforcement not needed
+# delete-when: the host itself is observed keeping the session shape this launcher spawns out of
+# the primary checkout
 def _spawn_attempt(
     repo_root,
     launch_id,
