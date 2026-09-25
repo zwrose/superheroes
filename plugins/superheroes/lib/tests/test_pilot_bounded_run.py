@@ -19,6 +19,7 @@ if _LIB not in sys.path:
 import pilot_bounded_run as pbr  # noqa: E402
 import pilot_boundary as pb  # noqa: E402
 from grandchild_probe import (  # noqa: E402
+    COMPLETION_BUDGET_SECONDS,
     _observed_process_state,
     _wait_for_process_gone,
     cleanup_grandchild_on_exit,
@@ -202,7 +203,7 @@ def test_observe_datastore_identity_routes_through_the_shared_runner(private_tmp
         connection_detail="postgres://localhost:5432/example_dev",
         reach_roots=[reach_root],
         run_cwd=run_cwd,
-        timeout_seconds=5,
+        timeout_seconds=COMPLETION_BUDGET_SECONDS,
     )
 
     assert spy_calls, (
@@ -441,7 +442,7 @@ def test_retain_output_false_under_cap(private_tmp):
         [script],
         run_cwd=run_cwd,
         env={},
-        timeout_seconds=5,
+        timeout_seconds=COMPLETION_BUDGET_SECONDS,
         max_output_bytes=100,
         retain_output=False,
     )
@@ -486,7 +487,7 @@ def test_retain_output_false_nonzero_exit_is_completed(private_tmp):
         [script],
         run_cwd=run_cwd,
         env={},
-        timeout_seconds=5,
+        timeout_seconds=COMPLETION_BUDGET_SECONDS,
         max_output_bytes=4096,
         retain_output=False,
     )
@@ -522,7 +523,7 @@ def test_retain_output_true_completed_carries_byte_fields(private_tmp):
         [script],
         run_cwd=run_cwd,
         env={},
-        timeout_seconds=5,
+        timeout_seconds=COMPLETION_BUDGET_SECONDS,
         max_output_bytes=100,
         retain_output=True,
     )
