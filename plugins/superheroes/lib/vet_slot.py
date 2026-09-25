@@ -6,8 +6,11 @@ closed-PR follow-ups sweep (``check``). ``write`` changes the PR body only in th
 span strictly between the advisor-vet marker line and the build-record marker
 line, and only after every follow-up id in the build record has exactly one
 recognized disposition bullet in the latest vet receipt (and vice versa). Any
-failed read or check is a named refusal and no edit is made. One JSON line on
-stdout; exit 0 on ok, 1 on refusal."""
+failed read or check is a refusal with one of nine reasons (``bad-argument``,
+``read-failed``, ``markers-invalid``, ``followups-malformed``, ``receipt-missing``,
+``dispositions-malformed``, ``followup-undispositioned``, ``none-over-list``,
+``write-failed``) and a detail naming what was wrong; no edit is made. One JSON
+line on stdout; exit 0 on ok, 1 on refusal."""
 import argparse
 import json
 import os
@@ -45,37 +48,33 @@ _DISPOSITION_RE = re.compile(r"^\s*- FU(\d+): (\S.*)$")
 
 
 class _Refusal(Exception):
-    def __init__(self, reason, detail=None):
+    def __init__(self, reason, detail):
         super().__init__(reason)
         self.reason = reason
         self.detail = detail
 
 
-class _ParseError(Exception):
-    pass
+def _malformed(detail):
+    return _Refusal("followups-malformed", detail)
 
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message):
-        raise _ParseError(message)
-
-    def exit(self, status=0, message=None):
-        raise _ParseError(message or "")
+        raise SystemExit(2)  # no usage text: stdout carries exactly one JSON line
 
 
-def _refusal(reason, detail=None):
+def _refusal(reason, detail):
     return {"ok": False, "reason": reason, "detail": detail}
 
 
 def _lines(text):
-    """(lines with ends, bare lines, start offsets)."""
+    """(bare lines, start offsets)."""
     lines = text.splitlines(keepends=True)
-    bare = [line.rstrip("\r\n") for line in lines]
     starts, pos = [], 0
     for line in lines:
         starts.append(pos)
         pos += len(line)
-    return lines, bare, starts
+    return [line.rstrip("\r\n") for line in lines], starts
 
 
 def _heading(line):
@@ -88,7 +87,7 @@ def _heading(line):
 
 def _parse_followups(body, build_offset):
     """Return the list of FU ids, or None for an explicit ``None`` section."""
-    _, bare, starts = _lines(body)
+    bare, starts = _lines(body)
     inert = md_fence.scan_contexts(bare).inert
     first = next(i for i, s in enumerate(starts) if s >= build_offset)
     heading_at = level = None
@@ -98,7 +97,7 @@ def _parse_followups(body, build_offset):
             heading_at, level = i, lvl
             break
     if heading_at is None:
-        raise _Refusal("followups-section-missing", None)
+        raise _malformed("no %r heading after the build-record marker" % FOLLOWUPS_HEADING)
     section = []
     for i in range(heading_at + 1, len(bare)):
         if not inert[i]:
@@ -118,25 +117,25 @@ def _parse_followups(body, build_offset):
         indent = md_fence.indent_width(line)
         if is_inert or indent >= 2:
             if _NESTED_RE.match(line.lstrip()):
-                raise _Refusal("followup-id-nested", line.strip())
+                raise _malformed("nested follow-up id: %s" % line.strip())
             if not have_item:
-                raise _Refusal("followup-unkeyed", line.strip())
+                raise _malformed("unkeyed line: %s" % line.strip())
             continue
         match = _ITEM_RE.match(line)
         if not match:
-            raise _Refusal("followup-unkeyed", line.strip())
+            raise _malformed("unkeyed line: %s" % line.strip())
         if match.group(2) not in CLASSES:
-            raise _Refusal("followup-class-unknown", match.group(2))
+            raise _malformed("unknown class: %s" % match.group(2))
         fu_id = "FU%d" % int(match.group(1))
         if fu_id in ids:
-            raise _Refusal("followup-id-duplicated", fu_id)
+            raise _malformed("duplicate follow-up id: %s" % fu_id)
         ids.append(fu_id)
         owner_calls += match.group(2) == "owner-call"
         have_item = True
     if not ids:
-        raise _Refusal("followup-unkeyed", "no follow-up items and not None")
+        raise _malformed("unkeyed section: no follow-up items and not None")
     if count is not None and (int(count.group(1)), int(count.group(2))) != (len(ids), owner_calls):
-        raise _Refusal("followup-count-mismatch", "count line %s/%s, items %d/%d" % (
+        raise _malformed("count line says %s (%s owner-call), items are %d (%d owner-call)" % (
             count.group(1), count.group(2), len(ids), owner_calls))
     return ids
 
@@ -144,27 +143,25 @@ def _parse_followups(body, build_offset):
 def analyze_body(body):
     """Check the body's markers and follow-ups; return (advisor_offset, build_offset, ids)."""
     if not body.strip():
-        raise _Refusal("pr-body-empty", None)
+        raise _Refusal("read-failed", "PR body is empty")
     offsets = {}
     for marker, name in ((ADVISOR_MARKER, "advisor-vet"), (BUILD_MARKER, "build-record")):
         found = grounding_stage.find_standalone_markers(body, marker)
-        if not found:
-            raise _Refusal("%s-marker-missing" % name, None)
-        if len(found) > 1:
-            raise _Refusal("%s-marker-duplicated" % name, "%d live occurrences" % len(found))
+        if len(found) != 1:
+            raise _Refusal("markers-invalid", "%s marker appears %d times" % (name, len(found)))
         offsets[name] = found[0]
     if offsets["advisor-vet"] >= offsets["build-record"]:
-        raise _Refusal("slot-order-invalid", None)
+        raise _Refusal("markers-invalid", "advisor-vet marker is not above the build-record marker")
     ids = _parse_followups(body, offsets["build-record"])
     return offsets["advisor-vet"], offsets["build-record"], ids
 
 
 def check_slot_text(slot_text):
     if not isinstance(slot_text, str) or not slot_text.strip():
-        raise _Refusal("slot-text-empty", None)
+        raise _Refusal("write-failed", "slot text is empty")
     for line in slot_text.splitlines():
         if line.strip().startswith("<!-- superheroes:"):
-            raise _Refusal("slot-text-carries-marker", line.strip())
+            raise _Refusal("write-failed", "slot text carries a marker: %s" % line.strip())
 
 
 def _select_receipt(comments):
@@ -179,12 +176,13 @@ def _select_receipt(comments):
 
 def _parse_dispositions(receipt_body):
     """Return the list of FU ids disposed, or None for an explicit ``None`` field."""
-    _, bare, _ = _lines(receipt_body)
+    bare, _ = _lines(receipt_body)
     start = next((i for i, l in enumerate(bare) if l.lstrip().startswith(DISPOSITIONS_PREFIX)), None)
     end = None if start is None else next(
         (i for i in range(start + 1, len(bare)) if bare[i].strip() == PENDING_MARKER), None)
     if end is None:
-        raise _Refusal("receipt-dispositions-missing", None)
+        raise _Refusal("dispositions-malformed", "no completed-dispositions field closed by the "
+                       "pending-proposals marker")
     head = bare[start].lstrip()[len(DISPOSITIONS_PREFIX):]
     close = head.find("**")
     pieces = [head[close + 2:].strip()] if close >= 0 else []
@@ -199,9 +197,9 @@ def _parse_dispositions(receipt_body):
         fu_id = "FU%d" % int(match.group(1))
         word = match.group(2).split()[0].lower().rstrip(string.punctuation)
         if word not in DISPOSITIONS:
-            raise _Refusal("disposition-unrecognized", "%s: %s" % (fu_id, word))
+            raise _Refusal("dispositions-malformed", "unrecognized disposition %s: %s" % (fu_id, word))
         if fu_id in ids:
-            raise _Refusal("disposition-id-duplicated", fu_id)
+            raise _Refusal("dispositions-malformed", "duplicate disposition for %s" % fu_id)
         ids.append(fu_id)
     return ids
 
@@ -217,18 +215,16 @@ def evaluate(verb, body, comments, slot_text=None):
             if verb == "check" and ids is None:
                 return {"ok": True, "verb": "check", "followups": [], "receipt": None,
                         "receiptPresent": False}
-            raise _Refusal("receipt-missing", None)
+            raise _Refusal("receipt-missing", "no comment opens with the vet-receipt marker")
         disposed = _parse_dispositions(receipt["body"])
-        if ids is None and disposed:
-            raise _Refusal("disposition-id-unknown", ", ".join(disposed))
         if ids is not None and disposed is None:
-            raise _Refusal("receipt-none-over-followups", ", ".join(ids))
+            raise _Refusal("none-over-list", "receipt dispositions read None over %s" % ", ".join(ids))
         missing = [i for i in (ids or []) if i not in (disposed or [])]
         if missing:
-            raise _Refusal("disposition-missing", ", ".join(missing))
+            raise _Refusal("followup-undispositioned", "%s: no disposition" % ", ".join(missing))
         unknown = [i for i in (disposed or []) if i not in (ids or [])]
         if unknown:
-            raise _Refusal("disposition-id-unknown", ", ".join(unknown))
+            raise _Refusal("dispositions-malformed", "unknown follow-up ids: %s" % ", ".join(unknown))
     except _Refusal as exc:
         return _refusal(exc.reason, exc.detail)
     result = {"ok": True, "verb": verb, "followups": ids or [],
@@ -246,43 +242,44 @@ def evaluate(verb, body, comments, slot_text=None):
     return result
 
 
-def _gh(run, argv, reason):
+def _gh(run, argv, what, reason="read-failed"):
+    """Run one gh call; a failure is ``reason`` with ``what`` leading the detail."""
     try:
         proc = run(argv, capture_output=True, text=True, timeout=GH_TIMEOUT)
     except subprocess.TimeoutExpired:
-        raise _Refusal(reason, "gh call timed out")
-    except (FileNotFoundError, OSError) as exc:
-        raise _Refusal(reason, str(exc))
+        raise _Refusal(reason, "%s: gh call timed out" % what)
+    except OSError as exc:
+        raise _Refusal(reason, "%s: %s" % (what, exc))
     if proc.returncode != 0:
-        raise _Refusal(reason, ((proc.stdout or "") + (proc.stderr or "")).strip() or None)
+        out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        raise _Refusal(reason, "%s: exit %d %s" % (what, proc.returncode, out))
     return proc.stdout or ""
 
 
-def _read_body(run, pr, repo):
-    out = _gh(run, ["gh", "pr", "view", str(pr), "-R", repo, "--json", "body"], "pr-body-unreadable")
+def _gh_json(run, argv, what):
     try:
-        payload = json.loads(out)
+        return json.loads(_gh(run, argv, what))
     except ValueError as exc:
-        raise _Refusal("pr-body-unreadable", "bad JSON: %s" % exc)
+        raise _Refusal("read-failed", "%s: bad JSON: %s" % (what, exc))
+
+
+def _read_body(run, pr, repo):
+    payload = _gh_json(run, ["gh", "pr", "view", str(pr), "-R", repo, "--json", "body"], "PR body")
     if not isinstance(payload, dict) or not isinstance(payload.get("body"), str):
-        raise _Refusal("pr-body-unreadable", "body is not a string")
+        raise _Refusal("read-failed", "PR body: body is not a string")
     return payload["body"]
 
 
 def _read_comments(run, pr, repo):
     argv = ["gh", "api", "repos/%s/issues/%d/comments" % (repo, pr), "--paginate", "--slurp"]
-    out = _gh(run, argv, "receipt-unreadable")
-    try:
-        pages = json.loads(out)
-    except ValueError as exc:
-        raise _Refusal("receipt-unreadable", "bad JSON: %s" % exc)
+    pages = _gh_json(run, argv, "comments")
     if not isinstance(pages, list) or not all(isinstance(p, list) for p in pages):
-        raise _Refusal("receipt-unreadable", "pages are not lists")
+        raise _Refusal("read-failed", "comments: pages are not lists")
     comments = [c for page in pages for c in page]
     for c in comments:
         if not (isinstance(c, dict) and isinstance(c.get("body"), str)
                 and isinstance(c.get("created_at"), str)):
-            raise _Refusal("receipt-unreadable", "comment without string body/created_at")
+            raise _Refusal("read-failed", "comments: a comment lacks a string body or created_at")
     return comments
 
 
@@ -291,8 +288,6 @@ def _normalize(text):
 
 
 def run_verb(verb, pr, repo, slot_file=None, run=None):
-    if run is None:
-        run = subprocess.run
     if not isinstance(pr, int) or isinstance(pr, bool) or pr < 1:
         return _refusal("bad-argument", "pr must be a positive integer")
     if not isinstance(repo, str) or not _REPO_RE.match(repo):
@@ -300,50 +295,50 @@ def run_verb(verb, pr, repo, slot_file=None, run=None):
     if verb not in ("write", "check") or (verb == "write") != (slot_file is not None):
         return _refusal("bad-argument", "write needs --slot-file; check takes none")
     try:
-        if not shutil.which("gh"):
-            raise _Refusal("pr-body-unreadable", "gh not on PATH")
-        body = _read_body(run, pr, repo)
-        analyze_body(body)
-        slot_text = None
-        if verb == "write":
-            try:
-                with open(slot_file, encoding="utf-8") as handle:
-                    slot_text = handle.read()
-            except (OSError, UnicodeDecodeError) as exc:
-                raise _Refusal("slot-file-unreadable", str(exc))
-            check_slot_text(slot_text)
-        comments = _read_comments(run, pr, repo)
+        return _run_verb(verb, pr, repo, slot_file, run or subprocess.run)
     except _Refusal as exc:
         return _refusal(exc.reason, exc.detail)
+
+
+def _run_verb(verb, pr, repo, slot_file, run):
+    if not shutil.which("gh"):
+        raise _Refusal("read-failed", "gh not on PATH")
+    body = _read_body(run, pr, repo)
+    analyze_body(body)
+    slot_text = None
+    if verb == "write":
+        try:
+            with open(slot_file, encoding="utf-8") as handle:
+                slot_text = handle.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            raise _Refusal("write-failed", "slot file unreadable: %s" % exc)
+        check_slot_text(slot_text)
+    comments = _read_comments(run, pr, repo)
     result = evaluate(verb, body, comments, slot_text)
     if not result["ok"] or verb == "check":
         return result
     new_body = result.pop("newBody")
-    try:
-        if _read_body(run, pr, repo) != body:
-            return _refusal("body-changed-under-write", None)
-    except _Refusal as exc:
-        return _refusal(exc.reason, exc.detail)
+    if _read_body(run, pr, repo) != body:
+        raise _Refusal("write-failed", "PR body changed between the read and the push")
     path = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md",
                                          prefix="vet-slot-", delete=False) as handle:
             path = handle.name
             handle.write(new_body)
-        _gh(run, ["gh", "pr", "edit", str(pr), "-R", repo, "--body-file", path], "write-failed")
-    except _Refusal as exc:
-        return _refusal(exc.reason, exc.detail)
+        _gh(run, ["gh", "pr", "edit", str(pr), "-R", repo, "--body-file", path], "edit",
+            reason="write-failed")
     except OSError as exc:
-        return _refusal("write-failed", str(exc))
+        raise _Refusal("write-failed", "edit: %s" % exc)
     finally:
         if path is not None and os.path.exists(path):
             os.unlink(path)
     try:
         readback = _read_body(run, pr, repo)
     except _Refusal as exc:
-        return _refusal("write-readback-mismatch", "readback unreadable: %s" % exc.detail)
+        raise _Refusal("read-failed", "readback: %s" % exc.detail)
     if _normalize(readback) != _normalize(new_body):
-        return _refusal("write-readback-mismatch", None)
+        raise _Refusal("read-failed", "readback differs from the pushed body")
     return result
 
 
@@ -361,8 +356,8 @@ def main(argv=None, run=None):
                 sub.add_argument("--slot-file", required=True)
         args = parser.parse_args(argv)
         if args.verb not in ("write", "check"):
-            raise _ParseError("unknown or missing verb")
-    except (_ParseError, SystemExit):
+            raise SystemExit(2)
+    except SystemExit:
         result = _refusal("bad-argument", "invalid command-line arguments")
     else:
         result = run_verb(args.verb, args.pr, args.repo, getattr(args, "slot_file", None), run=run)

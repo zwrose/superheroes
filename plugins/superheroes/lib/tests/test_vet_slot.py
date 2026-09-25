@@ -1,6 +1,8 @@
 """Fake-runner units for vet_slot.py. No real gh or network — every gh call is faked."""
+import inspect
 import json
 import os
+import re
 import subprocess
 from types import SimpleNamespace
 
@@ -155,7 +157,19 @@ def test_ok_check_reports_receipt_present():
     assert fake.edit_calls() == []
 
 
-# --- refusal fixtures: literal token, zero edit calls ---------------------------------------
+# --- refusal fixtures: literal token, a distinguishing detail, zero edit calls -------------
+
+def test_module_emits_exactly_nine_tokens():
+    source = inspect.getsource(vs)
+    emitted = set(re.findall(r'_Refusal\(\s*"([a-z-]+)"', source))
+    emitted |= set(re.findall(r'_refusal\(\s*"([a-z-]+)"', source))
+    emitted |= set(re.findall(r'reason="([a-z-]+)"', source))
+    assert emitted == {
+        "bad-argument", "read-failed", "markers-invalid", "followups-malformed",
+        "receipt-missing", "dispositions-malformed", "followup-undispositioned",
+        "none-over-list", "write-failed",
+    }
+
 
 def _body_with_followups(section):
     return BODY.replace(
@@ -170,76 +184,92 @@ def _receipt_with(field):
 
 
 BODY_CASES = [
-    ("pr-body-empty", "   \n\t\n"),
-    ("advisor-vet-marker-missing", BODY.replace("<!-- superheroes:advisor-vet -->\n", "")),
-    ("advisor-vet-marker-duplicated", BODY.replace("trailer", "<!-- superheroes:advisor-vet -->")),
-    ("advisor-vet-marker-missing",
+    ("read-failed", "empty", "   \n\t\n"),
+    ("markers-invalid", "advisor-vet marker appears 0 times",
+     BODY.replace("<!-- superheroes:advisor-vet -->\n", "")),
+    ("markers-invalid", "advisor-vet marker appears 2 times",
+     BODY.replace("trailer", "<!-- superheroes:advisor-vet -->")),
+    ("markers-invalid", "advisor-vet marker appears 0 times",
      BODY.replace("<!-- superheroes:advisor-vet -->\n", "```\n<!-- superheroes:advisor-vet -->\n```\n")),
-    ("build-record-marker-missing", BODY.replace("<!-- superheroes:build-record -->\n", "")),
-    ("build-record-marker-duplicated",
+    ("markers-invalid", "build-record marker appears 0 times",
+     BODY.replace("<!-- superheroes:build-record -->\n", "")),
+    ("markers-invalid", "build-record marker appears 2 times",
      BODY.replace("trailer", "<!-- superheroes:build-record -->")),
-    ("slot-order-invalid",
+    ("markers-invalid", "not above",
      "<!-- superheroes:build-record -->\nx\n<!-- superheroes:advisor-vet -->\n"
      "### Follow-ups for the advisor\nNone\n"),
-    ("followups-section-missing", BODY.replace("### Follow-ups for the advisor", "### Other")),
-    ("followups-section-missing",
+    ("followups-malformed", "heading", BODY.replace("### Follow-ups for the advisor", "### Other")),
+    ("followups-malformed", "heading",
      BODY.replace("### Follow-ups for the advisor", "```\n### Follow-ups for the advisor\n```")),
-    ("followup-unkeyed", _body_with_followups("")),
-    ("followup-unkeyed", _body_with_followups("None\n- FU1 [defect] x\n")),
-    ("followup-unkeyed", _body_with_followups("- plain bullet\n")),
-    ("followup-unkeyed", _body_with_followups("  indented before any item\n- FU1 [defect] x\n")),
-    ("followup-unkeyed", _body_with_followups("Follow-ups: 0 (0 owner-call)\n")),
-    ("followup-id-nested", _body_with_followups("- FU1 [defect] x\n  - FU2 [craft] hidden\n")),
-    ("followup-id-nested", _body_with_followups("- FU1 [defect] x\n    FU2 [craft] hidden\n")),
-    ("followup-class-unknown", _body_with_followups("- FU1 [bogus] x\n")),
-    ("followup-id-duplicated", _body_with_followups("- FU1 [defect] x\n- FU1 [craft] y\n")),
-    ("followup-count-mismatch", _body_with_followups("Follow-ups: 3 (0 owner-call)\n- FU1 [defect] x\n")),
-    ("followup-count-mismatch", _body_with_followups("Follow-ups: 1 (1 owner-call)\n- FU1 [defect] x\n")),
+    ("followups-malformed", "no follow-up items", _body_with_followups("")),
+    ("followups-malformed", "unkeyed line: None", _body_with_followups("None\n- FU1 [defect] x\n")),
+    ("followups-malformed", "unkeyed line: - plain bullet", _body_with_followups("- plain bullet\n")),
+    ("followups-malformed", "unkeyed line: indented",
+     _body_with_followups("  indented before any item\n- FU1 [defect] x\n")),
+    ("followups-malformed", "no follow-up items", _body_with_followups("Follow-ups: 0 (0 owner-call)\n")),
+    ("followups-malformed", "nested follow-up id: - FU2",
+     _body_with_followups("- FU1 [defect] x\n  - FU2 [craft] hidden\n")),
+    ("followups-malformed", "nested follow-up id: FU2",
+     _body_with_followups("- FU1 [defect] x\n    FU2 [craft] hidden\n")),
+    ("followups-malformed", "unknown class: bogus", _body_with_followups("- FU1 [bogus] x\n")),
+    ("followups-malformed", "duplicate follow-up id: FU1",
+     _body_with_followups("- FU1 [defect] x\n- FU1 [craft] y\n")),
+    ("followups-malformed", "count line says 3 (0 owner-call), items are 1 (0 owner-call)",
+     _body_with_followups("Follow-ups: 3 (0 owner-call)\n- FU1 [defect] x\n")),
+    ("followups-malformed", "count line says 1 (1 owner-call), items are 1 (0 owner-call)",
+     _body_with_followups("Follow-ups: 1 (1 owner-call)\n- FU1 [defect] x\n")),
 ]
 
 
-@pytest.mark.parametrize("token,body", BODY_CASES)
+@pytest.mark.parametrize("token,detail,body", BODY_CASES)
 @pytest.mark.parametrize("verb", ["write", "check"])
-def test_body_refusals_make_no_edit(token, body, verb, slot_file):
+def test_body_refusals_make_no_edit(token, detail, body, verb, slot_file):
     fake = _ok_fake(body=body)
     result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
     assert result["ok"] is False
     assert result["reason"] == token
+    assert detail in result["detail"]
     assert set(result) == {"ok", "reason", "detail"}
     assert fake.edit_calls() == []
     assert fake.calls == [list(VIEW)]  # a bad body never reaches the comments read
 
 
-def test_empty_read_refuses_pr_body_empty(slot_file):
+def test_empty_read_refuses_read_failed(slot_file):
     fake = FakeGh([""], _pages([_comment(RECEIPT)]))
     result = _write(fake, slot_file)
-    assert result["reason"] == "pr-body-empty"
+    assert result["reason"] == "read-failed"
+    assert "empty" in result["detail"]
     assert fake.edit_calls() == []
 
 
 RECEIPT_CASES = [
-    ("receipt-dispositions-missing", RECEIPT.replace("**Dispositions — completed.**", "**Other.**")),
-    ("receipt-dispositions-missing", RECEIPT.replace("<!-- superheroes:pending-proposals -->", "")),
-    ("receipt-none-over-followups", _receipt_with("**Dispositions — completed.** `None`\n")),
-    ("receipt-none-over-followups", _receipt_with("**Dispositions — completed.**\n\nNone\n")),
-    ("disposition-missing", _receipt_with("**Dispositions — completed.**\n- FU1: filed #12\n")),
-    ("disposition-missing", _receipt_with("**Dispositions — completed.** FU1 and FU2 filed.\n")),
-    ("disposition-id-unknown",
+    ("dispositions-malformed", "no completed-dispositions field",
+     RECEIPT.replace("**Dispositions — completed.**", "**Other.**")),
+    ("dispositions-malformed", "no completed-dispositions field",
+     RECEIPT.replace("<!-- superheroes:pending-proposals -->", "")),
+    ("none-over-list", "None over FU1, FU2", _receipt_with("**Dispositions — completed.** `None`\n")),
+    ("none-over-list", "None over FU1, FU2", _receipt_with("**Dispositions — completed.**\n\nNone\n")),
+    ("followup-undispositioned", "FU2: no disposition",
+     _receipt_with("**Dispositions — completed.**\n- FU1: filed #12\n")),
+    ("followup-undispositioned", "FU1, FU2: no disposition",
+     _receipt_with("**Dispositions — completed.** FU1 and FU2 filed.\n")),
+    ("dispositions-malformed", "unknown follow-up ids: FU3",
      _receipt_with("**Dispositions — completed.**\n- FU1: filed #1\n- FU2: fixed\n- FU3: info\n")),
-    ("disposition-id-duplicated",
+    ("dispositions-malformed", "duplicate disposition for FU1",
      _receipt_with("**Dispositions — completed.**\n- FU1: filed #1\n- FU1: fixed\n- FU2: info\n")),
-    ("disposition-unrecognized",
+    ("dispositions-malformed", "unrecognized disposition FU1: ignored",
      _receipt_with("**Dispositions — completed.**\n- FU1: ignored it\n- FU2: fixed\n")),
 ]
 
 
-@pytest.mark.parametrize("token,receipt", RECEIPT_CASES)
+@pytest.mark.parametrize("token,detail,receipt", RECEIPT_CASES)
 @pytest.mark.parametrize("verb", ["write", "check"])
-def test_receipt_refusals_make_no_edit(token, receipt, verb, slot_file):
+def test_receipt_refusals_make_no_edit(token, detail, receipt, verb, slot_file):
     fake = _ok_fake(receipt=receipt)
     result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
     assert result["ok"] is False
     assert result["reason"] == token
+    assert detail in result["detail"]
     assert fake.edit_calls() == []
 
 
@@ -249,7 +279,8 @@ NONE_BODY = _body_with_followups("`None`\n")
 def test_none_build_with_any_receipt_id_is_unknown():
     fake = _ok_fake(body=NONE_BODY)
     result = vs.run_verb("check", PR, REPO, run=fake)
-    assert result["reason"] == "disposition-id-unknown"
+    assert result["reason"] == "dispositions-malformed"
+    assert "unknown follow-up ids: FU1, FU2" in result["detail"]
 
 
 def test_none_build_with_none_receipt_is_ok(slot_file):
@@ -272,6 +303,7 @@ def test_write_no_receipt_is_receipt_missing(body, slot_file):
     fake = FakeGh([body], _pages([_comment("just a comment")]))
     result = _write(fake, slot_file)
     assert result["reason"] == "receipt-missing"
+    assert "vet-receipt marker" in result["detail"]
     assert fake.edit_calls() == []
 
 
@@ -280,24 +312,27 @@ def test_check_no_receipt_with_followups_is_receipt_missing():
     assert vs.run_verb("check", PR, REPO, run=fake)["reason"] == "receipt-missing"
 
 
-@pytest.mark.parametrize("comments_out", [
-    "not json",
-    json.dumps({"a": 1}),
-    json.dumps([{"body": "x", "created_at": "t"}]),  # a page that is not a list
-    json.dumps([[{"body": 1, "created_at": "t"}]]),
-    json.dumps([[{"body": "x"}]]),
-    json.dumps([["a string comment"]]),
+@pytest.mark.parametrize("comments_out,detail", [
+    ("not json", "comments: bad JSON"),
+    (json.dumps({"a": 1}), "comments: pages are not lists"),
+    (json.dumps([{"body": "x", "created_at": "t"}]), "comments: pages are not lists"),
+    (json.dumps([[{"body": 1, "created_at": "t"}]]), "comments: a comment lacks"),
+    (json.dumps([[{"body": "x"}]]), "comments: a comment lacks"),
+    (json.dumps([["a string comment"]]), "comments: a comment lacks"),
 ])
-def test_bad_comments_shape_is_receipt_unreadable(comments_out, slot_file):
+def test_bad_comments_shape_is_read_failed(comments_out, detail, slot_file):
     fake = FakeGh([BODY], comments_out)
     result = _write(fake, slot_file)
-    assert result["reason"] == "receipt-unreadable"
+    assert result["reason"] == "read-failed"
+    assert detail in result["detail"]
     assert fake.edit_calls() == []
 
 
-def test_comments_nonzero_exit_is_receipt_unreadable(slot_file):
+def test_comments_nonzero_exit_is_read_failed(slot_file):
     fake = FakeGh([BODY], _pages([_comment(RECEIPT)]), comments_rc=1)
-    assert _write(fake, slot_file)["reason"] == "receipt-unreadable"
+    result = _write(fake, slot_file)
+    assert result["reason"] == "read-failed"
+    assert "comments: exit 1" in result["detail"]
     assert fake.edit_calls() == []
 
 
@@ -315,51 +350,57 @@ def test_receipt_on_page_two_is_newest_and_selected():
 
 # --- read failures -----------------------------------------------------------------------------
 
-@pytest.mark.parametrize("kwargs", [
-    {"view_rc": 1},
-    {"view_raw": "not json"},
-    {"view_raw": json.dumps(["body"])},
-    {"view_raw": json.dumps({"body": None})},
+@pytest.mark.parametrize("kwargs,detail", [
+    ({"view_rc": 1}, "PR body: exit 1 boom"),
+    ({"view_raw": "not json"}, "PR body: bad JSON"),
+    ({"view_raw": json.dumps(["body"])}, "PR body: body is not a string"),
+    ({"view_raw": json.dumps({"body": None})}, "PR body: body is not a string"),
 ])
-def test_body_read_failures_are_pr_body_unreadable(kwargs, slot_file):
+def test_body_read_failures_are_read_failed(kwargs, detail, slot_file):
     fake = FakeGh([BODY], _pages([_comment(RECEIPT)]), **kwargs)
     result = _write(fake, slot_file)
-    assert result["reason"] == "pr-body-unreadable"
+    assert result["reason"] == "read-failed"
+    assert detail in result["detail"]
     assert fake.edit_calls() == []
 
 
-def test_gh_missing_is_pr_body_unreadable(monkeypatch, slot_file):
+def test_gh_missing_is_read_failed(monkeypatch, slot_file):
     monkeypatch.setattr(vs.shutil, "which", lambda _name: None)
     fake = _ok_fake()
-    assert _write(fake, slot_file)["reason"] == "pr-body-unreadable"
+    result = _write(fake, slot_file)
+    assert result["reason"] == "read-failed"
+    assert "gh not on PATH" in result["detail"]
     assert fake.calls == []
 
 
-def test_timeout_is_pr_body_unreadable(slot_file):
+def test_timeout_is_read_failed(slot_file):
     calls = []
 
     def run(argv, **kwargs):
         calls.append(argv)
         raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
 
-    assert _write(run, slot_file)["reason"] == "pr-body-unreadable"
+    result = _write(run, slot_file)
+    assert result["reason"] == "read-failed"
+    assert "PR body: gh call timed out" in result["detail"]
     assert not [c for c in calls if c[:3] == ["gh", "pr", "edit"]]
 
 
 # --- slot file ---------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("content,token", [
-    (None, "slot-file-unreadable"),
-    ("\n  \n", "slot-text-empty"),
-    ("text\n<!-- superheroes:build-record -->\nmore\n", "slot-text-carries-marker"),
+@pytest.mark.parametrize("content,detail", [
+    (None, "slot file unreadable"),
+    ("\n  \n", "slot text is empty"),
+    ("text\n<!-- superheroes:build-record -->\nmore\n", "slot text carries a marker"),
 ])
-def test_slot_file_refusals(tmp_path, content, token):
+def test_slot_file_refusals(tmp_path, content, detail):
     path = tmp_path / "slot.md"
     if content is not None:
         path.write_text(content, encoding="utf-8")
     fake = _ok_fake()
     result = _write(fake, str(path))
-    assert result["reason"] == token
+    assert result["reason"] == "write-failed"
+    assert detail in result["detail"]
     assert fake.calls == [list(VIEW)]  # refused before the comments read
 
 
@@ -368,7 +409,8 @@ def test_slot_file_refusals(tmp_path, content, token):
 def test_body_changed_between_read_and_push(slot_file):
     fake = FakeGh([BODY, BODY + "someone else's edit\n"], _pages([_comment(RECEIPT)]))
     result = _write(fake, slot_file)
-    assert result["reason"] == "body-changed-under-write"
+    assert result["reason"] == "write-failed"
+    assert "changed between the read and the push" in result["detail"]
     assert fake.edit_calls() == []
 
 
@@ -376,6 +418,7 @@ def test_edit_nonzero_is_write_failed(slot_file):
     fake = FakeGh([BODY], _pages([_comment(RECEIPT)]), edit_rc=1)
     result = _write(fake, slot_file)
     assert result["reason"] == "write-failed"
+    assert "edit: exit 1 edit boom" in result["detail"]
     assert not os.path.exists(fake.edit_calls()[0][7])
 
 
@@ -390,7 +433,8 @@ def test_readback_mismatch(slot_file):
         return out
 
     result = _write(run, slot_file)
-    assert result["reason"] == "write-readback-mismatch"
+    assert result["reason"] == "read-failed"
+    assert "readback differs" in result["detail"]
 
 
 def test_readback_tolerates_crlf_and_trailing_whitespace(slot_file):
@@ -421,11 +465,11 @@ def test_bad_arguments(pr, repo, slot):
 # --- the invariant, stated directly over every refusal fixture -------------------------------
 
 def test_property_every_refusal_is_editless_and_ok_preserves_outside_span(slot_file):
-    for _token, body in BODY_CASES:
+    for _token, _detail, body in BODY_CASES:
         fake = _ok_fake(body=body)
         assert _write(fake, slot_file)["ok"] is False
         assert fake.edit_calls() == []
-    for _token, receipt in RECEIPT_CASES:
+    for _token, _detail, receipt in RECEIPT_CASES:
         fake = _ok_fake(receipt=receipt)
         assert _write(fake, slot_file)["ok"] is False
         assert fake.edit_calls() == []
@@ -485,10 +529,11 @@ def test_real_1442_pair_passes_write(slot_file):
 def test_real_1437_legacy_body_refuses_unkeyed():
     _body, fake = _real_fake(body_name="pr1437_body_legacy.md")
     result = vs.run_verb("check", PR, REPO, run=fake)
-    assert result["reason"] == "followup-unkeyed"
+    assert result["reason"] == "followups-malformed"
+    assert "unkeyed line" in result["detail"]
 
 
-def test_receipt_missing_fu2_refuses_disposition_missing(slot_file):
+def test_receipt_missing_fu2_refuses_followup_undispositioned(slot_file):
     receipt = _fixture("pr1442_receipt.md")
     lines = receipt.split("\n")
     fu2 = [line for line in lines if line.startswith("- FU2:")]
@@ -497,7 +542,7 @@ def test_receipt_missing_fu2_refuses_disposition_missing(slot_file):
     _body, fake = _real_fake(receipt=receipt)
     result = _write(fake, slot_file)
     assert result["ok"] is False
-    assert result["reason"] == "disposition-missing"
+    assert result["reason"] == "followup-undispositioned"
     assert "FU2" in result["detail"]
     assert fake.edit_calls() == []
 
@@ -518,7 +563,7 @@ def test_cli_refusal(capsys):
     code = vs.main(["check", "--pr", "42", "--repo", REPO], run=fake)
     out = capsys.readouterr().out
     assert code == 1
-    assert json.loads(out) == {"ok": False, "reason": "pr-body-empty", "detail": None}
+    assert json.loads(out) == {"ok": False, "reason": "read-failed", "detail": "PR body is empty"}
 
 
 @pytest.mark.parametrize("argv", [
