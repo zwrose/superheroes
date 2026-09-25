@@ -180,8 +180,16 @@ above).
    **completeness gate** (the check that fails until the extension is exhaustive) so **every lane
    after the first** expects it to fire and budgets the integration commit. When a builder messages you mid-build at the size tripwire and proposes a split, **take the
    split seriously** — that message is the tripwire working, not a builder stalling. **Reply by
-   message** and record the ruling on the issue for the owner's veto; the rulings open to you and the
-   builder's wait live in `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § Size.
+   message** and record the ruling on the issue for the owner's veto; the rulings open to you, the
+   split test and the builder's wait live in `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § Size.
+   **Answer a builder's size message within 15 minutes** — the builder parks after that, and a missed
+   reply becomes a park you repair: rule, write the order into the issue, relaunch. When a light build
+   messages you for its missing estimate, reply with a non-test line estimate (a number or a range)
+   and write it into the issue's order so it is on record. **A reply is not a durable order:** a split
+   ruling files each new piece as a layer sub-issue of the feature, fully wired
+   (`${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md`), and writes the continuation order into the issue
+   body's top STATE block, before or alongside the reply, so the order agrees with the reply the
+   builder acts on.
    When marking an issue **build-ready**, run the issue-contract check against the issue body
    and **decline the marking** when it reports a refusal — the check is advisory and the
    decision is the advisor's; micro work never reaches this check. Detail:

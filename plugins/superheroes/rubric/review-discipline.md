@@ -80,6 +80,12 @@ reviewable on its own, so no intermediate state reaches the trunk. The bars appl
 light lanes; a micro change that approached them would already have left its ceiling.
 Where the call is in doubt, the preference is more, smaller PRs.
 
+**The mid-build split test.** Whoever rules at the tripwire or a bar asks, in order: (a) is there a
+seam where the part already built stands alone as a layer that works and reviews on its own? If so,
+split there. (b) Would finishing take the PR past what one review can hold (the 600 bar is the
+stand-in)? If so, split. (c) Continue only when the change cannot be divided — the pieces do not work
+apart — and the PR says why. Otherwise the tiebreak above holds: in doubt, more and smaller PRs.
+
 ### Preflight in the light and micro lanes
 
 **Micro skips preflight** because preflight proves tools before a session goes
