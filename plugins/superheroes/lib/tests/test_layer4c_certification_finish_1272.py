@@ -89,6 +89,49 @@ def test_dispatch_observed_journal_envelope_run_kind_divergence_refuses(tmp_path
     assert refusal["bindingFailure"] == "evidence-run-kind-mismatch"
 
 
+def test_dispatch_observed_missing_envelope_execution_evidence_refuses(tmp_path):
+    """Journal evidence alone cannot satisfy dispatch runKind when envelope omits executionEvidence."""
+    journal = [_journal_row("code-reviewer", PANEL_PHASE, source="codex")]
+    spec = _envelope_spec("code-reviewer", PANEL_PHASE, source="codex")
+    payload = spec["payload"]
+    payload_sha = spec["payloadSha256"]
+    envelope = {
+        "schema": RR.SEAT_RESULT_SCHEMA_V2,
+        "session": "test-session-001",
+        "round": 1,
+        "phase": PANEL_PHASE,
+        "seat": "code-reviewer",
+        "attempt": 0,
+        "vendor": "codex",
+        "model": "gpt-5.6-sol",
+        "payload": payload,
+        "payloadSha256": payload_sha,
+        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+        "executionEvidence": None,
+        "envelopeSha256": RR.envelope_sha256(payload, None),
+    }
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=journal,
+        envelopes=[{"seat": "code-reviewer", "envelope": envelope}],
+    )
+    path = os.path.join(session_dir, RC.JOURNAL_FILE)
+    envelope_sha = envelope["envelopeSha256"]
+    lines = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            row["casToken"] = envelope_sha
+            lines.append(row)
+    with open(path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-absent"
+
+
 def test_run_kind_panel_write_refuses(tmp_path):
     session_dir = _panel_session(tmp_path, evidence_extra={"runKind": "write"})
     receipt, refusal = _certify(session_dir)

@@ -76,6 +76,8 @@ CERTIFICATION_LIVE_CONTENT_FIELDS = (
 )
 EXECUTION_ONLY_BINDING = session_contract.EXECUTION_ONLY_BINDING
 
+_ENVELOPE_RUN_KIND_NOT_PROVIDED = object()
+
 PANEL_PHASE = session_contract.PANEL_PHASE
 FIXER_PHASE = session_contract.FIXER_PHASE
 AUDITS_PHASE = session_contract.AUDITS_PHASE
@@ -980,8 +982,22 @@ def _journal_execution_binding(journal, seat, phase, attempt, occurrence=0, rnd=
     return None
 
 
+def _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field):
+    if field != "runKind":
+        return evidence.get(field)
+    if envelope_run_kind_evidence is _ENVELOPE_RUN_KIND_NOT_PROVIDED:
+        return evidence.get(field)
+    if not isinstance(envelope_run_kind_evidence, dict):
+        return None
+    return envelope_run_kind_evidence.get(field)
+
+
 def _execution_binding_matches_journal(
-    evidence, journal_binding, recorded_nonces, *, envelope_run_kind_evidence=None
+    evidence,
+    journal_binding,
+    recorded_nonces,
+    *,
+    envelope_run_kind_evidence=_ENVELOPE_RUN_KIND_NOT_PROVIDED,
 ):
     if not isinstance(evidence, dict):
         return False, "execution-evidence-absent"
@@ -989,10 +1005,7 @@ def _execution_binding_matches_journal(
     if _execution_evidence_source_is_caller_supplied(source):
         return False, "execution-evidence-caller-supplied"
     for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
-        if field == "runKind" and isinstance(envelope_run_kind_evidence, dict):
-            val = envelope_run_kind_evidence.get(field)
-        else:
-            val = evidence.get(field)
+        val = _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field)
         if not isinstance(val, str) or not val:
             if field == "runKind":
                 return False, "evidence-run-kind-mismatch"
@@ -1003,10 +1016,7 @@ def _execution_binding_matches_journal(
     if runner_nonce not in recorded_nonces:
         return False, "execution-evidence-dispatch-unrecorded"
     for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
-        if field == "runKind" and isinstance(envelope_run_kind_evidence, dict):
-            bound_val = envelope_run_kind_evidence.get(field)
-        else:
-            bound_val = evidence.get(field)
+        bound_val = _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field)
         if bound_val != journal_binding.get(field):
             if field == "runKind":
                 return False, "evidence-run-kind-mismatch"
@@ -1040,7 +1050,7 @@ def _observation_qualifies(
     recorded_nonces=None,
     *,
     require_runner_action=False,
-    envelope_run_kind_evidence=None,
+    envelope_run_kind_evidence=_ENVELOPE_RUN_KIND_NOT_PROVIDED,
 ):
     if not isinstance(obs, dict):
         return False, "execution-evidence-absent"
@@ -1208,6 +1218,13 @@ def check_unrun_review(ctx):
                     "dispatch-observed envelope missing or unreadable",
                 )
             envelope_evidence = env.get("executionEvidence")
+            if not isinstance(envelope_evidence, dict):
+                return _refusal(
+                    "unrun-review",
+                    seat,
+                    "dispatch-observed seat lacks CAS-bound executionEvidence",
+                    binding_failure="execution-evidence-absent",
+                )
             journal_binding = _journal_execution_binding(
                 journal,
                 seat,
@@ -1223,9 +1240,7 @@ def check_unrun_review(ctx):
                 journal_binding=journal_binding,
                 recorded_nonces=slot_nonces,
                 require_runner_action=True,
-                envelope_run_kind_evidence=(
-                    envelope_evidence if isinstance(envelope_evidence, dict) else None
-                ),
+                envelope_run_kind_evidence=envelope_evidence,
             )
             if not ok:
                 return _refusal(
@@ -1234,10 +1249,7 @@ def check_unrun_review(ctx):
                     "dispatch-observed seat lacks qualifying execution telemetry",
                     binding_failure=binding,
                 )
-            run_kind_evidence = (
-                envelope_evidence if isinstance(envelope_evidence, dict) else obs
-            )
-            rk_ok, found_kind = _dispatch_run_kind_qualifies(run_kind_evidence, phase)
+            rk_ok, found_kind = _dispatch_run_kind_qualifies(envelope_evidence, phase)
             if not rk_ok:
                 return _refusal(
                     "unrun-review",
