@@ -1041,31 +1041,34 @@ def test_codex_model_strength_covers_every_valid_model():
 
 
 def test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling():
-    # #409: the write-auth probe dispatches the strongest model the codex implementation (build/fix)
-    # role will actually run — its pins, else the sol floor for any UNPINNED write role.
-    floor = EP.CODEX_MODEL_BY_TIER["opus"]  # gpt-5.6-sol
-    # no pins at all -> the sol capability floor (both write roles unpinned)
+    # #409/#1435 WO-2: the write-auth probe dispatches the strongest model the codex implementation
+    # (build/fix) role will actually run — its pins, else the registry's opus peer floor for any
+    # UNPINNED write role.
+    floor = EP.CODEX_MODEL_BY_TIER["opus"]  # gpt-6-sol
+    # no pins at all -> the opus peer floor (both write roles unpinned)
     assert EP.codex_write_probe_model(None) == floor
     assert EP.codex_write_probe_model({}) == floor
     assert EP.codex_write_probe_model({"codexModels": {}}) == floor
     assert EP.codex_write_probe_model({"codexModels": "nope"}) == floor
-    # BOTH write roles pinned to unregistered gpt-5.5 -> treated as unpinned -> sol floor
+    # BOTH write roles pinned to unregistered gpt-5.5 -> treated as unpinned -> the floor
     assert EP.codex_write_probe_model(
         {"codexModels": {"implementer": "gpt-5.5", "code-fixer": "gpt-5.5"}}) == floor
-    # PARTIAL pin: one write role unpinned derives a GPT-5.6 tier model, so the probe clamps up to the
-    # sol floor rather than under-testing at gpt-5.5 (the premortem fail-direction regression, closed).
+    # PARTIAL pin: one write role unpinned derives the peer floor, so the probe clamps up to the
+    # floor rather than under-testing at gpt-5.5 (the premortem fail-direction regression, closed).
     assert EP.codex_write_probe_model({"codexModels": {"implementer": "gpt-5.5"}}) == floor
     # a reviewer pin is irrelevant to the WRITE probe — it does not lower or raise the write ceiling
     assert EP.codex_write_probe_model(
         {"codexModels": {"implementer": "gpt-5.5", "code-fixer": "gpt-5.5",
-                         "reviewer": "gpt-5.6-sol"}}) == floor
-    # both write roles pinned to valid 5.6 family -> the stronger of the two
+                         "reviewer": "gpt-6-sol"}}) == floor
+    # both write roles pinned ENTIRELY to the pin-only model -> that model (not falsely failed by a
+    # hard floor probe)
     assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": "gpt-5.6-terra", "code-fixer": "gpt-5.6-terra"}}) == "gpt-5.6-terra"
-    # implementer is the ceiling (stronger than code-fixer) -> the probe dispatches implementer's model.
-    # Proves the probe covers BOTH write roles, not just code-fixer (drops-a-write-role mutant dies here).
+        {"codexModels": {"implementer": "gpt-5.6-sol", "code-fixer": "gpt-5.6-sol"}}) == "gpt-5.6-sol"
+    # implementer is the ceiling (unpinned code-fixer clamps to the floor, which is stronger than the
+    # pin-only model) -> the probe dispatches the floor. Proves the probe covers BOTH write roles, not
+    # just code-fixer (drops-a-write-role mutant dies here).
     assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": "gpt-5.6-sol", "code-fixer": "gpt-5.6-terra"}}) == "gpt-5.6-sol"
+        {"codexModels": {"implementer": "gpt-6-astra", "code-fixer": "gpt-5.6-sol"}}) == "gpt-6-astra"
 
 
 def test_load_engine_prefs_rejects_unregistered_model_before_dispatch(tmp_path):
@@ -1539,6 +1542,36 @@ def test_normalize_seat_pin_map_vendor_only_and_empty_model_rejected():
     assert bad["pins"] == {}
     assert "security" in bad["invalid"]
     assert "model" in bad["invalid"]["security"]
+
+
+# --- #1435 WO-2: I2c/I2e — retired codex model refused everywhere a model is named by config ----
+
+_RETIRED_TERRA_REASON = "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
+
+
+def test_normalize_seat_pin_map_refuses_retired_codex_model():
+    got = EP.normalize_seat_pin_map(
+        {"security-reviewer": {"vendor": "codex", "model": "gpt-5.6-terra"}})
+    assert got["pins"] == {}
+    assert got["invalid"] == {"security-reviewer": _RETIRED_TERRA_REASON}
+    # a non-codex vendor naming the same string is untouched by the retired check
+    other = EP.normalize_seat_pin_map(
+        {"security-reviewer": {"vendor": "claude", "model": "gpt-5.6-terra"}})
+    assert other["pins"] == {"security-reviewer": {"vendor": "claude", "model": "gpt-5.6-terra"}}
+    assert other["invalid"] == {}
+
+
+def test_load_engine_prefs_reports_invalid_seat_pins_and_codex_models_for_retired_terra(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {
+        "codexModels": {"reviewer": "gpt-5.6-terra"},
+        "seatPins": {"security-reviewer": {"vendor": "codex", "model": "gpt-5.6-terra"}},
+    })
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert got.get("codexModels", {}) == {}
+    assert got["invalidCodexModels"]["reviewer"] == _RETIRED_TERRA_REASON
+    assert "seatPins" not in got
+    assert got["invalidSeatPins"]["security-reviewer"] == _RETIRED_TERRA_REASON
 
 
 def test_builder_tier_sources_cover_all_resolution_sources():

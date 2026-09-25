@@ -60,7 +60,7 @@ def test_we511_shape_parks():
     [
         ("cursor", "composer-2.5", "composer-2.5"),
         ("cursor", "cursor-grok-4.6-xhigh", "cursor-grok-4.6-xhigh"),
-        ("codex", "gpt-5.6-terra", "gpt-5.6-terra"),
+        ("codex", "gpt-6-sol", "gpt-6-sol"),
     ],
 )
 def test_listed_models_pass(vendor, model, expected):
@@ -82,7 +82,7 @@ def test_defaulted_resolves_to_listed():
 
     r2 = DG.validate("implementer", "codex", None)
     assert r2["ok"] is True
-    assert r2["resolved_model"] == "gpt-5.6-terra"
+    assert r2["resolved_model"] == "gpt-6-sol"
 
 
 def test_registered_role_with_no_model_on_vendor_parks():
@@ -235,9 +235,9 @@ def test_structured_triple_success_all_vendors():
 
     r_codex = DG.validate("brief-check", "codex", None)
     _assert_success_triple(r_codex)
-    assert r_codex["model_id"] == "gpt-5.6-sol"
+    assert r_codex["model_id"] == "gpt-6-sol"
     assert r_codex["effort"] == "xhigh"
-    assert r_codex["dispatch_token"] == "gpt-5.6-sol"
+    assert r_codex["dispatch_token"] == "gpt-6-sol"
 
     r_claude = DG.validate("reviewer", "claude", "sonnet")
     _assert_success_triple(r_claude)
@@ -465,7 +465,7 @@ def test_edge3_null_model_ambiguous_effort_refuses_via_cli():
     payload = json.loads(proc.stdout)
     assert payload["ok"] is False
     assert payload["reason"] == "model-ambiguous"
-    assert "gpt-5.6-terra" in payload["seat_detail"]
+    assert "gpt-6-sol" in payload["seat_detail"]
     assert "gpt-5.6-sol" in payload["seat_detail"]
 
 

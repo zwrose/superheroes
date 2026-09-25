@@ -2799,6 +2799,33 @@ def test_write_engine_pref_pins_codex_pin_ignored_note_when_reviewer_engine_clau
     )
 
 
+# --- #1435 WO-2: I2d — a retired codex model pin refuses on BOTH pin keys, nothing written -------
+
+def test_write_engine_pref_pins_refuses_retired_codex_model_both_keys_byte_identical(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_engine_pref_pins(
+        repo, "codexModels", {"reviewer": "gpt-5.6-terra"}, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
+    assert res["detail"]["reviewer"] == (
+        "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
+    )
+    assert open(path, encoding="utf-8").read() == before
+
+    res2 = CM.write_engine_pref_pins(
+        repo, "seatPins",
+        {"security-reviewer": {"vendor": "codex", "model": "gpt-5.6-terra"}},
+        root=store)
+    assert res2["action"] == "refused"
+    assert res2["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
+    assert res2["detail"]["security-reviewer"] == (
+        "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
+    )
+    assert open(path, encoding="utf-8").read() == before
+
+
 def test_write_engine_pref_pins_refused_invalid_seat_pin_byte_identical(tmp_path):
     repo, store = _write_core_for_pin_tests(tmp_path)
     path = CM.core_path(repo, store)
