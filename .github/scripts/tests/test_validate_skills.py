@@ -15,6 +15,25 @@ def test_links_flag_missing_target(tmp_path):
     out = vs.check_links("p/s", text, str(tmp_path))
     assert out and "reference-link" in out[0] and "gone.md" in out[0]
 
+def test_links_flag_retired_plugin_root_form(tmp_path):
+    # the retired fallback form is flagged even when its target resolves
+    (tmp_path / "rubric").mkdir()
+    (tmp_path / "rubric" / "review-base.md").write_text("x")
+    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`."
+    assert vs.check_links("p/s", text, str(tmp_path)) == [
+        "reference-link: p/s: retired plugin-root form rubric/review-base.md"]
+
+def test_links_flag_retired_form_beside_valid_citations(tmp_path):
+    (tmp_path / "rubric").mkdir()
+    (tmp_path / "rubric" / "review-base.md").write_text("x")
+    text = (
+        "Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`.\n"
+        "Then `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/gone.md`.\n"
+        "And again `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`.\n"
+    )
+    assert vs.check_links("p/s", text, str(tmp_path)) == [
+        "reference-link: p/s: retired plugin-root form rubric/gone.md"]
+
 # Fix A: directory targets must NOT be flagged
 def test_links_accept_directory_target(tmp_path):
     (tmp_path / "lib").mkdir()

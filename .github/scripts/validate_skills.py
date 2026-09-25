@@ -32,6 +32,8 @@ import re
 
 # Bites on: a ${CLAUDE_PLUGIN_ROOT}/<path> citation that does not resolve, or a cited reference that cites another file.
 _REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9._/\-]+)")
+# Bites on: a citation still written in the retired ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/<path> fallback form.
+_RETIRED_REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}/([A-Za-z0-9._/\-]+)")
 _HEADING = re.compile(r"^#+\s+(\d+(?:\.\d+)*)\b", re.MULTILINE)
 # Only CONVENTIONS-qualified citations are validated. A bare "§N" is ambiguous — skills
 # also use §N for their OWN internal section cross-references (e.g. review-code's §12),
@@ -46,6 +48,8 @@ def check_links(skill_key, text, plugin_dir):
         rel = m.group(1)
         if not os.path.exists(os.path.join(plugin_dir, rel)):
             out.append(f"reference-link: {skill_key}: unresolved reference {rel}")
+    for m in _RETIRED_REF.finditer(text):
+        out.append(f"reference-link: {skill_key}: retired plugin-root form {m.group(1)}")
     return out
 
 
