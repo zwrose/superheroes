@@ -1,0 +1,7 @@
+# Dependencies for this repository's validators and test suite.
+# Read by CI (`uv pip install --system -r requirements-dev.txt`) and by scripts/pinned-python.
+pytest
+pytest-xdist
+jsonschema
+pyyaml
+import-linter>=2,<3
