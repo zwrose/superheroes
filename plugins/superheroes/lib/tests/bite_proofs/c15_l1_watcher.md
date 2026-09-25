@@ -14,6 +14,7 @@
 | 1c-E5 | lock-unavailable refusal fails closed (`loop-lock-unavailable`, `arms: 0`) | `test_loop_lock_unavailable_flock_oserror` | proven |
 | 1c-E6 | non-regular lock file refused | `test_loop_lock_unavailable_non_regular_lock_file` | proven |
 | 1c-E7 | lock released on normal exit | `test_loop_lock_released_allows_sequential_loops` | proven |
+| 1c-E8 | passedOver / passedOverCount drift pins | `test_wave_watch_doc_pins_the_suppression_wire_contract` | proven |
 
 Rows prefixed `1c-` are layer 1c's lock proofs (the issue names them E2, E5 and E6; the prefix keeps them apart from layer 1b's E5).
 
@@ -112,6 +113,28 @@ The test carries a `max_total_seconds` ceiling on a fake monotonic clock, so the
 
 ---
 
+## 1c-E5 — lock-unavailable refusal fails closed
+
+**neutralization:** in `_acquire_loop_lock`, the `except OSError` fallback after `fcntl.flock` (non-`EWOULDBLOCK` / non-`EAGAIN`) — replace `return None, _loop_lock_refusal(f"flock:...")` with `pass`.
+
+**raw red** (tail; full: `/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1423-3cb6374d4cb5ed6b/51b9dabe-506e-48d3-ac54-e23a3a57e7a4/scratchpad/bp-fix/1c-e5-red.txt`):
+```
+>       assert result["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
+E       AssertionError: assert 'test-violation' == 'loop-lock-unavailable'
+FAILED ...::test_loop_lock_unavailable_flock_oserror
+EXIT=1
+```
+
+**restore:** reinstate the `return None, _loop_lock_refusal(f"flock:...")` arm.
+
+**raw green** (tail; full: `/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1423-3cb6374d4cb5ed6b/51b9dabe-506e-48d3-ac54-e23a3a57e7a4/scratchpad/bp-fix/1c-e5-green.txt`):
+```
+1 passed in 2.21s
+EXIT=0
+```
+
+---
+
 ## 1c-E6 — `S_ISREG` on lock file
 
 **neutralization:** remove `S_ISREG` refusal block in `_acquire_loop_lock`.
@@ -151,3 +174,24 @@ EXIT=1
 **restore:** reinstate `_release_loop_lock(lock_fd)`.
 
 **raw green:** `/private/tmp/c15-wo-a/bp-e5-green.txt` — `1 passed`, `EXIT=0`.
+
+---
+
+## 1c-E8 — passedOver / passedOverCount drift pins
+
+**neutralization:** in `wave_watch.py`, change `RESULT_KEY_PASSED_OVER` from `"passedOver"` to `"passedOverX"` (in-place).
+
+**raw red** (tail; full: `/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1423-3cb6374d4cb5ed6b/51b9dabe-506e-48d3-ac54-e23a3a57e7a4/scratchpad/bp-fix/1c-e8-red.txt`):
+```
+E       AssertionError: reference/wave-watch.md missing token(s): ['`passedOverX`']
+FAILED ...::test_wave_watch_doc_pins_the_suppression_wire_contract
+EXIT=1
+```
+
+**restore:** the inverse edit (`"passedOverX"` → `"passedOver"`).
+
+**raw green** (tail; full: `/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1423-3cb6374d4cb5ed6b/51b9dabe-506e-48d3-ac54-e23a3a57e7a4/scratchpad/bp-fix/1c-e8-green.txt`):
+```
+1 passed in 0.36s
+EXIT=0
+```
