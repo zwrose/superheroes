@@ -29,6 +29,12 @@ def test_links_flag_retired_plugin_root_form(tmp_path):
     assert vs.check_links("p/s", text, str(tmp_path)) == [
         "reference-link: p/s: retired plugin-root form rubric/review-base.md"]
 
+def test_links_flag_retired_plugin_root_form_bare(tmp_path):
+    # a bare use of the retired fallback (no /path following it) is refused too
+    text = 'ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"'
+    assert vs.check_links("p/s", text, str(tmp_path)) == [
+        "reference-link: p/s: retired plugin-root form (bare)"]
+
 def test_links_flag_retired_form_beside_valid_citations(tmp_path):
     (tmp_path / "rubric").mkdir()
     (tmp_path / "rubric" / "review-base.md").write_text("x")
@@ -113,6 +119,16 @@ def test_depth_flags_a_chain_in_retired_form(tmp_path):
         "reference-depth: p/s: reference/a.md itself references another file "
         "(chain deeper than one hop)",
         "reference-link: p/s: retired plugin-root form reference/b.md (in reference/a.md)"]
+
+def test_depth_bare_retired_form_reports_but_does_not_trigger_chain(tmp_path):
+    # a bare retired form in the cited file is not itself a citation of another file,
+    # so it must NOT raise the one-hop chain violation, only the retired-form line
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "reference" / "a.md").write_text(
+        'ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"')
+    text = "See `${CLAUDE_PLUGIN_ROOT}/reference/a.md`."
+    assert vs.check_depth("p/s", text, str(tmp_path)) == [
+        "reference-link: p/s: retired plugin-root form (bare) (in reference/a.md)"]
 
 def test_depth_ignores_unresolved_target_that_is_check_links_job(tmp_path):
     # a reference to a missing file is NOT a depth violation (resolution is check_links')
@@ -609,3 +625,30 @@ def test_citation_scan_yields_nothing_when_standard_dirs_absent(tmp_path):
     (root / "lib").mkdir()
     (root / "lib" / "only.py").write_text("x")
     assert vs.citation_scan_paths(str(tmp_path / "plugins")) == []
+
+
+# --- retired plugin-root form: §11.4 leg (check_retired) ---
+
+def test_check_retired_flags_bare_and_path_but_not_main_form():
+    text = (
+        'Bare: ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"\n'
+        "Path: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`\n"
+        "Main form (never flagged): `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`\n"
+    )
+    assert vs.check_retired("rubric/x.md", text) == [
+        "citation: rubric/x.md: retired plugin-root form (bare)",
+        "citation: rubric/x.md: retired plugin-root form rubric/review-base.md",
+    ]
+
+
+def test_main_wires_retired_form_citation_check(tmp_path, monkeypatch, capsys):
+    # §11.4 leg: a rubric/ doc using the bare retired form is flagged by main()'s scan loop
+    root = str(tmp_path / "plugins")
+    os.makedirs(os.path.join(root, "p", "rubric"))
+    with open(os.path.join(root, "p", "rubric", "notes.md"), "w", encoding="utf-8") as fh:
+        fh.write('ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"\n')
+    monkeypatch.setattr(vs, "PLUGINS", root)
+    assert vs.main([]) == 1
+    captured = capsys.readouterr()
+    assert "citation:" in captured.err
+    assert "retired plugin-root form (bare)" in captured.err

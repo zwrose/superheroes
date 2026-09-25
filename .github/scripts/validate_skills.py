@@ -32,8 +32,17 @@ import re
 
 # Bites on: a ${CLAUDE_PLUGIN_ROOT}/<path> citation that does not resolve, or a cited reference that cites another file.
 _REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9._/\-]+)")
-# Bites on: a citation still written in the retired ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/<path> fallback form.
-_RETIRED_REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}/([A-Za-z0-9._/\-]+)")
+# Bites on: a citation still written in the retired ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}} fallback
+# form, whether or not a /<path> follows it (a bare use, e.g. ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}",
+# is retired too even though it cites nothing). Group 1 is None for the bare form.
+_RETIRED_REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}(?:/([A-Za-z0-9._/\-]+))?")
+
+
+def _retired_label(m):
+    """The path a retired-form match carries, or the literal "(bare)" when it carries none."""
+    return m.group(1) if m.group(1) is not None else "(bare)"
+
+
 _HEADING = re.compile(r"^#+\s+(\d+(?:\.\d+)*)\b", re.MULTILINE)
 # Only CONVENTIONS-qualified citations are validated. A bare "§N" is ambiguous — skills
 # also use §N for their OWN internal section cross-references (e.g. review-code's §12),
@@ -49,7 +58,7 @@ def check_links(skill_key, text, plugin_dir):
         if not os.path.exists(os.path.join(plugin_dir, rel)):
             out.append(f"reference-link: {skill_key}: unresolved reference {rel}")
     for m in _RETIRED_REF.finditer(text):
-        out.append(f"reference-link: {skill_key}: retired plugin-root form {m.group(1)}")
+        out.append(f"reference-link: {skill_key}: retired plugin-root form {_retired_label(m)}")
     return out
 
 
@@ -208,6 +217,14 @@ def check_citations(rel_label, text, plugin_dir):
     return out
 
 
+def check_retired(rel_label, text):
+    """§11.4 leg: the retired plugin-root fallback form, wherever a scanned doc uses it."""
+    return [
+        f"citation: {rel_label}: retired plugin-root form {_retired_label(m)}"
+        for m in _RETIRED_REF.finditer(text)
+    ]
+
+
 def check_phrases(skill_key, description, required_phrases):
     return [
         f"trigger-phrase: {skill_key}: description no longer contains required phrase {p!r}"
@@ -261,13 +278,15 @@ def check_depth(skill_key, text, plugin_dir):
         with open(target, encoding="utf-8") as fh:
             cited = fh.read()
         retired = list(_RETIRED_REF.finditer(cited))
-        if _REF.search(cited) or retired:
+        # A bare retired form cites nothing, so it must not itself trip the one-hop chain gate.
+        retired_with_path = [r for r in retired if r.group(1) is not None]
+        if _REF.search(cited) or retired_with_path:
             out.append(
                 f"reference-depth: {skill_key}: {rel} itself references another "
                 f"file (chain deeper than one hop)")
         for r in retired:
             out.append(
-                f"reference-link: {skill_key}: retired plugin-root form {r.group(1)} (in {rel})")
+                f"reference-link: {skill_key}: retired plugin-root form {_retired_label(r)} (in {rel})")
     return out
 
 
@@ -399,6 +418,7 @@ def main(argv=None):
             errors.append(f"citation: {rel_doc}: unreadable scan file ({exc})")
             continue
         errors += check_citations(rel_doc, text, plugin_dir)
+        errors += check_retired(rel_doc, text)
 
     if errors:
         sys.stderr.write(f"\n✗ {len(errors)} skill problem(s):\n")

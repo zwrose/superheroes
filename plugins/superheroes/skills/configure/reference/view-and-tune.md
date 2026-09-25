@@ -25,7 +25,8 @@ print(configure_view.render('.'))"
 ```
 
 One plain-text screen, top to bottom: the project's core facts (including the **Show-it surface**
-declaration when present), the **Dispatch calibration** (the
+declaration when present and the declared **Vet checks** block with any malformed or unreadable
+calibration flagged), the **Dispatch calibration** (the
 effective engine + model for every v2 dispatch role) and its Codex model-pin detail, each hero's
 layer, the pinned patterns, and the **Model tiers** block — "here is everything superheroes knows
 about this project," not a list of files. Any current staleness/drift is shown as a **single,
@@ -173,6 +174,31 @@ action that owns it, leaving the rest of the calibration untouched:
   Only `written` or `noop` means the Show-it declaration was saved — surface any other
   `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
   exits 0 either way, so check `action`, not exit status.
+
+- **Declare or change the project's vet checks** → write **only** the `vetChecks` key in `core.md`'s
+  JSON block, leaving every other key untouched. Stdin carries a JSON list; empty stdin is refused
+  (use `--clear` to remove the key):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' '[{"name":"Example check","evidence":"PR body · Build record","records":"what was read and what the vet recorded"}]' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-vet-checks --cwd .
+  ```
+
+  To clear:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" write-vet-checks --cwd . --clear
+  ```
+
+  **Read the result, don't assume success.** `write-vet-checks` returns `{action, reason?,
+  malformed?}`. Only `written` or `noop` means the list was saved — surface any other `action`
+  (`refused`, `deferred`, `behind`) to the owner with its `reason`; refusal `vet-checks-malformed`
+  carries `malformed` for the owner to fix. Refusal reasons also include `vet-checks-input-unparseable`,
+  `duplicate-core-key:<key>`, `core-md-absent`, `core-md-unparseable`, and
+  `vet-checks-round-trip-refused`. The command exits 0 either way, so check `action`, not exit
+  status. List shape: `skills/showrunner/reference/vet-receipt.md` § Project vet checks.
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
