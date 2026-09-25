@@ -444,7 +444,7 @@ your next tool call. Act on the reply, **split or continue** — or park, when t
 crossed the 600 bar below, whose three-way ruling then governs. **No reply within 15 minutes**, or no
 way on this host to message it: post the same disclosure on the issue and stop, as a park. **No
 advisor session named** (an interactive build the owner drives): make the disclosure to the owner in
-the session. **No estimate in the order** is an order gap: post your own estimate on the issue before
+the session. **A light order with no estimate** is an order gap: post your own estimate on the issue before
 code, disclosed, and run the step against it. A reply to continue lifts no other size rule — the light lane still escalates past ~400, and the bars below still bind.
 The PR's **size tripwire** row (§11) records the outcome. Two absolute bars ride beside it, counted over non-test lines
 added or modified (deletions, regenerated artifacts, tests and records excluded): at **300**, report the count and a

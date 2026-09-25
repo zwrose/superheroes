@@ -282,7 +282,7 @@ above).
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
    else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
    process constraints (test right-sizing, E2E policy), and launch context (local export paths,
-   known-broken links, environment quirks) — and **the order names this advisor session** for the
+   known-broken links, environment quirks) — and **an order you launch names this advisor session** for the
    builder to message, plus a size estimate for a light build
    (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The size-consideration
    slot). **Any scope exclusion that leaves an audience or delivery

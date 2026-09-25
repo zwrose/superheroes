@@ -207,10 +207,11 @@ its roadmap, and a project extends it rather than minting a second one.
    [workhorse charter](../../workhorse/SKILL.md).
 5. **The slot is recorded in the issue body beside the lane call and the presentation call**, at the
    same moment the kind label is applied.
-6. **Every build order names the advisor session and carries an estimate.** The order written into a
-   build-ready issue names the advisor session the builder messages at the size step, by the name the
-   host's session listing shows, and a light-lane order — which gets no brief — states the non-test
-   line estimate the step compares against. The issue body is the carrier: a launched builder
+6. **An advisor-launched build order names the advisor session; a light order also carries an
+   estimate.** The order written into a build-ready issue names the advisor session the builder
+   messages at the size step, by the name the host's session listing shows; a build the owner drives
+   interactively has no advisor to name. A light-lane order — which gets no brief — also states the
+   non-test line estimate the step compares against; a full-lane build uses its brief's estimate. The issue body is the carrier: a launched builder
    receives only the command, the issue pointer and the standing rulings, so the launch premise adds
    nothing here.
 
