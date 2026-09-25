@@ -1971,6 +1971,8 @@ def test_loop_first_non_timer_ok_terminates_with_arms(tmp_path, monkeypatch):
     assert result["arms"] == 1
     assert calls[0] == 1
     assert violations == []
+    assert result["passedOverCount"] == 0
+    assert result["passedOver"] == []
 
 
 def test_loop_refusal_terminates_immediately_with_arms(tmp_path, monkeypatch):
@@ -2108,34 +2110,42 @@ def test_loop_threads_ledger_observed_across_arms(tmp_path, monkeypatch):
 def test_loop_threads_pr_state_across_arm_boundary(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    arm = [0]
-    pr_sets = [{1}, {1, 2}]
-    real_run = ww.watch_arm
 
-    def gh_for_arm(argv, **kwargs):
-        idx = min(arm[0] - 1, len(pr_sets) - 1)
-        body = [{"number": n} for n in sorted(pr_sets[idx])]
-        return subprocess.CompletedProcess(
-            argv, 0, stdout=json.dumps(body), stderr="",
-        )
-
-    def run_fn(repo_root, batch_id, **kwargs):
-        arm[0] += 1
-        call_kwargs = dict(kwargs)
-        call_kwargs["gh_run"] = gh_for_arm
-        call_kwargs["max_seconds"] = 2
-        call_kwargs["interval_seconds"] = 1
-        return real_run(repo_root, batch_id, **call_kwargs)
-
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [{"launchId": "lane-a", "state": "handback"}],
+    }
+    run_fn, calls, violations = _scripted_run_fn([
+        _timer_arm_result(),
+        {
+            "ok": True,
+            "event": "pr-set-changed",
+            "batchId": "batch-982",
+            "degraded": [],
+            "prsAdded": [2],
+            "prs": [1, 2],
+            "prsRemoved": [],
+            "stacks": [],
+            "ungrouped": [2],
+        },
+        terminal,
+    ])
     result = ww.loop(
         repo, "batch-982",
         max_seconds=2, interval_seconds=1,
         run_fn=run_fn,
     )
     assert result["ok"] is True
-    assert result["event"] == "pr-set-changed"
-    assert result["prsAdded"] == [2]
-    assert result["arms"] == 2
+    assert result["event"] == "lane-terminal"
+    assert result["passedOverCount"] == 1
+    assert result["passedOver"][0]["event"] == "pr-set-changed"
+    assert result["passedOver"][0]["prsAdded"] == [2]
+    assert result["arms"] == 3
+    assert violations == []
 
 
 def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatch):
@@ -2507,9 +2517,137 @@ def test_loop_refusal_interval_invalid_has_arms_zero(tmp_path, monkeypatch):
     assert result["arms"] == 0
     assert calls[0] == 0
     assert violations == []
+    assert result["passedOverCount"] == 0
+    assert result["passedOver"] == []
+
+
+def test_loop_internal_error_returns_empty_passed_over(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+
+    def run_fn(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_INTERNAL_ERROR
+    assert result["passedOverCount"] == 0
+    assert result["passedOver"] == []
 
 
 # --- C15 layer 1 watcher (issue #1274) ----------------------------------------
+
+
+def test_loop_passes_over_pr_set_change(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    pr_change = {
+        "ok": True,
+        "event": "pr-set-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "prsAdded": [2],
+        "prs": [1, 2],
+        "prsRemoved": [],
+        "stacks": [],
+        "ungrouped": [2],
+    }
+    run_fn, _calls, violations = _scripted_run_fn([pr_change, terminal])
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert result["event"] == "lane-terminal"
+    assert result["arms"] == 2
+    assert result["passedOverCount"] == 1
+    assert result["passedOver"][0]["event"] == "pr-set-changed"
+    assert result["passedOver"][0]["prsAdded"] == [2]
+    assert violations == []
+
+
+def test_loop_stack_state_idle_seat_exits_otherwise_passes_over(tmp_path, monkeypatch):
+    repo_idle = _init_repo(tmp_path / "repo-idle")
+    _setup_stack_batch(
+        repo_idle, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-pos1",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 3,
+            },
+            {
+                "launch_id": "lane-pos2",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 3,
+            },
+        ],
+    )
+    _patch_pr_vet(monkeypatch, {
+        50: {"state": _pr_vet_state()},
+        51: {"state": _pr_vet_state()},
+    })
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def sleep(duration):
+        clock[0] += duration
+
+    idle_result = ww.loop(
+        repo_idle,
+        "batch-982",
+        max_seconds=2,
+        interval_seconds=1,
+        gh_run=_gh_open_prs([50, 51]),
+        membership_reader=_membership_for_stack([50, 51]),
+        monotonic=mono,
+        sleep=sleep,
+        max_total_seconds=5,
+    )
+    assert idle_result["event"] == ww.EVENT_STACK_STATE_CHANGED
+    assert idle_result["arms"] == 1
+    assert {
+        "flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
+        "stack": _STACK_NUM,
+        "position": 2,
+    } in idle_result["flags"]
+    assert idle_result["passedOverCount"] == 0
+
+    repo_benign = _valid_repo_for_loop(tmp_path, monkeypatch)
+    benign_stack = {
+        "ok": True,
+        "event": "stack-state-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "stacks": [{"state": ww.STACK_STATE_COMPLETE}],
+        "flags": [],
+    }
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    run_fn, _calls, violations = _scripted_run_fn([benign_stack, terminal])
+    benign_result = ww.loop(
+        repo_benign, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert benign_result["event"] == "lane-terminal"
+    assert benign_result["passedOverCount"] == 1
+    assert benign_result["passedOver"][0]["event"] == "stack-state-changed"
+    assert violations == []
 
 
 def test_run_is_one_shot_against_quiet_live_lane(tmp_path, monkeypatch):
@@ -2536,6 +2674,223 @@ def test_run_is_one_shot_against_quiet_live_lane(tmp_path, monkeypatch):
     assert ledger_reads[0] == 1
 
 
+def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    pr_sets = [{1}, {1, 2}, {1, 2, 3}, {1, 2, 3}]
+    arm = [0]
+    real_run = ww.watch_arm
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
+    def gh_for_arm(argv, **kwargs):
+        idx = min(max(arm[0] - 1, 0), len(pr_sets) - 1)
+        body = [{"number": n} for n in sorted(pr_sets[idx])]
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=json.dumps(body), stderr="",
+        )
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        arm[0] += 1
+        if arm[0] <= 4:
+            return real_run(
+                repo_root,
+                batch_id,
+                gh_run=gh_for_arm,
+                max_seconds=5,
+                interval_seconds=1,
+                monotonic=mono,
+                sleep=fake_sleep,
+                ledger_observed=kwargs.get("ledger_observed"),
+                pr_state=kwargs.get("pr_state"),
+                stack_state=kwargs.get("stack_state"),
+                pr_sampled=kwargs.get("pr_sampled"),
+            )
+        return {
+            "ok": True,
+            "event": "lane-terminal",
+            "batchId": batch_id,
+            "degraded": [],
+            "launchId": "lane-a",
+            "launches": [],
+        }
+
+    result = ww.loop(
+        repo, "batch-982", max_seconds=5, interval_seconds=1,
+        run_fn=run_fn, monotonic=mono, sleep=fake_sleep,
+    )
+    assert result["event"] == "lane-terminal"
+    assert result["passedOverCount"] == 2
+    assert len(result["passedOver"]) == 2
+
+
+def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    benign = {
+        "ok": True,
+        "event": "stack-state-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "stacks": [],
+        "flags": [],
+    }
+    cap = ww.PASSED_OVER_CAP
+    sequence = []
+    for arm in range(1, cap + 2):
+        event = dict(benign)
+        event["stacks"] = [{"arm": arm}]
+        sequence.append(event)
+    sequence.append({
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    })
+    run_fn, _c, _v = _scripted_run_fn(sequence)
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert result["passedOverCount"] == cap + 1
+    assert len(result["passedOver"]) == cap
+    retained_arms = [entry["arm"] for entry in result["passedOver"]]
+    assert retained_arms == list(range(2, cap + 2))
+    assert result["passedOver"][-1]["stacks"] == [{"arm": cap + 1}]
+
+
+def test_loop_ceiling_after_benign_non_timer_returns_timer(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    pr_change = {
+        "ok": True,
+        "event": "pr-set-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "prsAdded": [1],
+        "prs": [1],
+        "prsRemoved": [],
+        "stacks": [],
+        "ungrouped": [1],
+    }
+    calls = [0]
+
+    def run_fn(*_args, **_kwargs):
+        calls[0] += 1
+        clock[0] += 6.0
+        return dict(pr_change)
+
+    result = ww.loop(
+        repo, "batch-982",
+        max_seconds=10,
+        interval_seconds=1,
+        max_total_seconds=5,
+        monotonic=mono,
+        sleep=lambda _d: None,
+        run_fn=run_fn,
+    )
+    assert result["event"] == "timer"
+    assert result["passedOverCount"] == 1
+
+
+def test_loop_ceiling_stale_suppressed_follows_last_benign_arm(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    timer_suppressed = {
+        "ok": True,
+        "event": "timer",
+        "batchId": "batch-982",
+        "degraded": [],
+        "staleSuppressed": [
+            {
+                "launchId": "lane-a",
+                "note": ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH,
+            },
+        ],
+    }
+    pr_stale_observed = {
+        "ok": True,
+        "event": "pr-set-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "prsAdded": [],
+        "prs": [1],
+        "prsRemoved": [],
+        "stacks": [],
+        "ungrouped": [1],
+        "alsoObserved": {"stale": ["lane-a"]},
+    }
+    calls = [0]
+
+    def run_fn(*_args, **_kwargs):
+        calls[0] += 1
+        clock[0] += 3.0
+        if calls[0] == 1:
+            return dict(timer_suppressed)
+        return dict(pr_stale_observed)
+
+    result = ww.loop(
+        repo, "batch-982",
+        max_seconds=10,
+        interval_seconds=1,
+        max_total_seconds=5,
+        monotonic=mono,
+        sleep=lambda _d: None,
+        run_fn=run_fn,
+    )
+    assert result["event"] == "timer"
+    assert "staleSuppressed" not in result
+    assert result["passedOverCount"] == 1
+    assert result["passedOver"][0]["alsoObserved"] == {"stale": ["lane-a"]}
+
+
+def test_loop_benign_non_timer_writes_log_line(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    log_path = str(tmp_path / "loop.log")
+    pr_change = {
+        "ok": True,
+        "event": "pr-set-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "prsAdded": [1],
+        "prs": [1],
+        "prsRemoved": [],
+        "stacks": [],
+        "ungrouped": [1],
+    }
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    run_fn, _c, _v = _scripted_run_fn([pr_change, terminal])
+    ww.loop(
+        repo, "batch-982",
+        max_seconds=1, interval_seconds=1,
+        log_path=log_path, run_fn=run_fn,
+    )
+    lines = open(log_path, encoding="utf-8").read().strip().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["result"]["event"] == "pr-set-changed"
+
+
 def test_run_slow_gh_returns_without_waiting(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
@@ -2560,6 +2915,11 @@ def test_cli_run_max_seconds_exits_two():
         "--max-seconds", "5",
     ])
     assert proc.returncode == 2
+
+
+def test_lane_and_benign_event_partition():
+    assert ww.LANE_ENDING_EVENTS | ww.BENIGN_EVENTS == ww.EVENTS
+    assert not ww.LANE_ENDING_EVENTS & ww.BENIGN_EVENTS
 
 
 def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch):
@@ -4061,26 +4421,39 @@ def test_run_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
 
 
 def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
-    pr_sets = [{10}, {10, 99}]
-    recorded = []
-    arm = [0]
-    real_run = ww.watch_arm
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
 
     def membership_reader(*, pr, repo, **kwargs):
-        recorded.append(pr)
         return {"ok": False, "reason": sc.REASON_NOT_LINKED}
 
-    def run_fn(repo_root, batch_id, **kwargs):
-        arm[0] += 1
-        call_kwargs = dict(kwargs)
-        call_kwargs["gh_run"] = _gh_pr_list_with_repo_view(pr_sets)
-        call_kwargs["max_seconds"] = 2
-        call_kwargs["interval_seconds"] = 1
-        call_kwargs["membership_reader"] = kwargs["membership_reader"]
-        call_kwargs["sleep"] = lambda _d: None
-        return real_run(repo_root, batch_id, **call_kwargs)
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    scripted_run_fn, _calls, violations = _scripted_run_fn([
+        _timer_arm_result(),
+        {
+            "ok": True,
+            "event": "pr-set-changed",
+            "batchId": "batch-982",
+            "degraded": [],
+            "prsAdded": [99],
+            "prs": [10, 99],
+            "prsRemoved": [],
+            "stacks": [],
+            "ungrouped": [99],
+        },
+        terminal,
+    ])
+    forwarded_readers = []
+
+    def run_fn(*args, **kwargs):
+        forwarded_readers.append(kwargs["membership_reader"])
+        return scripted_run_fn(*args, **kwargs)
 
     result = ww.loop(
         repo,
@@ -4092,8 +4465,11 @@ def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
         membership_reader=membership_reader,
     )
 
-    assert result["event"] == "pr-set-changed"
-    assert recorded == [99]
+    assert result["event"] == "lane-terminal"
+    assert result["passedOverCount"] == 1
+    assert violations == []
+    assert forwarded_readers
+    assert all(reader is membership_reader for reader in forwarded_readers)
 
 
 # --- stack-state-changed (#1340 layer 2f) -------------------------------------
@@ -4865,6 +5241,79 @@ def test_baseline_advances_unchanged_complete_does_not_refire(tmp_path, monkeypa
         repo, "batch-982", **run_kwargs, monotonic=_advancing_monotonic(),
     )
     assert second["event"] != ww.EVENT_STACK_STATE_CHANGED
+
+
+def test_loop_completed_stack_passes_over_once_with_real_watch_arm(
+    tmp_path, monkeypatch,
+):
+    # axis: shared stack_state across loop arms; unchanged complete stack fires once
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    batch_id = "batch-982"
+    ll.declare_batch(repo, batch_id, 4)
+    ll.append(
+        repo,
+        _reserved_stack(
+            "lane-pos1", batch_id, ["plugins/superheroes/lib"], repo,
+            _STACK_NUM, 1, 2,
+        ),
+    )
+    ll.append(
+        repo,
+        _reserved_stack(
+            "lane-pos2", batch_id, ["plugins/superheroes/lib"], repo,
+            _STACK_NUM, 2, 2,
+        ),
+    )
+    ll.append(
+        repo,
+        _reserved(
+            "lane-stale-trigger", batch_id, ["plugins/superheroes/lib"], repo,
+        ),
+    )
+    ll.append(repo, _started("lane-stale-trigger", pid=os.getpid()))
+    wall = [time.time()]
+    hb.stamp(
+        repo,
+        state="working",
+        phase="watch",
+        launch_id="lane-stale-trigger",
+        stale_after_seconds=3,
+        now=wall[0],
+    )
+    _patch_pr_vet(monkeypatch, {
+        50: {"state": _pr_vet_state()},
+        51: {"state": _pr_vet_state()},
+    })
+    config = tmp_path / "claude-config"
+    config.mkdir(exist_ok=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def sleep(duration):
+        clock[0] += duration
+        wall[0] += duration
+
+    monkeypatch.setattr(time, "time", lambda: wall[0])
+
+    result = ww.loop(
+        repo,
+        batch_id,
+        max_seconds=5,
+        interval_seconds=1,
+        gh_run=_gh_open_prs([50, 51]),
+        membership_reader=_membership_for_stack([50, 51]),
+        monotonic=mono,
+        sleep=sleep,
+    )
+    assert result["event"] == ww.EVENT_LANE_STALE
+    assert result["passedOverCount"] == 1
+    assert len(result["passedOver"]) == 1
+    assert result["passedOver"][0]["event"] == ww.EVENT_STACK_STATE_CHANGED
 
 
 def test_precedence_stack_state_over_pr_set_pr_baseline_unchanged(

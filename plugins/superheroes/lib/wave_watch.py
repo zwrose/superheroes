@@ -6,8 +6,8 @@ Watch one launch batch until the first qualifying event. stdlib only.
 Verbs:
 - run: one-shot evaluation tick — one ledger read, at most one open-PR poll, no sleep.
 - watch_arm: windowed watch — one arm until the first event or arm deadline.
-- loop: re-arms watch_arm internally until a refusal or a non-timer event; the arming
-  shape for a background advisor call per batch. loop owns one set of state
+- loop: re-arms watch_arm internally, passes over benign events, and exits only
+  on lane-ending events, refusals, or its ceiling. loop owns one set of state
   cells (ledger_observed, pr_state, stack_state, pr_sampled) threaded through every arm so
   store loss across an arm boundary is not mistaken for benign pre-arm silence,
   PR deltas across an arm boundary are not absorbed into a fresh baseline, and
@@ -94,9 +94,9 @@ Contract:
   (1.0), strict — so a window of exactly one second DOES poll (with timeout=1.0), and
   only a window shorter than one second is skipped. (Loop's final truncated arm polls
   when at least one full second remains.)
-- Standing guarantees: the watcher is read-only over the store (it never
-  writes, never mutates ledger or heartbeat state) and it never signals any
-  process (pid liveness is os.kill(pid, 0) probing only).
+- Standing guarantees: the watcher never writes under the store (never mutates
+  ledger or heartbeat state); `--log` writes the caller-selected log. It never
+  signals any process (pid liveness is os.kill(pid, 0) probing only).
 """
 import argparse
 import json
@@ -139,8 +139,11 @@ NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH = "stale-suppressed-transcript-fresh"
 # same authoritative definition — a doc-drift guard that compared two hardcoded
 # literals would still pass if the runtime key were renamed underneath it.
 RESULT_KEY_STALE_SUPPRESSED = "staleSuppressed"
+RESULT_KEY_PASSED_OVER = "passedOver"
+RESULT_KEY_PASSED_OVER_COUNT = "passedOverCount"
 
 RUN_READ_BUDGET_SECONDS = 30
+PASSED_OVER_CAP = 100
 
 _GH_SCRUB_VARS = (
     "GIT_DIR",
@@ -212,6 +215,21 @@ EVENTS = frozenset({
     EVENT_LANE_STALE,
     EVENT_TIMER,
 })
+
+LANE_ENDING_EVENTS = frozenset({
+    EVENT_LANE_TERMINAL,
+    EVENT_LANE_BLOCKED,
+    EVENT_BUILDER_EXITED,
+    EVENT_LANE_STALE,
+})
+BENIGN_EVENTS = frozenset({
+    EVENT_STACK_STATE_CHANGED,
+    EVENT_PR_SET_CHANGED,
+    EVENT_TIMER,
+})
+
+assert LANE_ENDING_EVENTS | BENIGN_EVENTS == EVENTS
+assert not LANE_ENDING_EVENTS & BENIGN_EVENTS
 
 DEGRADATION_LEDGER_TORN_TAIL = "ledger-torn-tail"
 DEGRADATION_LEDGER_UNREADABLE = "ledger-unreadable"
@@ -898,6 +916,7 @@ def _evaluate_pr_set_changed(
         repo_root, deadline, monotonic, gh_run, membership_reader, env,
         degraded, changed_prs, repo_slug,
     )
+    pr_state[0] = pr_set
     return {
         "prs": sorted(pr_set),
         "prsAdded": added,
@@ -1108,7 +1127,7 @@ def _payload_stack_state_changed(ctx):
     if baseline is not None and snapshot == baseline:
         return None
     # The advance serves a caller that threads stack_state across watch_arm() calls.
-    # loop() returns on this event, so a new loop invocation starts without one.
+    # loop() passes over this event and keeps the advanced baseline for the next arm.
     stack_state[0] = snapshot
     payload = dict(snapshot)
     also = _build_also_observed(
@@ -1257,6 +1276,47 @@ _EVENT_PAYLOAD_BUILDERS = {
 for _event in EVENT_PRECEDENCE:
     if _event != EVENT_TIMER:
         assert _event in _EVENT_PAYLOAD_BUILDERS
+
+
+def _loop_exits_on(result):
+    if result.get("ok") is not True:
+        return True
+    event = result.get("event")
+    if event == EVENT_STACK_STATE_CHANGED:
+        for entry in result.get("flags") or ():
+            if entry.get("flag") == FLAG_IDLE_SEAT_LAUNCHABLE_CHILD:
+                return True
+        return False
+    return event not in BENIGN_EVENTS
+
+
+def _passed_over_keys_empty():
+    return {
+        RESULT_KEY_PASSED_OVER: [],
+        RESULT_KEY_PASSED_OVER_COUNT: 0,
+    }
+
+
+def _passed_over_entry(arm, elapsed_seconds, result):
+    entry = {
+        "arm": arm,
+        "elapsedSeconds": round(elapsed_seconds, 3),
+        "event": result["event"],
+    }
+    skip = frozenset({"ok", "batch", "event", "degraded", "batchId"})
+    for key, value in result.items():
+        if key in skip:
+            continue
+        entry[key] = value
+    return entry
+
+
+def _append_passed_over(passed_over, passed_over_count, arm, elapsed, result):
+    passed_over_count[0] += 1
+    passed_over.append(_passed_over_entry(arm, elapsed, result))
+    overflow = len(passed_over) - PASSED_OVER_CAP
+    if overflow > 0:
+        del passed_over[:overflow]
 
 
 def _close_log_silent(log_file):
@@ -1448,6 +1508,69 @@ def _timer_at_deadline(
         EVENT_TIMER, batch_id, degraded,
         stale_suppressed=list(arm_suppressed.values()),
     )
+
+
+def _loop_attach_passed_over(final, passed_over, passed_over_count):
+    final[RESULT_KEY_PASSED_OVER] = list(passed_over)
+    final[RESULT_KEY_PASSED_OVER_COUNT] = passed_over_count[0]
+    return final
+
+
+def _loop_pre_arm_refusal(refusal):
+    out = dict(refusal)
+    out.update(_passed_over_keys_empty())
+    return out
+
+
+def _loop_log_arm_result(
+    log_file,
+    log_path,
+    log_degradation,
+    loop_degraded,
+    arms,
+    elapsed,
+    result,
+):
+    if log_file is not None:
+        try:
+            _append_log_line(log_file, arms, elapsed, result)
+        except OSError:
+            loop_degraded.add(DEGRADATION_LOG_UNWRITABLE)
+            _close_log_silent(log_file)
+            return None, log_degradation
+        return log_file, log_degradation
+    if log_path is not None and log_degradation is None:
+        log_file, log_degradation = _open_log_append(log_path)
+        if log_degradation is not None:
+            loop_degraded.add(log_degradation)
+            return None, log_degradation
+        if log_file is not None:
+            try:
+                _append_log_line(log_file, arms, elapsed, result)
+            except OSError:
+                loop_degraded.add(DEGRADATION_LOG_UNWRITABLE)
+                _close_log_silent(log_file)
+                return None, log_degradation
+    return log_file, log_degradation
+
+
+def _ceiling_timer_result(
+    batch_id,
+    loop_degraded,
+    passed_over,
+    passed_over_count,
+    last_benign_result,
+):
+    stale_values = None
+    if last_benign_result is not None:
+        stale_values = last_benign_result.get(RESULT_KEY_STALE_SUPPRESSED)
+    final = _event_result(
+        EVENT_TIMER,
+        batch_id,
+        loop_degraded,
+        stale_suppressed=stale_values,
+    )
+    return _loop_attach_passed_over(final, passed_over, passed_over_count)
 
 
 def watch_arm(
@@ -1671,11 +1794,13 @@ def loop(
     ignore_events=(),
     run_fn=None,
 ):
-    """Re-arm watch_arm until a refusal or non-timer event. Returns the result dict; never raises."""
+    """Re-arm watch_arm until lane-ending exit, refusal, or ceiling."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
     arms = 0
     loop_degraded = set()
     log_file = None
+    passed_over = []
+    passed_over_count = [0]
     try:
         if env is None:
             env = os.environ
@@ -1689,7 +1814,9 @@ def loop(
             run_fn = watch_arm
 
         if not _valid_batch_id(batch_id):
-            return _refusal(REFUSAL_BATCH_INVALID, batch_for_refusal, arms=0)
+            return _loop_pre_arm_refusal(
+                _refusal(REFUSAL_BATCH_INVALID, batch_for_refusal, arms=0),
+            )
 
         batch_id = batch_id.strip()
 
@@ -1697,21 +1824,27 @@ def loop(
             ignore_events, batch_id, arms=0,
         )
         if ignore_refusal is not None:
-            return ignore_refusal
+            return _loop_pre_arm_refusal(ignore_refusal)
 
         if (
             max_total_seconds is not None
             and not _valid_positive_int(max_total_seconds)
         ):
-            return _refusal(
+            return _loop_pre_arm_refusal(_refusal(
                 REFUSAL_MAX_TOTAL_SECONDS_INVALID, batch_id, arms=0,
-            )
+            ))
         if not _valid_positive_int(interval_seconds):
-            return _refusal(REFUSAL_INTERVAL_INVALID, batch_id, arms=0)
+            return _loop_pre_arm_refusal(
+                _refusal(REFUSAL_INTERVAL_INVALID, batch_id, arms=0),
+            )
         if not _valid_positive_int(max_seconds):
-            return _refusal(REFUSAL_MAX_SECONDS_INVALID, batch_id, arms=0)
+            return _loop_pre_arm_refusal(
+                _refusal(REFUSAL_MAX_SECONDS_INVALID, batch_id, arms=0),
+            )
         if not _valid_repo_root(repo_root):
-            return _refusal(REFUSAL_REPO_ROOT_INVALID, batch_id, arms=0)
+            return _loop_pre_arm_refusal(
+                _refusal(REFUSAL_REPO_ROOT_INVALID, batch_id, arms=0),
+            )
 
         ledger_observed = [False]
         pr_state = [None]
@@ -1723,7 +1856,7 @@ def loop(
             if max_total_seconds is not None
             else None
         )
-        last_timer_result = None
+        last_benign_result = None
         log_degradation = None
         if log_path is not None:
             log_file, log_degradation = _open_log_append(log_path)
@@ -1735,8 +1868,13 @@ def loop(
             if total_deadline is not None:
                 remaining = total_deadline - monotonic()
                 if remaining <= 0:
-                    # Fail-closed: only reachable after a timer arm set last_timer_result.
-                    final = dict(last_timer_result)
+                    final = _ceiling_timer_result(
+                        batch_id,
+                        loop_degraded,
+                        passed_over,
+                        passed_over_count,
+                        last_benign_result,
+                    )
                     final["arms"] = arms
                     final_degraded = set(final.get("degraded", []))
                     final_degraded.update(loop_degraded)
@@ -1772,68 +1910,69 @@ def loop(
             result_degraded = set(result.get("degraded", []))
             loop_degraded.update(result_degraded)
 
-            if result.get("ok") and result.get("event") == EVENT_TIMER:
-                last_timer_result = result
-                if log_file is not None:
-                    try:
-                        _append_log_line(
-                            log_file,
-                            arms,
-                            monotonic() - total_start,
-                            result,
-                        )
-                    except OSError:
-                        loop_degraded.add(DEGRADATION_LOG_UNWRITABLE)
-                        try:
-                            log_file.close()
-                        except OSError:
-                            pass
-                        log_file = None
-                elif log_path is not None and log_degradation is None:
-                    log_file, log_degradation = _open_log_append(log_path)
-                    if log_degradation is not None:
-                        loop_degraded.add(log_degradation)
-                        log_file = None
-                    elif log_file is not None:
-                        try:
-                            _append_log_line(
-                                log_file,
-                                arms,
-                                monotonic() - total_start,
-                                result,
-                            )
-                        except OSError:
-                            loop_degraded.add(DEGRADATION_LOG_UNWRITABLE)
-                            _close_log_silent(log_file)
-                            log_file = None
+            if _loop_exits_on(result):
+                final = dict(result)
+                final["arms"] = arms
+                final_degraded = set(final.get("degraded", []))
+                final_degraded.update(loop_degraded)
+                final["degraded"] = sorted(final_degraded)
+                _loop_attach_passed_over(final, passed_over, passed_over_count)
+                _close_log_silent(log_file)
+                return final
 
-                if total_deadline is not None:
-                    remaining = total_deadline - monotonic()
-                    if remaining <= 0:
-                        final = dict(result)
-                        final["arms"] = arms
-                        final_degraded = set(final.get("degraded", []))
-                        final_degraded.update(loop_degraded)
-                        final["degraded"] = sorted(final_degraded)
-                        _close_log_silent(log_file)
-                        return final
-                continue
+            elapsed = monotonic() - total_start
+            event = result.get("event")
+            if event == EVENT_TIMER:
+                last_benign_result = result
+                log_file, log_degradation = _loop_log_arm_result(
+                    log_file,
+                    log_path,
+                    log_degradation,
+                    loop_degraded,
+                    arms,
+                    elapsed,
+                    result,
+                )
+            else:
+                last_benign_result = result
+                _append_passed_over(
+                    passed_over, passed_over_count, arms, elapsed, result,
+                )
+                log_file, log_degradation = _loop_log_arm_result(
+                    log_file,
+                    log_path,
+                    log_degradation,
+                    loop_degraded,
+                    arms,
+                    elapsed,
+                    result,
+                )
 
-            final = dict(result)
-            final["arms"] = arms
-            final_degraded = set(final.get("degraded", []))
-            final_degraded.update(loop_degraded)
-            final["degraded"] = sorted(final_degraded)
-            _close_log_silent(log_file)
-            return final
+            if total_deadline is not None:
+                remaining = total_deadline - monotonic()
+                if remaining <= 0:
+                    final = _ceiling_timer_result(
+                        batch_id,
+                        loop_degraded,
+                        passed_over,
+                        passed_over_count,
+                        last_benign_result,
+                    )
+                    final["arms"] = arms
+                    final_degraded = set(final.get("degraded", []))
+                    final_degraded.update(loop_degraded)
+                    final["degraded"] = sorted(final_degraded)
+                    _close_log_silent(log_file)
+                    return final
+            continue
     except Exception as exc:
         _close_log_silent(log_file)
         result = _refusal(REFUSAL_INTERNAL_ERROR, batch_for_refusal, arms=arms)
         result["detail"] = type(exc).__name__
         if loop_degraded:
             result["degraded"] = sorted(loop_degraded)
+        _loop_attach_passed_over(result, passed_over, passed_over_count)
         return result
-
 
 def _parse_ignore_event_cli(value):
     if ":" not in value:

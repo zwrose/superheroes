@@ -86,11 +86,13 @@ whose stack is already complete, or that already carries the idle-seat flag
 (`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` in `lib/wave_watch.py`), reports `stack-state-changed` on its
 first arm.
 
-### `wave_watch.py` run
+### `wave_watch.py` loop and run
 
 `run` drops `--max-seconds` and `--interval-seconds` (and the Python `run()` loses `max_seconds`,
 `interval_seconds`, and `sleep`; the old windowed function is `watch_arm()`). `run` returns at once
-— one ledger read and at most one open-PR read, no waiting.
+— one ledger read and at most one open-PR read, no waiting. `loop` no longer returns on
+`pr-set-changed` or `stack-state-changed`; those are benign wakes passed over and reported at exit.
+Every `loop` result gains `passedOver` and `passedOverCount`.
 
 ### Launcher premise `dependency` field
 
