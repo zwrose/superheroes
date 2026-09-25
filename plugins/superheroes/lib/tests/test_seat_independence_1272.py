@@ -35,12 +35,14 @@ def _execution_evidence(seat, phase, attempt, occurrence, *, source, payload=Non
     payload = payload if payload is not None else DEFAULT_PANEL_PAYLOAD
     result_digest = RR.payload_sha256(payload.get("findings", []))
     nonce = "nonce-%s-%s-a%d-o%d" % (seat, phase, attempt, occurrence)
+    run_kind = "write" if phase == FIXER_PHASE else "review"
     return {
         "source": source,
         "runnerNonce": nonce,
         "recordDigest": "d" * 64,
         "resultDigest": result_digest,
         "resultKind": "findings",
+        "runKind": run_kind,
         "observation": _observation_fields(source=source),
     }
 
@@ -147,7 +149,7 @@ def test_receipt_independence_reads_recorded_fixer_vendor_two_vendors(tmp_path):
                 "seat": AUDIT_SEAT,
                 "round": 1,
                 "vendor": "claude",
-                "family": model_registry.family_for("verifier", "claude"),
+                "family": model_registry.family_for("auditor", "claude"),
                 "model": None,
             }
         ],
@@ -217,7 +219,7 @@ def test_audit_seat_same_family_per_runner_record_reads_degraded(tmp_path):
                 "seat": AUDIT_SEAT,
                 "round": 1,
                 "vendor": "claude",
-                "family": model_registry.family_for("verifier", "claude"),
+                "family": model_registry.family_for("auditor", "claude"),
                 "model": None,
             }
         ],

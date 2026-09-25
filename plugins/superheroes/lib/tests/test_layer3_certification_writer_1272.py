@@ -82,7 +82,7 @@ def _hand_landed_journal_row(phase, seat, payload_sha, evidence, *, attempt=0):
 
 
 def _write_stamp_session(tmp_path, phase, seat="code-reviewer"):
-    evidence = _write_stamp_evidence()
+    evidence = _write_stamp_evidence(runKind=SC.run_kind_for_phase(phase))
     payload = {"fixes": [{"file": "a.py", "description": "fixed"}]}
     payload_sha = DEFAULT_PANEL_PAYLOAD_SHA
     session_dir = write_session(

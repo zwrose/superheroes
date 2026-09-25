@@ -392,6 +392,7 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": RR.payload_sha256(DEFAULT_PANEL_PAYLOAD["findings"]),
         "resultKind": "findings",
+        "runKind": "review",
         "observation": dict(obs_fields, source="codex"),
     }
     fixer_evidence = {
@@ -400,8 +401,11 @@ def test_receipt_audit_seat_model_equals_runner_engine_model(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": RR.payload_sha256(DEFAULT_PANEL_PAYLOAD["findings"]),
         "resultKind": "findings",
+        "runKind": "write",
         "observation": dict(obs_fields, source="cursor"),
     }
+    if "runKind" not in audit_evidence:
+        audit_evidence = dict(audit_evidence, runKind="review")
 
     def _stored_envelope(payload, payload_sha, evidence):
         return {

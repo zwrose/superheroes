@@ -525,6 +525,19 @@ def _resolve_repo_head_sha(ctx):
     return head if head else None
 
 
+def _run_kind_refusal_detail(phase, found_kind):
+    expected = session_contract.run_kind_for_phase(phase)
+    return "phase %r requires runKind %r (found %r)" % (phase, expected, found_kind)
+
+
+def _dispatch_run_kind_qualifies(obs, phase):
+    if not isinstance(obs, dict):
+        return False, None
+    expected = session_contract.run_kind_for_phase(phase)
+    run_kind = obs.get("runKind")
+    return (isinstance(run_kind, str) and run_kind == expected), run_kind
+
+
 def _journal_event_slot(event):
     ident = event.get("recordIdentity")
     if not isinstance(ident, dict):
@@ -1185,6 +1198,14 @@ def check_unrun_review(ctx):
                     "dispatch-observed seat lacks qualifying execution telemetry",
                     binding_failure=binding,
                 )
+            rk_ok, found_kind = _dispatch_run_kind_qualifies(obs, phase)
+            if not rk_ok:
+                return _refusal(
+                    "unrun-review",
+                    seat,
+                    _run_kind_refusal_detail(phase, found_kind),
+                    binding_failure="evidence-run-kind-mismatch",
+                )
         elif provenance == PROVENANCE_HAND_LANDED:
             env, path = _load_envelope(
                 session_dir,
@@ -1221,6 +1242,15 @@ def check_unrun_review(ctx):
                     path,
                     "hand-landed seat lacks qualifying execution-evidence binding",
                     binding_failure=binding,
+                )
+            evidence = env.get("executionEvidence") if isinstance(env, dict) else None
+            rk_ok, found_kind = _dispatch_run_kind_qualifies(evidence, phase)
+            if not rk_ok:
+                return _refusal(
+                    "unrun-review",
+                    seat,
+                    _run_kind_refusal_detail(phase, found_kind),
+                    binding_failure="evidence-run-kind-mismatch",
                 )
     return None
 
@@ -1378,7 +1408,7 @@ def check_seat_independence(ctx):
                 binding_failure="auditor-vendor-underivable",
             )
         vendor = vendor_status
-        fam = model_registry.family_for("verifier", vendor)
+        fam = model_registry.family_for("auditor", vendor)
         if fam is None:
             return _refusal(
                 "unfetched-findings",
@@ -1413,7 +1443,7 @@ def _independence_block(ctx):
         if vendor_status == "missing":
             continue
         vendor = vendor_status
-        fam = model_registry.family_for("verifier", vendor)
+        fam = model_registry.family_for("auditor", vendor)
         model = _runner_recorded_model(obs, ctx["session_dir"], seat_entry)
         audit_seats.append(
             {
