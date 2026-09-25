@@ -20,6 +20,7 @@ from round_certification_fixtures import (
     case07_audited_chain,
     case07_audited_chain_missing_audit,
     case08_new_issue_audit,
+    _default_case08_new_issues,
     followup_class_closure_none,
     followup_documented_trigger,
     followup_missing_class_closure,
@@ -238,7 +239,7 @@ def test_case_7_audited_chain_certifies(tmp_path):
 
 
 def test_case_8_new_issue_audit_refuses_then_certifies_once_dispositioned(tmp_path):
-    session_dir = case08_new_issue_audit(tmp_path)
+    session_dir = case08_new_issue_audit(tmp_path, seed_raised_new_issue=True)
     receipt, refusal = _certify(session_dir)
     assert receipt is None
     assert refusal is not None
@@ -248,25 +249,17 @@ def test_case_8_new_issue_audit_refuses_then_certifies_once_dispositioned(tmp_pa
 
     state_path = os.path.join(session_dir, RC.STATE_FILE)
     state = json.load(open(state_path, encoding="utf-8"))
-    new_issue = {
-        "severity": "Important",
-        "file": "src/leak.py",
-        "line": 4,
-        "title": "regression adjacent to fix",
-    }
+    new_issue = _default_case08_new_issues()[0]
     new_key = session_contract.minted_identity_key(new_issue)
-    state[session_contract.DISPOSITION_LEDGER_KEY].append({
-        session_contract.FINDING_KEY_FIELD: new_key,
-        "file": new_issue["file"],
-        "line": new_issue["line"],
-        "title": new_issue["title"],
-        "severity": new_issue["severity"],
-        session_contract.RAISED_ROUND_FIELD: 2,
-        session_contract.RAISED_SEQ_FIELD: 1,
-        "disposition": "refuted",
-        session_contract.DISPOSITION_SEQ_FIELD: 2,
-        "refutedReason": "not reproduced on re-read",
-    })
+    raised_seq = None
+    for row in state[session_contract.DISPOSITION_LEDGER_KEY]:
+        if row.get(session_contract.FINDING_KEY_FIELD) == new_key:
+            raised_seq = row[session_contract.RAISED_SEQ_FIELD]
+            row["disposition"] = "refuted"
+            row["refutedReason"] = "not reproduced on re-read"
+            row[session_contract.DISPOSITION_SEQ_FIELD] = raised_seq + 1
+            break
+    assert raised_seq is not None
     with open(state_path, "w", encoding="utf-8") as fh:
         json.dump(state, fh, sort_keys=True)
     receipt, refusal = _certify(session_dir)

@@ -895,7 +895,7 @@ def test_fix_receipt_refuses_hand_landed_audit_on_panel_head(tmp_path):
     _assert_fix_receipt_audited_chain_refusal(refusal)
 
 
-def test_fix_receipt_refuses_discharged_but_new_issue(tmp_path):
+def test_fix_receipt_discharged_but_new_issue_refuses_while_undispositioned(tmp_path):
     import record_paths
 
     session_dir = case07_audited_chain(tmp_path)
@@ -917,7 +917,11 @@ def test_fix_receipt_refuses_discharged_but_new_issue(tmp_path):
     _resync_audit_journal_from_store(session_dir, target_id)
     receipt, refusal = _certify(session_dir)
     assert receipt is None
-    _assert_fix_receipt_audited_chain_refusal(refusal)
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-stale-head"
+    assert "audited-chain-gap:new-issue-undispositioned" in refusal["detail"]
+    assert "audited-chain-gap:fix-receipt" not in refusal["detail"]
 
 
 def _append_supersede_audit_journal_row(session_dir, target_id, head, *, ruling="discharged"):

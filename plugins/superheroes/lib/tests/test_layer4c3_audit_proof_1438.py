@@ -149,6 +149,21 @@ def _append_disposition(session_dir, candidate, **row_kw):
     _save_state(session_dir, state)
 
 
+def _append_raised_undispositioned(session_dir, candidate, *, raised_seq=1):
+    state = _load_state(session_dir)
+    cand = candidate
+    state[SC.DISPOSITION_LEDGER_KEY].append({
+        SC.FINDING_KEY_FIELD: _new_issue_key(cand),
+        "file": cand["file"],
+        "line": cand["line"] if isinstance(cand["line"], int) else int(str(cand["line"]).strip()),
+        "title": cand["title"],
+        "severity": cand["severity"],
+        SC.RAISED_ROUND_FIELD: 2,
+        SC.RAISED_SEQ_FIELD: raised_seq,
+    })
+    _save_state(session_dir, state)
+
+
 def test_refuted_new_issue_certifies_once_dispositioned(tmp_path):
     session_dir = case08_new_issue_audit(tmp_path)
     cand = _new_issue_template()
@@ -297,10 +312,14 @@ def test_e1_empty_linked_set_refuses(tmp_path, monkeypatch):
 def test_e2_foreign_candidates_only_refuses(tmp_path):
     session_dir = case08_new_issue_audit(tmp_path)
     state = _load_state(session_dir)
-    foreign = dict(_new_issue_template(), originAuditId="other-audit")
-    _mutate_audit_payload(session_dir, _fold_id(state), new_issues=[foreign])
-    _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    fold_id = _fold_id(state)
+    candidate = _new_issue_template()
+    _append_disposition(session_dir, candidate, disposition="refuted", refutedReason="closed")
+    state = _load_state(session_dir)
+    linked = [dict(candidate, originAuditId=fold_id)]
+    foreign = [dict(candidate, originAuditId="other-audit")]
+    assert RC._new_issues_dispositioned(state, fold_id, 2, foreign) is False
+    assert RC._new_issues_dispositioned(state, fold_id, 2, linked) is True
 
 
 def test_e3_non_coercible_line_refuses(tmp_path):
@@ -384,6 +403,30 @@ def test_e10_unresolvable_merge_refuses(tmp_path):
     _assert_new_issue_gap(refusal)
 
 
+def test_e11b_representative_is_fold_target_with_later_seq_refuses(tmp_path):
+    session_dir = case08_new_issue_audit(tmp_path)
+    state = _load_state(session_dir)
+    fold_id = _fold_id(state)
+    for row in state[SC.DISPOSITION_LEDGER_KEY]:
+        if row.get(SC.FINDING_KEY_FIELD) == fold_id:
+            row[SC.DISPOSITION_SEQ_FIELD] = 5
+    cand = _new_issue_template()
+    member = {
+        SC.FINDING_KEY_FIELD: _new_issue_key(cand),
+        "file": cand["file"],
+        "line": cand["line"],
+        "title": cand["title"],
+        "severity": cand["severity"],
+        SC.RAISED_ROUND_FIELD: 2,
+        SC.RAISED_SEQ_FIELD: 1,
+        "mergedInto": fold_id,
+    }
+    state[SC.DISPOSITION_LEDGER_KEY].append(member)
+    _save_state(session_dir, state)
+    _, refusal = _certify(session_dir)
+    _assert_new_issue_gap(refusal)
+
+
 def test_e11_representative_key_equals_fold_id_refuses(tmp_path):
     session_dir = case08_new_issue_audit(tmp_path)
     state = _load_state(session_dir)
@@ -393,6 +436,28 @@ def test_e11_representative_key_equals_fold_id_refuses(tmp_path):
         cand, disposition="refuted", refutedReason="x", mergedInto=fold_id)
     state[SC.DISPOSITION_LEDGER_KEY].append(member)
     _save_state(session_dir, state)
+    _, refusal = _certify(session_dir)
+    _assert_new_issue_gap(refusal)
+
+
+def test_e12b_minor_seq_without_disposition_refuses(tmp_path):
+    session_dir = case08_new_issue_audit(tmp_path)
+    cand = dict(_new_issue_template(), severity="Minor")
+    row = {
+        SC.FINDING_KEY_FIELD: _new_issue_key(cand),
+        "file": cand["file"],
+        "line": cand["line"],
+        "title": cand["title"],
+        "severity": cand["severity"],
+        SC.RAISED_ROUND_FIELD: 2,
+        SC.RAISED_SEQ_FIELD: 1,
+        SC.DISPOSITION_SEQ_FIELD: 2,
+    }
+    state = _load_state(session_dir)
+    state[SC.DISPOSITION_LEDGER_KEY].append(row)
+    _save_state(session_dir, state)
+    fold_id = _fold_id(state)
+    _mutate_audit_payload(session_dir, fold_id, new_issues=[cand])
     _, refusal = _certify(session_dir)
     _assert_new_issue_gap(refusal)
 
@@ -419,13 +484,19 @@ def test_e14_mixed_candidates_both_orders_refuse(tmp_path, order):
     state = _load_state(session_dir)
     fold_id = _fold_id(state)
     good = _new_issue_template()
-    bad = dict(_new_issue_template(), file="src/bad.py", line="nope")
+    bad = {
+        "severity": "Important",
+        "file": "src/bad.py",
+        "line": 7,
+        "title": "second regression",
+    }
     if order == "pass-first":
         issues = [good, bad]
     else:
         issues = [bad, good]
     _mutate_audit_payload(session_dir, fold_id, new_issues=issues)
     _append_disposition(session_dir, good, disposition="refuted", refutedReason="ok")
+    _append_raised_undispositioned(session_dir, bad, raised_seq=2)
     _, refusal = _certify(session_dir)
     _assert_new_issue_gap(refusal)
 

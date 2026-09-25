@@ -993,7 +993,14 @@ def _case08_ledger_rows(finding, canonical_key, certified_head, fix_digest, extr
     return [original, *extra_rows]
 
 
-def case08_new_issue_audit(tmp_path, *, new_issues=None, ledger_rows=None, ruling="discharged-but-new-issue"):
+def case08_new_issue_audit(
+    tmp_path,
+    *,
+    new_issues=None,
+    ledger_rows=None,
+    ruling="discharged-but-new-issue",
+    seed_raised_new_issue=False,
+):
     """Audited-chain with discharged-but-new-issue fix receipt and ledger-owned dispositions."""
     from session_checkout import _git, make_checkout
 
@@ -1029,6 +1036,22 @@ def case08_new_issue_audit(tmp_path, *, new_issues=None, ledger_rows=None, rulin
     finding[session_contract.FINDING_KEY_FIELD] = canonical_key
     if ledger_rows is None:
         ledger_rows = _case08_ledger_rows(finding, canonical_key, certified_head, fix_digest)
+    if seed_raised_new_issue and ruling == "discharged-but-new-issue":
+        seeded = list(ledger_rows)
+        for seq, cand in enumerate(new_issues, start=1):
+            line = cand["line"]
+            if not isinstance(line, int):
+                line = int(str(line).strip())
+            seeded.append({
+                session_contract.FINDING_KEY_FIELD: session_contract.minted_identity_key(cand),
+                "file": cand["file"],
+                "line": line,
+                "title": cand["title"],
+                "severity": cand["severity"],
+                session_contract.RAISED_ROUND_FIELD: 2,
+                session_contract.RAISED_SEQ_FIELD: seq,
+            })
+        ledger_rows = seeded
     panel_payload = {"findings": []}
     panel_envelope = _dispatch_envelope_for("code-reviewer", PANEL_PHASE, 1, payload=panel_payload)
     audit_target = canonical_key
