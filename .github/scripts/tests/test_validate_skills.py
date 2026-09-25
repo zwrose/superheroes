@@ -4,7 +4,11 @@ import yaml
 
 import validate_skills as vs
 
-from ci_requirements_helpers import active_requirement_names, active_requirements_content
+from ci_requirements_helpers import (
+    active_requirement_names,
+    active_requirements_content,
+    expand_requirements,
+)
 
 def test_links_resolve(tmp_path):
     (tmp_path / "rubric").mkdir()
@@ -193,28 +197,6 @@ def test_gather_combined_size_no_error_when_genuinely_smaller(tmp_path):
     )
 
 
-def _expand_requirements(run_text: str, repo_root: str) -> str:
-    expanded = run_text
-    tokens = run_text.split()
-    i = 0
-    while i < len(tokens):
-        if tokens[i] in ("-r", "--requirement") and i + 1 < len(tokens):
-            req_rel = tokens[i + 1]
-            req_path = (
-                req_rel
-                if os.path.isabs(req_rel)
-                else os.path.join(repo_root, req_rel)
-            )
-            if not os.path.isfile(req_path):
-                raise AssertionError(f"requirements file does not exist: {req_rel}")
-            with open(req_path, encoding="utf-8") as fh:
-                expanded += "\n" + active_requirements_content(fh.read())
-            i += 2
-        else:
-            i += 1
-    return expanded
-
-
 def test_ci_installs_pyyaml_before_validate_skills():
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     ci_path = os.path.join(repo, ".github", "workflows", "ci.yml")
@@ -224,7 +206,7 @@ def test_ci_installs_pyyaml_before_validate_skills():
     pip_idx = None
     validate_skills_idx = None
     for i, step in enumerate(steps):
-        run = _expand_requirements(step.get("run", ""), repo)
+        run = expand_requirements(step.get("run", ""), repo)
         if "pip install" in run and "pyyaml" in active_requirement_names(run):
             pip_idx = i
         if "validate_skills.py" in run:
