@@ -950,6 +950,20 @@ _VET_ENTRY_HEADING = re.compile(r"^\s*###\s+(.*)$")
 _VET_FIELD_EVIDENCE = re.compile(r"^-\s+\*\*Evidence:\*\*\s*(.*)$")
 _VET_FIELD_RECORDS = re.compile(r"^-\s+\*\*The vet records:\*\*\s*(.*)$")
 
+# Closed set of ``reason`` tokens on malformed vet-check items (see vet-receipt.md entry shape).
+VET_CHECKS_MALFORMED_REASONS = (
+    "section-duplicated",
+    "section-empty",
+    "stray-text",
+    "name-empty",
+    "name-duplicated",
+    "field-duplicated",
+    "field-empty",
+    "evidence-missing",
+    "records-missing",
+    "unrecognized-line",
+)
+
 
 def _vet_checks_scan_lines(lines):
     """Fence classifier for vet-checks section discovery (``md_fence.scan`` on bare lines)."""
@@ -2580,6 +2594,7 @@ def confirm(cwd, *, root=None, now=None):
       - {action: "absent"}     no core.md to confirm
       - {action: "behind"}     core.md is a NEWER schema — refuse to rewrite (UFR-3)
       - {action: "refused"}    vet checks malformed in raw core (vet-checks-malformed)
+        or vet checks altered/dropped by re-render (vet-checks-round-trip-refused)
       - {action: "deferred"}   lock contended / store unwritable (UFR-4), or core.md unreadable
         (includes reason/detail when unreadable — not retryable)"""
     with store_core.repo_identity_memo():
@@ -2643,6 +2658,10 @@ def confirm(cwd, *, root=None, now=None):
             if vet_candidate["malformed"]:
                 return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
                         "malformed": vet_candidate["malformed"], "record": existing}
+            if (vet_candidate["declared"] != vet_parsed["declared"]
+                    or vet_candidate["checks"] != vet_parsed["checks"]):
+                return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP,
+                        "record": existing}
             try:
                 store_core.atomic_write(core_path(cwd, root), candidate)
             except OSError:

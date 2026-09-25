@@ -228,20 +228,9 @@ anywhere. Nothing else is allowed in the section.
 - **Evidence** — where you read the rule's proof: a named PR-body section, a ledger path, a receipt.
 - **The vet records** — what this receipt must carry when the evidence is present and readable.
 
-**Malformed reasons** (closed set — the parser emits exactly these tokens):
-
-| token | when |
-|---|---|
-| `section-duplicated` | more than one `## Vet checks` heading in the core text |
-| `section-empty` | heading present, no non-blank line in its body |
-| `stray-text` | a non-blank line in the section before the first `### ` entry |
-| `name-empty` | a `###` entry heading whose name is empty after stripping |
-| `name-duplicated` | a second entry whose stripped, casefolded name equals an earlier one |
-| `field-duplicated` | a field label given twice in one entry |
-| `field-empty` | a field whose value (after continuation joining) is empty |
-| `evidence-missing` | an entry with no `Evidence` field |
-| `records-missing` | an entry with no `The vet records` field |
-| `unrecognized-line` | a non-blank line inside an entry that is neither a field line nor a valid continuation |
+**Malformed reasons** — the authoritative closed set is the module constant
+`VET_CHECKS_MALFORMED_REASONS` in `lib/core_md.py`; each token names which rule of the entry
+shape above was broken.
 
 A malformed item is `{"entry": <stripped name, or null for section-level reasons>, "reason": <token>,
 "detail": <short human string>}`. Only well-formed entries appear in `checks`; an entry with any

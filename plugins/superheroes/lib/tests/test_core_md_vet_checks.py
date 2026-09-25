@@ -173,6 +173,9 @@ def test_parse_malformed_tokens(text, expected_malformed, expected_checks):
     parsed = CM.parse_vet_checks(core_text)
     assert _malformed_pairs(parsed) == expected_malformed
     assert parsed["checks"] == expected_checks
+    closed = set(CM.VET_CHECKS_MALFORMED_REASONS)
+    for item in parsed["malformed"]:
+        assert item["reason"] in closed
 
 
 def test_literal_pins_for_vet_checks_markers():
@@ -409,6 +412,28 @@ def test_write_vet_checks_preserves_patterns_with_pseudo_vet_headings(tmp_path):
     assert "keep-me-fenced" in after
     assert "keep-me-indented" in after
     assert CM._section(after, "Canonical patterns") == patterns_before
+
+
+def test_confirm_refused_when_render_would_drop_vet_checks(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(
+        repo,
+        dict(_CORE_FACTS, patterns=_PATTERNS_WITH_PSEUDO_VET_HEADINGS, vetChecks=_HEALTHY_BODY),
+        "provisional",
+        root=store,
+        now="2026-06-26",
+    )
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    vet_before = CM.parse_vet_checks(before)
+    assert vet_before["declared"] is True
+    assert vet_before["checks"]
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "refused"
+    assert res["reason"] == "vet-checks-round-trip-refused"
+    assert open(path, encoding="utf-8").read() == before
+    assert CM.read(repo, root=store)["status"] == "provisional"
 
 
 def test_confirm_does_not_manufacture_vet_checks_from_patterns_pseudo_heading(tmp_path):
