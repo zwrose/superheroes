@@ -1350,10 +1350,11 @@ def _read_live_loop_record(lock_fd):
         return None
 
 
-def _loop_lock_refusal(detail):
+def _loop_lock_refusal(detail, batch_id):
     result = {
         "ok": False,
         "reason": REFUSAL_LOOP_LOCK_UNAVAILABLE,
+        "batchId": batch_id,
         "detail": detail,
         "arms": 0,
     }
@@ -1393,7 +1394,7 @@ def _acquire_loop_lock(repo_root, batch_id, env, log_path):
         reason = opened.get("reason") or "unknown"
         _close_fd_quiet(opened.get("root_fd"))
         _close_fd_quiet(opened.get("repo_fd"))
-        return None, _loop_lock_refusal(f"store-door:{reason}")
+        return None, _loop_lock_refusal(f"store-door:{reason}", batch_id)
 
     root_fd = opened["root_fd"]
     repo_fd = opened["repo_fd"]
@@ -1407,6 +1408,7 @@ def _acquire_loop_lock(repo_root, batch_id, env, log_path):
         except OSError as exc:
             return None, _loop_lock_refusal(
                 f"lock-dir-mkdir:{errno.errorcode.get(exc.errno, exc.errno)}",
+                batch_id,
             )
 
         try:
@@ -1418,6 +1420,7 @@ def _acquire_loop_lock(repo_root, batch_id, env, log_path):
         except OSError as exc:
             return None, _loop_lock_refusal(
                 f"lock-dir-open:{errno.errorcode.get(exc.errno, exc.errno)}",
+                batch_id,
             )
 
         lock_name = (
@@ -1433,6 +1436,7 @@ def _acquire_loop_lock(repo_root, batch_id, env, log_path):
         except OSError as exc:
             return None, _loop_lock_refusal(
                 f"lock-file-open:{errno.errorcode.get(exc.errno, exc.errno)}",
+                batch_id,
             )
 
         try:
@@ -1440,10 +1444,11 @@ def _acquire_loop_lock(repo_root, batch_id, env, log_path):
         except OSError as exc:
             return None, _loop_lock_refusal(
                 f"lock-file-stat:{errno.errorcode.get(exc.errno, exc.errno)}",
+                batch_id,
             )
 
         if not stat.S_ISREG(lock_stat.st_mode):
-            return None, _loop_lock_refusal("lock-file-not-regular")
+            return None, _loop_lock_refusal("lock-file-not-regular", batch_id)
 
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1456,6 +1461,7 @@ def _acquire_loop_lock(repo_root, batch_id, env, log_path):
                 return None, _loop_already_live_refusal(batch_id, live_loop)
             return None, _loop_lock_refusal(
                 f"flock:{errno.errorcode.get(exc.errno, exc.errno)}",
+                batch_id,
             )
 
         try:
@@ -1474,6 +1480,7 @@ def _acquire_loop_lock(repo_root, batch_id, env, log_path):
         except OSError as exc:
             return None, _loop_lock_refusal(
                 f"lock-record-write:{errno.errorcode.get(exc.errno, exc.errno)}",
+                batch_id,
             )
 
         held_fd = lock_fd
@@ -1966,7 +1973,6 @@ def loop(
     ignore_launch_ids=(),
     ignore_events=(),
     run_fn=None,
-    loop_lock=None,
 ):
     """Re-arm watch_arm until lane-ending exit, refusal, or ceiling."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
@@ -2021,14 +2027,11 @@ def loop(
                 _refusal(REFUSAL_REPO_ROOT_INVALID, batch_id, arms=0),
             )
 
-        if loop_lock is not None:
-            lock_fd = loop_lock
-        else:
-            lock_fd, lock_refusal = _acquire_loop_lock(
-                repo_root, batch_id, env, log_path,
-            )
-            if lock_refusal is not None:
-                return lock_refusal
+        lock_fd, lock_refusal = _acquire_loop_lock(
+            repo_root, batch_id, env, log_path,
+        )
+        if lock_refusal is not None:
+            return lock_refusal
 
         ledger_observed = [False]
         pr_state = [None]
