@@ -65,9 +65,17 @@ def _observation_fields(*, read="engaged", tool_calls=1):
     }
 
 
-def _execution_evidence(nonce, *, payload=None, read="engaged", tool_calls=1, source="runner"):
+def _run_kind_for_phase(phase):
+    if phase == round_phases.P_FIXER:
+        return "write"
+    return "review"
+
+
+def _execution_evidence(nonce, *, payload=None, read="engaged", tool_calls=1, source="runner",
+                        run_kind="review"):
     return {
         **_binding_fields(nonce, payload=payload, source=source),
+        "runKind": run_kind,
         "observation": _observation_fields(read=read, tool_calls=tool_calls),
     }
 
@@ -106,14 +114,19 @@ def production_hand_landed_envelope(seat, payload, *, phase=PANEL_PHASE, attempt
 def production_dispatch_observed_envelope(seat, payload, *, phase=PANEL_PHASE, attempt=0,
                                             occurrence=0, payload_sha=None, read="engaged",
                                             binding=None):
+    run_kind = _run_kind_for_phase(phase)
     if binding is None:
         evidence = _execution_evidence(
-            _slot_nonce(seat, phase, attempt, occurrence), payload=payload, read=read)
+            _slot_nonce(seat, phase, attempt, occurrence), payload=payload, read=read,
+            run_kind=run_kind)
     elif "observation" in binding:
-        evidence = binding
+        evidence = dict(binding)
+        if "runKind" not in evidence:
+            evidence["runKind"] = run_kind
     else:
         evidence = {
             **binding,
+            "runKind": run_kind,
             "observation": _observation_fields(read=read, tool_calls=1),
         }
     if payload_sha is None:
