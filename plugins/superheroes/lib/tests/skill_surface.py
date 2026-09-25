@@ -6,7 +6,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _SKILLS = os.path.normpath(os.path.join(_HERE, "..", "..", "skills"))
 
 _REF = re.compile(
-    r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}/skills/([A-Za-z0-9._-]+)/reference/([A-Za-z0-9._-]+\.md)"
+    r"\$\{CLAUDE_PLUGIN_ROOT\}/skills/([A-Za-z0-9._-]+)/reference/([A-Za-z0-9._-]+\.md)"
 )
 
 

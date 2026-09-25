@@ -94,12 +94,13 @@ Skills must work on both Claude Code and Codex. A few hard rules:
   > by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md`
   > (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude
   > Code, `codex-tools.md` on Codex.
-- **Use the portable root seam.** Assign it once per bash block:
+- **Name the plugin root with `${CLAUDE_PLUGIN_ROOT}`.** Assign it once per bash block:
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   ```
-  Then use `$ROOT_DIR` for all bundled-helper paths. Never write a bare
-  `${CLAUDE_PLUGIN_ROOT}` — it breaks on Codex. The validator fails on bare usage.
+  Then use `$ROOT_DIR` for all bundled-helper paths. Both hosts set the variable for plugin
+  hooks (Codex as a compatibility alias of `PLUGIN_ROOT`); CONVENTIONS §7.4 covers skill text
+  and Bash commands.
 - **Both `hosts/` maps must stay byte-identical to the repo-root canonical** —
   see RELEASING.md for the release checklist.
 

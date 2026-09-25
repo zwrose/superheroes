@@ -41,7 +41,7 @@ ten-hour dead-watcher hole — and each failure looked like a calm wave.
      re-arm" condition met; the condition is restated in the keep-or-retire record's marker
      inventory -->
 
-Assign the portable root seam once, then arm one harness **background task per batch**:
+Assign the plugin root once, then arm one harness **background task per batch**:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

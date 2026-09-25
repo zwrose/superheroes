@@ -2,6 +2,8 @@
 
 > **Status (v2): historical.** Maps a relocation within the still-current review-code skill, alongside the now-retired review-tasks (retired in #478/#479) cited as the canonical wording source. Kept as provenance; the v2 review-eval rebuild rides the S2 lane (#476).
 
+> **Note (plugin-root form).** Paths quoted below are shown in the current `${CLAUDE_PLUGIN_ROOT}` form; when this record was written they carried a fallback form of the root variable, since retired.
+
 Records every pre-change instruction unit relocated out of
 `plugins/superheroes/skills/review-code/SKILL.md` (Task 16).
 
