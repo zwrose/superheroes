@@ -320,6 +320,62 @@ def test_hand_landed_fixer_run_kind_absent_refuses(tmp_path):
     assert refusal["bindingFailure"] == "evidence-run-kind-mismatch"
 
 
+_UNKNOWN_DISPATCH_PHASE = "dispatch-future-write"
+
+
+def test_unknown_phase_review_run_kind_refuses_named_token(tmp_path):
+    """Unknown dispatch phase with consistent review runKind refuses phase-unknown token."""
+    phase = _UNKNOWN_DISPATCH_PHASE
+    journal = [_journal_row("code-reviewer", phase, source="codex")]
+    spec = _envelope_spec("code-reviewer", phase, source="codex")
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=journal,
+        envelopes=[spec],
+    )
+    path = os.path.join(session_dir, RC.JOURNAL_FILE)
+    envelope_sha = RR.envelope_sha256(
+        spec["payload"], spec["executionEvidence"]
+    )
+    lines = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            row["casToken"] = envelope_sha
+            lines.append(row)
+    with open(path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "evidence-run-kind-phase-unknown"
+
+
+def test_run_kind_for_phase_refuses_unknown():
+    assert session_contract.run_kind_for_phase(_UNKNOWN_DISPATCH_PHASE) is None
+    assert session_contract.run_kind_for_phase("dispatch-panell") is None
+    assert session_contract.run_kind_for_phase("") is None
+    assert session_contract.run_kind_for_phase(None) is None
+    assert session_contract.run_kind_for_phase(3) is None
+
+
+def test_verifier_seat_review_run_kind_qualifies():
+    for phase in (
+        "dispatch-verifiers",
+        "dispatch-scoped-finder",
+        "dispatch-gap-sweep",
+    ):
+        ok, found, binding = RC._dispatch_run_kind_qualifies(
+            {"runKind": session_contract.RUN_KIND_REVIEW},
+            phase,
+        )
+        assert ok is True
+        assert found == session_contract.RUN_KIND_REVIEW
+        assert binding is None
+
+
 def _panel_hand_landed_session(tmp_path, phase, seat, *, run_kind, include_run_kind=True):
     evidence = _execution_evidence_for_hand_landed(seat, phase)
     if include_run_kind:

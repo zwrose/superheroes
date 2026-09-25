@@ -528,12 +528,15 @@ def _run_kind_refusal_detail(phase, found_kind):
 
 def _dispatch_run_kind_qualifies(obs, phase):
     if not isinstance(obs, dict):
-        return False, None
+        return False, None, "evidence-run-kind-mismatch"
+    run_kind_field = session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD
     expected = session_contract.run_kind_for_phase(phase)
+    found = obs.get(run_kind_field)
     if expected is None:
-        return False, obs.get("runKind")
-    run_kind = obs.get("runKind")
-    return (isinstance(run_kind, str) and run_kind == expected), run_kind
+        return False, found, "evidence-run-kind-phase-unknown"
+    if not isinstance(found, str) or found != expected:
+        return False, found, "evidence-run-kind-mismatch"
+    return True, found, None
 
 
 def _journal_event_slot(event):
@@ -978,7 +981,7 @@ def _journal_execution_binding(journal, seat, phase, attempt, occurrence=0, rnd=
 
 
 def _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field):
-    if field != "runKind":
+    if field != session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD:
         return evidence.get(field)
     if not isinstance(envelope_run_kind_evidence, dict):
         return None
@@ -1000,7 +1003,7 @@ def _execution_binding_matches_journal(
     for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
         val = _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field)
         if not isinstance(val, str) or not val:
-            if field == "runKind":
+            if field == session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD:
                 return False, "evidence-run-kind-mismatch"
             return False, "execution-evidence-binding-incomplete"
     if journal_binding is None:
@@ -1011,7 +1014,7 @@ def _execution_binding_matches_journal(
     for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
         bound_val = _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field)
         if bound_val != journal_binding.get(field):
-            if field == "runKind":
+            if field == session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD:
                 return False, "evidence-run-kind-mismatch"
             return False, "execution-evidence-binding-mismatch"
     return True, None
@@ -1245,13 +1248,15 @@ def check_unrun_review(ctx):
                     "dispatch-observed seat lacks qualifying execution telemetry",
                     binding_failure=binding,
                 )
-            rk_ok, found_kind = _dispatch_run_kind_qualifies(envelope_evidence, phase)
+            rk_ok, found_kind, rk_binding = _dispatch_run_kind_qualifies(
+                envelope_evidence, phase
+            )
             if not rk_ok:
                 return _refusal(
                     "unrun-review",
                     seat,
                     _run_kind_refusal_detail(phase, found_kind),
-                    binding_failure="evidence-run-kind-mismatch",
+                    binding_failure=rk_binding,
                 )
         elif provenance == PROVENANCE_HAND_LANDED:
             env, path = _load_envelope(
@@ -1291,13 +1296,13 @@ def check_unrun_review(ctx):
                     binding_failure=binding,
                 )
             evidence = env.get("executionEvidence") if isinstance(env, dict) else None
-            rk_ok, found_kind = _dispatch_run_kind_qualifies(evidence, phase)
+            rk_ok, found_kind, rk_binding = _dispatch_run_kind_qualifies(evidence, phase)
             if not rk_ok:
                 return _refusal(
                     "unrun-review",
                     seat,
                     _run_kind_refusal_detail(phase, found_kind),
-                    binding_failure="evidence-run-kind-mismatch",
+                    binding_failure=rk_binding,
                 )
     return None
 

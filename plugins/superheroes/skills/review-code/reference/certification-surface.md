@@ -103,8 +103,9 @@ field) and is refused at certification when missing or mismatched (`evidence-run
 - `read`: `engaged`, `unknown` (`EXECUTION_EVIDENCE_READ_VALUES`)
 - `telemetry`: `tool-calls`, `none` (`EXECUTION_EVIDENCE_TELEMETRY_VALUES`)
 - `runKind`: `review`, `write` (`session_contract.RUN_KIND_VALUES`); expected value per phase
-  from `session_contract.run_kind_for_phase` — `write` on `dispatch-fixer`, `review` on
-  `dispatch-panel` and `dispatch-audits`, refusal when the phase is outside that closed set
+  from `session_contract.run_kind_for_phase` — `write` on `dispatch-fixer`, `review` on every
+  other driver dispatch phase (`session_contract.RUN_KIND_BY_PHASE`); refusal
+  `evidence-run-kind-phase-unknown` when the phase is outside that closed set
 
 Journal `recorded` rows and landed `seat-result/2` envelopes both carry an `executionEvidence`
 block validated against these same constants — `_journal_execution_binding` reads binding fields
