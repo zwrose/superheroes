@@ -99,6 +99,7 @@ never a self-declared downgrade):
 
 - The orchestrator **measures the working diff's non-test lines (additions plus deletions outside `tests/`) as it types**
   and **escalates when that count crosses ~400** — a flat measured line, not an estimate (basis: `review-discipline.md` § Size).
+  The **size step** (§4) runs in this lane too, against the estimate the issue's order states.
 - It **spreads into surfaces the lane call did not anticipate**.
 - It turns out to **touch a quiet-failure path**.
 - It turns out to need something **irreversible or expensive** — a migration, a new dependency, an
@@ -433,9 +434,18 @@ visible, never silent. **Scope check:** if the shape implies an oversized or mul
 propose a split before building; an irreducible big diff ships with an explicit scope disclosure.
 When the work is a family of parallel siblings, **one concern per PR** — one lens per PR for
 lens-family work — and any **shared shell or contract seam lands first, as its own small PR**,
-before the siblings that build on it. **Crossing twice the size your brief estimated in non-test changed
-lines (additions plus deletions outside `tests/`) is itself the tripwire** — disclose it mid-build and offer a split,
-rather than letting the overrun surface at handback. Two absolute bars ride beside it, counted over non-test lines
+before the siblings that build on it. **The size step — at every commit, in both lanes.** Count the
+non-test changed lines against your base (`git diff --numstat`, counted as `review-discipline.md`
+§ Size counts them) and compare them to your estimate: the brief's, or in the light lane the one the
+issue's order states. **Crossing twice that estimate is the tripwire.** At the first commit past 2×,
+**message the advisor session the order names** — the count, the estimate, and a proposed split — and
+type or dispatch no more code until it replies. Wait in-turn with tool calls (§7): a reply is delivered only at
+your next tool call. Act on the reply, **split or continue**. **No reply within 15 minutes**, or no way
+on this host to message it: post the same disclosure on the issue and stop, as a park. **No advisor
+session named** (an interactive build the owner drives): make the disclosure to the owner in the
+session. **No estimate stated:** the light lane's ~400 line is the size check. A reply to continue
+lifts no other size rule — the light lane still escalates past ~400, and the bars below still bind.
+The PR's **size tripwire** row (§11) records the outcome. Two absolute bars ride beside it, counted over non-test lines
 added or modified (deletions, regenerated artifacts, tests and records excluded): at **300**, report the count and a
 proposed cut on the issue and continue; at **600**, stop and hand the call to the advisor, who rules continue, split or park — never yours
 alone and never the owner's — and act on the advisor's recorded ruling (`review-discipline.md` § Size). **Gates and enforcement:** any work order that
@@ -1120,7 +1130,11 @@ against the registry allowlist (#600), so the advisor can vet what ran without y
 **Follow-ups for the advisor** section — out-of-scope discoveries, deferred work, or issues you noticed
 but cannot file yourself (you never wire the board). List them plainly under that exact heading (write
 **None** when there are none) so the advisor can turn them into issues and the advisor's triage
-backstop can grep the section. The PR body also carries a **DoD disposition table** (the
+backstop can grep the section. For both lanes the build record also carries a **size tripwire** row,
+filled by §4's size step: `not crossed (N of estimate M)`; `crossed at <commit>; messaged <time>;
+advisor ruled <split|continue> (<issue comment link>)`; `crossed at <commit>; parked, no reply
+(<issue comment link>)`; `crossed at <commit>; disclosed to the owner in session`; or `no estimate
+stated; light-lane line governs (N)`. The PR body also carries a **DoD disposition table** (the
 `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each
 **done** (with an evidence pointer) or **deferred** (with a filed issue and a one-line reason). This is
 distinct from the review dispositions table above (that grades review findings; this grades every spec'd

@@ -176,9 +176,11 @@ above).
    enum**, name the **union coupling** (parallel lanes each extend the same shared set, so the
    registry/kind-set/enum is only complete once all have landed) in each issue — and name the
    **completeness gate** (the check that fails until the extension is exhaustive) so **every lane
-   after the first** expects it to fire and budgets the integration commit. When a builder discloses mid-build that the diff has crossed **twice its
-   brief's estimate** and offers a split, **take the split seriously** — that disclosure is the
-   tripwire working, not a builder stalling.
+   after the first** expects it to fire and budgets the integration commit. When a builder messages you mid-build that the diff has crossed **twice its
+   estimate** and proposes a split, **take the split seriously** — that message is the tripwire
+   working, not a builder stalling. **Reply by message, split or continue** — the builder waits,
+   and parks on the issue after 15 minutes — and record the ruling on the issue for the owner's
+   veto: it is your craft call under the size doctrine (the step is the workhorse charter's size step).
    When marking an issue **build-ready**, run the issue-contract check against the issue body
    and **decline the marking** when it reports a refusal — the check is advisory and the
    decision is the advisor's; micro work never reaches this check. Detail:
@@ -279,7 +281,10 @@ above).
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
    else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
    process constraints (test right-sizing, E2E policy), and launch context (local export paths,
-   known-broken links, environment quirks). **Any scope exclusion that leaves an audience or delivery
+   known-broken links, environment quirks) — and **the order names this advisor session** for the
+   builder to message, plus a size estimate for a light build
+   (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The size-consideration
+   slot). **Any scope exclusion that leaves an audience or delivery
    channel on old behavior must be stated as a plain consequence at filing time** — in the issue, when
    it is filed, in plain language: *who* is still on the old behavior, and *what they will still
    experience* — not discovered at build time, and not left implicit in what the issue omits. **Headless
