@@ -1,10 +1,7 @@
 """Six-case birth suite and FR-D2 specimen pair for round_certification (#1271 C12 L2-K)."""
-import json
 import os
 
-import pytest
 import round_certification as RC
-import session_contract
 from round_certification_fixtures import (
     AUDIT_PHASE,
     HEAD_SHA,
@@ -17,8 +14,6 @@ from round_certification_fixtures import (
     case05_critical_out_of_scope,
     case05_critical_skipped,
     case06_mixed_panel,
-    case07_audited_chain,
-    case07_audited_chain_missing_audit,
     followup_class_closure_none,
     followup_documented_trigger,
     followup_missing_class_closure,
@@ -104,193 +99,6 @@ def test_case_5_critical_skipped_refuses(tmp_path):
     assert refusal is not None
     assert refusal["class"] == "disposition-without-receipt"
     assert refusal["artifact"] == "C-skip"
-
-
-def _mutate_panel_omitted_expected_dimension(session_dir):
-    state_path = os.path.join(session_dir, RC.STATE_FILE)
-    state = json.load(open(state_path, encoding="utf-8"))
-    cfg = state.setdefault("config", {})
-    cfg["dimensions"] = ["code-reviewer", "security-reviewer"]
-    with open(state_path, "w", encoding="utf-8") as fh:
-        json.dump(state, fh, sort_keys=True)
-
-
-def _mutate_panel_two_heads(session_dir):
-    from round_certification_fixtures import (
-        _dispatch_envelope_for,
-        _orders_manifest_for_seat,
-        _recorded_row_from_envelope,
-        _write_orders_manifest,
-    )
-
-    meta = json.load(open(os.path.join(session_dir, RC.META_FILE), encoding="utf-8"))
-    panel_head = meta["headSha"]
-    alt_head = "b" * 40
-    manifest = _orders_manifest_for_seat("code-reviewer")
-    manifest["seats"]["security-reviewer"] = dict(manifest["seats"]["code-reviewer"])
-    manifest["seats"]["security-reviewer"]["storeKey"] = "security-reviewer"
-    manifest["seats"]["security-reviewer"]["seat"] = "security-reviewer"
-    manifest_sha = _write_orders_manifest(session_dir, manifest)
-    sec_env = _dispatch_envelope_for("security-reviewer", RC.PANEL_PHASE, 1)
-    sec_row = _recorded_row_from_envelope(
-        sec_env, "security-reviewer", RC.PANEL_PHASE, 1, head_sha=alt_head)
-    journal_path = os.path.join(session_dir, RC.JOURNAL_FILE)
-    lines = []
-    with open(journal_path, encoding="utf-8") as fh:
-        for line in fh:
-            row = json.loads(line)
-            if row.get("outcome") == "orders-emitted" and row.get("phase") == RC.PANEL_PHASE:
-                row["manifestSha256"] = manifest_sha
-            lines.append(row)
-    lines.append(sec_row)
-    with open(journal_path, "w", encoding="utf-8") as fh:
-        for row in lines:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
-    import record_paths
-
-    path = record_paths.store_path(
-        session_dir, 1, RC.PANEL_PHASE, record_paths.storage_key("security-reviewer", 0), 0)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(sec_env, fh, sort_keys=True)
-
-
-def _drop_scoped_finder_record(session_dir):
-    path = os.path.join(session_dir, RC.JOURNAL_FILE)
-    kept = []
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            row = json.loads(line)
-            if row.get("phase") == "dispatch-scoped-finder" and row.get("outcome") == "recorded":
-                continue
-            kept.append(row)
-    with open(path, "w", encoding="utf-8") as fh:
-        for row in kept:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
-
-
-def _mutate_fix_receipt_fail(session_dir):
-    state_path = os.path.join(session_dir, RC.STATE_FILE)
-    state = json.load(open(state_path, encoding="utf-8"))
-    for finding in state.get("findings") or []:
-        if finding.get("disposition") == "fixed":
-            finding["dispositionReceipt"]["verifyResult"] = "fail"
-    with open(state_path, "w", encoding="utf-8") as fh:
-        json.dump(state, fh, sort_keys=True)
-
-
-def _mutate_verify_fail(session_dir):
-    state_path = os.path.join(session_dir, RC.STATE_FILE)
-    state = json.load(open(state_path, encoding="utf-8"))
-    state["rounds"]["2"]["verifyResult"] = "fail"
-    with open(state_path, "w", encoding="utf-8") as fh:
-        json.dump(state, fh, sort_keys=True)
-
-
-def _mutate_descent_sibling(session_dir):
-    from session_checkout import _git
-
-    meta = json.load(open(os.path.join(session_dir, RC.META_FILE), encoding="utf-8"))
-    repo = meta["repoRoot"]
-    panel_head = meta["headSha"]
-    _git(repo, "checkout", "-q", panel_head)
-    _git(repo, "checkout", "-qb", "sibling")
-    with open(os.path.join(repo, "sibling.txt"), "w", encoding="utf-8") as fh:
-        fh.write("sibling\n")
-    _git(repo, "add", "sibling.txt")
-    _git(repo, "commit", "-q", "-m", "sibling tip")
-    sibling_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    _git(repo, "checkout", "-q", "main")
-    meta["headSha"] = sibling_head
-    with open(os.path.join(session_dir, RC.META_FILE), "w", encoding="utf-8") as fh:
-        json.dump(meta, fh, sort_keys=True)
-    state_path = os.path.join(session_dir, RC.STATE_FILE)
-    state = json.load(open(state_path, encoding="utf-8"))
-    state["config"]["headSha"] = sibling_head
-    with open(state_path, "w", encoding="utf-8") as fh:
-        json.dump(state, fh, sort_keys=True)
-    journal_path = os.path.join(session_dir, RC.JOURNAL_FILE)
-    lines = []
-    with open(journal_path, encoding="utf-8") as fh:
-        for line in fh:
-            row = json.loads(line)
-            if row.get("seat") == "code-reviewer" and row.get("outcome") == "recorded":
-                row["headSha"] = sibling_head
-                row["citedHead"] = sibling_head
-            lines.append(row)
-    with open(journal_path, "w", encoding="utf-8") as fh:
-        for row in lines:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
-
-
-def test_case_7_audited_chain_certifies(tmp_path):
-    session_dir = case07_audited_chain(tmp_path)
-    receipt, refusal = _certify(session_dir)
-    assert refusal is None, refusal
-    assert receipt is not None
-    assert receipt["certificationShape"] == "audited-chain"
-    meta = json.load(open(os.path.join(session_dir, RC.META_FILE), encoding="utf-8"))
-    panel_head = meta["headSha"]
-    assert receipt["auditedChain"]["panelHead"] == panel_head
-    seat_names = {row["seat"] for row in receipt["seats"]}
-    assert "code-reviewer" in seat_names
-
-
-def test_case_7_missing_audit_dispatch_refuses_fix_receipt_leg(tmp_path):
-    session_dir = case07_audited_chain_missing_audit(tmp_path)
-    receipt, refusal = _certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "unrun-review"
-    assert refusal["bindingFailure"] == "execution-evidence-stale-head"
-    assert "audited-chain-gap:fix-receipt" in refusal["detail"]
-
-
-def test_case_7_omitted_panel_dimension_refuses_roster_gap(tmp_path):
-    session_dir = case07_audited_chain(tmp_path)
-    _mutate_panel_omitted_expected_dimension(session_dir)
-    receipt, refusal = _certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "unrun-review"
-    assert refusal["bindingFailure"] == "execution-evidence-stale-head"
-    assert "audited-chain-gap:panel" in refusal["detail"]
-
-
-@pytest.mark.parametrize(
-    "leg,mutator",
-    [
-        (
-            "panel",
-            _mutate_panel_two_heads,
-        ),
-        (
-            "descent",
-            _mutate_descent_sibling,
-        ),
-        (
-            "fix-receipt",
-            lambda sd: _mutate_fix_receipt_fail(sd),
-        ),
-        (
-            "scoped-finder",
-            lambda sd: _drop_scoped_finder_record(sd),
-        ),
-        (
-            "verify",
-            lambda sd: _mutate_verify_fail(sd),
-        ),
-    ],
-)
-def test_case_7_missing_leg_refuses(tmp_path, leg, mutator):
-    session_dir = case07_audited_chain(tmp_path)
-    mutator(session_dir)
-    receipt, refusal = _certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "unrun-review"
-    assert refusal["bindingFailure"] == "execution-evidence-stale-head"
-    assert "audited-chain-gap:%s" % leg in refusal["detail"]
 
 
 def test_case_6_mixed_panel_certifies_audited_chain(tmp_path):

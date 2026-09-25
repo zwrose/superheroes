@@ -16,7 +16,6 @@ from round_certification_fixtures import (
     DEFAULT_PANEL_PAYLOAD_SHA,
     HEAD_SHA,
     MUST_REFUSE_FIXTURES,
-    case07_audited_chain_skipped_scoped,
     write_session,
     write_certifiable_session,
     _binding_fields,
@@ -1148,20 +1147,6 @@ def test_certification_shape_matrix():
 
     state_other = {"certification": {"shape": "custom-shape"}}
     assert RC._certification_shape(state_other, seats_hand) == "custom-shape"
-
-    state_degraded = {"certification": {"shape": "full-panel-confirmed-degraded"}}
-    assert (
-        RC._certification_shape(state_degraded, seats_dispatch, chain_used=True)
-        == "audited-chain-degraded"
-    )
-
-
-def test_audited_chain_skipped_empty_surface_certifies(tmp_path):
-    session_dir = case07_audited_chain_skipped_scoped(tmp_path)
-    receipt, refusal = RC.certify(session_dir)
-    assert refusal is None, refusal
-    assert receipt is not None
-    assert receipt["certificationShape"] == "audited-chain"
 
 
 def test_hand_landed_forces_audited_chain_shape(tmp_path):

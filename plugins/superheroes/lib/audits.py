@@ -64,24 +64,6 @@ def has_usable_reason(reason):
     return isinstance(reason, str) and bool(reason.strip())
 
 
-def audit_payload_clears_target(payload, target_id):
-    """True when a single audit-result payload would clear ``target_id`` in ``apply_audit_results``.
-
-    Provenance and collection-manifest gates are enforced separately at bind time; this predicate
-    covers only id match plus the ruling/reason/newIssues shape the fold honors."""
-    if not isinstance(payload, dict):
-        return False
-    pid = payload.get("id")
-    if not isinstance(pid, str) or not pid or pid != target_id:
-        return False
-    ruling = payload.get("ruling")
-    if ruling == "discharged":
-        return has_usable_reason(payload.get("reason"))
-    if ruling == "discharged-but-new-issue":
-        return bool(_valid_new_issues(payload.get("newIssues"), pid))
-    return False
-
-
 def _resolve_expected_auditor(fid, finding, expected_auditors):
     """The TRUSTED independent-auditor selection for a target — the DRIVER's record, never the
     result's own echo (#507 R2). Prefer the explicit `expected_auditors` map the driver passes
