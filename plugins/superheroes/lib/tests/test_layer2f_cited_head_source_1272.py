@@ -107,7 +107,12 @@ def test_record_missing_sink_binds_order_anchor(tmp_path, adapters):
     assert stored["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
 
 
-def test_orchestrator_fulfilled_sink_binds_order_anchor(tmp_path, adapters):
+def test_orchestrator_fulfilled_sink_binds_order_anchor(tmp_path, adapters, monkeypatch):
+    monkeypatch.setattr(
+        RD,
+        "_derive_panel_diff_at_head",
+        lambda _config: ("diff --git a/x b/x\n", None),
+    )
     d = _SESSION(tmp_path)
     _AT_RUN_VERIFY(tmp_path, d)
     pend = _PENDING(d)

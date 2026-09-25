@@ -24,7 +24,6 @@ from session_checkout import enter_checkout  # noqa: E402
 from test_recorded_row_chokepoint_1272 import (  # noqa: E402
     HEAD_SHA,
     FakeAdapters,
-    _advance,
     _land,
     _pending,
     _record_all_panel_seats,
@@ -48,6 +47,32 @@ _TSP_SPEC.loader.exec_module(_TSP)
 ANCHOR_HEAD = HEAD_SHA
 PANEL_FINDING = [{"dimension": "d", "taxonomy": "t", "title": "x"}]
 PANEL_PAYLOAD = {"findings": PANEL_FINDING}
+
+
+def _fake_git(gitdir, head="a" * 40, base_sha="b" * 40, remote="github.com/o/r"):
+    def run(cwd, *args):
+        if args[:2] == ("rev-parse", "--absolute-git-dir"):
+            return gitdir
+        if args == ("rev-parse", "HEAD"):
+            return head
+        if args[:3] == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return "feature/x"
+        if args[0] == "rev-parse" and "--verify" in args:
+            return base_sha
+        if args[:2] == ("remote", "get-url"):
+            return remote
+        return None
+    return run
+
+
+def _gitdir(tmp_path, name="_cited_gitdir"):
+    path = os.path.join(str(tmp_path), name)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _advance(session_dir, tmp_path):
+    return RD.cmd_advance(session_dir, git=_fake_git(_gitdir(tmp_path)))
 
 
 @pytest.fixture
@@ -624,7 +649,12 @@ def _at_run_verify(tmp_path, session_dir):
     RD.save_state(session_dir, state)
 
 
-def test_orchestrator_fulfilled_declares_order_anchor_cited_head_source(tmp_path, adapters):
+def test_orchestrator_fulfilled_declares_order_anchor_cited_head_source(tmp_path, adapters, monkeypatch):
+    monkeypatch.setattr(
+        RD,
+        "_derive_panel_diff_at_head",
+        lambda _config: ("diff --git a/x b/x\n", None),
+    )
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
     pend = _pending(d)
