@@ -4,7 +4,7 @@ description: "Use to set up, fix, view, or tune a project's superheroes calibrat
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # configure
 
@@ -25,7 +25,7 @@ this is what makes the storage switch safe (UFR-1/UFR-10). `route`/`render` are 
 never be the recovery trigger.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" recover --cwd .
 ```
 
@@ -36,7 +36,7 @@ progress, not drift).
 ## Step 2 — Sense the state and route
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import configure_route
@@ -52,9 +52,9 @@ authorization that **defaults to refusing**. `configure` passes that authorizati
 owner asked for the migration in the current turn — the owner's words being the hearing event.
 Then run the matching path:
 
-- **`set-up`** → follow `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/set-up.md`.
-- **`fix`** → follow `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/fix.md`.
-- **`view`** → follow `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/view-and-tune.md`.
+- **`set-up`** → follow `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/set-up.md`.
+- **`fix`** → follow `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/fix.md`.
+- **`view`** → follow `${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/view-and-tune.md`.
 
 A run that only views an up-to-date project changes nothing (FR-12). A provisional calibration
 is confirmed only when the owner explicitly confirms it on the fix path (FR-18) — never by viewing.

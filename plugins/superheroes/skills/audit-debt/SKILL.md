@@ -4,7 +4,7 @@ description: Use when periodically sweeping a whole repository for accumulated t
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Audit Debt
 
@@ -12,7 +12,7 @@ Periodic full-repo sweep for accumulated technical, security, and architectural 
 
 This skill is **not a sibling of `/superheroes:review-code`**. `/superheroes:review-code` finds bugs in new code; `/superheroes:audit-debt` finds bugs in old code that has rotted. The diff-scope rule does NOT apply — every line in the project's source is in scope. The trade-off is that it is **slow and thorough by design** — meant to be run occasionally (suggest monthly), not before every PR. Running it weekly will drown you in nits you have already triaged; running it never will let real debt accumulate to "rewrite this feature" levels.
 
-Read the base rubric (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`) first for the severity rubric, verification rules, findings schema, triage, POV, and verdict mapping — those are not restated here. The base rubric's tier definitions get a debt-context recalibration in §Severity Recalibration for Debt Context below; if anything in this skill contradicts the base rubric, the base rubric wins.
+Read the base rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`) first for the severity rubric, verification rules, findings schema, triage, POV, and verdict mapping — those are not restated here. The base rubric's tier definitions get a debt-context recalibration in §Severity Recalibration for Debt Context below; if anything in this skill contradicts the base rubric, the base rubric wins.
 
 ## Invocation
 
@@ -46,17 +46,17 @@ SESSION_DIR=$(mktemp -d /tmp/audit-debt-XXXXXXXX)
 
 ### 1. Sweep Prep
 
-**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
 **Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt rather than assuming uncalibrated.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 CAL=$(python3 -B "$ROOT_DIR/lib/calibration_resolve.py" resolve) || { echo "calibration_resolve resolve exited non-zero (exit $?); halting rather than assuming uncalibrated" >&2; exit 1; }
 CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
 LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
@@ -71,10 +71,10 @@ NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | j
 [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
 
-Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
+Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 PLUGIN_VERSION=$(python3 -B -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])")
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
@@ -82,7 +82,7 @@ RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" 
 **Staleness self-check (first action).** Before the profile bootstrap and before generating artifacts or dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the sweep** on drift — it only produces a non-blocking nudge surfaced at end of run. audit-debt sweeps the working tree (default root), so no `--root` is passed. Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 if [ "$EXISTS" = "true" ]; then
   DOCTOR_JSON=$(python3 -B "$ROOT_DIR/lib/repo_doctor.py" \
     "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION")
@@ -96,7 +96,7 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 <!-- decision-point: id=audit-debt-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=audit-report -->
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 if [ "$LOCATION" = "none" ]; then
   DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
@@ -214,7 +214,7 @@ via the shared knob, honoring any `## Model tiers` override block in the project
 (`$PROFILE`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 MT="$ROOT_DIR/lib/model_tier_resolve.py"
 OV=$(python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
 REVIEWER_MODEL=$(python3 -B "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
@@ -417,7 +417,7 @@ These four behaviors are **non-blocking**, run **at end of run** (after filing i
 
 ### Recording decisions (at resolution time)
 
-The decisions-recording helper invocation and record-JSON format are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/audit-debt/reference/sweep-detail.md` — read it for the mechanics.
+The decisions-recording helper invocation and record-JSON format are in `${CLAUDE_PLUGIN_ROOT}/skills/audit-debt/reference/sweep-detail.md` — read it for the mechanics.
 
 ### Staleness nudge (end of run)
 
@@ -432,7 +432,7 @@ If the user declines or ignores it, record the dismissal (see "Recording a dismi
 **Not run.** Proposals are not surfaced this run — recorded decisions remain in `$DECISIONS` for a future owner review. Keep the analyze snippet for reference only; do not invoke at end of run:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/decisions.py" \
   analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
@@ -448,4 +448,4 @@ The staleness nudge (above), the learning-loop proposal, and the provisional-pro
 ## Scoring Reference (Severity · Effort · Common Mistakes)
 
 The severity recalibration for debt context, effort labels, and common-mistake table are in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/audit-debt/reference/sweep-detail.md` — read it before scoring findings.
+`${CLAUDE_PLUGIN_ROOT}/skills/audit-debt/reference/sweep-detail.md` — read it before scoring findings.

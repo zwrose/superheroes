@@ -10,7 +10,7 @@ Reached from `configure` when a project is configured and healthy (FR-1). Render
 calibration on one screen and offers a small menu of targeted changes. A view-only run on an
 up-to-date project changes nothing (FR-12).
 
-`ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash block below.
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash block below.
 
 Gate write-downs on this path are written down in the run output and are never written into a
 hero layer — their payloads carry machine-local absolute paths that must not reach a collaborator-visible in-repo file, and `write-layer` replaces a layer wholesale.
@@ -18,7 +18,7 @@ hero layer — their payloads carry machine-local absolute paths that must not r
 ## 1 — Render the combined view (FR-4) + drift notice (FR-7)
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import configure_view
 print(configure_view.render('.'))"
@@ -45,7 +45,7 @@ action that owns it, leaving the rest of the calibration untouched:
   reported to the owner and never worked around.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '"gh-stack"' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item stackingTool --cwd .
   ```
 
@@ -66,7 +66,7 @@ action that owns it, leaving the rest of the calibration untouched:
   never guess which heroes apply:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/hero_setup.py" offerable --cwd .
   ```
 
@@ -84,7 +84,7 @@ action that owns it, leaving the rest of the calibration untouched:
   output, and hand back — do **not** run `store_sweep.py sweep` on the default path.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/store_sweep.py" report
   ```
 
@@ -96,7 +96,7 @@ action that owns it, leaving the rest of the calibration untouched:
   **Only when the owner authorizes deletion in this turn** — not the default path — run:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/store_sweep.py" sweep
   ```
 
@@ -128,14 +128,14 @@ action that owns it, leaving the rest of the calibration untouched:
   judgment-seat tier, never a launch default.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' 'sonnet' | python3 -B "$ROOT_DIR/lib/core_md.py" write-builder-tier --cwd .
   ```
 
   To clear (empty stdin returns the project to the `opus` default):
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '' | python3 -B "$ROOT_DIR/lib/core_md.py" write-builder-tier --cwd .
   ```
 
@@ -157,7 +157,7 @@ action that owns it, leaving the rest of the calibration untouched:
   returns the project to `none`:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '<Level/What-the-owner-does/Notes prose>' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
   ```
@@ -165,7 +165,7 @@ action that owns it, leaving the rest of the calibration untouched:
   To clear:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '' | python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
   ```
 
@@ -225,7 +225,7 @@ action that owns it, leaving the rest of the calibration untouched:
   engine and model-tier tune actions above for those knobs.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '{"reviewer": "gpt-5.6-terra"}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
   ```
@@ -239,7 +239,7 @@ action that owns it, leaving the rest of the calibration untouched:
   returned `noop` does not mean a clear-all succeeded.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '{"reviewer": null}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
   ```
@@ -250,7 +250,7 @@ action that owns it, leaving the rest of the calibration untouched:
   exits 0 either way, so check `action`, not exit status.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" show
   ```
 
@@ -263,7 +263,7 @@ action that owns it, leaving the rest of the calibration untouched:
   accepted as a legacy alias for `code-fixer` (read, write, and clear):
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=sonnet --clear code-fixer
   ```
 
@@ -286,7 +286,7 @@ action that owns it, leaving the rest of the calibration untouched:
   existing `seatPins` object, and preserve every sibling key.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '{"security-reviewer": {"vendor": "claude"}}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key seatPins --cwd .
   ```
@@ -300,7 +300,7 @@ action that owns it, leaving the rest of the calibration untouched:
   returned `noop` does not mean a clear-all succeeded.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '{"security-reviewer": null}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key seatPins --cwd .
   ```
@@ -336,7 +336,7 @@ action that owns it, leaving the rest of the calibration untouched:
   `/superheroes:configure`.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '{"schema":"gate-policy/1","default":"park","rules":[{"gate":"present-judgment","findingClass":"judgment:important","disposition":"skip"}]}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
   ```
@@ -344,7 +344,7 @@ action that owns it, leaving the rest of the calibration untouched:
   To clear the overlay:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf 'null\n' | python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
   ```
 
@@ -364,7 +364,7 @@ preview only, write the exact move list down in the run output, and hand back �
 `execute` on the default path.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" preview --cwd . --target <in-repo|global>
 ```
 
@@ -375,7 +375,7 @@ collaborator-visibility note.
 the authorization — run:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global> --owner-authorized true
 ```
 

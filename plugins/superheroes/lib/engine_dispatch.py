@@ -967,17 +967,18 @@ def _read_session_transcript_rows(config_dir, session_id):
     """Read capped transcript JSONL rows; missing file is empty. Never raises."""
     paths = _glob_transcript_paths(config_dir, session_id)
     if len(paths) != 1:
-        return [], paths, 0
+        return [], paths, 0, False
     rows = []
     file_size = 0
+    truncated = False
     try:
         with open(paths[0], "rb") as fh:
-            capped, _truncated, observed = _bounded_stdout_cap_from_file(
+            capped, truncated, observed = _bounded_stdout_cap_from_file(
                 fh, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
             )
             file_size = observed or 0
         if capped is None:
-            return [], paths, file_size
+            return [], paths, file_size, False
         text = capped.decode("utf-8", errors="ignore")
         for line in text.splitlines():
             line = line.strip()
@@ -990,8 +991,8 @@ def _read_session_transcript_rows(config_dir, session_id):
             if isinstance(obj, dict):
                 rows.append(obj)
     except OSError:
-        return [], paths, file_size
-    return rows, paths, file_size
+        return [], paths, file_size, False
+    return rows, paths, file_size, truncated
 
 
 read_session_transcript_rows = _read_session_transcript_rows
@@ -1417,7 +1418,7 @@ def _run_engine_files_background(
         timeout_at = time.time()
     else:
         while _NOW() < deadline:
-            rows, transcript_paths, file_size = _read_session_transcript_rows(
+            rows, transcript_paths, file_size, _ = _read_session_transcript_rows(
                 config_dir, session_id,
             )
             if len(transcript_paths) > 1:
@@ -1458,7 +1459,7 @@ def _run_engine_files_background(
                 break
             agent_row = _claude_agent_row_for_launch(agent_rows, launch_id)
             if _background_session_ended(agent_row):
-                rows, transcript_paths, file_size = _read_session_transcript_rows(
+                rows, transcript_paths, file_size, _ = _read_session_transcript_rows(
                     config_dir, session_id,
                 )
                 if (

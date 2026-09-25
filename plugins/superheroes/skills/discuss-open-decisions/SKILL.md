@@ -4,7 +4,7 @@ description: "Use when the owner needs to rule on open decisions — asking what
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # discuss-open-decisions
 
@@ -20,7 +20,7 @@ This skill is deliberately not the only path. The showrunner advisor delivers ow
 
 ## Step 1 — Read the contract
 
-Read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` from disk — first action, every invocation.
+Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` from disk — first action, every invocation.
 
 When this session is not already running the showrunner charter, also read duties 4 and 5 in `skills/showrunner/SKILL.md` — duty 4 for the collector this skill sweeps and strikes, duty 5 for the two tests the contract's filter cites.
 
