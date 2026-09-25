@@ -1166,6 +1166,10 @@ def test_clean_round1_certifies_full_panel_confirmed(tmp_path):
 def test_unknown_delta_surface_runs_full_panel(tmp_path):
     """A malformed/quoted-path head diff → unknown surface → a FULL reviewer-deep panel (the
     existing unknown→run-everything rule), not a scoped audit."""
+    from test_round_driver_round_economy_1272 import _commit_in_repo, _init_ceiling_git_repo
+
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    _commit_in_repo(repo, "unknown-surface-head")
     d = str(tmp_path)
     bad_head = 'diff --git "a/x y.py" "b/x y.py"\n@@ -1 +1 @@\n-a\n+b\n'
     seen = {"panel_r2": False}
@@ -1192,7 +1196,7 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
             return {"results": [], "findings": []}
         return {}
 
-    payload = _drive_cli(d, _cfg(), respond)
+    payload = _drive_cli(d, _cfg(repoRoot=repo, baseRef=init_head), respond)
     assert seen["panel_r2"] is True
     assert payload["verdict"] == "converged"
 
@@ -1351,6 +1355,10 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
     """An unreadable `headDiffPath` (no inline diff) is an UNKNOWN surface, not an empty one: the
     delta round runs a FULL reviewer-deep panel (unknown→run-everything), never a silent scoped skip
     over nothing. The source is journaled `unknown` and an `unknown-surface` decision is recorded."""
+    from test_round_driver_round_economy_1272 import _commit_in_repo, _init_ceiling_git_repo
+
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    _commit_in_repo(repo, "panel-head")
     d = str(tmp_path)
     missing = str(tmp_path / "does-not-exist.txt")
     seen = {"panel_r2": False, "scoped": False}
@@ -1380,7 +1388,7 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
             return {"results": [], "findings": []}
         return {}
 
-    payload = _drive_cli(d, _cfg(), respond)
+    payload = _drive_cli(d, _cfg(repoRoot=repo, baseRef=init_head), respond)
     assert seen["panel_r2"] is True, "an unreadable head diff must run a full panel, not a scoped scan"
     assert seen["scoped"] is False
     assert payload["verdict"] == "converged"

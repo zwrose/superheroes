@@ -2,6 +2,7 @@
 import importlib.util
 import os
 import re
+import subprocess
 import sys
 
 import pytest
@@ -37,6 +38,30 @@ def _cfg(**over):
             "fixerVendor": "codex"}
     base.update(over)
     return base
+
+
+_GIT_ID = ("-c", "user.email=t@t.local", "-c", "user.name=t")
+
+
+def _panel_git_cfg(tmp_path, **over):
+    """Config with a real repo so unknown-surface full-panel scheduling can derive head diff."""
+    repo = tmp_path / "panel-repo"
+    repo.mkdir()
+    subprocess.run(["git", *_GIT_ID, "-C", str(repo), "init", "-q", "-b", "main"],
+                   check=True, capture_output=True)
+    (repo / "f.py").write_text("old base\n", encoding="utf-8")
+    subprocess.run(["git", *_GIT_ID, "-C", str(repo), "add", "f.py"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", *_GIT_ID, "-C", str(repo), "commit", "-qm", "base"],
+                   check=True, capture_output=True)
+    base_sha = subprocess.check_output(
+        ["git", *_GIT_ID, "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    (repo / "f.py").write_text("head line\n", encoding="utf-8")
+    subprocess.run(["git", *_GIT_ID, "-C", str(repo), "add", "f.py"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", *_GIT_ID, "-C", str(repo), "commit", "-qm", "head"],
+                   check=True, capture_output=True)
+    return _cfg(repoRoot=str(repo), baseRef=base_sha, **over)
 
 
 def _finding():
@@ -486,47 +511,50 @@ def test_l3_a3_delta_split_reads_per_round_reviewed_diff(monkeypatch):
     assert captured["reviewed"] != state["reviewedDiff"]
 
 
-def test_l3_a3_absent_baseline_refuses_to_scope_with_named_reason(monkeypatch):
+def test_l3_a3_absent_baseline_refuses_to_scope_with_named_reason(tmp_path, monkeypatch):
     def _split_must_not_run(*_args, **_kwargs):
         raise AssertionError("split_fix_surface must not run when baseline is absent")
 
     monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
-    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    config = _panel_git_cfg(tmp_path, diff=_BASE_DIFF)
+    state = RD.new_state(config)
     state["round"] = 2
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
-    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    RD._enter_delta_round(state, config)
     _assert_delta_baseline_refusal(state)
 
 
-def test_l3_a3_stale_round_baseline_refuses(monkeypatch):
+def test_l3_a3_stale_round_baseline_refuses(tmp_path, monkeypatch):
     def _split_must_not_run(*_args, **_kwargs):
         raise AssertionError("split_fix_surface must not run when baseline round is stale")
 
     monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
-    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    config = _panel_git_cfg(tmp_path, diff=_BASE_DIFF)
+    state = RD.new_state(config)
     state["round"] = 2
     state["deltaBaseline"] = {"round": 1, "diff": _BASE_DIFF}
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
-    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    RD._enter_delta_round(state, config)
     _assert_delta_baseline_refusal(state)
 
 
-def test_l3_a3_non_record_baseline_refuses(monkeypatch):
+def test_l3_a3_non_record_baseline_refuses(tmp_path, monkeypatch):
     def _split_must_not_run(*_args, **_kwargs):
         raise AssertionError("split_fix_surface must not run when baseline is not a record")
 
     monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
-    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    config = _panel_git_cfg(tmp_path, diff=_BASE_DIFF)
+    state = RD.new_state(config)
     state["round"] = 2
     state["deltaBaseline"] = ["x"]
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
-    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    RD._enter_delta_round(state, config)
     _assert_delta_baseline_refusal(state)
 
 
@@ -550,33 +578,35 @@ def test_l3_a3_empty_text_baseline_is_a_valid_baseline(monkeypatch):
     assert state["rounds"]["2"]["roundKind"] != "full-panel-unknown-surface"
 
 
-def test_l3_a3_non_text_baseline_refuses(monkeypatch):
+def test_l3_a3_non_text_baseline_refuses(tmp_path, monkeypatch):
     def _split_must_not_run(*_args, **_kwargs):
         raise AssertionError("split_fix_surface must not run when baseline diff is not text")
 
     monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
-    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    config = _panel_git_cfg(tmp_path, diff=_BASE_DIFF)
+    state = RD.new_state(config)
     state["round"] = 2
     state["deltaBaseline"] = {"round": 2, "diff": None}
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
-    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    RD._enter_delta_round(state, config)
     _assert_delta_baseline_refusal(state)
 
 
-def test_l3_a3_post_fix_absent_baseline_runs_verify_then_panel(monkeypatch):
+def test_l3_a3_post_fix_absent_baseline_runs_verify_then_panel(tmp_path, monkeypatch):
     def _split_must_not_run(*_args, **_kwargs):
         raise AssertionError("split_fix_surface must not run when baseline is absent")
 
     monkeypatch.setattr(RD.delta_surface, "split_fix_surface", _split_must_not_run)
-    state = RD.new_state(_cfg(diff=_BASE_DIFF))
+    config = _panel_git_cfg(tmp_path, diff=_BASE_DIFF)
+    state = RD.new_state(config)
     state["round"] = 2
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
     state["_postFixEntry"] = True
-    RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
+    RD._enter_delta_round(state, config)
     assert state["step"] == RD.P_VERIFY
     assert state["_verifyThen"] == RD.VERIFY_THEN_PANEL
 

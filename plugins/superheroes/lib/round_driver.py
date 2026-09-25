@@ -1162,6 +1162,7 @@ VERIFY_THEN_CEILING = "ceiling"
 VERIFY_THEN_PANEL = "full-panel"
 VERIFY_THEN_POST_AUDITS = "post-audits"
 DELTA_BASELINE_ABSENT = "delta-baseline-absent"
+PANEL_DIFF_UNDERIVABLE_CAUSE = "panel-diff-underivable"
 
 
 def _round_ceiling(config):
@@ -4322,13 +4323,80 @@ def _enter_post_fix(state, config, session_dir=None):
 
 # ---- delta rounds (2+) ----------------------------------------------------------------------
 
-def _schedule_full_panel_unknown(state, detail):
+def _derive_panel_diff_at_head(config):
+    """Derive ``git diff <baseRef>...HEAD`` at ``config.repoRoot`` for unknown-surface full panels.
+
+    Returns ``(diff_text, None)`` on success or ``(None, detail)`` when derivation must refuse."""
+    repo_root = config.get("repoRoot")
+    base = config.get("baseRef")
+    if not isinstance(repo_root, str) or not repo_root:
+        return None, "repoRoot missing"
+    if not isinstance(base, str) or not base:
+        return None, "baseRef missing"
+    try:
+        verify = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "%s^{commit}" % base],
+            cwd=repo_root,
+            capture_output=True,
+            timeout=120,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return None, "git unavailable: %s" % exc
+    except subprocess.SubprocessError as exc:
+        return None, "git rev-parse failed: %s" % exc
+    if verify.returncode != 0:
+        return None, "baseRef not a commit"
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "%s...HEAD" % base],
+            cwd=repo_root,
+            capture_output=True,
+            text=False,
+            timeout=120,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return None, "git unavailable: %s" % exc
+    except subprocess.SubprocessError as exc:
+        return None, "git diff failed: %s" % exc
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+        err = err.strip()
+        msg = "git diff exit %d" % proc.returncode
+        if err:
+            msg += ": %s" % err
+        return None, msg
+    diff_text = proc.stdout.decode("utf-8")
+    if not diff_text:
+        return None, "empty diff"
+    return diff_text, None
+
+
+def _schedule_full_panel_unknown(state, config, detail):
     """The fail-closed unknown→run-everything rule: an unresolvable delta surface schedules a FULL
-    reviewer-deep panel, never a silently-scoped (or silently-skipped) round."""
+    reviewer-deep panel over the git-derived head diff, never a stale reviewed diff or a silently-
+    scoped round. When head diff cannot be derived, parks ``cannot-certify`` instead."""
+    diff_text, refuse_detail = _derive_panel_diff_at_head(config)
+    if refuse_detail is not None:
+        _park_cannot_certify(
+            state, "%s: %s" % (PANEL_DIFF_UNDERIVABLE_CAUSE, refuse_detail))
+        return False
+    state["headDiff"] = diff_text
+    state["reviewedDiff"] = diff_text
+    _record_round(state, "panelDiffSource", "git-derived")
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
     state["fullPanelRan"] = False
     state["step"] = P_PANEL
+    return True
+
+
+def _after_unknown_surface_panel(state, config, detail, post_fix):
+    """Schedule a full unknown-surface panel when derivable; honor post-fix verify-then-panel."""
+    if not _schedule_full_panel_unknown(state, config, detail):
+        return
+    if post_fix:
+        state["_verifyThen"] = VERIFY_THEN_PANEL
+        state["step"] = P_VERIFY
 
 
 def _enter_delta_round(state, config):
@@ -4341,47 +4409,38 @@ def _enter_delta_round(state, config):
     # the honest recovery for the field defect: a lost head diff now runs a full panel, not a vacuous
     # scoped scan over nothing.
     if state.pop("_headDiffUnknown", False):
-        _schedule_full_panel_unknown(
-            state, "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
-            % state.get("_headDiffSource"))
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+        _after_unknown_surface_panel(
+            state, config,
+            "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
+            % state.get("_headDiffSource"),
+            post_fix)
         return
     baseline = state.get("deltaBaseline")
     if not isinstance(baseline, dict):
         cause = "no baseline record" if baseline is None else "baseline is not a record"
-        _schedule_full_panel_unknown(state, "%s: %s" % (DELTA_BASELINE_ABSENT, cause))
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+        _after_unknown_surface_panel(
+            state, config, "%s: %s" % (DELTA_BASELINE_ABSENT, cause), post_fix)
         return
     stamped_round = baseline.get("round")
     current_round = state["round"]
     if (not isinstance(stamped_round, int) or isinstance(stamped_round, bool)
             or stamped_round != current_round):
-        _schedule_full_panel_unknown(
-            state, "%s: baseline stamped round %s, current round %s"
-            % (DELTA_BASELINE_ABSENT, stamped_round, current_round))
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+        _after_unknown_surface_panel(
+            state, config,
+            "%s: baseline stamped round %s, current round %s"
+            % (DELTA_BASELINE_ABSENT, stamped_round, current_round),
+            post_fix)
         return
     reviewed = baseline.get("diff")
     if not isinstance(reviewed, str):
-        _schedule_full_panel_unknown(
-            state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT)
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+        _after_unknown_surface_panel(
+            state, config, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT, post_fix)
         return
     split = delta_surface.split_fix_surface(
         reviewed, state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
-        _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel")
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+        _after_unknown_surface_panel(
+            state, config, "delta surface unknown — full reviewer-deep panel", post_fix)
         return
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
