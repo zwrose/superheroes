@@ -259,10 +259,15 @@ def check_depth(skill_key, text, plugin_dir):
         if not os.path.isfile(target):
             continue  # resolution is check_links' job
         with open(target, encoding="utf-8") as fh:
-            if _REF.search(fh.read()):
-                out.append(
-                    f"reference-depth: {skill_key}: {rel} itself references another "
-                    f"file (chain deeper than one hop)")
+            cited = fh.read()
+        retired = list(_RETIRED_REF.finditer(cited))
+        if _REF.search(cited) or retired:
+            out.append(
+                f"reference-depth: {skill_key}: {rel} itself references another "
+                f"file (chain deeper than one hop)")
+        for r in retired:
+            out.append(
+                f"reference-link: {skill_key}: retired plugin-root form {r.group(1)} (in {rel})")
     return out
 
 

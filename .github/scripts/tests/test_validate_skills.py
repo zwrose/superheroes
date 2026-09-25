@@ -92,7 +92,21 @@ def test_depth_flags_a_chain(tmp_path):
         "more at `${CLAUDE_PLUGIN_ROOT}/reference/b.md`")
     text = "See `${CLAUDE_PLUGIN_ROOT}/reference/a.md`."
     out = vs.check_depth("p/s", text, str(tmp_path))
-    assert out and "reference-depth" in out[0]
+    assert out == [
+        "reference-depth: p/s: reference/a.md itself references another file "
+        "(chain deeper than one hop)"]
+
+def test_depth_flags_a_chain_in_retired_form(tmp_path):
+    # a cited reference whose only nested citation uses the retired fallback form still
+    # trips the one-hop gate, and the retired form is reported rather than invisible
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "reference" / "a.md").write_text(
+        "more at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/b.md`")
+    text = "See `${CLAUDE_PLUGIN_ROOT}/reference/a.md`."
+    assert vs.check_depth("p/s", text, str(tmp_path)) == [
+        "reference-depth: p/s: reference/a.md itself references another file "
+        "(chain deeper than one hop)",
+        "reference-link: p/s: retired plugin-root form reference/b.md (in reference/a.md)"]
 
 def test_depth_ignores_unresolved_target_that_is_check_links_job(tmp_path):
     # a reference to a missing file is NOT a depth violation (resolution is check_links')
