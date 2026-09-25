@@ -641,7 +641,6 @@ def test_compose_launch_propagates_adapter_refusal(tmp_path, monkeypatch):
 
     def _refuse_builder(token, session_id, prompt):
         return {
-            "ok": False,
             "argv": [],
             "reason": "builder-session-id-invalid",
             "detail": "a canonical lowercase UUID string",
@@ -651,6 +650,21 @@ def test_compose_launch_propagates_adapter_refusal(tmp_path, monkeypatch):
     result = L.compose_launch(repo, 656, premise)
     assert result["ok"] is False
     assert result["reason"] == "builder-session-id-invalid"
+    assert result["detail"] == "a canonical lowercase UUID string"
+
+
+def test_compose_launch_refusal_without_detail_carries_no_detail(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+
+    def _refuse_builder(token, session_id, prompt):
+        return {"argv": [], "reason": "unknown-claude-tier"}
+
+    monkeypatch.setattr(L.engine_adapter, "claude_builder_argv", _refuse_builder)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is False
+    assert result["reason"] == "unknown-claude-tier"
+    assert "detail" not in result
 
 
 def _write_core_with_builder_tier(repo, prefs):
@@ -7799,6 +7813,55 @@ def test_canary_transcript_unreadable(tmp_path, monkeypatch):
     result = L.canary(repo, "launch-bad-tx")
     assert result["ok"] is False
     assert result["reason"] == "canary-transcript-unreadable"
+
+
+def test_canary_truncation_follows_reader_bit(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    session_id = "33333333-bbbb-cccc-dddd-eeeeeeeeeeee"
+    launch_id = "launch-reader-bit-trunc"
+    rows = [
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "no tools"}]},
+        }
+    ]
+    transcript_path = _write_canary_transcript(config_dir, session_id, rows)
+    _canary_reserved(repo, launch_id, session_id, str(config_dir))
+
+    def _fake_reader(_config_dir, _session_id):
+        return rows, [transcript_path], 10, True
+
+    monkeypatch.setattr(
+        L.engine_dispatch, "read_session_transcript_rows", _fake_reader,
+    )
+    result = L.canary(repo, launch_id)
+    assert result["reason"] == "canary-transcript-truncated"
+
+
+def test_canary_not_truncated_when_reader_bit_clear(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    session_id = "44444444-bbbb-cccc-dddd-eeeeeeeeeeee"
+    launch_id = "launch-reader-bit-clear"
+    rows = [_assistant_tool_use("one-tool")]
+    transcript_path = _write_canary_transcript(config_dir, session_id, rows)
+    _canary_reserved(repo, launch_id, session_id, str(config_dir))
+    big_size = L.engine_dispatch.MAX_STDOUT_CAPTURE + 1
+
+    def _fake_reader(_config_dir, _session_id):
+        return rows, [transcript_path], big_size, False
+
+    monkeypatch.setattr(
+        L.engine_dispatch, "read_session_transcript_rows", _fake_reader,
+    )
+    result = L.canary(repo, launch_id)
+    assert result["ok"] is True
+    assert result["truncated"] is False
 
 
 def test_canary_transcript_truncated_zero_tool_calls(tmp_path, monkeypatch):

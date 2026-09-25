@@ -502,16 +502,17 @@ Everything in the plugin's source tree is shared and host-neutral:
 Each `SKILL.md` carries a host-map pointer line:
 
 > This skill speaks in host-neutral actions. Resolve them to your runtime's tools
-> by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md`
+> by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md`
 > (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude
 > Code, `codex-tools.md` on Codex.
 
-The portable root seam `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` (assigned
-once per bash block) lets skills reference bundled helpers on both hosts. Bare
-`${CLAUDE_PLUGIN_ROOT}` is banned — use the seam form above; `validate_hosts.py` enforces
-it. The pointer line above uses
-that same seam so it resolves at the plugin **root** (where `hosts/` lives); a bare
-relative `hosts/` path would resolve against the skill's own folder, which has none.
+`${CLAUDE_PLUGIN_ROOT}` names the plugin root on both hosts: Claude Code sets it for plugin
+hooks, and Codex sets it as a compatibility alias of its own `PLUGIN_ROOT`. Skills assign
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` once per bash block to reference bundled helpers; in skill
+text and Bash commands neither host expands the variable: the model resolves it in text (§7.4), and the Bash layer is tracked in #93. The
+pointer line above uses the same variable so it resolves at the plugin **root** (where `hosts/`
+lives); a bare relative `hosts/` path would resolve against the skill's own folder, which has
+none. `validate_hosts.py` requires the pointer line in every `SKILL.md`.
 
 ### 7.2 Host-adaptation layer (thin, per-host)
 
@@ -549,7 +550,7 @@ A session started **directly from a slash command** (e.g. `/superheroes:workhors
 in a fresh worktree — superheroes' usual entry path) does **not** receive the harness's
 auto-injected context layer that a plain chat start gets: project `CLAUDE.md`, the
 `MEMORY.md` head, and the env block are all absent, and nothing expands the §7.1 host-map
-pointer's `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`. The only channel that survives the spawn
+pointer's `${CLAUDE_PLUGIN_ROOT}`. The only channel that survives the spawn
 is a `SessionStart` hook's `additionalContext`.
 
 On Claude Code, `hooks/session_start.py` (wired in `hooks.json` with `--host claude`) closes
@@ -582,10 +583,10 @@ reaches a Codex session only through a project's own `CLAUDE.md` copy; and in ou
 storage mode there is no carrier at all.
 
 Scope boundary: this fixes the host-map **Read** (model-resolved, so an injected absolute path
-is the lever). The `lib/` **bash** seam of §7.1 — skills shelling out to `lib/` helpers through
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`, which the Bash tool does not expand — is a *different*
+is the lever). The `lib/` **bash** layer of §7.1 — skills shelling out to `lib/` helpers through
+`${CLAUDE_PLUGIN_ROOT}`, which the Bash tool does not expand — is a *different*
 layer that context injection cannot fix; it is tracked separately
-([#93](https://github.com/zwrose/superheroes/issues/93)) and the seam form here is unchanged.
+([#93](https://github.com/zwrose/superheroes/issues/93)) and this bootstrap does not change it.
 
 ### 7.5 Cross-engine contract (host-run-on vs engine-dispatched-to)
 

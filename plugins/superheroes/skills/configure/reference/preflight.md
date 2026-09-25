@@ -16,7 +16,7 @@ preflight step (#472). It runs once, **at session start, while the owner is stil
 before the session goes autonomous. Follow it top to bottom; every check below ends in
 **pass**, **fail**, or **N/A with the reason** — a check is never silently skipped.
 
-`ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash block below.
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash block below.
 
 ## Framing + the timing rule
 
@@ -86,7 +86,7 @@ will actually dispatch through — the brief-check reviewer, and any external-en
 reviewer, or pilot this project configures. Derive them; do not hard-code one engine:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import core_md, preflight_probe
@@ -107,7 +107,7 @@ Only at a wave preflight the owner or advisor chose to spend on Astra registrati
 attempt per wave. The durable attempt record lives in the project's store directory (not a temp directory):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/conformance_probe.py" astra-probe --repo-root <root> --wave <wave-id> --run-dir <dir> [--max-wait S]
 ```
 
@@ -125,7 +125,7 @@ does; Astra's row no longer carries it.
 Confirm sign-in:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import preflight_probe
@@ -162,7 +162,7 @@ compute it once and carry it forward into two places: the build brief, and the P
 section, so anyone reading the PR later can see exactly what ran without re-deriving it:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import preflight_probe
@@ -200,7 +200,7 @@ Before launch, run one real review dispatch per dispatchable engine (`codex`, `c
 liveness check the selftest is not:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor|claude> [--wave <launch-id>]
 ```
 
@@ -214,7 +214,7 @@ When this build will run `review-code` (it always does at handback), seed the sh
 **liveness receipt** now, so the build's review loop rides it instead of re-probing every round:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
 ```
 
@@ -265,7 +265,7 @@ distinct configured non-Claude engine itself (the same `configured_cross_vendor_
 §A.2; pass `--engine <name>` only to force one specific engine, e.g. for back-compat scripting):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/preflight_probe.py" run --cwd .
 ```
 

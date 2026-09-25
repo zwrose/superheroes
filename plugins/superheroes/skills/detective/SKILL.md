@@ -3,7 +3,7 @@ name: detective
 description: "Use when a failure needs its cause demonstrated before any fix is scoped — why did this break, diagnose this, a first fix that already failed, or one symptom on more than one surface. Observe-only: it reproduces or A/B-compares on disposable copies and delivers a diagnosis receipt for the advisor to vet. It never edits the surface under diagnosis and never produces a fix. Not the builder (that is workhorse)."
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Detective
 
@@ -15,7 +15,7 @@ receipt, never an edit.** Fixes belong to builds; routing belongs to the advisor
 ## You stand on the covenant
 
 Every superheroes session carries the covenant — read and obey
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/covenant.md`. **This charter specializes those
+`${CLAUDE_PLUGIN_ROOT}/rubric/covenant.md`. **This charter specializes those
 standing orders for diagnosis; it does not repeat them.** Where a duty below touches a hard line,
 the covenant governs.
 
@@ -41,7 +41,7 @@ honest stop (see below) — not a failure of the role.
 ## Before diagnosis — registry scan
 
 Every owner-direct or advisor-dispatched diagnosis processes a field report. **Before repro
-or A/B work begins**, read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`
+or A/B work begins**, read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`
 from disk and scan the project's revisit-trigger registry per `## The revisit-trigger registry` —
 resolve the collector pointer from durable memory when available, or ask the owner for it rather
 than opening a second collector. Cite any row whose revisit trigger matches this incident so a
@@ -104,7 +104,7 @@ tokens, credentials, authorization headers, private URLs, and PII must all come 
 posting. Run every quoted diagnostic through the scrub helper first:
 
 ```bash
-python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/pr_comment.py" scrub
+python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_comment.py" scrub
 ```
 
 (stdin→stdout). The helper reliably removes **authorization and cookie headers**, **bearer tokens**,

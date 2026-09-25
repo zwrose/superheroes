@@ -3,7 +3,7 @@ name: writing-specs
 description: Use to author the on-disk `spec` definition-doc once an owner has APPROVED a set of requirements — normally invoked by the `discovery` skill. Mints the work-item slug, fills the spec body template, writes `docs/superheroes/<work-item>/spec.md`, and runs a self-review. Does NOT elicit requirements (that is `discovery`) or design the technical approach (that is the build).
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # writing-specs
 
@@ -17,7 +17,7 @@ If they have not, stop and return to `discovery` — do not author a spec from
 un-approved requirements.
 
 Spec content rules (consolidation, annexes, rulings, Amendments shape):
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-spec/reference/spec-content.md`.
+`${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md`.
 
 ## Inputs (from `discovery`)
 
@@ -33,7 +33,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
 1. **Mint the work-item** (once; it is then frozen — CONVENTIONS §6.1):
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>")
    ```
 
@@ -45,7 +45,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    working directory:
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    ROOT=$(git rev-parse --show-toplevel)
    SPEC=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" resolve-write \
      --work-item "$WORK_ITEM" --doc spec --root "$ROOT") \
@@ -56,7 +56,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    `gates.review: pending`):
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/definition_doc.py" frontmatter \
      --doc spec --work-item "$WORK_ITEM" --size "<size>"
    ```
@@ -64,7 +64,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    Do not hand-write the frontmatter — the lib owns its shape and the
    gate/status invariants.
 
-4. **Fill the body** from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/spec.md`: replace the
+4. **Fill the body** from `${CLAUDE_PLUGIN_ROOT}/templates/spec.md`: replace the
    `{{frontmatter}}` line with the emitted block, set the `# {{Title}}`, and fill
    every section from the approved inputs. Honor the template's contract:
    - **Functional requirements in EARS**, numbered, one behavior each, each with ≥1
@@ -138,7 +138,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
 A spec reviewed at `light` weight and a spec reviewed at `full` weight are **the same artifact
 class**. Four equivalences hold, always:
 
-1. **Same template.** Both are filled from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/spec.md`.
+1. **Same template.** Both are filled from `${CLAUDE_PLUGIN_ROOT}/templates/spec.md`.
    **There is no light template.**
 2. **Same home.** Both land at the `spec` definition-doc path for their work-item, resolved the
    same way (`definition_doc.py resolve-write --doc spec`). **There is no light home.**

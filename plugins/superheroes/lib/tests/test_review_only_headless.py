@@ -56,7 +56,7 @@ _NORMATIVE_UNCOMMITTED_SENTENCE = (
 _ASK_USER_QUESTION_ALLOWED_LINES = frozenset({
     # skills/review-code/SKILL.md § --review-only
     "**Write the presentation artifact — the only path.** Follow "
-    "`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/headless-presentation.md`. "
+    "`${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/headless-presentation.md`. "
     "Presence is an event, not a state a run can detect — the run never branches on whether a "
     "human is present and never opens a question that could block waiting for an answer. Never "
     "open `AskUserQuestion` on this path or any review-code path.",

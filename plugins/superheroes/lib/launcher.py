@@ -1137,7 +1137,9 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
     # Popen raised and no child ever started — every other failure is terminal
     # with no re-spawn.
     built = engine_adapter.claude_builder_argv(token, session_id, prompt)
-    if built.get("ok") is False or built.get("reason") is not None:
+    if built.get("reason") is not None:
+        if "detail" in built:
+            return _fail(built["reason"], detail=built["detail"])
         return _fail(built["reason"])
     argv = built["argv"]
     return {
@@ -1161,7 +1163,8 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, 
 
 
 # WORKAROUND: headless builders must survive parent session exit via detached spawn
-# delete-when: the background-session trial receipt marks detached spawn not needed
+# delete-when: a re-run of the background-session trial observes its "detached spawn"
+# condition met; the condition is restated in the keep-or-retire record's marker inventory
 def _default_spawn(argv, cwd, out_fh, err_fh, child_env):
     return subprocess.Popen(
         argv,
@@ -1235,7 +1238,9 @@ def _overlap_evidence(warnings):
 
 
 # WORKAROUND: launcher refuses spawn when cwd is the primary checkout (own-worktree)
-# delete-when: the background-session trial receipt marks launcher worktree enforcement not needed
+# delete-when: a re-run of the background-session trial observes its
+# "launcher-enforced own-worktree half" condition met; the condition is restated in the
+# keep-or-retire record's marker inventory
 def _spawn_attempt(
     repo_root,
     launch_id,
@@ -2318,7 +2323,7 @@ def canary(repo_root, launch_id, env=None):
     config_dir = lane.get("configDir")
     if not isinstance(config_dir, str) or not config_dir:
         return _fail("canary-config-dir-absent")
-    rows, paths, size = engine_dispatch.read_session_transcript_rows(
+    rows, paths, size, truncated = engine_dispatch.read_session_transcript_rows(
         config_dir, session_id,
     )
     if len(paths) == 0:
@@ -2328,8 +2333,7 @@ def canary(repo_root, launch_id, env=None):
     tool_calls = engine_adapter.claude_transcript_tool_calls(rows)
     if tool_calls is None:
         return _fail("canary-transcript-unreadable")
-    truncated = size > engine_dispatch.MAX_STDOUT_CAPTURE
-    if size > engine_dispatch.MAX_STDOUT_CAPTURE and tool_calls == 0:
+    if truncated and tool_calls == 0:
         return _fail("canary-transcript-truncated")
     return {
         "ok": True,

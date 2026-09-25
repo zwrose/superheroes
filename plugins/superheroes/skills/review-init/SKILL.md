@@ -3,7 +3,7 @@ name: review-init
 description: "Internal helper reached from `superheroes:configure` to refresh review-crew's calibration layer for a project. Not a front door; owners run `superheroes:configure` instead."
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # review-init
 
@@ -49,7 +49,7 @@ conventions/threat context it already states.
 Read the engine versions for provenance:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 sed -n '1p' "$ROOT_DIR/rubric/review-base.md"          # -> <!-- rubric-version: N -->
 python3 -B -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])"
 ```
@@ -61,7 +61,7 @@ global per-repo store). `review_store.py resolve` returns the resolved path, or
 `location: none` when no profile exists yet:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 RES=$(python3 -B "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
   || RES='{"location":"none","exists":false,"path":null}'
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
@@ -78,7 +78,7 @@ storage location and mint the path before writing:
 <!-- decision-point: id=review-init-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-crew-layer -->
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 if [ "$LOCATION" = "none" ]; then
   DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
@@ -168,7 +168,7 @@ Fail-closed guard below — not the mechanical-carrier redesign: it refuses to e
 piped input is missing, because `write-layer` replaces the entire layer file.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 STATUS=provisional   # always on this create path; confirmed only via /superheroes:configure (FR-5)
 [ -n "$CORE_FACTS_JSON" ] && [ -n "$REVIEW_LAYER_BODY" ] || { echo "assembly produced empty payloads; halting rather than writing an empty layer" >&2; exit 1; }
 # CREATE: shared facts → core.md (lock-guarded, reuse-not-clobber FR-6/FR-7; a
