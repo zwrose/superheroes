@@ -364,7 +364,7 @@ and each of the three is established from the **remote**, never from a local ass
   gate selects the whole stack below it.
 - **The register check reads main's copy, and the handback says which copy it read** — a layer's
   worktree carries whatever the layers below wrote ([register-check.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md)).
-- **The size bars apply** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md) § Size) — a layer growing past the bars is split into another layer rather than
+- **The size bars apply** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md) § Size) — a layer that grows into a second surface is split into another layer rather than
   allowed to swallow two surfaces.
 - **Never hand-rebase and never force-push a layer inside a lane** — both move a head other layers and the
   review are pinned to; take in a moved base or a moved lower layer **by merge** — a **local `--no-ff`
@@ -445,13 +445,10 @@ visible, never silent. **Scope check:** if the shape implies an oversized or mul
 propose a split before building; an irreducible big diff ships with an explicit scope disclosure.
 When the work is a family of parallel siblings, **one concern per PR** — one lens per PR for
 lens-family work — and any **shared shell or contract seam lands first, as its own small PR**,
-before the siblings that build on it. **The size step — at every commit, in both lanes.** Count
-your non-test changed lines against your base and compare them to your starting estimate. At the
-tripwire, message the advisor session your order names with the count, the estimate and a proposed
-split; write or dispatch no more code, wait in-turn as the host tool map says, and act on the reply.
-With no reply, no way to message, or no advisor named, and at the absolute bars, do what
-`review-discipline.md` § Size says; a light order with no estimate is asked about before any code, as
-it says there. The PR's **size tripwire** row (§11) records the outcome. **Gates and enforcement:** any work order that
+before the siblings that build on it. **The size step, in both lanes:** carry out the
+builder's part of `review-discipline.md` § Size — the count at each commit, the message to the advisor
+at the tripwire, the parks — waiting in-turn as the host tool map says, and record the outcome in the
+PR's **size tripwire** row (§11). **Gates and enforcement:** any work order that
 adds a **gate, hook, or enforcement mechanism** names, in the brief before code, the ratified
 precondition that unlocks it and the evidence that it is met — in every project. When the project
 being built is the superheroes source repository itself, cite the entry and unlock condition in the
@@ -1137,8 +1134,9 @@ backstop can grep the section. For both lanes the build record also carries a **
 filled by §4's size step: `not crossed (N of estimate M)`; `crossed at <commit>; messaged <time>;
 advisor ruled <split|continue|park> (<issue comment link>)`; `crossed at <commit>; messaged <time>;
 parked, no reply (<issue comment link>)`; `crossed at <commit>; messaging
-unavailable on this host; parked (<issue comment link>)`; or `crossed at <commit>; disclosed to the
-owner in session`. The PR body also carries a **DoD disposition table** (the
+unavailable on this host; parked (<issue comment link>)`; `crossed at <commit>; disclosed to the
+owner in session`; or, when that commit also crossed 600, `crossed at <commit>; disclosed to the owner
+in session; parked at 600 (<issue comment link>)`. The PR body also carries a **DoD disposition table** (the
 `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each
 **done** (with an evidence pointer) or **deferred** (with a filed issue and a one-line reason). This is
 distinct from the review dispositions table above (that grades review findings; this grades every spec'd
