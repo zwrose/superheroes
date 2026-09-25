@@ -6,6 +6,7 @@ write/write_layer/confirm*/write_show_it_surface are the lock-guarded fail-open 
 (mode_registry.config_lock; return a `deferred` action, never raise, never block). The
 legacy-profile migration path was removed in favour of a named refusal (issue #724)."""
 import collections
+import copy
 import datetime
 import json
 import os
@@ -20,8 +21,9 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-# WORKAROUND: the profile schema stays at 2 while it carries the projectConfiguration keys an
-# older build does not know, so an older build re-calibrating from scratch can drop them.
+# WORKAROUND: the profile schema stays at 2 while it carries the projectConfiguration and
+# vetChecks keys an older build does not know, so an older build re-calibrating from scratch
+# can drop them.
 # delete-when: the keep list is stamped and a release carrying the configuration items has
 # shipped; then raise this version, pinning the new literal in the tests rather than referencing
 # this constant, so an older build refuses the profile instead of rewriting it.
@@ -85,6 +87,19 @@ PROJECT_CONFIG_REASON_NOT_A_MAPPING = "project-config-not-a-mapping"
 PROJECT_CONFIG_REASON_ROUND_TRIP = "project-config-round-trip-refused"
 DECLARED_DEPS_REASON_NOT_A_MAPPING = "declared-deps-not-a-mapping"
 DECLARED_DEPS_REASON_ROUND_TRIP = "declared-deps-round-trip-refused"
+VET_CHECKS_KEY = "vetChecks"
+VET_CHECKS_REASON_MALFORMED = "vet-checks-malformed"
+VET_CHECKS_REASON_INPUT_UNPARSEABLE = "vet-checks-input-unparseable"
+VET_CHECKS_REASON_ROUND_TRIP = "vet-checks-round-trip-refused"
+VET_CHECKS_MALFORMED_REASONS = (
+    "vet-checks-not-a-list",
+    "vet-checks-entry-not-an-object",
+    "vet-checks-entry-missing-field",
+    "vet-checks-entry-unknown-field",
+    "vet-checks-field-not-a-nonempty-string",
+    "vet-checks-duplicate-name",
+)
+_VET_CHECK_FIELDS = frozenset({"name", "evidence", "records"})
 THREAT_MODEL_REASON_ROUND_TRIP = "threat-model-round-trip-refused"
 GUARDIAN_CADENCE_REASON_LAYER_ABSENT = "guardian-layer-absent"
 GUARDIAN_CADENCE_REASON_NO_FENCE = "guardian-config-fence-absent"
@@ -106,6 +121,46 @@ _PROV = re.compile(
 _JSON_BLOCK = re.compile(r"```json superheroes-core\s*\n(.*?)\n```", re.DOTALL)
 
 
+def validate_vet_checks(value):
+    """Return malformed-item dicts for a vetChecks value; empty list means valid. Never raises."""
+    items = []
+    if not isinstance(value, list):
+        return [{"index": None, "field": None, "reason": "vet-checks-not-a-list"}]
+    seen_names = {}
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            items.append(
+                {"index": index, "field": None, "reason": "vet-checks-entry-not-an-object"})
+            continue
+        for key in entry:
+            if key not in _VET_CHECK_FIELDS:
+                items.append(
+                    {"index": index, "field": key, "reason": "vet-checks-entry-unknown-field"})
+        for field in ("name", "evidence", "records"):
+            if field not in entry:
+                items.append(
+                    {"index": index, "field": field, "reason": "vet-checks-entry-missing-field"})
+        for field in _VET_CHECK_FIELDS:
+            if field not in entry:
+                continue
+            raw = entry[field]
+            if not isinstance(raw, str) or not raw.strip():
+                items.append({
+                    "index": index,
+                    "field": field,
+                    "reason": "vet-checks-field-not-a-nonempty-string",
+                })
+        name_val = entry.get("name")
+        if isinstance(name_val, str) and name_val.strip():
+            stripped_name = name_val.strip()
+            if stripped_name in seen_names:
+                items.append(
+                    {"index": index, "field": "name", "reason": "vet-checks-duplicate-name"})
+            else:
+                seen_names[stripped_name] = index
+    return items
+
+
 def render_core(facts, status, created, updated):
     """Render the §2.2 core.md: provenance comment + prose sections + the json block."""
     block = {
@@ -123,6 +178,8 @@ def render_core(facts, status, created, updated):
     declared_deps = facts.get(DECLARED_DEPENDENCIES_KEY)
     if isinstance(declared_deps, dict) and declared_deps:
         block[DECLARED_DEPENDENCIES_KEY] = dict(declared_deps)
+    if VET_CHECKS_KEY in facts:
+        block[VET_CHECKS_KEY] = copy.deepcopy(facts[VET_CHECKS_KEY])
     show_it = (facts.get("showItSurface") or "").strip()
     show_it_block = ""
     if show_it:
@@ -199,7 +256,7 @@ def parse_core(text):
     declared_deps = block.get(DECLARED_DEPENDENCIES_KEY)
     if declared_deps is not None and not isinstance(declared_deps, dict):
         declared_deps = {}
-    return {
+    out = {
         "schemaVersion": int(block["schemaVersion"]),
         "status": status,
         "verifyCommand": block.get("verifyCommand"),
@@ -215,6 +272,9 @@ def parse_core(text):
         "created": created,
         "updated": updated,
     }
+    if VET_CHECKS_KEY in block:
+        out[VET_CHECKS_KEY] = copy.deepcopy(block[VET_CHECKS_KEY])
+    return out
 
 
 def _repo_root(cwd):
@@ -438,7 +498,7 @@ def read(cwd, root=None):
     ver = facts["schemaVersion"]
     behind = ver > SCHEMA_VERSION
     effective = ver if behind else SCHEMA_VERSION  # UFR-2: older stamped current in memory
-    return {
+    out = {
         "schemaVersion": effective,
         "status": facts["status"],
         "verifyCommand": facts["verifyCommand"],
@@ -455,6 +515,9 @@ def read(cwd, root=None):
         "created": facts["created"],
         "updated": facts["updated"],
     }
+    if VET_CHECKS_KEY in facts:
+        out[VET_CHECKS_KEY] = facts[VET_CHECKS_KEY]
+    return out
 
 
 def _today():
@@ -921,13 +984,8 @@ def write_show_it_surface(cwd, prose, *, root=None):
         return {"action": "written"}
 
 
-def _loads_rejecting_duplicate_keys(text):
-    """Parse a JSON object, returning ``(value, duplicate_key)``.
-
-    ``duplicate_key`` is the first duplicated key name when one is present (``value`` is then
-    ``None``); a parse failure returns ``(None, None)``. This is the in-lock half of the
-    ``profile_structural_refusal`` duplicate-key check: the pre-lock check cannot bind a file that
-    may change before the lock is taken."""
+def _json_loads_rejecting_duplicate_keys(text):
+    """Parse JSON (any top-level type), returning ``(value, duplicate_key_or_none)``."""
     dup_key = [None]
 
     def _reject_dupes(pairs):
@@ -947,6 +1005,19 @@ def _loads_rejecting_duplicate_keys(text):
         return None, None
     except TypeError:
         return None, None
+    return value, None
+
+
+def _loads_rejecting_duplicate_keys(text):
+    """Parse a JSON object, returning ``(value, duplicate_key)``.
+
+    ``duplicate_key`` is the first duplicated key name when one is present (``value`` is then
+    ``None``); a parse failure returns ``(None, None)``. This is the in-lock half of the
+    ``profile_structural_refusal`` duplicate-key check: the pre-lock check cannot bind a file that
+    may change before the lock is taken."""
+    value, dup = _json_loads_rejecting_duplicate_keys(text)
+    if dup is not None:
+        return None, dup
     return value, None
 
 
@@ -1551,10 +1622,19 @@ def _prose_field_round_trip_ok(orig, new_parsed, owned_field):
 
 
 def _write_json_block_key(cwd, block_key, mapping, *, root=None, not_a_mapping_reason,
-                          round_trip_reason):
-    """Shared lock-guarded writer for a single superheroes-core json object key."""
-    if not isinstance(mapping, dict):
-        return {"action": "refused", "reason": not_a_mapping_reason}
+                          round_trip_reason, validate=None):
+    """Shared lock-guarded writer for a single superheroes-core json block key."""
+    if validate is None:
+        if not isinstance(mapping, dict):
+            return {"action": "refused", "reason": not_a_mapping_reason}
+    else:
+        malformed = validate(mapping)
+        if malformed:
+            return {
+                "action": "refused",
+                "reason": VET_CHECKS_REASON_MALFORMED,
+                "malformed": malformed,
+            }
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
         return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
@@ -1608,11 +1688,10 @@ def _write_json_block_key(cwd, block_key, mapping, *, root=None, not_a_mapping_r
                     "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
         if block is None or not isinstance(block, dict):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
-        current = block.get(block_key)
         if mapping:
-            if isinstance(current, dict) and current == mapping:
+            if block_key in block and block[block_key] == mapping:
                 return {"action": "noop"}
-            block[block_key] = dict(mapping)
+            block[block_key] = copy.deepcopy(mapping)
         else:
             if block_key not in block:
                 return {"action": "noop"}
@@ -1668,6 +1747,126 @@ def write_declared_dependency_item(cwd, slug, value, *, root=None):
         cwd, DECLARED_DEPENDENCIES_KEY, slug, value, root=root,
         not_a_mapping_reason=DECLARED_DEPS_REASON_NOT_A_MAPPING,
         round_trip_reason=DECLARED_DEPS_REASON_ROUND_TRIP)
+
+
+def read_vet_checks(cwd, root=None):
+    """Read the ``vetChecks`` json key from core.md. Never raises."""
+    base = {
+        "declared": False,
+        "checks": [],
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": False,
+    }
+    try:
+        path = core_path(cwd, root)
+    except RepoRootUnavailable:
+        return dict(base, reason="repo-root-unavailable")
+
+    structural = _structural_refusal_at_path(path)
+    if structural is not None:
+        if structural.startswith("%s:" % DUPLICATE_CORE_KEY_REASON):
+            reason = structural
+            detail = None
+        else:
+            reason = structural.split(":", 1)[0]
+            detail = structural
+        return dict(base, reason=reason, detail=detail)
+
+    cls = _classify_core_md_at_path(path)
+    if cls.status == CONFIG_ABSENT:
+        return dict(base, reason="core-md-absent")
+    if cls.status == CONFIG_UNREADABLE:
+        reason = "core-md-unreadable"
+        detail = cls.detail
+        try:
+            with open(path, encoding="utf-8") as fh:
+                probe = fh.read()
+            if parse_core(probe) is None:
+                reason = "core-md-unparseable"
+        except (OSError, UnicodeDecodeError):
+            pass
+        return dict(base, reason=reason, detail=detail)
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return dict(
+            base,
+            reason="core-md-unreadable",
+            detail=gate_refusal_detail(exc, at=path),
+        )
+
+    facts = parse_core(text)
+    if facts is None:
+        return dict(
+            base,
+            reason="core-md-unparseable",
+            detail="corrupt or unreadable core.md at %s" % path,
+        )
+
+    ver = facts["schemaVersion"]
+    behind = ver > SCHEMA_VERSION
+    if VET_CHECKS_KEY not in facts:
+        return dict(base, behind=behind)
+
+    raw = facts[VET_CHECKS_KEY]
+    malformed = validate_vet_checks(raw)
+    if malformed:
+        return {
+            "declared": True,
+            "checks": [],
+            "malformed": malformed,
+            "reason": VET_CHECKS_REASON_MALFORMED,
+            "detail": None,
+            "behind": behind,
+        }
+    checks = [
+        {
+            "name": entry["name"].strip(),
+            "evidence": entry["evidence"].strip(),
+            "records": entry["records"].strip(),
+        }
+        for entry in raw
+    ]
+    return {
+        "declared": True,
+        "checks": checks,
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": behind,
+    }
+
+
+def write_vet_checks(cwd, checks, *, root=None):
+    """Lock-guarded surgical write of ``vetChecks`` only. Never raises."""
+    malformed = validate_vet_checks(checks)
+    if malformed:
+        return {
+            "action": "refused",
+            "reason": VET_CHECKS_REASON_MALFORMED,
+            "malformed": malformed,
+        }
+    stored = [
+        {
+            "name": entry["name"].strip(),
+            "evidence": entry["evidence"].strip(),
+            "records": entry["records"].strip(),
+        }
+        for entry in checks
+    ]
+    return _write_json_block_key(
+        cwd,
+        VET_CHECKS_KEY,
+        stored,
+        root=root,
+        not_a_mapping_reason=VET_CHECKS_REASON_MALFORMED,
+        round_trip_reason=VET_CHECKS_REASON_ROUND_TRIP,
+        validate=lambda _value: [],
+    )
 
 
 _THREAT_MODEL_HEADING = re.compile(r"^\s*##\s+Threat model\s*$", re.IGNORECASE)
@@ -2167,6 +2366,8 @@ def confirm(cwd, *, root=None, now=None):
                 "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",
                 "ratifiedResiduals", REVIEW_GATE_POLICY_KEY, PROJECT_CONFIGURATION_KEY,
                 DECLARED_DEPENDENCIES_KEY)}
+            if VET_CHECKS_KEY in existing:
+                facts[VET_CHECKS_KEY] = existing[VET_CHECKS_KEY]
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),
@@ -2291,6 +2492,12 @@ def main(argv):
     wgc = sub.add_parser("write-guardian-cadence")
     wgc.add_argument("--cwd", default=".")
     wgc.add_argument("--root", default=None)
+    vc = sub.add_parser("vet-checks")
+    vc.add_argument("--cwd", default=".")
+    vc.add_argument("--root", default=None)
+    wvc = sub.add_parser("write-vet-checks")
+    wvc.add_argument("--cwd", default=".")
+    wvc.add_argument("--root", default=None)
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -2472,6 +2679,63 @@ def main(argv):
                 sys.stdout.write(json.dumps(out, indent=2) + "\n")
                 return 0
             out = write_guardian_cadence(args.cwd, cadence, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "vet-checks":
+        try:
+            out = read_vet_checks(args.cwd, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {
+                "declared": False,
+                "checks": [],
+                "malformed": [],
+                "reason": "repo-root-unavailable",
+                "detail": gate_refusal_detail(exc),
+                "behind": False,
+            }
+        except Exception:
+            out = {
+                "declared": False,
+                "checks": [],
+                "malformed": [],
+                "reason": "core-md-unreadable",
+                "detail": None,
+                "behind": False,
+            }
+    elif args.cmd == "write-vet-checks":
+        try:
+            raw = sys.stdin.read()
+            if raw.strip() == "":
+                checks = []
+            else:
+                try:
+                    checks, duplicate_key = _json_loads_rejecting_duplicate_keys(raw.strip())
+                except TypeError:
+                    checks, duplicate_key = None, None
+                if duplicate_key is not None:
+                    out = {
+                        "action": "refused",
+                        "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key),
+                    }
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if checks is None:
+                    out = {"action": "refused", "reason": VET_CHECKS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if not isinstance(checks, list):
+                    out = {
+                        "action": "refused",
+                        "reason": VET_CHECKS_REASON_MALFORMED,
+                        "malformed": validate_vet_checks(checks),
+                    }
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+            out = write_vet_checks(args.cwd, checks, root=args.root)
         except RepoRootUnavailable as exc:
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,
