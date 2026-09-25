@@ -7,17 +7,21 @@
 | ID | Axis | Proving test | Verdict |
 |---|---|---|---|
 | E1 | loop passes over benign `pr-set-changed` | `test_loop_passes_over_pr_set_change` | proven |
-| E2 | second live loop refused at flock | `test_second_loop_on_same_batch_refuses` | proven |
+| 1c-E2 | second live loop refused at flock | `test_second_loop_on_same_batch_refuses` | proven |
 | E3 | `run` never sleeps | `test_run_is_one_shot_against_quiet_live_lane` | proven |
 | E4 | PR baseline advances on fire | `test_loop_two_distinct_pr_set_changes_passed_over` | proven |
-| E5 | lock released on normal exit | `test_loop_lock_released_allows_sequential_loops` | proven |
-| E6 | non-regular lock file refused | `test_loop_lock_unavailable_non_regular_lock_file` | proven |
+| E5 | loop exits on a stack change carrying the idle-seat flag | `test_loop_stack_state_idle_seat_exits_otherwise_passes_over` | proven |
+| 1c-E5 | lock-unavailable refusal fails closed (`loop-lock-unavailable`, `arms: 0`) | `test_loop_lock_unavailable_flock_oserror` | proven |
+| 1c-E6 | non-regular lock file refused | `test_loop_lock_unavailable_non_regular_lock_file` | proven |
+| 1c-E7 | lock released on normal exit | `test_loop_lock_released_allows_sequential_loops` | proven |
+
+Rows prefixed `1c-` are layer 1c's lock proofs (the issue names them E2, E5 and E6; the prefix keeps them apart from layer 1b's E5).
 
 ---
 
 ## E1 — classifier (`_loop_exits_on`)
 
-**neutralization:** `return result.get("event") not in BENIGN_EVENTS` → `return True  # bite-proof E1`
+**neutralization:** insert `return True` as the first statement of `_loop_exits_on` (every wake exits).
 
 **raw red** (tail; full: `/private/tmp/c15-wo-a/bp-e1-red.txt`):
 ```
@@ -27,7 +31,7 @@ FAILED ...::test_loop_passes_over_pr_set_change
 EXIT=1
 ```
 
-**restore:** inverse perl replace restoring `BENIGN_EVENTS` branch.
+**restore:** remove that inserted line.
 
 **raw green** (tail; full: `/private/tmp/c15-wo-a/bp-e1-green.txt`):
 ```
@@ -37,7 +41,7 @@ EXIT=0
 
 ---
 
-## E2 — start check (flock contention)
+## 1c-E2 — start check (flock contention)
 
 **neutralization:** `fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)` → `pass  # bite-proof E2`
 
@@ -89,25 +93,26 @@ EXIT=1
 
 ---
 
-## E5 — lock release on normal exit
+## E5 — idle-seat arm of the classifier
 
-**neutralization:** omit `_release_loop_lock(lock_fd)` on the `_loop_exits_on` success path.
+**neutralization:** in `_loop_exits_on`, the `return True` inside the `FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` check → `return False`.
 
-**raw red** (tail; full: `/private/tmp/c15-wo-a/bp-e5-red.txt`):
+**raw red** (a fenced block):
 ```
->       assert second["ok"] is True
-E       assert False is True
-FAILED ...::test_loop_lock_released_allows_sequential_loops
-EXIT=1
+E       AssertionError: assert 'timer' == 'stack-state-changed'
+FAILED ...::test_loop_stack_state_idle_seat_exits_otherwise_passes_over
+1 failed in 13.71s
 ```
 
-**restore:** reinstate `_release_loop_lock(lock_fd)`.
+**restore:** the inverse edit (`return False` → `return True`).
 
-**raw green:** `/private/tmp/c15-wo-a/bp-e5-green.txt` — `1 passed`, `EXIT=0`.
+**raw green:** `1 passed` (run together with `test_stack_state_changed_emits_flags_on_first_arm_with_idle_seat`: `2 passed in 9.95s`).
+
+The test carries a `max_total_seconds` ceiling on a fake monotonic clock, so the neutralized arm fails at the ceiling (`timer`) instead of hanging.
 
 ---
 
-## E6 — `S_ISREG` on lock file
+## 1c-E6 — `S_ISREG` on lock file
 
 **neutralization:** remove `S_ISREG` refusal block in `_acquire_loop_lock`.
 
@@ -128,3 +133,21 @@ EXIT=1
 1 passed in 0.34s
 EXIT=0
 ```
+
+---
+
+## 1c-E7 — lock release on normal exit
+
+**neutralization:** omit `_release_loop_lock(lock_fd)` on the `_loop_exits_on` success path.
+
+**raw red** (tail; full: `/private/tmp/c15-wo-a/bp-e5-red.txt`):
+```
+>       assert second["ok"] is True
+E       assert False is True
+FAILED ...::test_loop_lock_released_allows_sequential_loops
+EXIT=1
+```
+
+**restore:** reinstate `_release_loop_lock(lock_fd)`.
+
+**raw green:** `/private/tmp/c15-wo-a/bp-e5-green.txt` — `1 passed`, `EXIT=0`.
