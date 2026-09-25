@@ -273,3 +273,184 @@ run, with no residue at any point across all five elements.
   `# Bites on: a ${CLAUDE_PLUGIN_ROOT}/<path> citation that does not resolve, or a cited reference that cites another file.`
 - `plugins/superheroes/lib/tests/skill_surface.py`, immediately above `_REF = re.compile(`:
   `# Bites on: a SKILL.md reference link in the ${CLAUDE_PLUGIN_ROOT}/skills/<s>/reference/<f>.md form (other forms are not collected).`
+
+---
+
+## Final-head run at 69ed0787 (after review sessions 2 and 3)
+
+Declared guarded-element set for this section (exactly three new detectors, plus a re-run of
+E1–E5 at this head): **E6** `.github/scripts/validate_skills.py` `_RETIRED_REF` in `check_links`
+— axis: a SKILL.md citation in the retired fallback form is an error, not invisible. **E7**
+`check_depth` depth axis on the retired form — axis: a cited reference file whose only nested
+citation is retired-form still trips the one-hop gate. **E8** `check_depth` link axis — axis:
+the retired-form citation found inside a nested reference file is itself reported, naming the
+citing file.
+
+**Probes ran at `69ed0787`** (C15 layer 3's head at order time), in a **detached** worktree at
+`.../scratchpad/probe-f` created with `git worktree add --detach ... 69ed0787`. Every mutation,
+red run, restore, and green run below happened only in that probe tree; the BUILD worktree
+received only this section — confirmed clean (`git status --porcelain` empty) both before and
+after the probe work.
+
+**Redaction and elision:** nothing needed redaction — no capture carries secrets, tokens, or
+private URLs. Same elision as the record's header, applied to this section's own probe tree: the
+probe tree's absolute path is shortened to `.../scratchpad/probe-f` (the elided part is the fixed
+session scratchpad prefix under `/private/tmp/claude-501/`, about 150 characters, identical in
+every occurrence). Every other character of each command and capture is as run.
+
+**Command form** (`/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-f <cmd>`,
+run from the probe-f root) is referred to below as *the command*.
+
+### E6 — `_RETIRED_REF` in `check_links`, axis: a retired-form citation is an error, not invisible
+
+**guarded element:** `.github/scripts/validate_skills.py:33` (`_RETIRED_REF`, consumed by
+`check_links` at line 42)
+
+**neutralization** (`plugins/superheroes/skills/checkpoint/SKILL.md:7`, probe tree — the file's
+only citation matching the `${CLAUDE_PLUGIN_ROOT}/<path>` form):
+```
+...reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable...
+```
+→
+```
+...reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable...
+```
+
+**command:** the command `.github/scripts/validate_skills.py`.
+
+**raw red:**
+```
+✗ 1 skill problem(s):
+  - reference-link: superheroes/checkpoint: retired plugin-root form hosts/
+EXIT:1
+```
+**Disclosure:** the order names the expected red token as `retired plugin-root form <that path>`
+for `superheroes/checkpoint`, i.e. the full path `hosts/<your-host>-tools.md`. What printed is
+`retired plugin-root form hosts/` — the path capture stops at `hosts/` because `_RETIRED_REF`'s
+character class (`[A-Za-z0-9._/\-]+`) does not include `<` or `>`, so it cannot consume
+`<your-host>-tools.md`. This is the only `${CLAUDE_PLUGIN_ROOT}/<path>` citation that exists in
+`checkpoint/SKILL.md` (confirmed by grep before neutralizing), so no alternative citation inside
+that file avoids the truncation. The printed token still carries `retired plugin-root form` and
+still names `superheroes/checkpoint` — the axis (a retired-form citation is flagged, not silently
+accepted) fires correctly; only the captured path substring is shorter than the order's literal
+example, for the reason given. Treated as red on that basis, same disclosure shape the order
+allows for E8's `(in …)` path form.
+
+**restore:** inverse Edit, putting `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` back.
+
+**restore receipt** (`git status --porcelain`, probe-f): empty (clean).
+
+**raw green:**
+```
+✓ skills meet token-shape rules
+EXIT:0
+```
+
+### E7 — `check_depth` depth axis on the retired form
+
+**guarded element:** `.github/scripts/validate_skills.py:250` (`check_depth`, depth axis at line
+264, `_REF.search(cited) or retired`)
+
+**selection grep** (probe-f, confirming `spec-content.md` is cited via the rooted form and cites
+no `${CLAUDE_PLUGIN_ROOT}` path itself before neutralization):
+```
+$ grep -n 'reference/spec-content.md' plugins/superheroes/skills/architect-spec/SKILL.md
+20:`${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md`.
+
+$ grep -n '\${CLAUDE_PLUGIN_ROOT' plugins/superheroes/skills/architect-spec/reference/spec-content.md
+exit:1
+```
+(exit `1` = no match — `spec-content.md` cites no `${CLAUDE_PLUGIN_ROOT}` path before
+neutralization)
+
+**neutralization** (`plugins/superheroes/skills/architect-spec/reference/spec-content.md`, probe
+tree) — appended after the file's last line:
+```
+This file does not define how an amendment is classified, what ceremony each class carries, how
+amendments propagate to in-flight children, or how the log is validated — that machinery lives
+elsewhere. For the log's entry format, see the `## Amendments` section of the spec template
+(`templates/spec.md`) — and stop there.
+```
+→
+```
+This file does not define how an amendment is classified, what ceremony each class carries, how
+amendments propagate to in-flight children, or how the log is validated — that machinery lives
+elsewhere. For the log's entry format, see the `## Amendments` section of the spec template
+(`templates/spec.md`) — and stop there.
+
+See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`.
+```
+
+**command:** the command `.github/scripts/validate_skills.py` (one run serves both E7 and E8).
+
+**raw red:**
+```
+✗ 4 skill problem(s):
+  - reference-depth: superheroes/architect-spec: skills/architect-spec/reference/spec-content.md itself references another file (chain deeper than one hop)
+  - reference-link: superheroes/architect-spec: retired plugin-root form rubric/review-base.md (in skills/architect-spec/reference/spec-content.md)
+  - reference-depth: superheroes/showrunner: skills/architect-spec/reference/spec-content.md itself references another file (chain deeper than one hop)
+  - reference-link: superheroes/showrunner: retired plugin-root form rubric/review-base.md (in skills/architect-spec/reference/spec-content.md)
+EXIT:1
+```
+Contains `reference-depth:` naming `skills/architect-spec/reference/spec-content.md` (both
+consuming skills, `architect-spec` and `showrunner`) — matches the order's named condition.
+
+**restore:** inverse Edit, deleting the appended `See ...` line.
+
+**restore receipt** (`git status --porcelain`, probe-f): empty (clean).
+
+**raw green:**
+```
+✓ skills meet token-shape rules
+EXIT:0
+```
+
+### E8 — `check_depth` link axis
+
+**guarded element:** `.github/scripts/validate_skills.py:250` (`check_depth`, link axis at lines
+268–270, the `for r in retired:` loop)
+
+**neutralization:** same as E7 (same run serves both).
+
+**command:** the command `.github/scripts/validate_skills.py` (same run as E7, quoted again
+here per the order).
+
+**raw red (decisive lines):**
+```
+  - reference-link: superheroes/architect-spec: retired plugin-root form rubric/review-base.md (in skills/architect-spec/reference/spec-content.md)
+  - reference-link: superheroes/showrunner: retired plugin-root form rubric/review-base.md (in skills/architect-spec/reference/spec-content.md)
+```
+Printed exactly `retired plugin-root form rubric/review-base.md (in skills/architect-spec/reference/spec-content.md)` — the `(in …)` part names `skills/architect-spec/reference/spec-content.md`, the full relative path (not the bare filename the order's prose used as shorthand); this matches the order's named token verbatim other than that path form, which the order allows disclosing rather than treating as a failure since it still names `spec-content.md`.
+
+**restore:** inverse Edit, deleting the appended `See ...` line (same edit as E7 — one
+neutralization, one restore, both axes read off the same red/green pair).
+
+**restore receipt** (`git status --porcelain`, probe-f): empty (clean).
+
+**raw green:**
+```
+✓ skills meet token-shape rules
+EXIT:0
+```
+
+### E1–E5 re-run table (at `69ed0787`, neutralizations as described in the record above)
+
+| element | red token seen | status clean | green |
+| --- | --- | --- | --- |
+| E1 | `checkpoint/SKILL.md: missing host-map pointer line`, EXIT:1 | empty | `✓ dual-host manifests, tool maps, and skill language valid`, EXIT:0 |
+| E2 | `checkpoint/SKILL.md: missing host-map pointer line`, EXIT:1 (same token as E1) | empty | `✓ dual-host manifests, tool maps, and skill language valid`, EXIT:0 |
+| E3 | `reference-link: superheroes/checkpoint: unresolved reference rubric/bite-proof-gone.md`, EXIT:1 | empty | `✓ skills meet token-shape rules`, EXIT:0 |
+| E4 | `reference-depth: superheroes/architect-spec: skills/architect-spec/reference/spec-content.md itself references another file (chain deeper than one hop)` (also for `superheroes/showrunner`), EXIT:1 | empty | `✓ skills meet token-shape rules`, EXIT:0 |
+| E5 | `test_skill_resolves_the_verifier_tier_not_the_session_model` fails: `AssertionError: surface must assign VERIFIER_MODEL via --role verifier` | empty | `1 passed in 0.06s` |
+
+Each re-run used the exact neutralization the original record describes for that element (see
+E1–E5 above), applied fresh in the `probe-f` tree at `69ed0787` — no residual differences in
+mechanics, only path/host-tree identifiers changed as shown in each raw capture.
+
+### Restore receipt (this section's run)
+
+Every element's individual restore receipt above (`git status --porcelain` immediately after the
+inverse Edit, before the green run) was empty — the probe tree was clean before every green run,
+with no residue at any point across E6, E7, E8, and the E1–E5 re-run. The probe tree
+(`.../scratchpad/probe-f`) was removed after this section's work with
+`git worktree remove <probe-f>` from the build worktree.
