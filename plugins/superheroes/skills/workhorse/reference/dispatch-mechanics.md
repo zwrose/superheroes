@@ -372,7 +372,7 @@ Before launch, compose the walked `engine-auth` check from one probe result per 
 engine (`codex`, `cursor`, and `claude` — not merely the engines the calibration routes to):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/conformance_probe.py" preflight-entry --repo-root <abs> --result <probe.json>… \
   [--wave <id>] [--launch-without <engine> --owner-word "<text>"]… [--max-age-seconds N]
 ```
@@ -536,7 +536,7 @@ check always applies, and the mechanics for *how* it is dispatched. The sanction
 the runner itself is unavailable** (disclosed degradation in the PR body, never the normal path).
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 # Resolve brief-check cell from dispatch calibration + registry matrix (model/effort)
 read -r BRIEF_ENGINE BRIEF_ENGINE_MODEL BRIEF_EFFORT <<<"$(python3 -B -c "
 import sys
@@ -628,7 +628,7 @@ The sanctioned way to dispatch a long-running **external implementer** is the su
 the full CLI argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 # Resolve implementer cell from dispatch calibration + registry (honor configured model pin)
 read -r IMPL_ENGINE IMPL_ENGINE_MODEL IMPL_EFFORT <<<"$(python3 -B -c "
 import sys

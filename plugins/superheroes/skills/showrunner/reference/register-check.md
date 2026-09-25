@@ -22,10 +22,10 @@ what to do with the result.
 ## The invocation
 
 The stable invocation (from a plugin-cache install, `ROOT_DIR` is
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+`${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/register_check.py" check \
   --register <path to the register .md> \
   --body-file <path to the consumer body .md> \

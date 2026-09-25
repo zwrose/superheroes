@@ -33,7 +33,7 @@ position 15 — grep-detected **additive** brief flags; **additions only, never
 classifier-driven lens removal**):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/focus_flags.py" "$SESSION_DIR/round-<round>/diff.txt"
 ```
 
@@ -348,7 +348,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > 2.1.219**.
 >
 > ```bash
-> ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 > # Per external seat — the orchestrator sets these before this recipe runs:
 > #   $SEAT_KEY       roster seat key (e.g. code-reviewer) — indexes $SEAT_MAP.seats
 > #   $SEAT_PROMPT    emitted order path for this seat
@@ -435,7 +435,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `engine-config:invalid-model-effort`, so the loop omits the flag rather than passing an empty one.
 >
 > ```bash
-> ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 > # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object you
 > # submit on `dispatch-panel`). $PANEL_SEAT_STATUS — per-dimension status map (`run` / `missing` /
 > # etc.) for the same round. $RAN_MANIFEST — trusted `{<dim>: <vendor>}` record of which vendor

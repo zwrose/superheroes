@@ -3,7 +3,7 @@ name: test-pilot-plan
 description: Use when a PR/branch needs a manual test plan with seeded data — "write a test plan", "seed test data for this PR", "set up manual testing". Seeds scenarios via the test-pilot engine and posts a checkbox plan to the PR. Does NOT execute the plan (that is test-pilot-execute).
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # test-pilot-plan
 
@@ -25,11 +25,11 @@ test-pilot-execute.
 
 ## Flow
 
-1. **Resolve.** `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/store.py" resolve` →
+1. **Resolve.** `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/store.py" resolve` →
    `location: none` means run superheroes:configure first, then return.
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
    NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
    [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
@@ -43,14 +43,14 @@ test-pilot-execute.
    module in `<blocks_dir>` from `templates/starter-block.py` (non-empty
    `targets`, pinned PEP 723 deps — check `uv` first; without it use
    stdlib/run-command designs), then regenerate:
-   `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/catalog.py" --blocks-dir <blocks_dir>`
+   `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/catalog.py" --blocks-dir <blocks_dir>`
 5. **Write/merge the manifest** at `<manifests_dir>/<key>.json` where
-   `key=$(python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/store.py" key --branch B [--slot S])`.
+   `key=$(python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/store.py" key --branch B [--slot S])`.
    `branch`/`slot` go INSIDE the JSON (schemaVersion 1). On re-invocation
    MERGE: preserve unchanged scenarios, update `updatedAt`. Use slots for
    independent flows on one PR. Validate:
-   `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/engine.py" apply --branch B [--slot S] --dry-run --json`
-6. **Apply.** `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/engine.py" apply --branch B [--slot S] --json`
+   `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/engine.py" apply --branch B [--slot S] --dry-run --json`
+6. **Apply.** `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/engine.py" apply --branch B [--slot S] --json`
    — on `ok: false`, report the failing block + scenarioId and fix the
    manifest/block; never work around the engine.
 7. **Write the plan record** (source of truth) at
@@ -59,7 +59,7 @@ test-pilot-execute.
    manifest).
 8. **Render + post the comment.** Fill `templates/plan-comment.md` from the
    plan record; marker comes from the key. Post:
-   `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/pr_comment.py" upsert --pr N --family plan --key K --body-file F --plans-dir <plans_dir>`
+   `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_comment.py" upsert --pr N --family plan --key K --body-file F --plans-dir <plans_dir>`
    (edits in place; preserves the human's checked boxes). No PR or gh
    failure → write the rendered plan to `<plans_dir>/<key>.md` and tell the
    user the path.

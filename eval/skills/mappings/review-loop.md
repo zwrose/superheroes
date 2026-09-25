@@ -17,10 +17,10 @@ Records every pre-change instruction unit relocated into
   4 minor wording differences (more detail in Provisional-profile confirmation and
   Recording a dismissal sub-sections) with no behavioral difference. The canonical
   version (review-spec / review-tasks) was used as the reference content.
-- The block contains `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` assignments
-  but no `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/<path>` literals, so FR-5
+- The block contains `ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` assignments
+  but no `${CLAUDE_PLUGIN_ROOT}/<path>` literals, so FR-5
   (leaves-only constraint) is satisfied.
 - Each SKILL.md now has a one-hop reference line in place of the block:
   `The shared dispatch/compile/revise learning-loop steps and staleness nudge are in
-  \`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/review-loop.md\` — read it and
+  \`${CLAUDE_PLUGIN_ROOT}/reference/review-loop.md\` — read it and
   apply it where this skill's flow references those steps.`

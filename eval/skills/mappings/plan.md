@@ -17,7 +17,7 @@
 ## Pointer placed in SKILL.md
 
 Replaced the self-review checklist body with a single paragraph under `### 5. Self-review`
-pointing at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-plan/reference/method-detail.md`.
+pointing at `${CLAUDE_PLUGIN_ROOT}/skills/architect-plan/reference/method-detail.md`.
 
 ## UFR-2 attestation
 

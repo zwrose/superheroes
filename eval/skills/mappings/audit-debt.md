@@ -17,7 +17,7 @@
 ## Pointer placed in SKILL.md
 
 Replaced the three sections with a single `## Scoring Reference` paragraph pointing at
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/audit-debt/reference/sweep-detail.md`.
+`${CLAUDE_PLUGIN_ROOT}/skills/audit-debt/reference/sweep-detail.md`.
 
 ## UFR-2 attestation
 

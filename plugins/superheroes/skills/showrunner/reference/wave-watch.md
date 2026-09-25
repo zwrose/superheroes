@@ -44,7 +44,7 @@ ten-hour dead-watcher hole — and each failure looked like a calm wave.
 Assign the portable root seam once, then arm one harness **background task per batch**:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/wave_watch.py" loop \
   --repo-root "$REPO_ROOT" --batch "$BATCH_ID" \
   --max-seconds 2400 --interval-seconds 60 \
@@ -142,7 +142,7 @@ ended on a benign event.
 Use `run` for a **single foreground check** — "what is due right now?" — not for wave arming:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/wave_watch.py" run \
   --repo-root "$REPO_ROOT" --batch "$BATCH_ID"
 ```

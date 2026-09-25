@@ -253,7 +253,7 @@ recorded in the trail; the tool checks completeness and well-formedness, never r
 The stable invocation (`ROOT_DIR` is the plugin root):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/package_read_audit.py" check --trail <path to the trail .md>
 ```
 

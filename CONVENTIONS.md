@@ -502,11 +502,11 @@ Everything in the plugin's source tree is shared and host-neutral:
 Each `SKILL.md` carries a host-map pointer line:
 
 > This skill speaks in host-neutral actions. Resolve them to your runtime's tools
-> by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md`
+> by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md`
 > (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude
 > Code, `codex-tools.md` on Codex.
 
-The portable root seam `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` (assigned
+The portable root seam `ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` (assigned
 once per bash block) lets skills reference bundled helpers on both hosts. Bare
 `${CLAUDE_PLUGIN_ROOT}` is banned — use the seam form above; `validate_hosts.py` enforces
 it. The pointer line above uses
@@ -549,7 +549,7 @@ A session started **directly from a slash command** (e.g. `/superheroes:workhors
 in a fresh worktree — superheroes' usual entry path) does **not** receive the harness's
 auto-injected context layer that a plain chat start gets: project `CLAUDE.md`, the
 `MEMORY.md` head, and the env block are all absent, and nothing expands the §7.1 host-map
-pointer's `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`. The only channel that survives the spawn
+pointer's `${CLAUDE_PLUGIN_ROOT}`. The only channel that survives the spawn
 is a `SessionStart` hook's `additionalContext`.
 
 On Claude Code, `hooks/session_start.py` (wired in `hooks.json` with `--host claude`) closes
@@ -583,7 +583,7 @@ storage mode there is no carrier at all.
 
 Scope boundary: this fixes the host-map **Read** (model-resolved, so an injected absolute path
 is the lever). The `lib/` **bash** seam of §7.1 — skills shelling out to `lib/` helpers through
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`, which the Bash tool does not expand — is a *different*
+`${CLAUDE_PLUGIN_ROOT}`, which the Bash tool does not expand — is a *different*
 layer that context injection cannot fix; it is tracked separately
 ([#93](https://github.com/zwrose/superheroes/issues/93)) and the seam form here is unchanged.
 
