@@ -109,6 +109,9 @@ A successful arm whose `event` is **not** in **`BENIGN_EVENTS`** ends the loop �
 `_loop_exits_on()` in `lib/wave_watch.py`. That covers every lane-ending token and any unknown token
 alike.
 
+A successful `stack-state-changed` result that carries the idle-seat launchable-child flag ends the
+loop on that arm.
+
 Every `loop` result carries **`passedOver`** — one entry per benign non-timer event passed over in
 that invocation, each `{"arm", "elapsedSeconds", "event", …that event's payload keys}`, keeping the
 most recent **`PASSED_OVER_CAP`** entries — and **`passedOverCount`**, the total passed over (it can
