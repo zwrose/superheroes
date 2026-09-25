@@ -509,7 +509,7 @@ Each `SKILL.md` carries a host-map pointer line:
 `${CLAUDE_PLUGIN_ROOT}` names the plugin root on both hosts: Claude Code sets it for plugin
 hooks, and Codex sets it as a compatibility alias of its own `PLUGIN_ROOT`. Skills assign
 `ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` once per bash block to reference bundled helpers; in skill
-text and Bash commands neither host expands the variable, so the model resolves it (§7.4). The
+text and Bash commands neither host expands the variable: the model resolves it in text (§7.4), and the Bash layer is tracked in #93. The
 pointer line above uses the same variable so it resolves at the plugin **root** (where `hosts/`
 lives); a bare relative `hosts/` path would resolve against the skill's own folder, which has
 none. `validate_hosts.py` requires the pointer line in every `SKILL.md`.

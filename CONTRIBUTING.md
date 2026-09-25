@@ -99,8 +99,9 @@ Skills must work on both Claude Code and Codex. A few hard rules:
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   ```
   Then use `$ROOT_DIR` for all bundled-helper paths. Both hosts set the variable for plugin
-  hooks (Codex as a compatibility alias of `PLUGIN_ROOT`); CONVENTIONS §7.4 covers skill text
-  and Bash commands.
+  hooks (Codex as a compatibility alias of `PLUGIN_ROOT`); in skill text the model resolves it
+  (CONVENTIONS §7.4), and in Bash commands it does not expand — that layer is tracked in
+  [#93](https://github.com/zwrose/superheroes/issues/93).
 - **Both `hosts/` maps must stay byte-identical to the repo-root canonical** —
   see RELEASING.md for the release checklist.
 
