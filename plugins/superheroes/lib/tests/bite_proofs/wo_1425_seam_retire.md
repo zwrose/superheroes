@@ -15,8 +15,12 @@ mutation, red run, restore, and green run below happened only in that probe tree
 worktree received only the two deliverables (this record and the three axis-line comments) —
 no probe mutation landed there.
 
-**Redaction:** nothing needed redaction. Every command below is quoted verbatim and in full;
-none of it carries secrets, tokens, or private URLs.
+**Redaction and elision:** nothing needed redaction — no capture carries secrets, tokens, or
+private URLs. One elision, applied throughout: the probe tree's absolute path is shortened to
+`.../scratchpad/probe-bp` or `/private/tmp/.../probe-bp` (the elided part is the fixed session
+scratchpad prefix under `/private/tmp/claude-501/`, about 150 characters, identical in every
+occurrence), and in the E5 list output the repeated `.../reference/` directory prefix is shortened
+the same way. Every other character of each command and capture is as run.
 
 **Command form** (`/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc-bp <cmd>`,
 run from the probe-bp root) is referred to below as *the command*.
