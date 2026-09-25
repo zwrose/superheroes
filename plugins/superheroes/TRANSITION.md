@@ -7,7 +7,17 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
-## Unreleased
+## 0.34.0
+
+### Before you upgrade
+
+Check these in a consuming project before it takes 0.34.0:
+
+- **The owner-authority gate is retired.** Merges run on the owner's scoped word under the merge
+  covenant; the hook no longer asks. See [Owner-authority gate retired](#owner-authority-gate-retired).
+- **Dispatch CLIs take `--seat` as four-key JSON.** The old `--engine`, `--model`, `--effort`,
+  `--engine-model`, `--vendor` and `--role` flags refuse. See
+  [Dispatch CLI arguments](#dispatch-cli-arguments).
 
 ### Launcher stacked premise
 
@@ -432,3 +442,11 @@ A runner-journal line that is valid JSON but not an object now counts as interio
 the class `journal-line-not-object`. The launcher's `preflight-failed:<id>` refusal now carries the
 walked `checks`, including the failing entry, so the launch ledger keeps the probe's evidence on
 refusal.
+
+### Owner-authority gate retired
+
+The `PreToolUse` hook `hooks/owner_authority_gate.py` and its classifier `lib/owner_authority.py`
+are gone, so a merge, release, publish, force-push, push-to-default or workflow-run command no
+longer stops at a gate prompt. A project store's `owner-authority-allow.json` is no longer read;
+it can be deleted. Approval is the owner's scoped word in chat, and merges execute inside it under
+the merge covenant (`rubric/covenant.md`, the hard lines).
