@@ -1130,6 +1130,9 @@ def _cited_head_qualifies(ctx, cited_head):
         return False, "audited-chain-gap:%s" % (chain.get("gap") or "panel",)
     meta, cfg = ctx.get("meta") or {}, (ctx.get("state") or {}).get("config") or {}
     repo_root = meta.get("repoRoot") or cfg.get("repoRoot")
+    panel_head = chain.get("panelHead")
+    if not _is_ancestor(repo_root, panel_head, cited_head):
+        return False, "audited-chain-gap:descent"
     if not _is_ancestor(repo_root, cited_head, certified_head):
         return False, "audited-chain-gap:descent"
     return True, None
