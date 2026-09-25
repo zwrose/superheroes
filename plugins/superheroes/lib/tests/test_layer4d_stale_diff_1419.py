@@ -137,36 +137,93 @@ def test_derivation_admits_only_a_non_empty_utf8_git_diff(tmp_path, monkeypatch)
     assert RD._derive_head_diff_from_git(session_dir, {"config": {"baseRef": "main"}}) is None
 
 
-def test_only_the_guarded_entry_schedules_a_panel_after_round_one():
-    """Invariant census: after round 1, the one place that sets the step to the panel is
-    `_enter_panel` (the stale guard). `_seed_resume` is the fresh-session resume, whose reviewed
-    diff is the session's own bound diff and never stale. A new bypassing entry fails here."""
-    with open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8") as fh:
-        tree = ast.parse(fh.read())
+def _calls_in(tree, name):
+    """The function names whose bodies call ``name`` (or raise/catch it)."""
     owners = set()
     for fn in ast.walk(tree):
         if not isinstance(fn, ast.FunctionDef):
             continue
         for node in ast.walk(fn):
-            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Name)
-                    and node.value.id == "P_PANEL"
-                    and any(isinstance(t, ast.Subscript)
-                            and isinstance(t.slice, ast.Constant) and t.slice.value == "step"
-                            for t in node.targets)):
+            if isinstance(node, ast.Name) and node.id == name:
                 owners.add(fn.name)
-    assert owners == {"_enter_panel", "_seed_resume"}, owners
+    return owners
 
 
-def test_a_known_head_diff_clears_the_stale_marker():
-    state = {"reviewedDiff": "old", "headDiff": "diff --git a/x b/x\n", "_reviewedDiffStale": True}
+def test_panel_order_emission_is_the_one_stale_refusal_site():
+    """Invariant census: the stale refusal runs in exactly one place, `_emit_orders_manifest` (the
+    one renderer of every dispatch order, which `next`, `advance` via `next`, and `re-emit` reach);
+    the exception is raised only by the refusal, and parked only where emission is called. The
+    retired per-path pieces (marker, `_enter_panel`, loaded-state park) stay retired."""
+    with open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8") as fh:
+        source = fh.read()
+    tree = ast.parse(source)
+    assert _calls_in(tree, "_refuse_stale_panel_emission") == {"_emit_orders_manifest"}
+    assert _calls_in(tree, "ReviewedDiffStale") == {
+        "_refuse_stale_panel_emission", "_cmd_next_locked", "_cmd_re_emit_locked"}
+    assert _calls_in(tree, "_emit_orders_manifest") == {"_cmd_next_locked", "_cmd_re_emit_locked"}
+    assert _calls_in(tree, "_park_reviewed_diff_stale") == {
+        "_cmd_next_locked", "_cmd_re_emit_locked"}
+    assert "_reviewedDiffStale" not in source
+    defined = {fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)}
+    assert not defined & {"_enter_panel", "_reviewed_diff_stale", "_stale_panel_blocks_loaded"}
+
+
+def test_the_reviewed_diff_is_bound_to_the_head_it_was_taken_at():
+    """A session with no fix is never stale; a fold moves the head; only a known head diff (text,
+    empty included) re-binds the reviewed diff; a pre-count state that folded a fixer is stale."""
+    RD._refuse_stale_panel_emission({"reviewedDiff": "d"}, RD.P_PANEL)
+    state = {"reviewedDiff": "old", "reviewedDiffHead": 0, "fixFolds": 1, "headDiff": None}
     RD._advance_reviewed_diff(state)
-    assert state["reviewedDiff"] == "diff --git a/x b/x\n" and "_reviewedDiffStale" not in state
-    state = {"reviewedDiff": "old", "headDiff": None, "_reviewedDiffStale": True}
+    assert state["reviewedDiff"] == "old" and state["reviewedDiffHead"] == 0
+    try:
+        RD._refuse_stale_panel_emission(state, RD.P_PANEL)
+        raise AssertionError("a stale panel order was emitted")
+    except RD.ReviewedDiffStale as exc:
+        assert str(exc) == "reviewed-diff-stale"
+    RD._refuse_stale_panel_emission(state, RD.P_FIXER)
+    state["headDiff"] = ""
     RD._advance_reviewed_diff(state)
-    assert state["reviewedDiff"] == "old" and state["_reviewedDiffStale"] is True
-    state = {"reviewedDiff": "old", "headDiff": "", "_reviewedDiffStale": False}
-    RD._advance_reviewed_diff(state)
-    assert state["reviewedDiff"] == "" and "_reviewedDiffStale" not in state
+    assert state["reviewedDiff"] == "" and state["reviewedDiffHead"] == 1
+    RD._refuse_stale_panel_emission(state, RD.P_PANEL)
+    legacy = {"reviewedDiff": "d", "_headDiffSource": "inline", "headDiff": "d"}
+    RD._advance_reviewed_diff(legacy)
+    try:
+        RD._refuse_stale_panel_emission(legacy, RD.P_PANEL)
+        raise AssertionError("a pre-count folded state emitted a panel")
+    except RD.ReviewedDiffStale:
+        pass
+
+
+def test_inline_head_diff_that_is_not_text_is_unknown(tmp_path):
+    """`headDiff: {}` (or any non-text) is an UNKNOWN head, the same as absent; `""` is a known
+    empty diff."""
+    assert RD._resolve_head_diff({"headDiff": {}}) == (None, "unknown")
+    assert RD._resolve_head_diff({"headDiff": 3}) == (None, "unknown")
+    assert RD._resolve_head_diff({"headDiff": ""}) == ("", "inline")
+    path = tmp_path / "head.diff"
+    path.write_text("diff --git a/x b/x\n", encoding="utf-8")
+    assert RD._resolve_head_diff({"headDiff": {}, "headDiffPath": str(path)}) == (
+        "diff --git a/x b/x\n", "path")
+
+
+def test_non_text_inline_head_diff_via_hand_submit_parks_stale(tmp_path):
+    """A hand-submitted fixer result with `headDiff: {}` and no derivable diff never reaches a
+    round-2 panel (red token: a round-2 panel runs)."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, _base = _seed_checkout(d)
+    seen = {}
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+
+    def respond(phase, payload, rnd):
+        art = inner(phase, payload, rnd)
+        if phase == RD.P_FIXER:
+            art = {"fixes": [], "headDiff": {}}
+        return art
+    payload = TRD._drive_cli(d, TRD._cfg(), respond)
+    assert seen.get("panels") == [1], seen
+    assert payload["verdict"] == "cannot-certify", payload
+    assert RD.REVIEWED_DIFF_STALE in payload["certification"]["reason"], payload
 
 
 def test_known_empty_head_diff_rearm_panel_reviews_the_empty_diff(tmp_path, monkeypatch):
@@ -232,7 +289,7 @@ def test_a_later_inline_slice_clears_git_derived_provenance(monkeypatch):
 def test_a_later_underivable_slice_clears_git_derived_provenance(monkeypatch):
     """Derived-then-underivable: the final head is unknown (stale), so no `git-derived` claim."""
     state = _fold_two_slices(monkeypatch, "diff --git a/x b/x\n", {"fixes": []})
-    assert state["headDiff"] is None and state["_reviewedDiffStale"] is True
+    assert state["headDiff"] is None and state["fixFolds"] == 2
     assert "reviewedDiffSource" not in state["rounds"]["2"], state["rounds"]["2"]
 
 
@@ -254,19 +311,23 @@ def _drive_to_post_fix_verify(session_dir, cfg, respond):
     raise AssertionError("never reached the post-fix verify gate")
 
 
-def _rewrite_legacy(session_dir, mutate):
-    """Rewrite the persisted state into the shape the pre-marker driver left: no stale marker."""
+def _rewrite_state(session_dir, mutate):
     import json
     path = os.path.join(session_dir, RD.STATE_FILE)
     with open(path, encoding="utf-8") as fh:
         state = json.load(fh)
-    assert state.get("_reviewedDiffStale") is True and state.get("headDiff") is None, state
-    state.pop("_reviewedDiffStale")
     mutate(state)
     RD.save_state(session_dir, state)
 
 
-def _stale_legacy_session(tmp_path):
+def _legacy(state):
+    """The shape the pre-count driver left after a fixer fold: no fold count, no bound head."""
+    assert state.get("headDiff") is None and "_headDiffSource" in state, state
+    state.pop("fixFolds")
+    state.pop("reviewedDiffHead")
+
+
+def _stale_session(tmp_path):
     d = str(tmp_path / "session")
     os.makedirs(d)
     checkout, _base = _seed_checkout(d)
@@ -276,38 +337,67 @@ def _stale_legacy_session(tmp_path):
     return d, respond, seen
 
 
-def test_persisted_pre_marker_state_at_the_panel_parks_stale(tmp_path):
-    """A pre-marker state persisted at the panel step (the old verify fold set it directly) over the
-    pre-fix diff parks `reviewed-diff-stale` on load, never emitting the panel (red token: `next`
-    answers `dispatch-panel` for round 2)."""
-    d, _respond_fn, seen = _stale_legacy_session(tmp_path)
+def _assert_parked(answer):
+    assert answer["ok"] and answer["action"] == RD.P_TERMINAL, answer
+    assert answer["payload"]["verdict"] == "cannot-certify", answer
+    assert RD.REVIEWED_DIFF_STALE in answer["payload"]["certification"]["reason"], answer
+
+
+def test_persisted_pre_count_state_at_the_panel_parks_stale_via_next(tmp_path):
+    """Entry path `next`: a pre-count state persisted at the panel step over the pre-fix diff parks
+    at emission (red token: `next` answers `dispatch-panel` for round 2)."""
+    d, _respond_fn, seen = _stale_session(tmp_path)
 
     def at_panel(state):
+        _legacy(state)
         state["step"] = RD.P_PANEL
         state["pending"] = None
         state.pop("_verifyThen", None)
-    _rewrite_legacy(d, at_panel)
-    n = RD.cmd_next(d)
-    assert n["ok"] and n["action"] == RD.P_TERMINAL, n
-    assert n["payload"]["verdict"] == "cannot-certify", n
-    assert RD.REVIEWED_DIFF_STALE in n["payload"]["certification"]["reason"], n
+    _rewrite_state(d, at_panel)
+    _assert_parked(RD.cmd_next(d))
+    assert not os.path.isdir(os.path.join(RR.round_dir(d, 2), "orders", RD.P_PANEL))
     assert seen.get("panels") == [1], seen
 
 
-def test_persisted_pre_marker_state_at_verify_parks_stale(tmp_path):
-    """A pre-marker state persisted at the verify gate bound for the panel parks at the gate's fold
-    (red token: a round-2 panel runs)."""
-    d, respond, seen = _stale_legacy_session(tmp_path)
-    _rewrite_legacy(d, lambda state: None)
+def test_persisted_pre_count_state_at_verify_parks_stale(tmp_path):
+    """A pre-count state persisted at the verify gate bound for the panel parks when the gate's fold
+    reaches panel emission (red token: a round-2 panel runs)."""
+    d, respond, seen = _stale_session(tmp_path)
+    _rewrite_state(d, _legacy)
     payload = TRD._drive_cli(d, None, respond)
     assert payload["verdict"] == "cannot-certify", payload
     assert RD.REVIEWED_DIFF_STALE in payload["certification"]["reason"], payload
     assert seen.get("panels") == [1], seen
 
 
-def test_known_head_state_without_marker_is_not_stale():
-    assert not RD._reviewed_diff_stale({"_headDiffSource": "unknown", "headDiff": "diff --git x"})
-    assert not RD._reviewed_diff_stale({"headDiff": None})
-    assert RD._reviewed_diff_stale({"_headDiffSource": "unknown", "headDiff": None})
-    assert not RD._reviewed_diff_stale(
-        {"_headDiffSource": "unknown", "headDiff": None, "_reviewedDiffStale": False})
+def test_stale_panel_cannot_be_emitted_via_durable_advance(tmp_path):
+    """Entry path `advance`: the durable fold of the verify gate emits the next action through
+    `next`, whose panel emission parks (red token: `nextAction` is `dispatch-panel`)."""
+    import json
+    d, _respond_fn, seen = _stale_session(tmp_path)
+    pend = RD.load_state(d)[1]["pending"]
+    _rewrite_state(d, lambda state: state.pop("_submitUsed", None))
+    landing = RR.bare_payload_path(d, pend["round"], RD.P_VERIFY, RR.storage_key("verify"),
+                                   pend["attempt"])
+    os.makedirs(os.path.dirname(landing), exist_ok=True)
+    with open(landing, "w", encoding="utf-8") as fh:
+        json.dump({"result": "pass"}, fh)
+    out = RD.cmd_advance(d)
+    assert out.get("ok"), out
+    _assert_parked(out["nextAction"])
+    assert out.get("terminal") == "cannot-certify", out
+    assert seen.get("panels") == [1], seen
+
+
+def test_stale_panel_cannot_be_re_emitted(tmp_path, capsys):
+    """Entry path `re-emit`: a pending panel whose reviewed diff is older than the fold head parks
+    instead of rendering a new attempt (red token: re-emit answers a `dispatch-panel` attempt 1)."""
+    import test_round_driver_re_emit as RE
+    _repo, _sess, d = RE._stale_session(tmp_path, capsys)
+
+    def moved(state):
+        state["fixFolds"] = 1
+    _rewrite_state(d, moved)
+    out = RD.cmd_re_emit(d, "tester")
+    _assert_parked(out)
+    assert RE._anchor_for(d, 1, RD.P_PANEL, 1) is None
