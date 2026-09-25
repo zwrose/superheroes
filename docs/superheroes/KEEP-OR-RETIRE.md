@@ -298,7 +298,20 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — fail-closed liveness signal for unattended builders; a low catch count
-  means builders are finishing, not that wedged lanes stopped happening.
+  means builders are finishing, not that wedged lanes stopped happening. **Outcome at the
+  orchestration decommission: kept, and it stays the lane's terminal signal.** The catch it adds
+  that the transcript freshness check lacks is the dead-versus-done distinction: a lane that ends
+  with its handback or park posted stamps a terminal state, which the watcher reports as
+  `lane-terminal`, and a lane's own `blocked` stamp becomes `lane-blocked`; a lane that dies with
+  neither surfaces only as `builder-exited`, from its pid. A cold transcript and an exited pid read
+  the same for a handback, a park, and a crash; the trial receipt's heartbeat line
+  (`LEDGERS.md` §5.4) records the same trap for idle signals, which report a wedged lane as idle
+  and so read as completion. Record, read 2026-09-25: 600 lane heartbeat files across the two
+  launch-ledger roots under `~/.claude/superheroes-launch-ledger/`, 539 of them carrying a terminal
+  stamp (329 `handback`, 210 `parked`). On the stale class the record shows no such catch: 25
+  watcher logs under `~/.claude/wave-logs/superheroes/` carry `stale-suppressed-transcript-fresh`
+  and none carries an emitted `lane-stale`, so there the transcript overruled every heartbeat-stale
+  reading.
 
 #### B4 — Seat canary (planted-defect control probe)
 
@@ -1837,6 +1850,8 @@ unmarked ritual. A gardening pass reports the markers whose condition has come t
 below lists every marked site in the tree, and a grep for the tag over the tree, excluding this
 file, returns exactly that set.
 
+> **The six orchestration pieces are kept.** The background-session trial's receipt (`LEDGERS.md` §5.5) reads **needed** on every line, so all six pieces stay as plain keeps: detached spawn, wave-watch arming and the re-arm ritual, transcript-mtime liveness, the turn-end doctrine with its slice recipes, multi-account provisioning transport, and the launcher-enforced half of the own-worktree ruling. Each marker below carries its restated delete-when condition from the receipt's piece lines (`LEDGERS.md` §5.4). Every one of those conditions is satisfied only by a re-run of the trial that observes it on the path the plugin actually uses, never by reading a diff. The launch ledger (`plugins/superheroes/lib/launch_ledger.py`) and the launch doctrine's rulings block (`plugins/superheroes/rubric/launch-doctrine.md`, between the `launch-doctrine:rulings` markers) are doctrine, not workarounds, and stay.
+
 - `.github/scripts/validate_hosts.py` — portable plugin-root seam and host-map lint for dual-host
   skill prose. **delete-when:** every host resolves plugin root through one variable without this
   fallback seam.
@@ -1865,33 +1880,43 @@ file, returns exactly that set.
   durable batch accounting. **delete-when:** the host records launch batches durably without this
   ledger module.
 - `plugins/superheroes/lib/launcher.py` — headless builders must survive parent session exit via
-  detached spawn. **delete-when:** the background-session trial receipt marks detached spawn not
-  needed.
+  detached spawn. **delete-when:** the builders this launcher spawns are observed surviving their
+  spawner's turn end on the path it actually spawns, and the service that holds them has been
+  exercised or its failure is accepted by the owner, on the record and cited by id, as a known
+  unexercised class. (Receipt: **needed**, LEDGERS.md §5.4, "detached spawn".)
 - `plugins/superheroes/lib/launcher.py` — launcher refuses spawn when cwd is the primary checkout
-  (own-worktree). **delete-when:** the background-session trial receipt marks launcher worktree
-  enforcement not needed.
-- `plugins/superheroes/lib/launcher.py` — the launcher's hand-built claude -p argv (spawn path)
-  duplicates the engine adapter's claude branch until the migration layer folds it in.
-  **delete-when:** the launcher's builder launch goes through engine_adapter.build_argv_result for
-  vendor claude (a grep for the hand-built argv returns nothing).
+  (own-worktree). **delete-when:** the host itself is observed keeping the session shape this
+  launcher spawns out of the primary checkout. (Receipt: **needed**, LEDGERS.md §5.4,
+  "launcher-enforced own-worktree half".)
 - `plugins/superheroes/lib/pilot_conformance_runtime.py` — env-var transport of connection detail
-  across multi-account ownership probes. **delete-when:** the background-session trial receipt marks
-  multi-account provisioning transport not needed.
+  across multi-account ownership probes. **delete-when:** a lane launched without the config-dir pin
+  is observed landing under the account its launcher intended, and one supervision view — the one
+  that carries lane work state, not only names — is observed spanning every account's lanes.
+  (Receipt: **needed**, LEDGERS.md §5.4, "multi-account provisioning transport".)
 - `plugins/superheroes/lib/sibling_worktree_probe.py` — sibling worktree snapshot probe when
   dispatch fold cannot attribute dirt. **delete-when:** dispatch fold attributes sibling worktree
   changes without a snapshot probe.
 - `plugins/superheroes/lib/wave_watch.py` — loop re-arms watch_arm because there is no durable
-  batch watcher daemon. **delete-when:** the background-session trial receipt marks wave-watch
-  arming not needed.
+  batch watcher daemon. **delete-when:** completion and wake signals are observed reaching the
+  headless spawning session while it is still working — inside the turn, not at its boundary — for
+  every lane of a wave, not merely for most lanes, and not at an interactive or root session
+  standing in for it. (Receipt: **needed**, LEDGERS.md §5.4, "wave-watch arming and re-arm".)
 - `plugins/superheroes/lib/wave_watch.py` — transcript file mtime as lane liveness when idle signals
-  are unreliable. **delete-when:** the background-session trial receipt marks transcript-mtime
-  liveness not needed.
+  are unreliable. **delete-when:** the launcher's own lanes are observed carrying a readable state,
+  and reading that state is observed to tell working, wedged and finished apart without falling back
+  on the transcript. (Receipt: **needed**, LEDGERS.md §5.4, "transcript-mtime liveness".)
 - `plugins/superheroes/skills/showrunner/reference/wave-watch.md` — harness background-task arming
-  pattern with manual re-arm after each lane-ending event. **delete-when:** the background-session trial receipt
-  marks wave-watch arming not needed.
+  pattern with manual re-arm after each lane-ending event. **delete-when:** completion and wake
+  signals are observed reaching the headless spawning session while it is still working — inside the
+  turn, not at its boundary — for every lane of a wave, not merely for most lanes, and not at an
+  interactive or root session standing in for it. (Receipt: **needed**, LEDGERS.md §5.4,
+  "wave-watch arming and re-arm".)
 - `plugins/superheroes/skills/showrunner-resume/SKILL.md` — duplicate-loop check via process listing
   before background arming. **delete-when:** a durable batch watcher makes the duplicate-loop check
   and this arming shape unnecessary.
 - `plugins/superheroes/skills/workhorse/reference/dispatch-mechanics.md` — 540 s continuation and
-  short launch slice recipes for turn-end survival. **delete-when:** the background-session trial
-  receipt marks turn-end slice recipes not needed.
+  short launch slice recipes for turn-end survival. **delete-when:** a headless supervising session
+  is observed being notified of each lane's finish in time to act on it, inside the turn and not at
+  its boundary, for every lane of a wave and not merely for most lanes, so that ending a turn stops
+  costing the result; the supervising process surviving a turn boundary does not satisfy this on its
+  own. (Receipt: **needed**, LEDGERS.md §5.4, "the turn-end doctrine and its slice recipes".)

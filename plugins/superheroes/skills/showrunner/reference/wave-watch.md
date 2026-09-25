@@ -37,7 +37,9 @@ ten-hour dead-watcher hole — and each failure looked like a calm wave.
 ## The arming pattern
 
 <!-- WORKAROUND: harness background-task arming pattern with manual re-arm after each lane-ending event
-     delete-when: the background-session trial receipt marks wave-watch arming not needed -->
+     delete-when: a re-run of the background-session trial observes its "wave-watch arming and
+     re-arm" condition met; the condition is restated in the keep-or-retire record's marker
+     inventory -->
 
 Assign the portable root seam once, then arm one harness **background task per batch**:
 
@@ -466,5 +468,8 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 
 The heartbeat sweep (`lib/heartbeat.py`) and `wave_watch` are complementary, not substitutes: the
 sweep is a scheduled, whole-wave read the advisor runs and acts on; the watcher is a blocking arm
-(`loop` at wave launch, or a one-off `run`) — `loop` returns when a lane ends, `run` returns at once.
+(`loop` at wave launch, or a one-off `run`) — `loop` returns on the first arm its exit classifier
+does not pass over — a refusal, a lane-ending event, an unknown event, or a `stack-state-changed`
+carrying the launchable idle-seat flag — or at its `--max-total-seconds` ceiling (see "What ends a
+loop and what it passes over"); `run` returns at once.
 Neither asserts a lane is dead.

@@ -15,8 +15,12 @@
 | 1c-E6 | non-regular lock file refused | `test_loop_lock_unavailable_non_regular_lock_file` | proven |
 | 1c-E7 | lock released on normal exit | `test_loop_lock_released_allows_sequential_loops` | proven |
 | 1c-E8 | passedOver / passedOverCount drift pins | `test_wave_watch_doc_pins_the_suppression_wire_contract` | proven |
+| 2-L1 | loop-lock-unavailable carries batchId | `test_loop_lock_unavailable_flock_oserror` | proven |
+| 2-L3 | per-batch lock filenames | `test_loop_locks_are_per_batch_in_one_repo` | proven |
+| 2-L4a | lock released on top-of-body ceiling exit | `test_loop_lock_released_on_top_ceiling_exit` | proven |
+| 2-L4c | lock released on post-arm ceiling exit | `test_loop_lock_released_on_post_arm_ceiling_exit` | proven |
 
-Rows prefixed `1c-` are layer 1c's lock proofs (the issue names them E2, E5 and E6; the prefix keeps them apart from layer 1b's E5).
+Rows prefixed `1c-` are layer 1c's proofs: 1c-E2 and 1c-E5 to 1c-E7 are the lock proofs (the issue names E2, E5 and E6), and 1c-E8 is the passedOver drift pin carried in the same layer; the prefix keeps them apart from layer 1b's E5.
 
 ---
 
@@ -195,3 +199,51 @@ EXIT=1
 1 passed in 0.36s
 EXIT=0
 ```
+
+---
+
+## 2-L1 — batchId on loop-lock-unavailable
+
+**neutralization:** delete the `"batchId": batch_id,` line from `_loop_lock_refusal`.
+
+**raw red:** `test_loop_lock_unavailable_flock_oserror` — `KeyError: 'batchId'` or assertion mismatch on `batchId`.
+
+**restore:** reinstate `"batchId": batch_id,`.
+
+**raw green:** `1 passed`.
+
+---
+
+## 2-L3 — per-batch lock file
+
+**neutralization:** in `_acquire_loop_lock`, replace the batch-derived lock name with a constant string (shared lock path).
+
+**raw red:** `test_loop_locks_are_per_batch_in_one_repo` — batch-b acquire refuses `loop-already-live`.
+
+**restore:** reinstate batch-derived `lock_name`.
+
+**raw green:** `1 passed`.
+
+---
+
+## 2-L4a — release on top-of-body ceiling exit
+
+**neutralization:** delete `_release_loop_lock(lock_fd)` in the top-of-body ceiling branch inside `loop`.
+
+**raw red:** `test_loop_lock_released_on_top_ceiling_exit` — second loop refuses `loop-already-live`.
+
+**restore:** reinstate `_release_loop_lock(lock_fd)`.
+
+**raw green:** `1 passed`.
+
+---
+
+## 2-L4c — release on post-arm ceiling exit
+
+**neutralization:** delete `_release_loop_lock(lock_fd)` in the post-arm ceiling branch inside `loop`.
+
+**raw red:** `test_loop_lock_released_on_post_arm_ceiling_exit` — second loop refuses `loop-already-live`.
+
+**restore:** reinstate `_release_loop_lock(lock_fd)`.
+
+**raw green:** `1 passed`.

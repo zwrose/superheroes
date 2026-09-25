@@ -2835,6 +2835,7 @@ def test_loop_lock_unavailable_insecure_store_door(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     insecure = str(tmp_path / "ledger-insecure")
     os.makedirs(insecure, mode=0o777)
+    os.chmod(insecure, 0o777)
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, insecure)
     run_fn, calls, violations = _never_run_fn()
     result = ww.loop(
@@ -2842,10 +2843,124 @@ def test_loop_lock_unavailable_insecure_store_door(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
+    assert result["batchId"] == "batch-982"
     assert result["detail"].startswith("store-door:")
     assert result["arms"] == 0
     assert calls[0] == 0
     assert violations == []
+
+
+def test_loop_locks_are_per_batch_in_one_repo(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    fd_a, refusal_a = ww._acquire_loop_lock(
+        repo, "batch-a", os.environ, None,
+    )
+    assert refusal_a is None
+    fd_b, refusal_b = ww._acquire_loop_lock(
+        repo, "batch-b", os.environ, None,
+    )
+    assert refusal_b is None
+    fd_a2, refusal_a2 = ww._acquire_loop_lock(
+        repo, "batch-a", os.environ, None,
+    )
+    assert fd_a2 is None
+    assert refusal_a2 is not None
+    assert refusal_a2["ok"] is False
+    assert refusal_a2["reason"] == ww.REFUSAL_LOOP_ALREADY_LIVE
+    ww._release_loop_lock(fd_a)
+    ww._release_loop_lock(fd_b)
+
+
+def test_loop_lock_released_on_top_ceiling_exit(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    clock = [0.0, 10.0]
+    idx = [0]
+
+    def mono():
+        i = min(idx[0], len(clock) - 1)
+        idx[0] += 1
+        return clock[i]
+
+    run_fn, calls, violations = _never_run_fn()
+    result = ww.loop(
+        repo,
+        "batch-982",
+        max_seconds=10,
+        interval_seconds=1,
+        max_total_seconds=5,
+        monotonic=mono,
+        sleep=lambda _d: None,
+        run_fn=run_fn,
+    )
+    assert result["event"] == "timer"
+    assert result["arms"] == 0
+    assert calls[0] == 0
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    second = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        run_fn=_scripted_run_fn([terminal])[0],
+    )
+    assert second["ok"] is True
+    assert second["event"] == "lane-terminal"
+    assert violations == []
+
+
+def test_loop_lock_released_on_post_arm_ceiling_exit(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    pr_change = {
+        "ok": True,
+        "event": "pr-set-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "prsAdded": [1],
+        "prs": [1],
+        "prsRemoved": [],
+        "stacks": [],
+        "ungrouped": [1],
+    }
+
+    def run_fn(*_args, **_kwargs):
+        clock[0] += 6.0
+        return dict(pr_change)
+
+    result = ww.loop(
+        repo,
+        "batch-982",
+        max_seconds=10,
+        interval_seconds=1,
+        max_total_seconds=5,
+        monotonic=mono,
+        sleep=lambda _d: None,
+        run_fn=run_fn,
+    )
+    assert result["event"] == "timer"
+    assert result["arms"] == 1
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    second = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        run_fn=_scripted_run_fn([terminal])[0],
+    )
+    assert second["ok"] is True
+    assert second["event"] == "lane-terminal"
 
 
 def _plant_loop_lock_file(repo, batch_id, tmp_path, monkeypatch):
@@ -2912,6 +3027,7 @@ def test_loop_lock_unavailable_non_regular_lock_file(tmp_path, monkeypatch):
     assert refusal["ok"] is False
     assert flock_calls == []
     assert refusal["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
+    assert refusal["batchId"] == batch_id
     assert refusal["detail"] == "lock-file-not-regular"
     assert refusal["arms"] == 0
 
@@ -2930,6 +3046,7 @@ def test_loop_lock_unavailable_flock_oserror(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
+    assert result["batchId"] == "batch-982"
     assert "flock:" in result["detail"]
     assert result["arms"] == 0
     assert calls[0] == 0
