@@ -714,7 +714,45 @@ def _recorded_row_from_envelope(envelope, seat, phase, rnd, *, head_sha, attempt
     return row
 
 
-def case07_audited_chain(tmp_path):
+def _audit_dispatch_envelope(target_id, rnd):
+    audit_payload = {
+        "id": target_id,
+        "ruling": "discharged",
+        "auditorVendor": "codex",
+        "reason": "re-read the fixed hunk; the defect is gone",
+    }
+    payload_sha = session_contract.payload_sha256(audit_payload)
+    binding = _binding_fields(
+        _slot_nonce(target_id, AUDIT_PHASE, 0),
+        result_digest=payload_sha,
+    )
+    binding["source"] = "codex"
+    evidence = _execution_evidence(binding, phase=AUDIT_PHASE)
+    evidence["source"] = "codex"
+    evidence["resultKind"] = "ruling"
+    evidence["resultDigest"] = payload_sha
+    observation = evidence.get("observation")
+    if isinstance(observation, dict):
+        evidence["observation"] = dict(observation, source="codex")
+    envelope = {
+        "schema": RR.SEAT_RESULT_SCHEMA_V2,
+        "session": "test-session-001",
+        "round": rnd,
+        "phase": AUDIT_PHASE,
+        "seat": target_id,
+        "attempt": 0,
+        "vendor": "codex",
+        "model": "gpt-5.6-sol",
+        "payload": audit_payload,
+        "payloadSha256": payload_sha,
+        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+        "executionEvidence": evidence,
+    }
+    envelope["envelopeSha256"] = RR.envelope_sha256(audit_payload, evidence)
+    return envelope
+
+
+def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
     """Audited-chain certification: panel at ancestor head, fix + scoped finder + verify at tip."""
     from session_checkout import _git, make_checkout
 
@@ -735,6 +773,7 @@ def case07_audited_chain(tmp_path):
         "title": "missing bounds guard",
         "severity": "Important",
         "disposition": "fixed",
+        "dispositionRound": 2,
         "dispositionReceipt": {
             "headSha": certified_head,
             "verifyResult": "pass",
@@ -745,7 +784,11 @@ def case07_audited_chain(tmp_path):
     }
     panel_payload = {"findings": []}
     panel_envelope = _dispatch_envelope_for("code-reviewer", PANEL_PHASE, 1, payload=panel_payload)
-    scoped_envelope = _dispatch_envelope_for(SCOPED_SEAT, SCOPED_PHASE, 2)
+    audit_target = finding["id"]
+    audit_envelope = _audit_dispatch_envelope(audit_target, 2) if include_audit else None
+    scoped_envelope = (
+        _dispatch_envelope_for(SCOPED_SEAT, SCOPED_PHASE, 2) if include_scoped else None
+    )
 
     manifest = _orders_manifest_for_seat("code-reviewer")
     orders_row = {
@@ -774,7 +817,7 @@ def case07_audited_chain(tmp_path):
                 session_contract.FIX_FOLD_HEAD_KEY: certified_head,
             },
             "certification": {
-                "shape": "audited-chain",
+                "shape": "full-panel-confirmed",
                 "fullPanel": True,
                 "independence": "independent",
                 "base": "fetched",
@@ -792,11 +835,16 @@ def case07_audited_chain(tmp_path):
                 },
                 "2": {
                     "roundKind": "fix",
-                    "seatStatus": {SCOPED_SEAT: "run"},
+                    "seatStatus": {SCOPED_SEAT: "run"} if include_scoped else {},
                     "blockingCount": 0,
                     "verifyResult": "pass",
                     "verifyPasses": [],
                     "verifiedHead": certified_head,
+                    **(
+                        {"scopedFinder": "skipped-empty-surface"}
+                        if not include_scoped
+                        else {}
+                    ),
                 },
             },
         },
@@ -804,17 +852,49 @@ def case07_audited_chain(tmp_path):
             orders_row,
             _recorded_row_from_envelope(
                 panel_envelope, "code-reviewer", PANEL_PHASE, 1, head_sha=panel_head),
-            _recorded_row_from_envelope(
-                scoped_envelope, SCOPED_SEAT, SCOPED_PHASE, 2, head_sha=certified_head),
+            *(
+                [
+                    _recorded_row_from_envelope(
+                        audit_envelope, audit_target, AUDIT_PHASE, 2, head_sha=certified_head),
+                ]
+                if include_audit and audit_envelope is not None
+                else []
+            ),
+            *(
+                [
+                    _recorded_row_from_envelope(
+                        scoped_envelope, SCOPED_SEAT, SCOPED_PHASE, 2, head_sha=certified_head),
+                ]
+                if include_scoped and scoped_envelope is not None
+                else []
+            ),
         ],
         envelopes=[
             {"seat": "code-reviewer", "phase": PANEL_PHASE, "round": 1, "envelope": panel_envelope},
-            {
-                "seat": SCOPED_SEAT,
-                "phase": SCOPED_PHASE,
-                "round": 2,
-                "envelope": scoped_envelope,
-            },
+            *(
+                [
+                    {
+                        "seat": audit_target,
+                        "phase": AUDIT_PHASE,
+                        "round": 2,
+                        "envelope": audit_envelope,
+                    },
+                ]
+                if include_audit and audit_envelope is not None
+                else []
+            ),
+            *(
+                [
+                    {
+                        "seat": SCOPED_SEAT,
+                        "phase": SCOPED_PHASE,
+                        "round": 2,
+                        "envelope": scoped_envelope,
+                    },
+                ]
+                if include_scoped and scoped_envelope is not None
+                else []
+            ),
         ],
         faithful_session=True,
     )
@@ -835,6 +915,23 @@ def case07_audited_chain(tmp_path):
     if blobs is not None:
         _write_head_content_blobs(session_dir, blobs)
     return session_dir
+
+
+def case07_audited_chain(tmp_path):
+    return _case07_core(tmp_path, include_audit=True, include_scoped=True)
+
+
+@must_refuse_fixture(
+    class_="unrun-review",
+    artifact="code-reviewer",
+    binding_failure="execution-evidence-stale-head",
+)
+def case07_audited_chain_missing_audit(tmp_path):
+    return _case07_core(tmp_path, include_audit=False, include_scoped=True)
+
+
+def case07_audited_chain_skipped_scoped(tmp_path):
+    return _case07_core(tmp_path, include_audit=True, include_scoped=False)
 
 
 def specimen_must_certify_sixteen_seat_audit(tmp_path):
