@@ -2,6 +2,7 @@
 
 - [What it is](#what-it-is)
 - [The arming pattern](#the-arming-pattern)
+- [The single-loop rule](#the-single-loop-rule)
 - [What ends a loop and what it passes over](#what-ends-a-loop-and-what-it-passes-over)
 - [One-off check (`run`)](#one-off-check-run)
 - [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)
@@ -91,6 +92,18 @@ Bash timeout on Claude Code has two layers (`hooks/bash_timeout.py`,
 (600 s), so a foreground call with no explicit timeout is killed at ~600 s; an **explicit** timeout
 above ~600 s converts the call to background. For the arming pattern, use the harness background-task
 primitive so `loop` survives across turns — do not rely on a foreground arm outliving the turn.
+
+## The single-loop rule
+
+At start, before its first arm, `loop` takes an exclusive kernel lock on a per-batch lock file under
+the launch ledger's per-repository store directory (`wave-watch-locks/`). If another live `loop`
+holds it, the new one refuses **`loop-already-live`** (exit 1, `arms: 0`) and names the live loop in
+**`liveLoop`** — `{"pid", "startedAt", "batch", "log"}`, or `null` when the holder's record could not
+be read. The kernel drops the lock when its holder process dies, so a dead loop never blocks a new
+one and there is no stale lock to clear. If exclusivity cannot be established at all (the store
+refuses, the lock file cannot be made or opened or is not a regular file, the lock call fails for
+another reason) it refuses **`loop-lock-unavailable`** (exit 1, `arms: 0`) with a `detail` naming the
+cause — it never arms without knowing it is alone.
 
 ## What ends a loop and what it passes over
 
@@ -388,10 +401,13 @@ event: a result carrying only `staleSuppressed` is a result where nothing action
 - `store-unresolvable`
 - `ledger-unreadable`
 - `internal-error`
+- `loop-already-live`
+- `loop-lock-unavailable`
 
 The pre-loop validations (`batch-invalid`, `interval-invalid`, `max-seconds-invalid`,
-`max-total-seconds-invalid`, `ignore-event-invalid`, `repo-root-invalid`, `store-unresolvable`) refuse
-immediately — re-arming without fixing the cause just refuses again. `ledger-unreadable` can also
+`max-total-seconds-invalid`, `ignore-event-invalid`, `repo-root-invalid`, `store-unresolvable`,
+`loop-already-live`, `loop-lock-unavailable`) refuse immediately — re-arming without fixing the cause
+just refuses again. A `loop-already-live` refusal carries `liveLoop`. `ledger-unreadable` can also
 arrive on the deadline path after the full `--max-seconds` window. `internal-error` comes from the
 top-level exception handler wrapping all of `run()` — including the pre-loop validations — so it can
 fire before the watch loop ever runs; neither `ledger-unreadable` on the deadline path nor

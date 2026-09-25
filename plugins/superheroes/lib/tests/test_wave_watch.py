@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -2572,6 +2574,27 @@ def test_loop_passes_over_pr_set_change(tmp_path, monkeypatch):
     assert violations == []
 
 
+def test_second_loop_on_same_batch_refuses(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    held_fd, refusal = ww._acquire_loop_lock(
+        repo, "batch-982", os.environ, None,
+    )
+    assert refusal is None
+    run_fn, calls, violations = _never_run_fn()
+    try:
+        result = ww.loop(
+            repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+        )
+    finally:
+        ww._release_loop_lock(held_fd)
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LOOP_ALREADY_LIVE
+    assert result["arms"] == 0
+    assert result["liveLoop"]["pid"] == os.getpid()
+    assert calls[0] == 0
+    assert violations == []
+
+
 def test_loop_stack_state_idle_seat_exits_otherwise_passes_over(tmp_path, monkeypatch):
     repo_idle = _init_repo(tmp_path / "repo-idle")
     _setup_stack_batch(
@@ -2727,6 +2750,209 @@ def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
     assert result["event"] == "lane-terminal"
     assert result["passedOverCount"] == 2
     assert len(result["passedOver"]) == 2
+
+
+def test_loop_lock_released_allows_sequential_loops(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    first = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        run_fn=_scripted_run_fn([terminal])[0],
+    )
+    assert first["event"] == "lane-terminal"
+    second = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        run_fn=_scripted_run_fn([terminal])[0],
+    )
+    assert second["ok"] is True
+    assert second["event"] == "lane-terminal"
+
+
+def test_loop_lock_released_on_exception_path(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("arm-boom")
+
+    ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=boom,
+    )
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    run_fn, _c, _v = _scripted_run_fn([terminal])
+    second = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert second["event"] == "lane-terminal"
+
+
+def test_dead_holder_lock_does_not_block_loop(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    child = subprocess.run(
+        [
+            sys.executable, "-B", "-c",
+            (
+                "import os, sys; "
+                f"sys.path.insert(0, {json.dumps(_LIB)}); "
+                "import wave_watch as ww; "
+                f"fd, ref = ww._acquire_loop_lock({json.dumps(repo)}, "
+                f"'batch-982', os.environ, None); "
+                "assert ref is None"
+            ),
+        ],
+        env={**os.environ, ll.LEDGER_ROOT_ENV: os.environ[ll.LEDGER_ROOT_ENV]},
+    )
+    assert child.returncode == 0
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    run_fn, _c, _v = _scripted_run_fn([terminal])
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert result["event"] == "lane-terminal"
+
+
+def test_loop_lock_unavailable_insecure_store_door(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    insecure = str(tmp_path / "ledger-insecure")
+    os.makedirs(insecure, mode=0o777)
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, insecure)
+    run_fn, calls, violations = _never_run_fn()
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
+    assert result["detail"].startswith("store-door:")
+    assert result["arms"] == 0
+    assert calls[0] == 0
+    assert violations == []
+
+
+def _plant_loop_lock_file(repo, batch_id, tmp_path, monkeypatch):
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    repo_id = ll.repo_identity(repo)
+    locks_dir = os.path.join(store_root, repo_id, "wave-watch-locks")
+    os.makedirs(locks_dir, mode=0o700, exist_ok=True)
+    repo_dir = os.path.join(store_root, repo_id)
+    for path in (store_root, repo_dir, locks_dir):
+        os.chmod(path, 0o700)
+    lock_name = hashlib.sha256(batch_id.encode("utf-8")).hexdigest() + ".lock"
+    lock_path = os.path.join(locks_dir, lock_name)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    os.close(fd)
+
+
+def _wave_watch_loop_lock_name(batch_id):
+    return hashlib.sha256(batch_id.encode("utf-8")).hexdigest() + ".lock"
+
+
+def _is_wave_watch_loop_lock_open(name, batch_id):
+    expected = _wave_watch_loop_lock_name(batch_id)
+    if isinstance(name, str):
+        return name == expected
+    if isinstance(name, (bytes, bytearray)):
+        return name == expected.encode("ascii")
+    return False
+
+
+def test_loop_lock_unavailable_non_regular_lock_file(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    batch_id = "batch-982"
+    _plant_loop_lock_file(repo, batch_id, tmp_path, monkeypatch)
+    real_fstat = ww.os.fstat
+    real_open = ww.os.open
+    real_flock = ww.fcntl.flock
+    wave_watch_lock_fds = set()
+    flock_calls = []
+
+    def tracking_open(name, flags, mode=0o777, *, dir_fd=None):
+        fd = real_open(name, flags, mode, dir_fd=dir_fd)
+        if _is_wave_watch_loop_lock_open(name, batch_id):
+            wave_watch_lock_fds.add(fd)
+        return fd
+
+    def fake_fstat(fd):
+        st = real_fstat(fd)
+        if fd in wave_watch_lock_fds:
+            fields = list(st)
+            fields[0] = stat.S_IFIFO | (st.st_mode & 0o777)
+            return os.stat_result(fields)
+        return st
+
+    def tracking_flock(fd, op):
+        flock_calls.append((fd, op))
+        return real_flock(fd, op)
+
+    monkeypatch.setattr(ww.os, "open", tracking_open)
+    monkeypatch.setattr(ww.os, "fstat", fake_fstat)
+    monkeypatch.setattr(ww.fcntl, "flock", tracking_flock)
+    lock_fd, refusal = ww._acquire_loop_lock(repo, batch_id, os.environ, None)
+    assert lock_fd is None
+    assert refusal is not None
+    assert refusal["ok"] is False
+    assert flock_calls == []
+    assert refusal["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
+    assert refusal["detail"] == "lock-file-not-regular"
+    assert refusal["arms"] == 0
+
+
+def test_loop_lock_unavailable_flock_oserror(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    import errno as errno_mod
+
+    def bad_flock(fd, op):
+        raise OSError(errno_mod.ENOLCK, "no locks")
+
+    monkeypatch.setattr(ww.fcntl, "flock", bad_flock)
+    run_fn, calls, violations = _never_run_fn()
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
+    assert "flock:" in result["detail"]
+    assert result["arms"] == 0
+    assert calls[0] == 0
+
+
+def test_equal_batch_ids_different_repos_do_not_share_lock(tmp_path, monkeypatch):
+    repo_a = _init_repo(tmp_path / "repo-a")
+    repo_b = _init_repo(tmp_path / "repo-b")
+    store_a = str(tmp_path / "ledger-a")
+    store_b = str(tmp_path / "ledger-b")
+    os.makedirs(store_a, mode=0o700)
+    os.makedirs(store_b, mode=0o700)
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, store_a)
+    _precreate_repo_store_dir(repo_a, store_a)
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, store_b)
+    _precreate_repo_store_dir(repo_b, store_b)
+    fd_a, ref_a = ww._acquire_loop_lock(repo_a, "same-batch", os.environ, None)
+    assert ref_a is None
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, store_b)
+    fd_b, ref_b = ww._acquire_loop_lock(repo_b, "same-batch", os.environ, None)
+    assert ref_b is None
+    ww._release_loop_lock(fd_a)
+    ww._release_loop_lock(fd_b)
 
 
 def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch):

@@ -283,7 +283,7 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — the host offers no native batch watcher; auto-re-arm redesign is queued
   at the front door while the silent-death class it targets still recurs in field evidence. Its loop
-  passes over benign wakes; that rides this entry's
+  passes over benign wakes and refuses a second live loop on the same batch; both ride this entry's
   condition.
 
 #### B3 — Heartbeat
