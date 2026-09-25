@@ -28,13 +28,13 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
       - name: Install Python dependencies (validators + tests + import-linter)
-        run: uv pip install --system pytest pytest-xdist jsonschema pyyaml "import-linter>=2,<3"
+        run: uv pip install --system -r requirements-dev.txt
 
       - name: Validate marketplace + plugin manifests
         run: python3 .github/scripts/validate_marketplace.py

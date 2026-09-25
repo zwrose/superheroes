@@ -355,8 +355,8 @@ def main(argv=None):
     if yaml is None:
         sys.stderr.write(
             "validate_skills.py requires PyYAML (import yaml failed). "
-            "Run under an interpreter with PyYAML installed "
-            "(e.g. /usr/bin/python3) or: python3 -m pip install pyyaml\n"
+            "Run it through scripts/pinned-python, which provides PyYAML "
+            "from requirements-dev.txt.\n"
         )
         return 1
     argparse.ArgumentParser(description="validate skill token-shape").parse_args(argv or [])

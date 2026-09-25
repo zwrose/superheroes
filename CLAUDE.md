@@ -9,6 +9,9 @@ a catalog (`.claude-plugin/marketplace.json`) listing plugins under `plugins/`.
 - `plugins/superheroes/.claude-plugin/plugin.json` — the plugin manifest (name, version).
 - `plugins/superheroes/` — the plugin's components (`agents/`, `skills/`, `rubric/`, `eval/`).
 - `pytest.ini` — pins pytest's rootdir to the repo root so `conftest.py` and `source_guard.py` load for every invocation shape.
+- `.python-version` — the one Python pin (its only home); CI, the local gate, and dispatched orders all resolve the interpreter from it.
+- `requirements-dev.txt` — the validators' and test suite's dependencies, read by CI and by `scripts/pinned-python`.
+- `scripts/pinned-python` — runs Python for this repo under the pinned interpreter (via `uv run`); every local gate command goes through it.
 - `conftest.py` — repo-root pytest config; loads `source_guard` via `pytest_plugins` for every test tree.
 - `source_guard.py` — pytest plugin that blocks writes to shipped (non-test) Python source during test runs.
 - `docs/superheroes/KEEP-OR-RETIRE.md` — the keep-or-retire list and workaround-marker inventory for plugin components, kept at the project's superheroes root.
@@ -82,7 +85,7 @@ ship but aren't a user-facing feature or bugfix; use `fix`/`feat` when they are.
 
 ## CI
 
-Every PR and push to `main` runs `.github/workflows/ci.yml` (Python **3.12** on
+Every PR and push to `main` runs `.github/workflows/ci.yml` (the pinned Python — `.python-version` — on
 `ubuntu-latest`), on `opened`/`synchronize`/`reopened` only — a title or body edit
 does not re-run code checks. Title re-validation lives in its own workflow
 (`pr-title.yml`, which does fire on `edited`), and superseded runs on a PR ref are
@@ -125,26 +128,26 @@ truth reports any watched file left dirty (`source_guard: session left shipped s
 Run all locally-runnable steps before pushing:
 
 ```bash
-/usr/bin/python3 .github/scripts/validate_marketplace.py
-/usr/bin/python3 .github/scripts/validate_hosts.py
-/usr/bin/python3 .github/scripts/validate_skills.py
-/usr/bin/python3 .github/scripts/validate_stubs.py
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -n auto --durations=25
+scripts/pinned-python .github/scripts/validate_marketplace.py
+scripts/pinned-python .github/scripts/validate_hosts.py
+scripts/pinned-python .github/scripts/validate_skills.py
+scripts/pinned-python .github/scripts/validate_stubs.py
+scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -n auto --durations=25
 ```
 
-Use `/usr/bin/python3` for local gates: that interpreter carries pytest, PyYAML
-and `pytest-xdist`, which the validators and test suite require — run the suite
-with `-n auto` exactly as CI does; the serial run is many times slower. Keep the
-`-B -X pycache_prefix=…` flags: Apple's Python caches bytecode *outside* the tree
-(`~/Library/Caches/com.apple.python/`), and a same-size, same-second edit — the
-shape of every bite-proof and probe — then runs stale bytecode; the prefix redirects
-reads and writes to a scratch tree. The full suite is CI's receipt; the calibrated
-local verify command is the four validators, and builds run the suites their
-orders name. CI runs the gates on Python
-**3.12** while `/usr/bin/python3` on macOS is **3.9.6**, so a green local run is
-strong but not conclusive evidence for CI — version-sensitive syntax or stdlib
-behavior can pass one and fail the other. The catalog-membership check and the
-PR-title check are CI-side only (they need a base ref or a PR title).
+Run every local gate through `scripts/pinned-python`: it resolves the one pinned interpreter
+from `.python-version` (the pin's only home) with the dependencies in `requirements-dev.txt`,
+so the local gate, CI, and dispatched orders run the same Python. **Provisioning (once per
+machine):** install `uv`, then run `uv python install` from the repo root (it reads
+`.python-version`). Never name an interpreter by path or version in a gate command or an
+order — `validate_python_pin.py` fails CI when an in-repo home does. Run the suite with
+`-n auto` exactly as CI does; the serial run is many times slower. Keep the
+`-B -X pycache_prefix=…` flags: a same-size, same-second edit — the shape of every
+bite-proof and probe — can otherwise run stale bytecode; the prefix redirects reads and
+writes to a scratch tree. The full suite is CI's receipt; the calibrated local verify
+command is the four validators, and builds run the suites their orders name. The
+catalog-membership check and the PR-title check are CI-side only (they need a base ref or a
+PR title).
 
 ## Review discipline — no unreviewed PRs
 
