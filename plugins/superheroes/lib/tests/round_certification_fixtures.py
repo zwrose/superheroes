@@ -814,6 +814,7 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
                 "baseGuard": RC.BASE_GUARD_CHECKED,
                 "headSha": panel_head,
                 "repoRoot": str(repo),
+                "dimensions": ["code-reviewer"],
                 session_contract.FIX_FOLD_HEAD_KEY: certified_head,
             },
             "certification": {

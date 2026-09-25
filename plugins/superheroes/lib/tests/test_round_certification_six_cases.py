@@ -18,6 +18,7 @@ from round_certification_fixtures import (
     case05_critical_skipped,
     case06_mixed_panel,
     case07_audited_chain,
+    case07_audited_chain_missing_audit,
     followup_class_closure_none,
     followup_documented_trigger,
     followup_missing_class_closure,
@@ -224,6 +225,16 @@ def test_case_7_audited_chain_certifies(tmp_path):
     assert receipt["auditedChain"]["panelHead"] == panel_head
     seat_names = {row["seat"] for row in receipt["seats"]}
     assert "code-reviewer" in seat_names
+
+
+def test_case_7_missing_audit_dispatch_refuses_fix_receipt_leg(tmp_path):
+    session_dir = case07_audited_chain_missing_audit(tmp_path)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-stale-head"
+    assert "audited-chain-gap:fix-receipt" in refusal["detail"]
 
 
 @pytest.mark.parametrize(

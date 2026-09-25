@@ -540,6 +540,22 @@ _SCOPED_FINDER_PHASE = "dispatch-scoped-finder"
 _AUDITED_CHAIN_MEMO_KEY = "_auditedChainMemo"
 _CHAIN_QUALIFIED_KEY = "_auditedChainQualified"
 _CLEARING_AUDIT_RULINGS = frozenset(("discharged", "discharged-but-new-issue"))
+# Kept equal to round_phases.DIMENSIONS / panel_dimensions (register R5: driverless writer).
+_DEFAULT_PANEL_DIMENSIONS = (
+    "architecture-reviewer",
+    "code-reviewer",
+    "security-reviewer",
+    "test-reviewer",
+    "premortem-reviewer",
+)
+
+
+def _panel_dimensions_from_config(config):
+    dims = config.get("dimensions") if isinstance(config, dict) else None
+    if isinstance(dims, (list, tuple)):
+        strings = [d for d in dims if isinstance(d, str)]
+        return strings if strings else list(_DEFAULT_PANEL_DIMENSIONS)
+    return list(_DEFAULT_PANEL_DIMENSIONS)
 
 
 def _audit_payload_discharges(payload, target_id):
@@ -550,6 +566,40 @@ def _audit_payload_discharges(payload, target_id):
         return False
     ruling = payload.get("ruling")
     return isinstance(ruling, str) and ruling in _CLEARING_AUDIT_RULINGS
+
+
+def _panel_lens_coverage_complete(lc, expected_count):
+    if not isinstance(lc, dict):
+        return False
+    for key in ("ran", "expected", "floor"):
+        if key not in lc:
+            return False
+    ran, expected, floor = lc["ran"], lc["expected"], lc["floor"]
+    if type(ran) is not int or type(expected) is not int or not isinstance(floor, bool):
+        return False
+    if expected != expected_count or expected <= 0:
+        return False
+    if floor or ran != expected:
+        return False
+    return True
+
+
+def _audited_chain_panel_coverage_ok(state, manifest, panel_round):
+    """Panel leg: manifest roster must cover configured dimensions or round lensCoverage."""
+    cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
+    dims = _panel_dimensions_from_config(cfg)
+    if not dims:
+        return True
+    seats = manifest.get("seats") if isinstance(manifest, dict) else None
+    if isinstance(seats, dict) and all(dim in seats for dim in dims):
+        return True
+    rounds = state.get("rounds")
+    if not isinstance(rounds, dict):
+        return False
+    rec = rounds.get(str(panel_round))
+    if not isinstance(rec, dict):
+        return False
+    return _panel_lens_coverage_complete(rec.get("lensCoverage"), len(dims))
 
 
 def _audit_cited_head_rule(ctx, repo_root, certified_head):
@@ -682,6 +732,10 @@ def _audited_chain_legs(ctx):
         return gap_out("panel")
     roster, roster_refusal = _orders_emitted_roster_or_refusal(session_dir, panel_event)
     if roster_refusal is not None or not roster:
+        return gap_out("panel")
+    manifest, manifest_refusal = _verified_orders_manifest(session_dir, panel_event)
+    if manifest_refusal is not None or not _audited_chain_panel_coverage_ok(
+            state, manifest, panel_round):
         return gap_out("panel")
     def _slot_head(seat, occ):
         if not isinstance(journal, list):
