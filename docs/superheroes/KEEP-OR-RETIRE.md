@@ -734,6 +734,29 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   its revision identity is refused at write time rather than at each call site. No engine family
   applies.
 
+#### D33 — The staging chokepoint and the departure archive
+
+- **Component.** `round_driver._stage_findings` (the only writer of `_toVerify`; seeds the ledger)
+  and `_archive_departures` (every departure lands in the ledger); the refusal surfaces as the
+  writer's "finding has no disposition recorded".
+- **Condition.** Citation-based, 45 days.
+- **Last demonstrated benefit.** unknown — ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one seeding site and one archive site so a raised finding cannot escape
+  the writer.
+
+#### D34 — The evidence-digest drift test
+
+- **Component.** `lib/tests/test_evidence_digest_subject_1272.py`, pinning
+  `session_contract.evidence_digest_subject` equal to `engine_adapter.review_payload_carried` for
+  every result kind (the writer cannot import the adapter).
+- **Condition.** Citation-based, 45 days.
+- **Last demonstrated benefit.** unknown — ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a leaf rule beside a type-declared one, pinned equal.
+
 #### D19 — `check_unrun_review`
 
 - **Component.** `round_certification.check_unrun_review` — refuses when a dispatch-observed or
