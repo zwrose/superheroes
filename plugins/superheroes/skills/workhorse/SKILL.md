@@ -153,8 +153,8 @@ happens **before any spend** — before the workspace, before the brief, before 
 When the routed issue is a **register-consuming child** — an epic child of a package that has a
 register, or a single-issue child standing in for one under FR-36 — run the register-check at
 **build intake** before the brief, whether or not the body contains a quoted block; for a stack
-layer, against the feature issue's body and child token ([Each layer is a
-sub-issue](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md#each-layer-is-a-sub-issue));
+layer, use the register-check [stack layer
+inputs](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md#stack-layer-inputs);
 a body with zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
 derived from the issue alone, the route names the register and child token for you to pass. On
 `pass`, record the check's own output in the intake note — the `result` line, or `pass` together
@@ -347,9 +347,12 @@ and each of the three is established from the **remote**, never from a local ass
 - **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests.
   When the **bottom layer** hands back **before** any upper-layer pull request exists, it has
   nothing to link yet: it records that the stack does not exist and names the layer that will form
-  it. Once **both** layers have pull requests, **whichever lane hands back second** runs
-  `gh stack link` with pull request numbers only, bottom to top — including when the upper layer
-  handed back first and the bottom layer is second. Parallel layers and the full rule:
+  it. Link only when **every planned layer from the stack bottom through the upper layer of the pair
+  to be linked** already has a pull request — do not link an upper fragment while a lower planned
+  layer still lacks one. When that contiguous span is complete, **whichever lane hands back with it
+  newly satisfied** runs `gh stack link` with pull request numbers only, bottom to top through that
+  span — including when the upper layer handed back first and the bottom layer is second. Parallel
+  layers and the full rule:
   [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md)
   § Each layer is a sub-issue, item 4. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist).
   A base-branch chain that was never linked **is not a stack** — nothing downstream, not the advisor's click list,

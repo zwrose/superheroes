@@ -1,6 +1,7 @@
 # Contents
 
 - [What this check is](#what-this-check-is)
+- [Stack layer inputs](#stack-layer-inputs)
 - [The invocation](#the-invocation)
 - [The result contract](#the-result-contract)
 - [What counts as a quoted register block](#what-counts-as-a-quoted-register-block)
@@ -18,6 +19,13 @@ whose `*Consumers:*` line names that child. The check runs at child filing, chil
 and an epic package read's verification pass. **Register-to-child text agreement is machine
 work, never model judgment** — the script reports pass, fail, or undecided; the charters decide
 what to do with the result.
+
+## Stack layer inputs
+
+For a **stack layer**, run `--child` with the **feature issue's child token** and pass the **feature
+issue's body** to `--body-file`, not the layer sub-issue's body — register entries stay quoted on the
+feature issue ([Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)).
+The layer's body states that the check uses those inputs.
 
 ## The invocation
 
@@ -242,10 +250,9 @@ checked against it by `lib/tests/test_ssot_drift.py` per CONVENTIONS §11.2.
 epic child of a package that has a register, or a single-issue child standing in for one under
 FR-36 — run the check against the body **before filing**, whether or not the body contains a
 quoted block; a body with zero quoted blocks is exactly the case the check is there to fail. For a
-stack layer, the child token and body are the feature issue's ([Each layer is a
-sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)).
-Where applicability cannot be derived from the issue alone, the route names the register and
-child token at routing for the builder to pass. On `fail`, fix the body — do not file a drifted
+stack layer, use the [stack layer inputs](#stack-layer-inputs). Where applicability cannot be
+derived from the issue alone, the route names the register and child token at routing for the
+builder to pass. On `fail`, fix the body — do not file a drifted
 quote. On `pass`, record the check's own output in the filing note — the `result` line, or `pass`
 together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child
 token are known — the route names them or they are derivable — **run the check**; an `undecided`
@@ -259,8 +266,7 @@ for the filing obligation.
 
 **Child build intake (workhorse §1).** When the routed issue is a **register-consuming child**,
 run the check at intake before the brief, whether or not the body contains a quoted block. For a
-stack layer, the child token and body are the feature issue's ([Each layer is a
-sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)). On
+stack layer, use the [stack layer inputs](#stack-layer-inputs). On
 `fail`, **park** — the quoted text is the contract the build is graded on, so a drifted quote is
 not a buildable surface. On `pass`, record the check's own output in the intake note — the
 `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When
@@ -275,9 +281,8 @@ park obligation.
 
 **Package-read verification pass (showrunner duty 3).** At an epic package read's verification
 pass, re-run the check per **register-consuming child** across **both** directions, whether or
-not each body contains a quoted block. For a stack layer, the child token and body are the feature
-issue's ([Each layer is a
-sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)). On `fail`, record a blocking package-read finding and do
+not each body contains a quoted block. For a stack layer, use the [stack layer
+inputs](#stack-layer-inputs). On `fail`, record a blocking package-read finding and do
 not treat the package as verified. On `pass`, record the check's own output in the package-read
 verification record — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a
 claim that it ran. When the register path and child token are known — the route names them or they

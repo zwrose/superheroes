@@ -145,8 +145,8 @@ above).
    When an issue being filed is a **register-consuming child** — an epic child of a package that
    has a register, or a single-issue child standing in for one under FR-36 — run the register-check
    against the filed body **before filing**, whether or not the body contains a quoted block; for a
-   stack layer, against the feature issue's body and child token ([Each layer is a
-   sub-issue](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md#each-layer-is-a-sub-issue));
+   stack layer, use the register-check [stack layer
+   inputs](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md#stack-layer-inputs);
    a body with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
    filing a drifted or incomplete quote. On `pass`, record the check's own output in the filing
    note — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that
@@ -387,7 +387,7 @@ above).
      there is none), and a deliberate departure the build **disclosed** is a call to accept or reject,
      while an **undisclosed** one holds the handback. Detail:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
-   - **The closure row** — fires when **this vet is the final one**. **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.** **Where more than one candidate closure moment is live — concurrent final vets, or a vet racing a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt.** **Where the last open child closes without a PR — declined scope — the closure receipt is presented to the owner with that close, in the same sitting, and there is still no separate closure trigger.** That no-PR path produces **no PR**, so the receipt reaches the owner with the close itself — an advisor must not conclude that a closure with no PR needs no receipt. When the row fires, the vet **assembles and carries the closure receipt** — Detail:
+   - **The closure row** — fires when **this vet is the final one**. **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.** **Where more than one candidate closure moment is live — concurrent final vets, or a vet racing a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt.** **Where the last open child closes without a PR — declined scope — the closure receipt is presented to the owner with that close, in the same sitting, and there is still no separate closure trigger.** Or, for a stacked feature, the vet [When closure fires](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md#when-closure-fires) names. That no-PR path produces **no PR**, so the receipt reaches the owner with the close itself — an advisor must not conclude that a closure with no PR needs no receipt. When the row fires, the vet **assembles and carries the closure receipt** — Detail:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
    - **Trust CI green on the recorded head** — including the suite's receipt per
      `rubric/test-receipt-evidence.md` (run selection per

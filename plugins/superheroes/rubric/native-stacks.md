@@ -39,10 +39,9 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    merges](#how-a-stack-merges).
 2. **The order's home.** A layer's build order lives at the top of its own sub-issue's body. The
    feature issue carries the stack's plan and state, not each layer's order.
-3. **Register-consuming layers.** Contract-register entries stay quoted on the feature issue. A
-   layer's register check runs `--child <the feature issue's child token>` against the feature
-   issue's body, not the layer's body, and the layer's body says so. See
-   [register-check.md](../skills/showrunner/reference/register-check.md).
+3. **Register-consuming layers.** Contract-register entries stay quoted on the feature issue; the
+   layer's body says so. A layer's register check uses the inputs in [register-check.md — Stack
+   layer inputs](../skills/showrunner/reference/register-check.md#stack-layer-inputs).
 4. **Parallel layers.** Two layers of one stack may build at the same time when their surfaces are
    disjoint, or when the upper layer's lane owns bringing the lower layer forward: it merges the
    lower layer's branch into its own with `--no-ff` and never rebases ([How a stack stays
@@ -54,9 +53,13 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    pins. If its lane hands back **before** the lower layer has a pull request, it opens its pull
    request with base set to the lower layer's branch and records in the handback that
    `gh stack link` is owed at the lower layer's handback — it does **not** pass the lower layer's
-   branch name to `gh stack link` (branch arguments push). Once **both** layers have pull requests,
-   whichever lane hands back **second** links the stack with pull request numbers only, bottom to
-   top: `gh stack link <lower PR> <upper PR>`. Detail: workhorse charter, Building a layer of a
+   branch name to `gh stack link` (branch arguments push). Link only when **every planned layer from
+   the stack bottom through the upper layer of the pair to be linked** already has a pull request —
+   do not link an upper fragment while a lower planned layer still lacks one (`gh-stack` accepts new
+   members only at the top of an existing stack). When that contiguous span is complete, whichever
+   lane hands back with it newly satisfied runs `gh stack link` with pull request numbers only,
+   bottom to top through that span (`gh stack link <lower PR> <upper PR>` and further PR numbers when
+   the span has more than two layers). Detail: workhorse charter, Building a layer of a
    stack. Once the stack exists, later layers carry the gated premise.
 5. **Unchanged.** The stack is still the unit of merge: one `gh stack merge`, only when every
    planned layer is vetted ([How a stack merges](#how-a-stack-merges)). The launcher's refusal of a
@@ -70,7 +73,7 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    applies only when the spec's last open child closes without a merge, not to these post-merge
    administrative closes. After the merge train's post-merge step, the **advisor** closes the
    feature issue and each layer sub-issue with `gh issue close <n> --comment <merge receipt>` that
-   references the closure receipt already presented on the top layer's vet, then reads each back with
+   references the closure receipt already accepted on the top layer's vet, then reads each back with
    `gh issue view <n> --json state` and records `state=CLOSED` in the post-merge report. When a
    queued merge lands only a prefix of the stack, close only the sub-issues whose layers landed
    and leave the feature issue open. Do not rely on GitHub closing sub-issues when the parent

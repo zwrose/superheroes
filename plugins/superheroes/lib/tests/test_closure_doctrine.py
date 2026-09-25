@@ -23,6 +23,8 @@ _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 _SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
 _CLOSURE_REF = "skills/showrunner/reference/closure.md"
 _VET_RECEIPT_REF = "skills/showrunner/reference/vet-receipt.md"
+
+_STACKED_FEATURE_CLOSURE_LINK = "closure.md#when-closure-fires"
 _DECOMPOSITION_REF = "skills/showrunner/reference/decomposition.md"
 
 # Bite-proof records are receipts, not consumed surfaces: they are categorically outside every
@@ -365,9 +367,18 @@ def _assert_closure_trigger_row(text):
             % len(matches)
         )
     trigger = _normalized(matches[0][0]).lower()
+    trigger_raw = matches[0][0].lower()
     if "without a pr" not in trigger:
         raise AssertionError(
             "closure trigger row trigger cell does not mention no-PR close"
+        )
+    if "stacked feature" not in trigger:
+        raise AssertionError(
+            "closure trigger row trigger cell does not mention stacked feature"
+        )
+    if _STACKED_FEATURE_CLOSURE_LINK not in trigger_raw:
+        raise AssertionError(
+            "closure trigger row trigger cell does not link closure.md#when-closure-fires"
         )
 
 
@@ -514,6 +525,37 @@ def test_r8_census_excluded_predicate_is_scoped_to_the_records_directory():
 def test_vet_receipt_closure_trigger_row():
     text = _read_plugin(_VET_RECEIPT_REF)
     _assert_closure_trigger_row(text)
+
+
+def test_stacked_feature_closure_home_and_operative_links():
+    closure_text = _read_plugin(_CLOSURE_REF)
+    if "A stacked feature" not in closure_text:
+        raise AssertionError(
+            "%s must carry the stacked-feature closure paragraph" % _CLOSURE_REF
+        )
+    if "top layer's vet" not in closure_text:
+        raise AssertionError(
+            "%s stacked-feature rule must name the top layer's vet" % _CLOSURE_REF
+        )
+    charter_text = _read_plugin(_SHOWRUNNER_CHARTER)
+    duty_text = _extract_duty_slice(
+        charter_text,
+        _DUTY_4_START,
+        _DUTY_5_START,
+        _SHOWRUNNER_CHARTER,
+    )
+    vet_text = _read_plugin(_VET_RECEIPT_REF)
+    for label, text in (
+        ("showrunner duty-4 closure row", duty_text),
+        ("vet-receipt closure trigger row", vet_text),
+    ):
+        if "stacked feature" not in text.lower():
+            raise AssertionError("%s must mention stacked feature closure" % label)
+        if _STACKED_FEATURE_CLOSURE_LINK not in text:
+            raise AssertionError(
+                "%s must link %s for stacked-feature closure"
+                % (label, _STACKED_FEATURE_CLOSURE_LINK)
+            )
 
 
 def test_decomposition_single_issue_fast_path_names_closure_md():
