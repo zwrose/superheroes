@@ -30,6 +30,9 @@ def _load(name):
 
 
 RR = _load("round_records")
+MR = _load("model_registry")
+
+_CODEX_REVIEW_MODEL = MR.matrix_config("reviewer", "codex")[0]
 
 SESSION = "s" * 32
 PHASE = "dispatch-verifiers"
@@ -2091,12 +2094,12 @@ def test_v2_execution_evidence_optional_engine_model_accepted(tmp_path, provenan
     sd = _session(tmp_path)
     env = _v2_env(
         provenance=provenance,
-        execution_evidence=_execution_evidence(engineModel="gpt-5.6-sol"),
+        execution_evidence=_execution_evidence(engineModel=_CODEX_REVIEW_MODEL),
     )
     _land(sd, env)
     plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
     assert refusal is None and plan is not None
-    assert plan["envelope"]["executionEvidence"]["engineModel"] == "gpt-5.6-sol"
+    assert plan["envelope"]["executionEvidence"]["engineModel"] == _CODEX_REVIEW_MODEL
 
 
 @pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)

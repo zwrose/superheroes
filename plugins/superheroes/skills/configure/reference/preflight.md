@@ -101,10 +101,15 @@ If the project is **all-Claude** (`engines` comes back empty), this check is **N
 move on. A non-ok result for a configured engine means the CLI is not installed, not
 authenticated, or not answering — fix it with the owner before going further.
 
-### A.2a — Astra registration probe
+### A.2a — Registration security-lens probe
 
-Only at a wave preflight the owner or advisor chose to spend on Astra registration — at most one
-attempt per wave. The durable attempt record lives in the project's store directory (not a temp directory):
+Only at a wave preflight the owner or advisor chose to spend on registration for the
+registry's `registration-probe` role — at most one attempt per wave. The command and its
+ledger file are named `astra-probe` as a legacy label; the probe actually dispatches to
+whichever model that role's registry cell currently names, not necessarily Astra. Read
+the model the probe actually ran under off the returned payload or the ledger's `model`
+field — never assume it from the command name. The durable attempt record lives in the
+project's store directory (not a temp directory):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -118,7 +123,7 @@ dispatch, is a miss. An unreadable attempts ledger refuses `astra-probe-ledger-u
 never overwritten. A second wave attempt with a different run dir refuses
 `astra-probe-wave-already-attempted`; three recorded misses set `ownerProposal: true`. A pass does
 not register a model by itself — a reviewed commit removing `probe-pending` from its registry row
-does; Astra's row no longer carries it.
+does; the probed model's row no longer carries it.
 
 ### A.3 — `gh`
 

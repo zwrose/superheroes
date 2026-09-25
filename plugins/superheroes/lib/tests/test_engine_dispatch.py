@@ -33,8 +33,25 @@ def _load():
 
 ED = _load()
 
+
+def _load_model_registry():
+    spec = importlib.util.spec_from_file_location(
+        "model_registry", os.path.join(_HERE, "..", "model_registry.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+MR = _load_model_registry()
+
 _REVIEW_ROLE = "reviewer"
 _WRITE_ROLE = "implementer"
+
+_PIN_MODEL = MR.pin_only_models("codex")[0]
+_REVIEWER_CODEX_MODEL, _REVIEWER_CODEX_EFFORT = MR.matrix_config(_REVIEW_ROLE, "codex")
+_IMPLEMENTER_CODEX_MODEL, _IMPLEMENTER_CODEX_EFFORT = MR.matrix_config(_WRITE_ROLE, "codex")
+_BRIEF_CHECK_CODEX_MODEL, _BRIEF_CHECK_CODEX_EFFORT = MR.matrix_config("brief-check", "codex")
+_REVIEWER_DEEP_CODEX_MODEL, _REVIEWER_DEEP_CODEX_EFFORT = MR.matrix_config("reviewer-deep", "codex")
 
 
 def _seat(vendor, model, effort, role=_REVIEW_ROLE):
@@ -45,12 +62,12 @@ def _seat_json(vendor, model, effort, role=_REVIEW_ROLE):
     return json.dumps({"vendor": vendor, "model": model, "effort": effort, "role": role})
 
 
-def _codex_seat(model="gpt-5.6-sol", effort="high", role=_REVIEW_ROLE):
+def _codex_seat(model=_PIN_MODEL, effort="high", role=_REVIEW_ROLE):
     return _seat("codex", model, effort, role)
 
 
 def _brief_check_codex_seat():
-    return _seat("codex", "gpt-5.6-sol", "xhigh", "brief-check")
+    return _seat("codex", _BRIEF_CHECK_CODEX_MODEL, _BRIEF_CHECK_CODEX_EFFORT, "brief-check")
 
 
 def _cursor_seat(model="composer-2.5", effort=None, role=_WRITE_ROLE):
@@ -761,7 +778,7 @@ def test_dispatch_review_codex_argv_has_c_repo_no_skip_git(tmp_path):
 def test_argv_for_attempt_injects_codex_json_flags(tmp_path):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
-    base = ["codex", "exec", "-m", "gpt-5.6-sol", "-"]
+    base = ["codex", "exec", "-m", _PIN_MODEL, "-"]
     assert ED._argv_for_attempt(base, run_dir, 2, "codex") == base
     native = base + ["-o", "/tmp/native.json", "--output-schema", "/tmp/schema.json"]
     argv = ED._argv_for_attempt(native, run_dir, 2, "codex")
@@ -1824,7 +1841,7 @@ def test_edge4_dropped_role_flag_carries_terminal_envelope_review(capsys):
     argv = [
         "dispatch-review",
         "--role", _REVIEW_ROLE,
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--seat", _seat_json("codex", _PIN_MODEL, "high"),
         "--prompt-path", "p",
         "--repo-root", "/tmp",
         "--run-dir", "/tmp/r",
@@ -1846,7 +1863,7 @@ def test_main_dispatch_review_without_repo_root_argparse_refusal(tmp_path):
     with pytest.raises(SystemExit) as excinfo:
         ED.main([
             "dispatch-review",
-            "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+            "--seat", _seat_json("codex", _PIN_MODEL, "high"),
             "--prompt-path", prompt,
         ])
     assert excinfo.value.code == 2
@@ -2148,7 +2165,7 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
         )
     else:
         seat = _codex_seat(
-            model=kwargs.get("model", "gpt-5.6-sol"),
+            model=kwargs.get("model", _PIN_MODEL),
             effort=kwargs.get("effort", "high"),
         )
     if case == "engine_config_refusal":
@@ -5744,7 +5761,7 @@ def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys
     repo_root = _repo(tmp_path)
     rc = ED.main([
         "dispatch-review",
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--seat", _seat_json("codex", _PIN_MODEL, "high"),
         "--prompt-path", prompt,
         "--repo-root", repo_root,
         "--diff-base", "REF",
@@ -7067,7 +7084,7 @@ def test_dispatch_review_cli_expected_result_kind_invalid_refused_by_argparse(tm
         [
             sys.executable, "-B", mod_path,
             "dispatch-review",
-            "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+            "--seat", _seat_json("codex", _PIN_MODEL, "high"),
             "--prompt-path", prompt_path,
             "--repo-root", repo_root,
             "--expected-result-kind", "rulings",
@@ -9979,7 +9996,7 @@ def test_dispatch_review_cli_non_terminal_running_exits_0(tmp_path, monkeypatch,
     _running_slice_capture(monkeypatch)
     rc = ED.main([
         "dispatch-review",
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--seat", _seat_json("codex", _PIN_MODEL, "high"),
         "--prompt-path", _valid_prompt(tmp_path),
         "--repo-root", repo_root,
         "--run-dir", run_dir,
@@ -10444,9 +10461,9 @@ def test_cached_liveness_does_not_bypass_entry_allowlist(tmp_path, monkeypatch):
     "ok_role, ok_vendor, ok_model, ok_effort, bad_role",
     [
         ("implementer", "cursor", "composer-2.5", None, "reviewer"),
-        ("reviewer", "codex", "gpt-5.6-terra", "high", "reviewer-deep"),
-        ("reviewer", "codex", "gpt-5.6-terra", "high", "brief-check"),
-        ("reviewer", "codex", "gpt-5.6-terra", "high", "brief-check"),
+        ("reviewer", "codex", _PIN_MODEL, "high", "reviewer-deep"),
+        ("reviewer", "codex", _PIN_MODEL, "high", "brief-check"),
+        ("reviewer", "codex", _PIN_MODEL, "high", "brief-check"),
     ],
 )
 def test_distinct_role_allowlists_refuse_cross_role_model(
@@ -10692,8 +10709,8 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
     run_dir = str(tmp_path / "census-open")
     _manual_open_review_run(tmp_path, run_dir)
     wt = _linked_worktree(tmp_path)
-    seat = _seat_json("codex", "gpt-5.6-sol", "high")
-    write_seat = _seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE)
+    seat = _seat_json("codex", _PIN_MODEL, "high")
+    write_seat = _seat_json("codex", _PIN_MODEL, "high", _WRITE_ROLE)
 
     _assert_dispatch_result_entry_refusal(
         ED.dispatch_review("codex", prompt_path=prompt, repo_root=repo_root),
@@ -10735,7 +10752,7 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
     )
     _assert_dispatch_result_entry_refusal(
         ED.dispatch_review(
-            seat={"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+            seat={"vendor": "codex", "model": _PIN_MODEL, "effort": "high"},
             prompt_path=prompt, repo_root=repo_root,
             run_engine=_never_call, build_view=_never_build_view,
         ),
@@ -10772,7 +10789,7 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
     assert ED.main([
         "dispatch-write", "--seat", write_seat,
         "--prompt-path", prompt, "--cwd", wt, "--run-dir", run_dir,
-        "--model", "gpt-5.6-sol",
+        "--model", _PIN_MODEL,
     ]) == 1
     _assert_dispatch_result_entry_refusal(
         json.loads(capsys.readouterr().out.strip()),
@@ -10780,7 +10797,9 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
         "legacy-seat-args",
     )
 
-    assert DG.main(["check", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}']) == 1
+    assert DG.main(
+        ["check", "--seat", '{"vendor":"codex","model":"%s","effort":"high"}' % _PIN_MODEL]
+    ) == 1
     guard_out = json.loads(capsys.readouterr().out.splitlines()[0])
     _assert_cli_payload_entry_refusal(guard_out, "guard-check-cli-seat-invalid", "role-key-absent")
 
@@ -10789,7 +10808,7 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
     _assert_cli_payload_entry_refusal(guard_legacy, "guard-check-cli-legacy", "legacy-seat-args")
 
     assert EA.main([
-        "build-argv", "--seat", '{"vendor":"codex","model":"gpt-5.6-sol","effort":"high"}',
+        "build-argv", "--seat", '{"vendor":"codex","model":"%s","effort":"high"}' % _PIN_MODEL,
         "--run-kind", "review",
     ]) == 1
     build_out = json.loads(capsys.readouterr().out.strip())
@@ -11235,7 +11254,7 @@ def test_main_dropped_flag_attached_run_dir_carries_provenance(capsys, tmp_path)
     argv = [
         "dispatch-review",
         "--role", _REVIEW_ROLE,
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--seat", _seat_json("codex", _PIN_MODEL, "high"),
         "--prompt-path", "p",
         "--repo-root", "/tmp",
         "--run-dir=" + run_dir,
@@ -11810,13 +11829,13 @@ def test_run_execution_record_engine_model_from_resolved_inputs(tmp_path):
     records, _ = ED._journal_read(run_dir)
     for rec in records:
         if rec.get("kind") == "run-opened":
-            rec["resolvedInputs"] = {"engineModel": "gpt-5.6-sol"}
+            rec["resolvedInputs"] = {"engineModel": _PIN_MODEL}
     with open(ED._journal_path(run_dir), "w", encoding="utf-8") as fh:
         for rec in records:
             fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
     record, error = ED.run_execution_record(run_dir)
     assert error is None
-    assert record["engineModel"] == "gpt-5.6-sol"
+    assert record["engineModel"] == _PIN_MODEL
 
     run_dir_absent = str(tmp_path / "engine-model-absent")
     _execution_record_completed_attempt(tmp_path, run_dir_absent, stdout=_VALID_FINDINGS_STDOUT)
@@ -14297,11 +14316,6 @@ _TEA = importlib.util.spec_from_file_location(
 _TEA_MOD = importlib.util.module_from_spec(_TEA)
 _TEA.loader.exec_module(_TEA_MOD)
 _claude_event_stream = _TEA_MOD._claude_event_stream
-
-_MR = importlib.util.spec_from_file_location(
-    "model_registry", os.path.join(_HERE, "..", "model_registry.py"))
-MR = importlib.util.module_from_spec(_MR)
-_MR.loader.exec_module(MR)
 
 _OFF_ALLOWLIST_CLAUDE = "haiku-4.5"
 

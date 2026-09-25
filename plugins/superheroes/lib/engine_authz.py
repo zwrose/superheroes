@@ -20,7 +20,7 @@ _DISPATCH_CMD = {"codex": "codex exec", "cursor": "cursor-agent"}
 
 
 def _codex_capability_model():
-    """The strongest default GPT-5.6 tier from the registry, or None if unresolvable
+    """The strongest default codex tier from the registry, or None if unresolvable
     (caller then reports codex not-ready → falls open to the host model). Never raises."""
     try:
         import model_registry
