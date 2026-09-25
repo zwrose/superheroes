@@ -2595,6 +2595,14 @@ def test_loop_stack_state_idle_seat_exits_otherwise_passes_over(tmp_path, monkey
         50: {"state": _pr_vet_state()},
         51: {"state": _pr_vet_state()},
     })
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def sleep(duration):
+        clock[0] += duration
+
     idle_result = ww.loop(
         repo_idle,
         "batch-982",
@@ -2602,9 +2610,12 @@ def test_loop_stack_state_idle_seat_exits_otherwise_passes_over(tmp_path, monkey
         interval_seconds=1,
         gh_run=_gh_open_prs([50, 51]),
         membership_reader=_membership_for_stack([50, 51]),
-        sleep=lambda _d: None,
+        monotonic=mono,
+        sleep=sleep,
+        max_total_seconds=5,
     )
     assert idle_result["event"] == ww.EVENT_STACK_STATE_CHANGED
+    assert idle_result["arms"] == 1
     assert {
         "flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
         "stack": _STACK_NUM,
