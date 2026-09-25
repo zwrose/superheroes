@@ -186,7 +186,7 @@ are never holding the inventory in working memory.
 | this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR) | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
 | the build record records a **full-lane** pre-handback review | the **certified-loop check** — the driver's own round receipt, or a skip disclosure citing an open `driver-blocker` issue by number, or a skip disclosure citing an explicit owner direction as a dated record (the venue-citation convention, `skills/showrunner/reference/issue-contract.md` § Anchor resolution; the subordinated owner-directed ending). A citation that is absent, or that names a closed issue, is a finding; whether a cited skip still passes at all is governed by the driver-mandate flip in `rubric/review-discipline.md`, which is the one home for that timing — post-flip, an owner-direction citation is recorded in this receipt **named as the owner's override** of driver-or-park, never as a citation-pass |
 | the build record shows a **full-lane** review **not driven by the certified loop** | the **seat-provenance parity check** — each seat's seat-map assignment, plus a recorded attempt or terminal forfeit on the vendor that seat was assigned; a missing assignment is a finding. A seat that ran off its seat-map assignment with no recorded forfeit on the vendor it was assigned is a finding |
-| the project's `core.md` declares a `## Vet checks` section (read with the `vet-checks` verb) | one line per declared check, and a finding for every malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
+| the `vet-checks` verb reports a declared section, or a non-null `reason` | one line per declared check, and a finding for every malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
@@ -267,8 +267,12 @@ It prints one JSON object and exits 0:
 
 - Each well-formed declared check → **one receipt line**: the check's name, what you read from its
   named evidence, and what you record per the check's *The vet records* field.
-- A non-empty `malformed` list or a non-null `reason` → a **finding** in the receipt naming the
-  entry and token — never a silent skip.
+- `reason: core-md-absent` → the project has no calibration file, so it declares no vet checks: the
+  receipt carries **one plain line** saying so — **not a finding**.
+- `reason: core-md-unparseable` or `repo-root-unavailable` → a **finding**: calibration exists but
+  cannot be read; name the reason token.
+- A non-empty `malformed` list → a **finding** in the receipt naming the entry and token — never a
+  silent skip.
 - `declared: false` with `reason: null` → the field is absent; no vet-check lines are owed.
 
 ## The `None` convention

@@ -44,65 +44,152 @@ def _render_with_vet(body):
     return CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
 
 
-def _write_core(repo, store, **extra):
-    facts = dict(_CORE_FACTS, **extra)
-    CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+def _malformed_pairs(parsed):
+    return [(m["entry"], m["reason"]) for m in parsed["malformed"]]
 
 
-def test_parse_healthy_vet_checks_two_entries_with_continuation():
-    text = _render_with_vet(_HEALTHY_BODY)
-    got = CM.parse_vet_checks(text)
-    assert got["declared"] is True
-    assert got["malformed"] == []
-    assert got["checks"] == [
-        {"name": "Alpha check", "evidence": "PR section Summary", "records": "alpha receipt"},
-        {"name": "Beta check", "evidence": "ledger path continued evidence",
-         "records": "beta receipt"},
-    ]
+def _section_duplicated_core():
+    base = CM.render_core(dict(_CORE_FACTS), "confirmed", "2026-06-26", "2026-06-26")
+    insert = "## Vet checks\n\n### One\n- **Evidence:** a\n- **The vet records:** b\n\n"
+    at = base.index("```json superheroes-core")
+    return (
+        base[:at]
+        + insert
+        + "## Vet checks\n\n### Two\n- **Evidence:** c\n- **The vet records:** d\n\n"
+        + base[at:]
+    )
 
 
-@pytest.mark.parametrize("body,token", [
-    ("## Vet checks\n\n## Vet checks\n\n### X\n- **Evidence:** a\n- **The vet records:** b",
-     "section-duplicated"),
-    ("", "section-empty"),
-    ("intro\n\n### X\n- **Evidence:** a\n- **The vet records:** b", "stray-text"),
-    ("### \n- **Evidence:** a\n- **The vet records:** b", "name-empty"),
-    ("### Same\n- **Evidence:** a\n- **The vet records:** b\n\n### same\n"
-     "- **Evidence:** c\n- **The vet records:** d", "name-duplicated"),
-    ("### X\n- **Evidence:** a\n- **Evidence:** b\n- **The vet records:** c", "field-duplicated"),
-    ("### X\n- **Evidence:**\n- **The vet records:** c", "field-empty"),
-    ("### X\n- **The vet records:** c", "evidence-missing"),
-    ("### X\n- **Evidence:** a", "records-missing"),
-    ("### X\n- **Evidence:** a\n- **The vet records:** b\nnot a field", "unrecognized-line"),
-])
-def test_parse_malformed_tokens(body, token):
-    if token == "section-duplicated":
-        base = CM.render_core(dict(_CORE_FACTS), "confirmed", "2026-06-26", "2026-06-26")
-        insert = "## Vet checks\n\n### One\n- **Evidence:** a\n- **The vet records:** b\n\n"
-        at = base.index("```json superheroes-core")
-        text = base[:at] + insert + "## Vet checks\n\n### Two\n- **Evidence:** c\n- **The vet records:** d\n\n" + base[at:]
-    elif token == "section-empty":
-        text = _render_with_vet("")
-        text = text.replace(_HEALTHY_BODY, "")
-        # empty vetChecks omits heading — inject empty section
-        at = text.index("```json superheroes-core")
-        text = text[:at] + "## Vet checks\n\n\n" + text[at:]
+def _section_empty_core():
+    text = _render_with_vet("")
+    text = text.replace(_HEALTHY_BODY, "")
+    at = text.index("```json superheroes-core")
+    return text[:at] + "## Vet checks\n\n\n" + text[at:]
+
+
+@pytest.mark.parametrize(
+    "text,expected_malformed,expected_checks",
+    [
+        pytest.param(
+            "section-duplicated",
+            [(None, "section-duplicated")],
+            [{"name": "One", "evidence": "a", "records": "b"}],
+            id="section-duplicated",
+        ),
+        pytest.param(
+            "section-empty",
+            [(None, "section-empty")],
+            [],
+            id="section-empty",
+        ),
+        pytest.param(
+            "line one\nline two",
+            [(None, "stray-text")],
+            [],
+            id="stray-text-two-lines",
+        ),
+        pytest.param(
+            "intro\n\n### X\n- **Evidence:** a\n- **The vet records:** b",
+            [(None, "stray-text")],
+            [{"name": "X", "evidence": "a", "records": "b"}],
+            id="stray-text",
+        ),
+        pytest.param(
+            "### \n- **Evidence:** a\n- **The vet records:** b",
+            [(None, "name-empty")],
+            [],
+            id="name-empty",
+        ),
+        pytest.param(
+            "### Same\n- **Evidence:** a\n- **The vet records:** b\n\n### same\n"
+            "- **Evidence:** c\n- **The vet records:** d",
+            [("same", "name-duplicated")],
+            [{"name": "Same", "evidence": "a", "records": "b"}],
+            id="name-duplicated",
+        ),
+        pytest.param(
+            "### X\n- **Evidence:** a\n- **Evidence:** b\n- **The vet records:** c",
+            [("X", "field-duplicated")],
+            [],
+            id="field-duplicated-evidence",
+        ),
+        pytest.param(
+            "### X\n- **Evidence:** a\n- **The vet records:** r1\n- **The vet records:** r2",
+            [("X", "field-duplicated")],
+            [],
+            id="field-duplicated-records",
+        ),
+        pytest.param(
+            "### X\n- **Evidence:**\n- **The vet records:** c",
+            [("X", "field-empty")],
+            [],
+            id="field-empty-evidence",
+        ),
+        pytest.param(
+            "### X\n- **Evidence:** a\n- **The vet records:**",
+            [("X", "field-empty")],
+            [],
+            id="field-empty-records",
+        ),
+        pytest.param(
+            "### X\n- **The vet records:** c",
+            [("X", "evidence-missing")],
+            [],
+            id="evidence-missing",
+        ),
+        pytest.param(
+            "### X\n- **Evidence:** a",
+            [("X", "records-missing")],
+            [],
+            id="records-missing",
+        ),
+        pytest.param(
+            "### X\n- **Evidence:** a\n- **The vet records:** b\nnot a field",
+            [("X", "unrecognized-line")],
+            [],
+            id="unrecognized-line-in-entry",
+        ),
+        pytest.param(
+            "### X\n  orphan indent\n- **Evidence:** a\n- **The vet records:** b",
+            [("X", "unrecognized-line")],
+            [],
+            id="unrecognized-line-indent-no-field",
+        ),
+        pytest.param(
+            "### X\n- **The vet records:**",
+            [("X", "evidence-missing"), ("X", "field-empty")],
+            [],
+            id="two-reasons-one-entry",
+        ),
+    ],
+)
+def test_parse_malformed_tokens(text, expected_malformed, expected_checks):
+    if text == "section-duplicated":
+        core_text = _section_duplicated_core()
+    elif text == "section-empty":
+        core_text = _section_empty_core()
     else:
-        text = _render_with_vet(body)
-    parsed = CM.parse_vet_checks(text)
-    reasons = [m["reason"] for m in parsed["malformed"]]
-    assert token in reasons
+        core_text = _render_with_vet(text)
+    parsed = CM.parse_vet_checks(core_text)
+    assert _malformed_pairs(parsed) == expected_malformed
+    assert parsed["checks"] == expected_checks
 
 
 def test_literal_pins_for_vet_checks_markers():
     heading = "## Vet checks"
     evidence = "- **Evidence:**"
     records = "- **The vet records:**"
-    assert heading == "## Vet checks"
-    assert evidence == "- **Evidence:**"
-    assert records == "- **The vet records:**"
-    sample = heading + "\n\n### N\n" + evidence + " x\n" + records + " y\n"
-    assert sample.count(heading) == 1
+    body = (
+        "### Pin check\n"
+        + evidence + " e\n"
+        + records + " r\n"
+    )
+    facts = dict(_CORE_FACTS, vetChecks=body)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    assert heading in text
+    got = CM.parse_vet_checks(text)
+    assert got["malformed"] == []
+    assert got["checks"] == [{"name": "Pin check", "evidence": "e", "records": "r"}]
 
 
 def test_read_vet_checks_no_section_declared_false_reason_null(tmp_path):
@@ -152,6 +239,11 @@ def test_confirm_preserves_vet_checks_on_provisional_core(tmp_path):
     assert after["checks"] == before
 
 
+def _write_core(repo, store, **extra):
+    facts = dict(_CORE_FACTS, **extra)
+    CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+
+
 def _repo_store(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
@@ -191,7 +283,31 @@ def test_write_vet_checks_refused_malformed(tmp_path):
     res = CM.write_vet_checks(repo, bad, root=store)
     assert res["action"] == "refused"
     assert res["reason"] == "vet-checks-malformed"
-    assert any(m["reason"] == "evidence-missing" for m in res["malformed"])
+    assert [(m["entry"], m["reason"]) for m in res["malformed"]] == [
+        ("X", "evidence-missing"),
+    ]
+
+
+def test_write_vet_checks_refused_clear_when_section_duplicated(tmp_path):
+    repo, store = _repo_store(tmp_path)
+    path = CM.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    at = text.index("```json superheroes-core")
+    dup = (
+        text[:at]
+        + "## Vet checks\n\n### One\n- **Evidence:** a\n- **The vet records:** b\n\n"
+        + "## Vet checks\n\n### Two\n- **Evidence:** c\n- **The vet records:** d\n\n"
+        + text[at:]
+    )
+    open(path, "w", encoding="utf-8").write(dup)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_vet_checks(repo, "", root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == "vet-checks-malformed"
+    assert [(m["entry"], m["reason"]) for m in res["malformed"]] == [
+        (None, "section-duplicated"),
+    ]
+    assert open(path, encoding="utf-8").read() == before
 
 
 def test_write_vet_checks_refused_heading_in_body(tmp_path):

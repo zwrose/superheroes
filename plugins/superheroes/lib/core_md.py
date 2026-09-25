@@ -136,6 +136,7 @@ def render_core(facts, status, created, updated):
     vet_checks = (facts.get("vetChecks") or "").strip()
     vet_checks_block = ""
     if vet_checks:
+        # axis: render_core emits Vet checks section when vetChecks non-empty
         vet_checks_block = "## Vet checks\n\n%s\n\n" % vet_checks
     return (
         "<!-- superheroes-core: schemaVersion=%d status=%s created=%s updated=%s -->\n\n"
@@ -979,9 +980,11 @@ def _parse_vet_checks_body(body_lines):
     while i < n and not body_lines[i].strip():
         i += 1
     if i < n and not body_lines[i].lstrip().startswith("###"):
+        # axis: stray-text before first ### entry
         malformed.append(_vet_checks_malformed_item(
             None, "stray-text", "non-entry text before the first check heading"))
-        # axis: stray-text before first ### entry
+        while i < n and not body_lines[i].lstrip().startswith("###"):
+            i += 1
 
     while i < n:
         while i < n and not body_lines[i].strip():
@@ -989,13 +992,6 @@ def _parse_vet_checks_body(body_lines):
         if i >= n:
             break
         line = body_lines[i]
-        if not line.lstrip().startswith("###"):
-            if line.strip():
-                malformed.append(_vet_checks_malformed_item(
-                    None, "unrecognized-line", "line outside a check entry"))
-                # axis: unrecognized-line outside entry
-            i += 1
-            continue
         m = _VET_ENTRY_HEADING.match(line)
         name = (m.group(1) if m else line.lstrip()[3:]).strip()
         i += 1
@@ -1028,8 +1024,8 @@ def _parse_vet_checks_body(body_lines):
                 _flush_pending()
                 evidence_count += 1
                 if evidence_count > 1:
-                    entry_reasons.append(("field-duplicated", "Evidence field repeated"))
                     # axis: field-duplicated Evidence
+                    entry_reasons.append(("field-duplicated", "Evidence field repeated"))
                 pending_label = "evidence"
                 pending_parts = [ev.group(1).strip()]
                 i += 1
@@ -1038,47 +1034,47 @@ def _parse_vet_checks_body(body_lines):
                 _flush_pending()
                 records_count += 1
                 if records_count > 1:
-                    entry_reasons.append(("field-duplicated", "The vet records field repeated"))
                     # axis: field-duplicated records
+                    entry_reasons.append(("field-duplicated", "The vet records field repeated"))
                 pending_label = "records"
                 pending_parts = [rec.group(1).strip()]
                 i += 1
                 continue
             if _vet_line_is_continuation(raw):
                 if pending_label is None:
-                    entry_reasons.append(("unrecognized-line", "indented line without a field"))
                     # axis: unrecognized-line continuation without field
+                    entry_reasons.append(("unrecognized-line", "indented line without a field"))
                 else:
                     pending_parts.append(raw.strip())
                 i += 1
                 continue
-            entry_reasons.append(("unrecognized-line", "line is not a field or continuation"))
             # axis: unrecognized-line inside entry
+            entry_reasons.append(("unrecognized-line", "line is not a field or continuation"))
             i += 1
         _flush_pending()
 
         if not name:
-            entry_reasons.append(("name-empty", "check name is empty"))
             # axis: name-empty
+            entry_reasons.append(("name-empty", "check name is empty"))
         else:
             folded = name.casefold()
             if folded in names_seen:
-                entry_reasons.append(("name-duplicated", "duplicate check name"))
                 # axis: name-duplicated
+                entry_reasons.append(("name-duplicated", "duplicate check name"))
             names_seen[folded] = True
 
         if "evidence" not in fields:
-            entry_reasons.append(("evidence-missing", "Evidence field is missing"))
             # axis: evidence-missing
+            entry_reasons.append(("evidence-missing", "Evidence field is missing"))
         elif not fields["evidence"]:
-            entry_reasons.append(("field-empty", "Evidence value is empty"))
             # axis: field-empty evidence
+            entry_reasons.append(("field-empty", "Evidence value is empty"))
         if "records" not in fields:
-            entry_reasons.append(("records-missing", "The vet records field is missing"))
             # axis: records-missing
+            entry_reasons.append(("records-missing", "The vet records field is missing"))
         elif not fields["records"]:
-            entry_reasons.append(("field-empty", "The vet records value is empty"))
             # axis: field-empty records
+            entry_reasons.append(("field-empty", "The vet records value is empty"))
 
         if entry_reasons:
             seen = set()
@@ -1101,15 +1097,15 @@ def parse_vet_checks(core_text):
     if not spans:
         return {"declared": False, "checks": [], "malformed": []}
     if len(spans) > 1:
+        # axis: section-duplicated
         malformed.append(_vet_checks_malformed_item(
             None, "section-duplicated", "more than one Vet checks heading"))
-        # axis: section-duplicated
     start, end = spans[0]
     body_lines = lines[start + 1:end]
     if not any(line.strip() for line in body_lines):
+        # axis: section-empty
         malformed.append(_vet_checks_malformed_item(
             None, "section-empty", "Vet checks heading has an empty body"))
-        # axis: section-empty
         return {"declared": declared, "checks": [], "malformed": malformed}
     parsed_checks, entry_malformed = _parse_vet_checks_body(body_lines)
     malformed.extend(entry_malformed)
@@ -1125,6 +1121,7 @@ def read_vet_checks(cwd, root=None):
                 "reason": GATE_REASON_ROOT_UNAVAILABLE}
     cls = _classify_core_md_at_path(path)
     if cls.status == CONFIG_ABSENT:
+        # axis: read-vet-checks core-md-absent
         return {"declared": False, "checks": [], "malformed": [],
                 "reason": SHOW_IT_REASON_ABSENT}
     try:
@@ -1134,6 +1131,7 @@ def read_vet_checks(cwd, root=None):
         return {"declared": False, "checks": [], "malformed": [],
                 "reason": SHOW_IT_REASON_UNPARSEABLE}
     if parse_core(text) is None:
+        # axis: read-vet-checks core-md-unparseable
         return {"declared": False, "checks": [], "malformed": [],
                 "reason": SHOW_IT_REASON_UNPARSEABLE}
     parsed = parse_vet_checks(text)
@@ -1237,21 +1235,29 @@ def write_vet_checks(cwd, body, *, root=None):
             return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
         prose = body if body is not None else ""
         if prose.strip() and _vet_checks_body_forbidden(prose):
-            return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP}
             # axis: vet-checks-round-trip-refused injected heading or fence
+            return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP}
+        orig_spans, _ = _vet_checks_section_spans(text)
+        if len(orig_spans) > 1:
+            sec_dup = [m for m in parse_vet_checks(text)["malformed"]
+                       if m["reason"] == "section-duplicated"]
+            return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
+                    "malformed": sec_dup or [_vet_checks_malformed_item(
+                        None, "section-duplicated", "more than one Vet checks heading")]}
         new_text = replace_vet_checks_section(text, prose)
         if new_text == text:
             return {"action": "noop"}
         ok, bad_malformed = _vet_checks_write_acceptance(new_text, prose)
         if not ok:
+            # axis: vet-checks-malformed writer invariant
             return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
                     "malformed": bad_malformed}
-            # axis: vet-checks-malformed writer invariant
         new_parsed = parse_core(new_text)
+        # bite-proof: Unprovable as placed — splice touches only the vet section; no stdin body reaches other-facts round-trip
         if (new_parsed is None or not _prose_field_round_trip_ok(orig, new_parsed, "vetChecks")
                 or not _show_it_json_blocks_unchanged(text, new_text)):
-            return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP}
             # axis: vet-checks-round-trip-refused other facts changed
+            return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP}
         try:
             store_core.atomic_write(path, new_text)
         except OSError:
@@ -2503,6 +2509,7 @@ def confirm(cwd, *, root=None, now=None):
                 return {"action": "behind", "record": existing}
             if existing.get("status") == "confirmed":
                 return {"action": "noop", "record": existing}
+            # axis: confirm preserves vetChecks in allowlist
             facts = {k: existing[k] for k in (
                 "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",
                 "ratifiedResiduals", "vetChecks", REVIEW_GATE_POLICY_KEY, PROJECT_CONFIGURATION_KEY,
