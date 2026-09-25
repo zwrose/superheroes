@@ -13,6 +13,12 @@ belongs to and lists every change with its replacement.
 
 Check these in a consuming project before it takes 0.34.0:
 
+- **Update the Codex CLI to 0.157.0 or later.** The codex default is now `gpt-6-sol`, and the
+  preflight otherwise refuses `codex-cli-too-old`. See
+  [Astra and the codex role pin](#astra-and-the-codex-role-pin).
+- **Move a `gpt-5.6-terra` pin to `gpt-6-sol`.** A pin or config naming `gpt-5.6-terra` now refuses
+  `model-retired`; `gpt-5.6-sol` stays a valid pin. See
+  [Astra and the codex role pin](#astra-and-the-codex-role-pin).
 - **The owner-authority gate is retired.** Merges run on the owner's scoped word under the merge
   covenant; the hook no longer asks. See [Owner-authority gate retired](#owner-authority-gate-retired).
 - **Dispatch CLIs take `--seat` as four-key JSON.** The old `--engine`, `--model`, `--effort`,
