@@ -590,11 +590,6 @@ def _audited_chain_panel_coverage_ok(state, manifest, panel_round):
     roster = _panel_dimension_roster_from_manifest(manifest)
     if roster is None or not all(dim in roster for dim in dims):
         return False
-    rounds = state.get("rounds")
-    if isinstance(rounds, dict):
-        rec = rounds.get(str(panel_round))
-        if isinstance(rec, dict):
-            _panel_lens_coverage_complete(rec.get("lensCoverage"), len(dims))
     return True
 
 
@@ -615,20 +610,23 @@ def _resolve_post_fix_head(state, finding):
     disposition_round = finding.get("dispositionRound")
     if isinstance(disposition_round, bool) or not isinstance(disposition_round, int):
         return None
-    rounds = state.get("rounds") if isinstance(state, dict) else None
-    if not isinstance(rounds, dict):
-        return None
-    rec = rounds.get(str(disposition_round))
-    if not isinstance(rec, dict):
-        return None
-    post_fix = rec.get("fixFoldHead")
-    if not _valid_head_sha(post_fix):
-        return None
     receipt = finding.get("dispositionReceipt")
     if not isinstance(receipt, dict):
         return None
-    bound = receipt.get("headSha")
-    if not _valid_head_sha(bound) or bound != post_fix:
+    post_fix = receipt.get("headSha")
+    if not _valid_head_sha(post_fix):
+        return None
+    fixer_round = disposition_round - 1
+    if fixer_round < 1:
+        return None
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return None
+    rec = rounds.get(str(fixer_round))
+    if not isinstance(rec, dict):
+        return None
+    recorded = rec.get("fixFoldHead")
+    if not _valid_head_sha(recorded) or recorded != post_fix:
         return None
     return post_fix
 
@@ -773,10 +771,11 @@ def _audit_admitted_dispatch_result(session_dir, journal, event, certified_head,
         if not rk_ok:
             return None
     elif provenance == PROVENANCE_HAND_LANDED:
-        if cited and head_rule is not None:
-            ok_head, _gap = head_rule(cited)
-            if not ok_head:
-                return None
+        if head_rule is None or not _valid_head_sha(cited):
+            return None
+        ok_head, _gap = head_rule(cited)
+        if not ok_head:
+            return None
         ok, _binding = _hand_landed_evidence_qualifies(
             env,
             certified_head,
@@ -808,6 +807,8 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
         return False
     head_rule = _audit_fix_receipt_head_rule(repo_root, post_fix_head, certified_head)
     fixer_fam = maker_author_family(state)
+    if fixer_fam is None:
+        return False
     admitted_by_round = {}
     for event in _collapse_dispatch_audit_recorded_rows(journal):
         seat, _phase, _attempt, _occ, rnd = _journal_event_slot(event)

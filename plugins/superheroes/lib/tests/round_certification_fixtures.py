@@ -841,12 +841,15 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
             "findings": [finding],
             "rounds": {
                 "1": {
+                    # Driver: round_driver fix fold _record_round(..., "fixFoldHead") on fixer round r;
+                    # disposition lands on audit round r+1 (dispositionRound).
                     "roundKind": "baseline",
                     "seatStatus": {"code-reviewer": "run"},
                     "blockingCount": 1,
                     "verifyResult": "pass",
                     "verifyPasses": [],
                     "verifiedHead": panel_head,
+                    "fixFoldHead": certified_head,
                 },
                 "2": {
                     "roundKind": "fix",
@@ -854,7 +857,6 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
                     "blockingCount": 0,
                     "verifyResult": "pass",
                     "verifyPasses": [],
-                    "fixFoldHead": certified_head,
                     "verifiedHead": certified_head,
                     **(
                         {"scopedFinder": "skipped-empty-surface"}

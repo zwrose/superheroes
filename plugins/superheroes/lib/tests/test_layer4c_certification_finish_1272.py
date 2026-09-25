@@ -643,6 +643,69 @@ def test_fix_receipt_certifies_post_fix_ancestor_audit(tmp_path):
     assert receipt is not None
 
 
+def test_fix_receipt_refuses_fix_fold_head_on_disposition_round_only(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    state_path = os.path.join(session_dir, RC.STATE_FILE)
+    state = json.load(open(state_path, encoding="utf-8"))
+    finding = state["findings"][0]
+    disposition_round = finding["dispositionRound"]
+    head = finding["dispositionReceipt"]["headSha"]
+    fixer_round = str(disposition_round - 1)
+    state["rounds"][fixer_round].pop("fixFoldHead", None)
+    state["rounds"][str(disposition_round)]["fixFoldHead"] = head
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, sort_keys=True)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def test_fix_receipt_refuses_unresolvable_fixer_family(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    state_path = os.path.join(session_dir, RC.STATE_FILE)
+    state = json.load(open(state_path, encoding="utf-8"))
+    state["config"].pop("fixerVendor", None)
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, sort_keys=True)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def test_fix_receipt_refuses_hand_landed_audit_without_cited_head(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    target_id = _case07_audit_target_id(session_dir)
+    import record_paths
+
+    path = record_paths.store_path(
+        session_dir, 2, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 0)
+    with open(path, encoding="utf-8") as fh:
+        envelope = json.load(fh)
+    envelope["provenance"] = RC.PROVENANCE_HAND_LANDED
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, sort_keys=True)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    lines = []
+    with open(journal_path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if (
+                row.get("outcome") == "recorded"
+                and row.get("phase") == AUDIT_PHASE
+                and row.get("seat") == target_id
+            ):
+                row["provenance"] = RC.PROVENANCE_HAND_LANDED
+                row.pop("headSha", None)
+                row.pop("citedHead", None)
+            lines.append(row)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
 def test_fix_receipt_refuses_hand_landed_audit_on_panel_head(tmp_path):
     import record_paths
 
