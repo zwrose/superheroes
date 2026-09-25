@@ -310,6 +310,59 @@ def test_write_vet_checks_refused_malformed(tmp_path):
     ]
 
 
+def test_write_vet_checks_refused_unchanged_malformed(tmp_path):
+    repo, store = _repo_store(tmp_path)
+    bad = "### X\n- **The vet records:** only records"
+    path = CM.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    at = text.index("```json superheroes-core")
+    open(path, "w", encoding="utf-8").write(
+        text[:at]
+        + "## Vet checks\n\n"
+        + bad
+        + "\n\n"
+        + text[at:]
+    )
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_vet_checks(repo, bad, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == "vet-checks-malformed"
+    assert [(m["entry"], m["reason"]) for m in res["malformed"]] == [
+        ("X", "evidence-missing"),
+    ]
+    assert open(path, encoding="utf-8").read() == before
+
+
+_PATTERNS_WITH_PSEUDO_VET_HEADINGS = (
+    "before\n"
+    "\n"
+    "```markdown\n"
+    "## Vet checks\n"
+    "keep-me-fenced\n"
+    "```\n"
+    "\n"
+    "    ## Vet checks\n"
+    "    keep-me-indented\n"
+    "\n"
+    "after"
+)
+
+
+def test_write_vet_checks_preserves_patterns_with_pseudo_vet_headings(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _write_core(repo, store, patterns=_PATTERNS_WITH_PSEUDO_VET_HEADINGS)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    patterns_before = CM._section(before, "Canonical patterns")
+    res = CM.write_vet_checks(repo, _HEALTHY_BODY, root=store)
+    assert res == {"action": "written"}
+    after = open(path, encoding="utf-8").read()
+    assert "keep-me-fenced" in after
+    assert "keep-me-indented" in after
+    assert CM._section(after, "Canonical patterns") == patterns_before
+
+
 def test_write_vet_checks_refused_clear_when_section_duplicated(tmp_path):
     repo, store = _repo_store(tmp_path)
     path = CM.core_path(repo, store)

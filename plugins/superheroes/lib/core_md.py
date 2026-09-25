@@ -17,6 +17,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import md_fence        # noqa: E402  (sibling)
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
@@ -937,17 +938,45 @@ _VET_FIELD_EVIDENCE = re.compile(r"^-\s+\*\*Evidence:\*\*\s*(.*)$")
 _VET_FIELD_RECORDS = re.compile(r"^-\s+\*\*The vet records:\*\*\s*(.*)$")
 
 
+def _vet_checks_scan_lines(lines):
+    """Fence classifier for vet-checks section discovery (``md_fence.scan`` on bare lines)."""
+    return md_fence.scan(lines)
+
+
+def _vet_checks_line_is_indented_code(line):
+    return md_fence.indent_width(line) >= md_fence.INDENT_CODE_BLOCK_COLUMNS
+
+
+def _vet_checks_is_live_prose_line(inert, line):
+    return not inert and not _vet_checks_line_is_indented_code(line)
+
+
+def _vet_checks_is_live_heading(inert, line):
+    return _vet_checks_is_live_prose_line(inert, line) and _VET_CHECKS_HEADING.match(line)
+
+
+def _vet_checks_is_live_section_end(inert, line):
+    # axis: core json fence always bounds the vet-checks section (opener is inert to md_fence)
+    if _JSON_FENCE_LINE.match(line):
+        return True
+    if not _vet_checks_is_live_prose_line(inert, line):
+        return False
+    return _TOP_LEVEL_SECTION.match(line)
+
+
 def _vet_checks_section_spans(text):
-    """Every ``## Vet checks`` section as (start_line, end_line) indices; end is exclusive."""
+    """Every live ``## Vet checks`` section as (start_line, end_line) indices; end is exclusive."""
     lines = (text or "").splitlines()
+    fence_scan = _vet_checks_scan_lines(lines)
+    inert = fence_scan.inert
     spans = []
     i = 0
     while i < len(lines):
-        if _VET_CHECKS_HEADING.match(lines[i]):
+        if _vet_checks_is_live_heading(inert[i], lines[i]):
             start = i
             end = len(lines)
             for j in range(i + 1, len(lines)):
-                if _TOP_LEVEL_SECTION.match(lines[j]) or _JSON_FENCE_LINE.match(lines[j]):
+                if _vet_checks_is_live_section_end(inert[j], lines[j]):
                     end = j
                     break
             spans.append((start, end))
@@ -1172,23 +1201,26 @@ def replace_vet_checks_section(text, prose):
     """Create, replace, or clear only the ``## Vet checks`` section; preserve all else."""
     new_block = _render_vet_checks_block(prose)
     lines = (text or "").splitlines(keepends=True)
+    bare = [line.rstrip("\r\n") for line in lines]
+    fence_scan = _vet_checks_scan_lines(bare)
+    inert = fence_scan.inert
     start = None
-    for i, line in enumerate(lines):
-        if _VET_CHECKS_HEADING.match(line):
+    for i, line in enumerate(bare):
+        if _vet_checks_is_live_heading(inert[i], line):
             start = i
             break
     if start is None:
         if not new_block:
             return text
         insert_at = len(lines)
-        for i, line in enumerate(lines):
+        for i, line in enumerate(bare):
             if _JSON_FENCE_LINE.match(line):
                 insert_at = i
                 break
         return "".join(lines[:insert_at]) + new_block + "".join(lines[insert_at:])
     end = len(lines)
-    for j in range(start + 1, len(lines)):
-        if _TOP_LEVEL_SECTION.match(lines[j]) or _JSON_FENCE_LINE.match(lines[j]):
+    for j in range(start + 1, len(bare)):
+        if _vet_checks_is_live_section_end(inert[j], bare[j]):
             end = j
             break
     if not new_block:
@@ -1260,9 +1292,13 @@ def write_vet_checks(cwd, body, *, root=None):
                     "malformed": sec_dup or [_vet_checks_malformed_item(
                         None, "section-duplicated", "more than one Vet checks heading")]}
         new_text = replace_vet_checks_section(text, prose)
-        if new_text == text:
-            return {"action": "noop"}
         ok, bad_malformed = _vet_checks_write_acceptance(new_text, prose)
+        if new_text == text:
+            if not ok:
+                # axis: vet-checks-malformed unchanged candidate
+                return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
+                        "malformed": bad_malformed}
+            return {"action": "noop"}
         if not ok:
             # axis: vet-checks-malformed writer invariant
             return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
