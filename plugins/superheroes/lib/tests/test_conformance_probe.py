@@ -2385,10 +2385,11 @@ def test_astra_probe_pass_matches_plant_and_records_attempt(tmp_path, monkeypatc
     attempts, _ = CP._read_astra_attempts(ledger_dir)
     assert len(attempts) == 1
     assert attempts[0]["wave"] == "wave-pass"
+    probe_model, probe_effort = MR.matrix_config("registration-probe", "codex")
     assert calls[0]["seat"] == {
         "vendor": "codex",
-        "model": "gpt-6-astra",
-        "effort": "high",
+        "model": probe_model,
+        "effort": probe_effort,
         "role": "registration-probe",
     }
 
@@ -2396,7 +2397,11 @@ def test_astra_probe_pass_matches_plant_and_records_attempt(tmp_path, monkeypatc
 # bite-axis: the registration-probe seat is admitted by the real dispatch guard
 def test_astra_probe_seat_admitted_by_the_real_guard():
     DA = _load("dispatch_allowlist", "dispatch_allowlist.py")
-    assert DA.validate("registration-probe", "codex", "gpt-6-astra", "high")["ok"] is True
+    probe_model, probe_effort = MR.matrix_config("registration-probe", "codex")
+    assert (
+        DA.validate("registration-probe", "codex", probe_model, probe_effort)["ok"]
+        is True
+    )
 
 
 # bite-axis: unresolvable registry cell refuses before any claim or dispatch

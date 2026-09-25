@@ -158,8 +158,13 @@ def test_model_family():
 
 def test_derivation_helpers():
     assert MR.known_claude_models() == ("haiku", "sonnet", "opus", "fable")
-    assert MR.codex_models() == ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra")
-    assert MR.codex_model_strength() == ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra")
+    assert MR.codex_models() == ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-astra")
+    assert MR.codex_model_strength() == (
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+        "gpt-6-sol",
+        "gpt-6-astra",
+    )
     assert MR.codex_pin_roles() == (
         "reviewer",
         "reviewer-deep",
@@ -668,7 +673,9 @@ def test_registered_astra_on_reviewer_deep_allowlist_and_probe_role_admits():
         MR.matrix_config("reviewer-deep", "codex"),
         ("gpt-6-astra", "high"),
     )
-    assert MR.allowlist("registration-probe", "codex") == (("gpt-6-astra", "high"),)
+    assert MR.allowlist("registration-probe", "codex") == (
+        MR.matrix_config("registration-probe", "codex"),
+    )
     assert MR.ladder("codex")[-1] == ("gpt-6-astra", "high")
     assert MR.codex_effort_for_kind("review") == MR.matrix_config("reviewer", "codex")[1]
     r = MR.resolve_dispatch("registration-probe", "codex")
@@ -718,6 +725,26 @@ def test_codex_pin_verdict_astra_on_reviewer_refused_pin_role():
     ok, reason = MR.codex_pin_verdict("reviewer", "gpt-6-astra")
     assert ok is False
     assert reason.startswith("pin-role-not-eligible:")
+
+
+def test_probe_pending_gpt6_sol_is_only_the_probe_seat():
+    assert MR.ladder("codex") == (
+        ("gpt-5.6-terra", "high"),
+        ("gpt-5.6-sol", "high"),
+        ("gpt-5.6-sol", "xhigh"),
+        ("gpt-6-astra", "high"),
+    )
+    for role in MR.codex_pin_roles():
+        ok, reason = MR.codex_pin_verdict(role, "gpt-6-sol")
+        assert ok is False
+        assert reason.startswith("pin-probe-pending:")
+    r = MR.resolve_dispatch("registration-probe", "codex")
+    assert r["ok"] is True
+    assert r["model_id"] == "gpt-6-sol"
+    assert r["effort"] == "high"
+    assert all(m != "gpt-6-sol" for m, _ in MR.allowlist("reviewer-deep", "codex"))
+    assert all(m != "gpt-6-sol" for m, _ in MR.allowlist("reviewer", "codex"))
+    assert MR.escalate("codex", "gpt-5.6-sol", "xhigh") == ("codex", "gpt-6-astra", "high")
 
 
 def test_codex_pin_verdict_refuses_pins_off_the_role_allowlist():

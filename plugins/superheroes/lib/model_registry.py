@@ -20,6 +20,12 @@ _MODELS: dict[str, dict[str, dict]] = {
     "codex": {
         "gpt-5.6-terra": {"family": "openai", "dispatch": "gpt-5.6-terra", "override_only": False},
         "gpt-5.6-sol": {"family": "openai", "dispatch": "gpt-5.6-sol", "override_only": False},
+        "gpt-6-sol": {
+            "family": "openai",
+            "dispatch": "gpt-6-sol",
+            "override_only": False,
+            "registration": "probe-pending",
+        },
         "gpt-6-astra": {
             "family": "openai",
             "dispatch": "gpt-6-astra",
@@ -69,6 +75,8 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
         ("gpt-5.6-terra", "high"),
         ("gpt-5.6-sol", "high"),
         ("gpt-5.6-sol", "xhigh"),
+        ("gpt-6-sol", "high"),
+        ("gpt-6-sol", "xhigh"),
         ("gpt-6-astra", "high"),
     ),
     "cursor": (
@@ -130,7 +138,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     },
     "registration-probe": {
         "claude": None,
-        "codex": ("gpt-6-astra", "high"),
+        "codex": ("gpt-6-sol", "high"),
         "cursor": None,
     },
 }
