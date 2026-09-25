@@ -18,7 +18,9 @@ from round_certification_fixtures import (
     JOURNAL_FILE,
     PANEL_PHASE,
     _audit_dispatch_envelope,
+    _orders_manifest_for_seat,
     _recorded_row_from_envelope,
+    _write_orders_manifest,
     case07_audited_chain,
     write_certifiable_session,
     write_session,
@@ -338,10 +340,21 @@ def _append_duplicate_audit_record(session_dir, target_id, certified_head):
     dup["attempt"] = 1
     dup["envelopeSha256"] = RR.envelope_sha256(
         dup["payload"], dup["executionEvidence"])
+    manifest = _orders_manifest_for_seat(target_id, rnd=2, attempt=1, phase=AUDIT_PHASE)
+    manifest_sha = _write_orders_manifest(session_dir, manifest)
+    orders_row = {
+        "cmd": "advance",
+        "outcome": "orders-emitted",
+        "phase": AUDIT_PHASE,
+        "round": 2,
+        "attempt": 1,
+        "manifestSha256": manifest_sha,
+    }
     row = _recorded_row_from_envelope(
         dup, target_id, AUDIT_PHASE, 2, head_sha=certified_head, attempt=1)
     journal_path = os.path.join(session_dir, JOURNAL_FILE)
     with open(journal_path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(orders_row, sort_keys=True) + "\n")
         fh.write(json.dumps(row, sort_keys=True) + "\n")
     path = record_paths.store_path(
         session_dir, 2, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 1)
@@ -559,3 +572,352 @@ def _panel_hand_landed_session(tmp_path, phase, seat, *, run_kind):
             }
         ],
     )
+
+
+def _resync_audit_journal_from_store(session_dir, target_id):
+    import record_paths
+
+    path = record_paths.store_path(
+        session_dir, 2, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 0)
+    with open(path, encoding="utf-8") as fh:
+        envelope = json.load(fh)
+    meta = json.load(open(os.path.join(session_dir, RC.META_FILE), encoding="utf-8"))
+    head = meta[session_contract.FIX_FOLD_HEAD_KEY]
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    lines = []
+    with open(journal_path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if (
+                row.get("outcome") == "recorded"
+                and row.get("phase") == AUDIT_PHASE
+                and row.get("seat") == target_id
+                and row.get("attempt") == 0
+            ):
+                row = _recorded_row_from_envelope(
+                    envelope, target_id, AUDIT_PHASE, 2, head_sha=head, attempt=0)
+            lines.append(row)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _mutate_audit_cited_head(session_dir, cited_head):
+    import record_paths
+
+    target_id = _case07_audit_target_id(session_dir)
+    path = record_paths.store_path(
+        session_dir, 2, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 0)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    lines = []
+    with open(journal_path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if (
+                row.get("outcome") == "recorded"
+                and row.get("phase") == AUDIT_PHASE
+                and row.get("seat") == target_id
+                and row.get("attempt") == 0
+            ):
+                row["headSha"] = cited_head
+                row["citedHead"] = cited_head
+            lines.append(row)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def test_fix_receipt_refuses_audit_citing_panel_head(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    meta = json.load(open(os.path.join(session_dir, RC.META_FILE), encoding="utf-8"))
+    _mutate_audit_cited_head(session_dir, meta["headSha"])
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def test_fix_receipt_certifies_post_fix_ancestor_audit(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    receipt, refusal = _certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+
+
+def test_fix_receipt_refuses_hand_landed_audit_on_panel_head(tmp_path):
+    import record_paths
+
+    session_dir = case07_audited_chain(tmp_path)
+    meta = json.load(open(os.path.join(session_dir, RC.META_FILE), encoding="utf-8"))
+    target_id = _case07_audit_target_id(session_dir)
+    panel_head = meta["headSha"]
+    path = record_paths.store_path(
+        session_dir, 2, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 0)
+    with open(path, encoding="utf-8") as fh:
+        envelope = json.load(fh)
+    envelope["provenance"] = RC.PROVENANCE_HAND_LANDED
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, sort_keys=True)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    lines = []
+    with open(journal_path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if (
+                row.get("outcome") == "recorded"
+                and row.get("phase") == AUDIT_PHASE
+                and row.get("seat") == target_id
+            ):
+                row["provenance"] = RC.PROVENANCE_HAND_LANDED
+                row["headSha"] = panel_head
+                row["citedHead"] = panel_head
+            lines.append(row)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def test_fix_receipt_refuses_discharged_but_new_issue(tmp_path):
+    import record_paths
+
+    session_dir = case07_audited_chain(tmp_path)
+    target_id = _case07_audit_target_id(session_dir)
+    path = record_paths.store_path(
+        session_dir, 2, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 0)
+    with open(path, encoding="utf-8") as fh:
+        envelope = json.load(fh)
+    payload = dict(envelope["payload"])
+    payload["ruling"] = "discharged-but-new-issue"
+    payload["newIssues"] = [
+        {"severity": "Important", "file": "x.py", "line": 1, "title": "leak"},
+    ]
+    envelope["payload"] = payload
+    envelope["payloadSha256"] = session_contract.payload_sha256(payload)
+    envelope["envelopeSha256"] = RR.envelope_sha256(payload, envelope["executionEvidence"])
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, sort_keys=True)
+    _resync_audit_journal_from_store(session_dir, target_id)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def _append_supersede_audit_journal_row(session_dir, target_id, head, *, ruling="discharged"):
+    import record_paths
+
+    path = record_paths.store_path(
+        session_dir, 2, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 0)
+    with open(path, encoding="utf-8") as fh:
+        envelope = json.load(fh)
+    payload = dict(envelope["payload"])
+    payload["ruling"] = ruling
+    if ruling == "not-discharged":
+        payload["reason"] = "still broken"
+    envelope["payload"] = payload
+    envelope["payloadSha256"] = session_contract.payload_sha256(payload)
+    envelope["envelopeSha256"] = RR.envelope_sha256(payload, envelope["executionEvidence"])
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, sort_keys=True)
+    row = _recorded_row_from_envelope(
+        envelope, target_id, AUDIT_PHASE, 2, head_sha=head, attempt=0)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    with open(journal_path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def test_fix_receipt_supersede_slot_latest_discharged_certifies(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    meta = json.load(open(os.path.join(session_dir, RC.META_FILE), encoding="utf-8"))
+    target_id = _case07_audit_target_id(session_dir)
+    head = meta[session_contract.FIX_FOLD_HEAD_KEY]
+    _append_supersede_audit_journal_row(session_dir, target_id, head, ruling="not-discharged")
+    _append_supersede_audit_journal_row(session_dir, target_id, head, ruling="discharged")
+    receipt, refusal = _certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+
+
+def test_fix_receipt_ignores_superseded_audit_attempt(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    meta = json.load(open(os.path.join(session_dir, RC.META_FILE), encoding="utf-8"))
+    target_id = _case07_audit_target_id(session_dir)
+    head = meta[session_contract.FIX_FOLD_HEAD_KEY]
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    supersede_row = {
+        "cmd": session_contract.RE_EMIT_CMD,
+        "outcome": session_contract.ORDERS_SUPERSEDED_OUTCOME,
+        "phase": AUDIT_PHASE,
+        "round": 2,
+        "attempt": 0,
+        "newAttempt": 1,
+    }
+    with open(journal_path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(supersede_row, sort_keys=True) + "\n")
+    _append_duplicate_audit_record(session_dir, target_id, head)
+    receipt, refusal = _certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+
+
+def test_fix_receipt_later_round_not_discharged_wins(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    meta = json.load(open(os.path.join(session_dir, RC.META_FILE), encoding="utf-8"))
+    target_id = _case07_audit_target_id(session_dir)
+    head = meta[session_contract.FIX_FOLD_HEAD_KEY]
+    manifest = _orders_manifest_for_seat(target_id, rnd=3, attempt=0, phase=AUDIT_PHASE)
+    manifest_sha = _write_orders_manifest(session_dir, manifest)
+    orders_row = {
+        "cmd": "advance",
+        "outcome": "orders-emitted",
+        "phase": AUDIT_PHASE,
+        "round": 3,
+        "attempt": 0,
+        "manifestSha256": manifest_sha,
+    }
+    env = _audit_dispatch_envelope(target_id, 3)
+    env["payload"]["ruling"] = "not-discharged"
+    env["payload"]["reason"] = "regressed"
+    env["payloadSha256"] = session_contract.payload_sha256(env["payload"])
+    env["envelopeSha256"] = RR.envelope_sha256(env["payload"], env["executionEvidence"])
+    row = _recorded_row_from_envelope(env, target_id, AUDIT_PHASE, 3, head_sha=head, attempt=0)
+    import record_paths
+
+    path = record_paths.store_path(
+        session_dir, 3, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 0)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(env, fh, sort_keys=True)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    with open(journal_path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(orders_row, sort_keys=True) + "\n")
+        fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def test_fix_receipt_refuses_payload_id_manifest_seat_mismatch(tmp_path):
+    import record_paths
+
+    session_dir = case07_audited_chain(tmp_path)
+    target_id = _case07_audit_target_id(session_dir)
+    path = record_paths.store_path(
+        session_dir, 2, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 0)
+    with open(path, encoding="utf-8") as fh:
+        envelope = json.load(fh)
+    payload = dict(envelope["payload"])
+    payload["id"] = "wrong-id"
+    envelope["payload"] = payload
+    envelope["payloadSha256"] = session_contract.payload_sha256(payload)
+    envelope["envelopeSha256"] = RR.envelope_sha256(payload, envelope["executionEvidence"])
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, sort_keys=True)
+    _resync_audit_journal_from_store(session_dir, target_id)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def test_fix_receipt_refuses_hand_landed_self_authenticating_audit(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    _mutate_audit_runner_source(session_dir, "codex")
+    import record_paths
+
+    target_id = _case07_audit_target_id(session_dir)
+    path = record_paths.store_path(
+        session_dir, 2, AUDIT_PHASE, record_paths.storage_key(target_id, 0), 0)
+    with open(path, encoding="utf-8") as fh:
+        envelope = json.load(fh)
+    envelope["provenance"] = RC.PROVENANCE_HAND_LANDED
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh, sort_keys=True)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    lines = []
+    with open(journal_path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if row.get("phase") == AUDIT_PHASE and row.get("outcome") == "recorded":
+                row["provenance"] = RC.PROVENANCE_HAND_LANDED
+            lines.append(row)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def test_fix_receipt_refuses_fixer_family_auditor(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    state_path = os.path.join(session_dir, RC.STATE_FILE)
+    state = json.load(open(state_path, encoding="utf-8"))
+    fixer = state["config"]["fixerVendor"]
+    fixer_fam = model_registry.family_for("code-fixer", fixer)
+    vendor = None
+    for v in model_registry.VENDORS:
+        if model_registry.family_for("auditor", v) == fixer_fam:
+            vendor = v
+            break
+    assert vendor is not None
+    _mutate_audit_runner_source(session_dir, vendor)
+    _mutate_audit_selected_vendor(session_dir, vendor)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def test_fix_receipt_merged_member_certifies_via_representative(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    state_path = os.path.join(session_dir, RC.STATE_FILE)
+    state = json.load(open(state_path, encoding="utf-8"))
+    rep = state["findings"][0]
+    rep_key = session_contract.finding_identity_key(rep)
+    member = {
+        "id": "F-merged",
+        "file": "src/other.py",
+        "line": 99,
+        "title": "merged away",
+        "severity": "Important",
+        session_contract.MERGED_INTO_FIELD: rep_key,
+    }
+    member[session_contract.FINDING_KEY_FIELD] = session_contract.finding_identity_key(member)
+    state["findings"].append(member)
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, sort_keys=True)
+    receipt, refusal = _certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+
+
+def test_panel_refuses_lens_coverage_without_manifest_roster(tmp_path):
+    from round_certification_fixtures import _dispatch_envelope_for, _write_orders_manifest
+
+    session_dir = case07_audited_chain(tmp_path)
+    state_path = os.path.join(session_dir, RC.STATE_FILE)
+    state = json.load(open(state_path, encoding="utf-8"))
+    state["config"]["dimensions"] = ["code-reviewer", "security-reviewer"]
+    state["rounds"]["1"]["lensCoverage"] = {"ran": 2, "expected": 2, "floor": False}
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, sort_keys=True)
+    manifest = _orders_manifest_for_seat("code-reviewer")
+    skey = "code-reviewer-e08ba693bb6ad36a"
+    entry = dict(manifest["seats"]["code-reviewer"])
+    entry["storeKey"] = skey
+    manifest["seats"] = {skey: entry}
+    manifest_sha = _write_orders_manifest(session_dir, manifest)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    lines = []
+    with open(journal_path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if row.get("outcome") == "orders-emitted" and row.get("phase") == PANEL_PHASE:
+                row["manifestSha256"] = manifest_sha
+            lines.append(row)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert "audited-chain-gap:panel" in refusal["detail"]

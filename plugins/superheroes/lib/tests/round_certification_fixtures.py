@@ -854,6 +854,7 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
                     "blockingCount": 0,
                     "verifyResult": "pass",
                     "verifyPasses": [],
+                    "fixFoldHead": certified_head,
                     "verifiedHead": certified_head,
                     **(
                         {"scopedFinder": "skipped-empty-surface"}

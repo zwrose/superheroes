@@ -559,33 +559,163 @@ def _panel_lens_coverage_complete(lc, expected_count):
     return True
 
 
+def _valid_head_sha(head):
+    return isinstance(head, str) and bool(head) and len(head) in (40, 64)
+
+
+def _panel_dimension_roster_from_manifest(manifest):
+    """Configured dimension names from manifest seat entries — not storage map keys."""
+    seats = manifest.get("seats") if isinstance(manifest, dict) else None
+    if not isinstance(seats, dict):
+        return None
+    roster = set()
+    for entry in seats.values():
+        if not isinstance(entry, dict):
+            return None
+        seat = entry.get("seat")
+        if not isinstance(seat, str) or not seat:
+            return None
+        if seat in roster:
+            return None
+        roster.add(seat)
+    return roster
+
+
 def _audited_chain_panel_coverage_ok(state, manifest, panel_round):
-    """Panel leg: manifest roster must cover configured dimensions or round lensCoverage."""
+    """Panel leg: authenticated manifest roster must cover every configured dimension."""
     cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
     dims = round_panel_contract.panel_dimensions_from_config(cfg)
     if not dims:
         return True
-    seats = manifest.get("seats") if isinstance(manifest, dict) else None
-    if isinstance(seats, dict) and all(dim in seats for dim in dims):
-        return True
+    roster = _panel_dimension_roster_from_manifest(manifest)
+    if roster is None or not all(dim in roster for dim in dims):
+        return False
     rounds = state.get("rounds")
-    if not isinstance(rounds, dict):
-        return False
-    rec = rounds.get(str(panel_round))
-    if not isinstance(rec, dict):
-        return False
-    return _panel_lens_coverage_complete(rec.get("lensCoverage"), len(dims))
+    if isinstance(rounds, dict):
+        rec = rounds.get(str(panel_round))
+        if isinstance(rec, dict):
+            _panel_lens_coverage_complete(rec.get("lensCoverage"), len(dims))
+    return True
 
 
-def _audit_cited_head_rule(ctx, repo_root, certified_head):
+def _audit_fix_receipt_head_rule(repo_root, post_fix_head, certified_head):
     def _rule(cited_head):
-        if cited_head == certified_head:
-            return True, None
-        if _is_ancestor(repo_root, cited_head, certified_head):
-            return True, None
-        return False, "audited-chain-gap:descent"
+        if not _valid_head_sha(cited_head):
+            return False, "audited-chain-gap:descent"
+        if not _is_ancestor(repo_root, post_fix_head, cited_head):
+            return False, "audited-chain-gap:descent"
+        if not _is_ancestor(repo_root, cited_head, certified_head):
+            return False, "audited-chain-gap:descent"
+        return True, None
 
     return _rule
+
+
+def _resolve_post_fix_head(state, finding):
+    disposition_round = finding.get("dispositionRound")
+    if isinstance(disposition_round, bool) or not isinstance(disposition_round, int):
+        return None
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return None
+    rec = rounds.get(str(disposition_round))
+    if not isinstance(rec, dict):
+        return None
+    post_fix = rec.get("fixFoldHead")
+    if not _valid_head_sha(post_fix):
+        return None
+    receipt = finding.get("dispositionReceipt")
+    if not isinstance(receipt, dict):
+        return None
+    bound = receipt.get("headSha")
+    if not _valid_head_sha(bound) or bound != post_fix:
+        return None
+    return post_fix
+
+
+def _superseded_audit_attempts(journal):
+    superseded = set()
+    if not isinstance(journal, list):
+        return superseded
+    for event in journal:
+        if not isinstance(event, dict):
+            continue
+        if not session_contract.journal_is_re_emit_orders_superseded(event):
+            continue
+        phase = event.get("phase")
+        rnd = event.get("round")
+        attempt = event.get("attempt")
+        if (phase == P_AUDITS and isinstance(rnd, int) and not isinstance(rnd, bool)
+                and attempt is not None):
+            superseded.add((rnd, phase, attempt))
+    return superseded
+
+
+def _collapse_dispatch_audit_recorded_rows(journal):
+    """Latest journal row per dispatch-audits slot; drop superseded attempts."""
+    if not isinstance(journal, list):
+        return []
+    superseded = _superseded_audit_attempts(journal)
+    latest = {}
+    for event in journal:
+        if not isinstance(event, dict):
+            continue
+        if event.get("outcome") != "recorded" or event.get("phase") != P_AUDITS:
+            continue
+        seat, phase, attempt, occ, rnd = _journal_event_slot(event)
+        if attempt is None or not isinstance(rnd, int) or isinstance(rnd, bool):
+            continue
+        if (rnd, phase, attempt) in superseded:
+            continue
+        latest[(rnd, phase, attempt, seat, occ)] = event
+    return list(latest.values())
+
+
+def _audit_orders_emit_for_attempt(journal, rnd, attempt):
+    for event in journal:
+        if not isinstance(event, dict):
+            continue
+        if (event.get("outcome") == "orders-emitted" and event.get("phase") == P_AUDITS
+                and event.get("round") == rnd and event.get("attempt") == attempt):
+            return event
+    return None
+
+
+def _manifest_vendor_for_audit_row(session_dir, journal, event):
+    seat, phase, attempt, occ, rnd = _journal_event_slot(event)
+    emit = _audit_orders_emit_for_attempt(journal, rnd, attempt)
+    if emit is None:
+        return None
+    manifest, refusal = _verified_orders_manifest(session_dir, emit)
+    if refusal is not None or not isinstance(manifest, dict):
+        return None
+    seats = manifest.get("seats")
+    if not isinstance(seats, dict):
+        return None
+    skey = storage_key(seat, occ)
+    entry = seats.get(skey)
+    if not isinstance(entry, dict):
+        entry = seats.get(seat)
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("seat") != seat:
+        return None
+    entry_occ = entry.get("occurrence", 0)
+    if entry_occ != occ:
+        return None
+    vendor = entry.get("vendor")
+    if not isinstance(vendor, str) or not vendor:
+        return None
+    return vendor
+
+
+def _audited_chain_fold_target_id(finding, by_key):
+    if finding.get(session_contract.MERGED_INTO_FIELD):
+        rep = _resolve_merged_into_entry(finding, by_key)
+        if rep is None:
+            return None
+        return _finding_identity_key(rep)
+    return _finding_identity_key(finding)
 
 
 def _audit_runner_vendor_from_envelope(envelope):
@@ -597,58 +727,6 @@ def _audit_runner_vendor_from_envelope(envelope):
     if isinstance(source, str) and source and source in model_registry.VENDORS:
         return source
     return None
-
-
-def _audit_merge_verified_manifest_seats(expected, conflicted, manifest):
-    seats = manifest.get("seats")
-    if not isinstance(seats, dict):
-        return
-    for entry in seats.values():
-        if not isinstance(entry, dict):
-            continue
-        seat = entry.get("seat")
-        vendor = entry.get("vendor")
-        if not isinstance(seat, str) or not seat:
-            continue
-        if not isinstance(vendor, str) or not vendor:
-            continue
-        if seat in conflicted:
-            continue
-        if seat in expected:
-            if expected[seat] != vendor:
-                del expected[seat]
-                conflicted.add(seat)
-        else:
-            expected[seat] = vendor
-
-
-def _audit_expected_auditors_from_dispatch_manifests(
-        session_dir, journal, disposition_round, attempts_with_results):
-    """Selected auditor per target from hash-verified dispatch-audits orders manifests."""
-    if not isinstance(journal, list):
-        return None
-    expected = {}
-    conflicted = set()
-    emit_by_attempt = {}
-    for event in journal:
-        if not isinstance(event, dict):
-            return None
-        if (event.get("outcome") != "orders-emitted" or event.get("phase") != P_AUDITS
-                or event.get("round") != disposition_round):
-            continue
-        attempt = event.get("attempt")
-        if attempt is None:
-            continue
-        emit_by_attempt[attempt] = event
-    for attempt in attempts_with_results:
-        emit_event = emit_by_attempt.get(attempt)
-        if emit_event is None:
-            continue
-        manifest, refusal = _verified_orders_manifest(session_dir, emit_event)
-        if refusal is not None:
-            continue
-        _audit_merge_verified_manifest_seats(expected, conflicted, manifest)
-    return expected
 
 
 def _audit_admitted_dispatch_result(session_dir, journal, event, certified_head, head_rule):
@@ -695,6 +773,10 @@ def _audit_admitted_dispatch_result(session_dir, journal, event, certified_head,
         if not rk_ok:
             return None
     elif provenance == PROVENANCE_HAND_LANDED:
+        if cited and head_rule is not None:
+            ok_head, _gap = head_rule(cited)
+            if not ok_head:
+                return None
         ok, _binding = _hand_landed_evidence_qualifies(
             env,
             certified_head,
@@ -712,43 +794,61 @@ def _audit_admitted_dispatch_result(session_dir, journal, event, certified_head,
 def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root):
     session_dir = ctx.get("session_dir")
     journal = ctx.get("journal") or []
+    state = ctx.get("state") or {}
     if session_dir is None or not isinstance(journal, list):
         return False
-    canonical_id = _finding_identity_key(finding)
-    if not isinstance(canonical_id, str) or not canonical_id:
+    by_key, marker_refusal = _certification_findings_by_key(state)
+    if marker_refusal is not None:
         return False
-    disposition_round = finding.get("dispositionRound")
-    if isinstance(disposition_round, bool) or not isinstance(disposition_round, int):
+    fold_id = _audited_chain_fold_target_id(finding, by_key)
+    if not isinstance(fold_id, str) or not fold_id:
         return False
-    head_rule = _audit_cited_head_rule(ctx, repo_root, certified_head)
-    results = []
-    collection_manifest = {}
-    attempts_with_results = set()
-    for event in journal:
-        if not isinstance(event, dict):
-            return False
-        if event.get("round") != disposition_round:
+    post_fix_head = _resolve_post_fix_head(state, finding)
+    if post_fix_head is None:
+        return False
+    head_rule = _audit_fix_receipt_head_rule(repo_root, post_fix_head, certified_head)
+    fixer_fam = maker_author_family(state)
+    admitted_by_round = {}
+    for event in _collapse_dispatch_audit_recorded_rows(journal):
+        seat, _phase, _attempt, _occ, rnd = _journal_event_slot(event)
+        if seat != fold_id:
             continue
         admitted = _audit_admitted_dispatch_result(
             session_dir, journal, event, certified_head, head_rule)
         if admitted is None:
             continue
         payload, env = admitted
-        results.append(payload)
-        _seat, _phase, attempt, _occ, _rnd = _journal_event_slot(event)
-        if attempt is not None:
-            attempts_with_results.add(attempt)
         pid = payload.get("id")
-        if isinstance(pid, str) and pid:
-            vendor = _audit_runner_vendor_from_envelope(env)
-            if vendor is not None:
-                collection_manifest[pid] = vendor
-    expected_auditors = _audit_expected_auditors_from_dispatch_manifests(
-        session_dir, journal, disposition_round, attempts_with_results)
-    if expected_auditors is None:
+        if pid != fold_id or pid != seat:
+            continue
+        manifest_vendor = _manifest_vendor_for_audit_row(session_dir, journal, event)
+        if manifest_vendor is None:
+            continue
+        runner_vendor = _audit_runner_vendor_from_envelope(env)
+        if runner_vendor is not None and fixer_fam is not None:
+            audit_fam = model_registry.family_for("auditor", runner_vendor)
+            if audit_fam is not None and audit_fam == fixer_fam:
+                continue
+        provenance = event.get("provenance") or env.get("provenance")
+        dispatch_authentic = False
+        if provenance == PROVENANCE_DISPATCH_OBSERVED and runner_vendor is not None:
+            dispatch_authentic = True
+        admitted_by_round.setdefault(rnd, []).append(
+            (payload, dispatch_authentic, manifest_vendor, runner_vendor))
+    if not admitted_by_round:
         return False
+    fold_round = max(admitted_by_round)
+    row_bundle = admitted_by_round[fold_round]
+    results = []
+    expected_auditors = {}
+    collection_manifest = {}
+    for payload, dispatch_authentic, manifest_vendor, runner_vendor in row_bundle:
+        results.append(payload)
+        if dispatch_authentic and runner_vendor is not None:
+            expected_auditors[fold_id] = manifest_vendor
+            collection_manifest[fold_id] = runner_vendor
     audited_target = {
-        "id": canonical_id,
+        "id": fold_id,
         "file": finding.get("file"),
         "line": finding.get("line"),
         "title": finding.get("title"),
@@ -763,8 +863,12 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
         expected_auditors=expected_auditors,
         collection_manifest=collection_manifest,
     )
-    discharged = outcome.get("discharged") or []
-    return canonical_id in discharged
+    for entry in outcome.get("audits") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("id") == fold_id and entry.get("ruling") == "discharged":
+            return True
+    return False
 
 
 def _is_ancestor(repo_root, ancestor, descendant):
@@ -839,12 +943,19 @@ def _audited_chain_legs(ctx):
     by_key, marker_refusal = _certification_findings_by_key(state)
     if marker_refusal is not None:
         return gap_out("fix-receipt")
+    checked_fold_targets = set()
     for finding in by_key.values():
         if not isinstance(finding, dict):
             continue
         graded = _effective_certification_finding(finding, by_key)
         if graded.get("disposition") != "fixed":
             continue
+        fold_id = _audited_chain_fold_target_id(graded, by_key)
+        if not isinstance(fold_id, str) or not fold_id:
+            return gap_out("fix-receipt")
+        if fold_id in checked_fold_targets:
+            continue
+        checked_fold_targets.add(fold_id)
         receipt = graded.get("dispositionReceipt")
         if not isinstance(receipt, dict) or receipt.get("verifyResult") != "pass":
             return gap_out("fix-receipt")
