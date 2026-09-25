@@ -815,6 +815,9 @@ def write(cwd, facts, status, *, root=None, now=None):
         if not ok:
             return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
                     "malformed": bad_malformed, "record": None, "proposals": []}
+        if not _initial_write_core_round_trip_ok(facts, vet_prose, parse_core(text)):
+            return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP,
+                    "record": None, "proposals": []}
         try:
             store_core.atomic_write(core_path(cwd, root), text)
         except RepoRootUnavailable as exc:
@@ -1237,9 +1240,24 @@ def _render_vet_checks_block(prose):
 
 def _vet_checks_body_forbidden(prose):
     for line in (prose or "").splitlines():
-        if _TOP_LEVEL_SECTION.match(line) or _JSON_FENCE_LINE.match(line):
+        if _TOP_LEVEL_SECTION.match(line) or "```json superheroes-core" in line:
             return True
     return False
+
+
+def _initial_write_core_round_trip_ok(facts, vet_prose, parsed):
+    """True when ``parse_core`` on a newly rendered core matches supplied json fields and vet prose."""
+    if parsed is None:
+        return False
+    if parsed.get("verifyCommand") != facts.get("verifyCommand"):
+        return False
+    if parsed.get("stackTags") != list(facts.get("stackTags") or []):
+        return False
+    if parsed.get("enginePreferences") != dict(facts.get("enginePreferences") or {}):
+        return False
+    if parsed.get("vetChecks") != (vet_prose or "").strip():
+        return False
+    return True
 
 
 def replace_vet_checks_section(text, prose):

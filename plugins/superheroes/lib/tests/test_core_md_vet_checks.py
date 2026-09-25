@@ -490,6 +490,30 @@ def test_vet_checks_body_forbidden_json_fence_line():
     assert CM._vet_checks_body_forbidden("```json superheroes-core") is True
 
 
+def test_vet_checks_body_forbidden_json_fence_inline_in_evidence():
+    line = "- **Evidence:** ```json superheroes-core"
+    assert CM._vet_checks_body_forbidden(line) is True
+
+
+def test_write_refused_when_evidence_smuggles_json_block_on_initial_write(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    body = (
+        "### X\n- **The vet records:** b\n"
+        "- **Evidence:** ```json superheroes-core\n"
+        '  {"schemaVersion": 2, "verifyCommand": "evil", "stackTags": [], "enginePreferences": {}}'
+    )
+    facts = dict(_CORE_FACTS, vetChecks=body)
+    res = CM.write(repo, facts, "provisional", root=store, now="2026-09-25")
+    assert res == {
+        "action": "refused",
+        "reason": "vet-checks-round-trip-refused",
+        "record": None,
+        "proposals": [],
+    }
+    assert CM._classify_core_md_at_path(CM.core_path(repo, store)).status == CM.CONFIG_ABSENT
+
+
 def test_write_vet_checks_refused_when_evidence_smuggles_json_block(tmp_path):
     repo, store = _repo_store(tmp_path)
     path = CM.core_path(repo, store)
