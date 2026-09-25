@@ -344,6 +344,41 @@ def _review_gate_policy_lines(data):
     return lines
 
 
+def _vet_checks_view_lines(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    reason = payload.get("reason")
+    lines = ["### Vet checks"]
+    if reason:
+        if reason == core_md.BUILDER_DISPATCH_REASON_ABSENT:
+            lines.append("(none declared — the vet runs no project vet checks)")
+            return lines
+        lines.append("⚠ vet checks unreadable: %s" % reason)
+        if reason == core_md.VET_CHECKS_REASON_MALFORMED:
+            for item in payload.get("malformed") or []:
+                field = item.get("field")
+                if field is not None:
+                    lines.append(
+                        "⚠ malformed entry %s field %s: %s"
+                        % (item.get("index"), field, item.get("reason")))
+                else:
+                    lines.append(
+                        "⚠ malformed entry %s: %s"
+                        % (item.get("index"), item.get("reason")))
+        return lines
+    if not payload.get("declared"):
+        lines.append("(none declared — the vet runs no project vet checks)")
+        return lines
+    checks = payload.get("checks") or []
+    if not checks:
+        lines.append("(declared empty — zero vet checks)")
+        return lines
+    for check in checks:
+        lines.append("- %s" % _one_line_prose(check.get("name", "")))
+        lines.append("  evidence: %s" % _one_line_prose(check.get("evidence", "")))
+        lines.append("  the vet records: %s" % _one_line_prose(check.get("records", "")))
+    return lines
+
+
 def collect(cwd, root=None):
     """Gather everything the view renders (read-only): the core facts, each hero layer's text,
     the pinned patterns, the resolved storage mode, the coalesced drift notice, the effective
@@ -432,12 +467,16 @@ def collect(cwd, root=None):
             "overlayParse": None,
             "shipped": review_gate_policy.load_shipped_layer(),
         }
+    try:
+        vet_checks = core_md.read_vet_checks(cwd, root)
+    except Exception:
+        vet_checks = {"reason": "vet-checks-read-failed", "declared": False, "checks": []}
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
             "modelTierRefusal": model_tier_refusal,
             "enginePrefs": engine_prefs, "guardian": guardian,
-            "reviewGatePolicy": review_gate}
+            "reviewGatePolicy": review_gate, "vetChecks": vet_checks}
 
 
 def _health_line(counts):
@@ -494,6 +533,9 @@ def render(cwd, *, root=None):
         out.append("(no core calibration yet)")
         _append_builder_dispatch_row(out, cwd, root)
         out.append("")
+        for line in _vet_checks_view_lines(data.get("vetChecks")):
+            out.append(line)
+        out.append("")
         out.append("## Review gate policy")
         for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
             out.append(line)
@@ -511,6 +553,9 @@ def render(cwd, *, root=None):
             out.append(show_it)
         else:
             out.append('(not declared — the presentation level for this project is "none")')
+        out.append("")
+        for line in _vet_checks_view_lines(data.get("vetChecks")):
+            out.append(line)
         prefs = core.get("enginePreferences")
         prefs = prefs if isinstance(prefs, dict) else {}
         out.append("")
