@@ -248,6 +248,7 @@ Follow-up: `/superheroes:configure`.
    When Codex is selected and no concrete model pin exists, explain the effective codex defaults.
    Codex tier map: haiku=gpt-6-sol, sonnet=gpt-6-sol, opus=gpt-6-sol.
    A `reviewer-deep` Codex pin may also name `gpt-6-astra`; it is valid for `reviewer-deep` only, at effort `high`.
+   A Codex pin may also name the pin-only `gpt-5.6-sol` (any role with a codex cell, at that role's own effort); a pin to the retired `gpt-5.6-terra` is refused `model-retired`.
    `max` effort is owner opt-in only (never a default).
 
 3. **Show the build authorization — never apply it (FR-13).** If an external **implementation** engine

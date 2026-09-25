@@ -2812,6 +2812,7 @@ def test_write_engine_pref_pins_codex_pin_ignored_note_when_reviewer_engine_clau
 
 # --- #1435 WO-2: I2d — a retired codex model pin refuses on BOTH pin keys, nothing written -------
 
+# bite-axis: write_engine_pref_pins refuses a retired-codex-model pin on both codexModels and seatPins keys, leaving core.md byte-identical
 def test_write_engine_pref_pins_refuses_retired_codex_model_both_keys_byte_identical(tmp_path):
     repo, store = _write_core_for_pin_tests(tmp_path)
     path = CM.core_path(repo, store)

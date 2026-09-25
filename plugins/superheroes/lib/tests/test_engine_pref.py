@@ -1567,6 +1567,7 @@ def test_normalize_seat_pin_map_vendor_only_and_empty_model_rejected():
 _RETIRED_TERRA_REASON = "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
 
 
+# bite-axis: normalize_seat_pin_map refuses a codex seat pin naming retired gpt-5.6-terra, but leaves a non-codex vendor naming the same string untouched
 def test_normalize_seat_pin_map_refuses_retired_codex_model():
     got = EP.normalize_seat_pin_map(
         {"security-reviewer": {"vendor": "codex", "model": "gpt-5.6-terra"}})
@@ -1579,6 +1580,7 @@ def test_normalize_seat_pin_map_refuses_retired_codex_model():
     assert other["invalid"] == {}
 
 
+# bite-axis: load_engine_prefs reports both invalidCodexModels and invalidSeatPins for retired gpt-5.6-terra, dropping it from the valid maps
 def test_load_engine_prefs_reports_invalid_seat_pins_and_codex_models_for_retired_terra(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {

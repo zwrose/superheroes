@@ -821,6 +821,7 @@ def test_host_family_table():
 _RETIRED_TERRA_REASON = "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
 
 
+# bite-axis: no unpinned surface (matrix cell, ladder rung, or Claude peer) ever names a retired or pin-only codex model
 def test_i1_no_default_surface_names_a_retired_or_pin_only_model():
     """I1: no codex matrix cell, no raw ladder rung, and no peer value names gpt-5.6-terra
     (retired) or gpt-5.6-sol (pin-only)."""
@@ -838,6 +839,7 @@ def test_i1_no_default_surface_names_a_retired_or_pin_only_model():
     assert "gpt-5.6-terra" not in MR.codex_models()
 
 
+# bite-axis: retired gpt-5.6-terra is refused with the named-replacement reason by both validate_config and codex_pin_verdict, for every role and both allow_override_only values
 def test_i2_retired_terra_refused_by_validate_config_and_pin_verdict():
     """I2 a+b: the exact retired reason string, for every codex_pin_roles() role and both
     allow_override_only values; the retired check runs before the not-registered check (the
@@ -853,6 +855,7 @@ def test_i2_retired_terra_refused_by_validate_config_and_pin_verdict():
         assert reason == _RETIRED_TERRA_REASON
 
 
+# bite-axis: pin-only gpt-5.6-sol is appended to the allowlist after the ladder slice, at the cell's own effort
 def test_i3_pin_only_sol_appended_after_ladder_slice_at_cell_effort():
     for role in MR.codex_pin_roles():
         cell = MR.matrix_config(role, "codex")
@@ -864,6 +867,7 @@ def test_i3_pin_only_sol_appended_after_ladder_slice_at_cell_effort():
         assert allowed[-1] == ("gpt-5.6-sol", effort)
 
 
+# bite-axis: pin-only gpt-5.6-sol never appears in the raw ladder, any matrix cell, or an escalate() result
 def test_i3_pin_only_absent_from_ladder_matrix_cells_and_escalate():
     assert all(m != "gpt-5.6-sol" for m, _ in MR.ladder("codex"))
     for role in MR.roles():
@@ -883,6 +887,7 @@ def test_i3_pin_only_absent_from_non_pin_role_allowlists():
         assert all(m != "gpt-5.6-sol" for m, _ in MR.allowlist(role, "codex"))
 
 
+# bite-axis: pinning gpt-5.6-sol resolves to xhigh only on reviewer-deep; every other pin-eligible role resolves it to high
 def test_i3_reviewer_deep_pin_sol_resolves_xhigh_others_resolve_high():
     assert MR.codex_pin_verdict("reviewer-deep", "gpt-5.6-sol") == (True, None)
     r = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-5.6-sol", None)
@@ -897,10 +902,12 @@ def test_i3_codex_model_strength_pin_only_first_then_ladder_order():
     assert set(MR.codex_models()) <= set(MR.codex_model_strength())
 
 
+# bite-axis: codex_min_cli() reports gpt-6-sol's own min_cli as the registry floor
 def test_i4_codex_min_cli_returns_gpt6_sol_floor():
     assert MR.codex_min_cli() == ("0.157.0", "gpt-6-sol")
 
 
+# bite-axis: codex_min_cli() compares min_cli versions numerically, not lexically as strings
 def test_i4_codex_min_cli_compares_numerically_not_as_a_string(monkeypatch):
     # "0.99.0" sorts AFTER "0.157.0" as a string (lexical '9' > '1') but is numerically SMALLER —
     # this pins the numeric comparison the invariant demands.

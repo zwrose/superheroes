@@ -242,6 +242,7 @@ def _increment_version(version_str):
     return ".".join(str(p) for p in parts)
 
 
+# bite-axis: codex_cli_floor_probe refuses a codex CLI below the registry floor, naming the floor, the required model, and the CLI's own version in the detail
 def test_codex_cli_floor_probe_below_floor_refused():
     below = _decrement_version(_CODEX_FLOOR_VERSION)
     floor_model = MR.codex_min_cli()[1]
@@ -275,6 +276,7 @@ def test_codex_cli_floor_probe_above_floor_passes():
     assert pp.codex_cli_floor_probe(run=_run) is None
 
 
+# bite-axis: codex_cli_floor_probe fails closed and refuses when the CLI's version output cannot be parsed
 def test_codex_cli_floor_probe_unparseable_output_refused():
     def _run(argv, **kwargs):
         return SimpleNamespace(returncode=0, stdout="not a version\n", stderr="")
@@ -307,6 +309,7 @@ def test_codex_cli_floor_probe_no_declared_floor_skips_probe(monkeypatch):
     assert calls == []
 
 
+# bite-axis: cross_vendor_cli_probe("codex") refuses on a below-floor CLI without ever running the exec no-op
 def test_cross_vendor_cli_probe_codex_below_floor_refuses_without_exec():
     below = _decrement_version(_CODEX_FLOOR_VERSION)
     calls = []
@@ -335,6 +338,7 @@ def test_cross_vendor_cli_probe_cursor_unaffected_by_codex_floor_gate():
     assert result["ok"] is True
 
 
+# bite-axis: composition_liveness refuses every codex cell on a below-floor CLI without ever probing a single cell
 def test_composition_liveness_codex_below_floor_all_cells_refused_without_per_cell_probe():
     below = _decrement_version(_CODEX_FLOOR_VERSION)
     calls = []
@@ -358,6 +362,7 @@ def test_composition_liveness_codex_below_floor_all_cells_refused_without_per_ce
     assert calls == []
 
 
+# bite-axis: live_vendors_for_composition bypasses its own liveness cache the moment the codex CLI drops below floor, refusing without a stale-cached-ready read
 def test_live_vendors_for_composition_cache_bypassed_when_codex_cli_drops_below_floor(
     tmp_path, monkeypatch,
 ):
