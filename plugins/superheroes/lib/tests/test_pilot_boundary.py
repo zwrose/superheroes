@@ -1,6 +1,7 @@
 """Tests for pilot_boundary.py — target boundary bindings and verdicts."""
 import json
 import os
+import shlex
 import stat
 import sys
 
@@ -506,7 +507,7 @@ def test_observe_datastore_identity_child_env_has_only_connection_var(private_tm
     _write_executable(
         script,
         "#!/bin/sh\n"
-        '/usr/bin/python3 -c "import os; print(\'PATH_SET\' if \'PATH\' in os.environ else \'PATH_UNSET\')"\n',
+        f'{shlex.quote(sys.executable)} -c "import os; print(\'PATH_SET\' if \'PATH\' in os.environ else \'PATH_UNSET\')"\n',
     )
     observer = {
         "command": [script],
@@ -670,7 +671,7 @@ def test_observe_datastore_identity_refuses_oversized_output(private_tmp):
     _write_executable(
         script,
         "#!/bin/sh\n"
-        "/usr/bin/python3 -c \"import sys; sys.stdout.write('x' * 20000)\"\n",
+        f"{shlex.quote(sys.executable)} -c \"import sys; sys.stdout.write('x' * 20000)\"\n",
     )
     observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
     with pytest.raises(pb.PilotBoundaryError) as exc:
@@ -690,7 +691,7 @@ def test_observe_datastore_identity_oversized_output_bites_on_byte_cap(private_t
     _write_executable(
         script,
         "#!/bin/sh\n"
-        "/usr/bin/python3 -c \"import sys; sys.stdout.write('x' * 20000)\"\n",
+        f"{shlex.quote(sys.executable)} -c \"import sys; sys.stdout.write('x' * 20000)\"\n",
     )
     observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
     with pytest.raises(pb.PilotBoundaryError):

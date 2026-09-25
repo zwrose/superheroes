@@ -4,6 +4,12 @@ import yaml
 
 import validate_skills as vs
 
+from ci_requirements_helpers import (
+    active_requirement_names,
+    active_requirements_content,
+    expand_requirements,
+)
+
 def test_links_resolve(tmp_path):
     (tmp_path / "rubric").mkdir()
     (tmp_path / "rubric" / "review-base.md").write_text("x")
@@ -233,8 +239,8 @@ def test_ci_installs_pyyaml_before_validate_skills():
     pip_idx = None
     validate_skills_idx = None
     for i, step in enumerate(steps):
-        run = step.get("run", "")
-        if "pip install" in run and "pyyaml" in run:
+        run = expand_requirements(step.get("run", ""), repo)
+        if "pip install" in run and "pyyaml" in active_requirement_names(run):
             pip_idx = i
         if "validate_skills.py" in run:
             validate_skills_idx = i

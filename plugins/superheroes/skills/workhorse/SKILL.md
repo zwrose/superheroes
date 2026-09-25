@@ -153,8 +153,10 @@ happens **before any spend** — before the workspace, before the brief, before 
 
 When the routed issue is a **register-consuming child** — an epic child of a package that has a
 register, or a single-issue child standing in for one under FR-36 — run the register-check at
-**build intake** before the brief, whether or not the body contains a quoted block; a body with
-zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
+**build intake** before the brief, whether or not the body contains a quoted block; for a stack
+layer, use the register-check [stack layer
+inputs](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md#stack-layer-inputs);
+a body with zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
 derived from the issue alone, the route names the register and child token for you to pass. On
 `pass`, record the check's own output in the intake note — the `result` line, or `pass` together
 with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child token are
@@ -337,13 +339,23 @@ Every multi-PR child of a superheroes project is a [native stack](${CLAUDE_PLUGI
 A layer's branch, its PR base, and its stack membership all name the **layer below**,
 and each of the three is established from the **remote**, never from a local assumption.
 
+- **The layer's order and PR title line** — the order lives at the top of the layer's own sub-issue;
+  the pull request's first line names that sub-issue with a non-closing verb until the stack merges
+  ([native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § Each layer is
+  a sub-issue; non-closing verb rule in §11).
 - **Branch from the layer below's head** and set the **PR base to that branch** — the bottom layer
   branches from and targets the stack's base (normally `main`).
-- **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests, so
-  the **bottom layer** has nothing to link to at its own handback: it records that the stack does not
-  exist yet and names the layer that will form it. The stack is created by `gh stack link <bottom> <top>`
-  when the layer above opens; from then on every layer verifies membership from the branch before
-  claiming it. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § How a stack comes to exist).
+- **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests.
+  When the **bottom layer** hands back **before** any upper-layer pull request exists, it has
+  nothing to link yet: it records that the stack does not exist and names the layer that will form
+  it. Link only when **every planned layer from the stack bottom through the upper layer of the pair
+  to be linked** already has a pull request — do not link an upper fragment while a lower planned
+  layer still lacks one. When that contiguous span is complete, **whichever lane hands back with it
+  newly satisfied** runs `gh stack link` with pull request numbers only, bottom to top through that
+  span — including when the upper layer handed back first and the bottom layer is second. Parallel
+  layers and the full rule:
+  [native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md)
+  § Each layer is a sub-issue, item 4. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § How a stack comes to exist).
   A base-branch chain that was never linked **is not a stack** — nothing downstream, not the advisor's click list,
   not the atomic merge, works on it.
 - **Membership is verified from the branch before it is claimed** — the GraphQL read in
