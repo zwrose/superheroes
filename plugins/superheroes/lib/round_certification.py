@@ -1241,8 +1241,6 @@ def _journal_open_seats(journal, session_dir=None):
                 and session_dir is not None):
             roster, refusal = _orders_emitted_roster_or_refusal(session_dir, event)
             if refusal is not None:
-                if phase == P_AUDITS:
-                    continue
                 return None, refusal
             for sk, occ in roster:
                 opened[(phase, rnd, attempt, sk, occ)] = event

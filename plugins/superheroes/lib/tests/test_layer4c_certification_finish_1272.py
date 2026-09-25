@@ -487,7 +487,8 @@ def test_audited_chain_refuses_when_dispatch_audit_manifest_tampered(tmp_path):
         json.dump(manifest, fh, sort_keys=True)
     receipt, refusal = _certify(session_dir)
     assert receipt is None
-    _assert_fix_receipt_audited_chain_refusal(refusal)
+    assert refusal["class"] == "unfetched-findings"
+    assert "orders manifest sha256 does not match event manifestSha256" in refusal["detail"]
 
 
 def test_audited_chain_certifies_when_display_id_differs_from_canonical_key(tmp_path):
