@@ -1341,6 +1341,7 @@ def test_wave_watch_suppressible_events_in_wave_watch_doc():
 _CONCRETE_MODEL_TOKENS = (
     "gpt-5.6-terra",
     "gpt-5.6-sol",
+    "gpt-6-sol",
     "gpt-6-astra",
     "gpt-5.5",
     "gpt-5.6-luna",

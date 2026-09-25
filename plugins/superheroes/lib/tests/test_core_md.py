@@ -26,6 +26,7 @@ def _load(name):
 
 
 CM = _load("core_md")
+MR = _load("model_registry")
 
 
 def test_render_then_parse_roundtrips():
@@ -2644,11 +2645,12 @@ def test_engine_pref_round_trip_ok_rejects_updated_divergence():
 def test_write_engine_pref_pins_codex_models_written_and_loads(tmp_path):
     engine_pref = _load("engine_pref")
     repo, store = _write_core_for_pin_tests(tmp_path)
+    pin = MR.pin_only_models("codex")[0]
     res = CM.write_engine_pref_pins(
-        repo, "codexModels", {"reviewer": "gpt-5.6-terra"}, root=store)
+        repo, "codexModels", {"reviewer": pin}, root=store)
     assert res["action"] == "written"
     loaded = engine_pref.load_engine_prefs(repo, root=store)
-    assert loaded["codexModels"] == {"reviewer": "gpt-5.6-terra"}
+    assert loaded["codexModels"] == {"reviewer": pin}
     assert "invalidCodexModels" not in loaded
 
 
@@ -2673,8 +2675,9 @@ def test_write_engine_pref_pins_sibling_and_prose_preservation(tmp_path):
     patterns_before = CM._section(before, "Canonical patterns")
     show_it_before = CM._section(before, "Show-it surface")
     orig = CM.read(repo, root=store)
+    pin = MR.pin_only_models("codex")[0]
     res = CM.write_engine_pref_pins(
-        repo, "codexModels", {"reviewer": "gpt-5.6-terra"}, root=store)
+        repo, "codexModels", {"reviewer": pin}, root=store)
     assert res["action"] == "written"
     got = CM.read(repo, root=store)
     assert got["verifyCommand"] == orig["verifyCommand"]
@@ -2714,8 +2717,9 @@ def test_write_engine_pref_pins_refused_round_trip_sibling_divergence(tmp_path, 
         return real_splice(candidate, modified_body)
 
     monkeypatch.setattr(CM, "_splice_single_json_block", _splice_with_extra_pref_key)
+    pin = MR.pin_only_models("codex")[0]
     res = CM.write_engine_pref_pins(
-        repo, "codexModels", {"reviewer": "gpt-5.6-terra"}, root=store)
+        repo, "codexModels", {"reviewer": pin}, root=store)
     assert res == {"action": "refused", "reason": CM.ENGINE_PINS_REASON_ROUND_TRIP}
     assert open(path, "rb").read() == before_bytes
 
@@ -2736,8 +2740,9 @@ def test_write_engine_pref_pins_refused_round_trip_top_level_divergence(tmp_path
         return _diverge_builder_round_trip_candidate(candidate, "verifyCommand", real_splice)
 
     monkeypatch.setattr(CM, "_splice_single_json_block", _splice_with_top_level_divergence)
+    pin = MR.pin_only_models("codex")[0]
     res = CM.write_engine_pref_pins(
-        repo, "codexModels", {"reviewer": "gpt-5.6-terra"}, root=store)
+        repo, "codexModels", {"reviewer": pin}, root=store)
     assert res == {"action": "refused", "reason": CM.ENGINE_PINS_REASON_ROUND_TRIP}
     assert open(path, "rb").read() == before_bytes
 
@@ -2771,23 +2776,29 @@ def test_write_engine_pref_pins_registered_astra_on_reviewer_deep_succeeds(tmp_p
 
 
 def test_write_engine_pref_pins_refuses_pin_off_the_role_allowlist(tmp_path):
+    # "pilot" is a codexModels pin role with NO codex matrix seat at all, so any registered
+    # model is off its allowlist by construction — reviewer-deep's own allowlist now spans
+    # every registered codex model (pin-only + ladder + astra), so it can no longer exercise
+    # this axis.
     repo, store = _write_core_for_pin_tests(tmp_path)
     path = CM.core_path(repo, store)
     before = open(path, encoding="utf-8").read()
+    model = MR.matrix_config("implementer", "codex")[0]
     res = CM.write_engine_pref_pins(
-        repo, "codexModels", {"reviewer-deep": "gpt-5.6-terra"}, root=store)
+        repo, "codexModels", {"pilot": model}, root=store)
     assert res["action"] == "refused"
     assert res["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
-    assert res["detail"]["reviewer-deep"].startswith("pin-not-on-allowlist:")
-    assert "reviewer-deep" in res["detail"]["reviewer-deep"]
+    assert res["detail"]["pilot"].startswith("pin-not-on-allowlist:")
+    assert "pilot" in res["detail"]["pilot"]
     assert open(path, encoding="utf-8").read() == before
 
 
 def test_write_engine_pref_pins_codex_pin_ignored_note_when_reviewer_engine_claude(tmp_path):
     repo, store = _write_core_for_pin_tests(
         tmp_path, prefs={"reviewer": "claude", "implementation": "claude"})
+    pin = MR.pin_only_models("codex")[0]
     res = CM.write_engine_pref_pins(
-        repo, "codexModels", {"reviewer": "gpt-5.6-terra"}, root=store)
+        repo, "codexModels", {"reviewer": pin}, root=store)
     assert res["action"] == "written"
     assert "notes" in res
     assert any(
@@ -2847,12 +2858,13 @@ def test_write_engine_pref_pins_empty_pins_is_noop_byte_identical(tmp_path):
 
 
 def test_write_engine_pref_pins_delete_entry_and_last_entry_removes_key(tmp_path):
+    pin = MR.pin_only_models("codex")[0]
     repo, store = _write_core_for_pin_tests(
-        tmp_path, prefs={"codexModels": {"reviewer": "gpt-5.6-terra", "implementer": "gpt-5.6-sol"}})
+        tmp_path, prefs={"codexModels": {"reviewer": pin, "implementer": pin}})
     res = CM.write_engine_pref_pins(repo, "codexModels", {"implementer": None}, root=store)
     assert res["action"] == "written"
     got = CM.read(repo, root=store)
-    assert got["enginePreferences"]["codexModels"] == {"reviewer": "gpt-5.6-terra"}
+    assert got["enginePreferences"]["codexModels"] == {"reviewer": pin}
     res = CM.write_engine_pref_pins(repo, "codexModels", {"reviewer": None}, root=store)
     assert res["action"] == "written"
     got = CM.read(repo, root=store)
@@ -2860,17 +2872,18 @@ def test_write_engine_pref_pins_delete_entry_and_last_entry_removes_key(tmp_path
 
 
 def test_write_engine_pref_pins_legacy_fixer_dropped_on_canonical_set_or_delete(tmp_path):
+    pin = MR.pin_only_models("codex")[0]
     repo, store = _write_core_for_pin_tests(
-        tmp_path, prefs={"codexModels": {"fixer": "gpt-5.6-terra"}})
+        tmp_path, prefs={"codexModels": {"fixer": pin}})
     res = CM.write_engine_pref_pins(
-        repo, "codexModels", {"code-fixer": "gpt-5.6-sol"}, root=store)
+        repo, "codexModels", {"code-fixer": pin}, root=store)
     assert res["action"] == "written"
     got = CM.read(repo, root=store)
     pins = got["enginePreferences"]["codexModels"]
     assert "fixer" not in pins
-    assert pins == {"code-fixer": "gpt-5.6-sol"}
+    assert pins == {"code-fixer": pin}
     repo2, store2 = _write_core_for_pin_tests(
-        tmp_path / "second", prefs={"codexModels": {"fixer": "gpt-5.6-terra"}})
+        tmp_path / "second", prefs={"codexModels": {"fixer": pin}})
     res = CM.write_engine_pref_pins(repo2, "codexModels", {"code-fixer": None}, root=store2)
     assert res["action"] == "written"
     got = CM.read(repo2, root=store2)
@@ -2911,7 +2924,8 @@ def test_cli_write_engine_pins_deferred_unexpected_failure(tmp_path, capsys, mon
     import io
 
     repo, store = _write_core_for_pin_tests(tmp_path)
-    monkeypatch.setattr("sys.stdin", io.StringIO('{"reviewer": "gpt-5.6-terra"}'))
+    pin = MR.pin_only_models("codex")[0]
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"reviewer": pin})))
 
     def _boom(*_a, **_k):
         raise RuntimeError("boom")
@@ -2947,8 +2961,9 @@ def test_cli_write_engine_pins_seat_pins_success(tmp_path, capsys, monkeypatch):
 def test_cli_write_engine_pins_empty_stdin_noop(tmp_path, capsys, monkeypatch):
     import io
 
+    pin = MR.pin_only_models("codex")[0]
     repo, store = _write_core_for_pin_tests(
-        tmp_path, prefs={"codexModels": {"reviewer": "gpt-5.6-terra"}})
+        tmp_path, prefs={"codexModels": {"reviewer": pin}})
     path = CM.core_path(repo, store)
     before = open(path, encoding="utf-8").read()
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
