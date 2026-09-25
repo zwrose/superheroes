@@ -1434,6 +1434,9 @@ def _acquire_loop_lock(repo_root, batch_id, env, log_path):
                 f"lock-file-stat:{errno.errorcode.get(exc.errno, exc.errno)}",
             )
 
+        if not stat.S_ISREG(lock_stat.st_mode):
+            return None, _loop_lock_refusal("lock-file-not-regular")
+
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

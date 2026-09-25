@@ -2745,6 +2745,7 @@ def test_loop_lock_unavailable_insecure_store_door(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
     assert result["detail"].startswith("store-door:")
+    assert result["arms"] == 0
     assert calls[0] == 0
     assert violations == []
 
@@ -2754,6 +2755,9 @@ def _plant_non_regular_loop_lock(repo, batch_id, tmp_path, monkeypatch):
     repo_id = ll.repo_identity(repo)
     locks_dir = os.path.join(store_root, repo_id, "wave-watch-locks")
     os.makedirs(locks_dir, mode=0o700, exist_ok=True)
+    repo_dir = os.path.join(store_root, repo_id)
+    for path in (store_root, repo_dir, locks_dir):
+        os.chmod(path, 0o700)
     lock_name = hashlib.sha256(batch_id.encode("utf-8")).hexdigest() + ".lock"
     fifo_path = os.path.join(locks_dir, lock_name)
     try:
@@ -2769,7 +2773,10 @@ def test_loop_lock_unavailable_non_regular_lock_file(tmp_path, monkeypatch):
     result = ww.loop(
         repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
     )
+    assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
+    assert result["detail"] == "lock-file-not-regular"
+    assert result["arms"] == 0
     assert calls[0] == 0
     assert violations == []
 
@@ -2786,8 +2793,10 @@ def test_loop_lock_unavailable_flock_oserror(tmp_path, monkeypatch):
     result = ww.loop(
         repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
     )
+    assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
     assert "flock:" in result["detail"]
+    assert result["arms"] == 0
     assert calls[0] == 0
 
 
