@@ -299,6 +299,47 @@ def test_codex_cli_floor_probe_above_floor_passes():
     assert pp.codex_cli_floor_probe(run=_run) is None
 
 
+# bite-axis: a prerelease sharing the floor's numeric core (e.g. `0.157.0-alpha.1` when the
+# floor is `0.157.0`) must NEVER pass — its numeric core alone is not below the floor, but the
+# `-alpha.1` suffix marks the actual build as pre-release, i.e. below the release it is a
+# prerelease OF (#1435 review fix: fail-open version gate).
+def test_codex_cli_floor_probe_prerelease_at_floor_core_refused():
+    prerelease = "%s-alpha.1" % _CODEX_FLOOR_VERSION
+
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % prerelease, stderr="")
+
+    result = pp.codex_cli_floor_probe(run=_run)
+    assert result is not None
+    assert result["ok"] is False
+    assert result["detail"].startswith("codex-cli-too-old:")
+    assert prerelease in result["detail"]
+
+
+# bite-axis: a prerelease whose numeric core is ABOVE the floor passes — the prerelease suffix
+# only pulls a version below the release sharing its OWN numeric core, never below an older
+# floor.
+def test_codex_cli_floor_probe_prerelease_above_floor_core_passes():
+    above = _increment_version(_CODEX_FLOOR_VERSION)
+    prerelease = "%s-alpha.1" % above
+
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % prerelease, stderr="")
+
+    assert pp.codex_cli_floor_probe(run=_run) is None
+
+
+# bite-axis: a `+build` metadata suffix alone (no `-prerelease`) at the floor's numeric core
+# passes — build metadata never lowers a version the way a prerelease suffix does.
+def test_codex_cli_floor_probe_build_metadata_at_floor_passes():
+    build = "%s+build.5" % _CODEX_FLOOR_VERSION
+
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % build, stderr="")
+
+    assert pp.codex_cli_floor_probe(run=_run) is None
+
+
 # bite-axis: codex_cli_floor_probe fails closed and refuses when the CLI's version output cannot be parsed
 def test_codex_cli_floor_probe_unparseable_output_refused():
     def _run(argv, **kwargs):

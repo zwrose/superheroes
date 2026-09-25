@@ -130,7 +130,11 @@ def gh_auth_probe(run=None):
 
 
 _CODEX_CLI_TOOL = "cross-vendor-cli:codex"
-_CODEX_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+# Group 1 is the numeric core; group 2 (optional) is a `-prerelease` suffix, which marks the
+# build as BELOW a floor sharing the same numeric core (e.g. `0.157.0-alpha.1` < `0.157.0`). An
+# optional trailing `+build` suffix is matched but never lowers the version on its own.
+_CODEX_VERSION_RE = re.compile(r"\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?(?:\+[0-9A-Za-z.]+)?")
+_CODEX_VERSION_CORE_RE = re.compile(r"\d+\.\d+\.\d+")
 
 
 def codex_cli_floor_probe(run=None):
@@ -157,8 +161,12 @@ def codex_cli_floor_probe(run=None):
                 ),
             }
         found_version = match.group(0)
-        found_key = tuple(int(part) for part in found_version.split("."))
-        if found_key >= floor_key:
+        found_core = _CODEX_VERSION_CORE_RE.match(found_version).group(0)
+        found_key = tuple(int(part) for part in found_core.split("."))
+        is_prerelease = match.group(1) is not None
+        if found_key > floor_key:
+            return None
+        if found_key == floor_key and not is_prerelease:
             return None
         return {
             "tool": _CODEX_CLI_TOOL,
