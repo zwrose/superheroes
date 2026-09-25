@@ -159,7 +159,7 @@ def test_ok_check_reports_receipt_present():
 
 # --- refusal fixtures: literal token, a distinguishing detail, zero edit calls -------------
 
-def test_module_emits_exactly_nine_tokens():
+def test_module_emits_exactly_ten_tokens():
     source = inspect.getsource(vs)
     emitted = set(re.findall(r'_Refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'_refusal\(\s*"([a-z-]+)"', source))
@@ -167,7 +167,7 @@ def test_module_emits_exactly_nine_tokens():
     assert emitted == {
         "bad-argument", "read-failed", "markers-invalid", "followups-malformed",
         "receipt-missing", "dispositions-malformed", "followup-undispositioned",
-        "none-over-list", "write-failed",
+        "none-over-list", "write-failed", "write-unconfirmed",
     }
 
 
@@ -218,6 +218,11 @@ BODY_CASES = [
      _body_with_followups("Follow-ups: 3 (0 owner-call)\n- FU1 [defect] x\n")),
     ("followups-malformed", "count line says 1 (1 owner-call), items are 1 (0 owner-call)",
      _body_with_followups("Follow-ups: 1 (1 owner-call)\n- FU1 [defect] x\n")),
+    ("followups-malformed", "count line says 1 (0 owner-call) over None",
+     _body_with_followups("Follow-ups: 1 (0 owner-call)\nNone\n")),
+    ("followups-malformed", "heading inside the build record",
+     BODY.replace("### Follow-ups for the advisor\n", "### Other\n")
+     .replace("trailer\n", "### Follow-ups for the advisor\nNone\n")),
 ]
 
 
@@ -259,6 +264,10 @@ RECEIPT_CASES = [
      _receipt_with("**Dispositions — completed.**\n- FU1: filed #1\n- FU1: fixed\n- FU2: info\n")),
     ("dispositions-malformed", "unrecognized disposition FU1: ignored",
      _receipt_with("**Dispositions — completed.**\n- FU1: ignored it\n- FU2: fixed\n")),
+    ("followup-undispositioned", "FU1: no disposition",
+     _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n```\n- FU1: filed #12\n```\n")),
+    ("followup-undispositioned", "FU1: no disposition",
+     _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n  - FU1: filed #12\n")),
 ]
 
 
@@ -285,6 +294,15 @@ def test_none_build_with_any_receipt_id_is_unknown():
 
 def test_none_build_with_none_receipt_is_ok(slot_file):
     fake = _ok_fake(body=NONE_BODY, receipt=_receipt_with("**Dispositions — completed.** None\n"))
+    result = _write(fake, slot_file)
+    assert result["ok"] is True
+    assert result["followups"] == []
+    assert len(fake.edit_calls()) == 1
+
+
+def test_zero_count_then_none_is_ok(slot_file):
+    body = _body_with_followups("Follow-ups: 0 (0 owner-call)\nNone\n")
+    fake = _ok_fake(body=body, receipt=_receipt_with("**Dispositions — completed.** None\n"))
     result = _write(fake, slot_file)
     assert result["ok"] is True
     assert result["followups"] == []
@@ -433,8 +451,25 @@ def test_readback_mismatch(slot_file):
         return out
 
     result = _write(run, slot_file)
-    assert result["reason"] == "read-failed"
-    assert "readback differs" in result["detail"]
+    assert result["reason"] == "write-unconfirmed"
+    assert "slot write already pushed; readback differs" in result["detail"]
+    assert len(fake.edit_calls()) == 1
+
+
+def test_readback_read_failure_after_push_is_write_unconfirmed(slot_file):
+    fake = _ok_fake()
+    original_call = fake.__call__
+
+    def run(argv, **kwargs):
+        out = original_call(argv, **kwargs)
+        if argv[:3] == ["gh", "pr", "edit"]:
+            fake.view_rc = 1
+        return out
+
+    result = _write(run, slot_file)
+    assert result["reason"] == "write-unconfirmed"
+    assert "slot write already pushed; readback: PR body: exit 1 boom" in result["detail"]
+    assert len(fake.edit_calls()) == 1
 
 
 def test_readback_tolerates_crlf_and_trailing_whitespace(slot_file):
@@ -574,3 +609,46 @@ def test_cli_bad_argument(capsys, argv):
     code = vs.main(argv, run=_ok_fake())
     assert code == 1
     assert json.loads(capsys.readouterr().out)["reason"] == "bad-argument"
+
+
+# --- vocabulary drift: the prose that teaches the shapes names every token this writer enforces --
+
+PLUGIN = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+
+
+def _doc(*parts):
+    with open(os.path.join(*parts), encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _one_block(blocks, needle, where):
+    found = [b for b in blocks if needle in b]
+    assert len(found) == 1, "%s: expected one block carrying %r, found %d" % (where, needle, len(found))
+    return found[0]
+
+
+def test_followup_vocabulary_is_named_in_the_teaching_prose():
+    workhorse = _doc(PLUGIN, "skills", "workhorse", "SKILL.md").split("\n\n")
+    followups = _one_block(workhorse, "`- FU<n> [<class>] <text>`", "workhorse Follow-ups paragraph")
+    assert "**%s**" % vs.FOLLOWUPS_HEADING in followups
+    assert "`Follow-ups: <n> (<m> owner-call)`" in followups
+    for cls in sorted(vs.CLASSES):
+        assert "`%s`" % cls in followups, cls
+        assert vs._ITEM_RE.match("- FU1 [%s] text" % cls), cls
+    receipt = _doc(PLUGIN, "skills", "showrunner", "reference", "vet-receipt.md")
+    field7 = re.search(r"^7\. \*\*Dispositions.*?(?=^\d+\. |\Z)", receipt, re.M | re.S)
+    assert field7, "vet-receipt.md field 7 not found"
+    field7 = field7.group(0)
+    assert "`- FU<n>: <disposition>`" in field7
+    assert "`%s.**`" % vs.DISPOSITIONS_PREFIX in field7
+    for word in sorted(vs.DISPOSITIONS):
+        assert "`%s`" % word in field7, word
+        assert vs._DISPOSITION_RE.match("- FU1: %s x" % word), word
+
+
+def test_receipt_markers_match_conventions_10_7():
+    conventions = _doc(PLUGIN, "..", "..", "CONVENTIONS.md")
+    section = re.search(r"^### 10\.7 .*?(?=^### )", conventions, re.M | re.S)
+    assert section, "CONVENTIONS section 10.7 not found"
+    for marker in (vs.RECEIPT_MARKER, vs.PENDING_MARKER):
+        assert "`%s`" % marker in section.group(0), marker

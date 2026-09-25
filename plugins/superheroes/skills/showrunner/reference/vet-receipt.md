@@ -304,7 +304,8 @@ non-empty body, and both the `advisor-vet` and `build-record` markers. It checks
 against field 7's keyed dispositions and re-reads the body before the push. It writes only between
 the two markers and reads the result back. A refusal names its reason (for example
 `followup-undispositioned`, `none-over-list`, `read-failed`, or `markers-invalid`) with a detail
-that says what was wrong, and writes nothing. `check --pr <n> --repo <owner/name>` runs the same
+that says what was wrong, and writes nothing, except `write-unconfirmed`: the write was pushed but
+the readback failed or differed. `check --pr <n> --repo <owner/name>` runs the same
 comparison with no write. The command exists because a hand-rolled write fails silently: a shell
 redirect truncates the target file *before* `gh` runs, so a `gh` read that fails leaves an empty
 file that the next `--body-file` pushes as the body.

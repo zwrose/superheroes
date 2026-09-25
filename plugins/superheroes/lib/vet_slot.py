@@ -6,11 +6,12 @@ closed-PR follow-ups sweep (``check``). ``write`` changes the PR body only in th
 span strictly between the advisor-vet marker line and the build-record marker
 line, and only after every follow-up id in the build record has exactly one
 recognized disposition bullet in the latest vet receipt (and vice versa). Any
-failed read or check is a refusal with one of nine reasons (``bad-argument``,
+failed read or check is a refusal with one of ten reasons (``bad-argument``,
 ``read-failed``, ``markers-invalid``, ``followups-malformed``, ``receipt-missing``,
 ``dispositions-malformed``, ``followup-undispositioned``, ``none-over-list``,
-``write-failed``) and a detail naming what was wrong; no edit is made. One JSON
-line on stdout; exit 0 on ok, 1 on refusal."""
+``write-failed``, ``write-unconfirmed``) and a detail naming what was wrong; no edit
+is made, except for ``write-unconfirmed``: the edit was pushed but the readback
+failed or differed. One JSON line on stdout; exit 0 on ok, 1 on refusal."""
 import argparse
 import json
 import os
@@ -29,8 +30,6 @@ import grounding_stage  # noqa: E402
 import md_fence  # noqa: E402
 
 GH_TIMEOUT = 120
-ADVISOR_MARKER = "<!-- superheroes:advisor-vet -->"
-BUILD_MARKER = "<!-- superheroes:build-record -->"
 RECEIPT_MARKER = "<!-- superheroes:vet-receipt -->"
 PENDING_MARKER = "<!-- superheroes:pending-proposals -->"
 FOLLOWUPS_HEADING = "Follow-ups for the advisor"
@@ -44,7 +43,7 @@ _HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
 _ITEM_RE = re.compile(r"^- FU(\d+) \[([a-z-]+)\] \S")
 _NESTED_RE = re.compile(r"^(?:[-*] FU\d+ |FU\d+ \[)")
 _COUNT_RE = re.compile(r"^Follow-ups: (\d+) \((\d+) owner-call\)$")
-_DISPOSITION_RE = re.compile(r"^\s*- FU(\d+): (\S.*)$")
+_DISPOSITION_RE = re.compile(r"^- FU(\d+): (\S.*)$")
 
 
 class _Refusal(Exception):
@@ -92,12 +91,14 @@ def _parse_followups(body, build_offset):
     first = next(i for i, s in enumerate(starts) if s >= build_offset)
     heading_at = level = None
     for i in range(first, len(bare)):
+        if not inert[i] and bare[i].strip() == "</details>":
+            break
         lvl, text = (None, None) if inert[i] else _heading(bare[i])
         if lvl is not None and text == FOLLOWUPS_HEADING:
             heading_at, level = i, lvl
             break
     if heading_at is None:
-        raise _malformed("no %r heading after the build-record marker" % FOLLOWUPS_HEADING)
+        raise _malformed("no %r heading inside the build record" % FOLLOWUPS_HEADING)
     section = []
     for i in range(heading_at + 1, len(bare)):
         if not inert[i]:
@@ -106,12 +107,15 @@ def _parse_followups(body, build_offset):
                 break
         if bare[i].strip():
             section.append((bare[i], inert[i]))
-    if len(section) == 1 and not section[0][1] and section[0][0].strip() in NONE_WORDS:
-        return None
     count = None
     if section and not section[0][1] and _COUNT_RE.match(section[0][0].rstrip()):
         count = _COUNT_RE.match(section[0][0].rstrip())
         section = section[1:]
+    if len(section) == 1 and not section[0][1] and section[0][0].strip() in NONE_WORDS:
+        if count is not None and (count.group(1), count.group(2)) != ("0", "0"):
+            raise _malformed("count line says %s (%s owner-call) over None" % (
+                count.group(1), count.group(2)))
+        return None
     ids, owner_calls, have_item = [], 0, False
     for line, is_inert in section:
         indent = md_fence.indent_width(line)
@@ -145,8 +149,8 @@ def analyze_body(body):
     if not body.strip():
         raise _Refusal("read-failed", "PR body is empty")
     offsets = {}
-    for marker, name in ((ADVISOR_MARKER, "advisor-vet"), (BUILD_MARKER, "build-record")):
-        found = grounding_stage.find_standalone_markers(body, marker)
+    for name in ("advisor-vet", "build-record"):
+        found = grounding_stage.find_standalone_markers(body, grounding_stage.REGION_MARKERS[name])
         if len(found) != 1:
             raise _Refusal("markers-invalid", "%s marker appears %d times" % (name, len(found)))
         offsets[name] = found[0]
@@ -189,9 +193,10 @@ def _parse_dispositions(receipt_body):
     pieces = [p for p in pieces + [l.strip() for l in bare[start + 1:end]] if p]
     if len(pieces) == 1 and pieces[0] in NONE_WORDS:
         return None
+    inert = md_fence.scan_contexts(bare).inert
     ids = []
-    for line in bare[start + 1:end]:
-        match = _DISPOSITION_RE.match(line)
+    for i in range(start + 1, end):
+        match = None if inert[i] else _DISPOSITION_RE.match(bare[i])
         if not match:
             continue
         fu_id = "FU%d" % int(match.group(1))
@@ -336,9 +341,10 @@ def _run_verb(verb, pr, repo, slot_file, run):
     try:
         readback = _read_body(run, pr, repo)
     except _Refusal as exc:
-        raise _Refusal("read-failed", "readback: %s" % exc.detail)
+        raise _Refusal("write-unconfirmed", "slot write already pushed; readback: %s" % exc.detail)
     if _normalize(readback) != _normalize(new_body):
-        raise _Refusal("read-failed", "readback differs from the pushed body")
+        raise _Refusal("write-unconfirmed",
+                       "slot write already pushed; readback differs from the pushed body")
     return result
 
 
