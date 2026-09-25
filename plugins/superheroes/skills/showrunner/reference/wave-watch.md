@@ -37,9 +37,9 @@ ten-hour dead-watcher hole — and each failure looked like a calm wave.
 ## The arming pattern
 
 <!-- WORKAROUND: harness background-task arming pattern with manual re-arm after each lane-ending event
-     delete-when: completion and wake signals are observed reaching the headless spawning session
-     while it is still working — inside the turn, not at its boundary — for every lane of a wave, not
-     merely for most lanes, and not at an interactive or root session standing in for it -->
+     delete-when: a re-run of the background-session trial observes its "wave-watch arming and
+     re-arm" condition met; the condition is restated in the keep-or-retire record's marker
+     inventory -->
 
 Assign the portable root seam once, then arm one harness **background task per batch**:
 

@@ -604,9 +604,9 @@ def _transcript_config_dirs(env, recorded=None):
 
 
 # WORKAROUND: transcript file mtime as lane liveness when idle signals are unreliable
-# delete-when: the launcher's own lanes are observed carrying a readable state, and reading that
-# state is observed to tell working, wedged and finished apart without falling back on the
-# transcript
+# delete-when: a re-run of the background-session trial observes its "transcript-mtime
+# liveness" condition met; the condition is restated in the keep-or-retire record's marker
+# inventory
 def _session_transcript_mtime(session_id, env, config_dir=None):
     """(mtime, ambiguous, unresolved) for the lane's own transcript, by recorded id.
 
@@ -1954,9 +1954,9 @@ def run(
 
 
 # WORKAROUND: loop re-arms watch_arm because there is no durable batch watcher daemon
-# delete-when: completion and wake signals are observed reaching the headless spawning session
-# while it is still working — inside the turn, not at its boundary — for every lane of a wave, not
-# merely for most lanes, and not at an interactive or root session standing in for it
+# delete-when: a re-run of the background-session trial observes its "wave-watch arming and
+# re-arm" condition met; the condition is restated in the keep-or-retire record's marker
+# inventory
 def loop(
     repo_root,
     batch_id,
