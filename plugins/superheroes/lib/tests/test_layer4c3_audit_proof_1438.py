@@ -24,6 +24,7 @@ from round_certification_fixtures import (
     _write_orders_manifest,
     case07_audited_chain,
     case08_new_issue_audit,
+    two_fix_rounds_rebound_session,
 )
 
 
@@ -74,6 +75,12 @@ def _assert_new_issue_gap(refusal):
 def _assert_fix_receipt_gap(refusal):
     assert refusal is not None
     assert "audited-chain-gap:fix-receipt" in refusal["detail"]
+
+
+def _assert_fix_receipt_stale_head(refusal):
+    _assert_fix_receipt_gap(refusal)
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-stale-head"
 
 
 def _resync_audit_journal_from_store(session_dir, target_id, *, rnd=2):
@@ -566,3 +573,38 @@ def test_not_discharged_still_refuses_fix_receipt(tmp_path):
     session_dir = case08_new_issue_audit(tmp_path, ruling="not-discharged")
     _, refusal = _certify(session_dir)
     _assert_fix_receipt_gap(refusal)
+
+
+def test_two_fix_rounds_with_rebound_receipts_certify(tmp_path):
+    session_dir = two_fix_rounds_rebound_session(tmp_path)
+    receipt, refusal = _certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+    assert receipt["certificationShape"] == "audited-chain"
+
+
+def test_two_fix_rounds_f1_wrong_fix_content_head_refuses(tmp_path):
+    def _mutate(finding1, **_kw):
+        finding1["dispositionReceipt"]["fixContentHeadSha"] = _kw["certified_head"]
+
+    session_dir = two_fix_rounds_rebound_session(tmp_path, receipt_mutator=_mutate)
+    _, refusal = _certify(session_dir)
+    _assert_fix_receipt_stale_head(refusal)
+
+
+def test_two_fix_rounds_f2_missing_fix_content_head_refuses(tmp_path):
+    def _mutate(finding1, **_kw):
+        finding1["dispositionReceipt"].pop("fixContentHeadSha", None)
+
+    session_dir = two_fix_rounds_rebound_session(tmp_path, receipt_mutator=_mutate)
+    _, refusal = _certify(session_dir)
+    _assert_fix_receipt_stale_head(refusal)
+
+
+def test_two_fix_rounds_f3_non_descendant_head_sha_refuses(tmp_path):
+    def _mutate(finding1, **_kw):
+        finding1["dispositionReceipt"]["headSha"] = _kw["panel_head"]
+
+    session_dir = two_fix_rounds_rebound_session(tmp_path, receipt_mutator=_mutate)
+    _, refusal = _certify(session_dir)
+    _assert_fix_receipt_stale_head(refusal)

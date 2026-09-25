@@ -951,6 +951,212 @@ def case07_audited_chain(tmp_path):
     return _case07_core(tmp_path, include_audit=True, include_scoped=True)
 
 
+def two_fix_rounds_rebound_session(tmp_path, *, receipt_mutator=None):
+    """Two fix rounds: round-1 receipt re-bound to certified head; round-3 fix at tip."""
+    from session_checkout import _git, make_checkout
+
+    repo = tmp_path / "repo"
+    panel_head = make_checkout(repo)
+    delta_path = repo / "delta.txt"
+    delta_path.write_text("delta\n", encoding="utf-8")
+    _git(repo, "add", "delta.txt")
+    _git(repo, "commit", "-q", "-m", "round-1 fix")
+    h1 = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    extra_path = repo / "delta2.txt"
+    extra_path.write_text("delta2\n", encoding="utf-8")
+    _git(repo, "add", "delta2.txt")
+    _git(repo, "commit", "-q", "-m", "round-3 fix")
+    certified_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    fix_path = "src/guard.py"
+    fix_path2 = "src/leak.py"
+    fix_digest = hashlib.sha256(_FIX_PRESENT_BYTES).hexdigest()
+    finding1 = {
+        "id": "F-fix-1",
+        "file": fix_path,
+        "line": 12,
+        "title": "missing bounds guard",
+        "severity": "Important",
+        "disposition": "fixed",
+        "dispositionRound": 2,
+        "dispositionReceipt": {
+            "headSha": certified_head,
+            "verifyResult": "pass",
+            "fixContentHeadSha": h1,
+            "fixContentDigest": fix_digest,
+            "fixContentBytes": len(_FIX_PRESENT_BYTES),
+        },
+    }
+    finding2 = {
+        "id": "F-fix-2",
+        "file": fix_path2,
+        "line": 4,
+        "title": "regression adjacent to fix",
+        "severity": "Important",
+        "disposition": "fixed",
+        "dispositionRound": 4,
+        "dispositionReceipt": {
+            "headSha": certified_head,
+            "verifyResult": "pass",
+            "fixContentHeadSha": certified_head,
+            "fixContentDigest": fix_digest,
+            "fixContentBytes": len(_FIX_PRESENT_BYTES),
+        },
+    }
+    if receipt_mutator is not None:
+        receipt_mutator(
+            finding1,
+            panel_head=panel_head,
+            h1=h1,
+            certified_head=certified_head,
+        )
+    key1 = session_contract.finding_identity_key(finding1)
+    key2 = session_contract.finding_identity_key(finding2)
+    finding1[session_contract.FINDING_KEY_FIELD] = key1
+    finding2[session_contract.FINDING_KEY_FIELD] = key2
+
+    panel_payload = {"findings": []}
+    panel_envelope = _dispatch_envelope_for("code-reviewer", PANEL_PHASE, 1, payload=panel_payload)
+    audit1 = _audit_dispatch_envelope(key1, 2)
+    audit2 = _audit_dispatch_envelope(key2, 4)
+    scoped2 = _dispatch_envelope_for(SCOPED_SEAT, SCOPED_PHASE, 2)
+    scoped3 = _dispatch_envelope_for(SCOPED_SEAT, SCOPED_PHASE, 3)
+    scoped4 = _dispatch_envelope_for(SCOPED_SEAT, SCOPED_PHASE, 4)
+
+    manifest = _orders_manifest_for_seat("code-reviewer")
+    audit_manifest1 = _orders_manifest_for_seat(key1, rnd=2, attempt=0, phase=AUDIT_PHASE)
+    audit_manifest2 = _orders_manifest_for_seat(key2, rnd=4, attempt=0, phase=AUDIT_PHASE)
+
+    journal_lines = [
+        {
+            "cmd": "advance",
+            "outcome": "orders-emitted",
+            "phase": PANEL_PHASE,
+            "round": 1,
+            "attempt": 0,
+        },
+        _recorded_row_from_envelope(
+            panel_envelope, "code-reviewer", PANEL_PHASE, 1, head_sha=panel_head),
+        {
+            "cmd": "advance",
+            "outcome": "orders-emitted",
+            "phase": AUDIT_PHASE,
+            "round": 2,
+            "attempt": 0,
+        },
+        _recorded_row_from_envelope(audit1, key1, AUDIT_PHASE, 2, head_sha=h1),
+        _recorded_row_from_envelope(scoped2, SCOPED_SEAT, SCOPED_PHASE, 2, head_sha=certified_head),
+        _recorded_row_from_envelope(scoped3, SCOPED_SEAT, SCOPED_PHASE, 3, head_sha=certified_head),
+        {
+            "cmd": "advance",
+            "outcome": "orders-emitted",
+            "phase": AUDIT_PHASE,
+            "round": 4,
+            "attempt": 0,
+        },
+        _recorded_row_from_envelope(audit2, key2, AUDIT_PHASE, 4, head_sha=certified_head),
+        _recorded_row_from_envelope(scoped4, SCOPED_SEAT, SCOPED_PHASE, 4, head_sha=certified_head),
+    ]
+
+    session_dir = write_session(
+        tmp_path,
+        name="two-fix-rounds-rebound",
+        meta={
+            "repoRoot": str(repo),
+            "headSha": panel_head,
+            session_contract.FIX_FOLD_HEAD_KEY: certified_head,
+        },
+        state={
+            "round": 4,
+            "config": {
+                "fixerVendor": "claude",
+                "baseGuard": RC.BASE_GUARD_CHECKED,
+                "headSha": panel_head,
+                "repoRoot": str(repo),
+                "dimensions": ["code-reviewer"],
+                session_contract.FIX_FOLD_HEAD_KEY: certified_head,
+            },
+            "certification": {
+                "shape": "full-panel-confirmed",
+                "fullPanel": True,
+                "independence": "independent",
+                "base": "fetched",
+                "shapeDrivers": [],
+            },
+            "findings": [finding1, finding2],
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 1,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                    "verifiedHead": h1,
+                    "fixFoldHead": h1,
+                },
+                "2": {
+                    "roundKind": "fix",
+                    "scopedFinder": "skipped-empty-surface",
+                    "verifyResult": "pass",
+                    "verifiedHead": certified_head,
+                },
+                "3": {
+                    "roundKind": "fix",
+                    "verifyResult": "pass",
+                    "verifiedHead": certified_head,
+                    "fixFoldHead": certified_head,
+                },
+                "4": {
+                    "roundKind": "fix",
+                    "scopedFinder": "skipped-empty-surface",
+                    "verifyResult": "pass",
+                    "verifiedHead": certified_head,
+                },
+            },
+        },
+        journal_lines=journal_lines,
+        envelopes=[
+            {"seat": "code-reviewer", "phase": PANEL_PHASE, "round": 1, "envelope": panel_envelope},
+            {"seat": key1, "phase": AUDIT_PHASE, "round": 2, "envelope": audit1},
+            {"seat": SCOPED_SEAT, "phase": SCOPED_PHASE, "round": 2, "envelope": scoped2},
+            {"seat": SCOPED_SEAT, "phase": SCOPED_PHASE, "round": 3, "envelope": scoped3},
+            {"seat": key2, "phase": AUDIT_PHASE, "round": 4, "envelope": audit2},
+            {"seat": SCOPED_SEAT, "phase": SCOPED_PHASE, "round": 4, "envelope": scoped4},
+        ],
+        faithful_session=True,
+    )
+    manifest_sha = _write_orders_manifest(session_dir, manifest)
+    audit_manifest1_sha = _write_orders_manifest(session_dir, audit_manifest1)
+    audit_manifest2_sha = _write_orders_manifest(session_dir, audit_manifest2)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    lines = []
+    with open(journal_path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if row.get("outcome") == "orders-emitted" and row.get("phase") == PANEL_PHASE:
+                row["manifestSha256"] = manifest_sha
+            if (
+                row.get("outcome") == "orders-emitted"
+                and row.get("phase") == AUDIT_PHASE
+                and row.get("round") == 2
+            ):
+                row["manifestSha256"] = audit_manifest1_sha
+            if (
+                row.get("outcome") == "orders-emitted"
+                and row.get("phase") == AUDIT_PHASE
+                and row.get("round") == 4
+            ):
+                row["manifestSha256"] = audit_manifest2_sha
+            lines.append(row)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    blobs = _head_content_blobs_for_findings([finding1, finding2], certified_head)
+    if blobs is not None:
+        _write_head_content_blobs(session_dir, blobs)
+    return session_dir
+
+
 @must_refuse_fixture(
     class_="unrun-review",
     artifact="code-reviewer",

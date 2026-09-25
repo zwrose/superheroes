@@ -600,7 +600,7 @@ def _audit_fix_receipt_head_rule(repo_root, post_fix_head, certified_head):
     return _rule
 
 
-def _resolve_post_fix_head(state, finding):
+def _resolve_post_fix_head(state, finding, repo_root):
     disposition_round = finding.get("dispositionRound")
     if isinstance(disposition_round, bool) or not isinstance(disposition_round, int):
         return None
@@ -620,9 +620,16 @@ def _resolve_post_fix_head(state, finding):
     if not isinstance(rec, dict):
         return None
     recorded = rec.get("fixFoldHead")
-    if not _valid_head_sha(recorded) or recorded != post_fix:
+    if not _valid_head_sha(recorded):
         return None
-    return post_fix
+    if recorded == post_fix:
+        return recorded
+    fix_content_head = receipt.get("fixContentHeadSha")
+    if not _valid_head_sha(fix_content_head) or fix_content_head != recorded:
+        return None
+    if not _is_ancestor(repo_root, recorded, post_fix):
+        return None
+    return recorded
 
 
 def _superseded_audit_attempts(journal):
@@ -889,7 +896,7 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
     fold_id = _audited_chain_fold_target_id(finding, by_key)
     if not isinstance(fold_id, str) or not fold_id:
         return "fix-receipt"
-    post_fix_head = _resolve_post_fix_head(state, finding)
+    post_fix_head = _resolve_post_fix_head(state, finding, repo_root)
     if post_fix_head is None:
         return "fix-receipt"
     head_rule = _audit_fix_receipt_head_rule(repo_root, post_fix_head, certified_head)
