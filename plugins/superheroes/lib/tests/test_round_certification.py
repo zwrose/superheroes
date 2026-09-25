@@ -478,6 +478,7 @@ def test_check_evidence_head_bound_unresolvable_certified_head_refuses(tmp_path)
 def test_check_unrun_review_hand_landed_clean_passes(tmp_path):
     evidence = {
         **_binding_fields("hand-nonce", result_digest=DEFAULT_FINDINGS_RESULT_SHA),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1167,6 +1168,7 @@ def test_audited_chain_skipped_empty_surface_certifies(tmp_path):
 def test_hand_landed_forces_audited_chain_shape(tmp_path):
     evidence = {
         **_binding_fields("hand-shape-nonce"),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1666,6 +1668,7 @@ def test_hand_landed_journal_recorded_runner_nonce_certifies(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1701,6 +1704,7 @@ def test_hand_landed_unrecorded_runner_nonce_refuses(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1739,6 +1743,7 @@ def _hand_landed_evidence_binding(**overrides):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1762,6 +1767,7 @@ def _hand_landed_envelope(evidence, payload, *, order_sha="f" * 64):
 def test_hand_landed_write_run_kind_qualifies_without_payload_key():
     evidence = _hand_landed_evidence_binding(
         resultKind=session_contract.WRITE_RESULT_KIND,
+        runKind=session_contract.RUN_KIND_WRITE,
         resultDigest=session_contract.payload_sha256(
             {"testFailed": False, "testPassed": True}),
     )
@@ -1814,6 +1820,7 @@ def test_hand_landed_journal_digest_mismatch_refuses(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -2244,6 +2251,7 @@ def test_dispatch_observed_matching_runner_nonce_certifies(tmp_path):
 def test_dispatch_observed_unrecorded_journal_binding_refuses(tmp_path):
     envelope_evidence = {
         **_binding_fields("orphan-nonce"),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -2293,6 +2301,7 @@ def test_slot_scoped_nonce_same_slot_certifies(tmp_path):
     nonce = "slot-nonce"
     evidence = {
         **_binding_fields(nonce),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -2344,6 +2353,7 @@ def test_slot_scoped_nonce_different_slot_refuses(tmp_path):
     borrowed_nonce = "shared-nonce"
     evidence_a = {
         **_binding_fields(borrowed_nonce),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -2387,17 +2397,25 @@ def test_slot_scoped_nonce_different_slot_refuses(tmp_path):
 @pytest.mark.parametrize("helper_name", QUALIFICATION_HELPER_CENSUS)
 def test_qualification_helpers_refuse_empty_or_absent_evidence(tmp_path, helper_name):
     if helper_name == "_execution_binding_matches_journal":
-        ok, failure = RC._execution_binding_matches_journal(None, None, set())
+        ok, failure = RC._execution_binding_matches_journal(
+            None, None, set(), envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
-        ok, failure = RC._execution_binding_matches_journal({}, None, set())
+        ok, failure = RC._execution_binding_matches_journal(
+            {}, None, set(), envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
     elif helper_name == "_observation_qualifies":
-        ok, failure = RC._observation_qualifies(None, HEAD, None)
+        ok, failure = RC._observation_qualifies(
+            None, HEAD, None, envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
-        ok, failure = RC._observation_qualifies({}, HEAD, None)
+        ok, failure = RC._observation_qualifies(
+            {}, HEAD, None, envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
     elif helper_name == "_hand_landed_evidence_qualifies":
@@ -2488,6 +2506,7 @@ def test_bite_slot_scoped_nonce_refuses_cross_slot(tmp_path):
     borrowed_nonce = "cross-slot-nonce"
     evidence_a = {
         **_binding_fields(borrowed_nonce),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",

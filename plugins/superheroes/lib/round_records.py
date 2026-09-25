@@ -99,9 +99,18 @@ PROVENANCE_RUNNER_RECORD_PHASES = (round_phases.P_AUDITS,)
 SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
                    PROVENANCE_ORCHESTRATOR_FULFILLED)
 EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
-EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind",
-                             "observation")
-EXECUTION_EVIDENCE_OPTIONAL_FIELDS = ("engineModel", "model", "runKind")
+EXECUTION_EVIDENCE_BINDING_FIELDS = session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
+_EXECUTION_EVIDENCE_MANDATORY_BINDING = tuple(
+    field
+    for field in EXECUTION_EVIDENCE_BINDING_FIELDS
+    if field != session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD
+)
+EXECUTION_EVIDENCE_FIELDS = _EXECUTION_EVIDENCE_MANDATORY_BINDING + ("observation",)
+EXECUTION_EVIDENCE_OPTIONAL_FIELDS = (
+    "engineModel",
+    "model",
+    session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD,
+)
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
@@ -117,7 +126,7 @@ _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK = {
     "observation": lambda value: isinstance(value, dict),
     "engineModel": lambda value: isinstance(value, str) and value,
     "model": lambda value: value is None or (isinstance(value, str) and value),
-    "runKind": lambda value: value in ("review", "write"),
+    session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD: session_contract.run_kind_value_ok,
 }
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
 # payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.

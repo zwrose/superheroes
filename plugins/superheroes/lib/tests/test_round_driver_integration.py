@@ -164,7 +164,7 @@ def _execution_evidence(**over):
     return evidence
 
 
-def _execution_evidence_for_payload(payload, source="runner", read="unknown"):
+def _execution_evidence_for_payload(payload, source="runner", read="unknown", phase=None):
     observation = {
         "tokens": None,
         "toolCalls": 1,
@@ -179,13 +179,20 @@ def _execution_evidence_for_payload(payload, source="runner", read="unknown"):
             carried, subject = session_contract.evidence_digest_subject(payload, kind)
             result_digest = (round_records.payload_sha256(subject)
                              if carried else round_records.payload_sha256(payload[kind]))
-            return _execution_evidence(
+            evidence = _execution_evidence(
                 resultKind=kind,
                 resultDigest=result_digest,
                 observation=observation,
                 source=source,
             )
-    return _execution_evidence(observation=observation, source=source)
+            break
+    else:
+        evidence = _execution_evidence(observation=observation, source=source)
+    if phase is not None:
+        run_kind = session_contract.run_kind_for_phase(phase)
+        if run_kind is not None:
+            evidence["runKind"] = run_kind
+    return evidence
 
 
 def _land(session_dir, state, pend, seat, payload, occurrence=0, evidence_read="unknown"):
@@ -213,7 +220,7 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0, evidence_read="
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
         evidence_source = _auditor_vendor_for(state)(seat)
         evidence = _execution_evidence_for_payload(
-            payload, source=evidence_source, read=evidence_read)
+            payload, source=evidence_source, read=evidence_read, phase=pend["phase"])
         envelope["executionEvidence"] = evidence
         envelope["provenance"] = round_records.PROVENANCE_HAND_LANDED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, evidence)

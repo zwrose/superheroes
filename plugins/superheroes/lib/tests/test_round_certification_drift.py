@@ -63,10 +63,9 @@ def test_execution_evidence_telemetry_values_match_records():
     assert RC.EXECUTION_EVIDENCE_TELEMETRY_VALUES == RR.EXECUTION_EVIDENCE_TELEMETRY_VALUES
 
 
-def test_execution_evidence_binding_fields_match_records():
-    assert RC.EXECUTION_EVIDENCE_BINDING_FIELDS == tuple(
-        field for field in RR.EXECUTION_EVIDENCE_FIELDS if field != "observation"
-    )
+def test_execution_evidence_binding_fields_match_session_contract():
+    assert RC.EXECUTION_EVIDENCE_BINDING_FIELDS is session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
+    assert RR.EXECUTION_EVIDENCE_BINDING_FIELDS is session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
 
 
 def test_head_content_blobs_file_name():
@@ -159,3 +158,27 @@ def test_round_phases_panel_dimensions_delegates_via_ast():
     assert isinstance(call.func, ast.Attribute)
     assert isinstance(call.func.value, ast.Name) and call.func.value.id == "round_panel_contract"
     assert call.func.attr == "panel_dimensions_from_config"
+
+
+def test_execution_evidence_optional_and_mandatory_fields_derive_from_home():
+    run_kind_field = session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD
+    assert run_kind_field in RR.EXECUTION_EVIDENCE_OPTIONAL_FIELDS
+    mandatory = tuple(
+        field
+        for field in session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
+        if field != run_kind_field
+    )
+    assert RR.EXECUTION_EVIDENCE_FIELDS == mandatory + ("observation",)
+
+
+def test_run_kind_by_phase_closed_over_dispatch_phases():
+    dispatch_phases = {p for p in round_phases.ALL_PHASES if p.startswith("dispatch-")}
+    assert set(session_contract.RUN_KIND_BY_PHASE) == dispatch_phases
+    assert (
+        session_contract.run_kind_for_phase(round_phases.P_FIXER)
+        == session_contract.RUN_KIND_WRITE
+    )
+    for phase in dispatch_phases:
+        if phase == round_phases.P_FIXER:
+            continue
+        assert session_contract.run_kind_for_phase(phase) == session_contract.RUN_KIND_REVIEW

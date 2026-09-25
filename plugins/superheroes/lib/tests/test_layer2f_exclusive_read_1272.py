@@ -56,6 +56,7 @@ def _hand_landed_evidence_binding(**overrides):
         "recordDigest": "a" * 64,
         "resultDigest": "b" * 64,
         "resultKind": "findings",
+        "runKind": SC.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -258,6 +259,7 @@ def test_write_run_stamp_qualifies_execution_only_despite_digest_mismatch():
     evidence = _hand_landed_evidence_binding(
         resultKind=SC.WRITE_RESULT_KIND,
         resultDigest=wrong_digest,
+        runKind=SC.run_kind_for_phase(SC.FIXER_PHASE),
     )
     payload = {"fixes": [{"file": "a.py", "description": "fixed"}]}
     envelope = _hand_landed_envelope(evidence, payload)
@@ -415,7 +417,9 @@ def test_bite_bp2f_r_ledger_identity_survives_merge():
 def test_bite_bp2f_h_write_run_execution_only():
     """axis: write-run stamp proves the run happened — binds no payload (execution-only)."""
     evidence = _hand_landed_evidence_binding(
-        resultKind=SC.WRITE_RESULT_KIND, resultDigest="0" * 64,
+        resultKind=SC.WRITE_RESULT_KIND,
+        resultDigest="0" * 64,
+        runKind=SC.run_kind_for_phase(SC.FIXER_PHASE),
     )
     envelope = _hand_landed_envelope(evidence, {"fixes": []})
     journal_binding = {field: evidence[field] for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS}

@@ -61,6 +61,82 @@ def _panel_session(tmp_path, *, evidence_extra=None):
     )
 
 
+def test_dispatch_observed_journal_envelope_run_kind_divergence_refuses(tmp_path):
+    """Journal runKind review with CAS-bound envelope runKind write must not certify."""
+    journal = [_journal_row("code-reviewer", PANEL_PHASE, source="codex")]
+    journal[0]["executionEvidence"]["runKind"] = "review"
+    spec = _envelope_spec("code-reviewer", PANEL_PHASE, source="codex")
+    spec["executionEvidence"] = {
+        **spec["executionEvidence"],
+        "runKind": "write",
+    }
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=journal,
+        envelopes=[spec],
+    )
+    path = os.path.join(session_dir, RC.JOURNAL_FILE)
+    envelope_sha = RR.envelope_sha256(
+        spec["payload"], spec["executionEvidence"]
+    )
+    lines = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            row["casToken"] = envelope_sha
+            lines.append(row)
+    with open(path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "evidence-run-kind-mismatch"
+
+
+def test_dispatch_observed_missing_envelope_execution_evidence_refuses(tmp_path):
+    """Journal evidence alone cannot satisfy dispatch runKind when envelope omits executionEvidence."""
+    journal = [_journal_row("code-reviewer", PANEL_PHASE, source="codex")]
+    spec = _envelope_spec("code-reviewer", PANEL_PHASE, source="codex")
+    payload = spec["payload"]
+    payload_sha = spec["payloadSha256"]
+    envelope = {
+        "schema": RR.SEAT_RESULT_SCHEMA_V2,
+        "session": "test-session-001",
+        "round": 1,
+        "phase": PANEL_PHASE,
+        "seat": "code-reviewer",
+        "attempt": 0,
+        "vendor": "codex",
+        "model": "gpt-5.6-sol",
+        "payload": payload,
+        "payloadSha256": payload_sha,
+        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+        "executionEvidence": None,
+        "envelopeSha256": RR.envelope_sha256(payload, None),
+    }
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=journal,
+        envelopes=[{"seat": "code-reviewer", "envelope": envelope}],
+    )
+    path = os.path.join(session_dir, RC.JOURNAL_FILE)
+    envelope_sha = envelope["envelopeSha256"]
+    lines = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            row["casToken"] = envelope_sha
+            lines.append(row)
+    with open(path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-absent"
+
+
 def test_run_kind_panel_write_refuses(tmp_path):
     session_dir = _panel_session(tmp_path, evidence_extra={"runKind": "write"})
     receipt, refusal = _certify(session_dir)
@@ -532,9 +608,84 @@ def test_hand_landed_fixer_run_kind_review_refuses(tmp_path):
     assert refusal["bindingFailure"] == "evidence-run-kind-mismatch"
 
 
-def _panel_hand_landed_session(tmp_path, phase, seat, *, run_kind):
+def test_hand_landed_panel_run_kind_absent_refuses(tmp_path):
+    session_dir = _panel_hand_landed_session(
+        tmp_path, PANEL_PHASE, "code-reviewer", run_kind="review", include_run_kind=False)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal["bindingFailure"] == "evidence-run-kind-mismatch"
+
+
+def test_hand_landed_fixer_run_kind_absent_refuses(tmp_path):
+    session_dir = _panel_hand_landed_session(
+        tmp_path, FIXER_PHASE, FIXER_SEAT, run_kind="write", include_run_kind=False)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal["bindingFailure"] == "evidence-run-kind-mismatch"
+
+
+_UNKNOWN_DISPATCH_PHASE = "dispatch-future-write"
+
+
+def test_unknown_phase_review_run_kind_refuses_named_token(tmp_path):
+    """Unknown dispatch phase with consistent review runKind refuses phase-unknown token."""
+    phase = _UNKNOWN_DISPATCH_PHASE
+    journal = [_journal_row("code-reviewer", phase, source="codex")]
+    spec = _envelope_spec("code-reviewer", phase, source="codex")
+    session_dir = write_session(
+        tmp_path,
+        journal_lines=journal,
+        envelopes=[spec],
+    )
+    path = os.path.join(session_dir, RC.JOURNAL_FILE)
+    envelope_sha = RR.envelope_sha256(
+        spec["payload"], spec["executionEvidence"]
+    )
+    lines = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            row["casToken"] = envelope_sha
+            lines.append(row)
+    with open(path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "evidence-run-kind-phase-unknown"
+
+
+def test_run_kind_for_phase_refuses_unknown():
+    assert session_contract.run_kind_for_phase(_UNKNOWN_DISPATCH_PHASE) is None
+    assert session_contract.run_kind_for_phase("dispatch-panell") is None
+    assert session_contract.run_kind_for_phase("") is None
+    assert session_contract.run_kind_for_phase(None) is None
+    assert session_contract.run_kind_for_phase(3) is None
+
+
+def test_verifier_seat_review_run_kind_qualifies():
+    for phase in (
+        "dispatch-verifiers",
+        "dispatch-scoped-finder",
+        "dispatch-gap-sweep",
+    ):
+        ok, found, binding = RC._dispatch_run_kind_qualifies(
+            {"runKind": session_contract.RUN_KIND_REVIEW},
+            phase,
+        )
+        assert ok is True
+        assert found == session_contract.RUN_KIND_REVIEW
+        assert binding is None
+
+
+def _panel_hand_landed_session(tmp_path, phase, seat, *, run_kind, include_run_kind=True):
     evidence = _execution_evidence_for_hand_landed(seat, phase)
-    evidence["runKind"] = run_kind
+    if include_run_kind:
+        evidence["runKind"] = run_kind
+    else:
+        evidence.pop("runKind", None)
     payload_sha = DEFAULT_PANEL_PAYLOAD_SHA
     journal_row = {
         "cmd": "record-result",
@@ -549,7 +700,9 @@ def _panel_hand_landed_session(tmp_path, phase, seat, *, run_kind):
         "headSha": HEAD_SHA,
         "citedHead": HEAD_SHA,
         "executionEvidence": {
-            field: evidence[field] for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
+            field: evidence[field]
+            for field in RC.EXECUTION_EVIDENCE_BINDING_FIELDS
+            if field in evidence
         },
         "recordIdentity": {
             "phase": phase,
