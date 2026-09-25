@@ -481,10 +481,12 @@ def test_pure_functions_still_importable():
 
 def test_cli_compose_probed_path_retains_codex_cell_through_receipt(monkeypatch, capsys):
     # axis: CLI serialization boundary — probed live_cells survives main→build→to_receipt
+    import model_registry as MRG
     import preflight_probe as pp
 
+    reviewer_deep_model, reviewer_deep_effort = MRG.matrix_config("reviewer-deep", "codex")
     aug15_cells = [
-        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["codex", reviewer_deep_model, reviewer_deep_effort],
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
     live_vendors = ["claude", "cursor"]
@@ -515,14 +517,14 @@ def test_cli_compose_probed_path_retains_codex_cell_through_receipt(monkeypatch,
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["liveCellsSource"] == "probed"
-    assert ["codex", "gpt-5.6-sol", "xhigh"] in receipt["liveCells"]
+    assert ["codex", reviewer_deep_model, reviewer_deep_effort] in receipt["liveCells"]
     assert "codex" not in receipt["liveVendors"]
     codex_deep = [
         s
         for s in SM.LENS_SEATS
         if receipt["seats"][s]["vendor"] == "codex"
-        and receipt["seats"][s]["model"] == "gpt-5.6-sol"
-        and receipt["seats"][s]["effort"] == "xhigh"
+        and receipt["seats"][s]["model"] == reviewer_deep_model
+        and receipt["seats"][s]["effort"] == reviewer_deep_effort
         and receipt["seats"][s]["tier"] == "reviewer-deep"
     ]
     assert codex_deep, "codex deep-review seat not retained through CLI path"
@@ -2241,18 +2243,29 @@ def test_review_code_reference_documents_pin_shorthand_and_rerotation():
 # --- cell-level liveness (#795 WO-B) ----------------------------------------------------------
 
 
+def _aug15_reviewer_deep_cell():
+    """The registry's reviewer-deep codex matrix cell (model, effort); never a re-spelled literal."""
+    import model_registry as MRG
+
+    return MRG.matrix_config("reviewer-deep", "codex")
+
+
 def _aug15_live_cells():
-    """2026-08-15 shape: codex sol/xhigh live, terra/high absent; cursor cells live."""
+    """2026-08-15 shape: reviewer-deep's codex matrix cell AND the pin-only fallback model live,
+    the ladder's other rungs absent; cursor cells live."""
+    model, effort = _aug15_reviewer_deep_cell()
     return [
+        ["codex", model, effort],
         ["codex", "gpt-5.6-sol", "xhigh"],
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
 
 
 def test_dod_aug15_partial_codex_cell_live():
-    """DoD row 1: lens seats keep codex at reviewer-deep when only sol/xhigh is live."""
+    """DoD row 1: lens seats keep codex at reviewer-deep when only its matrix cell is live."""
     live_vendors = ["claude", "cursor"]
     live_cells = _aug15_live_cells()
+    reviewer_deep_model, reviewer_deep_effort = _aug15_reviewer_deep_cell()
     m = SM.build(
         SM.PANEL_ROSTER,
         live_vendors,
@@ -2266,10 +2279,10 @@ def test_dod_aug15_partial_codex_cell_live():
     codex_lens = [
         s for s in SM.LENS_SEATS
         if m["seats"][s]["vendor"] == "codex"
-        and m["seats"][s]["model"] == "gpt-5.6-sol"
-        and m["seats"][s]["effort"] == "xhigh"
+        and m["seats"][s]["model"] == reviewer_deep_model
+        and m["seats"][s]["effort"] == reviewer_deep_effort
     ]
-    assert codex_lens, "codex lost from every lens seat despite sol/xhigh live"
+    assert codex_lens, "codex lost from every lens seat despite its matrix cell live"
     for seat in SM.LENS_SEATS:
         pinned = SM.build(
             SM.PANEL_ROSTER,
@@ -2284,8 +2297,8 @@ def test_dod_aug15_partial_codex_cell_live():
         cfg = pinned["seats"][seat]
         assert cfg["source"] == "pinned", seat
         assert cfg["vendor"] == "codex", seat
-        assert cfg["model"] == "gpt-5.6-sol", seat
-        assert cfg["effort"] == "xhigh", seat
+        assert cfg["model"] == reviewer_deep_model, seat
+        assert cfg["effort"] == reviewer_deep_effort, seat
         assert cfg["tier"] == "reviewer-deep", seat
     grounding = m["seats"][SM.GROUNDING_SEAT]
     assert grounding["vendor"] != "codex"
@@ -3183,6 +3196,7 @@ def test_codex_role_pin_astra_registered_seats_at_high():
 
 # axis: probed family check falls back to matrix when honored role pin is not live.
 def test_verify_maker_family_with_unavailable_role_pin_and_live_matrix_cell():
+    reviewer_deep_model, reviewer_deep_effort = _aug15_reviewer_deep_cell()
     kw = dict(
         roster=SM.PANEL_ROSTER,
         live_vendors=["claude", "codex"],
@@ -3193,7 +3207,7 @@ def test_verify_maker_family_with_unavailable_role_pin_and_live_matrix_cell():
             "code-reviewer": {"vendor": "claude"},
             "test-reviewer": {"vendor": "claude"},
         },
-        live_cells=[["codex", "gpt-5.6-sol", "xhigh"]],
+        live_cells=[["codex", reviewer_deep_model, reviewer_deep_effort]],
         live_cells_source="probed",
     )
     without_pin = SM.build(**kw)
@@ -3208,8 +3222,9 @@ def test_verify_maker_family_with_unavailable_role_pin_and_live_matrix_cell():
 
 # axis: registered gpt-6-astra role-pin falls back to matrix when Astra is not in live cells.
 def test_codex_role_pin_astra_not_live_falls_back_to_matrix():
+    reviewer_deep_model, reviewer_deep_effort = _aug15_reviewer_deep_cell()
     live_cells = [
-        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["codex", reviewer_deep_model, reviewer_deep_effort],
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
     m = SM.build(
@@ -3337,12 +3352,15 @@ def test_no_codex_role_pins_byte_identical_to_default_kwarg():
 
 
 def test_reachable_configs_vendor_pinned_seat_includes_matrix_cell():
+    import model_registry as MRG
+
+    reviewer_model, reviewer_effort = MRG.matrix_config("reviewer", "codex")
     rc = SM.reachable_configs(
         ["codex"],
         {"grounding-seat": "codex"},
         codex_role_pins={"reviewer": "gpt-5.6-sol"},
     )
-    assert ["gpt-5.6-terra", "high"] in rc["codex"]
+    assert [reviewer_model, reviewer_effort] in rc["codex"]
 
 
 def test_reachable_configs_in_play_role_pin_tiers_include_matrix_cells():
@@ -3361,6 +3379,9 @@ def test_reachable_configs_in_play_role_pin_tiers_include_matrix_cells():
 
 
 def test_codex_role_pin_vendor_pinned_seat_probes_matrix_fallback():
+    import model_registry as MRG
+
+    reviewer_model, reviewer_effort = MRG.matrix_config("reviewer", "codex")
     pins = {"grounding-seat": {"vendor": "codex"}}
     needed = SM.reachable_configs(
         ["codex", "cursor"],
@@ -3386,20 +3407,23 @@ def test_codex_role_pin_vendor_pinned_seat_probes_matrix_fallback():
     )
     cfg = m["seats"]["grounding-seat"]
     assert cfg["vendor"] == "codex"
-    assert cfg["model"] == "gpt-5.6-terra"
-    assert cfg["effort"] == "high"
+    assert cfg["model"] == reviewer_model
+    assert cfg["effort"] == reviewer_effort
     not_live = [d for d in m["degradations"] if d["constraint"] == "role-pin-not-live"]
     assert len(not_live) == 1
     assert not_live[0]["seat"] == "grounding-seat"
 
 
 def test_reachable_configs_includes_role_pinned_cell():
+    import model_registry as MRG
+
+    reviewer_model, reviewer_effort = MRG.matrix_config("reviewer", "codex")
     rc = SM.reachable_configs(
         ["codex", "cursor"],
         None,
         codex_role_pins={"reviewer": "gpt-5.6-sol"},
     )
-    assert ["gpt-5.6-terra", "high"] in rc["codex"]
+    assert [reviewer_model, reviewer_effort] in rc["codex"]
     assert ["gpt-5.6-sol", "high"] in rc["codex"]
 
 
@@ -3409,8 +3433,11 @@ def test_reachable_configs_role_pinned_cell_absent_without_pin():
 
 
 def test_codex_role_pin_reviewer_not_live_seats_matrix_with_one_degradation():
+    import model_registry as MRG
+
+    reviewer_model, reviewer_effort = MRG.matrix_config("reviewer", "codex")
     live_cells = [
-        ["codex", "gpt-5.6-terra", "high"],
+        ["codex", reviewer_model, reviewer_effort],
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
     m = SM.build(
@@ -3426,8 +3453,8 @@ def test_codex_role_pin_reviewer_not_live_seats_matrix_with_one_degradation():
     )
     cfg = m["seats"]["grounding-seat"]
     assert cfg["vendor"] == "codex"
-    assert cfg["model"] == "gpt-5.6-terra"
-    assert cfg["effort"] == "high"
+    assert cfg["model"] == reviewer_model
+    assert cfg["effort"] == reviewer_effort
     not_live = [d for d in m["degradations"] if d["constraint"] == "role-pin-not-live"]
     assert len(not_live) == 1
     assert not_live[0]["seat"] == "grounding-seat"
@@ -3644,9 +3671,26 @@ def test_compose_role_pin_without_seat_pins_liveness_not_scoped(tmp_path, capsys
     assert receipt["livenessPinScoped"] is False
 
 
-def test_compose_terra_deep_pin_refused_with_named_reason(tmp_path, capsys):
+def test_compose_role_pin_not_on_allowlist_refused_with_named_reason(tmp_path, capsys, monkeypatch):
+    # Every currently-registered non-retired codex model that is pin-eligible for reviewer-deep
+    # is also on its allowlist, so a real off-allowlist pin can no longer be constructed from
+    # registry data alone (#1435 WO-2b registry rewrite). Force `resolve_dispatch` not-ok for
+    # ONE otherwise-eligible pin (gpt-6-astra, whose pin_roles already include reviewer-deep) so
+    # the seat map's own "pin resolved but not on the tier's allowlist" path still gets proven —
+    # everything else still resolves through the real registry.
+    import model_registry as MRG
+
+    real_resolve_dispatch = MRG.resolve_dispatch
+
+    def _fake_resolve_dispatch(role, vendor, model, effort):
+        if role == "reviewer-deep" and vendor == "codex" and model == "gpt-6-astra":
+            return {"ok": False, "reason": "forced-off-allowlist-for-test"}
+        return real_resolve_dispatch(role, vendor, model, effort)
+
+    monkeypatch.setattr(MRG, "resolve_dispatch", _fake_resolve_dispatch)
+
     repo = str(tmp_path)
-    _write_core_with_prefs(repo, {"codexModels": {"reviewer-deep": "gpt-5.6-terra"}})
+    _write_core_with_prefs(repo, {"codexModels": {"reviewer-deep": "gpt-6-astra"}})
     rc = SM.main(
         [
             "x",
@@ -3672,7 +3716,7 @@ def test_compose_terra_deep_pin_refused_with_named_reason(tmp_path, capsys):
     assert honorable[0]["reason"].startswith("pin-not-on-allowlist:")
     for seat_cfg in receipt["seats"].values():
         if isinstance(seat_cfg, dict) and seat_cfg.get("vendor") == "codex":
-            assert seat_cfg.get("model") != "gpt-5.6-terra"
+            assert seat_cfg.get("model") != "gpt-6-astra"
 
 
 def test_compose_invalid_codex_role_pin_disclosed(tmp_path, capsys):

@@ -11,10 +11,39 @@ import pytest
 
 import core_md
 import mode_registry as mr
+import model_registry as MR
 import seat_bundle
 import store_core as sc
 
 import preflight_probe as pp
+
+# Fakes that answer every argv the same way must also answer `codex --version` at (or above)
+# the registry's floor, so the codex-CLI-floor gate never refuses a probe this file's fakes
+# never intended to fail. Read from the registry, never a literal (common.md migration rule).
+_CODEX_FLOOR_VERSION = MR.codex_min_cli()[0]
+_CODEX_VERSION_STDOUT = "codex-cli %s\n" % _CODEX_FLOOR_VERSION
+
+
+def _answer_codex_version_at_floor(argv):
+    """A canned at-floor success reply when `argv` is the codex-CLI-floor gate's own
+    `codex --version` probe; None otherwise (caller falls through to its own handling). A
+    custom fake `run` that discriminates by `-m`/effort flags must not also be asked to answer
+    this bare `("codex", "--version")` call — it isn't shaped like a dispatch argv."""
+    if list(argv) == ["codex", "--version"]:
+        return SimpleNamespace(returncode=0, stdout=_CODEX_VERSION_STDOUT, stderr="")
+    return None
+
+
+def _run_that_forbids_dispatch(msg="run must not be called"):
+    """A fake run that answers ONLY the codex-CLI-floor gate's own `codex --version` probe (a
+    cache hit still runs that gate before consulting the cache); any other call — a real
+    per-cell/no-op dispatch — means the cache was bypassed and is a test failure."""
+    def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
+        raise AssertionError(msg)
+    return _run
 
 
 def _assert_read_error_payload_shape(read_error, *, reason_prefix):
@@ -65,6 +94,9 @@ def _fake_run(returncode, stdout="", stderr=""):
 
 def _raising_run(exc):
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         raise exc
     return _run
 
@@ -96,10 +128,17 @@ def _scratch_repo_cwd_checks(kwargs, *, forbidden_realpaths=()):
 
 
 def _make_scratch_cwd_recording_run(forbidden_realpaths=(), raise_exc=None):
-    """Fake run that records cwd and asserts scratch-repo properties at call time."""
+    """Fake run that records cwd and asserts scratch-repo properties at call time.
+
+    The codex-CLI-floor gate's `codex --version` probe runs through the plain (non-scratch-repo)
+    `probe_command`, so it carries no `cwd` — answered here at the registry floor without the
+    scratch-repo assertions, and without touching `captured["cwd"]`, so a caller's later read of
+    `captured["cwd"]` still names the real scratch-repo cwd from the no-op probe."""
     captured = {}
 
     def _run(argv, **kwargs):
+        if list(argv) == ["codex", "--version"]:
+            return SimpleNamespace(returncode=0, stdout=_CODEX_VERSION_STDOUT, stderr="")
         captured["cwd"] = kwargs.get("cwd")
         captured["kwargs"] = kwargs
         _scratch_repo_cwd_checks(kwargs, forbidden_realpaths=forbidden_realpaths)
@@ -110,14 +149,25 @@ def _make_scratch_cwd_recording_run(forbidden_realpaths=(), raise_exc=None):
     return _run, captured
 
 
-fake0 = _fake_run(0)
-fake1 = _fake_run(1)
+fake0 = _fake_run(0, stdout=_CODEX_VERSION_STDOUT)
+fake1 = _fake_run(1, stdout=_CODEX_VERSION_STDOUT)
+
+# Registry-derived codex fixtures for the tests below (never a re-spelled model literal).
+_CODEX_REVIEWER_DEEP_CELL = MR.matrix_config("reviewer-deep", "codex")   # (model, effort)
+_CODEX_REVIEWER_CELL = MR.matrix_config("reviewer", "codex")             # (model, effort)
+_CODEX_LADDER = MR.ladder("codex")
+_CODEX_LADDER_DEFAULT_CELL = _CODEX_LADDER[0]
+_CODEX_LADDER_ALT_CELL = next(c for c in _CODEX_LADDER if c[0] != _CODEX_LADDER_DEFAULT_CELL[0])
+_CODEX_PIN_ONLY_MODEL = MR.pin_only_models("codex")[0]
 
 
 # --- probe_command -----------------------------------------------------------------------
 
 def test_probe_command_ok_on_exit_zero():
-    result = pp.probe_command("t", ["t"], run=fake0)
+    # A plain empty-stdout fake, deliberately not the shared codex-version-answering fake0/fake1
+    # (this test asserts the exact detail string, so it must not pick up their canned version
+    # text — those fakes exist to satisfy the codex-CLI-floor gate, not this generic probe).
+    result = pp.probe_command("t", ["t"], run=_fake_run(0))
     assert result == {"tool": "t", "ok": True, "exit": 0, "detail": ""}
 
 
@@ -168,6 +218,195 @@ def test_gh_auth_probe_ok_false():
     result = pp.gh_auth_probe(run=fake1)
     assert result["ok"] is False
     assert result["tool"] == "gh auth"
+
+
+# --- codex_cli_floor_probe (#1435 WO-2b) ----------------------------------------------------
+
+
+def _decrement_version(version_str):
+    """The floor version with its rightmost non-zero component decremented by one — a version
+    that compares strictly below `version_str` as int tuples."""
+    parts = [int(p) for p in version_str.split(".")]
+    i = len(parts) - 1
+    while i >= 0:
+        if parts[i] > 0:
+            parts[i] -= 1
+            break
+        i -= 1
+    return ".".join(str(p) for p in parts)
+
+
+def _increment_version(version_str):
+    parts = [int(p) for p in version_str.split(".")]
+    parts[-1] += 1
+    return ".".join(str(p) for p in parts)
+
+
+def test_codex_cli_floor_probe_below_floor_refused():
+    below = _decrement_version(_CODEX_FLOOR_VERSION)
+    floor_model = MR.codex_min_cli()[1]
+
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % below, stderr="")
+
+    result = pp.codex_cli_floor_probe(run=_run)
+    assert result is not None
+    assert result["ok"] is False
+    assert result["tool"] == "cross-vendor-cli:codex"
+    assert result["detail"].startswith("codex-cli-too-old:")
+    assert _CODEX_FLOOR_VERSION in result["detail"]
+    assert floor_model in result["detail"]
+    assert below in result["detail"]
+
+
+def test_codex_cli_floor_probe_at_floor_passes():
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=_CODEX_VERSION_STDOUT, stderr="")
+
+    assert pp.codex_cli_floor_probe(run=_run) is None
+
+
+def test_codex_cli_floor_probe_above_floor_passes():
+    above = _increment_version(_CODEX_FLOOR_VERSION)
+
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % above, stderr="")
+
+    assert pp.codex_cli_floor_probe(run=_run) is None
+
+
+def test_codex_cli_floor_probe_unparseable_output_refused():
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="not a version\n", stderr="")
+
+    result = pp.codex_cli_floor_probe(run=_run)
+    assert result is not None
+    assert result["ok"] is False
+    assert result["detail"].startswith("codex-cli-version-unknown:")
+
+
+def test_codex_cli_floor_probe_runner_raises_refused():
+    def _run(argv, **kwargs):
+        raise OSError("no codex binary")
+
+    result = pp.codex_cli_floor_probe(run=_run)
+    assert result is not None
+    assert result["ok"] is False
+    assert result["detail"].startswith("codex-cli-version-unknown:")
+
+
+def test_codex_cli_floor_probe_no_declared_floor_skips_probe(monkeypatch):
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=_CODEX_VERSION_STDOUT, stderr="")
+
+    monkeypatch.setattr(pp.model_registry, "codex_min_cli", lambda: None)
+    assert pp.codex_cli_floor_probe(run=_run) is None
+    assert calls == []
+
+
+def test_cross_vendor_cli_probe_codex_below_floor_refuses_without_exec():
+    below = _decrement_version(_CODEX_FLOOR_VERSION)
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append(list(argv))
+        if list(argv) == ["codex", "--version"]:
+            return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % below, stderr="")
+        raise AssertionError("the exec no-op must not run when the floor gate refuses")
+
+    result = pp.cross_vendor_cli_probe("codex", run=_run)
+    assert result["ok"] is False
+    assert result["detail"].startswith("codex-cli-too-old:")
+    assert calls == [["codex", "--version"]]
+
+
+def test_cross_vendor_cli_probe_cursor_unaffected_by_codex_floor_gate():
+    below = _decrement_version(_CODEX_FLOOR_VERSION)
+
+    def _run(argv, **kwargs):
+        if list(argv) == ["codex", "--version"]:
+            return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % below, stderr="")
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    result = pp.cross_vendor_cli_probe("cursor", run=_run)
+    assert result["ok"] is True
+
+
+def test_composition_liveness_codex_below_floor_all_cells_refused_without_per_cell_probe():
+    below = _decrement_version(_CODEX_FLOOR_VERSION)
+    calls = []
+
+    def _run(argv, **kwargs):
+        if list(argv) == ["codex", "--version"]:
+            return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % below, stderr="")
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    needed = {"codex": [_CODEX_LADDER_DEFAULT_CELL, _CODEX_LADDER_ALT_CELL]}
+    result = pp.composition_liveness(needed, run=_run)
+    info = result["codex"]
+    assert info["live"] is False
+    for model, _effort in needed["codex"]:
+        assert info["models"][model]["ok"] is False
+        assert info["models"][model]["detail"].startswith("codex-cli-too-old:")
+    for cell in info["cells"]:
+        assert cell["ok"] is False
+        assert cell["detail"].startswith("codex-cli-too-old:")
+    assert calls == []
+
+
+def test_live_vendors_for_composition_cache_bypassed_when_codex_cli_drops_below_floor(
+    tmp_path, monkeypatch,
+):
+    import liveness_cache
+
+    monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
+    model, effort = _CODEX_LADDER_DEFAULT_CELL
+    needed_override = {"codex": [(model, effort)]}
+    cache_path = str(tmp_path / "composition-liveness.json")
+    now = 1000.0
+
+    def _at_floor_run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    live, _cells, _liv, _notes, _src, first_prov = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_at_floor_run,
+        needed_override=needed_override,
+        cache_path=cache_path,
+        now=now,
+    )
+    assert "codex" in live
+    assert first_prov["servedFromCache"] is False
+    with open(cache_path, encoding="utf-8") as fh:
+        receipt_before = fh.read()
+
+    below = _decrement_version(_CODEX_FLOOR_VERSION)
+
+    def _below_floor_run(argv, **kwargs):
+        if list(argv) == ["codex", "--version"]:
+            return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % below, stderr="")
+        raise AssertionError("no per-cell probe may run once the codex CLI is below floor")
+
+    live2, _cells2, _liv2, notes2, _src2, second_prov = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_below_floor_run,
+        needed_override=needed_override,
+        cache_path=cache_path,
+        now=now + 1,
+    )
+    assert "codex" not in live2
+    assert second_prov["servedFromCache"] is False
+    assert any("codex-cli-too-old" in n.get("reason", "") for n in notes2)
+    with open(cache_path, encoding="utf-8") as fh:
+        receipt_after = fh.read()
+    assert receipt_after == receipt_before
 
 
 # --- cross_vendor_cli_probe / cross_vendor_no_op_argv --------------------------------------
@@ -247,6 +486,9 @@ def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_codex():
     captured = {}
 
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         captured["input"] = kwargs.get("input", "")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -319,7 +561,7 @@ def test_composition_liveness_codex_uses_disposable_scratch_repo_cwd(tmp_path):
     repo_root = str(tmp_path)
     run, captured = _make_scratch_cwd_recording_run(forbidden_realpaths=(repo_root,))
     scratch_cwd = None
-    needed = {"codex": [("gpt-5.6-terra", "high")]}
+    needed = {"codex": [_CODEX_LADDER_DEFAULT_CELL]}
     result = pp.composition_liveness(needed, run=run)
     scratch_cwd = captured["cwd"]
     assert result["codex"]["live"] is True
@@ -342,7 +584,7 @@ def test_composition_liveness_scratch_repo_removed_when_run_raises(tmp_path):
     run, captured = _make_scratch_cwd_recording_run(
         forbidden_realpaths=(repo_root,), raise_exc=OSError("boom"))
     scratch_cwd = None
-    needed = {"codex": [("gpt-5.6-terra", "high")]}
+    needed = {"codex": [_CODEX_LADDER_DEFAULT_CELL]}
     result = pp.composition_liveness(needed, run=run)
     scratch_cwd = captured["cwd"]
     assert result["codex"]["live"] is False
@@ -1054,15 +1296,27 @@ def test_model_no_op_argv_cursor_bogus_model_returns_none():
 
 
 def test_model_no_op_argv_codex_effort_none_resolves_from_matrix():
-    argv = pp.model_no_op_argv("codex", "gpt-5.6-sol")
+    model, effort = _CODEX_REVIEWER_DEEP_CELL
+    argv = pp.model_no_op_argv("codex", model)
     assert argv is not None
-    assert "model_reasoning_effort=xhigh" in argv
+    assert ("model_reasoning_effort=%s" % effort) in argv
 
 
-def test_model_no_op_argv_codex_terra_effort_none_resolves_second_tier():
-    argv = pp.model_no_op_argv("codex", "gpt-5.6-terra")
+def test_model_no_op_argv_codex_effort_none_resolves_second_tier(monkeypatch):
+    """When the probed model does not match the first `_PROBE_TIERS` entry's matrix cell,
+    effort resolution falls through to the second tier's cell."""
+    real_matrix_config = MR.matrix_config
+    reviewer_model, reviewer_effort = _CODEX_REVIEWER_CELL
+
+    def _fake_matrix_config(role, vendor):
+        if vendor == "codex" and role == "reviewer-deep":
+            return ("gpt-nope-tier-probe", "xhigh")
+        return real_matrix_config(role, vendor)
+
+    monkeypatch.setattr(pp.model_registry, "matrix_config", _fake_matrix_config)
+    argv = pp.model_no_op_argv("codex", reviewer_model)
     assert argv is not None
-    assert "model_reasoning_effort=high" in argv
+    assert ("model_reasoning_effort=%s" % reviewer_effort) in argv
 
 
 def test_model_no_op_argv_codex_matches_builder():
@@ -1085,7 +1339,7 @@ def test_model_no_op_argv_codex_bogus_model_returns_none():
 def test_needed_configs_for_review_tiers_omits_claude():
     configs = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex", "cursor"])
     assert "claude" not in configs
-    assert configs["codex"] == [("gpt-5.6-sol", "xhigh"), ("gpt-5.6-terra", "high")]
+    assert configs["codex"] == [_CODEX_REVIEWER_DEEP_CELL, _CODEX_REVIEWER_CELL]
     assert configs["cursor"] == [("cursor-grok-4.6", "xhigh")]
 
 
@@ -1168,17 +1422,23 @@ def test_composition_liveness_codex_both_ok_is_live():
 
 
 def test_composition_liveness_codex_one_fails_not_live():
+    model_a, effort_a = _CODEX_LADDER_DEFAULT_CELL
+    model_b, effort_b = _CODEX_LADDER_ALT_CELL
+
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         model = argv[argv.index("-m") + 1] if "-m" in argv else ""
-        if model == "gpt-5.6-sol":
+        if model == model_a:
             return SimpleNamespace(returncode=1, stdout="", stderr="fail")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    needed = {"codex": [(model_a, effort_a), (model_b, effort_b)]}
     result = pp.composition_liveness(needed, run=_run)
     assert result["codex"]["live"] is False
-    assert result["codex"]["models"]["gpt-5.6-sol"]["ok"] is False
-    assert result["codex"]["models"]["gpt-5.6-terra"]["ok"] is True
+    assert result["codex"]["models"][model_a]["ok"] is False
+    assert result["codex"]["models"][model_b]["ok"] is True
 
 
 def test_composition_liveness_claude_always_live():
@@ -1187,11 +1447,12 @@ def test_composition_liveness_claude_always_live():
 
 
 def test_composition_liveness_probe_exception_not_live():
-    needed = {"codex": [("gpt-5.6-terra", "high")]}
+    model, effort = _CODEX_LADDER_DEFAULT_CELL
+    needed = {"codex": [(model, effort)]}
     result = pp.composition_liveness(needed, run=_raising_run(OSError("boom")))
     assert result["codex"]["live"] is False
-    assert result["codex"]["models"]["gpt-5.6-terra"]["ok"] is False
-    assert "boom" in result["codex"]["models"]["gpt-5.6-terra"]["detail"]
+    assert result["codex"]["models"][model]["ok"] is False
+    assert "boom" in result["codex"]["models"][model]["detail"]
 
 
 def test_composition_liveness_unknown_cursor_model_not_live_without_run():
@@ -1211,15 +1472,19 @@ def test_composition_liveness_unknown_cursor_model_not_live_without_run():
 
 def test_composition_liveness_unknown_codex_model_not_live_without_run():
     calls = []
+    model, effort = _CODEX_LADDER_DEFAULT_CELL
 
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         calls.append(argv)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    needed = {"codex": [("gpt-5.6-terra", "high"), ("gpt-9-bogus", "xhigh")]}
+    needed = {"codex": [(model, effort), ("gpt-9-bogus", "xhigh")]}
     result = pp.composition_liveness(needed, run=_run)
     assert result["codex"]["live"] is False
-    assert result["codex"]["models"]["gpt-5.6-terra"]["ok"] is True
+    assert result["codex"]["models"][model]["ok"] is True
     assert result["codex"]["models"]["gpt-9-bogus"]["ok"] is False
     assert result["codex"]["models"]["gpt-9-bogus"]["detail"] == "unknown/unroutable model"
     assert len(calls) == 1
@@ -1241,6 +1506,9 @@ def test_composition_liveness_hardened_dispatch_codex():
     captured = {}
 
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         inp = kwargs.get("input", "")
         captured["input"] = inp
         if not inp.startswith(engine_dispatch.ANTIHIJACK_PREAMBLE):
@@ -1249,7 +1517,8 @@ def test_composition_liveness_hardened_dispatch_codex():
             return SimpleNamespace(returncode=1, stdout="", stderr="not stdin form")
         return SimpleNamespace(returncode=0, stdout="READY", stderr="")
 
-    needed = {"codex": [("gpt-5.6-sol", "xhigh")]}
+    model, effort = _CODEX_LADDER_DEFAULT_CELL
+    needed = {"codex": [(model, effort)]}
     result = pp.composition_liveness(needed, run=_run)
     assert result["codex"]["live"] is True
     assert "READY" in captured["input"]
@@ -1311,7 +1580,8 @@ def test_probe_argv_builders_contain_no_positional_prompt():
         ("cross_vendor", pp.cross_vendor_no_op_argv("cursor")),
         ("model_no_op", pp.model_no_op_argv("codex", "gpt-5.6-sol", "xhigh")),
         ("model_no_op", pp.model_no_op_argv("cursor", "cursor-grok-4.6", "xhigh")),
-        ("model_no_op", pp.model_no_op_argv("codex", "gpt-5.6-terra", "high")),
+        ("model_no_op", pp.model_no_op_argv(
+            "codex", _CODEX_LADDER_ALT_CELL[0], _CODEX_LADDER_ALT_CELL[1])),
         ("model_no_op", pp.model_no_op_argv("cursor", "composer-2.5", None)),
     ]
     for label, argv in builders:
@@ -1368,12 +1638,9 @@ def test_live_vendors_for_composition_cache_hit_skips_probe(tmp_path, monkeypatc
     now = 1000.0
     assert liveness_cache.write(liveness, needed, path=cache_path, now=now)
 
-    def _boom(argv, **kwargs):
-        raise AssertionError("run must not be called on cache hit")
-
     live, _live_cells, _liv, notes, _src, cache_prov = pp.live_vendors_for_composition(
         ["codex"],
-        run=_boom,
+        run=_run_that_forbids_dispatch("run must not be called on cache hit"),
         cache_path=cache_path,
         now=now + 1,
     )
@@ -1395,6 +1662,9 @@ def test_live_vendors_for_composition_stamps_configured_ttl_and_refuses_after_en
     now = 10_000.0
 
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         return SimpleNamespace(returncode=0, stdout="READY", stderr="")
 
     live, _, _, _, _, _ = pp.live_vendors_for_composition(
@@ -1437,6 +1707,9 @@ def test_live_vendors_for_composition_cache_miss_stale_probes_and_writes(tmp_pat
     calls = []
 
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         calls.append(argv)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -1474,12 +1747,9 @@ def test_live_vendors_for_composition_provenance_per_branch(tmp_path, monkeypatc
     now = 1000.0
     liveness_cache.write(liveness, needed, path=cache_path, now=now)
 
-    def _boom(argv, **kwargs):
-        raise AssertionError("run must not be called")
-
     _live, _cells, _liv, _notes, cache_hit_src, cache_hit_prov = pp.live_vendors_for_composition(
         ["codex"],
-        run=_boom,
+        run=_run_that_forbids_dispatch(),
         cache_path=cache_path,
         now=now + 1,
     )
@@ -1513,6 +1783,9 @@ def test_live_vendors_for_composition_probe_then_reprobe_uses_cache(tmp_path, mo
     calls = []
 
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         calls.append(now)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -1525,12 +1798,9 @@ def test_live_vendors_for_composition_probe_then_reprobe_uses_cache(tmp_path, mo
     assert first_prov["servedFromCache"] is False
     assert calls
 
-    def _boom(argv, **kwargs):
-        raise AssertionError("run must not be called on cache hit")
-
     _live, _cells, _liv, _notes, _src, second_prov = pp.live_vendors_for_composition(
         ["codex"],
-        run=_boom,
+        run=_run_that_forbids_dispatch("run must not be called on cache hit"),
         cache_path=cache_path,
         now=now + 700,
     )
@@ -1561,13 +1831,10 @@ def test_live_vendors_for_composition_provenance_values_in_vocabulary_home(tmp_p
     now = 1000.0
     lc.write(liveness, needed, path=cache_path, now=now)
 
-    def _boom(argv, **kwargs):
-        raise AssertionError("run must not be called")
-
     provenance_values = []
     _live, _cells, _liv, _notes, cache_hit_src, cache_hit_prov = pp.live_vendors_for_composition(
         ["codex"],
-        run=_boom,
+        run=_run_that_forbids_dispatch(),
         cache_path=cache_path,
         now=now + 1,
     )
@@ -1604,18 +1871,26 @@ def test_live_vendors_for_composition_cache_write_failure_disclosed(tmp_path):
 
 
 def test_live_vendors_for_composition_fresh_path_emits_cell_dead_notes():
+    model_ok, effort_ok = _CODEX_LADDER_DEFAULT_CELL
+    model_dead, effort_dead = _CODEX_LADDER_ALT_CELL
+
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         model = argv[argv.index("-m") + 1] if "-m" in argv else ""
-        if model == "gpt-5.6-terra":
+        if model == model_dead:
             return SimpleNamespace(
                 returncode=1, stdout="", stderr="Command timed out after 120 seconds")
         return SimpleNamespace(returncode=0, stdout="READY", stderr="")
 
-    live, live_cells, _liv, notes, _src, _prov = pp.live_vendors_for_composition(["codex"], run=_run)
+    needed_override = {"codex": [(model_ok, effort_ok), (model_dead, effort_dead)]}
+    live, live_cells, _liv, notes, _src, _prov = pp.live_vendors_for_composition(
+        ["codex"], run=_run, needed_override=needed_override)
     assert "codex" not in live
-    assert any(c[1] == "gpt-5.6-sol" for c in live_cells)
+    assert any(c[1] == model_ok for c in live_cells)
     cell_notes = [n for n in notes if n.get("constraint") == "liveness-cell"]
-    assert any(n["model"] == "gpt-5.6-terra" for n in cell_notes)
+    assert any(n["model"] == model_dead for n in cell_notes)
     assert any("timed out" in n["reason"] for n in cell_notes)
 
 
@@ -1623,24 +1898,20 @@ def test_live_vendors_for_composition_cache_path_emits_cell_dead_notes(tmp_path,
     import liveness_cache
 
     monkeypatch.delenv(liveness_cache._ENV_TTL, raising=False)
-    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    model_ok, effort_ok = _CODEX_LADDER_DEFAULT_CELL
+    model_dead, effort_dead = _CODEX_LADDER_ALT_CELL
+    needed = {"codex": [[model_ok, effort_ok], [model_dead, effort_dead]]}
     liveness = {
         "codex": {
             "live": False,
             "models": {
-                m: {"ok": (m != "gpt-5.6-terra"), "detail": (
-                    "Command timed out after 120 seconds" if m == "gpt-5.6-terra" else "")}
-                for m, _ in needed["codex"]
+                model_ok: {"ok": True, "detail": ""},
+                model_dead: {"ok": False, "detail": "Command timed out after 120 seconds"},
             },
             "cells": [
-                {
-                    "model": m,
-                    "effort": e,
-                    "ok": (m != "gpt-5.6-terra"),
-                    "detail": (
-                        "Command timed out after 120 seconds" if m == "gpt-5.6-terra" else ""),
-                }
-                for m, e in needed["codex"]
+                {"model": model_ok, "effort": effort_ok, "ok": True, "detail": ""},
+                {"model": model_dead, "effort": effort_dead, "ok": False,
+                 "detail": "Command timed out after 120 seconds"},
             ],
         },
         "claude": {"live": True, "models": {}, "cells": []},
@@ -1654,11 +1925,12 @@ def test_live_vendors_for_composition_cache_path_emits_cell_dead_notes(tmp_path,
         run=fake0,
         cache_path=cache_path,
         now=now + 1,
+        needed_override={"codex": [(model_ok, effort_ok), (model_dead, effort_dead)]},
     )
     assert "codex" not in live
-    assert any(c[1] == "gpt-5.6-sol" for c in live_cells)
+    assert any(c[1] == model_ok for c in live_cells)
     cell_notes = [n for n in notes if n.get("constraint") == "liveness-cell"]
-    assert any(n["model"] == "gpt-5.6-terra" for n in cell_notes)
+    assert any(n["model"] == model_dead for n in cell_notes)
     assert any("timed out" in n["reason"] for n in cell_notes)
     assert any("served from cache" in n["reason"] for n in cell_notes)
     assert any("seconds of effective TTL remaining" in n["reason"] for n in cell_notes)
@@ -1667,38 +1939,39 @@ def test_live_vendors_for_composition_cache_path_emits_cell_dead_notes(tmp_path,
 
 
 def test_live_vendors_for_composition_cache_served_note_constraint_matches_fresh_probe():
+    model_ok, effort_ok = _CODEX_LADDER_DEFAULT_CELL
+    model_dead, effort_dead = _CODEX_LADDER_ALT_CELL
+
     def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            return at_floor
         model = argv[argv.index("-m") + 1] if "-m" in argv else ""
-        if model == "gpt-5.6-terra":
+        if model == model_dead:
             return SimpleNamespace(
                 returncode=1, stdout="", stderr="Command timed out after 120 seconds")
         return SimpleNamespace(returncode=0, stdout="READY", stderr="")
 
+    needed_override = {"codex": [(model_ok, effort_ok), (model_dead, effort_dead)]}
     _live, _cells, _liv, fresh_notes, _src, _prov = pp.live_vendors_for_composition(
-        ["codex"], run=_run)
+        ["codex"], run=_run, needed_override=needed_override)
     fresh_cell_notes = [n for n in fresh_notes if n.get("constraint") == "liveness-cell"]
     assert fresh_cell_notes
 
     import liveness_cache
 
-    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    needed = {"codex": [[model_ok, effort_ok], [model_dead, effort_dead]]}
     liveness = {
         "codex": {
             "live": False,
             "models": {
-                m: {"ok": (m != "gpt-5.6-terra"), "detail": (
-                    "Command timed out after 120 seconds" if m == "gpt-5.6-terra" else "")}
-                for m, _ in needed["codex"]
+                model_ok: {"ok": True, "detail": ""},
+                model_dead: {"ok": False, "detail": "Command timed out after 120 seconds"},
             },
             "cells": [
-                {
-                    "model": m,
-                    "effort": e,
-                    "ok": (m != "gpt-5.6-terra"),
-                    "detail": (
-                        "Command timed out after 120 seconds" if m == "gpt-5.6-terra" else ""),
-                }
-                for m, e in needed["codex"]
+                {"model": model_ok, "effort": effort_ok, "ok": True, "detail": ""},
+                {"model": model_dead, "effort": effort_dead, "ok": False,
+                 "detail": "Command timed out after 120 seconds"},
             ],
         },
         "claude": {"live": True, "models": {}, "cells": []},
@@ -1714,6 +1987,7 @@ def test_live_vendors_for_composition_cache_served_note_constraint_matches_fresh
             run=fake0,
             cache_path=cache_path,
             now=now + 1,
+            needed_override=needed_override,
         )
     cached_cell_notes = [n for n in cached_notes if n.get("constraint") == "liveness-cell"]
     assert len(cached_cell_notes) == len(fresh_cell_notes)
