@@ -111,12 +111,12 @@ EXIT=1
 
 **neutralization:** remove `S_ISREG` refusal block in `_acquire_loop_lock`.
 
-**fixture seam:** test plants a regular lock file (open succeeds everywhere), then `monkeypatch` on `wave_watch.os.fstat` reports `S_IFIFO` for that inode so the guard is exercised without OS-specific `open` refusal; `flock` is wrapped to assert it is not reached when the guard holds.
+**fixture seam:** test plants a regular lock file (open succeeds everywhere), calls `_acquire_loop_lock` directly (the neutralized function), tracks only the batch's `wave-watch-locks/<sha256>.lock` open by exact name (not every `*.lock` under the ledger), then `monkeypatch` on `wave_watch.os.fstat` reports `S_IFIFO` for that fd so the guard is exercised without OS-specific `open` refusal; `flock` is wrapped to assert it is not reached when the guard holds.
 
 **raw red** (tail; full: `/private/tmp/c15-wo-a/bp-e6-red.txt`):
 ```
->       assert flock_calls == []
-E       AssertionError: assert [(3, 6)] == []
+>       assert lock_fd is None
+E       AssertionError: assert 16 is None
 FAILED ...::test_loop_lock_unavailable_non_regular_lock_file
 EXIT=1
 ```

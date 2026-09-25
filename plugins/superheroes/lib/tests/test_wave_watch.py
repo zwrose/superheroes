@@ -2765,24 +2765,38 @@ def _plant_loop_lock_file(repo, batch_id, tmp_path, monkeypatch):
     os.close(fd)
 
 
+def _wave_watch_loop_lock_name(batch_id):
+    return hashlib.sha256(batch_id.encode("utf-8")).hexdigest() + ".lock"
+
+
+def _is_wave_watch_loop_lock_open(name, batch_id):
+    expected = _wave_watch_loop_lock_name(batch_id)
+    if isinstance(name, str):
+        return name == expected
+    if isinstance(name, (bytes, bytearray)):
+        return name == expected.encode("ascii")
+    return False
+
+
 def test_loop_lock_unavailable_non_regular_lock_file(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _plant_loop_lock_file(repo, "batch-982", tmp_path, monkeypatch)
+    batch_id = "batch-982"
+    _plant_loop_lock_file(repo, batch_id, tmp_path, monkeypatch)
     real_fstat = ww.os.fstat
     real_open = ww.os.open
     real_flock = ww.fcntl.flock
-    lock_fds = set()
+    wave_watch_lock_fds = set()
     flock_calls = []
 
     def tracking_open(name, flags, mode=0o777, *, dir_fd=None):
         fd = real_open(name, flags, mode, dir_fd=dir_fd)
-        if isinstance(name, str) and name.endswith(_LEDGER_LOCK_SUFFIX):
-            lock_fds.add(fd)
+        if _is_wave_watch_loop_lock_open(name, batch_id):
+            wave_watch_lock_fds.add(fd)
         return fd
 
     def fake_fstat(fd):
         st = real_fstat(fd)
-        if fd in lock_fds:
+        if fd in wave_watch_lock_fds:
             fields = list(st)
             fields[0] = stat.S_IFIFO | (st.st_mode & 0o777)
             return os.stat_result(fields)
@@ -2795,17 +2809,14 @@ def test_loop_lock_unavailable_non_regular_lock_file(tmp_path, monkeypatch):
     monkeypatch.setattr(ww.os, "open", tracking_open)
     monkeypatch.setattr(ww.os, "fstat", fake_fstat)
     monkeypatch.setattr(ww.fcntl, "flock", tracking_flock)
-    run_fn, calls, violations = _never_run_fn()
-    result = ww.loop(
-        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
-    )
-    assert result["ok"] is False
+    lock_fd, refusal = ww._acquire_loop_lock(repo, batch_id, os.environ, None)
+    assert lock_fd is None
+    assert refusal is not None
+    assert refusal["ok"] is False
     assert flock_calls == []
-    assert result["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
-    assert result["detail"] == "lock-file-not-regular"
-    assert result["arms"] == 0
-    assert calls[0] == 0
-    assert violations == []
+    assert refusal["reason"] == ww.REFUSAL_LOOP_LOCK_UNAVAILABLE
+    assert refusal["detail"] == "lock-file-not-regular"
+    assert refusal["arms"] == 0
 
 
 def test_loop_lock_unavailable_flock_oserror(tmp_path, monkeypatch):
