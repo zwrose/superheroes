@@ -1,5 +1,14 @@
 # plugins/superheroes/lib/tests/test_core_md_vet_checks.py
-"""vetChecks json key: validate, read, write, CLI, preservation."""
+"""vetChecks json key: validate, read, write, CLI, preservation.
+
+Detector axes (bite-proof):
+- test_literal_pins — module pins and malformed-reason registry
+- test_validate_vet_checks_* — validator tokens and multi-field ordering
+- test_read_vet_checks_* — structural/read refusal and declared states
+- test_write_vet_checks_* / clear_vet_checks — write, declared-empty, clear, malformed refuse
+- test_preservation_* — vetChecks survives unrelated writers
+- test_cli_* / test_subprocess_* — CLI stdin, --clear, and argv boundaries
+"""
 import copy
 import importlib.util
 import io
@@ -15,14 +24,6 @@ _LIB = os.path.join(_REPO_ROOT, "plugins/superheroes/lib")
 _CORE_MD = os.path.join(_LIB, "core_md.py")
 
 _VET_CHECKS_KEY = "vetChecks"
-_MALFORMED_TOKENS = (
-    "vet-checks-not-a-list",
-    "vet-checks-entry-not-an-object",
-    "vet-checks-entry-missing-field",
-    "vet-checks-entry-unknown-field",
-    "vet-checks-field-not-a-nonempty-string",
-    "vet-checks-duplicate-name",
-)
 
 
 def _load(name):
@@ -94,8 +95,10 @@ def _parsed(repo, store):
 
 
 def test_literal_pins():
+    # axis: vetChecks key literals and malformed-reason registry are single-sourced in core_md
     assert CM.VET_CHECKS_KEY == _VET_CHECKS_KEY
-    assert tuple(CM.VET_CHECKS_MALFORMED_REASONS) == _MALFORMED_TOKENS
+    assert CM.VET_CHECK_FIELD_NAMES == ("name", "evidence", "records")
+    assert len(CM.VET_CHECKS_MALFORMED_REASONS) == len(set(CM.VET_CHECKS_MALFORMED_REASONS))
     assert CM.VET_CHECKS_REASON_MALFORMED == "vet-checks-malformed"
     assert CM.VET_CHECKS_REASON_INPUT_UNPARSEABLE == "vet-checks-input-unparseable"
     assert CM.VET_CHECKS_REASON_ROUND_TRIP == "vet-checks-round-trip-refused"
@@ -140,10 +143,15 @@ def test_literal_pins():
     ],
 )
 def test_validate_vet_checks_tokens(value, expected):
-    assert CM.validate_vet_checks(value) == expected
+    # axis: validate_vet_checks emits only registry-listed malformed reason tokens
+    got = CM.validate_vet_checks(value)
+    assert got == expected
+    for item in got:
+        assert item["reason"] in CM.VET_CHECKS_MALFORMED_REASONS
 
 
 def test_validate_vet_checks_multi_problem_ordered():
+    # axis: validator reports every distinct field problem on one entry in stable order
     value = [{"name": 1, "bogus": True}]
     got = CM.validate_vet_checks(value)
     assert got == [
@@ -155,6 +163,7 @@ def test_validate_vet_checks_multi_problem_ordered():
 
 
 def test_read_vet_checks_repo_root_unavailable(monkeypatch):
+    # axis: read_vet_checks refuses when core_path cannot resolve repo root
     def _raise(*a, **k):
         raise CM.RepoRootUnavailable("no root")
 
@@ -166,6 +175,7 @@ def test_read_vet_checks_repo_root_unavailable(monkeypatch):
 
 
 def test_read_vet_checks_core_absent(tmp_path):
+    # axis: missing core.md yields core-md-absent without treating checks as declared
     repo, store = _setup_repo(tmp_path)
     os.remove(CM.core_path(repo, store))
     got = CM.read_vet_checks(repo, store)
@@ -173,6 +183,7 @@ def test_read_vet_checks_core_absent(tmp_path):
 
 
 def test_read_vet_checks_unreadable_bytes(tmp_path):
+    # axis: unreadable core bytes surface core-md-unreadable
     repo, store = _setup_repo(tmp_path)
     open(CM.core_path(repo, store), "wb").write(b"\xff\xfe")
     got = CM.read_vet_checks(repo, store)
@@ -301,15 +312,31 @@ def test_write_vet_checks_noop(tmp_path):
 
 
 def test_write_vet_checks_clear_removes_key(tmp_path):
+    # axis: clear_vet_checks removes vetChecks; declared-empty [] keeps the key present
+    repo, store = _setup_repo(tmp_path)
+    CM.write_vet_checks(repo, _VALID_CHECKS, root=store)
+    res = CM.clear_vet_checks(repo, root=store)
+    assert res["action"] == "written"
+    assert res.get("cleared") is True
+    parsed = _parsed(repo, store)
+    assert _VET_CHECKS_KEY not in parsed
+
+
+def test_write_vet_checks_declared_empty_persists_key(tmp_path):
+    # axis: write_vet_checks([]) stores declared-empty vetChecks without deleting the key
     repo, store = _setup_repo(tmp_path)
     CM.write_vet_checks(repo, _VALID_CHECKS, root=store)
     res = CM.write_vet_checks(repo, [], root=store)
     assert res["action"] == "written"
     parsed = _parsed(repo, store)
-    assert _VET_CHECKS_KEY not in parsed
+    assert parsed[_VET_CHECKS_KEY] == []
+    got = CM.read_vet_checks(repo, store)
+    assert got["declared"] is True
+    assert got["checks"] == []
 
 
 def test_write_vet_checks_malformed_refused_bytes_unchanged(tmp_path):
+    # axis: malformed write refuses and leaves core.md bytes unchanged
     repo, store = _setup_repo(tmp_path)
     path = CM.core_path(repo, store)
     before = open(path, "rb").read()
@@ -357,6 +384,7 @@ def test_json_block_round_trip_vet_checks_only_diff():
 )
 @pytest.mark.parametrize("seed_kind", ["valid", "malformed", "empty_list"])
 def test_preservation_matrix(tmp_path, writer_name, kwargs, expect_action, seed_kind):
+    # axis: unrelated core.md writers preserve vetChecks seed (valid, malformed, empty list, absent)
     extra = None
     if seed_kind == "valid":
         extra = {_VET_CHECKS_KEY: copy.deepcopy(_VALID_CHECKS)}
@@ -490,13 +518,40 @@ def test_cli_write_and_read_vet_checks(tmp_path, monkeypatch):
     assert payload["checks"] == [{"name": "Alpha", "evidence": "ev", "records": "rec"}]
 
 
-def test_cli_write_vet_checks_empty_clears(tmp_path, monkeypatch):
+def test_cli_write_vet_checks_empty_stdin_refused(tmp_path, monkeypatch, capsys):
+    # axis: empty stdin on write-vet-checks is refused, not an silent clear
     repo, store = _setup_repo(tmp_path)
     CM.write_vet_checks(repo, _VALID_CHECKS, root=store)
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     rc = CM.main(["write-vet-checks", "--cwd", repo, "--root", store])
     assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "refused"
+    assert out["reason"] == "vet-checks-input-unparseable"
+    assert _VET_CHECKS_KEY in _parsed(repo, store)
+
+
+def test_cli_write_vet_checks_clear_flag(tmp_path, capsys):
+    # axis: --clear explicitly removes vetChecks and marks the result cleared
+    repo, store = _setup_repo(tmp_path)
+    CM.write_vet_checks(repo, _VALID_CHECKS, root=store)
+    rc = CM.main(["write-vet-checks", "--cwd", repo, "--root", store, "--clear"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out.get("cleared") is True
     assert _VET_CHECKS_KEY not in _parsed(repo, store)
+
+
+def test_cli_write_vet_checks_literal_empty_list_declared(tmp_path, monkeypatch):
+    # axis: JSON [] persists declared-empty vetChecks (distinct from key absence)
+    repo, store = _setup_repo(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("[]"))
+    rc = CM.main(["write-vet-checks", "--cwd", repo, "--root", store])
+    assert rc == 0
+    got = CM.read_vet_checks(repo, store)
+    assert got["declared"] is True
+    assert got["checks"] == []
+    assert _parsed(repo, store)[_VET_CHECKS_KEY] == []
 
 
 def test_cli_write_vet_checks_invalid_json(tmp_path, monkeypatch, capsys):

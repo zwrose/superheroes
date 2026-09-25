@@ -91,15 +91,22 @@ VET_CHECKS_KEY = "vetChecks"
 VET_CHECKS_REASON_MALFORMED = "vet-checks-malformed"
 VET_CHECKS_REASON_INPUT_UNPARSEABLE = "vet-checks-input-unparseable"
 VET_CHECKS_REASON_ROUND_TRIP = "vet-checks-round-trip-refused"
+VET_CHECK_FIELD_NAMES = ("name", "evidence", "records")
+_VET_CHECK_FIELDS = frozenset(VET_CHECK_FIELD_NAMES)
+VET_CHECKS_MALFORMED_NOT_A_LIST = "vet-checks-not-a-list"
+VET_CHECKS_MALFORMED_ENTRY_NOT_OBJECT = "vet-checks-entry-not-an-object"
+VET_CHECKS_MALFORMED_ENTRY_MISSING_FIELD = "vet-checks-entry-missing-field"
+VET_CHECKS_MALFORMED_ENTRY_UNKNOWN_FIELD = "vet-checks-entry-unknown-field"
+VET_CHECKS_MALFORMED_FIELD_NOT_STRING = "vet-checks-field-not-a-nonempty-string"
+VET_CHECKS_MALFORMED_DUPLICATE_NAME = "vet-checks-duplicate-name"
 VET_CHECKS_MALFORMED_REASONS = (
-    "vet-checks-not-a-list",
-    "vet-checks-entry-not-an-object",
-    "vet-checks-entry-missing-field",
-    "vet-checks-entry-unknown-field",
-    "vet-checks-field-not-a-nonempty-string",
-    "vet-checks-duplicate-name",
+    VET_CHECKS_MALFORMED_NOT_A_LIST,
+    VET_CHECKS_MALFORMED_ENTRY_NOT_OBJECT,
+    VET_CHECKS_MALFORMED_ENTRY_MISSING_FIELD,
+    VET_CHECKS_MALFORMED_ENTRY_UNKNOWN_FIELD,
+    VET_CHECKS_MALFORMED_FIELD_NOT_STRING,
+    VET_CHECKS_MALFORMED_DUPLICATE_NAME,
 )
-_VET_CHECK_FIELDS = frozenset({"name", "evidence", "records"})
 THREAT_MODEL_REASON_ROUND_TRIP = "threat-model-round-trip-refused"
 GUARDIAN_CADENCE_REASON_LAYER_ABSENT = "guardian-layer-absent"
 GUARDIAN_CADENCE_REASON_NO_FENCE = "guardian-config-fence-absent"
@@ -125,21 +132,24 @@ def validate_vet_checks(value):
     """Return malformed-item dicts for a vetChecks value; empty list means valid. Never raises."""
     items = []
     if not isinstance(value, list):
-        return [{"index": None, "field": None, "reason": "vet-checks-not-a-list"}]
+        return [{"index": None, "field": None, "reason": VET_CHECKS_MALFORMED_NOT_A_LIST}]
     seen_names = {}
     for index, entry in enumerate(value):
         if not isinstance(entry, dict):
             items.append(
-                {"index": index, "field": None, "reason": "vet-checks-entry-not-an-object"})
+                {"index": index, "field": None,
+                 "reason": VET_CHECKS_MALFORMED_ENTRY_NOT_OBJECT})
             continue
         for key in entry:
             if key not in _VET_CHECK_FIELDS:
                 items.append(
-                    {"index": index, "field": key, "reason": "vet-checks-entry-unknown-field"})
-        for field in ("name", "evidence", "records"):
+                    {"index": index, "field": key,
+                     "reason": VET_CHECKS_MALFORMED_ENTRY_UNKNOWN_FIELD})
+        for field in VET_CHECK_FIELD_NAMES:
             if field not in entry:
                 items.append(
-                    {"index": index, "field": field, "reason": "vet-checks-entry-missing-field"})
+                    {"index": index, "field": field,
+                     "reason": VET_CHECKS_MALFORMED_ENTRY_MISSING_FIELD})
         for field in _VET_CHECK_FIELDS:
             if field not in entry:
                 continue
@@ -148,14 +158,15 @@ def validate_vet_checks(value):
                 items.append({
                     "index": index,
                     "field": field,
-                    "reason": "vet-checks-field-not-a-nonempty-string",
+                    "reason": VET_CHECKS_MALFORMED_FIELD_NOT_STRING,
                 })
         name_val = entry.get("name")
         if isinstance(name_val, str) and name_val.strip():
             stripped_name = name_val.strip()
             if stripped_name in seen_names:
                 items.append(
-                    {"index": index, "field": "name", "reason": "vet-checks-duplicate-name"})
+                    {"index": index, "field": "name",
+                     "reason": VET_CHECKS_MALFORMED_DUPLICATE_NAME})
             else:
                 seen_names[stripped_name] = index
     return items
@@ -1622,7 +1633,7 @@ def _prose_field_round_trip_ok(orig, new_parsed, owned_field):
 
 
 def _write_json_block_key(cwd, block_key, mapping, *, root=None, not_a_mapping_reason,
-                          round_trip_reason, require_mapping=True):
+                          round_trip_reason, require_mapping=True, remove_key=False):
     """Shared lock-guarded writer for a single superheroes-core json block key."""
     if require_mapping and not isinstance(mapping, dict):
         return {"action": "refused", "reason": not_a_mapping_reason}
@@ -1679,14 +1690,14 @@ def _write_json_block_key(cwd, block_key, mapping, *, root=None, not_a_mapping_r
                     "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
         if block is None or not isinstance(block, dict):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
-        if mapping:
-            if block_key in block and block[block_key] == mapping:
-                return {"action": "noop"}
-            block[block_key] = copy.deepcopy(mapping)
-        else:
+        if remove_key or (require_mapping and not mapping):
             if block_key not in block:
                 return {"action": "noop"}
             block.pop(block_key, None)
+        else:
+            if block_key in block and block[block_key] == mapping:
+                return {"action": "noop"}
+            block[block_key] = copy.deepcopy(mapping)
         new_body = json.dumps(block, indent=2)
         new_text = _splice_single_json_block(text, new_body)
         if new_text is None:
@@ -1858,6 +1869,23 @@ def write_vet_checks(cwd, checks, *, root=None):
         round_trip_reason=VET_CHECKS_REASON_ROUND_TRIP,
         require_mapping=False,
     )
+
+
+def clear_vet_checks(cwd, *, root=None):
+    """Remove the ``vetChecks`` key from core.md. Never raises."""
+    result = _write_json_block_key(
+        cwd,
+        VET_CHECKS_KEY,
+        None,
+        root=root,
+        not_a_mapping_reason=VET_CHECKS_REASON_MALFORMED,
+        round_trip_reason=VET_CHECKS_REASON_ROUND_TRIP,
+        require_mapping=False,
+        remove_key=True,
+    )
+    if result.get("action") in ("written", "noop"):
+        return dict(result, cleared=True)
+    return result
 
 
 _THREAT_MODEL_HEADING = re.compile(r"^\s*##\s+Threat model\s*$", re.IGNORECASE)
@@ -2489,6 +2517,11 @@ def main(argv):
     wvc = sub.add_parser("write-vet-checks")
     wvc.add_argument("--cwd", default=".")
     wvc.add_argument("--root", default=None)
+    wvc.add_argument(
+        "--clear",
+        action="store_true",
+        help="remove vetChecks from core.md (explicit clear; empty stdin is refused)",
+    )
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -2699,10 +2732,14 @@ def main(argv):
             }
     elif args.cmd == "write-vet-checks":
         try:
-            raw = sys.stdin.read()
-            if raw.strip() == "":
-                checks = []
+            if args.clear:
+                out = clear_vet_checks(args.cwd, root=args.root)
             else:
+                raw = sys.stdin.read()
+                if raw.strip() == "":
+                    out = {"action": "refused", "reason": VET_CHECKS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
                 try:
                     checks, duplicate_key = _json_loads_rejecting_duplicate_keys(raw.strip())
                 except TypeError:
@@ -2718,7 +2755,7 @@ def main(argv):
                     out = {"action": "refused", "reason": VET_CHECKS_REASON_INPUT_UNPARSEABLE}
                     sys.stdout.write(json.dumps(out, indent=2) + "\n")
                     return 0
-            out = write_vet_checks(args.cwd, checks, root=args.root)
+                out = write_vet_checks(args.cwd, checks, root=args.root)
         except RepoRootUnavailable as exc:
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,

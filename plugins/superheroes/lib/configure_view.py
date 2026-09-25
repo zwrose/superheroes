@@ -349,12 +349,21 @@ def _vet_checks_view_lines(payload):
     reason = payload.get("reason")
     lines = ["### Vet checks"]
     if reason:
+        if reason == core_md.BUILDER_DISPATCH_REASON_ABSENT:
+            lines.append("(none declared — the vet runs no project vet checks)")
+            return lines
         lines.append("⚠ vet checks unreadable: %s" % reason)
         if reason == core_md.VET_CHECKS_REASON_MALFORMED:
             for item in payload.get("malformed") or []:
-                lines.append(
-                    "⚠ malformed entry %s: %s"
-                    % (item.get("index"), item.get("reason")))
+                field = item.get("field")
+                if field is not None:
+                    lines.append(
+                        "⚠ malformed entry %s field %s: %s"
+                        % (item.get("index"), field, item.get("reason")))
+                else:
+                    lines.append(
+                        "⚠ malformed entry %s: %s"
+                        % (item.get("index"), item.get("reason")))
         return lines
     if not payload.get("declared"):
         lines.append("(none declared — the vet runs no project vet checks)")

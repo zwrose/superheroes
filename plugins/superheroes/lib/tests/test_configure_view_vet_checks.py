@@ -66,6 +66,7 @@ def _vet_section(screen):
 
 
 def test_view_none_declared(tmp_path):
+    # axis: absent vetChecks key renders as none declared (not unreadable)
     repo, store = _setup_repo(tmp_path)
     screen = CV.render(repo, root=store)
     section = _vet_section(screen)
@@ -73,6 +74,7 @@ def test_view_none_declared(tmp_path):
 
 
 def test_view_declared_empty(tmp_path):
+    # axis: vetChecks [] renders declared-empty copy distinct from absence
     repo, store = _setup_repo(tmp_path, extra_block={"vetChecks": []})
     screen = CV.render(repo, root=store)
     section = _vet_section(screen)
@@ -80,6 +82,7 @@ def test_view_declared_empty(tmp_path):
 
 
 def test_view_declared_checks(tmp_path):
+    # axis: valid vetChecks list renders each check's three fields
     checks = [{"name": "A", "evidence": "e", "records": "r"}]
     repo, store = _setup_repo(tmp_path, extra_block={"vetChecks": checks})
     screen = CV.render(repo, root=store)
@@ -90,6 +93,7 @@ def test_view_declared_checks(tmp_path):
 
 
 def test_view_malformed_no_none_declared(tmp_path):
+    # axis: malformed vetChecks shows unreadable + per-entry reasons (not none declared)
     repo, store = _setup_repo(tmp_path, extra_block={"vetChecks": [{"name": ""}]})
     screen = CV.render(repo, root=store)
     section = _vet_section(screen)
@@ -99,15 +103,20 @@ def test_view_malformed_no_none_declared(tmp_path):
 
 
 def test_view_no_core_branch(tmp_path):
+    # axis: core-md-absent renders plain none-declared copy without unreadable warning
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     _init_repo(tmp_path)
     MR.write_registry(repo, MR.IN_REPO, "rk", root=store)
     screen = CV.render(repo, root=store)
-    assert "### Vet checks" in screen
+    section = _vet_section(screen)
+    assert "(none declared — the vet runs no project vet checks)" in section
+    assert "unreadable" not in section
+    assert "⚠" not in section
 
 
 def test_view_read_failure_monkeypatch(tmp_path, monkeypatch):
+    # axis: read_vet_checks failure surfaces vet-checks-read-failed in the view
     repo, store = _setup_repo(tmp_path)
 
     def _boom(*a, **k):
