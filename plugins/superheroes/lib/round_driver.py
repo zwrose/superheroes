@@ -7389,7 +7389,10 @@ def cmd_rule(session_dir, rulings_path):
 
 
 def _ruling_candidate_rows(state):
-    """{findingKey: (round, candidate row)} over every round's recorded audit new-issue candidates."""
+    """{findingKey: (round, candidate row)} over every round's recorded audit new-issue candidates.
+
+    Last wins: a candidate recorded on several rounds resolves to its LATEST raise, because
+    certification requires a ledger raise no earlier than every fold that still lists it."""
     out = {}
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
@@ -7397,9 +7400,16 @@ def _ruling_candidate_rows(state):
         rows = rec.get("auditNewIssues") if isinstance(rec, dict) else None
         for row in rows if isinstance(rows, list) else []:
             key = row.get(session_contract.FINDING_KEY_FIELD) if isinstance(row, dict) else None
-            if isinstance(key, str) and key and key not in out and str(rnd_key).isdigit():
+            if isinstance(key, str) and key and str(rnd_key).isdigit():
                 out[key] = (int(rnd_key), row)
     return out
+
+
+def _raised_before(ledger_row, candidate_round):
+    """True when a ledger row's recorded raise predates a later re-raise of the same candidate."""
+    raised = ledger_row.get(session_contract.RAISED_ROUND_FIELD)
+    return (isinstance(raised, int) and not isinstance(raised, bool)
+            and raised < candidate_round)
 
 
 def _ruling_entry_fault(entry, target, terminal, guidance_keys, guided_keys):
@@ -7466,12 +7476,16 @@ def _plan_rulings(state, rulings, terminal):
         seen.add(key)
         seed_round = None
         target = ledger_by_key.get(key)
+        hit = candidates.get(key)
         if not isinstance(target, dict):
-            hit = candidates.get(key)
             if hit is None or not owner_ok:
                 return None, RULING_TARGET_UNKNOWN, (
                     "%s id %r names no finding in the disposition ledger and no recorded audit "
                     "new-issue candidate" % (where, key))
+            seed_round, target = hit
+        elif hit is not None and owner_ok and _raised_before(target, hit[0]):
+            # Re-raised after its ledger raise: this fresh ruling re-stamps the raise, so a ruling
+            # recorded before the re-raise never answers it.
             seed_round, target = hit
         fault_detail = _ruling_entry_fault(entry, target, terminal, guidance_keys, guided_keys)
         if fault_detail is not None:
@@ -7481,8 +7495,9 @@ def _plan_rulings(state, rulings, terminal):
 
 
 def _seed_candidate_ledger_row(state, key, target, raised_round):
-    """Write an audit new-issue candidate the ledger never held (a Nit-cap overflow) as a raised
-    ledger row, so its disposition is recorded after a real raise."""
+    """Write an audit new-issue candidate the ledger never held (a Nit-cap overflow), or one
+    re-raised after its ledger raise, as a freshly raised ledger row, so its disposition is
+    recorded after its latest real raise. A re-raise replaces the stale row in place."""
     ledger = _ensure_disposition_ledger_for_write(state)
     entry = {session_contract.FINDING_KEY_FIELD: key}
     for field in ("file", "line", "title", "severity"):
@@ -7490,7 +7505,11 @@ def _seed_candidate_ledger_row(state, key, target, raised_round):
             entry[field] = target.get(field)
     entry[session_contract.RAISED_ROUND_FIELD] = raised_round
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
-    ledger.append(entry)
+    seen = _ledger_index_by_key(ledger)
+    if key in seen:
+        ledger[seen[key]] = entry
+    else:
+        ledger.append(entry)
 
 
 def _fold_rulings(state, plan, provenance, artifact_sha):

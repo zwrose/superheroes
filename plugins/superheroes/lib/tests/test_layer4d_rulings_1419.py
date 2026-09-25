@@ -372,3 +372,71 @@ def test_the_audits_fold_records_each_new_issue_candidate_on_the_round(tmp_path)
     assert [r["title"] for r in rows] == ["nit %d" % n for n in range(1, 8)]
     assert all(r["originAuditId"] == target["id"] for r in rows)
     assert [r[SC.FINDING_KEY_FIELD] for r in rows] == [SC.new_issue_candidate_key(n) for n in nits]
+
+
+_FOLD_ONE = "src/a.py::fix one@L1"
+_FOLD_THREE = "src/a.py::fix three@L9"
+_NIT = {"file": "src/f00.py", "line": 4, "title": "overflow nit", "severity": "Nit"}
+
+
+def _cand(fold_id):
+    return dict(_NIT, originAuditId=fold_id)
+
+
+def _ledgered_session(rnd):
+    """A recognized-owner ledger holding two fixed folds; audit new-issue rows are planted by
+    each test on the round that recorded them."""
+    ledger = [{SC.FINDING_KEY_FIELD: fid, "disposition": "fixed", "dispositionRound": r,
+               SC.RAISED_ROUND_FIELD: 1, SC.RAISED_SEQ_FIELD: seq, SC.DISPOSITION_SEQ_FIELD: seq + 1}
+              for fid, r, seq in ((_FOLD_ONE, 1, 1), (_FOLD_THREE, 3, 3))]
+    return {"round": rnd, "rounds": {str(n): {} for n in range(1, rnd + 1)},
+            SC.DISPOSITION_LEDGER_KEY: ledger,
+            SC.DISPOSITION_LEDGER_OWNER_FIELD: SC.DISPOSITION_LEDGER_OWNER_VALUE,
+            "dispositionSeqCounter": 4}
+
+
+def _apply_ruling(state, key, reason):
+    plan, refusal, detail = RD._plan_rulings(
+        state, [{"id": key, "ruling": "refuted", "reason": reason}], True)
+    assert refusal is None, (refusal, detail)
+    RD._fold_rulings(state, plan, PROV, "0" * 64)
+
+
+def _ledger_row(state, key):
+    return next(r for r in state[SC.DISPOSITION_LEDGER_KEY] if r.get(SC.FINDING_KEY_FIELD) == key)
+
+
+def test_a_candidate_raised_on_two_rounds_seeds_its_latest_raise_and_recertifies_the_later_fold():
+    """Last wins: a candidate recorded in rounds 1 and 3 and ruled after round 3 is ledgered with
+    raisedRound 3, so both folds that listed it reconcile."""
+    state = _ledgered_session(3)
+    state["rounds"]["1"]["auditNewIssues"] = RD._audit_new_issue_rows([_cand(_FOLD_ONE)])
+    state["rounds"]["3"]["auditNewIssues"] = RD._audit_new_issue_rows([_cand(_FOLD_THREE)])
+    key = state["rounds"]["3"]["auditNewIssues"][0][SC.FINDING_KEY_FIELD]
+    _apply_ruling(state, key, "the adjacent path is unreachable")
+    gap = RC._new_issues_reconciliation_gap(state, _FOLD_THREE, 3, [_cand(_FOLD_THREE)])
+    assert gap is None, gap
+    assert _ledger_row(state, key)[SC.RAISED_ROUND_FIELD] == 3
+    assert RC._new_issues_reconciliation_gap(state, _FOLD_ONE, 1, [_cand(_FOLD_ONE)]) is None
+
+
+def test_a_ruling_recorded_before_a_re_raise_never_certifies_it_and_a_fresh_ruling_does():
+    """Fail-closed: a round-2 ruling answers only the round-1 raise. The round-3 re-raise stays
+    refused with the ledger token until a fresh ruling re-stamps the raise and dispositions it."""
+    state = _ledgered_session(2)
+    state["rounds"]["1"]["auditNewIssues"] = RD._audit_new_issue_rows([_cand(_FOLD_ONE)])
+    key = state["rounds"]["1"]["auditNewIssues"][0][SC.FINDING_KEY_FIELD]
+    _apply_ruling(state, key, "stale answer")
+    assert _ledger_row(state, key)[SC.RAISED_ROUND_FIELD] == 1
+    state["round"] = 3
+    state["rounds"]["3"] = {"auditNewIssues": RD._audit_new_issue_rows([_cand(_FOLD_THREE)])}
+    gap = RC._new_issues_reconciliation_gap(state, _FOLD_THREE, 3, [_cand(_FOLD_THREE)])
+    assert gap == "new-issue-ledger-malformed", gap
+    _apply_ruling(state, key, "fresh answer to the re-raise")
+    row = _ledger_row(state, key)
+    assert row[SC.RAISED_ROUND_FIELD] == 3 and row.get("refutedReason") == (
+        "fresh answer to the re-raise")
+    assert row[SC.DISPOSITION_SEQ_FIELD] > row[SC.RAISED_SEQ_FIELD]
+    assert sum(1 for r in state[SC.DISPOSITION_LEDGER_KEY]
+               if r.get(SC.FINDING_KEY_FIELD) == key) == 1
+    assert RC._new_issues_reconciliation_gap(state, _FOLD_THREE, 3, [_cand(_FOLD_THREE)]) is None
