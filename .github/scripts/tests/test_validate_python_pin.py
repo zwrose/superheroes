@@ -338,3 +338,151 @@ def test_main_stdout_single_violation(tmp_path, capsys):
         for ln in lines
     )
     assert lines[-1] == "validate_python_pin: FAIL (1 violation(s))"
+
+
+# Axis: pin-home-duplicate — a second pin file anywhere competes with the root pin.
+def test_pin_home_duplicate_root_python_versions(tmp_path):
+    _scaffold_healthy(tmp_path)
+    _write(tmp_path, ".python-versions", "3.11\n")
+    assert _has_rule(_violations(tmp_path), "pin-home-duplicate", ".python-versions")
+
+
+def test_pin_home_duplicate_nested_python_version(tmp_path):
+    _scaffold_healthy(tmp_path)
+    _write(tmp_path, "eval/.python-version", "3.12\n")
+    assert _has_rule(
+        _violations(tmp_path), "pin-home-duplicate", "eval/.python-version"
+    )
+
+
+def test_pin_home_duplicate_root_only_ok(tmp_path):
+    _scaffold_healthy(tmp_path)
+    assert not _has_rule(_violations(tmp_path), "pin-home-duplicate")
+
+
+# Axis: bare-interpreter-command — ambient python/pip in non-workflow homes.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "python3 x.py\n",
+        "- python3 x.py\n",
+        "`pip install x`\n",
+        "$ python -m y\n",
+        "cd a && python3 b.py\n",
+        "a; pip3 install z\n",
+        "x | python3 -\n",
+        "(python3 z)\n",
+    ],
+)
+def test_bare_interpreter_command_positives(tmp_path, text):
+    _scaffold_healthy(tmp_path)
+    _write(tmp_path, "CLAUDE.md", text)
+    assert _has_rule(_violations(tmp_path), "bare-interpreter-command", "CLAUDE.md")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "scripts/pinned-python -m pytest\n",
+        "#!/usr/bin/env python3\n",
+        'exec uv run --no-project --python "$pin" python "$@"\n',
+        "Python 3.12\n",
+        "pytest\n",
+        "import subprocess\n",
+    ],
+)
+def test_bare_interpreter_command_negatives(tmp_path, text):
+    _scaffold_healthy(tmp_path)
+    _write(tmp_path, "CLAUDE.md", text)
+    assert not _has_rule(_violations(tmp_path), "bare-interpreter-command")
+
+
+def test_bare_interpreter_command_requirements_dev_pytest_line(tmp_path):
+    _scaffold_healthy(tmp_path)
+    _write(tmp_path, "requirements-dev.txt", "pytest>=8.0\n")
+    assert not _has_rule(
+        _violations(tmp_path), "bare-interpreter-command", "requirements-dev.txt"
+    )
+
+
+# Axis: workflow-python-before-setup — shell: python runs before pinned setup-python.
+def test_workflow_python_before_setup_shell_python(tmp_path):
+    _scaffold_healthy(tmp_path)
+    wf = """\
+name: ci
+on: push
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - shell: python
+        run: print(1)
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+"""
+    _write(tmp_path, ".github/workflows/ci.yml", wf)
+    assert _has_rule(
+        _violations(tmp_path), "workflow-python-before-setup"
+    )
+
+
+def test_workflow_python_before_setup_job_default_shell_python(tmp_path):
+    _scaffold_healthy(tmp_path)
+    wf = """\
+name: ci
+on: push
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: python
+    steps:
+      - uses: actions/checkout@v4
+      - run: print(1)
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+"""
+    _write(tmp_path, ".github/workflows/ci.yml", wf)
+    assert _has_rule(
+        _violations(tmp_path), "workflow-python-before-setup"
+    )
+
+
+# Axis: absolute-interpreter-path — declared maintainer-command homes stay path-free.
+def test_absolute_in_keep_or_retire_home(tmp_path):
+    _scaffold_healthy(tmp_path)
+    _write(
+        tmp_path,
+        "docs/superheroes/KEEP-OR-RETIRE.md",
+        "/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py --check\n",
+    )
+    assert _has_rule(
+        _violations(tmp_path),
+        "absolute-interpreter-path",
+        "docs/superheroes/KEEP-OR-RETIRE.md",
+    )
+
+
+def test_absolute_in_github_script_home(tmp_path):
+    _scaffold_healthy(tmp_path)
+    _write(tmp_path, ".github/scripts/x.py", "/usr/bin/python3\n")
+    assert _has_rule(
+        _violations(tmp_path),
+        "absolute-interpreter-path",
+        ".github/scripts/x.py",
+    )
+
+
+# Axis: running-interpreter-mismatch — --require-running-pin compares major.minor.
+def test_running_interpreter_mismatch_flag(tmp_path, monkeypatch, capsys):
+    _scaffold_healthy(tmp_path)
+    monkeypatch.setattr(vpp.sys, "version_info", (3, 11, 0, "final", 0))
+    assert vpp.check(tmp_path) == []
+    code = vpp.main(["--root", str(tmp_path), "--require-running-pin"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "running-interpreter-mismatch" in out

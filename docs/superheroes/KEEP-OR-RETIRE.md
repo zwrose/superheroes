@@ -1577,7 +1577,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 #### S10 — Entry-doc determinism guard
 
-- **Component.** Not a census row. `/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py --check`, which
+- **Component.** Not a census row. `scripts/pinned-python -B plugins/superheroes/lib/dispatch_entry_doc.py --check`, which
   regenerates the entry doc from the dispatch shell's own argparse declarations and refuses when
   the committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` differs from a
   fresh generation — including the doc's declared-vocabulary sections, so a vocabulary change without
@@ -1586,7 +1586,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   change to a dispatch flag's declaration or a declared vocabulary requires regenerating the doc in the same change.
 - **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
   `test_generated_doc_matches_committed_file` (the CI guard) or a local
-  `/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py --check` refusal (`is stale` / `is missing`)
+  `scripts/pinned-python -B plugins/superheroes/lib/dispatch_entry_doc.py --check` refusal (`is stale` / `is missing`)
   catching a committed `plugins/superheroes/skills/workhorse/reference/dispatch-entry.md` that had
   drifted from the argparse declarations. On firing, a proposal to the owner at a gardening pass. A
   zero citation count means the doc and the declarations have stayed together, not that the guard can

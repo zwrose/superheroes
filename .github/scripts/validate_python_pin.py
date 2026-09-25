@@ -28,6 +28,10 @@ _EXPLICIT_HOMES = (
     "eval/README.md",
     "eval/skills/README.md",
     "plugins/superheroes/eval/README.md",
+    "docs/superheroes/KEEP-OR-RETIRE.md",
+    "plugins/superheroes/lib/dispatch_entry_doc.py",
+    "plugins/superheroes/skills/workhorse/reference/dispatch-entry.md",
+    "plugins/superheroes/lib/tests/test_round_certification_fixture_generator_drift.py",
 )
 _SELF_SCRIPT = ".github/scripts/validate_python_pin.py"
 
@@ -55,6 +59,22 @@ _RUN_PYTHON_BEFORE_RE = re.compile(
 )
 
 _SETUP_PYTHON_USES = "actions/setup-python"
+
+_BARE_INTERPRETER_CMD_RE = re.compile(
+    r"(?:"
+    r"(?:(?:^|[\n\r])\s*(?:[-*+]\s+)?)"
+    r"|`"
+    r"|(?:\$\s+)"
+    r"|(?:&&\s+)"
+    r"|(?:;\s+)"
+    r"|(?:\|\s+)"
+    r"|(?:\(\s*)"
+    r")"
+    r"(?!scripts/pinned-python\b)"
+    r"(?:python\d*(?:\.\d+)*|pip3?)\b(?=\s)"
+)
+
+_PIN_HOME_WALK_SKIP = frozenset({".git", "node_modules", ".venv", "venv"})
 
 
 def _rel(root: str, path: str) -> str:
@@ -94,6 +114,33 @@ def _read_pin(root: str, violations: List[Violation]) -> Optional[str]:
         )
         return None
     return non_empty[0]
+
+
+def _check_pin_home_duplicates(root: str, violations: List[Violation]) -> None:
+    root_pin = os.path.normpath(os.path.join(root, ".python-version"))
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _PIN_HOME_WALK_SKIP]
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            rel = _rel(root, full)
+            if name == ".python-versions":
+                violations.append(
+                    Violation(
+                        "pin-home-duplicate",
+                        rel,
+                        None,
+                        "competing Python pin home",
+                    )
+                )
+            elif name == ".python-version" and os.path.normpath(full) != root_pin:
+                violations.append(
+                    Violation(
+                        "pin-home-duplicate",
+                        rel,
+                        None,
+                        "nested .python-version competes with root pin",
+                    )
+                )
 
 
 def _iter_homes(root: str, violations: List[Violation]) -> List[tuple[str, bool]]:
@@ -208,6 +255,51 @@ def _scan_line_rules(
                     "workflow must use python-version-file, not python-version",
                 )
             )
+        if not workflow_only and _BARE_INTERPRETER_CMD_RE.search(line):
+            violations.append(
+                Violation(
+                    "bare-interpreter-command",
+                    rel,
+                    line_no,
+                    "bare ambient python or pip command",
+                )
+            )
+
+
+def _job_default_run_shell(job: dict, workflow_defaults_shell: Optional[str]) -> Optional[str]:
+    defaults = job.get("defaults")
+    if isinstance(defaults, dict):
+        run = defaults.get("run")
+        if isinstance(run, dict):
+            shell = run.get("shell")
+            if isinstance(shell, str):
+                return shell
+    return workflow_defaults_shell
+
+
+def _workflow_default_run_shell(doc: dict) -> Optional[str]:
+    defaults = doc.get("defaults")
+    if not isinstance(defaults, dict):
+        return None
+    run = defaults.get("run")
+    if not isinstance(run, dict):
+        return None
+    shell = run.get("shell")
+    return shell if isinstance(shell, str) else None
+
+
+def _step_runs_python(step: dict, job_default_shell: Optional[str]) -> bool:
+    if not isinstance(step, dict):
+        return False
+    shell = step.get("shell")
+    if isinstance(shell, str) and shell.strip().lower().startswith("python"):
+        return True
+    run = step.get("run")
+    if not isinstance(run, str):
+        return False
+    if job_default_shell and job_default_shell.strip().lower().startswith("python"):
+        return True
+    return bool(_RUN_PYTHON_BEFORE_RE.search(run))
 
 
 def _uses_action(step: dict, action: str) -> bool:
@@ -246,6 +338,8 @@ def _check_workflow_structure(
     if not doc:
         return
 
+    workflow_default_shell = _workflow_default_run_shell(doc)
+
     jobs = doc.get("jobs")
     if jobs is None:
         return
@@ -263,10 +357,16 @@ def _check_workflow_structure(
             continue
         if not isinstance(steps, list):
             continue
-        _check_job_steps(rel, steps, violations)
+        job_default_shell = _job_default_run_shell(job, workflow_default_shell)
+        _check_job_steps(rel, steps, violations, job_default_shell)
 
 
-def _check_job_steps(rel: str, steps: list, violations: List[Violation]) -> None:
+def _check_job_steps(
+    rel: str,
+    steps: list,
+    violations: List[Violation],
+    job_default_shell: Optional[str] = None,
+) -> None:
     pinned_index: Optional[int] = None
     for idx, step in enumerate(steps):
         if not isinstance(step, dict):
@@ -296,12 +396,7 @@ def _check_job_steps(rel: str, steps: list, violations: List[Violation]) -> None
                     pinned_index = idx
 
     for idx, step in enumerate(steps):
-        if not isinstance(step, dict):
-            continue
-        run = step.get("run")
-        if not isinstance(run, str):
-            continue
-        if not _RUN_PYTHON_BEFORE_RE.search(run):
+        if not _step_runs_python(step, job_default_shell):
             continue
         if pinned_index is None or idx < pinned_index:
             violations.append(
@@ -326,6 +421,7 @@ def check(root: str) -> List[Violation]:
         return violations
 
     pin = _read_pin(root, violations)
+    _check_pin_home_duplicates(root, violations)
     homes = _iter_homes(root, violations)
     if pin is None:
         return violations
@@ -368,10 +464,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=_DEFAULT_ROOT,
         help="repository root (default: two levels above this script)",
     )
+    parser.add_argument(
+        "--require-running-pin",
+        action="store_true",
+        help="also require the running interpreter major.minor to match the pin",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     root = os.path.abspath(args.root)
 
     violations = check(root)
+    if not violations and args.require_running_pin:
+        pin_path = os.path.join(root, ".python-version")
+        pin_line = (
+            open(pin_path, encoding="utf-8").read().strip().splitlines()[0].strip()
+        )
+        running = "%d.%d" % sys.version_info[:2]
+        if not _versions_agree(pin_line, running):
+            violations.append(
+                Violation(
+                    "running-interpreter-mismatch",
+                    ".python-version",
+                    None,
+                    "running interpreter %s disagrees with pin %s"
+                    % (running, pin_line),
+                )
+            )
     if violations:
         for v in violations:
             print(_format_violation(v))

@@ -93,21 +93,22 @@ cancelled by the concurrency group.
 
 **Job `validate`**
 
-1. `validate_python_pin.py` — the Python pin: `.python-version` is the one home, no in-repo home names an interpreter by path or a disagreeing version, and every workflow's Python comes from setup-python reading the pin. Runs before any test (UFR-8).
-2. `validate_marketplace.py` — manifests parse, sources exist, versions are valid
+1. `validate_python_pin.py` — the Python pin: `.python-version` is the one home, no second pin home, no in-repo home names an interpreter by path or a disagreeing version, no bare ambient `python`/`pip` command in declared homes, and every workflow's Python comes from setup-python reading the pin. Runs before any test (UFR-8).
+2. Pinned runner smoke — `scripts/pinned-python` resolves the pin and re-runs `validate_python_pin.py` with `--require-running-pin` so CI proves the runner matches `.python-version`.
+3. `validate_marketplace.py` — manifests parse, sources exist, versions are valid
    SemVer, no duplicate-version trap.
-3. `check_catalog_membership.py` — catalog membership / `metadata.version`
+4. `check_catalog_membership.py` — catalog membership / `metadata.version`
    consistency against the PR base ref (**pull-request events only**).
-4. `validate_hosts.py` — dual-host manifests and tool maps are consistent.
-5. `validate_skills.py` — skill token-shape (line counts, description sizes,
+5. `validate_hosts.py` — dual-host manifests and tool maps are consistent.
+6. `validate_skills.py` — skill token-shape (line counts, description sizes,
    required phrases, reference links, CONVENTIONS citations) and, per CONVENTIONS
    §11.4, that every plugin-relative citation in the docs dispatched consumers read
    (`agents/`, `rubric/`, the `reference/` trees) resolves from the plugin root.
-6. `validate_stubs.py` — STUB markers carry an issue reference.
-7. Install `uv` — test-pilot block-execution tests depend on it.
-8. Install `jscpd@5.0.12` via npm — guardian duplication real-channel tests
+7. `validate_stubs.py` — STUB markers carry an issue reference.
+8. Install `uv` — test-pilot block-execution tests depend on it.
+9. Install `jscpd@5.0.12` via npm — guardian duplication real-channel tests
    depend on it.
-9. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
+10. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
    (`.github/scripts/tests/`), `plugins/superheroes/` (`lib/`, `eval/`), and
    `eval/lib/` (identifier reference-impl conformance, artifact schemas, and the
    activation-result CI gate). Schema tests
@@ -137,8 +138,9 @@ scripts/pinned-python .github/scripts/validate_stubs.py
 scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -n auto --durations=25
 ```
 
-Run every local gate through `scripts/pinned-python`: it resolves the one pinned interpreter
-from `.python-version` (the pin's only home) with the dependencies in `requirements-dev.txt`,
+Run every local gate through `scripts/pinned-python`: it requires a uv-managed interpreter at
+the pin and resolves the one pinned interpreter from `.python-version` (the pin's only home) with
+the dependencies in `requirements-dev.txt`,
 so the local gate, CI, and dispatched orders run the same Python. **Provisioning (once per
 machine):** install `uv`, then run `uv python install` from the repo root (it reads
 `.python-version`). Never name an interpreter by path or version in a gate command or an
