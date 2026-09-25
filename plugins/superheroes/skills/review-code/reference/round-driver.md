@@ -6,6 +6,7 @@
 - [Durable-record path](#durable-record-path)
 - [Base guard](#base-guard)
 - [Moving a session — relocate and re-emit](#moving-a-session--relocate-and-re-emit)
+- [Owner and advisor rulings — rule](#owner-and-advisor-rulings--rule)
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Round economy](#round-economy)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
@@ -673,6 +674,81 @@ it carries findings compare them with the new attempt's result for the same seat
 attempt if it has not run), then move the late file aside (never delete) — certification then reads
 the slot as superseded. The same move-aside unblocks `re-emit-attempt-has-results` when a hand-landed
 file for the old attempt was never recorded.
+
+## Owner and advisor rulings — rule
+
+Owner and advisor rulings reach the loop through one declared file — never as an appendix to a
+dispatch prompt. The runner evidence binding for fixer and audit orders requires the ruling text to
+live in the hashed order body the driver emits.
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" rule \
+  --session-dir "$SESSION_DIR" \
+  --ruling-file "$SESSION_DIR/rulings.json" \
+  --by "<who>"
+```
+
+The ruling file is a JSON **object**:
+
+```json
+{
+  "rulings": [
+    {
+      "id": "<finding id or findingKey>",
+      "ruling": "out-of-scope",
+      "reason": "<citable reason>",
+      "followUp": {
+        "item": "<named follow-up>",
+        "revisitTrigger": "<when to revisit>",
+        "classClosure": "<how the class closes>"
+      }
+    },
+    {
+      "id": "<finding id>",
+      "ruling": "guidance",
+      "reason": "<why this guidance applies>",
+      "guidance": "<text rendered into the next fixer or audit order>"
+    }
+  ],
+  "_provenance": {
+    "ruledBy": "<owner>",
+    "ruledAt": "<ISO-8601>",
+    "records": ["<durable URL of the ruling record>"]
+  }
+}
+```
+
+`ruling` is exactly `out-of-scope` or `guidance`. Every `out-of-scope` row **must** carry a
+well-formed `followUp` (same shape as owner-gate skip dispositions). Provenance uses the same required
+fields as owner-gate `_provenance` (`OWNER_PROVENANCE_FIELD_SHAPES`).
+
+**Effects.** `rule` appends to `rulingsLog`, records the round's `rulings`, journals
+`ruling-recorded`, and adds a `ruling-recorded` decision. `out-of-scope` dispositions go through
+`_record_disposition` (with follow-up and provenance); `_queue_fix_batch` excludes ruled keys the
+same way it excludes discharged fixes. Applicable rulings render into `dispatch-fixer` and
+`dispatch-audits` orders (including the fix-batch file sha256 on the fixer when rulings apply).
+
+**Re-emit after rule.** When the pending phase is a dispatch phase with orders already emitted and
+the ruling changes what those orders would render, `rule` supersedes the attempt and re-emits orders
+(factored from `re-emit`). Issue rulings before dispatch or after abandoning a stale attempt: when a
+seat already has a landing or bare payload for the pending attempt, `rule` refuses
+`ruling-attempt-recorded`.
+
+| `reason` | condition |
+| --- | --- |
+| `ruling-file-unreadable` | path missing or JSON unparseable |
+| `ruling-file-shape` | not an object, empty/malformed `rulings`, or guidance without text |
+| `ruling-provenance-malformed` | `_provenance` fails the owner-gate shape check |
+| `ruling-unknown-kind` | `ruling` is not `out-of-scope` or `guidance` |
+| `ruling-reason-missing` | `reason` empty or absent |
+| `ruling-follow-up-malformed` | `out-of-scope` without a valid `followUp` |
+| `ruling-target-unknown` | `id` matches no ledger row, live finding, fix-batch row, or audit new issue |
+| `ruling-session-terminal` | session already terminal |
+| `ruling-attempt-recorded` | pending attempt has unrecorded landing/bare results blocking supersession |
+| `rule-locked` | another process holds the session lock |
+
+A refused `rule` leaves loop state and the disposition ledger unchanged; only the refusal row is
+journalled.
 
 ## Batch concurrency — an independent batch goes out together
 

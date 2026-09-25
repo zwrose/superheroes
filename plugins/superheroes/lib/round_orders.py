@@ -176,6 +176,36 @@ def _format_payload_contract(phase: str) -> tuple[str | None, str | None]:
     return "\n".join(lines), None
 
 
+def _format_rulings_block(context: dict) -> str:
+    """Declared owner/advisor rulings hashed into fixer and audit orders (#1419)."""
+    rulings = context.get("rulings")
+    if not isinstance(rulings, list) or not rulings:
+        return ""
+    lines = ["## Owner and advisor rulings (declared input)", ""]
+    batch_sha = context.get("fix_batch_sha256")
+    if isinstance(batch_sha, str) and batch_sha.strip():
+        lines.append("Fix batch sha256: %s" % batch_sha.strip())
+        lines.append("")
+    for entry in rulings:
+        if not isinstance(entry, dict):
+            continue
+        rid = entry.get("id")
+        kind = entry.get("ruling")
+        reason = entry.get("reason")
+        lines.append("- id: %s" % (rid if rid is not None else "(missing)"))
+        lines.append("  ruling: %s" % (kind if kind is not None else "(missing)"))
+        if isinstance(reason, str) and reason.strip():
+            lines.append("  reason: %s" % reason.strip())
+        guidance = entry.get("guidance")
+        if isinstance(guidance, str) and guidance.strip():
+            lines.append("  guidance: %s" % guidance.strip())
+        follow_up = entry.get("followUp")
+        if isinstance(follow_up, dict):
+            lines.append("  followUp: %s" % json.dumps(follow_up, sort_keys=True))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _format_residual_block(context: dict) -> str:
     failure = context.get("residuals_read_failure")
     provenance = context.get("residuals_provenance")
@@ -489,6 +519,10 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         if lreason:
             return _refuse(lreason)
         blocks.append(landing_block.rstrip())
+        if phase in (round_phases.P_FIXER, round_phases.P_AUDITS):
+            rulings_block = _format_rulings_block(context)
+            if rulings_block:
+                blocks.insert(-1, rulings_block.rstrip())
 
         order = "\n\n".join(blocks) + "\n"
 
