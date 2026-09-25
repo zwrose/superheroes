@@ -93,20 +93,21 @@ cancelled by the concurrency group.
 
 **Job `validate`**
 
-1. `validate_marketplace.py` — manifests parse, sources exist, versions are valid
+1. `validate_python_pin.py` — the Python pin: `.python-version` is the one home, no in-repo home names an interpreter by path or a disagreeing version, and every workflow's Python comes from setup-python reading the pin. Runs before any test (UFR-8).
+2. `validate_marketplace.py` — manifests parse, sources exist, versions are valid
    SemVer, no duplicate-version trap.
-2. `check_catalog_membership.py` — catalog membership / `metadata.version`
+3. `check_catalog_membership.py` — catalog membership / `metadata.version`
    consistency against the PR base ref (**pull-request events only**).
-3. `validate_hosts.py` — dual-host manifests and tool maps are consistent.
-4. `validate_skills.py` — skill token-shape (line counts, description sizes,
+4. `validate_hosts.py` — dual-host manifests and tool maps are consistent.
+5. `validate_skills.py` — skill token-shape (line counts, description sizes,
    required phrases, reference links, CONVENTIONS citations) and, per CONVENTIONS
    §11.4, that every plugin-relative citation in the docs dispatched consumers read
    (`agents/`, `rubric/`, the `reference/` trees) resolves from the plugin root.
-5. `validate_stubs.py` — STUB markers carry an issue reference.
-6. Install `uv` — test-pilot block-execution tests depend on it.
-7. Install `jscpd@5.0.12` via npm — guardian duplication real-channel tests
+6. `validate_stubs.py` — STUB markers carry an issue reference.
+7. Install `uv` — test-pilot block-execution tests depend on it.
+8. Install `jscpd@5.0.12` via npm — guardian duplication real-channel tests
    depend on it.
-8. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
+9. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
    (`.github/scripts/tests/`), `plugins/superheroes/` (`lib/`, `eval/`), and
    `eval/lib/` (identifier reference-impl conformance, artifact schemas, and the
    activation-result CI gate). Schema tests
@@ -128,6 +129,7 @@ truth reports any watched file left dirty (`source_guard: session left shipped s
 Run all locally-runnable steps before pushing:
 
 ```bash
+scripts/pinned-python .github/scripts/validate_python_pin.py
 scripts/pinned-python .github/scripts/validate_marketplace.py
 scripts/pinned-python .github/scripts/validate_hosts.py
 scripts/pinned-python .github/scripts/validate_skills.py

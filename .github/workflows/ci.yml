@@ -36,6 +36,9 @@ jobs:
       - name: Install Python dependencies (validators + tests + import-linter)
         run: uv pip install --system -r requirements-dev.txt
 
+      - name: Python pin drift check (UFR-8 — before any test)
+        run: python3 .github/scripts/validate_python_pin.py
+
       - name: Validate marketplace + plugin manifests
         run: python3 .github/scripts/validate_marketplace.py
 
