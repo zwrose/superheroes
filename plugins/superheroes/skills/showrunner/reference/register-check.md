@@ -275,7 +275,9 @@ park obligation.
 
 **Package-read verification pass (showrunner duty 3).** At an epic package read's verification
 pass, re-run the check per **register-consuming child** across **both** directions, whether or
-not each body contains a quoted block. On `fail`, record a blocking package-read finding and do
+not each body contains a quoted block. For a stack layer, the child token and body are the feature
+issue's ([Each layer is a
+sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)). On `fail`, record a blocking package-read finding and do
 not treat the package as verified. On `pass`, record the check's own output in the package-read
 verification record — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a
 claim that it ran. When the register path and child token are known — the route names them or they

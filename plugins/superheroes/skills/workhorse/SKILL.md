@@ -152,8 +152,10 @@ happens **before any spend** — before the workspace, before the brief, before 
 
 When the routed issue is a **register-consuming child** — an epic child of a package that has a
 register, or a single-issue child standing in for one under FR-36 — run the register-check at
-**build intake** before the brief, whether or not the body contains a quoted block; a body with
-zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
+**build intake** before the brief, whether or not the body contains a quoted block; for a stack
+layer, against the feature issue's body and child token ([Each layer is a
+sub-issue](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md#each-layer-is-a-sub-issue));
+a body with zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
 derived from the issue alone, the route names the register and child token for you to pass. On
 `pass`, record the check's own output in the intake note — the `result` line, or `pass` together
 with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child token are
@@ -344,9 +346,9 @@ and each of the three is established from the **remote**, never from a local ass
   branches from and targets the stack's base (normally `main`).
 - **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests, so
   the **bottom layer** has nothing to link to at its own handback: it records that the stack does not
-  exist yet and names the layer that will form it. The stack is created by `gh stack link <bottom> <top>`
-  when the layer above opens; from then on every layer verifies membership from the branch before
-  claiming it. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist).
+  exist yet and names the layer that will form it. Parallel layers and which lane links once both
+  have pull requests: [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md)
+  § Each layer is a sub-issue, item 4. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist).
   A base-branch chain that was never linked **is not a stack** — nothing downstream, not the advisor's click list,
   not the atomic merge, works on it.
 - **Membership is verified from the branch before it is claimed** — the GraphQL read in

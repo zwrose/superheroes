@@ -27,6 +27,12 @@ when the vet starts is not "already merged," even if the plan assumed it would b
 
 **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.**
 
+**A stacked feature** is a child whose delivery is a native stack: every layer pull request names
+only its own sub-issue with a non-closing verb, so **no layer merge closes the feature issue**.
+The vet that carries the closure receipt is the **top layer's** vet — the last vet before the
+stack merges — and it applies the present-tense test to the stack's other layers and to the spec's
+other children at that moment.
+
 Candidate closure moments look like two final vets running concurrently, or a vet racing a sibling's
 no-PR close. In the concurrent case, both PRs may look "final" until one merges — the advisor holds
 the receipt on the vet that will actually close the last child, and the other vet carries a

@@ -51,16 +51,27 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    (`base-not-layer-head`, above) reads stack membership, and a stack does not exist until its second
    pull request is linked. So an upper layer launched while no stack exists yet carries no
    `stack`/`layerPosition` premise. It branches from the lower layer's pushed head, which its order
-   pins, and it links the stack at handback (workhorse charter, Building a layer of a stack). Once
-   the stack exists, later layers carry the gated premise.
+   pins. If its lane hands back **before** the lower layer has a pull request, it opens its pull
+   request with base set to the lower layer's branch and records in the handback that
+   `gh stack link` is owed at the lower layer's handback — it does **not** pass the lower layer's
+   branch name to `gh stack link` (branch arguments push). Once **both** layers have pull requests,
+   whichever lane hands back **second** links the stack with pull request numbers only, bottom to
+   top: `gh stack link <lower PR> <upper PR>`. Detail: workhorse charter, Building a layer of a
+   stack. Once the stack exists, later layers carry the gated premise.
 5. **Unchanged.** The stack is still the unit of merge: one `gh stack merge`, only when every
    planned layer is vetted ([How a stack merges](#how-a-stack-merges)). The launcher's refusal of a
    second live launch for one issue stays as it is. It is what lets layers run in parallel, since
    each layer is its own issue.
 6. **Closure.** Each layer's pull request names its own sub-issue with a non-closing verb ("part
-   of", "addresses") until the stack merges. When the stack merges, the feature issue closes citing
-   the stack's merge receipt, and each layer sub-issue is closed with it, explicitly. Do not rely
-   on GitHub closing sub-issues when the parent closes.
+   of", "addresses") until the stack merges — no layer pull request's merge closes the feature
+   issue. The vet that carries the closure receipt for a stacked feature is the top layer's vet
+   ([When closure fires](../skills/showrunner/reference/closure.md#when-closure-fires)). After
+   the merge train's post-merge step, the **advisor** closes the feature issue and each layer
+   sub-issue with `gh issue close <n> --comment <merge receipt>`, then reads each back with
+   `gh issue view <n> --json state` and records `state=CLOSED` in the post-merge report. When a
+   queued merge lands only a prefix of the stack, close only the sub-issues whose layers landed
+   and leave the feature issue open. Do not rely on GitHub closing sub-issues when the parent
+   closes.
 
 ## How a stack comes to exist
 

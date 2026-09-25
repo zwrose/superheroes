@@ -144,8 +144,10 @@ above).
    defect**, not a builder defect.
    When an issue being filed is a **register-consuming child** — an epic child of a package that
    has a register, or a single-issue child standing in for one under FR-36 — run the register-check
-   against the filed body **before filing**, whether or not the body contains a quoted block; a body
-   with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
+   against the filed body **before filing**, whether or not the body contains a quoted block; for a
+   stack layer, against the feature issue's body and child token ([Each layer is a
+   sub-issue](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md#each-layer-is-a-sub-issue));
+   a body with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
    filing a drifted or incomplete quote. On `pass`, record the check's own output in the filing
    note — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that
    it ran. When the register path and child token are known — the route names them or they are
