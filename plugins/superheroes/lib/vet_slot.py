@@ -10,8 +10,8 @@ failed read or check is a refusal with one of ten reasons (``bad-argument``,
 ``read-failed``, ``markers-invalid``, ``followups-malformed``, ``receipt-missing``,
 ``dispositions-malformed``, ``followup-undispositioned``, ``none-over-list``,
 ``write-failed``, ``write-unconfirmed``) and a detail naming what was wrong; no edit
-is made, except for ``write-unconfirmed``: the edit was pushed but the readback
-failed or differed. One JSON line on stdout; exit 0 on ok, 1 on refusal."""
+is made, except for ``write-unconfirmed``: the edit call was launched (and may have
+failed) but the readback failed or differed from the pushed body. One JSON line on stdout; exit 0 on ok, 1 on refusal."""
 import argparse
 import json
 import os
@@ -41,7 +41,7 @@ NONE_WORDS = ("None", "`None`")
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
 _ITEM_RE = re.compile(r"^- FU(\d+) \[([a-z-]+)\] \S")
-_NESTED_RE = re.compile(r"^(?:[-*] FU\d+ |FU\d+ \[)")
+_NESTED_RE = re.compile(r"^(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?FU\d+\b")
 _COUNT_RE = re.compile(r"^Follow-ups: (\d+) \((\d+) owner-call\)$")
 _DISPOSITION_RE = re.compile(r"^- FU(\d+): (\S.*)$")
 
@@ -90,8 +90,17 @@ def _parse_followups(body, build_offset):
     inert = md_fence.scan_contexts(bare).inert
     first = next(i for i, s in enumerate(starts) if s >= build_offset)
     heading_at = level = None
+    depth = 0  # live <details nesting; the first opener is the build record's own
+
+    def closes_record(i):
+        nonlocal depth
+        if inert[i]:
+            return False
+        depth += bare[i].count("<details") - bare[i].count("</details>")
+        return "</details>" in bare[i] and depth <= 0
+
     for i in range(first, len(bare)):
-        if not inert[i] and bare[i].strip() == "</details>":
+        if closes_record(i):
             break
         lvl, text = (None, None) if inert[i] else _heading(bare[i])
         if lvl is not None and text == FOLLOWUPS_HEADING:
@@ -103,7 +112,7 @@ def _parse_followups(body, build_offset):
     for i in range(heading_at + 1, len(bare)):
         if not inert[i]:
             lvl, _ = _heading(bare[i])
-            if (lvl is not None and lvl <= level) or bare[i].strip() == "</details>":
+            if (lvl is not None and lvl <= level) or closes_record(i):
                 break
         if bare[i].strip():
             section.append((bare[i], inert[i]))
@@ -193,6 +202,7 @@ def _parse_dispositions(receipt_body):
     pieces = [p for p in pieces + [l.strip() for l in bare[start + 1:end]] if p]
     if len(pieces) == 1 and pieces[0] in NONE_WORDS:
         return None
+    none_first = bool(pieces) and pieces[0] in NONE_WORDS
     inert = md_fence.scan_contexts(bare).inert
     ids = []
     for i in range(start + 1, end):
@@ -206,6 +216,9 @@ def _parse_dispositions(receipt_body):
         if fu_id in ids:
             raise _Refusal("dispositions-malformed", "duplicate disposition for %s" % fu_id)
         ids.append(fu_id)
+    if none_first and ids:
+        raise _Refusal("dispositions-malformed", "None and keyed dispositions both appear: %s"
+                       % ", ".join(ids))
     return ids
 
 
@@ -326,25 +339,29 @@ def _run_verb(verb, pr, repo, slot_file, run):
     if _read_body(run, pr, repo) != body:
         raise _Refusal("write-failed", "PR body changed between the read and the push")
     path = None
+    pushed = "slot write already pushed"
     try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md",
-                                         prefix="vet-slot-", delete=False) as handle:
-            path = handle.name
-            handle.write(new_body)
-        _gh(run, ["gh", "pr", "edit", str(pr), "-R", repo, "--body-file", path], "edit",
-            reason="write-failed")
-    except OSError as exc:
-        raise _Refusal("write-failed", "edit: %s" % exc)
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md",
+                                             prefix="vet-slot-", delete=False) as handle:
+                path = handle.name
+                handle.write(new_body)
+        except OSError as exc:
+            raise _Refusal("write-failed", "edit: %s" % exc)
+        try:  # once launched, a failed edit call is an unconfirmed write: read back
+            _gh(run, ["gh", "pr", "edit", str(pr), "-R", repo, "--body-file", path], "edit",
+                reason="write-unconfirmed")
+        except _Refusal as exc:
+            pushed = "slot edit call failed (%s)" % exc.detail
     finally:
         if path is not None and os.path.exists(path):
             os.unlink(path)
     try:
         readback = _read_body(run, pr, repo)
     except _Refusal as exc:
-        raise _Refusal("write-unconfirmed", "slot write already pushed; readback: %s" % exc.detail)
+        raise _Refusal("write-unconfirmed", "%s; readback: %s" % (pushed, exc.detail))
     if _normalize(readback) != _normalize(new_body):
-        raise _Refusal("write-unconfirmed",
-                       "slot write already pushed; readback differs from the pushed body")
+        raise _Refusal("write-unconfirmed", "%s; readback differs from the pushed body" % pushed)
     return result
 
 

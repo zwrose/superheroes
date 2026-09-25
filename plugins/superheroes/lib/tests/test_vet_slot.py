@@ -211,6 +211,12 @@ BODY_CASES = [
      _body_with_followups("- FU1 [defect] x\n  - FU2 [craft] hidden\n")),
     ("followups-malformed", "nested follow-up id: FU2",
      _body_with_followups("- FU1 [defect] x\n    FU2 [craft] hidden\n")),
+    ("followups-malformed", "nested follow-up id: + FU2",
+     _body_with_followups("- FU1 [defect] x\n  + FU2 [craft] hidden\n")),
+    ("followups-malformed", "nested follow-up id: 1. FU2",
+     _body_with_followups("- FU1 [defect] x\n  1. FU2 [craft] hidden\n")),
+    ("followups-malformed", "nested follow-up id: 1) FU2",
+     _body_with_followups("- FU1 [defect] x\n  1) FU2 [craft] hidden\n")),
     ("followups-malformed", "unknown class: bogus", _body_with_followups("- FU1 [bogus] x\n")),
     ("followups-malformed", "duplicate follow-up id: FU1",
      _body_with_followups("- FU1 [defect] x\n- FU1 [craft] y\n")),
@@ -268,6 +274,10 @@ RECEIPT_CASES = [
      _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n```\n- FU1: filed #12\n```\n")),
     ("followup-undispositioned", "FU1: no disposition",
      _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n  - FU1: filed #12\n")),
+    ("dispositions-malformed", "None and keyed dispositions both appear: FU1, FU2",
+     _receipt_with("**Dispositions — completed.** None\n- FU1: filed #1\n- FU2: fixed\n")),
+    ("dispositions-malformed", "None and keyed dispositions both appear: FU1, FU2",
+     _receipt_with("**Dispositions — completed.**\n`None`\n- FU1: filed #1\n- FU2: fixed\n")),
 ]
 
 
@@ -432,11 +442,37 @@ def test_body_changed_between_read_and_push(slot_file):
     assert fake.edit_calls() == []
 
 
-def test_edit_nonzero_is_write_failed(slot_file):
+def test_edit_nonzero_is_write_unconfirmed(slot_file):
     fake = FakeGh([BODY], _pages([_comment(RECEIPT)]), edit_rc=1)
     result = _write(fake, slot_file)
-    assert result["reason"] == "write-failed"
-    assert "edit: exit 1 edit boom" in result["detail"]
+    assert result["reason"] == "write-unconfirmed"
+    assert ("slot edit call failed (edit: exit 1 edit boom); readback differs from the pushed body"
+            in result["detail"])
+    assert not os.path.exists(fake.edit_calls()[0][7])
+
+
+@pytest.mark.parametrize("landed", [True, False])
+def test_edit_timeout_reads_back(landed, slot_file):
+    fake = _ok_fake()
+    original_call = fake.__call__
+
+    def run(argv, **kwargs):
+        if argv[:3] == ["gh", "pr", "edit"]:
+            if landed:
+                original_call(argv, **kwargs)
+            else:
+                fake.calls.append(list(argv))
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        return original_call(argv, **kwargs)
+
+    result = _write(run, slot_file)
+    if landed:
+        assert result["ok"] is True
+    else:
+        assert result["reason"] == "write-unconfirmed"
+        assert ("slot edit call failed (edit: gh call timed out); readback differs from the "
+                "pushed body" in result["detail"])
+    assert fake.calls[-1] == list(VIEW)  # the readback ran
     assert not os.path.exists(fake.edit_calls()[0][7])
 
 
@@ -525,6 +561,17 @@ def test_section_bounded_by_details_with_followups_last():
     body = BODY.replace("</details>\n\ntrailer\n", "</details>\n\n- not a follow-up after details\n")
     fake = _ok_fake(body=body)
     assert vs.run_verb("check", PR, REPO, run=fake)["ok"] is True
+
+
+@pytest.mark.parametrize("verb", ["write", "check"])
+def test_nested_details_before_followups_passes(verb, slot_file):
+    body = BODY.replace("\n### Follow-ups for the advisor",
+                        "<details><summary>Receipts</summary>\nreceipt\n</details>\n"
+                        "\n### Follow-ups for the advisor")
+    fake = _ok_fake(body=body)
+    result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
 
 
 def test_section_bounded_by_next_heading():
