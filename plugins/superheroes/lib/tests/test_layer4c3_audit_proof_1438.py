@@ -402,6 +402,47 @@ def test_e9_missing_raised_seq_refuses(tmp_path):
     _assert_reconciliation_gap(refusal, "new-issue-ledger-malformed")
 
 
+def test_merged_into_representative_certifies_once_rep_dispositioned(tmp_path):
+    session_dir = case08_new_issue_audit(tmp_path)
+    state = _load_state(session_dir)
+    cand = _new_issue_template()
+    member_key = _new_issue_key(cand)
+    rep = {
+        "severity": "Important",
+        "file": "src/rep.py",
+        "line": 99,
+        "title": "merge representative",
+    }
+    rep_key = SC.minted_identity_key(rep)
+    rep_row = {
+        SC.FINDING_KEY_FIELD: rep_key,
+        "file": rep["file"],
+        "line": rep["line"],
+        "title": rep["title"],
+        "severity": rep["severity"],
+        SC.RAISED_ROUND_FIELD: 2,
+        SC.RAISED_SEQ_FIELD: 2,
+        "disposition": "refuted",
+        SC.DISPOSITION_SEQ_FIELD: 2,
+        "refutedReason": "closed via representative",
+    }
+    member_row = {
+        SC.FINDING_KEY_FIELD: member_key,
+        "file": cand["file"],
+        "line": cand["line"],
+        "title": cand["title"],
+        "severity": cand["severity"],
+        SC.RAISED_ROUND_FIELD: 2,
+        SC.RAISED_SEQ_FIELD: 1,
+        "mergedInto": rep_key,
+    }
+    state[SC.DISPOSITION_LEDGER_KEY].extend([rep_row, member_row])
+    _save_state(session_dir, state)
+    receipt, refusal = _certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+
+
 def test_e10_unresolvable_merge_refuses(tmp_path):
     session_dir = case08_new_issue_audit(tmp_path)
     cand = _new_issue_template()
