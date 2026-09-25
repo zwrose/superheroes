@@ -109,7 +109,7 @@ def test_guidance_ruling_renders_in_the_order_and_the_fixer_evidence_binds(tmp_p
         assert GUIDANCE in fh.read()
     with open(os.path.join(RR.round_dir(d, 1), "fix-batch.json"), encoding="utf-8") as fh:
         rows = {r[SC.FINDING_KEY_FIELD]: r for r in json.load(fh)}
-    assert rows[key]["gateRuling"]["disposition"] == RD.RULING_GUIDANCE
+    assert rows[key]["gateRuling"]["disposition"] == "fix-with-guidance"
     (tmp_path / "ev").mkdir()
     run_dir = TRI._write_execution_run_dir(tmp_path / "ev", order_path)
     _stub_dispatch_observed_land(d, state, pend, "fixer", payload=FIXER_PAYLOAD)
@@ -142,29 +142,29 @@ def test_guidance_needs_an_unexecuted_fixer_slice(tmp_path):
     d, _gitdir, _head = _drive_to_audits(tmp_path, name="rule-late")
     key = _keys(TRI._state(d)["fixBatch"])[0]
     out = _rule(tmp_path, d, [{"id": key, "ruling": "fix-with-guidance", "guidance": GUIDANCE}])
-    assert out["ok"] is False and out["reason"] == RD.RULING_ENTRY_INVALID, out
+    assert out["ok"] is False and out["reason"] == "ruling-entry-invalid", out
 
 
 def _refusal_cases(ruled):
     good = {"id": ruled, "ruling": "refuted", "reason": "unreachable"}
     return [
-        ("unreadable", None, RD.RULING_ARTIFACT_UNREADABLE),
-        ("empty", {"rulings": [], "_provenance": PROV}, RD.RULING_ARTIFACT_SHAPE),
-        ("no-provenance", {"rulings": [good]}, RD.RULING_PROVENANCE_MISSING),
+        ("unreadable", None, "ruling-artifact-unreadable"),
+        ("empty", {"rulings": [], "_provenance": PROV}, "ruling-artifact-shape"),
+        ("no-provenance", {"rulings": [good]}, "ruling-provenance-missing"),
         ("bad-provenance", {"rulings": [good], "_provenance": dict(PROV, records=[])},
-         RD.RULING_PROVENANCE_MISSING),
-        ("duplicate", {"rulings": [good, good], "_provenance": PROV}, RD.RULING_ENTRY_INVALID),
+         "ruling-provenance-missing"),
+        ("duplicate", {"rulings": [good, good], "_provenance": PROV}, "ruling-entry-invalid"),
         ("unknown-kind", {"rulings": [dict(good, ruling="skip")], "_provenance": PROV},
-         RD.RULING_ENTRY_INVALID),
+         "ruling-entry-invalid"),
         ("no-reason", {"rulings": [dict(good, reason=" ")], "_provenance": PROV},
-         RD.RULING_ENTRY_INVALID),
+         "ruling-entry-invalid"),
         ("no-follow-up", {"rulings": [dict(good, ruling="out-of-scope")], "_provenance": PROV},
-         RD.RULING_ENTRY_INVALID),
+         "ruling-entry-invalid"),
         ("unknown-target", {"rulings": [dict(good, id="src/nowhere.py::ghost@L9")],
-                            "_provenance": PROV}, RD.RULING_TARGET_UNKNOWN),
+                            "_provenance": PROV}, "ruling-target-unknown"),
         ("later-row-invalid", {"rulings": [good, {"id": "src/nowhere.py::ghost@L9",
                                                   "ruling": "refuted", "reason": "x"}],
-                               "_provenance": PROV}, RD.RULING_TARGET_UNKNOWN),
+                               "_provenance": PROV}, "ruling-target-unknown"),
     ]
 
 
@@ -193,7 +193,7 @@ def test_critical_may_not_be_ruled_out_of_scope(tmp_path):
     RD.save_state(d, state)
     out = _rule(tmp_path, d, [{"id": key, "ruling": "out-of-scope", "reason": "r",
                                "followUp": FOLLOW_UP}])
-    assert out["ok"] is False and out["reason"] == RD.RULING_ENTRY_INVALID, out
+    assert out["ok"] is False and out["reason"] == "ruling-entry-invalid", out
 
 
 def test_owner_gate_and_answered_attempts_refuse(tmp_path):
@@ -203,11 +203,11 @@ def test_owner_gate_and_answered_attempts_refuse(tmp_path):
     ruling = [{"id": key, "ruling": "refuted", "reason": "unreachable"}]
     _stub_dispatch_observed_land(d, state, state["pending"], "fixer", payload=FIXER_PAYLOAD)
     out = _rule(tmp_path, d, ruling)
-    assert out["ok"] is False and out["reason"] == RD.RULING_ATTEMPT_HAS_RESULTS, out
+    assert out["ok"] is False and out["reason"] == "ruling-attempt-has-results", out
     state["pending"] = dict(state["pending"], phase=RD.P_JUDGMENT)
     RD.save_state(d, state)
     out = _rule(tmp_path, d, ruling, name="gate.json")
-    assert out["ok"] is False and out["reason"] == RD.RULING_OWNER_GATE_PENDING, out
+    assert out["ok"] is False and out["reason"] == "ruling-owner-gate-pending", out
 
 
 def test_a_superseded_attempt_is_never_reissued(tmp_path):
@@ -220,6 +220,30 @@ def test_a_superseded_attempt_is_never_reissued(tmp_path):
     assert RD._next_dispatch_attempt(d, 1, RD.P_FIXER, TRI._state(d)) == 1
     RD.cmd_next(d)
     assert _order_path(d, TRI._state(d)["pending"]) != old_order
+
+
+def test_a_second_guidance_ruling_for_one_finding_in_a_round_is_refused(tmp_path):
+    """Two artifacts, one finding: the second guidance ruling is refused before `next`, folds
+    nothing, and the first guidance is the one the re-rendered order carries."""
+    d = _session_at_fixer(tmp_path, name="rule-guide-twice")
+    key = _keys(TRI._state(d)["_fixBatch"])[1]
+    assert _rule(tmp_path, d, [{"id": key, "ruling": "fix-with-guidance",
+                                "guidance": GUIDANCE}])["ok"] is True
+    state_path = os.path.join(d, RD.STATE_FILE)
+    with open(state_path, "rb") as fh:
+        before = fh.read()
+    other = "rewrite the loop instead"
+    out = _rule(tmp_path, d, [{"id": key, "ruling": "fix-with-guidance", "guidance": other}],
+                name="second-guidance.json")
+    assert out["ok"] is False and out["reason"] == "ruling-entry-invalid", out
+    with open(state_path, "rb") as fh:
+        assert fh.read() == before
+    assert len(TRI._state(d)["rounds"]["1"]["rulings"]) == 1
+    n = RD.cmd_next(d)
+    assert n["ok"] and n["phase"] == RD.P_FIXER and n["attempt"] == 1, n
+    with open(_order_path(d, TRI._state(d)["pending"]), encoding="utf-8") as fh:
+        order = fh.read()
+    assert GUIDANCE in order and other not in order
 
 
 @pytest.fixture
@@ -268,20 +292,42 @@ def test_terminal_takes_only_closing_rulings_and_never_a_certified_session(
         tmp_path, refused_new_issue_session):
     d, key = refused_new_issue_session
     out = _rule(tmp_path, d, [{"id": key, "ruling": "fix-with-guidance", "guidance": GUIDANCE}])
-    assert out["ok"] is False and out["reason"] == RD.RULING_ENTRY_INVALID, out
+    assert out["ok"] is False and out["reason"] == "ruling-entry-invalid", out
     assert _rule(tmp_path, d, [{"id": key, "ruling": "refuted", "reason": "r"}],
                  name="ok.json")["ok"] is True
     out = _rule(tmp_path, d, [{"id": key, "ruling": "refuted", "reason": "again"}],
                 name="again.json")
-    assert out["ok"] is False and out["reason"] == RD.RULING_SESSION_TERMINAL, out
+    assert out["ok"] is False and out["reason"] == "ruling-session-terminal", out
     # The crash window: a receipt landed but the stale refusal was not yet retired. The session is
     # certified, and that alone refuses.
     with open(os.path.join(d, RD.CERTIFICATION_REFUSAL_FILE), "w", encoding="utf-8") as fh:
         fh.write("{}\n")
     out = _rule(tmp_path, d, [{"id": key, "ruling": "refuted", "reason": "again"}],
                 name="again2.json")
-    assert out["ok"] is False and out["reason"] == RD.RULING_SESSION_TERMINAL, out
+    assert out["ok"] is False and out["reason"] == "ruling-session-terminal", out
     assert "certified" in out["detail"], out
+
+
+def test_a_faulted_terminal_receipt_is_never_reopened_by_a_ruling(
+        tmp_path, refused_new_issue_session):
+    """A terminal session whose receipt verification failed carries `_receiptFault`; a closing
+    ruling that would otherwise be accepted is refused and records nothing."""
+    d, key = refused_new_issue_session
+    assert os.path.isfile(os.path.join(d, RD.CERTIFICATION_REFUSAL_FILE))
+    state = RD.load_state(d)[1]
+    state["_receiptFault"] = "receipt verification failed"
+    RD.save_state(d, state)
+    state_path = os.path.join(d, RD.STATE_FILE)
+    with open(state_path, "rb") as fh:
+        before = fh.read()
+    out = _rule(tmp_path, d, [{"id": key, "ruling": "refuted", "reason": "unreachable"}])
+    assert out["ok"] is False and out["reason"] == "ruling-session-terminal", out
+    assert "faulted receipt" in out["detail"], out
+    with open(state_path, "rb") as fh:
+        assert fh.read() == before
+    state = RD.load_state(d)[1]
+    assert not any(r.get("id") == key for rec in state["rounds"].values()
+                   for r in (rec.get("rulings") or []))
 
 
 def test_a_crash_after_the_ruling_commit_recertifies_on_the_next_terminal_answer(
