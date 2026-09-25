@@ -140,7 +140,8 @@ reconciliation holds, certification refuses recoverably under `unrun-review` wit
 faults; `new-issue-duplicate-identity` for duplicate ledger keys;
 `new-issue-merge-unresolvable` when a merge chain does not resolve. Recoverable
 `new-issue-undispositioned` clears when the missing dispositions land, without re-running the
-original fix audit.
+original fix audit. The route for landing them is the driver's `rule` verb (a closing ruling on the
+new issue's recorded `findingKey`), which re-certifies the terminal session.
 
 ## Head-content contract (`head-content-blobs.json`)
 

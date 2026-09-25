@@ -10,6 +10,7 @@
 - [Round economy](#round-economy)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
 - [Dispositions](#dispositions)
+- [Rulings — the one declared input](#rulings--the-one-declared-input)
 - [Actions and payloads](#actions-and-payloads)
 - [The re-dispatch carry](#the-re-dispatch-carry)
 - [Transition — plugin versions under a live session](#transition--plugin-versions-under-a-live-session)
@@ -809,6 +810,57 @@ certification writer reads it when told to.
   submit and at a cannot-certify park — never silently skipped.
 - A finding held under both its legacy bare key and its minted key refuses at certification with
   `disposition-ledger-legacy-key-collision` (class `disposition-without-receipt`).
+
+## Rulings — the one declared input
+
+An owner or advisor ruling on a finding reaches the driver through one verb, never as text
+appended to a seat's prompt. An appended ruling changes the bytes the runner hashes, so the seat's
+evidence no longer binds to the order the driver emitted and `record-result` refuses
+`evidence-order-mismatch`.
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" rule --session-dir "$SESSION_DIR" --rulings "$RULINGS"
+```
+
+The file is `{"rulings": [{"id", "ruling", "reason"?, "guidance"?, "followUp"?}], "_provenance":
+{"ruledBy", "ruledAt", "records"}}`. `_provenance` is required (the owner-gate shape); `id` is the
+finding's `findingKey` — the ledger key, or for an audit-raised new issue the `findingKey` the
+audits fold records on the round as `auditNewIssues` (so a candidate the Nit cap dropped is still
+addressable). One ruling per `id`. Kinds:
+
+- **`out-of-scope`** — `reason` plus a full `followUp` (`item`, `revisitTrigger`, `classClosure`);
+  never on a Critical.
+- **`refuted`** — `reason`.
+- **`fix-with-guidance`** — `guidance`; only while `dispatch-fixer` is the next step and the finding
+  is in its unexecuted slice or queue. It renders in the fixer order's guidance block and the row's
+  `gateRuling`.
+
+Every entry and target is validated before anything folds. A closing ruling is written to the
+disposition ledger after the finding's latest raise, and the fix-batch chokepoint excludes any
+finding closed after its latest raise, so a ruled finding leaves the live batch and never re-enters
+one unless it is raised again. Each ruling is recorded on the round (`rulings`, with the
+provenance and the artifact's sha) and journaled (`cmd: rule`, `outcome: ruled`).
+
+**Pending orders are superseded, never edited.** When the pending dispatch already has emitted
+orders, the verb journals `orders-superseded` for that attempt (the attempt counts as spent) and
+clears the pending step; the next `next` emits the re-derived step at a fresh attempt, with the
+ruling already in the order.
+
+**A refused certification can be recovered.** A converged session whose certification was refused
+(for example `new-issue-undispositioned`) takes closing rulings; the refusal is archived as
+`certification-refusal.superseded-<n>.json`, the terminal receipt is re-finalized, and the session
+re-certifies without a new panel. A crash between the ruling's commit and the re-certification
+completes on the next terminal answer.
+
+| `reason` | condition |
+| --- | --- |
+| `ruling-artifact-unreadable` / `ruling-artifact-shape` | file missing or not JSON / no non-empty `rulings` list |
+| `ruling-provenance-missing` | `_provenance` absent or malformed |
+| `ruling-entry-invalid` | a repeated id, unknown kind, missing reason/guidance/followUp, Critical out of scope, guidance with no unexecuted fixer slice |
+| `ruling-target-unknown` | the id names no ledger finding and no recorded audit new-issue candidate |
+| `ruling-owner-gate-pending` | an owner gate is pending — use `advance --owner-artifact` |
+| `ruling-attempt-has-results` | the pending attempt already has a landed or recorded result |
+| `ruling-session-terminal` | a terminal session that is certified, receipt-faulted, or has no refusal on disk |
 
 ## Actions and payloads
 

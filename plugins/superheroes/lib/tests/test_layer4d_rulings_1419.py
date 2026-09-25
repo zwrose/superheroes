@@ -300,3 +300,21 @@ def test_audit_new_issue_rows_use_the_certification_identity():
     assert rows[0][SC.FINDING_KEY_FIELD] == SC.new_issue_candidate_key(cand)
     assert rows[0][SC.FINDING_KEY_FIELD] == SC.minted_identity_key(
         {"file": "src/a.py", "line": 7, "title": "overflow nit", "severity": "Nit"})
+
+
+def test_the_audits_fold_records_each_new_issue_candidate_on_the_round(tmp_path):
+    """The address a ruling names is written at the audits fold, before any Nit cap can drop it."""
+    d, _gitdir, _head = _drive_to_audits(tmp_path, name="rule-audit-rows")
+    state = TRI._state(d)
+    target = state["_auditTargets"][0]
+    nits = [{"file": "src/f00.py", "line": n, "title": "nit %d" % n, "severity": "Nit"}
+            for n in range(1, 8)]
+    artifact = {"results": [{"id": target["id"], "ruling": "discharged-but-new-issue",
+                             "reason": "fixed; seven nits nearby",
+                             "auditorVendor": target.get("auditorVendor"), "newIssues": nits}],
+                "collectionManifest": {target["id"]: target.get("auditorVendor")}}
+    RD._fold_audits(state, state["config"], artifact)
+    rows = state["rounds"][str(state["round"])]["auditNewIssues"]
+    assert [r["title"] for r in rows] == ["nit %d" % n for n in range(1, 8)]
+    assert all(r["originAuditId"] == target["id"] for r in rows)
+    assert [r[SC.FINDING_KEY_FIELD] for r in rows] == [SC.new_issue_candidate_key(n) for n in nits]
