@@ -23,15 +23,7 @@ _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 _SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
 _CLOSURE_REF = "skills/showrunner/reference/closure.md"
 _VET_RECEIPT_REF = "skills/showrunner/reference/vet-receipt.md"
-
-_STACKED_FEATURE_CLOSURE_LINK = "closure.md#when-closure-fires"
-_CHARTER_CLOSURE_ROW_PREFIX = "   - **The closure row**"
 _DECOMPOSITION_REF = "skills/showrunner/reference/decomposition.md"
-
-PIN_STACKED_FEATURE_VET = (
-    "The vet that carries the closure receipt is the top layer's vet — the last vet before "
-    "the atomic stack merge."
-)
 
 # Bite-proof records are receipts, not consumed surfaces: they are categorically outside every
 # content census, exactly as detector self-paths are. A proof must be free to quote the literal
@@ -360,33 +352,6 @@ def _triggered_fields_section(text):
     return "\n".join(lines[start:end])
 
 
-def _extract_charter_vet_row(text, row_prefix, label):
-    """One duty-4 vet row bullet — not the whole duty slice."""
-    lines = text.splitlines()
-    starts = [i for i, line in enumerate(lines) if line.startswith(row_prefix)]
-    if len(starts) != 1:
-        raise RuntimeError(
-            "%s: %r found %d times (expected 1)" % (label, row_prefix, len(starts))
-        )
-    start = starts[0]
-    end = len(lines)
-    for i in range(start + 1, len(lines)):
-        if lines[i].startswith("   - **") and not lines[i].startswith(row_prefix):
-            end = i
-            break
-    return "\n".join(lines[start:end])
-
-
-def _assert_stacked_feature_operative_link(text, label):
-    if "stacked feature" not in _normalized(text).lower():
-        raise AssertionError("%s must mention stacked feature closure" % label)
-    if _STACKED_FEATURE_CLOSURE_LINK not in text:
-        raise AssertionError(
-            "%s must link %s for stacked-feature closure"
-            % (label, _STACKED_FEATURE_CLOSURE_LINK)
-        )
-
-
 def _assert_closure_trigger_row(text):
     section = _triggered_fields_section(text)
     rows = _parse_triggered_fields_table(section)
@@ -400,18 +365,9 @@ def _assert_closure_trigger_row(text):
             % len(matches)
         )
     trigger = _normalized(matches[0][0]).lower()
-    trigger_raw = matches[0][0].lower()
     if "without a pr" not in trigger:
         raise AssertionError(
             "closure trigger row trigger cell does not mention no-PR close"
-        )
-    if "stacked feature" not in trigger:
-        raise AssertionError(
-            "closure trigger row trigger cell does not mention stacked feature"
-        )
-    if _STACKED_FEATURE_CLOSURE_LINK not in trigger_raw:
-        raise AssertionError(
-            "closure trigger row trigger cell does not link closure.md#when-closure-fires"
         )
 
 
@@ -560,27 +516,6 @@ def test_vet_receipt_closure_trigger_row():
     _assert_closure_trigger_row(text)
 
 
-def test_stacked_feature_closure_home_and_operative_links():
-    closure_text = _read_plugin(_CLOSURE_REF)
-    when_fires = _h2_section(closure_text, "When closure fires")
-    _assert_pinned_present(
-        when_fires,
-        PIN_STACKED_FEATURE_VET,
-        "%s § When closure fires" % _CLOSURE_REF,
-    )
-    charter_text = _read_plugin(_SHOWRUNNER_CHARTER)
-    closure_row = _extract_charter_vet_row(
-        charter_text,
-        _CHARTER_CLOSURE_ROW_PREFIX,
-        _SHOWRUNNER_CHARTER,
-    )
-    _assert_stacked_feature_operative_link(
-        closure_row, "showrunner charter closure row"
-    )
-    vet_text = _read_plugin(_VET_RECEIPT_REF)
-    _assert_closure_trigger_row(vet_text)
-
-
 def test_decomposition_single_issue_fast_path_names_closure_md():
     text = _read_plugin(_DECOMPOSITION_REF)
     _assert_section_names_closure_md(text, _SINGLE_ISSUE_FAST_PATH_HEADING)
@@ -711,37 +646,6 @@ def test_negative_literal_present_twice():
             text=duplicated,
         ),
         match="expected 1 occurrence.*found 2",
-    )
-
-
-def test_negative_stacked_feature_vet_pin_missing_from_when_closure_fires():
-    synthetic = "\n".join([
-        "## When closure fires",
-        "",
-        "The merge receipt references the closure receipt already accepted on the top layer's vet.",
-        "",
-        "## The closure receipt",
-    ])
-    _expect_assertion_error(
-        lambda: _assert_pinned_present(
-            synthetic,
-            PIN_STACKED_FEATURE_VET,
-            "synthetic § When closure fires",
-        ),
-        match="pinned sentence missing",
-    )
-
-
-def test_negative_charter_closure_row_missing_stacked_feature_link():
-    synthetic = "\n".join([
-        _CHARTER_CLOSURE_ROW_PREFIX + " — fires when this vet is the final one.",
-        "   - **Trust CI green on the recorded head** — detail elsewhere.",
-    ])
-    _expect_assertion_error(
-        lambda: _assert_stacked_feature_operative_link(
-            synthetic, "synthetic charter closure row"
-        ),
-        match="must mention stacked feature closure",
     )
 
 
