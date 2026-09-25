@@ -22,6 +22,7 @@ PLUGINS = os.path.join(REPO, "plugins")
 # so require the ${CLAUDE_PLUGIN_ROOT} prefix. This also rejects a
 # hardcoded host (e.g. ${...}/hosts/claude-tools.md) — the <your-host> placeholder
 # is still required.
+# Bites on: a SKILL.md whose rooted host-map pointer is absent or in the retired fallback form.
 POINTER_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/hosts/<your-host>-tools\.md")
 BANNED = ("subagent_type", "the Agent tool", "the Skill tool", "the Task tool")
 

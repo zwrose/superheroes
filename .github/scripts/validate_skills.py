@@ -30,6 +30,7 @@ def check_line_count(skill_key, total_lines, ceilings):
 
 import re
 
+# Bites on: a ${CLAUDE_PLUGIN_ROOT}/<path> citation that does not resolve, or a cited reference that cites another file.
 _REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9._/\-]+)")
 _HEADING = re.compile(r"^#+\s+(\d+(?:\.\d+)*)\b", re.MULTILINE)
 # Only CONVENTIONS-qualified citations are validated. A bare "§N" is ambiguous — skills
