@@ -599,26 +599,55 @@ def _audit_runner_vendor_from_envelope(envelope):
     return None
 
 
-def _audit_expected_auditors_from_ctx(ctx):
-    """Driver-recorded selected auditor per target id; empty dict when absent, None on read fault."""
-    state = ctx.get("state")
-    if not isinstance(state, dict):
-        return {}
-    raw = state.get("_auditTargets")
-    if raw is None:
-        return {}
-    if not isinstance(raw, list):
+def _audit_merge_verified_manifest_seats(expected, conflicted, manifest):
+    seats = manifest.get("seats")
+    if not isinstance(seats, dict):
+        return
+    for entry in seats.values():
+        if not isinstance(entry, dict):
+            continue
+        seat = entry.get("seat")
+        vendor = entry.get("vendor")
+        if not isinstance(seat, str) or not seat:
+            continue
+        if not isinstance(vendor, str) or not vendor:
+            continue
+        if seat in conflicted:
+            continue
+        if seat in expected:
+            if expected[seat] != vendor:
+                del expected[seat]
+                conflicted.add(seat)
+        else:
+            expected[seat] = vendor
+
+
+def _audit_expected_auditors_from_dispatch_manifests(
+        session_dir, journal, disposition_round, attempts_with_results):
+    """Selected auditor per target from hash-verified dispatch-audits orders manifests."""
+    if not isinstance(journal, list):
         return None
     expected = {}
-    for row in raw:
-        if not isinstance(row, dict):
+    conflicted = set()
+    emit_by_attempt = {}
+    for event in journal:
+        if not isinstance(event, dict):
             return None
-        tid = row.get("id")
-        if not isinstance(tid, str) or not tid:
-            return None
-        vendor = row.get("auditorVendor")
-        if isinstance(vendor, str) and vendor:
-            expected[tid] = vendor
+        if (event.get("outcome") != "orders-emitted" or event.get("phase") != P_AUDITS
+                or event.get("round") != disposition_round):
+            continue
+        attempt = event.get("attempt")
+        if attempt is None:
+            continue
+        emit_by_attempt[attempt] = event
+    for attempt in attempts_with_results:
+        emit_event = emit_by_attempt.get(attempt)
+        if emit_event is None:
+            continue
+        manifest, refusal = _verified_orders_manifest(session_dir, emit_event)
+        if refusal is not None:
+            continue
+        _audit_merge_verified_manifest_seats(expected, conflicted, manifest)
     return expected
 
 
@@ -691,14 +720,14 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
     disposition_round = finding.get("dispositionRound")
     if isinstance(disposition_round, bool) or not isinstance(disposition_round, int):
         return False
-    expected_auditors = _audit_expected_auditors_from_ctx(ctx)
-    if expected_auditors is None:
-        return False
     head_rule = _audit_cited_head_rule(ctx, repo_root, certified_head)
     results = []
     collection_manifest = {}
+    attempts_with_results = set()
     for event in journal:
-        if not isinstance(event, dict) or event.get("round") != disposition_round:
+        if not isinstance(event, dict):
+            return False
+        if event.get("round") != disposition_round:
             continue
         admitted = _audit_admitted_dispatch_result(
             session_dir, journal, event, certified_head, head_rule)
@@ -706,11 +735,18 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
             continue
         payload, env = admitted
         results.append(payload)
+        _seat, _phase, attempt, _occ, _rnd = _journal_event_slot(event)
+        if attempt is not None:
+            attempts_with_results.add(attempt)
         pid = payload.get("id")
         if isinstance(pid, str) and pid:
             vendor = _audit_runner_vendor_from_envelope(env)
             if vendor is not None:
                 collection_manifest[pid] = vendor
+    expected_auditors = _audit_expected_auditors_from_dispatch_manifests(
+        session_dir, journal, disposition_round, attempts_with_results)
+    if expected_auditors is None:
+        return False
     audited_target = {
         "id": canonical_id,
         "file": finding.get("file"),
@@ -721,9 +757,6 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
     marker = finding.get(session_contract.FINDING_KEY_FIELD)
     if isinstance(marker, str) and marker:
         audited_target[session_contract.FINDING_KEY_FIELD] = marker
-    vendor = finding.get("auditorVendor")
-    if isinstance(vendor, str) and vendor:
-        audited_target["auditorVendor"] = vendor
     outcome = audits.apply_audit_results(
         [audited_target],
         results,
@@ -1208,6 +1241,8 @@ def _journal_open_seats(journal, session_dir=None):
                 and session_dir is not None):
             roster, refusal = _orders_emitted_roster_or_refusal(session_dir, event)
             if refusal is not None:
+                if phase == P_AUDITS:
+                    continue
                 return None, refusal
             for sk, occ in roster:
                 opened[(phase, rnd, attempt, sk, occ)] = event

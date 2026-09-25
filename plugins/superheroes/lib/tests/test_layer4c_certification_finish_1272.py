@@ -327,9 +327,8 @@ def _assert_fix_receipt_audited_chain_refusal(refusal):
 
 def _case07_audit_target_id(session_dir):
     state = json.load(open(os.path.join(session_dir, RC.STATE_FILE), encoding="utf-8"))
-    targets = state.get("_auditTargets") or []
-    assert targets
-    return targets[0]["id"]
+    finding = state["findings"][0]
+    return finding[session_contract.FINDING_KEY_FIELD]
 
 
 def _append_duplicate_audit_record(session_dir, target_id, certified_head):
@@ -399,13 +398,33 @@ def _mutate_audit_runner_source(session_dir, source):
 
 
 def _mutate_audit_selected_vendor(session_dir, vendor):
-    state_path = os.path.join(session_dir, RC.STATE_FILE)
-    state = json.load(open(state_path, encoding="utf-8"))
-    for row in state.get("_auditTargets") or []:
-        if isinstance(row, dict):
-            row["auditorVendor"] = vendor
-    with open(state_path, "w", encoding="utf-8") as fh:
-        json.dump(state, fh, sort_keys=True)
+    rnd, phase, attempt = 2, AUDIT_PHASE, 0
+    manifest_path = RC._orders_manifest_path(session_dir, rnd, phase, attempt)
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    for entry in manifest.get("seats", {}).values():
+        if isinstance(entry, dict):
+            entry["vendor"] = vendor
+    text = session_contract.canonical(manifest)
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    new_sha = session_contract.sha256_text(text)
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    lines = []
+    with open(journal_path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if (
+                row.get("outcome") == "orders-emitted"
+                and row.get("phase") == phase
+                and row.get("round") == rnd
+                and row.get("attempt") == attempt
+            ):
+                row["manifestSha256"] = new_sha
+            lines.append(row)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
 
 
 def test_audit_fold_missing_manifest_entry_refuses_fix_receipt(tmp_path):
@@ -428,6 +447,44 @@ def test_audit_fold_selected_auditor_differs_from_runner_refuses_fix_receipt(tmp
     session_dir = case07_audited_chain(tmp_path)
     _mutate_audit_selected_vendor(session_dir, "claude")
     _mutate_audit_runner_source(session_dir, "codex")
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    _assert_fix_receipt_audited_chain_refusal(refusal)
+
+
+def test_audited_chain_certifies_despite_stale_audit_targets_in_state(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    state_path = os.path.join(session_dir, RC.STATE_FILE)
+    state = json.load(open(state_path, encoding="utf-8"))
+    state["round"] = 3
+    state["_auditTargets"] = [
+        {
+            "id": "other-finding::src/other.py::9",
+            "auditorVendor": "claude",
+            "file": "src/other.py",
+            "line": 9,
+            "title": "unrelated",
+            "severity": "Important",
+        },
+    ]
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, sort_keys=True)
+    receipt, refusal = _certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+    assert receipt["certificationShape"] == "audited-chain"
+
+
+def test_audited_chain_refuses_when_dispatch_audit_manifest_tampered(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    manifest_path = RC._orders_manifest_path(session_dir, 2, AUDIT_PHASE, 0)
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    for entry in manifest.get("seats", {}).values():
+        if isinstance(entry, dict):
+            entry["vendor"] = "tampered-vendor"
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, sort_keys=True)
     receipt, refusal = _certify(session_dir)
     assert receipt is None
     _assert_fix_receipt_audited_chain_refusal(refusal)

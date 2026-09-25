@@ -793,11 +793,23 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
     )
 
     manifest = _orders_manifest_for_seat("code-reviewer")
+    audit_manifest = (
+        _orders_manifest_for_seat(canonical_key, rnd=2, attempt=0, phase=AUDIT_PHASE)
+        if include_audit
+        else None
+    )
     orders_row = {
         "cmd": "advance",
         "outcome": "orders-emitted",
         "phase": PANEL_PHASE,
         "round": 1,
+        "attempt": 0,
+    }
+    audit_orders_row = {
+        "cmd": "advance",
+        "outcome": "orders-emitted",
+        "phase": AUDIT_PHASE,
+        "round": 2,
         "attempt": 0,
     }
 
@@ -827,17 +839,6 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
                 "shapeDrivers": [],
             },
             "findings": [finding],
-            "_auditTargets": [
-                {
-                    "id": canonical_key,
-                    session_contract.FINDING_KEY_FIELD: canonical_key,
-                    "auditorVendor": "codex",
-                    "file": finding["file"],
-                    "line": finding["line"],
-                    "title": finding["title"],
-                    "severity": finding["severity"],
-                },
-            ],
             "rounds": {
                 "1": {
                     "roundKind": "baseline",
@@ -866,6 +867,11 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
             orders_row,
             _recorded_row_from_envelope(
                 panel_envelope, "code-reviewer", PANEL_PHASE, 1, head_sha=panel_head),
+            *(
+                [audit_orders_row]
+                if include_audit
+                else []
+            ),
             *(
                 [
                     _recorded_row_from_envelope(
@@ -914,6 +920,10 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
     )
     manifest_sha = _write_orders_manifest(session_dir, manifest)
     orders_row["manifestSha256"] = manifest_sha
+    audit_manifest_sha = None
+    if audit_manifest is not None:
+        audit_manifest_sha = _write_orders_manifest(session_dir, audit_manifest)
+        audit_orders_row["manifestSha256"] = audit_manifest_sha
     journal_path = os.path.join(session_dir, JOURNAL_FILE)
     lines = []
     with open(journal_path, encoding="utf-8") as fh:
@@ -921,6 +931,13 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
             row = json.loads(line)
             if row.get("outcome") == "orders-emitted" and row.get("phase") == PANEL_PHASE:
                 row["manifestSha256"] = manifest_sha
+            if (
+                audit_manifest_sha is not None
+                and row.get("outcome") == "orders-emitted"
+                and row.get("phase") == AUDIT_PHASE
+                and row.get("round") == 2
+            ):
+                row["manifestSha256"] = audit_manifest_sha
             lines.append(row)
     with open(journal_path, "w", encoding="utf-8") as fh:
         for row in lines:
