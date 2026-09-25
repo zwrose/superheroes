@@ -127,6 +127,16 @@ envelope evidence against the same binding and observation rules.
 `full-panel-confirmed`, and any `full-panel*` shape in loop state is downgraded the same way.
 Otherwise the shape follows loop state's `certification.shape`.
 
+**Audited-chain fix-receipt reconciliation.** A fix audit whose ruling is
+`discharged-but-new-issue` counts toward the fix-receipt leg only after every new issue that
+audit raised (linked by `originAuditId` to that audit's fold id) is dispositioned in the
+disposition ledger: `fixed`, `refuted`, or `out-of-scope`, with the raise recorded at or after
+the audit round and the disposition sequence strictly after the raise sequence. Until that
+reconciliation holds, certification refuses recoverably on
+`audited-chain-gap:new-issue-undispositioned` under `unrun-review` with binding failure
+`execution-evidence-stale-head`; the refusal clears when the missing dispositions land, without
+re-running the original fix audit.
+
 ## Head-content contract (`head-content-blobs.json`)
 
 At terminal, the driver may write `head-content-blobs.json` beside the session artifacts. The

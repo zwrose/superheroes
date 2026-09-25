@@ -790,25 +790,119 @@ def _audit_admitted_dispatch_result(session_dir, journal, event, certified_head,
     return dict(payload), env
 
 
+def _coerce_line_for_new_issue(value):
+    """Mirrors round_driver._coerce_line."""
+    if isinstance(value, bool):
+        return False, value
+    if isinstance(value, int):
+        return True, value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped.isascii() and stripped.isdecimal():
+            try:
+                return True, int(stripped)
+            except ValueError:
+                return False, value
+        return False, value
+    return False, value
+
+
+def _new_issues_dispositioned(state, fold_id, fold_round, new_issues):
+    """True when every new issue raised by fold_id's discharged-but-new-issue fold is dispositioned."""
+    if not isinstance(fold_id, str) or not fold_id:
+        return False
+    if not isinstance(fold_round, int) or isinstance(fold_round, bool):
+        return False
+    if not isinstance(new_issues, list):
+        return False
+    linked = []
+    for entry in new_issues:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("originAuditId") == fold_id:
+            linked.append(entry)
+    if not linked:
+        return False
+    if (session_contract.disposition_ledger_owner_classification(state)
+            != session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED):
+        return False
+    ledger_rows, ledger_fault = session_contract.read_disposition_ledger(state, required=True)
+    if ledger_fault is not None:
+        return False
+    ledger_index = {}
+    key_counts = {}
+    for row in ledger_rows:
+        if not isinstance(row, dict):
+            continue
+        key = session_contract.finding_identity_key(row)
+        if not key:
+            continue
+        ledger_index[key] = row
+        key_counts[key] = key_counts.get(key, 0) + 1
+    for cand in linked:
+        copy = dict(cand)
+        copy.pop(session_contract.FINDING_KEY_FIELD, None)
+        copy.pop("originAuditId", None)
+        file_val = copy.get("file")
+        if not isinstance(file_val, str) or not file_val:
+            return False
+        ok, line = _coerce_line_for_new_issue(copy.get("line"))
+        if not ok:
+            return False
+        copy["line"] = line
+        key = session_contract.minted_identity_key(copy)
+        if not isinstance(key, str) or not key:
+            return False
+        if key == fold_id:
+            return False
+        count = key_counts.get(key, 0)
+        if count != 1:
+            return False
+        row = ledger_index[key]
+        raised_round = row.get(session_contract.RAISED_ROUND_FIELD)
+        if not isinstance(raised_round, int) or isinstance(raised_round, bool):
+            return False
+        if raised_round < fold_round:
+            return False
+        raised_seq = row.get(session_contract.RAISED_SEQ_FIELD)
+        if not isinstance(raised_seq, int) or isinstance(raised_seq, bool):
+            return False
+        effective = session_contract.resolve_merged_into_entry(row, ledger_index)
+        if effective is None:
+            return False
+        rep_key = session_contract.finding_identity_key(effective)
+        if rep_key == fold_id:
+            return False
+        disposition = effective.get("disposition")
+        if disposition not in session_contract.DISPOSITIONS:
+            return False
+        disp_seq = effective.get(session_contract.DISPOSITION_SEQ_FIELD)
+        if not isinstance(disp_seq, int) or isinstance(disp_seq, bool):
+            return False
+        if disp_seq <= raised_seq:
+            return False
+    return True
+
+
 def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root):
     session_dir = ctx.get("session_dir")
     journal = ctx.get("journal") or []
     state = ctx.get("state") or {}
     if session_dir is None or not isinstance(journal, list):
-        return False
+        return "fix-receipt"
     by_key, marker_refusal = _certification_findings_by_key(state)
     if marker_refusal is not None:
-        return False
+        return "fix-receipt"
     fold_id = _audited_chain_fold_target_id(finding, by_key)
     if not isinstance(fold_id, str) or not fold_id:
-        return False
+        return "fix-receipt"
     post_fix_head = _resolve_post_fix_head(state, finding)
     if post_fix_head is None:
-        return False
+        return "fix-receipt"
     head_rule = _audit_fix_receipt_head_rule(repo_root, post_fix_head, certified_head)
     fixer_fam = maker_author_family(state)
     if fixer_fam is None:
-        return False
+        return "fix-receipt"
     admitted_by_round = {}
     for event in _collapse_dispatch_audit_recorded_rows(journal):
         seat, _phase, _attempt, _occ, rnd = _journal_event_slot(event)
@@ -837,7 +931,7 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
         admitted_by_round.setdefault(rnd, []).append(
             (payload, dispatch_authentic, manifest_vendor, runner_vendor))
     if not admitted_by_round:
-        return False
+        return "fix-receipt"
     fold_round = max(admitted_by_round)
     row_bundle = admitted_by_round[fold_round]
     results = []
@@ -867,9 +961,17 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
     for entry in outcome.get("audits") or []:
         if not isinstance(entry, dict):
             continue
-        if entry.get("id") == fold_id and entry.get("ruling") == "discharged":
-            return True
-    return False
+        if entry.get("id") != fold_id:
+            continue
+        ruling = entry.get("ruling")
+        if ruling == "discharged":
+            return None
+        if ruling == "discharged-but-new-issue":
+            if _new_issues_dispositioned(
+                    state, fold_id, fold_round, outcome.get("newIssues") or []):
+                return None
+            return "new-issue-undispositioned"
+    return "fix-receipt"
 
 
 def _is_ancestor(repo_root, ancestor, descendant):
@@ -1061,9 +1163,10 @@ def _audited_chain_legs(ctx):
         receipt = graded.get("dispositionReceipt")
         if not isinstance(receipt, dict) or receipt.get("verifyResult") != "pass":
             return gap_out("fix-receipt")
-        if not _fixed_finding_has_discharging_audit(
-                ctx, graded, certified_head, repo_root):
-            return gap_out("fix-receipt")
+        gap = _fixed_finding_has_discharging_audit(
+            ctx, graded, certified_head, repo_root)
+        if gap is not None:
+            return gap_out(gap)
     rounds = state.get("rounds")
     if not isinstance(rounds, dict):
         return gap_out("scoped-finder")
