@@ -3894,16 +3894,45 @@ def _advance_reviewed_diff(state):
         state.pop("_reviewedDiffStale", None)
 
 
+def _reviewed_diff_stale(state):
+    """Whether the reviewed diff is older than the head. The marker, when present, answers. A state
+    persisted before the marker existed carries none: there a fixer fold (`_headDiffSource` is set
+    only by one) that left the head diff unknown (`None`) is stale — the old advance kept the
+    pre-fix reviewed diff in exactly that case. Read-only: a loaded state is never seeded."""
+    marker = state.get("_reviewedDiffStale")
+    if marker is not None:
+        return bool(marker)
+    return "_headDiffSource" in state and state.get("headDiff") is None
+
+
+def _park_reviewed_diff_stale(state):
+    _park_cannot_certify(
+        state, "%s: the head moved and no diff at the post-fix head is known (none supplied, "
+               "and none derivable from git) — a panel would review the pre-fix diff"
+        % REVIEWED_DIFF_STALE)
+
+
 def _enter_panel(state):
     """The one entry to a full panel after round 1: a panel is never dispatched over a diff older
     than the head it certifies. A stale reviewed diff parks with the named token instead."""
-    if state.get("_reviewedDiffStale"):
-        _park_cannot_certify(
-            state, "%s: the head moved and no diff at the post-fix head is known (none supplied, "
-                   "and none derivable from git) — a panel would review the pre-fix diff"
-            % REVIEWED_DIFF_STALE)
+    if _reviewed_diff_stale(state):
+        _park_reviewed_diff_stale(state)
         return
     state["step"] = P_PANEL
+
+
+def _stale_panel_blocks_loaded(state):
+    """Persisted-state entry guard: a loaded non-terminal state already sitting at the panel step
+    (pending or not) over a stale reviewed diff parks `reviewed-diff-stale` — it never reached the
+    panel through `_enter_panel`'s check (it was persisted before that check existed). A state at the
+    verify gate bound for the panel needs no guard here: its fold enters through `_enter_panel`.
+    Returns True when it parked."""
+    if state.get("terminal") or state.get("step") != P_PANEL:
+        return False
+    if not _reviewed_diff_stale(state):
+        return False
+    _park_reviewed_diff_stale(state)
+    return True
 
 
 def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None):
@@ -3924,6 +3953,9 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     else:
         state["fixBatch"] = (state.get("fixBatch") or []) + list(slice_)
     head, head_source = _resolve_head_diff(artifact)
+    # A capped round folds several fixer slices; the provenance describes the LAST slice's head
+    # diff, so each fold records it afresh and never inherits an earlier slice's value.
+    _clear_round(state, "reviewedDiffSource")
     if head is None:
         head = _derive_head_diff_from_git(session_dir, state)
         if head is not None:
@@ -6477,7 +6509,10 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                               "attempt": None,
                                               "outcome": "refused-records-path-not-fresh"})
                 return {"ok": False, "reason": "records-path-not-fresh-state"}
-        if _ceiling_blocks_loaded(state, state["config"]):
+        loaded_park = ("loaded-ceiling-park" if _ceiling_blocks_loaded(state, state["config"])
+                       else "loaded-stale-diff-park" if _stale_panel_blocks_loaded(state)
+                       else None)
+        if loaded_park:
             pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
                        "attempt": 0,
                        "payload": {"verdict": state["terminal"],
@@ -6486,7 +6521,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             save_state(session_dir, state)
             _journal_append(session_dir, {"cmd": "next", "phase": P_TERMINAL,
                                           "round": state["round"], "attempt": 0,
-                                          "outcome": "loaded-ceiling-park"})
+                                          "outcome": loaded_park})
             fail = _terminal_receipt_gate(session_dir, state)
             if fail:
                 return _receipt_fault_response(fail)
@@ -7525,7 +7560,10 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "attempt": attempt, "outcome": "no-state"})
         return {"ok": False, "reason": "no loop-state.json — call next first"}
     state = loaded
-    if _ceiling_blocks_loaded(state, state["config"]):
+    loaded_park = ("loaded-ceiling-park" if _ceiling_blocks_loaded(state, state["config"])
+                   else "loaded-stale-diff-park" if _stale_panel_blocks_loaded(state)
+                   else None)
+    if loaded_park:
         pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
                    "attempt": 0,
                    "payload": {"verdict": state["terminal"],
@@ -7533,7 +7571,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         state["pending"] = pending
         save_state(session_dir, state)
         _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": state["round"],
-                                      "attempt": attempt, "outcome": "loaded-ceiling-park"})
+                                      "attempt": attempt, "outcome": loaded_park})
         fault = _terminal_receipt_gate(session_dir, state)
         if fault:
             return _receipt_fault_response(fault)
