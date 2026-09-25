@@ -440,11 +440,12 @@ non-test changed lines against your base (`git diff --numstat`, counted as `revi
 issue's order states. **Crossing twice that estimate is the tripwire.** At the first commit past 2×,
 **message the advisor session the order names** — the count, the estimate, and a proposed split — and
 type or dispatch no more code until it replies. Wait in-turn with tool calls (§7): a reply is delivered only at
-your next tool call. Act on the reply, **split or continue**. **No reply within 15 minutes**, or no way
-on this host to message it: post the same disclosure on the issue and stop, as a park. **No advisor
-session named** (an interactive build the owner drives): make the disclosure to the owner in the
-session. **No estimate stated:** the light lane's ~400 line is the size check. A reply to continue
-lifts no other size rule — the light lane still escalates past ~400, and the bars below still bind.
+your next tool call. Act on the reply, **split or continue** — or park, when the same commit also
+crossed the 600 bar below, whose three-way ruling then governs. **No reply within 15 minutes**, or no
+way on this host to message it: post the same disclosure on the issue and stop, as a park. **No
+advisor session named** (an interactive build the owner drives): make the disclosure to the owner in
+the session. **No estimate in the order** is an order gap: post your own estimate on the issue before
+code, disclosed, and run the step against it. A reply to continue lifts no other size rule — the light lane still escalates past ~400, and the bars below still bind.
 The PR's **size tripwire** row (§11) records the outcome. Two absolute bars ride beside it, counted over non-test lines
 added or modified (deletions, regenerated artifacts, tests and records excluded): at **300**, report the count and a
 proposed cut on the issue and continue; at **600**, stop and hand the call to the advisor, who rules continue, split or park — never yours
@@ -1132,9 +1133,10 @@ but cannot file yourself (you never wire the board). List them plainly under tha
 **None** when there are none) so the advisor can turn them into issues and the advisor's triage
 backstop can grep the section. For both lanes the build record also carries a **size tripwire** row,
 filled by §4's size step: `not crossed (N of estimate M)`; `crossed at <commit>; messaged <time>;
-advisor ruled <split|continue> (<issue comment link>)`; `crossed at <commit>; parked, no reply
-(<issue comment link>)`; `crossed at <commit>; disclosed to the owner in session`; or `no estimate
-stated; light-lane line governs (N)`. The PR body also carries a **DoD disposition table** (the
+advisor ruled <split|continue|park> (<issue comment link>)`; `crossed at <commit>; messaged <time>;
+parked after 15 minutes, no reply (<issue comment link>)`; `crossed at <commit>; messaging
+unavailable on this host; parked (<issue comment link>)`; or `crossed at <commit>; disclosed to the
+owner in session`. A self-stated estimate adds `(self-estimated, <issue comment link>)`. The PR body also carries a **DoD disposition table** (the
 `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each
 **done** (with an evidence pointer) or **deferred** (with a filed issue and a one-line reason). This is
 distinct from the review dispositions table above (that grades review findings; this grades every spec'd

@@ -178,7 +178,8 @@ above).
    **completeness gate** (the check that fails until the extension is exhaustive) so **every lane
    after the first** expects it to fire and budgets the integration commit. When a builder messages you mid-build that the diff has crossed **twice its
    estimate** and proposes a split, **take the split seriously** — that message is the tripwire
-   working, not a builder stalling. **Reply by message, split or continue** — the builder waits,
+   working, not a builder stalling. **Reply by message, split or continue** (or park, when the same
+   commit crossed the 600 bar) — the builder waits,
    and parks on the issue after 15 minutes — and record the ruling on the issue for the owner's
    veto: it is your craft call under the size doctrine (the step is the workhorse charter's size step).
    When marking an issue **build-ready**, run the issue-contract check against the issue body
