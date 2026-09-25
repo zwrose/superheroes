@@ -274,6 +274,14 @@ def test_terminal_takes_only_closing_rulings_and_never_a_certified_session(
     out = _rule(tmp_path, d, [{"id": key, "ruling": "refuted", "reason": "again"}],
                 name="again.json")
     assert out["ok"] is False and out["reason"] == RD.RULING_SESSION_TERMINAL, out
+    # The crash window: a receipt landed but the stale refusal was not yet retired. The session is
+    # certified, and that alone refuses.
+    with open(os.path.join(d, RD.CERTIFICATION_REFUSAL_FILE), "w", encoding="utf-8") as fh:
+        fh.write("{}\n")
+    out = _rule(tmp_path, d, [{"id": key, "ruling": "refuted", "reason": "again"}],
+                name="again2.json")
+    assert out["ok"] is False and out["reason"] == RD.RULING_SESSION_TERMINAL, out
+    assert "certified" in out["detail"], out
 
 
 def test_a_crash_after_the_ruling_commit_recertifies_on_the_next_terminal_answer(
