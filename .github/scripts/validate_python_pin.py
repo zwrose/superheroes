@@ -74,8 +74,10 @@ _BARE_INTERPRETER_CMD_RE = re.compile(
     r"|(?:\|\s+)"
     r"|(?:\(\s*)"
     r")"
+    r"(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*)"
+    r"(?:(?:/usr/bin/)?env\s+)?"
     r"(?!scripts/pinned-python\b)"
-    r"(?:python\d*(?:\.\d+)*|pip3?)\b(?=\s)"
+    r"(?:python\d*(?:\.\d+)*|pip3?)\b(?=\s|$|`)"
 )
 
 _PIN_HOME_WALK_SKIP = frozenset({".git", "node_modules", ".venv", "venv"})
@@ -401,6 +403,8 @@ def _check_job_steps(
         if not isinstance(step, dict):
             continue
         if _uses_action(step, _SETUP_PYTHON_USES):
+            if step.get("if") is not None:
+                continue
             with_block = step.get("with")
             if not isinstance(with_block, dict):
                 violations.append(

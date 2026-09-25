@@ -9,7 +9,7 @@ a catalog (`.claude-plugin/marketplace.json`) listing plugins under `plugins/`.
 - `plugins/superheroes/.claude-plugin/plugin.json` — the plugin manifest (name, version).
 - `plugins/superheroes/` — the plugin's components (`agents/`, `skills/`, `rubric/`, `eval/`).
 - `pytest.ini` — pins pytest's rootdir to the repo root so `conftest.py` and `source_guard.py` load for every invocation shape.
-- `.python-version` — the one Python pin (its only home); CI, the local gate, and dispatched orders all resolve the interpreter from it.
+- `.python-version` — the one Python pin (its only home); CI and every in-repo gate command resolve the interpreter from it (through setup-python or `scripts/pinned-python`); the calibrated verify command in the out-of-repo project store must call `scripts/pinned-python` too.
 - `requirements-dev.txt` — the validators' and test suite's dependencies, read by CI and by `scripts/pinned-python`.
 - `scripts/pinned-python` — runs Python for this repo under the pinned interpreter (via `uv run`); every local gate command goes through it.
 - `conftest.py` — repo-root pytest config; loads `source_guard` via `pytest_plugins` for every test tree.
@@ -93,7 +93,7 @@ cancelled by the concurrency group.
 
 **Job `validate`**
 
-1. `validate_python_pin.py` — the Python pin: `.python-version` is the one home, no second pin home, no in-repo home names an interpreter by path or a disagreeing version, no bare ambient `python`/`pip` command in declared homes, and every workflow's Python comes from setup-python reading the pin. Runs before any test (UFR-8).
+1. `validate_python_pin.py` — the Python pin: `.python-version` is the one home, no second pin home, no in-repo home names an interpreter by path or a disagreeing version, no bare ambient python or pip command in declared homes, and every workflow's Python comes from setup-python reading the pin. Runs before any test (UFR-8).
 2. Pinned runner smoke — `scripts/pinned-python` resolves the pin and re-runs `validate_python_pin.py` with `--require-running-pin` so CI proves the runner matches `.python-version`.
 3. `validate_marketplace.py` — manifests parse, sources exist, versions are valid
    SemVer, no duplicate-version trap.

@@ -391,6 +391,12 @@ def test_pin_home_duplicate_root_only_ok(tmp_path):
         "a; pip3 install z\n",
         "x | python3 -\n",
         "(python3 z)\n",
+        "python3\n",
+        "`python3`\n",
+        "env python3 x.py\n",
+        "/usr/bin/env python3 x.py\n",
+        "FOO=1 python3 x.py\n",
+        "A=1 B=2 pip install x\n",
     ],
 )
 def test_bare_interpreter_command_positives(tmp_path, text):
@@ -407,6 +413,7 @@ def test_bare_interpreter_command_positives(tmp_path, text):
         'exec uv run --no-project --python "$pin" python "$@"\n',
         "Python 3.12\n",
         "pytest\n",
+        "the python3 interpreter\n",
         "import subprocess\n",
     ],
 )
@@ -467,6 +474,48 @@ jobs:
 """
     _write(tmp_path, ".github/workflows/ci.yml", wf)
     assert _has_rule(
+        _violations(tmp_path), "workflow-python-before-setup"
+    )
+
+
+# Axis: workflow-python-before-setup — conditional setup-python never counts as pinned.
+def test_workflow_python_before_setup_conditional_setup_python(tmp_path):
+    _scaffold_healthy(tmp_path)
+    wf = """\
+name: ci
+on: push
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        if: false
+        with:
+          python-version-file: .python-version
+      - run: python3 x.py
+"""
+    _write(tmp_path, ".github/workflows/ci.yml", wf)
+    assert _has_rule(
+        _violations(tmp_path), "workflow-python-before-setup"
+    )
+
+
+def test_workflow_unconditional_setup_python_then_run_stays_clean(tmp_path):
+    _scaffold_healthy(tmp_path)
+    wf = """\
+name: ci
+on: push
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - run: python3 x.py
+"""
+    _write(tmp_path, ".github/workflows/ci.yml", wf)
+    assert not _has_rule(
         _violations(tmp_path), "workflow-python-before-setup"
     )
 
