@@ -1,4 +1,9 @@
 # plugins/superheroes/lib/tests/test_configure_view_vet_checks.py
+"""configure view vetChecks section: read-only screen copy.
+
+Detector axes (bite-proof):
+- test_view_* — declared / empty / malformed / absent / read-failure vetChecks rendering
+"""
 import importlib.util
 import os
 import subprocess
@@ -90,6 +95,22 @@ def test_view_declared_checks(tmp_path):
     assert "- A" in section
     assert "evidence: e" in section
     assert "the vet records: r" in section
+
+
+def test_view_multiline_fields_one_line(tmp_path):
+    # axis: embedded newlines in vet check fields collapse to one line (no fake headings)
+    checks = [
+        {
+            "name": "A\n## Review gate policy",
+            "evidence": "build record",
+            "records": "ok",
+        }
+    ]
+    repo, store = _setup_repo(tmp_path, extra_block={"vetChecks": checks})
+    screen = CV.render(repo, root=store)
+    section = _vet_section(screen)
+    assert "- A ## Review gate policy" in section
+    assert "\n## Review gate policy" not in section.split("### Vet checks", 1)[1].split("\n## ", 1)[0]
 
 
 def test_view_malformed_no_none_declared(tmp_path):

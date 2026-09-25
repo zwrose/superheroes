@@ -176,8 +176,8 @@ action that owns it, leaving the rest of the calibration untouched:
   exits 0 either way, so check `action`, not exit status.
 
 - **Declare or change the project's vet checks** → write **only** the `vetChecks` key in `core.md`'s
-  JSON block, leaving every other key untouched. Stdin carries a JSON list; empty stdin clears the
-  key:
+  JSON block, leaving every other key untouched. Stdin carries a JSON list; empty stdin is refused
+  (use `--clear` to remove the key):
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -189,7 +189,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-  printf '' | python3 -B "$ROOT_DIR/lib/core_md.py" write-vet-checks --cwd .
+  python3 -B "$ROOT_DIR/lib/core_md.py" write-vet-checks --cwd . --clear
   ```
 
   **Read the result, don't assume success.** `write-vet-checks` returns `{action, reason?,

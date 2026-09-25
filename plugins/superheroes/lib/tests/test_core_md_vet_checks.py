@@ -192,6 +192,7 @@ def test_read_vet_checks_unreadable_bytes(tmp_path):
 
 
 def test_read_vet_checks_unparseable_block(tmp_path):
+    # axis: core.md without a parseable JSON block yields core-md-unparseable
     repo, store = _setup_repo(tmp_path)
     open(CM.core_path(repo, store), "w").write("no json fence\n")
     got = CM.read_vet_checks(repo, store)
@@ -199,6 +200,7 @@ def test_read_vet_checks_unparseable_block(tmp_path):
 
 
 def test_read_vet_checks_two_blocks(tmp_path):
+    # axis: duplicate superheroes-core JSON fences refuse with multiple-core-blocks
     repo, store = _setup_repo(tmp_path)
     path = CM.core_path(repo, store)
     text = open(path).read()
@@ -208,6 +210,7 @@ def test_read_vet_checks_two_blocks(tmp_path):
 
 
 def test_read_vet_checks_duplicate_root_key(tmp_path):
+    # axis: duplicate top-level JSON keys refuse with duplicate-core-key:<key>
     repo, store = _setup_repo(tmp_path)
     path = CM.core_path(repo, store)
     text = open(path).read()
@@ -221,6 +224,7 @@ def test_read_vet_checks_duplicate_root_key(tmp_path):
 
 
 def test_read_vet_checks_duplicate_name_member(tmp_path):
+    # axis: duplicate object member in a vetChecks entry refuses duplicate-core-key:name
     repo, store = _setup_repo(tmp_path, schema=CM.SCHEMA_VERSION)
     path = CM.core_path(repo, store)
     text = open(path).read()
@@ -235,6 +239,7 @@ def test_read_vet_checks_duplicate_name_member(tmp_path):
 
 
 def test_read_vet_checks_key_absent(tmp_path):
+    # axis: missing vetChecks key is undeclared with empty checks and no reason
     repo, store = _setup_repo(tmp_path)
     got = CM.read_vet_checks(repo, store)
     assert got["declared"] is False
@@ -243,6 +248,7 @@ def test_read_vet_checks_key_absent(tmp_path):
 
 
 def test_read_vet_checks_present_empty_list(tmp_path):
+    # axis: vetChecks [] is declared with an empty checks list
     repo, store = _setup_repo(
         tmp_path, schema=CM.SCHEMA_VERSION, extra_block={_VET_CHECKS_KEY: []})
     got = CM.read_vet_checks(repo, store)
@@ -252,6 +258,7 @@ def test_read_vet_checks_present_empty_list(tmp_path):
 
 
 def test_read_vet_checks_present_null(tmp_path):
+    # axis: vetChecks null is declared but malformed
     repo, store = _setup_repo(
         tmp_path, schema=CM.SCHEMA_VERSION, extra_block={_VET_CHECKS_KEY: None})
     got = CM.read_vet_checks(repo, store)
@@ -261,6 +268,7 @@ def test_read_vet_checks_present_null(tmp_path):
 
 
 def test_read_vet_checks_present_scalar(tmp_path):
+    # axis: non-list vetChecks value is declared but malformed
     repo, store = _setup_repo(
         tmp_path, schema=CM.SCHEMA_VERSION, extra_block={_VET_CHECKS_KEY: "x"})
     got = CM.read_vet_checks(repo, store)
@@ -269,6 +277,7 @@ def test_read_vet_checks_present_scalar(tmp_path):
 
 
 def test_read_vet_checks_malformed_list(tmp_path):
+    # axis: malformed vetChecks list surfaces vet-checks-malformed and malformed detail
     repo, store = _setup_repo(
         tmp_path, schema=CM.SCHEMA_VERSION, extra_block={_VET_CHECKS_KEY: _MALFORMED_SEED})
     got = CM.read_vet_checks(repo, store)
@@ -279,6 +288,7 @@ def test_read_vet_checks_malformed_list(tmp_path):
 
 
 def test_read_vet_checks_valid_stripped(tmp_path):
+    # axis: valid vetChecks entries strip surrounding whitespace on read
     repo, store = _setup_repo(
         tmp_path, schema=CM.SCHEMA_VERSION, extra_block={_VET_CHECKS_KEY: _VALID_CHECKS})
     got = CM.read_vet_checks(repo, store)
@@ -286,6 +296,7 @@ def test_read_vet_checks_valid_stripped(tmp_path):
 
 
 def test_read_vet_checks_behind_schema(tmp_path):
+    # axis: schemaVersion ahead of reader still returns checks with behind=True
     repo, store = _setup_repo(
         tmp_path,
         schema=99,
@@ -297,6 +308,7 @@ def test_read_vet_checks_behind_schema(tmp_path):
 
 
 def test_write_vet_checks_roundtrip(tmp_path):
+    # axis: write_vet_checks persists trimmed checks readable on read_vet_checks
     repo, store = _setup_repo(tmp_path)
     res = CM.write_vet_checks(repo, _VALID_CHECKS, root=store)
     assert res["action"] == "written"
@@ -305,6 +317,7 @@ def test_write_vet_checks_roundtrip(tmp_path):
 
 
 def test_write_vet_checks_noop(tmp_path):
+    # axis: identical write_vet_checks payload is a noop
     repo, store = _setup_repo(tmp_path)
     CM.write_vet_checks(repo, _VALID_CHECKS, root=store)
     res = CM.write_vet_checks(repo, _VALID_CHECKS, root=store)
@@ -348,6 +361,7 @@ def test_write_vet_checks_malformed_refused_bytes_unchanged(tmp_path):
 
 
 def test_json_block_round_trip_vet_checks_only_diff():
+    # axis: vetChecks-only JSON block edits fail projectConfiguration round-trip guard
     orig = {"schemaVersion": 2, "verifyCommand": "x", "stackTags": []}
     new = dict(orig, vetChecks=[])
     assert CM._json_block_key_round_trip_ok(orig, new, "projectConfiguration") is False
@@ -422,6 +436,7 @@ def test_preservation_matrix(tmp_path, writer_name, kwargs, expect_action, seed_
 
 
 def test_preservation_absent_stays_absent_through_confirm(tmp_path):
+    # axis: confirm without vetChecks seed leaves the key absent
     repo, store = _setup_repo(tmp_path, status="provisional")
     assert _VET_CHECKS_KEY not in _parsed(repo, store)
     res = CM.confirm(repo, root=store)
@@ -439,6 +454,7 @@ def _git_env():
 
 
 def test_subprocess_write_vet_checks_argv_stdin_boundary(tmp_path):
+    # axis: write-vet-checks/read-vet-checks CLI round-trip via argv and stdin boundaries
     repo, store = _setup_repo(tmp_path)
     env = {**os.environ, **_git_env()}
     write_proc = subprocess.run(
@@ -504,6 +520,7 @@ def test_subprocess_write_vet_checks_argv_stdin_boundary(tmp_path):
 
 
 def test_cli_write_and_read_vet_checks(tmp_path, monkeypatch):
+    # axis: write-vet-checks and vet-checks CLI subcommands round-trip valid checks
     repo, store = _setup_repo(tmp_path)
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_VALID_CHECKS)))
     rc = CM.main(["write-vet-checks", "--cwd", repo, "--root", store])
@@ -555,6 +572,7 @@ def test_cli_write_vet_checks_literal_empty_list_declared(tmp_path, monkeypatch)
 
 
 def test_cli_write_vet_checks_invalid_json(tmp_path, monkeypatch, capsys):
+    # axis: non-JSON stdin refuses with vet-checks-input-unparseable
     repo, store = _setup_repo(tmp_path)
     monkeypatch.setattr("sys.stdin", io.StringIO("not-json"))
     rc = CM.main(["write-vet-checks", "--cwd", repo, "--root", store])
@@ -563,6 +581,7 @@ def test_cli_write_vet_checks_invalid_json(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_write_vet_checks_nested_duplicate(tmp_path, monkeypatch, capsys):
+    # axis: duplicate member in stdin JSON refuses duplicate-core-key:name
     repo, store = _setup_repo(tmp_path)
     raw = '[{"name": "a", "name": "b", "evidence": "e", "records": "r"}]'
     monkeypatch.setattr("sys.stdin", io.StringIO(raw))
@@ -572,6 +591,7 @@ def test_cli_write_vet_checks_nested_duplicate(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_write_vet_checks_malformed(tmp_path, monkeypatch, capsys):
+    # axis: malformed list on stdin refuses with vet-checks-malformed
     repo, store = _setup_repo(tmp_path)
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_MALFORMED_SEED)))
     rc = CM.main(["write-vet-checks", "--cwd", repo, "--root", store])

@@ -373,9 +373,9 @@ def _vet_checks_view_lines(payload):
         lines.append("(declared empty — zero vet checks)")
         return lines
     for check in checks:
-        lines.append("- %s" % check.get("name", ""))
-        lines.append("  evidence: %s" % check.get("evidence", ""))
-        lines.append("  the vet records: %s" % check.get("records", ""))
+        lines.append("- %s" % _one_line_prose(check.get("name", "")))
+        lines.append("  evidence: %s" % _one_line_prose(check.get("evidence", "")))
+        lines.append("  the vet records: %s" % _one_line_prose(check.get("records", "")))
     return lines
 
 
