@@ -908,6 +908,17 @@ def resolve_dispatch(
             f"role {role!r} has no sanctioned model on vendor {vendor!r}"
         )
 
+    if model is not None:
+        # A retired model can already be off every allowlist and out of the registry
+        # entirely (`is_registered` false), so the by_id/parse_dispatch_token lookup below
+        # would otherwise fall through to the generic "not on the allowlist" park instead of
+        # naming the retirement and its replacement. Check the EXPLICIT model the caller
+        # passed in — not one this function later derives from a seat default, which is a
+        # registry pick and never retired.
+        retired_reason = retired_model_reason(vendor, model)
+        if retired_reason is not None:
+            return _resolve_dispatch_fail(retired_reason, pairs)
+
     token_effort: str | None = None
 
     if model is None:

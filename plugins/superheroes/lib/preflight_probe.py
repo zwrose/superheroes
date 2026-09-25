@@ -511,9 +511,17 @@ def needed_configs_for(tiers, vendors):
     return out
 
 
-def composition_liveness(needed_configs, run=None):
+_UNSET = object()
+
+
+def composition_liveness(needed_configs, run=None, codex_floor_refusal=_UNSET):
     """Per-vendor composition liveness: auth is all-or-nothing per vendor, layered with per-model
-    adequacy. Returns {vendor: {"live": bool, "models": {model: {"ok", "detail"}}, "cells": [...]}}."""
+    adequacy. Returns {vendor: {"live": bool, "models": {model: {"ok", "detail"}}, "cells": [...]}}.
+
+    `codex_floor_refusal` lets a caller that already ran `codex_cli_floor_probe` this
+    composition thread that SAME observation in, instead of this function sampling the
+    `codex --version` boundary again (two separate subprocess calls can disagree). Omit it
+    (the default) to have this function probe the floor itself, as a standalone call does."""
     if not isinstance(needed_configs, dict):
         return {}
     result = {}
@@ -524,7 +532,9 @@ def composition_liveness(needed_configs, run=None):
         models = {}
         cells = []
         if vendor == "codex" and configs:
-            floor_refusal = codex_cli_floor_probe(run)
+            floor_refusal = (
+                codex_cli_floor_probe(run) if codex_floor_refusal is _UNSET else codex_floor_refusal
+            )
             if floor_refusal is not None:
                 detail = floor_refusal["detail"]
                 for model, effort in configs:
@@ -612,7 +622,9 @@ def live_vendors_for_composition(
                 _cached_cache_provenance(rec, now),
             )
 
-    liveness = composition_liveness({**needed, "claude": []}, run)
+    liveness = composition_liveness(
+        {**needed, "claude": []}, run, codex_floor_refusal=codex_floor_refusal,
+    )
     if codex_floor_refusal is None and cache_path is not None and now is not None:
         wrote = liveness_cache.write(liveness, needed, path=cache_path, now=now)
         if not wrote:

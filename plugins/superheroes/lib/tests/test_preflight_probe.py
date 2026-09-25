@@ -260,6 +260,29 @@ def test_codex_cli_floor_probe_below_floor_refused():
     assert below in result["detail"]
 
 
+# bite-axis: codex_cli_floor_probe compares versions NUMERICALLY, never as a bare string — a
+# CLI that is numerically below the floor but lexically greater (e.g. "0.99.0" vs "0.157.0",
+# where "9" > "1" at the first differing character) must still be refused. This is the same
+# trap `test_i4_codex_min_cli_compares_numerically_not_as_a_string` already guards on
+# `codex_min_cli()`; the dispatch gate itself (`found_key >= floor_key`) needs the same proof.
+def test_codex_cli_floor_probe_numerically_below_but_lexically_above_refused():
+    floor_major, floor_minor, _floor_patch = (int(p) for p in _CODEX_FLOOR_VERSION.split("."))
+    trap_minor = 99
+    assert trap_minor < floor_minor, "expected the registry floor's minor to exceed 99"
+    assert str(trap_minor) > str(floor_minor), (
+        "expected '%d' to sort lexically ABOVE '%d' (first-char trap)" % (trap_minor, floor_minor)
+    )
+    trap_version = "%d.%d.0" % (floor_major, trap_minor)
+
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % trap_version, stderr="")
+
+    result = pp.codex_cli_floor_probe(run=_run)
+    assert result is not None
+    assert result["ok"] is False
+    assert result["detail"].startswith("codex-cli-too-old:")
+
+
 def test_codex_cli_floor_probe_at_floor_passes():
     def _run(argv, **kwargs):
         return SimpleNamespace(returncode=0, stdout=_CODEX_VERSION_STDOUT, stderr="")
@@ -412,6 +435,71 @@ def test_live_vendors_for_composition_cache_bypassed_when_codex_cli_drops_below_
     with open(cache_path, encoding="utf-8") as fh:
         receipt_after = fh.read()
     assert receipt_after == receipt_before
+
+
+# bite-axis: live_vendors_for_composition samples the codex-CLI-floor boundary EXACTLY ONCE per
+# composition and threads that single observation into composition_liveness — a disagreeing
+# second `codex --version` reply (a transient flake in either direction between the two probe
+# sites) must never be consulted, so a below-floor CLI can never be reported live and an
+# above-floor CLI can never have its liveness recomputed from a stale second sample.
+def test_live_vendors_for_composition_probes_codex_floor_exactly_once_below_then_would_pass():
+    model, effort = _CODEX_LADDER_DEFAULT_CELL
+    needed_override = {"codex": [(model, effort)]}
+    below = _decrement_version(_CODEX_FLOOR_VERSION)
+    version_calls = []
+
+    def _run(argv, **kwargs):
+        if list(argv) == ["codex", "--version"]:
+            version_calls.append(list(argv))
+            if len(version_calls) > 1:
+                raise AssertionError(
+                    "codex --version must be sampled exactly once per composition"
+                )
+            return SimpleNamespace(returncode=0, stdout="codex-cli %s\n" % below, stderr="")
+        raise AssertionError("no per-cell probe may run once the codex CLI is below floor")
+
+    live, _cells, liveness, _notes, _src, _prov = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_run,
+        needed_override=needed_override,
+    )
+    assert "codex" not in live
+    assert liveness["codex"]["live"] is False
+    assert version_calls == [["codex", "--version"]]
+
+
+def test_live_vendors_for_composition_single_probe_backs_the_cache_write(tmp_path):
+    import liveness_cache
+
+    model, effort = _CODEX_LADDER_DEFAULT_CELL
+    needed_override = {"codex": [(model, effort)]}
+    cache_path = str(tmp_path / "composition-liveness.json")
+    now = 1000.0
+    version_calls = []
+
+    def _run(argv, **kwargs):
+        at_floor = _answer_codex_version_at_floor(argv)
+        if at_floor is not None:
+            version_calls.append(list(argv))
+            if len(version_calls) > 1:
+                raise AssertionError(
+                    "codex --version must be sampled exactly once per composition"
+                )
+            return at_floor
+        return SimpleNamespace(returncode=0, stdout="READY", stderr="")
+
+    live, _cells, _liv, _notes, _src, _prov = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_run,
+        needed_override=needed_override,
+        cache_path=cache_path,
+        now=now,
+    )
+    assert "codex" in live
+    rec = liveness_cache.read(cache_path, now=now)
+    assert rec is not None
+    assert rec["liveness"]["codex"]["live"] is True
+    assert version_calls == [["codex", "--version"]]
 
 
 # --- cross_vendor_cli_probe / cross_vendor_no_op_argv --------------------------------------
@@ -2009,7 +2097,7 @@ def test_cli_compose_liveness_writes_receipt(tmp_path, monkeypatch, capsys):
 
     cache_file = tmp_path / "state" / "composition-liveness.json"
     monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
-    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None: {
+    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None, **_kw: {
         "codex": {"live": True, "models": {}, "cells": []},
         "claude": {"live": True, "models": {}, "cells": []},
     })
@@ -2162,7 +2250,7 @@ def test_compose_liveness_unreadable_core_config_read_and_note(tmp_path, monkeyp
     repo, store = _selftest_repo_with_core_shape(tmp_path, "dangling")
     cache_file = tmp_path / "state" / "composition-liveness.json"
     monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
-    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None: {
+    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None, **_kw: {
         "codex": {"live": True, "models": {}, "cells": []},
         "claude": {"live": True, "models": {}, "cells": []},
     })
@@ -2185,7 +2273,7 @@ def test_compose_liveness_readable_core_no_unreadable_note(tmp_path, monkeypatch
     repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
     cache_file = tmp_path / "state" / "composition-liveness.json"
     monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
-    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None: {
+    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None, **_kw: {
         "codex": {"live": True, "models": {}, "cells": []},
         "claude": {"live": True, "models": {}, "cells": []},
     })
@@ -2256,7 +2344,7 @@ def test_both_cli_config_read_payloads_use_the_shared_projection(tmp_path, monke
         "probe_result",
         lambda config=None: {"tool": "dispatch-vocab", "ok": True, "detail": "ok (1 checks)"},
     )
-    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None: {
+    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None, **_kw: {
         "codex": {"live": True, "models": {}, "cells": []},
         "claude": {"live": True, "models": {}, "cells": []},
     })
@@ -2379,7 +2467,7 @@ def test_config_read_payload_keys_are_core_only(tmp_path, monkeypatch, capsys):
     )
     cache_file = tmp_path / "state" / "composition-liveness.json"
     monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
-    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None: {
+    monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None, **_kw: {
         "codex": {"live": True, "models": {}, "cells": []},
         "claude": {"live": True, "models": {}, "cells": []},
     })

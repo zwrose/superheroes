@@ -2727,6 +2727,32 @@ def test_astra_probe_seat_is_the_registry_cell(tmp_path, monkeypatch):
     }
 
 
+# bite-axis: astra_probe dispatches — and the ledger records — whatever model the registry's
+# `registration-probe` codex cell currently names, not a model hardcoded to "Astra". The command,
+# ledger file, and refusal tokens are reused machinery kept stable across a cell change (#1435);
+# only the docstring/help text describing them may ever diverge from this real registry read.
+def test_astra_probe_dispatches_and_records_the_live_registration_probe_cell(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    expected_model, expected_effort = CP.model_registry.matrix_config("registration-probe", "codex")
+    seats = []
+
+    def dispatch(**kwargs):
+        seats.append(kwargs["seat"])
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.astra_probe(repo, "wave-live-cell", run_dir, dispatch=dispatch)
+    assert code == 0
+    assert seats[0]["model"] == expected_model
+    assert seats[0]["effort"] == expected_effort
+    assert out["model"] == expected_model
+    ledger_dir, _ = CP._conformance_record_dir(repo)
+    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    assert attempts[0]["model"] == expected_model
+
+
 # bite-axis: each attempt records the hash of the exact prompt sent
 def test_astra_probe_attempt_records_prompt_hash(tmp_path, monkeypatch):
     _astra_ledger(tmp_path, monkeypatch)

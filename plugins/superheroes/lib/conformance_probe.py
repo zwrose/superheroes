@@ -1037,7 +1037,11 @@ def _build_astra_output(wave, run_dir_real, terminal, findings, attempts_before,
     return out
 
 def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=None, now=None):
-    """Run the Astra registration probe for `wave`. Returns (payload, exit code). Never raises."""
+    """Run the registration security-lens probe for `wave` — dispatched to whatever model the
+    registry's `registration-probe` codex cell currently names (recorded as `model` on every
+    ledger attempt), NOT necessarily Astra: the command, its refusal tokens, and its ledger
+    file name are reused machinery, kept stable even when the cell's model changes. Returns
+    (payload, exit code). Never raises."""
     if dispatch is None:
         dispatch = engine_dispatch.dispatch_review
     if not isinstance(wave, str) or not wave.strip():
@@ -1182,7 +1186,13 @@ def main(argv):
     pe.add_argument("--owner-word", action="append", default=[], dest="owner_words")
     pe.add_argument("--max-age-seconds", type=int, default=DEFAULT_MAX_AGE_SECONDS)
     pe.add_argument("--wave", default=None)
-    ap_probe = sub.add_parser("astra-probe", help="Astra registration security-lens probe")
+    ap_probe = sub.add_parser(
+        "astra-probe",
+        help=(
+            "registration security-lens probe for whatever model the registry's "
+            "registration-probe codex cell names (not Astra-only)"
+        ),
+    )
     ap_probe.add_argument("--repo-root", required=True)
     ap_probe.add_argument("--wave", required=True)
     ap_probe.add_argument("--run-dir", required=True)

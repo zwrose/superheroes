@@ -855,6 +855,18 @@ def test_i2_retired_terra_refused_by_validate_config_and_pin_verdict():
         assert reason == _RETIRED_TERRA_REASON
 
 
+# bite-axis: an explicit dispatch seat naming the retired gpt-5.6-terra gets the named-replacement
+# refusal from resolve_dispatch, not the generic "not on the allowlist" park — gpt-5.6-terra is
+# off every allowlist and out of the registry entirely, so by_id/parse_dispatch_token would
+# otherwise fall through before validate_config ever runs.
+def test_i2_retired_terra_direct_dispatch_named_not_generic_park():
+    resolved = MR.resolve_dispatch("reviewer", "codex", "gpt-5.6-terra", "high")
+    assert resolved["ok"] is False
+    assert resolved["reason"] == _RETIRED_TERRA_REASON
+    assert resolved["model_id"] is None
+    assert resolved["dispatch_token"] is None
+
+
 # bite-axis: pin-only gpt-5.6-sol is appended to the allowlist after the ladder slice, at the cell's own effort
 def test_i3_pin_only_sol_appended_after_ladder_slice_at_cell_effort():
     for role in MR.codex_pin_roles():
