@@ -20,7 +20,6 @@ from round_certification_fixtures import (
     case07_audited_chain,
     case07_audited_chain_missing_audit,
     case08_new_issue_audit,
-    _default_case08_new_issues,
     followup_class_closure_none,
     followup_documented_trigger,
     followup_missing_class_closure,
@@ -238,8 +237,20 @@ def test_case_7_audited_chain_certifies(tmp_path):
     assert "code-reviewer" in seat_names
 
 
+_CASE8_MINOR_NEW_ISSUE = {
+    "severity": "Minor",
+    "file": "src/leak.py",
+    "line": 4,
+    "title": "regression adjacent to fix",
+}
+
+
 def test_case_8_new_issue_audit_refuses_then_certifies_once_dispositioned(tmp_path):
-    session_dir = case08_new_issue_audit(tmp_path, seed_raised_new_issue=True)
+    session_dir = case08_new_issue_audit(
+        tmp_path,
+        seed_raised_new_issue=True,
+        new_issues=[dict(_CASE8_MINOR_NEW_ISSUE)],
+    )
     receipt, refusal = _certify(session_dir)
     assert receipt is None
     assert refusal is not None
@@ -249,7 +260,7 @@ def test_case_8_new_issue_audit_refuses_then_certifies_once_dispositioned(tmp_pa
 
     state_path = os.path.join(session_dir, RC.STATE_FILE)
     state = json.load(open(state_path, encoding="utf-8"))
-    new_issue = _default_case08_new_issues()[0]
+    new_issue = _CASE8_MINOR_NEW_ISSUE
     new_key = session_contract.minted_identity_key(new_issue)
     raised_seq = None
     for row in state[session_contract.DISPOSITION_LEDGER_KEY]:
@@ -266,6 +277,15 @@ def test_case_8_new_issue_audit_refuses_then_certifies_once_dispositioned(tmp_pa
     assert refusal is None, refusal
     assert receipt is not None
     assert receipt["certificationShape"] == "audited-chain"
+
+
+def test_case_8_important_new_issue_refuses_with_chain_token(tmp_path):
+    session_dir = case08_new_issue_audit(tmp_path, seed_raised_new_issue=True)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] != "disposition-without-receipt"
+    assert "audited-chain-gap:new-issue-undispositioned" in refusal["detail"]
 
 
 def test_case_8_plain_discharged_still_certifies(tmp_path):

@@ -485,7 +485,7 @@ def test_e14_mixed_candidates_both_orders_refuse(tmp_path, order):
     fold_id = _fold_id(state)
     good = _new_issue_template()
     bad = {
-        "severity": "Important",
+        "severity": "Minor",
         "file": "src/bad.py",
         "line": 7,
         "title": "second regression",
