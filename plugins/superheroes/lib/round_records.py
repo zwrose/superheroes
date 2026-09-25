@@ -117,7 +117,7 @@ _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK = {
     "observation": lambda value: isinstance(value, dict),
     "engineModel": lambda value: isinstance(value, str) and value,
     "model": lambda value: value is None or (isinstance(value, str) and value),
-    "runKind": lambda value: value in ("review", "write"),
+    "runKind": session_contract.run_kind_value_ok,
 }
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
 # payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.

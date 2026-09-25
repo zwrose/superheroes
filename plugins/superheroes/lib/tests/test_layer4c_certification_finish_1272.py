@@ -228,9 +228,28 @@ def test_hand_landed_fixer_run_kind_review_refuses(tmp_path):
     assert refusal["bindingFailure"] == "evidence-run-kind-mismatch"
 
 
-def _panel_hand_landed_session(tmp_path, phase, seat, *, run_kind):
+def test_hand_landed_panel_run_kind_absent_refuses(tmp_path):
+    session_dir = _panel_hand_landed_session(
+        tmp_path, PANEL_PHASE, "code-reviewer", run_kind="review", include_run_kind=False)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal["bindingFailure"] == "evidence-run-kind-mismatch"
+
+
+def test_hand_landed_fixer_run_kind_absent_refuses(tmp_path):
+    session_dir = _panel_hand_landed_session(
+        tmp_path, FIXER_PHASE, FIXER_SEAT, run_kind="write", include_run_kind=False)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal["bindingFailure"] == "evidence-run-kind-mismatch"
+
+
+def _panel_hand_landed_session(tmp_path, phase, seat, *, run_kind, include_run_kind=True):
     evidence = _execution_evidence_for_hand_landed(seat, phase)
-    evidence["runKind"] = run_kind
+    if include_run_kind:
+        evidence["runKind"] = run_kind
+    else:
+        evidence.pop("runKind", None)
     payload_sha = DEFAULT_PANEL_PAYLOAD_SHA
     journal_row = {
         "cmd": "record-result",

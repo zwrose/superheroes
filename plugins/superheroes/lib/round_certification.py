@@ -526,14 +526,14 @@ def _resolve_repo_head_sha(ctx):
 
 
 def _run_kind_refusal_detail(phase, found_kind):
-    expected = "write" if phase == P_FIXER else "review"
+    expected = session_contract.run_kind_for_phase(phase)
     return "phase %r requires runKind %r (found %r)" % (phase, expected, found_kind)
 
 
 def _dispatch_run_kind_qualifies(obs, phase):
     if not isinstance(obs, dict):
         return False, None
-    expected = "write" if phase == P_FIXER else "review"
+    expected = session_contract.run_kind_for_phase(phase)
     run_kind = obs.get("runKind")
     return (isinstance(run_kind, str) and run_kind == expected), run_kind
 
@@ -1244,15 +1244,14 @@ def check_unrun_review(ctx):
                     binding_failure=binding,
                 )
             evidence = env.get("executionEvidence") if isinstance(env, dict) else None
-            if isinstance(evidence, dict) and "runKind" in evidence:
-                rk_ok, found_kind = _dispatch_run_kind_qualifies(evidence, phase)
-                if not rk_ok:
-                    return _refusal(
-                        "unrun-review",
-                        seat,
-                        _run_kind_refusal_detail(phase, found_kind),
-                        binding_failure="evidence-run-kind-mismatch",
-                    )
+            rk_ok, found_kind = _dispatch_run_kind_qualifies(evidence, phase)
+            if not rk_ok:
+                return _refusal(
+                    "unrun-review",
+                    seat,
+                    _run_kind_refusal_detail(phase, found_kind),
+                    binding_failure="evidence-run-kind-mismatch",
+                )
     return None
 
 

@@ -89,7 +89,7 @@ WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
 NATIVE_SCHEMA_NAME = "native-schema.json"
-RUN_KIND_REVIEW = "review"
+RUN_KIND_REVIEW = session_contract.RUN_KIND_REVIEW
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
 REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
 _REVIEW_RESULT_KINDS_CHOICES_CONTRACT = (
@@ -99,7 +99,7 @@ _CLAUDE_MODES_CHOICES_CONTRACT = (
     "choices:" + ",".join(str(mode) for mode in engine_result_channel.CLAUDE_MODES)
 )
 RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
-RUN_KIND_WRITE = "write"
+RUN_KIND_WRITE = session_contract.RUN_KIND_WRITE
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
 _GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
                      "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_GLOBAL",

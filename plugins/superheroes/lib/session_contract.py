@@ -80,6 +80,11 @@ __all__ = (
     "PAYLOAD_BOUND_BINDING",
     "evidence_binding",
     "execution_only_admissible_for_phase",
+    "RUN_KIND_REVIEW",
+    "RUN_KIND_WRITE",
+    "RUN_KIND_VALUES",
+    "run_kind_value_ok",
+    "run_kind_for_phase",
     "verify_result_for_head",
     "runner_channel_vendor",
     "RE_EMIT_CMD",
@@ -132,6 +137,22 @@ def execution_only_admissible_for_phase(phase):
     if phase not in (PANEL_PHASE, FIXER_PHASE, AUDITS_PHASE):
         return False
     return phase == FIXER_PHASE
+
+RUN_KIND_REVIEW = "review"
+RUN_KIND_WRITE = "write"
+RUN_KIND_VALUES = frozenset((RUN_KIND_REVIEW, RUN_KIND_WRITE))
+
+
+def run_kind_value_ok(value):
+    return value in RUN_KIND_VALUES
+
+
+def run_kind_for_phase(phase):
+    """Expected executionEvidence.runKind for a dispatch phase — write on fixer, review elsewhere."""
+    if phase == FIXER_PHASE:
+        return RUN_KIND_WRITE
+    return RUN_KIND_REVIEW
+
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 
