@@ -838,18 +838,8 @@ def _new_issues_reconciliation_gap(state, fold_id, fold_round, new_issues):
     if any(count > 1 for count in key_counts.values()):
         return _duplicate
     for cand in linked:
-        copy = dict(cand)
-        copy.pop(session_contract.FINDING_KEY_FIELD, None)
-        copy.pop("originAuditId", None)
-        file_val = copy.get("file")
-        if not isinstance(file_val, str) or not file_val:
-            return _evidence
-        ok, line = session_contract.coerce_line(copy.get("line"))
-        if not ok:
-            return _evidence
-        copy["line"] = line
-        key = session_contract.minted_identity_key(copy)
-        if not isinstance(key, str) or not key:
+        key = session_contract.new_issue_candidate_key(cand)
+        if key is None:
             return _evidence
         if key == fold_id:
             return _evidence

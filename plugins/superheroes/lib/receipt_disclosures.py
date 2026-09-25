@@ -114,6 +114,8 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "verifyPasses": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
+    "rulings": dict_list,
+    "auditNewIssues": dict_list,
 }
 
 # Ride the receipt's per-round entries; never read into a verdict or a degraded line.
@@ -124,6 +126,8 @@ RECORD_ONLY_DISCLOSURE_CHANNELS = (
     "canaryPlantUndetected",
     "canaryVerified",
     "controlProbe",
+    "rulings",
+    "auditNewIssues",
 )
 
 

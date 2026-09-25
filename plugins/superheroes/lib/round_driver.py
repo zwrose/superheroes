@@ -178,6 +178,7 @@ STATE_FILE = session_contract.STATE_FILE
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RE_EMIT_CMD = session_contract.RE_EMIT_CMD
+RULE_CMD = session_contract.RULE_CMD
 ORDERS_SUPERSEDED_OUTCOME = session_contract.ORDERS_SUPERSEDED_OUTCOME
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
@@ -470,6 +471,11 @@ FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 # Per-round disclosure channels `_fold_judgment` records (not `_fold_panel`). Each name here must
 # also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
 JUDGMENT_FOLD_DISCLOSURE_CHANNELS = ("judgmentDispositions",)
+
+# Per-round channels the rulings verb (`rule`) and the audits fold record. Each name here must also
+# appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
+RULE_FOLD_DISCLOSURE_CHANNELS = ("rulings",)
+AUDIT_FOLD_DISCLOSURE_CHANNELS = ("auditNewIssues",)
 
 # Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
 # close the set: a new `_record_round` key lands in one home or the other, deliberately, or the
@@ -3259,6 +3265,21 @@ def _history_row_key(row):
     return session_contract.finding_identity_key(row)
 
 
+def _guidance_log_rows(round_entry):
+    """The round's guidance-bearing log rows, in record order: the owner-gate
+    ``judgmentDispositions`` followed by the ``fix-with-guidance`` rulings the rulings verb
+    recorded. The one reader the fixer order's guidance block and the fix-batch history use."""
+    rows = []
+    log = round_entry.get("judgmentDispositions")
+    if isinstance(log, list):
+        rows.extend(log)
+    rulings = round_entry.get("rulings")
+    if isinstance(rulings, list):
+        rows.extend(r for r in rulings
+                    if isinstance(r, dict) and r.get("disposition") == RULING_GUIDANCE)
+    return rows
+
+
 def _finding_history(state):
     """Latest gate and audit rulings per finding key across ``state['rounds']``."""
     history = {}
@@ -3273,8 +3294,8 @@ def _finding_history(state):
             rnd_num = int(rnd_key)
         except (TypeError, ValueError):
             continue
-        log = round_entry.get("judgmentDispositions")
-        if isinstance(log, list):
+        log = _guidance_log_rows(round_entry)
+        if log:
             for item in log:
                 if not isinstance(item, dict):
                     continue
@@ -3328,9 +3349,7 @@ def _validate_gate_guidance_logs(rounds, rnd, batch_keys):
         except (TypeError, ValueError):
             continue
         is_current = rnd_num == rnd
-        log = round_entry.get("judgmentDispositions")
-        if not isinstance(log, list):
-            continue
+        log = _guidance_log_rows(round_entry)
         seen_ids = set()
         for item in log:
             if not isinstance(item, dict):
@@ -3372,8 +3391,8 @@ def _gate_guidance_entries(state, rnd):
     covered_keys = set()
     round_entry = rounds.get(str(rnd))
     if isinstance(round_entry, dict):
-        log = round_entry.get("judgmentDispositions")
-        if isinstance(log, list):
+        log = _guidance_log_rows(round_entry)
+        if log:
             for item in log:
                 if not isinstance(item, dict):
                     continue
@@ -3700,14 +3719,16 @@ def _disposition_ledger_by_key(state):
 
 
 def _excluded_discharged_fix_row(ledger_by_key, row):
-    """True when a discharged fix must not re-enter the fix batch (A1 chokepoint predicate)."""
+    """True when a closed finding must not re-enter the fix batch (A1 chokepoint predicate): its
+    ledger row carries a closing disposition — fixed, refuted, or out of scope (a ruling included) —
+    recorded after its latest raise. A finding raised again after the closure re-enters."""
     key = _finding_identity_key(row)
     if not key:
         return False
     entry = ledger_by_key.get(key)
     if not isinstance(entry, dict):
         return False
-    if entry.get("disposition") != "fixed":
+    if entry.get("disposition") not in session_contract.DISPOSITIONS:
         return False
     disp_seq = entry.get(session_contract.DISPOSITION_SEQ_FIELD)
     raised_seq = entry.get(session_contract.RAISED_SEQ_FIELD)
@@ -4628,12 +4649,31 @@ def _fold_audits(state, config, artifact, session_dir=None):
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt)
     state["_newIssues"] = outcome["newIssues"]
+    candidates = _audit_new_issue_rows(outcome["newIssues"])
+    if candidates:
+        _record_round(state, "auditNewIssues", candidates)
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
     if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
         state["step"] = P_VERIFY
         return
     _after_audits(state, config)
+
+
+def _audit_new_issue_rows(new_issues):
+    """Each audit-raised new-issue candidate with its canonical identity — the address a ruling
+    names. A candidate the Nit cap later drops never reaches the ledger, so this record is the only
+    place its identity is written down. Candidates with no derivable identity are omitted."""
+    rows = []
+    for cand in new_issues or []:
+        key = session_contract.new_issue_candidate_key(cand)
+        if key is None:
+            continue
+        rows.append({session_contract.FINDING_KEY_FIELD: key,
+                     "originAuditId": cand.get("originAuditId"), "file": cand.get("file"),
+                     "line": session_contract.coerce_line(cand.get("line"))[1],
+                     "title": cand.get("title"), "severity": cand.get("severity")})
+    return rows
 
 
 def _after_audits(state, config):
@@ -7272,6 +7312,325 @@ def _cmd_re_emit_locked(session_dir, by):
     return response
 
 
+# =============================================================================================
+# rulings — the one declared input for owner and advisor rulings (C13 layer 4d)
+# =============================================================================================
+#
+# A ruling reaches the driver through `rule --rulings FILE`, never as an appendix to a seat's
+# prompt: an appended ruling changes the bytes the runner hashes, so the seat's evidence no longer
+# binds to the order the driver emitted and `record-result` refuses `evidence-order-mismatch`.
+# The verb folds each ruling into state (the disposition ledger's one writer; the round's `rulings`
+# record with provenance), retires any emitted-but-unanswered order wave, and lets `next` emit the
+# re-derived step — so the order a seat runs is driver-rendered with the ruling already in it.
+
+RULING_OUT_OF_SCOPE = "out-of-scope"
+RULING_REFUTED = "refuted"
+RULING_GUIDANCE = "fix-with-guidance"
+RULING_KINDS = (RULING_OUT_OF_SCOPE, RULING_REFUTED, RULING_GUIDANCE)
+RULING_CLOSING_KINDS = (RULING_OUT_OF_SCOPE, RULING_REFUTED)
+
+RULING_SESSION_UNREADABLE = "ruling-session-unreadable"
+RULING_ARTIFACT_UNREADABLE = "ruling-artifact-unreadable"
+RULING_ARTIFACT_SHAPE = "ruling-artifact-shape"
+RULING_PROVENANCE_MISSING = "ruling-provenance-missing"
+RULING_ENTRY_INVALID = "ruling-entry-invalid"
+RULING_TARGET_UNKNOWN = "ruling-target-unknown"
+RULING_OWNER_GATE_PENDING = "ruling-owner-gate-pending"
+RULING_ATTEMPT_HAS_RESULTS = "ruling-attempt-has-results"
+RULING_SESSION_TERMINAL = "ruling-session-terminal"
+RULING_RECERTIFY_MARKER = "_rulingRecertify"
+
+
+def cmd_rule(session_dir, rulings_path):
+    """Fold one rulings artifact into the session (see the section comment above)."""
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, RULE_CMD)
+            if refusal is not None:
+                return refusal
+            return _cmd_rule_locked(session_dir, rulings_path)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, RULE_CMD, held)
+
+
+def _ruling_candidate_rows(state):
+    """{findingKey: (round, candidate row)} over every round's recorded audit new-issue candidates."""
+    out = {}
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        rec = rounds[rnd_key]
+        rows = rec.get("auditNewIssues") if isinstance(rec, dict) else None
+        for row in rows if isinstance(rows, list) else []:
+            key = row.get(session_contract.FINDING_KEY_FIELD) if isinstance(row, dict) else None
+            if isinstance(key, str) and key and key not in out and str(rnd_key).isdigit():
+                out[key] = (int(rnd_key), row)
+    return out
+
+
+def _ruling_entry_fault(entry, target, terminal, guidance_keys, guided_keys):
+    """None when one ruling entry is usable against its resolved target; else a detail string."""
+    kind = entry.get("ruling")
+    if kind not in RULING_KINDS:
+        return "unknown ruling %r; expected one of: %s" % (kind, ", ".join(RULING_KINDS))
+    if terminal and kind not in RULING_CLOSING_KINDS:
+        return "a terminal session takes only closing rulings (%s)" % ", ".join(RULING_CLOSING_KINDS)
+    if kind in RULING_CLOSING_KINDS:
+        reason = entry.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return "a %s ruling needs a non-empty reason" % kind
+    if kind == RULING_OUT_OF_SCOPE:
+        if circuit_breaker.is_critical(target.get("severity")):
+            return "a Critical finding may not be ruled out of scope"
+        fault = session_contract.follow_up_shape_fault(entry.get("followUp"))
+        if fault is not None:
+            return "out-of-scope followUp: %s" % fault[1]
+    if kind == RULING_GUIDANCE:
+        guidance = entry.get("guidance")
+        if not isinstance(guidance, str) or not guidance.strip():
+            return "a fix-with-guidance ruling needs non-empty guidance"
+        key = entry.get("id")
+        if key not in guidance_keys:
+            return ("guidance reaches a fixer only through an unexecuted fix slice; %r is not in "
+                    "the pending fix batch or its queue" % key)
+        if key in guided_keys:
+            return "%r already carries guidance this round" % key
+    return None
+
+
+def _plan_rulings(state, rulings, terminal):
+    """Validate every entry and resolve every target before anything is folded.
+
+    Returns (plan, refusal_reason, detail). A plan row is (entry, target, seed_round) where
+    `seed_round` is set when the target is an audit new-issue candidate the ledger never held."""
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return None, RULING_ENTRY_INVALID, fault.detail
+    owner_ok = (session_contract.disposition_ledger_owner_classification(state)
+                == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED)
+    candidates = _ruling_candidate_rows(state)
+    guidance_keys = set()
+    if not terminal and state.get("step") == P_FIXER:
+        for row in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or []):
+            key = _fix_batch_row_key(row)
+            if key:
+                guidance_keys.add(key)
+    round_rec = state.get("rounds", {}).get(str(state.get("round")), {})
+    guided_keys = {_history_row_key(r) for r in _guidance_log_rows(round_rec)
+                   if isinstance(r, dict) and r.get("disposition") == RULING_GUIDANCE}
+    plan, seen = [], set()
+    for i, entry in enumerate(rulings):
+        where = "rulings[%d]" % i
+        if not isinstance(entry, dict):
+            return None, RULING_ENTRY_INVALID, "%s is not an object" % where
+        key = entry.get("id")
+        if not isinstance(key, str) or not key:
+            return None, RULING_ENTRY_INVALID, "%s has no usable id" % where
+        if key in seen:
+            return None, RULING_ENTRY_INVALID, "%s repeats id %r; one ruling per finding" % (
+                where, key)
+        seen.add(key)
+        seed_round = None
+        target = ledger_by_key.get(key)
+        if not isinstance(target, dict):
+            hit = candidates.get(key)
+            if hit is None or not owner_ok:
+                return None, RULING_TARGET_UNKNOWN, (
+                    "%s id %r names no finding in the disposition ledger and no recorded audit "
+                    "new-issue candidate" % (where, key))
+            seed_round, target = hit
+        fault_detail = _ruling_entry_fault(entry, target, terminal, guidance_keys, guided_keys)
+        if fault_detail is not None:
+            return None, RULING_ENTRY_INVALID, "%s (%r): %s" % (where, key, fault_detail)
+        plan.append((entry, target, seed_round))
+    return plan, None, None
+
+
+def _seed_candidate_ledger_row(state, key, target, raised_round):
+    """Write an audit new-issue candidate the ledger never held (a Nit-cap overflow) as a raised
+    ledger row, so its disposition is recorded after a real raise."""
+    ledger = _ensure_disposition_ledger_for_write(state)
+    entry = {session_contract.FINDING_KEY_FIELD: key}
+    for field in ("file", "line", "title", "severity"):
+        if target.get(field) is not None:
+            entry[field] = target.get(field)
+    entry[session_contract.RAISED_ROUND_FIELD] = raised_round
+    entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
+    ledger.append(entry)
+
+
+def _fold_rulings(state, plan, provenance, artifact_sha):
+    """Fold a validated plan: dispositions through the ledger's one writer, one `rulings` row per
+    ruling on the current round with its provenance. Returns the recorded rows."""
+    rows = []
+    for entry, target, seed_round in plan:
+        key = entry["id"]
+        kind = entry["ruling"]
+        if seed_round is not None:
+            _seed_candidate_ledger_row(state, key, target, seed_round)
+        row = {"id": key, session_contract.FINDING_KEY_FIELD: key, "ruling": kind,
+               "disposition": kind, "title": target.get("title"), "file": target.get("file"),
+               "line": target.get("line"), "ruledBy": provenance.get("ruledBy"),
+               "ruledAt": provenance.get("ruledAt"), "records": list(provenance.get("records")),
+               "artifactSha256": artifact_sha}
+        if kind == RULING_OUT_OF_SCOPE:
+            _record_disposition(state, key, "out-of-scope", state["round"],
+                                outOfScopeReason=entry["reason"].strip(),
+                                followUp=entry["followUp"])
+            row.update(reason=entry["reason"].strip(), followUp=entry["followUp"])
+        elif kind == RULING_REFUTED:
+            _record_disposition(state, key, "refuted", state["round"],
+                                refutedReason=entry["reason"].strip())
+            row["reason"] = entry["reason"].strip()
+        else:
+            row[GATE_GUIDANCE_RECORD_KEY] = entry["guidance"].strip()
+        if kind in RULING_CLOSING_KINDS:
+            row["dispositionSeq"] = state.get("dispositionSeqCounter")
+        _record_round_append(state, "rulings", row)
+        rows.append(row)
+    return rows
+
+
+def _requeue_ruled_fix_batch(state, config, session_dir):
+    """Re-run the live fix batch through the one `_fixBatch` writer so a finding ruled closed leaves
+    it; an emptied slice resolves the way the chokepoint already resolves one."""
+    if state.get("step") != P_FIXER:
+        return
+    rows = [dict(r) for r in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or [])
+            if isinstance(r, dict)]
+    index = state.get("_fixBatchIndex") or 0
+    status = _queue_fix_batch(state, config, rows, reset_accumulator=index == 0, batch_index=index)
+    if status == "excluded" and index >= 1:
+        state.pop("_escalatedRung", None)
+        state.pop("_fixQueue", None)
+        state.pop("_fixBatchIndex", None)
+        _enter_post_fix(state, config, session_dir=session_dir)
+
+
+def _terminal_ruling_fault(session_dir, state):
+    """None when a terminal session may take closing rulings: its certification was refused and
+    nothing else is wrong with its terminal record; otherwise the reason it may not."""
+    if state.get("_receiptFault"):
+        return "the terminal receipt carries a fault; a ruling never re-opens a faulted receipt"
+    if os.path.exists(os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE)):
+        return "the session is certified"
+    if not os.path.isfile(os.path.join(session_dir, CERTIFICATION_REFUSAL_FILE)):
+        return "no certification refusal is on disk to recover from"
+    return None
+
+
+def _refusal_archive_path(session_dir):
+    stem, ext = os.path.splitext(CERTIFICATION_REFUSAL_FILE)
+    n = 1
+    while True:
+        path = os.path.join(session_dir, "%s.superseded-%d%s" % (stem, n, ext))
+        if not os.path.exists(path):
+            return path
+        n += 1
+
+
+def _complete_ruling_recertify(session_dir, state):
+    """Finish a ruling-driven re-certification once the terminal gate has re-finalized: a refusal
+    left beside a new certification receipt is retired (its bytes were archived by the ruling's
+    commit), and the marker clears. Idempotent; a crash at any step completes on the next terminal
+    answer."""
+    if not state.get(RULING_RECERTIFY_MARKER) or not state.get("_receiptFinalized"):
+        return
+    refusal = os.path.join(session_dir, CERTIFICATION_REFUSAL_FILE)
+    if (os.path.exists(os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE))
+            and os.path.exists(refusal)):
+        os.remove(refusal)
+    state.pop(RULING_RECERTIFY_MARKER, None)
+
+
+def _cmd_rule_locked(session_dir, rulings_path):
+    ok, state = load_state(session_dir)
+    if not ok or state is None:
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_SESSION_UNREADABLE,
+                           detail=state if not ok else "no state")
+    try:
+        with open(rulings_path, encoding="utf-8") as fh:
+            artifact = json.load(fh)
+    except (OSError, ValueError, TypeError) as exc:
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_ARTIFACT_UNREADABLE, detail=str(exc))
+    rulings = artifact.get("rulings") if isinstance(artifact, dict) else None
+    if not isinstance(rulings, list) or not rulings:
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_ARTIFACT_SHAPE,
+                           detail="expected {\"rulings\": [...non-empty...], \"_provenance\": {...}}")
+    if not _owner_artifact_provenance_well_formed(artifact):
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_PROVENANCE_MISSING,
+                           detail="a ruling needs _provenance {ruledBy, ruledAt, records}")
+    terminal = bool(state.get("terminal"))
+    pending = state.get("pending") if isinstance(state.get("pending"), dict) else None
+    phase = pending.get("phase") if pending else None
+    rnd = pending.get("round") if pending else None
+    attempt = pending.get("attempt") if pending else None
+    if terminal:
+        why = _terminal_ruling_fault(session_dir, state)
+        if why is not None:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_SESSION_TERMINAL, detail=why)
+    elif phase in OWNER_GATE_PHASES:
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_OWNER_GATE_PENDING, phase=phase,
+                           rnd=rnd, attempt=attempt)
+    emitted = (not terminal and isinstance(phase, str) and phase.startswith("dispatch-")
+               and _journal_has_orders_emitted(session_dir, rnd, phase, attempt))
+    if emitted:
+        roster, roster_refusal = _roster_of(session_dir, state, RULE_CMD, phase, rnd, attempt)
+        if roster_refusal is not None:
+            return roster_refusal
+        journal = read_journal(session_dir)
+        names = (_re_emit_recorded_seat_labels(journal, rnd, phase, attempt)
+                 + _re_emit_blocking_result_names(session_dir, journal, rnd, phase, attempt, roster))
+        if names:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_ATTEMPT_HAS_RESULTS, phase=phase,
+                               rnd=rnd, attempt=attempt, names=names)
+    plan, reason, detail = _plan_rulings(state, rulings, terminal)
+    if reason is not None:
+        return _refuse_cmd(session_dir, RULE_CMD, reason, detail=detail)
+    artifact_sha = _sha256(_canonical(artifact))
+    rows = _fold_rulings(state, plan, artifact["_provenance"], artifact_sha)
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    entries = [_journal_entry_for_commit(
+        session_dir, RULE_CMD, "ruled", round=state.get("round"), artifactSha256=artifact_sha,
+        ids=[r["id"] for r in rows], at=at)]
+    archive = None
+    if terminal:
+        state["_receiptFinalized"] = False
+        state[RULING_RECERTIFY_MARKER] = True
+        archive = _refusal_archive_path(session_dir)
+    else:
+        if emitted:
+            entries.append(_journal_entry_for_commit(
+                session_dir, RULE_CMD, ORDERS_SUPERSEDED_OUTCOME, phase=phase, round=rnd,
+                attempt=attempt, newAttempt=None, reason="ruling", artifactSha256=artifact_sha,
+                at=at))
+        state.pop("pending", None)
+        _requeue_ruled_fix_batch(state, state.get("config") or {}, session_dir)
+    try:
+        c = round_commit.begin(session_dir, "rule")
+        if archive is not None:
+            with open(os.path.join(session_dir, CERTIFICATION_REFUSAL_FILE), "rb") as fh:
+                c.add_replace_file(archive, fh.read())
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(state).encode("utf-8"))
+        for entry in entries:
+            c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), entry)
+        c.run()
+    except (round_commit.CommitRefused, OSError) as exc:
+        if isinstance(exc, OSError):
+            return _refuse_cmd(session_dir, RULE_CMD, "commit-staging-failed",
+                               fault=FAULT_INTERNAL, detail=str(exc))
+        return _commit_refused_response(session_dir, RULE_CMD, exc)
+    out = {"ok": True, "ruled": [r["id"] for r in rows], "artifactSha256": artifact_sha,
+           "superseded": ({"phase": phase, "round": rnd, "attempt": attempt} if emitted
+                          else None)}
+    if terminal:
+        fault = _terminal_receipt_gate(session_dir, state)
+        out["recertified"] = {
+            "certified": os.path.exists(os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE)),
+            "archivedRefusal": archive, "receiptFault": fault.detail if fault else None}
+    return out
+
+
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
                _pending_policy_applied=None, _durable_record=None, _policy_journal_entry=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
@@ -7907,6 +8266,7 @@ def _terminal_receipt_gate(session_dir, state):
             state["_receiptFinalized"] = True
     state["_receiptFault"] = fault or None
     state["_receiptFaultClass"] = fault.kind if fault else None
+    _complete_ruling_recertify(session_dir, state)
     save_state(session_dir, state)
     return fault
 
@@ -8161,10 +8521,13 @@ def _orders_manifest_path(session_dir, rnd, phase, attempt):
 
 
 def _journal_max_attempt(session_dir, rnd, phase):
-    """Highest **accepted** submit attempt logged for `(rnd, phase)`, or -1 when none."""
+    """Highest **accepted** submit attempt — or superseded order wave — logged for `(rnd, phase)`,
+    or -1 when none."""
     max_attempt = -1
     for event in read_journal(session_dir):
-        if event.get("cmd") != "submit" or event.get("outcome") != "accepted":
+        accepted = event.get("cmd") == "submit" and event.get("outcome") == "accepted"
+        # A superseded wave's attempt is spent too: re-issuing it would reuse its order paths.
+        if not accepted and not session_contract.journal_is_re_emit_orders_superseded(event):
             continue
         if event.get("round") != rnd or event.get("phase") != phase:
             continue
@@ -11778,6 +12141,11 @@ def build_parser():
     cli_contract.add_argument(prl, "--repo-root", contract="repo-root", required=True)
     cli_contract.add_argument(prl, "--by", contract="free-text", required=True)
 
+    pru = sub.add_parser("rule")
+    cli_contract.add_argument(pru, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pru, "--rulings", contract="free-text", required=True,
+                              help="path to a rulings artifact: {rulings: [...], _provenance: {...}}")
+
     pre = sub.add_parser("re-emit")
     cli_contract.add_argument(pre, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pre, "--by", contract="free-text", required=True)
@@ -11969,6 +12337,10 @@ def _dispatch(args):
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
     elif args.cmd == "relocate":
         out = cmd_relocate(args.session_dir, args.repo_root, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == "rule":
+        out = cmd_rule(args.session_dir, args.rulings)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     elif args.cmd == "re-emit":

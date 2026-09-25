@@ -278,13 +278,15 @@ def test_l3_a1_edge_disposition_seq_not_after_raise_no_exclusion():
     assert state["step"] == RD.P_FIXER
 
 
-def test_l3_a1_edge_non_fixed_disposition_no_exclusion():
+def test_l3_a1_edge_non_closing_disposition_no_exclusion():
+    """Only a closing disposition (fixed, refuted, out-of-scope) excludes; since #1419 refuted and
+    out-of-scope close a finding the way fixed does (a ruling must take it out of the batch)."""
     compiled, key = _compile_one()
     state = RD.new_state(_cfg())
     state["round"] = 1
     RD._stage_findings(state, [compiled])
     entry = _ledger_by_key(state)[key]
-    entry["disposition"] = "refuted"
+    entry["disposition"] = "deferred"
     entry["dispositionSeq"] = entry["raisedSeq"] + 10
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])

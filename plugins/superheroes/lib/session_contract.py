@@ -92,8 +92,11 @@ __all__ = (
     "verify_result_for_head",
     "runner_channel_vendor",
     "RE_EMIT_CMD",
+    "RULE_CMD",
+    "ORDERS_SUPERSEDING_CMDS",
     "ORDERS_SUPERSEDED_OUTCOME",
     "journal_is_re_emit_orders_superseded",
+    "new_issue_candidate_key",
 )
 
 RAISED_ROUND_FIELD = "raisedRound"
@@ -191,15 +194,19 @@ STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
 JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 RE_EMIT_CMD = "re-emit"
+RULE_CMD = "rule"
+# Every command that may retire an emitted, unanswered order wave. A ruling supersedes the pending
+# orders the same way a relocation re-emit does, so both read as one protocol everywhere.
+ORDERS_SUPERSEDING_CMDS = (RE_EMIT_CMD, RULE_CMD)
 ORDERS_SUPERSEDED_OUTCOME = "orders-superseded"
 META_FILE = "meta.json"
 
 
 def journal_is_re_emit_orders_superseded(event):
-    """True when a journal row commits the re-emit supersession protocol."""
+    """True when a journal row commits an order-supersession (re-emit or ruling)."""
     if not isinstance(event, dict):
         return False
-    return (event.get("cmd") == RE_EMIT_CMD
+    return (event.get("cmd") in ORDERS_SUPERSEDING_CMDS
             and event.get("outcome") == ORDERS_SUPERSEDED_OUTCOME)
 CHANNEL_FILE = "file"
 CHANNEL_STDOUT = "stdout"
@@ -477,6 +484,28 @@ def coerce_line(value):
                 return False, value
         return False, value
     return False, value
+
+
+def new_issue_candidate_key(candidate):
+    """The canonical identity of an audit-raised new-issue candidate, or None when it has none.
+
+    The one derivation both the driver (which records and rules on candidates) and certification
+    (which reconciles them) read: the candidate's own `findingKey` and `originAuditId` are ignored,
+    the file must be a non-empty string and the line must coerce."""
+    if not isinstance(candidate, dict):
+        return None
+    copy = dict(candidate)
+    copy.pop(FINDING_KEY_FIELD, None)
+    copy.pop("originAuditId", None)
+    file_val = copy.get("file")
+    if not isinstance(file_val, str) or not file_val:
+        return None
+    ok, line = coerce_line(copy.get("line"))
+    if not ok:
+        return None
+    copy["line"] = line
+    key = minted_identity_key(copy)
+    return key if isinstance(key, str) and key else None
 
 
 def minted_identity_key(finding):

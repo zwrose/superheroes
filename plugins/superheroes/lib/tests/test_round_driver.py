@@ -3219,6 +3219,11 @@ _ALL_CHANNELS = {
                               "disposition": "fix-with-guidance",
                               "userGuidance": "keep narrow"}],
     "gateGuidanceRowCarried": [{"index": 0, "title": "orphan row"}],
+    "rulings": [{"id": "f.py::bug@L1", "findingKey": "f.py::bug@L1", "ruling": "refuted",
+                 "disposition": "refuted", "reason": "not reachable", "ruledBy": "owner",
+                 "ruledAt": "2026-09-25T00:00:00Z", "records": ["https://example.invalid/r"]}],
+    "auditNewIssues": [{"findingKey": "f.py::nit@L2", "originAuditId": "f.py::bug@L1",
+                        "file": "f.py", "line": 2, "title": "nit", "severity": "Nit"}],
 }
 
 
@@ -3990,6 +3995,7 @@ def test_panel_round_channels_are_all_accounted_for():
 
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
     judgment_fold = set(RD.JUDGMENT_FOLD_DISCLOSURE_CHANNELS)
+    rule_fold = set(RD.RULE_FOLD_DISCLOSURE_CHANNELS) | set(RD.AUDIT_FOLD_DISCLOSURE_CHANNELS)
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
     order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
     verifier_fold = set(RD.VERIFIER_FOLD_DISCLOSURE_CHANNELS)
@@ -4007,13 +4013,16 @@ def test_panel_round_channels_are_all_accounted_for():
     assert verifier_fold <= restorable, (
         "verifier-fold disclosure channels must be restorable: %s"
         % sorted(verifier_fold - restorable))
+    assert rule_fold <= restorable, (
+        "rulings/audit-fold channels must be restorable: %s" % sorted(rule_fold - restorable))
     assert judgment_fold <= restorable, (
         "judgment-fold disclosure channels must be restorable: %s"
         % sorted(judgment_fold - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
-    all_recorded = (recorded | fold_provenance | judgment_fold | submit_disclosure | order_emission
+    all_recorded = (recorded | fold_provenance | judgment_fold | rule_fold | submit_disclosure
+                    | order_emission
                     | verifier_recorded | verifier_appended | verifier_fold)
     assert all_recorded == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
