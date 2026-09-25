@@ -2889,6 +2889,7 @@ def _build_receipt_rounds(state, form):
             "auditProvenance": rec.get("auditProvenance"),
             "scopedFinder": rec.get("scopedFinder"),
             "headDiffSource": rec.get("headDiffSource"),
+            "reviewedDiffSource": rec.get("reviewedDiffSource"),
             "unverified": rec.get("unverified"),
             "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
             "compileDrops": rec.get("compileDrops"),

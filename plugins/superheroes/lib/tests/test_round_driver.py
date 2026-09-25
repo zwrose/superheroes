@@ -1349,8 +1349,11 @@ def test_fixer_head_diff_path_form_end_to_end(tmp_path):
 
 def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
     """An unreadable `headDiffPath` (no inline diff) is an UNKNOWN surface, not an empty one: the
-    delta round runs a FULL reviewer-deep panel (unknown→run-everything), never a silent scoped skip
-    over nothing. The source is journaled `unknown` and an `unknown-surface` decision is recorded."""
+    delta round schedules a FULL reviewer-deep panel (unknown→run-everything), never a silent scoped
+    skip over nothing. The source is journaled `unknown` and an `unknown-surface` decision is
+    recorded. This session pins no base, so no diff at the post-fix head is derivable: the panel
+    would review the pre-fix diff, and the loop parks `reviewed-diff-stale` instead (#1419; the
+    derivable case is `test_layer4d_stale_diff_1419`)."""
     d = str(tmp_path)
     missing = str(tmp_path / "does-not-exist.txt")
     seen = {"panel_r2": False, "scoped": False}
@@ -1381,13 +1384,14 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
         return {}
 
     payload = _drive_cli(d, _cfg(), respond)
-    assert seen["panel_r2"] is True, "an unreadable head diff must run a full panel, not a scoped scan"
+    assert seen["panel_r2"] is False, "a panel must never review the pre-fix diff"
     assert seen["scoped"] is False
-    assert payload["verdict"] == "converged"
+    assert payload["verdict"] == "cannot-certify"
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert any(r.get("headDiffSource") == "unknown" for r in receipt["rounds"]), receipt["rounds"]
     assert any(dc["kind"] == "unknown-surface" for dc in receipt["decisions"]), receipt["decisions"]
+    assert any(RD.REVIEWED_DIFF_STALE in str(dc.get("detail")) for dc in receipt["decisions"])
 
 
 def test_fixer_inline_head_diff_wins_over_path(tmp_path):

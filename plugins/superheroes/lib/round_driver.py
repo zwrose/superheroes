@@ -3848,6 +3848,64 @@ def _resolve_head_diff(artifact):
     return None, "unknown"
 
 
+REVIEWED_DIFF_SOURCE_GIT = "git-derived"
+REVIEWED_DIFF_STALE = "reviewed-diff-stale"
+_GIT_DIFF_FORMAT_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
+
+
+def _derive_head_diff_from_git(session_dir, state):
+    """The post-fix head diff derived from git when the fixer supplied none: `git diff
+    <baseRef>...<fix-fold head>` in the session repository, byte-mode. Admitted only as strict UTF-8
+    text that opens with a `diff --git ` header; an empty diff, a failed or undecodable run, or a
+    session without a pinned base or a session directory returns None — never a partial diff."""
+    if not session_dir:
+        return None
+    base = (state.get("config") or {}).get("baseRef")
+    if not (isinstance(base, str) and _FULL_HEX_ID.fullmatch(base)):
+        return None
+    head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+    repo_root = _resolve_repo_root(session_dir, state)
+    if head_err or not head or not repo_root:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo_root, "diff"] + list(_GIT_DIFF_FORMAT_FLAGS)
+            + ["%s...%s" % (base, head)],
+            capture_output=True, text=False, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        text = proc.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return text if text.startswith("diff --git ") else None
+
+
+def _advance_reviewed_diff(state):
+    """The one writer that moves ``reviewedDiff`` to the post-fix head diff. It advances only on a
+    known, non-empty head diff and clears the stale marker when it does; otherwise the reviewed
+    diff is left as it was and the stale marker (set at fixer fold) keeps any panel from reviewing
+    it."""
+    head = state.get("headDiff")
+    if isinstance(head, str) and head:
+        state["reviewedDiff"] = head
+        state.pop("_reviewedDiffStale", None)
+
+
+def _enter_panel(state):
+    """The one entry to a full panel after round 1: a panel is never dispatched over a diff older
+    than the head it certifies. A stale reviewed diff parks with the named token instead."""
+    if state.get("_reviewedDiffStale"):
+        _park_cannot_certify(
+            state, "%s: the head moved and no diff at the post-fix head is known (none supplied, "
+                   "and none derivable from git) — a panel would review the pre-fix diff"
+            % REVIEWED_DIFF_STALE)
+        return
+    state["step"] = P_PANEL
+
+
 def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
     the driver sequences + records. The post-fix head diff rides the artifact (git, per the
@@ -3866,9 +3924,16 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     else:
         state["fixBatch"] = (state.get("fixBatch") or []) + list(slice_)
     head, head_source = _resolve_head_diff(artifact)
+    if head is None:
+        head = _derive_head_diff_from_git(session_dir, state)
+        if head is not None:
+            _record_round(state, "reviewedDiffSource", REVIEWED_DIFF_SOURCE_GIT)
     state["headDiff"] = head
     state["_headDiffSource"] = head_source
     state["_headDiffUnknown"] = head_source == "unknown"
+    # The head moved and no diff at that head is known: the reviewed diff is now older than the
+    # head, and no panel may review it (`_enter_panel`). A later known head clears the marker.
+    state["_reviewedDiffStale"] = head is None
     _record_round(state, "headDiffSource", head_source)
     derive = changed_subjects_seam or derive_changed_subjects
     state["_changedSubjects"] = derive(
@@ -4263,13 +4328,13 @@ def _fold_verify(state, config, artifact, *, resolution):
         _after_audits(state, config)
         return
     if then == VERIFY_THEN_PANEL:
-        state["step"] = P_PANEL
+        _enter_panel(state)
         return
     # VERIFY_THEN_CEILING, and the legacy position (a gate pending with no flag): the round advance
     # is here — at the ceiling it parks `round-ceiling`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
-    state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
+    _advance_reviewed_diff(state)
     _enter_delta_round(state, config)
 
 
@@ -4315,20 +4380,25 @@ def _enter_post_fix(state, config, session_dir=None):
         return
     if not _advance_round(state, config, reason="post-fix-advance"):
         return
-    state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
+    _advance_reviewed_diff(state)
     state["_postFixEntry"] = True
     _enter_delta_round(state, config)
 
 
 # ---- delta rounds (2+) ----------------------------------------------------------------------
 
-def _schedule_full_panel_unknown(state, detail):
+def _schedule_full_panel_unknown(state, detail, post_fix=False):
     """The fail-closed unknown→run-everything rule: an unresolvable delta surface schedules a FULL
-    reviewer-deep panel, never a silently-scoped (or silently-skipped) round."""
+    reviewer-deep panel, never a silently-scoped (or silently-skipped) round. A post-fix entry runs
+    the verify gate first and enters the panel after it; either way the entry is `_enter_panel`."""
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
     state["fullPanelRan"] = False
-    state["step"] = P_PANEL
+    if post_fix:
+        state["_verifyThen"] = VERIFY_THEN_PANEL
+        state["step"] = P_VERIFY
+        return
+    _enter_panel(state)
 
 
 def _enter_delta_round(state, config):
@@ -4343,18 +4413,12 @@ def _enter_delta_round(state, config):
     if state.pop("_headDiffUnknown", False):
         _schedule_full_panel_unknown(
             state, "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
-            % state.get("_headDiffSource"))
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+            % state.get("_headDiffSource"), post_fix)
         return
     baseline = state.get("deltaBaseline")
     if not isinstance(baseline, dict):
         cause = "no baseline record" if baseline is None else "baseline is not a record"
-        _schedule_full_panel_unknown(state, "%s: %s" % (DELTA_BASELINE_ABSENT, cause))
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+        _schedule_full_panel_unknown(state, "%s: %s" % (DELTA_BASELINE_ABSENT, cause), post_fix)
         return
     stamped_round = baseline.get("round")
     current_round = state["round"]
@@ -4362,26 +4426,18 @@ def _enter_delta_round(state, config):
             or stamped_round != current_round):
         _schedule_full_panel_unknown(
             state, "%s: baseline stamped round %s, current round %s"
-            % (DELTA_BASELINE_ABSENT, stamped_round, current_round))
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+            % (DELTA_BASELINE_ABSENT, stamped_round, current_round), post_fix)
         return
     reviewed = baseline.get("diff")
     if not isinstance(reviewed, str):
         _schedule_full_panel_unknown(
-            state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT)
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+            state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT, post_fix)
         return
     split = delta_surface.split_fix_surface(
         reviewed, state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
-        _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel")
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+        _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel",
+                                     post_fix)
         return
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
@@ -4733,8 +4789,8 @@ def _settle_delta_converged(state, config):
             return
         state["fullPanelRan"] = False
         _record_round(state, "roundKind", "confirmation")
-        state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
-        state["step"] = P_PANEL
+        _advance_reviewed_diff(state)
+        _enter_panel(state)
         return
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
@@ -5226,6 +5282,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "auditProvenance": rec.get("auditProvenance"),
               "scopedFinder": rec.get("scopedFinder"),
               "headDiffSource": rec.get("headDiffSource"),
+              "reviewedDiffSource": rec.get("reviewedDiffSource"),
               "unverified": rec.get("unverified"),
               "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
               "compileDrops": rec.get("compileDrops"),
