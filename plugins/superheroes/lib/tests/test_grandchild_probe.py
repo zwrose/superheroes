@@ -77,6 +77,23 @@ def test_live_process_reads_alive_without_proc(no_proc):
         proc.wait()
 
 
+def test_pid_reaped_between_kill_and_ps_reads_gone(no_proc, monkeypatch):
+    # axis: ps could not say because the pid vanished after kill(pid, 0) — a second kill settles it gone
+    proc = _seed_zombie()
+    try:
+        _await_zombie(proc)
+
+        def _reap_then_unknown(pid):
+            proc.wait()
+            return None
+
+        monkeypatch.setattr(gp, "_ps_process_state", _reap_then_unknown)
+        state = gp._observed_process_state(proc.pid)
+        assert state is None, f"a pid gone by the time ps ran must read gone; got {state!r}"
+    finally:
+        proc.wait()
+
+
 def test_unknown_ps_state_reads_alive_even_for_a_zombie(no_proc, monkeypatch):
     # axis: unknown ps state is fail-closed alive, never gone
     proc = _seed_zombie()

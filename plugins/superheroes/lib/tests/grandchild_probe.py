@@ -22,7 +22,8 @@ _PROC_ROOT = "/proc"
 # costs nothing, and a hang regression still goes red — it just takes this long. A short budget
 # instead races process startup: macOS assesses a freshly written executable on its first exec and
 # those assessments queue system-wide, so a two-line script took up to ~6 s to finish with 36
-# parallel workers (0.17 s serially). Timeout-direction tests keep their own short budgets.
+# parallel workers (0.17 s serially). Tests adopt it once their own budget has been measured
+# racing startup; timeout-direction tests keep their own short budgets.
 COMPLETION_BUDGET_SECONDS = 120
 
 GrandchildProbe = namedtuple(
@@ -51,7 +52,7 @@ def _try_read_grandchild_pid(pid_file):
 
 
 def _ps_process_state(pid):
-    """Return ``ps`` state letters for ``pid``, or ``None`` when ``ps`` cannot say."""
+    """Return ``ps`` state letters for ``pid``, or ``None`` when ``ps`` cannot say; the zombie reading mirrors engine_dispatch._process_alive."""
     try:
         out = subprocess.run(
             ["ps", "-p", str(pid), "-o", "state="],
@@ -103,10 +104,19 @@ def _observed_process_state(pid):
         return None
     except PermissionError:
         return "alive (kill(pid, 0) raised PermissionError; /proc unavailable)"
-    # kill(pid, 0) succeeds for a zombie; ps settles it; unknown state reads alive.
+    # kill(pid, 0) succeeds for a zombie; ps settles it (mirrors engine_dispatch._process_alive).
     ps_state = _ps_process_state(pid)
-    if ps_state is not None and ps_state.startswith(("Z", "z")):
+    if ps_state is not None and ps_state.startswith("Z"):
         return None
+    if ps_state is None:
+        # ps could not say: the pid may have been reaped after kill(pid, 0) succeeded. Only a
+        # second kill(pid, 0) that finds no such process reads gone; anything else stays alive.
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return None
+        except PermissionError:
+            pass
     return f"alive (kill(pid, 0) succeeded; /proc unavailable; ps state {ps_state!r})"
 
 
