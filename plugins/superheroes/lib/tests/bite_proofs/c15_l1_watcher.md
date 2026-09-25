@@ -11,7 +11,7 @@
 | E3 | `run` never sleeps | `test_run_is_one_shot_against_quiet_live_lane` | proven |
 | E4 | PR baseline advances on fire | `test_loop_two_distinct_pr_set_changes_passed_over` | proven |
 | E5 | lock released on normal exit | `test_loop_lock_released_allows_sequential_loops` | proven |
-| E6 | non-regular lock file refused | `test_loop_lock_unavailable_non_regular_lock_file` | Unprovable as placed (darwin: fifo lock path fails at `open` before `fstat`; removing `S_ISREG` does not change outcome) |
+| E6 | non-regular lock file refused | `test_loop_lock_unavailable_non_regular_lock_file` | proven |
 
 ---
 
@@ -111,4 +111,20 @@ EXIT=1
 
 **neutralization:** remove `S_ISREG` refusal block in `_acquire_loop_lock`.
 
-**Disclosure:** `Unprovable as placed` on darwin — planted FIFO is rejected at `open` before `fstat`, so the detector stays green with and without the guard (`bp-e6-red.txt` / `bp-e6-green.txt` both `EXIT=0`).
+**fixture seam:** test plants a regular lock file (open succeeds everywhere), then `monkeypatch` on `wave_watch.os.fstat` reports `S_IFIFO` for that inode so the guard is exercised without OS-specific `open` refusal; `flock` is wrapped to assert it is not reached when the guard holds.
+
+**raw red** (tail; full: `/private/tmp/c15-wo-a/bp-e6-red.txt`):
+```
+>       assert flock_calls == []
+E       AssertionError: assert [(3, 6)] == []
+FAILED ...::test_loop_lock_unavailable_non_regular_lock_file
+EXIT=1
+```
+
+**restore:** reinstate `S_ISREG` refusal block.
+
+**raw green** (tail; full: `/private/tmp/c15-wo-a/bp-e6-green.txt`):
+```
+1 passed in 0.34s
+EXIT=0
+```
