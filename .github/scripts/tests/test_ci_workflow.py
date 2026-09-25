@@ -37,6 +37,29 @@ def _run_without_comments(run: str) -> str:
     )
 
 
+def _expand_requirements(run_text: str, repo_root: str) -> str:
+    """Run text plus contents of every requirements file named via -r or --requirement."""
+    expanded = run_text
+    tokens = run_text.split()
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in ("-r", "--requirement") and i + 1 < len(tokens):
+            req_rel = tokens[i + 1]
+            req_path = (
+                req_rel
+                if os.path.isabs(req_rel)
+                else os.path.join(repo_root, req_rel)
+            )
+            if not os.path.isfile(req_path):
+                raise AssertionError(f"requirements file does not exist: {req_rel}")
+            with open(req_path, encoding="utf-8") as fh:
+                expanded += "\n" + fh.read()
+            i += 2
+        else:
+            i += 1
+    return expanded
+
+
 def _validate_step_run(data, step_name_substring: str) -> str:
     steps = data["jobs"]["validate"]["steps"]
     step = next(s for s in steps if step_name_substring in (s.get("name") or ""))
@@ -187,8 +210,11 @@ def test_release_bump_gate_sets_gh_token():
 def test_validate_installs_all_coupling_collectors():
     # Axis: silent-skip return — collectors must be installed so real-seam tests cannot degrade.
     data = _ci_data()
-    python_deps_run = _validate_step_run(
-        data, "Install Python dependencies (validators + tests + import-linter)"
+    python_deps_run = _expand_requirements(
+        _validate_step_run(
+            data, "Install Python dependencies (validators + tests + import-linter)"
+        ),
+        _ROOT,
     )
     collectors_run = _validate_step_run(
         data, "Install coupling collectors (ungate coupling lens real-seam tests)"
@@ -201,8 +227,11 @@ def test_validate_installs_all_coupling_collectors():
 def test_ci_collector_pins_match_guardian_adapters():
     # Axis: ci.yml install majors must track guardian_coupling_adapters pins (CONVENTIONS §11.3).
     data = _ci_data()
-    python_deps_run = _validate_step_run(
-        data, "Install Python dependencies (validators + tests + import-linter)"
+    python_deps_run = _expand_requirements(
+        _validate_step_run(
+            data, "Install Python dependencies (validators + tests + import-linter)"
+        ),
+        _ROOT,
     )
     collectors_run = _validate_step_run(
         data, "Install coupling collectors (ungate coupling lens real-seam tests)"
@@ -210,6 +239,17 @@ def test_ci_collector_pins_match_guardian_adapters():
     assert f"dependency-cruiser@{adapters.DEPCRUISE_PIN}" in collectors_run
     assert f"typescript@{adapters.TYPESCRIPT_PIN}" in collectors_run
     assert f"import-linter>={adapters.IMPORT_LINTER_PIN}," in python_deps_run
+
+
+def test_expand_requirements_raises_when_named_file_missing(tmp_path):
+    # Axis: missing -r/--requirement path fails closed instead of silently skipping.
+    run = "uv pip install --system -r missing-requirements.txt"
+    try:
+        _expand_requirements(run, str(tmp_path))
+    except AssertionError as exc:
+        assert "missing-requirements.txt" in str(exc)
+    else:
+        raise AssertionError("expected AssertionError for missing requirements file")
 
 
 def test_release_please_still_runs_check_release_bump():
