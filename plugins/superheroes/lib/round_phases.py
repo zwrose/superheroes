@@ -3,15 +3,13 @@
 layers (#723).
 
 Single home for the `P_*` action strings so `round_driver`, `round_adapters`, and
-`round_records` agree without import cycles."""
-import round_panel_contract
-
+`round_records` agree without import cycles. Stdlib-only."""
 # Phases (the `action` a `next` emits; each is fulfilled by exactly one orchestrator dispatch).
 P_PANEL = "dispatch-panel"
 P_VERIFIERS = "dispatch-verifiers"
 P_SYNTHESIS = "dispatch-synthesis"
 P_AUDITS = "dispatch-audits"
-P_SCOPED = round_panel_contract.P_SCOPED_FINDER_PHASE
+P_SCOPED = "dispatch-scoped-finder"
 P_GAPSWEEP = "dispatch-gap-sweep"
 P_VERIFY = "run-verify"
 P_FIXER = "dispatch-fixer"
@@ -29,7 +27,8 @@ ALL_PHASES = (
 
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
 # provenance) — deliberately absent here; test_dispatch_tables pins the per-leg subset.
-DIMENSIONS = list(round_panel_contract.DEFAULT_PANEL_DIMENSIONS)
+DIMENSIONS = ["architecture-reviewer", "code-reviewer", "security-reviewer",
+              "test-reviewer", "premortem-reviewer"]
 
 # The three stall-menu choices (never "judge the dispute yourself"). accept-the-risk is offerable
 # ONLY for a CONFIRMED-with-receipt stalled audit target; the menu payload gates it per-run.
@@ -57,7 +56,11 @@ VERDICTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED")
 
 def panel_dimensions(config):
     """Configured panel dimensions, or the default DIMENSIONS list."""
-    return round_panel_contract.panel_dimensions_from_config(config)
+    dims = config.get("dimensions") if isinstance(config, dict) else None
+    if isinstance(dims, (list, tuple)):
+        strings = [d for d in dims if isinstance(d, str)]
+        return strings if strings else list(DIMENSIONS)
+    return list(DIMENSIONS)
 
 
 # Verify submit-shape guard — lives here so `round_adapters` never imports `round_driver`.

@@ -101,3 +101,10 @@ def test_scoped_finder_phase_matches_round_panel_contract():
 
 def test_default_panel_dimensions_match_round_panel_contract():
     assert tuple(round_phases.DIMENSIONS) == round_panel_contract.DEFAULT_PANEL_DIMENSIONS
+
+
+def test_panel_dimensions_match_round_panel_contract():
+    for cfg in ({}, {"dimensions": ["code-reviewer"]}, {"dimensions": []}):
+        assert round_phases.panel_dimensions(cfg) == round_panel_contract.panel_dimensions_from_config(
+            cfg
+        )
