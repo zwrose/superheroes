@@ -14,6 +14,7 @@ Skills in this plugin speak in host-neutral **actions**. On Claude Code they res
 | Multiple parallel dispatches | multiple `Agent` calls in one message |
 | Track tasks ("todo", "mark done") | `TodoWrite` |
 | Invoke another skill | the `Skill` tool |
+| Message another live session by name, and receive its reply | `ListAgents` finds the name, `SendMessage` sends; a reply is delivered at your next tool call, so wait with tool calls, never a turn end |
 
 ## Dispatch Reliability
 

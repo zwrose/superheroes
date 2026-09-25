@@ -63,7 +63,7 @@ charter states today.
 
 **Light lane — shape for the builder**
 
-- **No build brief and no pre-code brief check** (§4–§5 are full-lane only).
+- **No build brief and no pre-code brief check** (§4–§5 are full-lane only, except §4's size step).
 - **You type the implementation** in this session rather than dispatching work orders (§7).
 - **Review before handback is one independent cross-vendor reviewer** — not the full `review-code`
   panel loop — and that reviewer must be **outside the maker family** (you typed the change, so you
@@ -99,22 +99,21 @@ never a self-declared downgrade):
 
 - The orchestrator **measures the working diff's non-test lines (additions plus deletions outside `tests/`) as it types**
   and **escalates when that count crosses ~400** — a flat measured line, not an estimate (basis: `review-discipline.md` § Size).
+  The **size step** (§4) runs in this lane too.
 - It **spreads into surfaces the lane call did not anticipate**.
 - It turns out to **touch a quiet-failure path**.
 - It turns out to need something **irreversible or expensive** — a migration, a new dependency, an
   auth or data-model change, a new external contract. **These go to the owner before they are built,
   in any lane.**
 
-**Separately from escalation**, the two absolute bars of `review-discipline.md` § Size apply in this lane as in
-full, on their own basis (non-test lines added or modified; deletions, regenerated artifacts, tests and records
-excluded): at **300** report the count and a proposed cut on the issue and continue; at **600** stop and act on the
-advisor's recorded ruling — continue, split or park. Neither bar is an escalation trigger.
+**Separately from escalation**, the size tripwire and the two absolute bars of `review-discipline.md` § Size
+apply in this lane as in full; none of them is an escalation trigger.
 
 **Escalation bridge (light → full).** When you escalate, **write the brief now** and **disclose
 that it was written late**, naming the trigger. Record already-typed work in the dispatch-provenance
 section as **orchestrator-typed** (your maker family). Then run the **full review loop** (brief
 check if not yet done, delegation as needed, full `review-code`) before handback — prose disclosure,
-not a new gate.
+not a new gate. The size step keeps the build's starting estimate (`review-discipline.md` § Size).
 
 **Light lane — implementer dispatch.** **Any implementer dispatch originating in the light lane is
 an escalation to the full lane** (escalation bridge above) — review fixes and pilot-discovered bugs
@@ -131,7 +130,7 @@ A routed issue carries exactly one of the advisor's four routes — `discovery`,
 
 - **`build-ready`** → the owner starting the issue is your go-ahead; no discovery needed — set up the
   workspace (§2), run the preflight (§3); **in the full lane** write the brief (§4); **in the light
-  lane** skip §4–§5 and build per Build lanes (you type the implementation).
+  lane** skip §4–§5 except §4's size step, and build per Build lanes (you type the implementation).
 - **`discovery`** → **route it back and stop.** You do not elicit requirements in a build session:
   discovery ends in an owner-approved spec, and that spec is what a build starts from. Report on the
   issue that it reached a builder still needing discovery, and hand it to the advisor —
@@ -365,7 +364,7 @@ and each of the three is established from the **remote**, never from a local ass
   gate selects the whole stack below it.
 - **The register check reads main's copy, and the handback says which copy it read** — a layer's
   worktree carries whatever the layers below wrote ([register-check.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md)).
-- **Size is reported at 300 and the call is handed up at 600** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md) § Review bars and recorded residuals) — a layer growing past the bars is split into another layer rather than
+- **The size bars apply** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md) § Size) — a layer that grows into a second surface is split into another layer rather than
   allowed to swallow two surfaces.
 - **Never hand-rebase and never force-push a layer inside a lane** — both move a head other layers and the
   review are pinned to; take in a moved base or a moved lower layer **by merge** — a **local `--no-ff`
@@ -429,11 +428,12 @@ board wiring) and the fail-loud go/no-go. Don't restate it here.
 
 ## 4. Write the build brief (before code)
 
-**Full lane only** — the light lane skips this section (Build lanes).
+**Full lane only** — the light lane skips this section (Build lanes), except the **size step** below,
+which runs in both lanes.
 
 ~20–40 lines, **posted on the issue** and carried into the PR. Six items, in order:
 
-1. **Shape** — what gets built where; expected diff size as THREE numbers — non-test changed lines (additions plus deletions outside `tests/`; the input to the scope check below), test-code lines (derived from the DoD: one fixture per row, one bite-proof per guarded element, one census per invariant), and **record lines** — the committed prose receipts the build owes, chiefly the bite-proof records under `lib/tests/bite_proofs/`. Budget the third bucket separately because it is receipts, not test code: the two-number form had nowhere to put it, so PR #1129 landed **648 unbudgeted record lines** while both of its estimated buckets came in on target. The scope check and its 2× tripwire below read the **non-test** number only — record lines never enlarge the size you may ship without disclosure.
+1. **Shape** — what gets built where; expected diff size as THREE numbers — non-test changed lines (counted as `review-discipline.md` § Size defines them; the input to the scope check below), test-code lines (derived from the DoD: one fixture per row, one bite-proof per guarded element, one census per invariant), and **record lines** — the committed prose receipts the build owes, chiefly the bite-proof records under `lib/tests/bite_proofs/`. Budget the third bucket separately because it is receipts, not test code: the two-number form had nowhere to put it, so PR #1129 landed **648 unbudgeted record lines** while both of its estimated buckets came in on target. The scope check and the size step below read the **non-test** number only — record lines never enlarge the size you may ship without disclosure.
 2. **Contracts & state** — new/changed interfaces and data shapes; where state lives and who mutates it.
 3. **Reuse plan** — what existing code you build on; what you checked for before writing new.
 4. **Hard seams** — the 2–3 riskiest spots and how each is handled; conscious deferrals stated.
@@ -445,12 +445,10 @@ visible, never silent. **Scope check:** if the shape implies an oversized or mul
 propose a split before building; an irreducible big diff ships with an explicit scope disclosure.
 When the work is a family of parallel siblings, **one concern per PR** — one lens per PR for
 lens-family work — and any **shared shell or contract seam lands first, as its own small PR**,
-before the siblings that build on it. **Crossing twice the size your brief estimated in non-test changed
-lines (additions plus deletions outside `tests/`) is itself the tripwire** — disclose it mid-build and offer a split,
-rather than letting the overrun surface at handback. Two absolute bars ride beside it, counted over non-test lines
-added or modified (deletions, regenerated artifacts, tests and records excluded): at **300**, report the count and a
-proposed cut on the issue and continue; at **600**, stop and hand the call to the advisor, who rules continue, split or park — never yours
-alone and never the owner's — and act on the advisor's recorded ruling (`review-discipline.md` § Size). **Gates and enforcement:** any work order that
+before the siblings that build on it. **The size step, in both lanes:** carry out the
+builder's part of `review-discipline.md` § Size — the count at each commit, the message to the advisor
+at the tripwire, the parks — waiting in-turn as the host tool map says, and record the outcome in the
+PR's **size tripwire** row (§11). **Gates and enforcement:** any work order that
 adds a **gate, hook, or enforcement mechanism** names, in the brief before code, the ratified
 precondition that unlocks it and the evidence that it is met — in every project. When the project
 being built is the superheroes source repository itself, cite the entry and unlock condition in the
@@ -1132,7 +1130,13 @@ against the registry allowlist (#600), so the advisor can vet what ran without y
 **Follow-ups for the advisor** section — out-of-scope discoveries, deferred work, or issues you noticed
 but cannot file yourself (you never wire the board). List them plainly under that exact heading (write
 **None** when there are none) so the advisor can turn them into issues and the advisor's triage
-backstop can grep the section. The PR body also carries a **DoD disposition table** (the
+backstop can grep the section. For both lanes the build record also carries a **size tripwire** row,
+filled by §4's size step: `not crossed (N of estimate M)`; `crossed at <commit>; messaged <time>;
+advisor ruled <split|continue|park> (<issue comment link>)`; `crossed at <commit>; messaged <time>;
+parked, no reply (<issue comment link>)`; `crossed at <commit>; messaging
+unavailable on this host; parked (<issue comment link>)`; `crossed at <commit>; disclosed to the
+owner in session`; or, when that commit also crossed 600, `crossed at <commit>; disclosed to the owner
+in session; parked at 600 (<issue comment link>)`. The PR body also carries a **DoD disposition table** (the
 `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each
 **done** (with an evidence pointer) or **deferred** (with a filed issue and a one-line reason). This is
 distinct from the review dispositions table above (that grades review findings; this grades every spec'd
