@@ -241,7 +241,9 @@ checked against it by `lib/tests/test_ssot_drift.py` per CONVENTIONS §11.2.
 **Child filing (showrunner duty 2).** When the advisor files a **register-consuming child** — an
 epic child of a package that has a register, or a single-issue child standing in for one under
 FR-36 — run the check against the body **before filing**, whether or not the body contains a
-quoted block; a body with zero quoted blocks is exactly the case the check is there to fail.
+quoted block; a body with zero quoted blocks is exactly the case the check is there to fail. For a
+stack layer, the child token and body are the feature issue's ([Each layer is a
+sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)).
 Where applicability cannot be derived from the issue alone, the route names the register and
 child token at routing for the builder to pass. On `fail`, fix the body — do not file a drifted
 quote. On `pass`, record the check's own output in the filing note — the `result` line, or `pass`
@@ -256,7 +258,9 @@ the child token is recognized, exactly like `fail`. See the showrunner charter's
 for the filing obligation.
 
 **Child build intake (workhorse §1).** When the routed issue is a **register-consuming child**,
-run the check at intake before the brief, whether or not the body contains a quoted block. On
+run the check at intake before the brief, whether or not the body contains a quoted block. For a
+stack layer, the child token and body are the feature issue's ([Each layer is a
+sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)). On
 `fail`, **park** — the quoted text is the contract the build is graded on, so a drifted quote is
 not a buildable surface. On `pass`, record the check's own output in the intake note — the
 `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When

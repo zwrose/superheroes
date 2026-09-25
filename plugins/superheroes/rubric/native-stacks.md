@@ -23,8 +23,44 @@ the branch below, which is what makes each layer reviewable on its own.
 ## What a layer is
 
 A [layer](glossary.md#layer) is one pull request in a stack: one position, one head branch, with its
-base set to the branch of the layer below (or the stack base, at the bottom). The lane lifecycle —
+base set to the branch of the layer below (or the stack base, at the bottom). Each layer also has
+its own sub-issue; see [Each layer is a sub-issue](#each-layer-is-a-sub-issue). The lane lifecycle —
 how a builder branches, links, and hands one back — lives in the workhorse charter §2.
+
+## Each layer is a sub-issue
+
+1. **Filing.** Each planned layer is filed as a GitHub sub-issue of the feature issue it breaks
+   down, linked natively (`gh issue create --parent <feature>`, or `gh issue edit <feature>
+   --add-sub-issue <layer>` for an existing issue). It is filed, and fully wired, when the layer is
+   planned. Linking does not copy the parent's wiring, so set the layer's milestone, project, and
+   labels explicitly to match the parent's. Each layer issue carries its own Anchor, What, and DoD
+   (the [issue contract](../skills/showrunner/reference/issue-contract.md)). New scope that a vet or
+   tripwire adds to the feature joins as a new layer sub-issue — see [How a stack
+   merges](#how-a-stack-merges).
+2. **The order's home.** A layer's build order lives at the top of its own sub-issue's body. The
+   feature issue carries the stack's plan and state, not each layer's order.
+3. **Register-consuming layers.** Contract-register entries stay quoted on the feature issue. A
+   layer's register check runs `--child <the feature issue's child token>` against the feature
+   issue's body, not the layer's body, and the layer's body says so. See
+   [register-check.md](../skills/showrunner/reference/register-check.md).
+4. **Parallel layers.** Two layers of one stack may build at the same time when their surfaces are
+   disjoint, or when the upper layer's lane owns bringing the lower layer forward: it merges the
+   lower layer's branch into its own with `--no-ff` and never rebases ([How a stack stays
+   current](#how-a-stack-stays-current)). The lower layer's lane never writes the upper layer's
+   branch. Otherwise, layers build in order, bottom-up. **Launch path:** the launcher's layer gate
+   (`base-not-layer-head`, above) reads stack membership, and a stack does not exist until its second
+   pull request is linked. So an upper layer launched while no stack exists yet carries no
+   `stack`/`layerPosition` premise. It branches from the lower layer's pushed head, which its order
+   pins, and it links the stack at handback (workhorse charter, Building a layer of a stack). Once
+   the stack exists, later layers carry the gated premise.
+5. **Unchanged.** The stack is still the unit of merge: one `gh stack merge`, only when every
+   planned layer is vetted ([How a stack merges](#how-a-stack-merges)). The launcher's refusal of a
+   second live launch for one issue stays as it is. It is what lets layers run in parallel, since
+   each layer is its own issue.
+6. **Closure.** Each layer's pull request names its own sub-issue with a non-closing verb ("part
+   of", "addresses") until the stack merges. When the stack merges, the feature issue closes citing
+   the stack's merge receipt, and each layer sub-issue is closed with it, explicitly. Do not rely
+   on GitHub closing sub-issues when the parent closes.
 
 ## How a stack comes to exist
 

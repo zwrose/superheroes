@@ -336,6 +336,10 @@ Every multi-PR child of a superheroes project is a [native stack](${CLAUDE_PLUGI
 A layer's branch, its PR base, and its stack membership all name the **layer below**,
 and each of the three is established from the **remote**, never from a local assumption.
 
+- **The layer's order and PR title line** — the order lives at the top of the layer's own sub-issue;
+  the pull request's first line names that sub-issue with a non-closing verb until the stack merges
+  ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § Each layer is
+  a sub-issue; non-closing verb rule in §11).
 - **Branch from the layer below's head** and set the **PR base to that branch** — the bottom layer
   branches from and targets the stack's base (normally `main`).
 - **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests, so
