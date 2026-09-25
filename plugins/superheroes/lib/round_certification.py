@@ -790,23 +790,6 @@ def _audit_admitted_dispatch_result(session_dir, journal, event, certified_head,
     return dict(payload), env
 
 
-def _coerce_line_for_new_issue(value):
-    """Mirrors round_driver._coerce_line."""
-    if isinstance(value, bool):
-        return False, value
-    if isinstance(value, int):
-        return True, value
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped and stripped.isascii() and stripped.isdecimal():
-            try:
-                return True, int(stripped)
-            except ValueError:
-                return False, value
-        return False, value
-    return False, value
-
-
 def _new_issues_dispositioned(state, fold_id, fold_round, new_issues):
     """True when every new issue raised by fold_id's discharged-but-new-issue fold is dispositioned."""
     if not isinstance(fold_id, str) or not fold_id:
@@ -839,6 +822,8 @@ def _new_issues_dispositioned(state, fold_id, fold_round, new_issues):
             continue
         ledger_index[key] = row
         key_counts[key] = key_counts.get(key, 0) + 1
+    if any(count > 1 for count in key_counts.values()):
+        return False
     for cand in linked:
         copy = dict(cand)
         copy.pop(session_contract.FINDING_KEY_FIELD, None)
@@ -846,7 +831,7 @@ def _new_issues_dispositioned(state, fold_id, fold_round, new_issues):
         file_val = copy.get("file")
         if not isinstance(file_val, str) or not file_val:
             return False
-        ok, line = _coerce_line_for_new_issue(copy.get("line"))
+        ok, line = session_contract.coerce_line(copy.get("line"))
         if not ok:
             return False
         copy["line"] = line

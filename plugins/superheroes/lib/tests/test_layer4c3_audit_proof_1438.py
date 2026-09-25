@@ -478,6 +478,63 @@ def test_e13_disposition_seq_not_after_raise_refuses(tmp_path):
     _assert_new_issue_gap(refusal)
 
 
+@pytest.mark.parametrize("order", ["disposed-first", "undisposed-first"])
+def test_e15_duplicate_merge_representative_both_orders_refuse(tmp_path, order):
+    session_dir = case08_new_issue_audit(tmp_path)
+    state = _load_state(session_dir)
+    fold_id = _fold_id(state)
+    cand = _new_issue_template()
+    member_key = _new_issue_key(cand)
+    rep = {
+        "severity": "Important",
+        "file": "src/rep.py",
+        "line": 99,
+        "title": "representative dup",
+    }
+    rep_key = SC.minted_identity_key(rep)
+    row_disposed = {
+        SC.FINDING_KEY_FIELD: rep_key,
+        "file": rep["file"],
+        "line": rep["line"],
+        "title": rep["title"],
+        "severity": rep["severity"],
+        SC.RAISED_ROUND_FIELD: 2,
+        SC.RAISED_SEQ_FIELD: 2,
+        "disposition": "refuted",
+        SC.DISPOSITION_SEQ_FIELD: 3,
+        "refutedReason": "closed",
+    }
+    row_undisposed = {
+        SC.FINDING_KEY_FIELD: rep_key,
+        "file": rep["file"],
+        "line": rep["line"],
+        "title": rep["title"],
+        "severity": rep["severity"],
+        SC.RAISED_ROUND_FIELD: 2,
+        SC.RAISED_SEQ_FIELD: 2,
+    }
+    member_row = {
+        SC.FINDING_KEY_FIELD: member_key,
+        "file": cand["file"],
+        "line": cand["line"],
+        "title": cand["title"],
+        "severity": cand["severity"],
+        SC.RAISED_ROUND_FIELD: 2,
+        SC.RAISED_SEQ_FIELD: 1,
+        "mergedInto": rep_key,
+    }
+    dup_rows = (
+        [row_disposed, row_undisposed]
+        if order == "disposed-first"
+        else [row_undisposed, row_disposed]
+    )
+    state[SC.DISPOSITION_LEDGER_KEY].extend([member_row, *dup_rows])
+    _save_state(session_dir, state)
+    _mutate_audit_payload(session_dir, fold_id, new_issues=[cand])
+    _, refusal = _certify(session_dir)
+    _assert_new_issue_gap(refusal)
+
+
 @pytest.mark.parametrize("order", ["pass-first", "fail-first"])
 def test_e14_mixed_candidates_both_orders_refuse(tmp_path, order):
     session_dir = case08_new_issue_audit(tmp_path)
