@@ -410,6 +410,71 @@ def _git_env():
     }
 
 
+def test_subprocess_write_vet_checks_argv_stdin_boundary(tmp_path):
+    repo, store = _setup_repo(tmp_path)
+    env = {**os.environ, **_git_env()}
+    write_proc = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            _CORE_MD,
+            "write-vet-checks",
+            "--cwd",
+            repo,
+            "--root",
+            store,
+        ],
+        input=json.dumps(_VALID_CHECKS),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert write_proc.returncode == 0
+    write_out = json.loads(write_proc.stdout)
+    assert write_out["action"] == "written"
+    read_proc = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            _CORE_MD,
+            "vet-checks",
+            "--cwd",
+            repo,
+            "--root",
+            store,
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert read_proc.returncode == 0
+    read_out = json.loads(read_proc.stdout)
+    assert read_out["checks"] == [
+        {"name": "Alpha", "evidence": "ev", "records": "rec"}
+    ]
+    assert read_out["reason"] is None
+    bad_proc = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            _CORE_MD,
+            "write-vet-checks",
+            "--cwd",
+            repo,
+            "--root",
+            store,
+        ],
+        input='{"a": 1}',
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert bad_proc.returncode == 0
+    bad_out = json.loads(bad_proc.stdout)
+    assert bad_out["reason"] == "vet-checks-malformed"
+    assert bad_out["malformed"][0]["reason"] == "vet-checks-not-a-list"
+
+
 def test_cli_write_and_read_vet_checks(tmp_path, monkeypatch):
     repo, store = _setup_repo(tmp_path)
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_VALID_CHECKS)))

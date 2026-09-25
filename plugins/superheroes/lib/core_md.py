@@ -1622,19 +1622,10 @@ def _prose_field_round_trip_ok(orig, new_parsed, owned_field):
 
 
 def _write_json_block_key(cwd, block_key, mapping, *, root=None, not_a_mapping_reason,
-                          round_trip_reason, validate=None):
+                          round_trip_reason, require_mapping=True):
     """Shared lock-guarded writer for a single superheroes-core json block key."""
-    if validate is None:
-        if not isinstance(mapping, dict):
-            return {"action": "refused", "reason": not_a_mapping_reason}
-    else:
-        malformed = validate(mapping)
-        if malformed:
-            return {
-                "action": "refused",
-                "reason": VET_CHECKS_REASON_MALFORMED,
-                "malformed": malformed,
-            }
+    if require_mapping and not isinstance(mapping, dict):
+        return {"action": "refused", "reason": not_a_mapping_reason}
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
         return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
@@ -1865,7 +1856,7 @@ def write_vet_checks(cwd, checks, *, root=None):
         root=root,
         not_a_mapping_reason=VET_CHECKS_REASON_MALFORMED,
         round_trip_reason=VET_CHECKS_REASON_ROUND_TRIP,
-        validate=lambda _value: [],
+        require_mapping=False,
     )
 
 
@@ -2725,14 +2716,6 @@ def main(argv):
                     return 0
                 if checks is None:
                     out = {"action": "refused", "reason": VET_CHECKS_REASON_INPUT_UNPARSEABLE}
-                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
-                    return 0
-                if not isinstance(checks, list):
-                    out = {
-                        "action": "refused",
-                        "reason": VET_CHECKS_REASON_MALFORMED,
-                        "malformed": validate_vet_checks(checks),
-                    }
                     sys.stdout.write(json.dumps(out, indent=2) + "\n")
                     return 0
             out = write_vet_checks(args.cwd, checks, root=args.root)
