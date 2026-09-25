@@ -208,14 +208,21 @@ name. Background mode remains a review-seat mode only (`--claude-mode background
 `gpt-6-astra` is registered as the codex top rung and a valid `reviewer-deep` pin at effort `high`.
 A consumer meets:
 
-- the `registration-probe` role the registration probe dispatches under — today its only cell is
-  Astra (`gpt-6-astra` at `high`), which has passed; it stays for any model registered
+- the `registration-probe` role the registration probe dispatches under — its cell is now
+  `gpt-6-sol` at `high`, which has passed; it stays for any model registered
   probe-pending later;
 - `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
   wave is re-attempted with a different run dir);
 - pin refusal tokens `pin-probe-pending` (for a future probe-pending model), `pin-role-not-eligible`,
-  and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — Terra
-  is refused on `reviewer-deep`, and every codex `pilot` pin is refused);
+  and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — every
+  codex `pilot` pin is refused);
+- `model-retired`, refused for any pin or config naming a retired codex model (`gpt-5.6-terra`)
+  at load, at the configure write, and at dispatch validation;
+- `codex-cli-too-old` and `codex-cli-version-unknown`, refused by the preflight and the
+  composition-liveness check when the installed Codex CLI falls short of the registry's floor for
+  the models the codex defaults use, or when its version can't be parsed;
+- `gpt-5.6-sol`, registered pin-only: never a default, ladder rung, peer, or escalation target, but
+  a valid pin for any codex pin role at that role's own effort;
 - `seat_map compose` flags `--host-model` and `--implementation-engine` and degradations
   `host-model-unknown`, `role-pin-not-live`, `role-pin-not-honorable`;
 - `SUPERHEROES_HOST_MODEL`, exported by the session-start hook from the host payload (empty when

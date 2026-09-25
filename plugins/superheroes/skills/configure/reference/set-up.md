@@ -245,8 +245,8 @@ Follow-up: `/superheroes:configure`.
    Optionally, `enginePreferences.seatPins` holds a per-review-panel-seat pin map (vendor required; model and effort optional per seat).
    An absent block reads as `claude` for every role **except `briefCheck`, which falls open to
    `codex`** (the cross-vendor default — a brief-check on the host model is a disclosed degradation).
-   When Codex is selected and no concrete model pin exists, explain the effective GPT-5.6 defaults.
-   Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
+   When Codex is selected and no concrete model pin exists, explain the effective codex defaults.
+   Codex tier map: haiku=gpt-6-sol, sonnet=gpt-6-sol, opus=gpt-6-sol.
    A `reviewer-deep` Codex pin may also name `gpt-6-astra`; it is valid for `reviewer-deep` only, at effort `high`.
    `max` effort is owner opt-in only (never a default).
 
@@ -270,8 +270,8 @@ Follow-up: `/superheroes:configure`.
    # -> {"engine":E,"ok":false} (denied or no-response bounded by the UFR-5 limit -> falls open to
    #    the host model; tell the owner how to enable, leave the engine not-ready with a retry instruction)
    ```
-   For Codex, this probes the GPT-5.6 Sol capability explicitly as well as the host write grant, so
-   an authenticated CLI that is too old for GPT-5.6 remains not-ready.
+   For Codex, this probes the codex default model (the registry's opus peer) explicitly as well as
+   the host write grant, so a CLI too old for it stays not-ready; the preflight names the upgrade.
    A failed or timed-out test dispatch leaves the engine **not-ready** — builds and mechanical fixes fall
    open to the host model until it works. Never present a not-working engine as ready.
 

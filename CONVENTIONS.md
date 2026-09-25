@@ -626,10 +626,13 @@ threads the role's resolved model into the engine argv as a dispatch fact —
 `lib/model_registry.py` (the vendor registry + role×vendor matrix) decides what
 actually runs; the adapter and `engine_pref` re-derive from it.
 
-Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
-An optional per-role `enginePreferences.codexModels` pin may select one of those
-canonical IDs (plus `gpt-6-astra` for `reviewer-deep` only, at effort `high`); a pinned model runs at the effort
-of its own registry rung, not the role's configured effort. A one-run preflight pin wins over the
+Codex tier map: haiku=gpt-6-sol, sonnet=gpt-6-sol, opus=gpt-6-sol.
+An optional per-role `enginePreferences.codexModels` pin may select `gpt-6-sol`, the
+pin-only `gpt-5.6-sol` (valid only for a role with a codex cell, at that role's own
+effort), or `gpt-6-astra` for `reviewer-deep` only (at effort `high`); a pinned model runs
+at the effort of its own registry rung, not the role's configured effort. A pin to the
+retired `gpt-5.6-terra` is refused by name (`model-retired: gpt-5.6-terra is retired; use
+gpt-6-sol`), never falling back silently. A one-run preflight pin wins over the
 persistent pin, which wins over tier mapping. The provider-specific pin is carried separately from the shared
 tier so a failed Codex dispatch falls directly open to the host model with a valid native
 model — never automatically downgrading to another GPT model. Effort stays
@@ -642,7 +645,7 @@ error at configure/calibration time, named `fable-on-external-engine`, raised by
 `dispatch-vocab` probe (which reads the project's configuration), by `dispatch_selftest.run` when
 a caller supplies that configuration, and by both configure-facing write paths (the tier writer
 and the engine-preference writer), so an invalid combination cannot be saved in the first place; there is **no cross-family
-substitution** (this replaces the old silent `fable→gpt-5.6-sol` remap). Fable's
+substitution**. Fable's
 long-term availability on Max plans removes the reason a graceful degrade ever existed.
 The dispatch-time named refusal (`fable-unrunnable`) **remains as defensive depth** for
 callers that bypass configuration, but is unreachable from a valid configuration.
@@ -658,9 +661,13 @@ When git cannot be run and the repository root is unknown, the accessor reports
 `legacy-profile-unsupported`. A genuinely absent `core.md` (with a known repo root)
 remains a clean create. A gate that treats an unreadable config as "no config"
 **fails open**, which is the failure this closes. The
-GPT-5.6 tier requires a sufficiently
-new Codex CLI; an unavailable model follows the observable fall-open path to
-the host model, never a guessed version gate. Dispatch provenance — the concrete engine,
+registry names a minimum Codex CLI version for the models the codex defaults use; the
+preflight and the composition-liveness check review-code runs before seating a panel
+both run `codex --version` first, and a CLI below that floor is refused by name,
+`codex-cli-too-old`, telling the owner to upgrade the Codex CLI to that version or later
+(an unparseable version is refused `codex-cli-version-unknown`). A cached liveness
+receipt never skips that check, so an older CLI is told at preflight or composition,
+never first inside a review seat. Dispatch provenance — the concrete engine,
 model, and effort actually used — is recorded in the PR body (the Workhorse
 charter's "dispatch provenance" section), not a separate journal.
 
