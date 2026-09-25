@@ -178,12 +178,10 @@ above).
    enum**, name the **union coupling** (parallel lanes each extend the same shared set, so the
    registry/kind-set/enum is only complete once all have landed) in each issue — and name the
    **completeness gate** (the check that fails until the extension is exhaustive) so **every lane
-   after the first** expects it to fire and budgets the integration commit. When a builder messages you mid-build that the diff has crossed **twice its
-   estimate** and proposes a split, **take the split seriously** — that message is the tripwire
-   working, not a builder stalling. **Reply by message, split or continue** (or park, when the same
-   commit crossed the 600 bar) — the builder waits,
-   and parks on the issue after 15 minutes — and record the ruling on the issue for the owner's
-   veto: it is your craft call under the size doctrine (the step is the workhorse charter's size step).
+   after the first** expects it to fire and budgets the integration commit. When a builder messages you mid-build at the size tripwire and proposes a split, **take the
+   split seriously** — that message is the tripwire working, not a builder stalling. **Reply by
+   message** and record the ruling on the issue for the owner's veto; the rulings open to you and the
+   builder's wait live in `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § Size.
    When marking an issue **build-ready**, run the issue-contract check against the issue body
    and **decline the marking** when it reports a refusal — the check is advisory and the
    decision is the advisor's; micro work never reaches this check. Detail:

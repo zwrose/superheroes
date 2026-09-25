@@ -136,7 +136,7 @@ layer that carries two goes round and round on whichever is harder, and the seco
 cost is paid in rounds, not lines.
 
 The size bars still apply, and they are not restated here — see `rubric/review-discipline.md`
-§ *Review bars and recorded residuals* for the numbers, their two different effects, and who
+§ *Size* for the numbers, their two different effects, and who
 rules on each.
 
 The reason beside the rule: an observational read of roughly sixty-five merged pull requests across

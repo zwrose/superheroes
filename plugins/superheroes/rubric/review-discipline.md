@@ -27,13 +27,19 @@ not listed in the table below is the same as the **full** lane.
 | Size (non-test lines — see below) | — | ~100–400 | ~100 or fewer |
 | Typical cost | 33–108 min | ~5 min | ~5 min |
 
+### Size
+
+This section is the one home of the size rule. The charters, the issue contract and the vet receipt
+say only what their own actor does and point here.
+
 **Size counts non-test lines.** Every size figure in this document and in the charters — the
 lane row above, the light lane's measured escalation line, the micro ceiling, and the
-"twice the estimate" scope tripwire (the brief's estimate, or a light order's non-test estimate) — is read over **non-test changed lines**
-(the two absolute bars in the next paragraph are the one exception: they count added or
+tripwire below — is read over **non-test changed lines**
+(the two absolute bars below are the one exception: they count added or
 modified lines only, as stated there):
 additions plus deletions in every file *outside* a `tests/` directory (docs, skill and
-rubric prose, and code all count; test modules and their fixtures do not). Test volume
+rubric prose, and code all count; test modules and their fixtures do not), taken from
+`git diff --numstat` against the build's base. Test volume
 scales with rigour here — bite-proofs, truth tables, censuses, drift tests — and a size
 line that counted it would push a builder toward fewer tests to stay in-lane, which is
 the wrong pressure. Test volume that signals a *design* problem is the third-rework
@@ -41,15 +47,38 @@ tripwire's and the vet's to catch, not the lane line's. Estimates carry both num
 (behaviour + test lines) so the tripwire and the estimate share a basis (owner-ruled
 2026-08-16).
 
-**Two absolute bars stand beside the relative tripwire**, counted over non-test lines **added or
+**The estimate is fixed when the build starts.** The tripwire compares against the non-test estimate
+on record at the start: the brief's for a full build, the order's for a light build. A light build
+that escalates to the full lane keeps its starting estimate; the late brief does not replace it. A
+light order with no estimate is an order gap: before any code, the builder asks the advisor session
+its order names for one, by the same message and the same 15-minute wait as the tripwire below, and
+with no reply it posts on the issue and stops, as a park. A build the owner drives asks the owner in
+the session. The builder never sets its own estimate.
+
+**The tripwire resolves by message.** The builder counts at every commit, in the full and light
+lanes. **Crossing twice the estimate is the tripwire.** At the first commit past 2×, the builder
+messages the advisor session its order names — the count, the estimate, and a proposed split — and
+writes or dispatches no more code until the reply, waiting in-turn as the host tool map says. The
+advisor replies **split or continue** — or **park**, when the same commit also crossed 600 — and
+records the ruling on the issue for the owner's veto; the ruling is the advisor's craft call. With no
+reply within **15 minutes**, or no way on the host to message the advisor, the builder posts the same
+disclosure on the issue and stops, as a park. A build the owner drives, with no advisor named, makes
+the disclosure to the owner in the session. A reply to continue lifts no other size rule. The build
+record's size tripwire row records the outcome; its forms live in the workhorse charter.
+
+**Two absolute bars stand beside the tripwire**, counted over non-test lines **added or
 modified** — pure deletions, regenerated artifacts (a generated reference doc, a regenerated
 fixture), test modules and bite-proof records do not count. At **300** the builder reports the count
 on the issue with a proposed cut line and continues. At **600** the builder stops and hands the call
 to the advisor, who rules continue, split or park and records the reason on the issue; that call is
-never the builder's to make alone and never the owner's. A split lands as native stack layers, each
+never the builder's to make alone and never the owner's. A build with no advisor named stops at 600
+and posts its count and a proposed split on the issue, as a park, for an advisor to rule. A split
+lands as native stack layers, each
 reviewable on its own, so no intermediate state reaches the trunk. The bars apply in the full and
 light lanes; a micro change that approached them would already have left its ceiling.
 Where the call is in doubt, the preference is more, smaller PRs.
+
+### Preflight in the light and micro lanes
 
 **Micro skips preflight** because preflight proves tools before a session goes
 *autonomous*, and micro never does — it runs inside a long-lived advisor session with
