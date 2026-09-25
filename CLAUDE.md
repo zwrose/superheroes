@@ -141,7 +141,9 @@ scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytes
 Run every local gate through `scripts/pinned-python`: it requires a uv-managed interpreter at
 the pin and resolves the one pinned interpreter from `.python-version` (the pin's only home) with
 the dependencies in `requirements-dev.txt`,
-so the local gate, CI, and dispatched orders run the same Python. **Provisioning (once per
+so every in-repo gate command and CI run the same Python; the calibrated verify command in the
+out-of-repo project store must call `scripts/pinned-python` as well — until it does, that one
+command still runs the interpreters it names. **Provisioning (once per
 machine):** install `uv`, then run `uv python install` from the repo root (it reads
 `.python-version`). Never name an interpreter by path or version in a gate command or an
 order — `validate_python_pin.py` fails CI when an in-repo home does. Run the suite with

@@ -232,6 +232,28 @@ def test_workflow_setup_python_unpinned_wrong_file(tmp_path):
     )
 
 
+# Axis: workflow-setup-python-unpinned — conditional setup-python is still validated.
+def test_workflow_setup_python_unpinned_conditional_wrong_file(tmp_path):
+    _scaffold_healthy(tmp_path)
+    wf = """\
+name: ci
+on: push
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: false
+        with:
+          python-version-file: other.txt
+"""
+    _write(tmp_path, ".github/workflows/ci.yml", wf)
+    assert _has_rule(
+        _violations(tmp_path), "workflow-setup-python-unpinned"
+    )
+
+
 def test_workflow_python_before_setup_run_python(tmp_path):
     _scaffold_healthy(tmp_path)
     wf = """\
@@ -579,3 +601,8 @@ def test_running_interpreter_mismatch_flag(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert code == 1
     assert "running-interpreter-mismatch" in out
+    monkeypatch.undo()
+    code_green = vpp.main(["--root", str(tmp_path), "--require-running-pin"])
+    out_green = capsys.readouterr().out
+    assert code_green == 0
+    assert "running-interpreter-mismatch" not in out_green

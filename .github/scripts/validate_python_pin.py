@@ -403,8 +403,6 @@ def _check_job_steps(
         if not isinstance(step, dict):
             continue
         if _uses_action(step, _SETUP_PYTHON_USES):
-            if step.get("if") is not None:
-                continue
             with_block = step.get("with")
             if not isinstance(with_block, dict):
                 violations.append(
@@ -424,9 +422,8 @@ def _check_job_steps(
                         "setup-python python-version-file must be .python-version",
                     )
                 )
-            else:
-                if pinned_index is None:
-                    pinned_index = idx
+            elif step.get("if") is None and pinned_index is None:
+                pinned_index = idx
 
     for idx, step in enumerate(steps):
         if not _step_runs_python(step, job_default_shell):
