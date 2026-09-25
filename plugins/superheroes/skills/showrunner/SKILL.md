@@ -463,7 +463,8 @@ above).
      for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim
      without a receipt — it evaporates in working context (weekly-eats: ~8 routings recorded as
      intent evaporated across four rapid vets until an owner-forced sweep found 2 genuinely dropped,
-     filed late as we#526/we#527). At a [craft call](../../rubric/glossary.md#craft-call) the
+     filed late as we#526/we#527). Each `FU` id gets its own keyed disposition in the receipt's
+     field 7. At a [craft call](../../rubric/glossary.md#craft-call) the
      advisor executes it now and records the determination dated and reasoned for cheap owner veto;
      at an [owner call](../../rubric/glossary.md#owner-call) it is the owner's word, via the
      collector; doubt resolves upward. **Craft calls** — craft record-keeping writes — venue-1
@@ -545,7 +546,9 @@ above).
      **The merged-PR backstop gets the same actor and the same trigger:** at vet, grep merged-PR
      bodies for the **Follow-ups for the advisor** heading (the workhorse charter standardizes it;
      `<!-- superheroes:build-record -->` is the grep anchor it never had) and reconcile against the
-     board. Standing duty, no machinery.
+     board. Standing duty. It may run `vet_slot.py check --pr <n> --repo <owner/name>` per PR. It
+     also flags a PR **closed** unmerged whose follow-ups list is not `None` and that has no vet
+     receipt. Those follow-ups carry into the superseding PR's build record.
      **Install the contract's distilled preamble at the top of the collector issue body, above the
      items, and refresh it when it has drifted or is missing.** Canonical snippet and markers:
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`
@@ -587,6 +590,9 @@ above).
      preserve on a body rewrite; that guarantee is prose with no mechanical check, so the backstop
      below is still yours). **Write to the owner-half register:** the **verdict**; **what was checked, in owner terms**;
      **what accepting it means**; and **what is theirs to decide** — plus a pointer to the receipt.
+     **The write goes through `vet_slot.py write`**, whose command form and refusals the register
+     in `vet-receipt.md` states. Fix a refusal at its source: add the missing disposition to the
+     receipt, or have the builder correct its list. Never work around a refusal with a hand edit.
      **The verdict's form** lives in
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` spine field 1 —
      read it there at vet time; a slot not in that form reads NOT-READY by construction.

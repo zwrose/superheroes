@@ -904,7 +904,9 @@ worktree** — three builds burned roughly five full-suite runs against in-fligh
 started while edits are still landing measures a tree that no longer exists, and its green is not a
 receipt; the requirement attaches to the calibrated verify and any local full-suite run alike. **A
 handback whose suite receipt is still pending says so**, reports that the **calibrated verify
-passed**, and makes **no test-pass claim at all**.
+passed**, and makes **no test-pass claim at all**. A background command's harness-reported exit
+code belongs to the whole command line, not the gate inside it. Read the gate's own exit status
+(`$?` right after it, or its receipt) before you report a gate result.
 When you probe a guard by mutating the code it guards, apply the mutation as a **targeted,
 revertible edit through the host's edit action** — never a whole-file rewrite and never an ad-hoc
 shell edit — and revert it before moving on. **Before you run any mutation probe, commit the landed
@@ -1128,9 +1130,15 @@ plus for both lanes a **dispatch provenance** section — each dispatch (the bri
 implementer, every `check-runner`, the pilot, the review-code seats) with the **engine + model** it ran on — each validated
 against the registry allowlist (#600), so the advisor can vet what ran without your context — plus a
 **Follow-ups for the advisor** section — out-of-scope discoveries, deferred work, or issues you noticed
-but cannot file yourself (you never wire the board). List them plainly under that exact heading (write
+but cannot file yourself (you never wire the board). List them under that exact heading (write
 **None** when there are none) so the advisor can turn them into issues and the advisor's triage
-backstop can grep the section. For both lanes the build record also carries a **size tripwire** row,
+backstop can grep the section. Key every item as one top-level bullet, `- FU<n> [<class>] <text>`,
+with the class one of `owner-call`, `defect`, `craft`, `flake`, or `info`. An optional first line
+counts them: `Follow-ups: <n> (<m> owner-call)`. Indented sub-bullets may add detail, but an `FU`
+id sits only at top level. The advisor's slot writer refuses any other line, so an unkeyed item
+cannot drop out unseen. The handback comment states the same count line. When a PR closes or is
+superseded before its vet, carry its follow-ups into the superseding build record as
+`- FU<n> [<class>] (from #N) <text>`. For both lanes the build record also carries a **size tripwire** row,
 filled by §4's size step: `not crossed (N of estimate M)`; `crossed at <commit>; messaged <time>;
 advisor ruled <split|continue|park> (<issue comment link>)`; `crossed at <commit>; messaged <time>;
 parked, no reply (<issue comment link>)`; `crossed at <commit>; messaging

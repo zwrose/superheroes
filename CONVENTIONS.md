@@ -914,6 +914,12 @@ PR-body markers from the retired execution spine survive independently of it:
   separates those two states, because the builder stamps the marker.
   A slot with **no marker at all** is read against the advisor's own receipt: with no receipt comment it is a body predating the contract (*not yet vetted*); with a receipt already posted it is a rewrite that dropped the verdict and marker together.
   Because the receipt is posted before the body write, a standing reminder means the **owner-half write** is owed — the receipt may already exist, so the advisor checks for its own existing receipt comment before posting another.
+- **Keyed follow-ups** — the build record's *Follow-ups for the advisor* section keys each item
+  `- FU<n> [<class>] <text>` (or reads **None**), and the vet receipt's completed dispositions key
+  one bullet per id, `- FU<n>: <disposition>`. The one home for the `## Advisor vet` slot write is
+  `vet_slot.py write`, which refuses when the two lists disagree. The build-record shape lives in
+  the **workhorse** charter's §11. The receipt shape and the command live in
+  `plugins/superheroes/skills/showrunner/reference/vet-receipt.md`.
 
 **Omission floor (owner half).** Anything the owner still **carries after merging** appears
 in the PR's owner half, **stated as a consequence**. The checkable floor beneath that
