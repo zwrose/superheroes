@@ -2382,17 +2382,25 @@ def test_slot_scoped_nonce_different_slot_refuses(tmp_path):
 @pytest.mark.parametrize("helper_name", QUALIFICATION_HELPER_CENSUS)
 def test_qualification_helpers_refuse_empty_or_absent_evidence(tmp_path, helper_name):
     if helper_name == "_execution_binding_matches_journal":
-        ok, failure = RC._execution_binding_matches_journal(None, None, set())
+        ok, failure = RC._execution_binding_matches_journal(
+            None, None, set(), envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
-        ok, failure = RC._execution_binding_matches_journal({}, None, set())
+        ok, failure = RC._execution_binding_matches_journal(
+            {}, None, set(), envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
     elif helper_name == "_observation_qualifies":
-        ok, failure = RC._observation_qualifies(None, HEAD, None)
+        ok, failure = RC._observation_qualifies(
+            None, HEAD, None, envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
-        ok, failure = RC._observation_qualifies({}, HEAD, None)
+        ok, failure = RC._observation_qualifies(
+            {}, HEAD, None, envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
     elif helper_name == "_hand_landed_evidence_qualifies":

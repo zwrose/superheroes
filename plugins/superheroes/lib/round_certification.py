@@ -76,8 +76,6 @@ CERTIFICATION_LIVE_CONTENT_FIELDS = (
 )
 EXECUTION_ONLY_BINDING = session_contract.EXECUTION_ONLY_BINDING
 
-_ENVELOPE_RUN_KIND_NOT_PROVIDED = object()
-
 PANEL_PHASE = session_contract.PANEL_PHASE
 FIXER_PHASE = session_contract.FIXER_PHASE
 AUDITS_PHASE = session_contract.AUDITS_PHASE
@@ -985,8 +983,6 @@ def _journal_execution_binding(journal, seat, phase, attempt, occurrence=0, rnd=
 def _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field):
     if field != "runKind":
         return evidence.get(field)
-    if envelope_run_kind_evidence is _ENVELOPE_RUN_KIND_NOT_PROVIDED:
-        return evidence.get(field)
     if not isinstance(envelope_run_kind_evidence, dict):
         return None
     return envelope_run_kind_evidence.get(field)
@@ -997,7 +993,7 @@ def _execution_binding_matches_journal(
     journal_binding,
     recorded_nonces,
     *,
-    envelope_run_kind_evidence=_ENVELOPE_RUN_KIND_NOT_PROVIDED,
+    envelope_run_kind_evidence,
 ):
     if not isinstance(evidence, dict):
         return False, "execution-evidence-absent"
@@ -1049,8 +1045,8 @@ def _observation_qualifies(
     journal_binding=None,
     recorded_nonces=None,
     *,
+    envelope_run_kind_evidence,
     require_runner_action=False,
-    envelope_run_kind_evidence=_ENVELOPE_RUN_KIND_NOT_PROVIDED,
 ):
     if not isinstance(obs, dict):
         return False, "execution-evidence-absent"
@@ -1093,7 +1089,10 @@ def _hand_landed_evidence_qualifies(
     if not isinstance(order_sha, str) or not order_sha:
         return False, "execution-evidence-order-unbound"
     ok, binding_failure = _execution_binding_matches_journal(
-        evidence, journal_binding, recorded_nonces or set()
+        evidence,
+        journal_binding,
+        recorded_nonces or set(),
+        envelope_run_kind_evidence=evidence,
     )
     if not ok:
         return False, binding_failure
