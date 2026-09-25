@@ -229,7 +229,7 @@ was broken. Malformed entries report as `{"index", "field", "reason"}`; when any
 **Read verb.** From the project cwd:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/core_md.py" vet-checks --cwd .
 ```
 

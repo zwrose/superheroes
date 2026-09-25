@@ -180,7 +180,7 @@ action that owns it, leaving the rest of the calibration untouched:
   (use `--clear` to remove the key):
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '[{"name":"Example check","evidence":"PR body · Build record","records":"what was read and what the vet recorded"}]' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-vet-checks --cwd .
   ```
@@ -188,7 +188,7 @@ action that owns it, leaving the rest of the calibration untouched:
   To clear:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/core_md.py" write-vet-checks --cwd . --clear
   ```
 
