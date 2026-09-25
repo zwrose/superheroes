@@ -2675,6 +2675,9 @@ def confirm(cwd, *, root=None, now=None):
             except OSError:
                 mark_pending(cwd, root, detail={"reason": "store-unwritable"})
                 return {"action": "deferred", "record": None}
+            structural = _structural_refusal_at_path(path)
+            if structural is not None:
+                return {"action": "refused", "reason": structural, "record": existing}
             vet_parsed = parse_vet_checks(raw_text)
             if vet_parsed["malformed"]:
                 return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,

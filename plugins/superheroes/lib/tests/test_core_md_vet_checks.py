@@ -264,6 +264,29 @@ def test_confirm_refused_when_vet_checks_section_duplicated(tmp_path):
     assert CM.read(repo, root=store)["status"] == "provisional"
 
 
+def test_confirm_refused_when_extra_core_json_block_after_vet_checks(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(
+        repo,
+        dict(_CORE_FACTS, vetChecks=_HEALTHY_BODY),
+        "provisional",
+        root=store,
+        now="2026-06-26",
+    )
+    path = CM.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": %d}\n```\n" % CM.SCHEMA_VERSION
+    open(path, "w", encoding="utf-8").write(text + extra)
+    before = open(path, encoding="utf-8").read()
+    assert CM.parse_vet_checks(before)["malformed"] == []
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "refused"
+    assert res["reason"].startswith("multiple-core-blocks:")
+    assert open(path, encoding="utf-8").read() == before
+    assert CM.read(repo, root=store)["status"] == "provisional"
+
+
 def _write_core(repo, store, **extra):
     facts = dict(_CORE_FACTS, **extra)
     CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
