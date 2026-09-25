@@ -1,6 +1,5 @@
 """Tests for grandchild_probe's process-state probe on hosts without /proc."""
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -84,7 +83,10 @@ def test_unknown_ps_state_reads_alive_even_for_a_zombie(no_proc, monkeypatch):
     try:
         _await_zombie(proc)
         monkeypatch.setattr(gp, "_ps_process_state", lambda pid: None)
-        assert gp._observed_process_state(proc.pid).startswith("alive")
+        state = gp._observed_process_state(proc.pid)
+        assert state is not None and state.startswith("alive"), (
+            f"an unknown ps state must read alive, never gone; got {state!r}"
+        )
     finally:
         proc.wait()
 
