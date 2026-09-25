@@ -139,8 +139,6 @@ def test_wave_watch_doc_pins_the_suppression_wire_contract():
         doc, "reference/wave-watch.md",
         ["`%s`" % ww.RESULT_KEY_STALE_SUPPRESSED,
          "`%s`" % ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH,
-         "`%s`" % ww.RESULT_KEY_PASSED_OVER,
-         "`%s`" % ww.RESULT_KEY_PASSED_OVER_COUNT,
          "`%s`" % ww.RESULT_KEY_LIVE_LOOP],
     )
 

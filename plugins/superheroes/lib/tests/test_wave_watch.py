@@ -2605,6 +2605,13 @@ def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
     pr_sets = [{1}, {1, 2}, {1, 2, 3}, {1, 2, 3}]
     arm = [0]
     real_run = ww.watch_arm
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
 
     def gh_for_arm(argv, **kwargs):
         idx = min(max(arm[0] - 1, 0), len(pr_sets) - 1)
@@ -2622,7 +2629,8 @@ def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
                 gh_run=gh_for_arm,
                 max_seconds=5,
                 interval_seconds=1,
-                sleep=lambda _d: None,
+                monotonic=mono,
+                sleep=fake_sleep,
                 ledger_observed=kwargs.get("ledger_observed"),
                 pr_state=kwargs.get("pr_state"),
                 stack_state=kwargs.get("stack_state"),
@@ -2639,7 +2647,7 @@ def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
 
     result = ww.loop(
         repo, "batch-982", max_seconds=5, interval_seconds=1,
-        run_fn=run_fn, sleep=lambda _d: None,
+        run_fn=run_fn, monotonic=mono, sleep=fake_sleep,
     )
     assert result["event"] == "lane-terminal"
     assert result["passedOverCount"] == 2
@@ -2813,7 +2821,12 @@ def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch):
         "stacks": [],
         "flags": [],
     }
-    sequence = [dict(benign) for _ in range(101)]
+    cap = ww.PASSED_OVER_CAP
+    sequence = []
+    for arm in range(1, cap + 2):
+        event = dict(benign)
+        event["stacks"] = [{"arm": arm}]
+        sequence.append(event)
     sequence.append({
         "ok": True,
         "event": "lane-terminal",
@@ -2826,8 +2839,11 @@ def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch):
     result = ww.loop(
         repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
     )
-    assert result["passedOverCount"] == 101
-    assert len(result["passedOver"]) == 100
+    assert result["passedOverCount"] == cap + 1
+    assert len(result["passedOver"]) == cap
+    retained_arms = [entry["arm"] for entry in result["passedOver"]]
+    assert retained_arms == list(range(2, cap + 2))
+    assert result["passedOver"][-1]["stacks"] == [{"arm": cap + 1}]
 
 
 def test_loop_ceiling_after_benign_non_timer_returns_timer(tmp_path, monkeypatch):
@@ -2866,6 +2882,61 @@ def test_loop_ceiling_after_benign_non_timer_returns_timer(tmp_path, monkeypatch
     )
     assert result["event"] == "timer"
     assert result["passedOverCount"] == 1
+
+
+def test_loop_ceiling_stale_suppressed_follows_last_benign_arm(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    timer_suppressed = {
+        "ok": True,
+        "event": "timer",
+        "batchId": "batch-982",
+        "degraded": [],
+        "staleSuppressed": [
+            {
+                "launchId": "lane-a",
+                "note": ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH,
+            },
+        ],
+    }
+    pr_stale_observed = {
+        "ok": True,
+        "event": "pr-set-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "prsAdded": [],
+        "prs": [1],
+        "prsRemoved": [],
+        "stacks": [],
+        "ungrouped": [1],
+        "alsoObserved": {"stale": ["lane-a"]},
+    }
+    calls = [0]
+
+    def run_fn(*_args, **_kwargs):
+        calls[0] += 1
+        clock[0] += 3.0
+        if calls[0] == 1:
+            return dict(timer_suppressed)
+        return dict(pr_stale_observed)
+
+    result = ww.loop(
+        repo, "batch-982",
+        max_seconds=10,
+        interval_seconds=1,
+        max_total_seconds=5,
+        monotonic=mono,
+        sleep=lambda _d: None,
+        run_fn=run_fn,
+    )
+    assert result["event"] == "timer"
+    assert "staleSuppressed" not in result
+    assert result["passedOverCount"] == 1
+    assert result["passedOver"][0]["alsoObserved"] == {"stale": ["lane-a"]}
 
 
 def test_loop_benign_non_timer_writes_log_line(tmp_path, monkeypatch):
@@ -4432,26 +4503,10 @@ def test_run_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
 
 
 def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
-    pr_sets = [{10}, {10, 99}]
-    recorded = []
-    arm = [0]
-    real_run = ww.watch_arm
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
 
     def membership_reader(*, pr, repo, **kwargs):
-        recorded.append(pr)
         return {"ok": False, "reason": sc.REASON_NOT_LINKED}
-
-    def run_fn(repo_root, batch_id, **kwargs):
-        arm[0] += 1
-        call_kwargs = dict(kwargs)
-        call_kwargs["gh_run"] = _gh_pr_list_with_repo_view(pr_sets)
-        call_kwargs["max_seconds"] = 2
-        call_kwargs["interval_seconds"] = 1
-        call_kwargs["membership_reader"] = kwargs["membership_reader"]
-        call_kwargs["sleep"] = lambda _d: None
-        return real_run(repo_root, batch_id, **call_kwargs)
 
     terminal = {
         "ok": True,
@@ -4476,6 +4531,11 @@ def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
         },
         terminal,
     ])
+    forwarded_readers = []
+
+    def run_fn(*args, **kwargs):
+        forwarded_readers.append(kwargs["membership_reader"])
+        return scripted_run_fn(*args, **kwargs)
 
     result = ww.loop(
         repo,
@@ -4483,13 +4543,15 @@ def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
         max_seconds=2,
         interval_seconds=1,
         sleep=lambda _d: None,
-        run_fn=scripted_run_fn,
+        run_fn=run_fn,
         membership_reader=membership_reader,
     )
 
     assert result["event"] == "lane-terminal"
     assert result["passedOverCount"] == 1
     assert violations == []
+    assert forwarded_readers
+    assert all(reader is membership_reader for reader in forwarded_readers)
 
 
 # --- stack-state-changed (#1340 layer 2f) -------------------------------------
