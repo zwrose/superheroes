@@ -2138,6 +2138,7 @@ def test_cli_compose_liveness_writes_receipt(tmp_path, monkeypatch, capsys):
 
     cache_file = tmp_path / "state" / "composition-liveness.json"
     monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+    monkeypatch.setattr(pp, "codex_cli_floor_probe", lambda run=None: None)
     monkeypatch.setattr(pp, "composition_liveness", lambda needed, run=None, **_kw: {
         "codex": {"live": True, "models": {}, "cells": []},
         "claude": {"live": True, "models": {}, "cells": []},
