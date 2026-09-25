@@ -86,6 +86,12 @@ whose stack is already complete, or that already carries the idle-seat flag
 (`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` in `lib/wave_watch.py`), reports `stack-state-changed` on its
 first arm.
 
+### `wave_watch.py` run
+
+`run` drops `--max-seconds` and `--interval-seconds` (and the Python `run()` loses `max_seconds`,
+`interval_seconds`, and `sleep`; the old windowed function is `watch_arm()`). `run` returns at once
+— one ledger read and at most one open-PR read, no waiting.
+
 ### Launcher premise `dependency` field
 
 `validate_premise` accepts an optional `dependency` field on the premise — a positive integer pull

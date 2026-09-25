@@ -1878,7 +1878,7 @@ file, returns exactly that set.
 - `plugins/superheroes/lib/sibling_worktree_probe.py` — sibling worktree snapshot probe when
   dispatch fold cannot attribute dirt. **delete-when:** dispatch fold attributes sibling worktree
   changes without a snapshot probe.
-- `plugins/superheroes/lib/wave_watch.py` — loop re-arms wave_watch run because there is no durable
+- `plugins/superheroes/lib/wave_watch.py` — loop re-arms watch_arm because there is no durable
   batch watcher daemon. **delete-when:** the background-session trial receipt marks wave-watch
   arming not needed.
 - `plugins/superheroes/lib/wave_watch.py` — transcript file mtime as lane liveness when idle signals
