@@ -175,11 +175,11 @@ def test_composition_owner_calls_stalled_open_targets():
 
 
 def test_routing_owner_is_total():
-    # axis: routing owner names all four terminal routes (fixer, both parks, converge)
+    # axis: routing owner names all four terminal routes (the fixer through _queue_fix_batch, both parks, converge)
     tree = _round_driver_tree()
     route = _top_level_function(tree, "_route_stall_self_recovery")
     assert route is not None
-    assert _subtree_has_name_load(route, "P_FIXER")
+    assert _subtree_has_bare_name_call(route, "_queue_fix_batch")
     assert _subtree_has_bare_name_call(route, "_park_cannot_certify")
     assert _subtree_has_bare_name_call(route, "_park_capped_open")
     assert _subtree_has_bare_name_call(route, "_settle_delta_converged")
