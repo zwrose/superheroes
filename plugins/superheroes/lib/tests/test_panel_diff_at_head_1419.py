@@ -185,6 +185,29 @@ def test_b2_git_timeout_parks(tmp_path, monkeypatch):
     assert state["step"] != RD.P_PANEL
 
 
+def test_b2_git_diff_non_utf8_parks(tmp_path, monkeypatch):
+    repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    real_run = subprocess.run
+
+    def _wrapped(*args, **kwargs):
+        cmd = args[0] if args else []
+        if isinstance(cmd, (list, tuple)) and len(cmd) >= 2 and cmd[0] == "git" and cmd[1] == "diff":
+            class _Proc:
+                returncode = 0
+                stdout = b"diff --git a/f.py b/f.py\n+\xff\n"
+                stderr = b""
+            return _Proc()
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(RD.subprocess, "run", _wrapped)
+    state = _unknown_surface_state(cfg)
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
+    assert "diff not UTF-8" in state["certification"]["reason"]
+    assert state["step"] != RD.P_PANEL
+
+
 def test_b3_derived_diff_matches_git_cli_byte_exact(tmp_path):
     trailing = "line one\nline two   \n"
     repo, base_sha, _ = _init_two_commit_repo(

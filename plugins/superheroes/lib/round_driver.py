@@ -9,10 +9,12 @@ layers over one core:
 
   - Layer 1 (`run_loop`): the ported control-flow of `review_panel_shell.js::reviewPanel` with
     every effectful step behind an injectable seam (`reviewer`, `synthesis`, `verifier`,
-    `auditor`, `fix_step`, `verify_runner`, `changed_subjects`, `io`). Same run-SHAPE, not the JS
+    `auditor`, `fix_step`, `verify_runner`, `changed_subjects`, `panel_diff`, `io`). Same run-SHAPE, not the JS
     idioms. `changed_subjects` derives the fix's changed policy subjects from git (the reviewed vs
     head diff), NEVER the fixer's self-report (#157/#158) — the library default + the CLI path wire
-    the real derivation; the eval harness injects a scripted replay.
+    the real derivation; the eval harness injects a scripted replay. `panel_diff` derives the
+    git head diff for unknown-surface full panels — the library default + the CLI path wire the
+    real git helper; run_loop may inject a scripted replay.
   - Layer 2 (`next`/`submit` CLI): the state machine BETWEEN orchestrator dispatches — `next`
     emits the one action to run, `submit` folds its artifact and advances.
 
@@ -2231,13 +2233,17 @@ def _record_adapter_provenance(state, artifact, phase):
 
 
 def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None,
-          verified_head_resolution=None):
+          verified_head_resolution=None, panel_diff_seam=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
 
     `changed_subjects_seam` is threaded to the fixer fold: run_loop passes the injected seam (the
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
     wires the real git derivation. It is inert for every other phase.
+
+    `panel_diff_seam` is threaded to verify and fixer folds (unknown-surface full panels): run_loop
+    passes the injected seam; the CLI submit path passes None so those folds wire the real git
+    derivation. It is inert for every other phase.
 
     `verified_head_resolution` is inert for every phase but ``P_VERIFY``."""
     if session_contract.disposition_ledger_owner_classification(state) == (
@@ -2259,9 +2265,11 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_SCOPED:
         _fold_scoped(state, config, artifact)
     elif phase == P_VERIFY:
-        _fold_verify(state, config, artifact, resolution=verified_head_resolution)
+        _fold_verify(state, config, artifact, resolution=verified_head_resolution,
+                     panel_diff_seam=panel_diff_seam)
     elif phase == P_FIXER:
-        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir)
+        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
+                    panel_diff_seam=panel_diff_seam)
     elif phase == P_JUDGMENT:
         _fold_judgment(state, config, artifact)
     elif phase == P_STALL:
@@ -3849,7 +3857,8 @@ def _resolve_head_diff(artifact):
     return None, "unknown"
 
 
-def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None):
+def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None,
+                panel_diff_seam=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
     the driver sequences + records. The post-fix head diff rides the artifact (git, per the
     dispatch-fixer contract) so the next delta round can split_fix_surface against git — INLINE
@@ -3934,7 +3943,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     state.pop("_escalatedRung", None)
     state.pop("_fixQueue", None)
     state.pop("_fixBatchIndex", None)
-    _enter_post_fix(state, config, session_dir=session_dir)
+    _enter_post_fix(state, config, session_dir=session_dir, panel_diff_seam=panel_diff_seam)
 
 
 _VERIFY_SKIP = ("skipped", "none", "unverified")
@@ -4206,7 +4215,7 @@ def _verify_command_configured(config):
     return cmd.strip().lower() not in ("", "none")
 
 
-def _fold_verify(state, config, artifact, *, resolution):
+def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
     `fail`, a `timeout`, a missing/None result, any unrecognized value, OR a skip result while a real
@@ -4271,7 +4280,7 @@ def _fold_verify(state, config, artifact, *, resolution):
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
-    _enter_delta_round(state, config)
+    _enter_delta_round(state, config, panel_diff_seam=panel_diff_seam)
 
 
 def _try_reuse_ceiling_verify_gate(state, config, session_dir):
@@ -4302,7 +4311,7 @@ def _try_reuse_ceiling_verify_gate(state, config, session_dir):
     return True
 
 
-def _enter_post_fix(state, config, session_dir=None):
+def _enter_post_fix(state, config, session_dir=None, panel_diff_seam=None):
     """After the round's last fix-batch slice folds: advance or run the gate at the ceiling."""
     next_round = state["round"] + 1
     if circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config)).get("halt"):
@@ -4318,7 +4327,7 @@ def _enter_post_fix(state, config, session_dir=None):
         return
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
     state["_postFixEntry"] = True
-    _enter_delta_round(state, config)
+    _enter_delta_round(state, config, panel_diff_seam=panel_diff_seam)
 
 
 # ---- delta rounds (2+) ----------------------------------------------------------------------
@@ -4365,17 +4374,21 @@ def _derive_panel_diff_at_head(config):
         if err:
             msg += ": %s" % err
         return None, msg
-    diff_text = proc.stdout.decode("utf-8")
+    try:
+        diff_text = proc.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return None, "diff not UTF-8: %s" % exc
     if not diff_text:
         return None, "empty diff"
     return diff_text, None
 
 
-def _schedule_full_panel_unknown(state, config, detail):
+def _schedule_full_panel_unknown(state, config, detail, panel_diff_seam=None):
     """The fail-closed unknown→run-everything rule: an unresolvable delta surface schedules a FULL
     reviewer-deep panel over the git-derived head diff, never a stale reviewed diff or a silently-
     scoped round. When head diff cannot be derived, parks ``cannot-certify`` instead."""
-    diff_text, refuse_detail = _derive_panel_diff_at_head(config)
+    derive = panel_diff_seam or _derive_panel_diff_at_head
+    diff_text, refuse_detail = derive(config)
     if refuse_detail is not None:
         _park_cannot_certify(
             state, "%s: %s" % (PANEL_DIFF_UNDERIVABLE_CAUSE, refuse_detail))
@@ -4390,16 +4403,16 @@ def _schedule_full_panel_unknown(state, config, detail):
     return True
 
 
-def _after_unknown_surface_panel(state, config, detail, post_fix):
+def _after_unknown_surface_panel(state, config, detail, post_fix, panel_diff_seam=None):
     """Schedule a full unknown-surface panel when derivable; honor post-fix verify-then-panel."""
-    if not _schedule_full_panel_unknown(state, config, detail):
+    if not _schedule_full_panel_unknown(state, config, detail, panel_diff_seam=panel_diff_seam):
         return
     if post_fix:
         state["_verifyThen"] = VERIFY_THEN_PANEL
         state["step"] = P_VERIFY
 
 
-def _enter_delta_round(state, config):
+def _enter_delta_round(state, config, panel_diff_seam=None):
     """Rounds 2+: split_fix_surface(reviewed, head, fixBatch). unknown → schedule a FULL panel
     (the existing unknown→run-everything rule). Else audit the fixed findings + scoped-find the new
     surface."""
@@ -4413,13 +4426,14 @@ def _enter_delta_round(state, config):
             state, config,
             "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
             % state.get("_headDiffSource"),
-            post_fix)
+            post_fix, panel_diff_seam=panel_diff_seam)
         return
     baseline = state.get("deltaBaseline")
     if not isinstance(baseline, dict):
         cause = "no baseline record" if baseline is None else "baseline is not a record"
         _after_unknown_surface_panel(
-            state, config, "%s: %s" % (DELTA_BASELINE_ABSENT, cause), post_fix)
+            state, config, "%s: %s" % (DELTA_BASELINE_ABSENT, cause), post_fix,
+            panel_diff_seam=panel_diff_seam)
         return
     stamped_round = baseline.get("round")
     current_round = state["round"]
@@ -4429,18 +4443,20 @@ def _enter_delta_round(state, config):
             state, config,
             "%s: baseline stamped round %s, current round %s"
             % (DELTA_BASELINE_ABSENT, stamped_round, current_round),
-            post_fix)
+            post_fix, panel_diff_seam=panel_diff_seam)
         return
     reviewed = baseline.get("diff")
     if not isinstance(reviewed, str):
         _after_unknown_surface_panel(
-            state, config, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT, post_fix)
+            state, config, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT, post_fix,
+            panel_diff_seam=panel_diff_seam)
         return
     split = delta_surface.split_fix_surface(
         reviewed, state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
         _after_unknown_surface_panel(
-            state, config, "delta surface unknown — full reviewer-deep panel", post_fix)
+            state, config, "delta surface unknown — full reviewer-deep panel", post_fix,
+            panel_diff_seam=panel_diff_seam)
         return
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
@@ -6380,7 +6396,8 @@ def run_loop(seams, config=None):
                                          {"fault": fault, "round": state["round"]})
             try:
                 _fold(state, state["config"], action, artifact, seams.get("changed_subjects"),
-                      verified_head_resolution=_verified_head_at_fold(None, state))
+                      verified_head_resolution=_verified_head_at_fold(None, state),
+                      panel_diff_seam=seams.get("panel_diff"))
             except DispositionLedgerOwnerRefusal as refusal:
                 _park_cannot_certify(state, refusal.reason)
                 return _run_loop_certified_receipt(state, guard)
