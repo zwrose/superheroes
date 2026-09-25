@@ -29,7 +29,7 @@ not listed in the table below is the same as the **full** lane.
 
 **Size counts non-test lines.** Every size figure in this document and in the charters — the
 lane row above, the light lane's measured escalation line, the micro ceiling, and the
-"twice the brief's estimate" scope tripwire — is read over **non-test changed lines**
+"twice the estimate" scope tripwire (the brief's estimate, or a light order's non-test estimate) — is read over **non-test changed lines**
 (the two absolute bars in the next paragraph are the one exception: they count added or
 modified lines only, as stated there):
 additions plus deletions in every file *outside* a `tests/` directory (docs, skill and

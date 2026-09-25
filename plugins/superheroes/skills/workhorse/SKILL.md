@@ -418,7 +418,8 @@ board wiring) and the fail-loud go/no-go. Don't restate it here.
 
 ## 4. Write the build brief (before code)
 
-**Full lane only** — the light lane skips this section (Build lanes).
+**Full lane only** — the light lane skips this section (Build lanes), except the **size step** below,
+which runs in both lanes.
 
 ~20–40 lines, **posted on the issue** and carried into the PR. Six items, in order:
 
