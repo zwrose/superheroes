@@ -1119,7 +1119,7 @@ def _audited_chain(ctx):
     return out
 
 
-def _cited_head_qualifies(ctx, cited_head):
+def _cited_head_qualifies(ctx, cited_head, seat_round):
     certified_head = _certified_head_sha(ctx)
     if not isinstance(cited_head, str) or not cited_head:
         return False, "audited-chain-gap:panel"
@@ -1131,7 +1131,16 @@ def _cited_head_qualifies(ctx, cited_head):
     meta, cfg = ctx.get("meta") or {}, (ctx.get("state") or {}).get("config") or {}
     repo_root = meta.get("repoRoot") or cfg.get("repoRoot")
     panel_head = chain.get("panelHead")
-    if not _is_ancestor(repo_root, panel_head, cited_head):
+    panel_round = chain.get("panelRound")
+    apply_lower_bound = True
+    if (
+        isinstance(seat_round, int)
+        and not isinstance(seat_round, bool)
+        and isinstance(panel_round, int)
+        and not isinstance(panel_round, bool)
+    ):
+        apply_lower_bound = seat_round >= panel_round
+    if apply_lower_bound and not _is_ancestor(repo_root, panel_head, cited_head):
         return False, "audited-chain-gap:descent"
     if not _is_ancestor(repo_root, cited_head, certified_head):
         return False, "audited-chain-gap:descent"
@@ -1804,7 +1813,7 @@ def check_unrun_review(ctx):
             cited = seat_entry.get("citedHead")
             head_rule_state = {}
             def _dispatch_head_rule(ch):
-                ok, gap_detail = _cited_head_qualifies(ctx, ch)
+                ok, gap_detail = _cited_head_qualifies(ctx, ch, rnd)
                 head_rule_state.update(ok=ok, gap_detail=gap_detail)
                 return ok, gap_detail
             ok, binding = _observation_qualifies(
@@ -2477,7 +2486,7 @@ def check_evidence_head_bound(ctx):
             continue
         if not isinstance(cited, str) or not cited or cited == certified_head:
             continue
-        chain_ok, gap_detail = _cited_head_qualifies(ctx, cited)
+        chain_ok, gap_detail = _cited_head_qualifies(ctx, cited, seat_entry["round"])
         if not chain_ok:
             return _refusal(
                 "unrun-review",
