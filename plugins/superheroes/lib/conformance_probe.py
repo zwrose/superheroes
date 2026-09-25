@@ -36,6 +36,7 @@ DISPATCHABLE_ENGINES = tuple(
 _LEG_NAMES = ("resultProduction", "completionDetection", "progressTelemetry")
 ASTRA_PROBE_ROLE = "registration-probe"
 ASTRA_CLAIM_ABANDON_SECONDS = 86400
+ASTRA_CLAIM_UNRECORDED_MODEL = "unrecorded"
 _RUBRIC_PATH = os.path.join(os.path.dirname(_LIB_DIR), "rubric", "review-base.md")
 PLANT_FILE = "app/session_guard.py"
 PLANT_LINES = (24, 25)
@@ -913,8 +914,14 @@ def _read_astra_claim(claim_path):
     except (OSError, json.JSONDecodeError):
         return None
 
-def _write_astra_claim(ledger_dir, wave, run_dir_real):
-    claim = {"wave": wave, "runDir": run_dir_real, "claimedAt": _utc_now_iso()}
+def _write_astra_claim(ledger_dir, wave, run_dir_real, model=None, effort=None):
+    claim = {
+        "wave": wave,
+        "runDir": run_dir_real,
+        "claimedAt": _utc_now_iso(),
+        "model": model,
+        "effort": effort,
+    }
     path = _astra_claim_path(ledger_dir, wave)
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
@@ -953,11 +960,9 @@ def _claim_is_abandoned(claim, now):
         return True
     return (now - anchor).total_seconds() > ASTRA_CLAIM_ABANDON_SECONDS
 
-def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None, seat=None):
+def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None):
     if now is None:
         now = _now_utc()
-    model = (seat or {}).get("model")
-    effort = (seat or {}).get("effort")
     attempts, err = _read_astra_attempts(ledger_dir)
     if err:
         return None, err
@@ -977,13 +982,18 @@ def _settle_orphan_astra_claims(ledger_dir, current_wave, now=None, seat=None):
             continue
         if not _claim_is_abandoned(claim, now):
             continue
+        claim_model = claim.get("model")
+        claim_effort = claim.get("effort")
+        if claim_model is None:
+            claim_model = ASTRA_CLAIM_UNRECORDED_MODEL
+            claim_effort = None
         misses = _count_astra_misses(attempts) + 1
         orphan = {
             "ok": False,
             "outcome": "incomplete",
             "wave": wave,
-            "model": model,
-            "effort": effort,
+            "model": claim_model,
+            "effort": claim_effort,
             "runDir": claim.get("runDir"),
             "dispatchReason": "abandoned-claim",
             "matched": None,
@@ -1080,14 +1090,16 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
     attempts, ledger_read_err = _read_astra_attempts(ledger_dir)
     if ledger_read_err:
         return {"ok": False, "reason": ledger_read_err}, 1
-    attempts, settle_err = _settle_orphan_astra_claims(ledger_dir, wave, now=now, seat=seat)
+    attempts, settle_err = _settle_orphan_astra_claims(ledger_dir, wave, now=now)
     if settle_err:
         return {"ok": False, "reason": settle_err}, 1
     claim_path = _astra_claim_path(ledger_dir, wave)
     claim = _read_astra_claim(claim_path)
     if claim is None:
         try:
-            _write_astra_claim(ledger_dir, wave, run_dir_real)
+            _write_astra_claim(
+                ledger_dir, wave, run_dir_real,
+                model=seat.get("model"), effort=seat.get("effort"))
             claim = _read_astra_claim(claim_path)
         except FileExistsError:
             claim = _read_astra_claim(claim_path)

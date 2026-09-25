@@ -2845,8 +2845,11 @@ def test_astra_probe_owner_proposal_on_third_miss(tmp_path, monkeypatch):
             assert out["ownerProposal"] is False
 
 
-def _write_astra_claim_at(ledger_dir, wave, run_dir_real, claimed_at):
+def _write_astra_claim_at(ledger_dir, wave, run_dir_real, claimed_at, model=None, effort=None):
     claim = {"wave": wave, "runDir": run_dir_real, "claimedAt": claimed_at}
+    if model is not None:
+        claim["model"] = model
+        claim["effort"] = effort
     path = CP._astra_claim_path(ledger_dir, wave)
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
@@ -2969,6 +2972,70 @@ def test_astra_probe_orphan_claim_recorded_as_miss(tmp_path, monkeypatch):
     assert orphan["dispatchReason"] == "abandoned-claim"
     assert orphan["misses"] == 1
     assert out["outcome"] == "pass"
+
+
+# bite-axis: an orphan claim settles with the model/effort it was itself claimed under, not
+# whatever the registry cell resolves to at settle time (a cell change must not repaint history)
+def test_astra_probe_orphan_claim_keeps_its_own_seat_model(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    claimed_at = now - timedelta(seconds=CP.ASTRA_CLAIM_ABANDON_SECONDS + 60)
+    claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    old_wave = "wave-a"
+    old_run = str(tmp_path / "run-a")
+    os.makedirs(old_run)
+    _write_astra_claim_at(
+        ledger_dir, old_wave, old_run, claimed_iso, model="model-a", effort="effort-a")
+    new_run = str(tmp_path / "new-run")
+    os.makedirs(new_run)
+
+    def resolve_current(role, vendor, model, effort):
+        return {"ok": True, "model_id": "model-b", "effort": "effort-b"}
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", resolve_current)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
+    assert code == 0
+    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    orphan = next(a for a in attempts if a.get("wave") == old_wave)
+    assert orphan["model"] == "model-a"
+    assert orphan["effort"] == "effort-a"
+
+
+# bite-axis: a legacy claim written before claims carried a model snapshot settles as
+# explicitly unrecorded rather than being attributed to whatever cell resolves at settle time
+def test_astra_probe_orphan_legacy_claim_without_model_settles_unrecorded(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    claimed_at = now - timedelta(seconds=CP.ASTRA_CLAIM_ABANDON_SECONDS + 60)
+    claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    old_wave = "wave-legacy"
+    old_run = str(tmp_path / "legacy-run")
+    os.makedirs(old_run)
+    _write_astra_claim_at(ledger_dir, old_wave, old_run, claimed_iso)
+    new_run = str(tmp_path / "new-run")
+    os.makedirs(new_run)
+
+    def resolve_current(role, vendor, model, effort):
+        return {"ok": True, "model_id": "model-current", "effort": "effort-current"}
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", resolve_current)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
+    assert code == 0
+    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    orphan = next(a for a in attempts if a.get("wave") == old_wave)
+    assert orphan["model"] == CP.ASTRA_CLAIM_UNRECORDED_MODEL
+    assert orphan["model"] != "model-current"
+    assert orphan["effort"] is None
 
 
 def test_astra_probe_miss_string_line_not_matched(tmp_path, monkeypatch):
