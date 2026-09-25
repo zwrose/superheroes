@@ -281,13 +281,13 @@ unsuppressed event.
 
 **Events** (`ok=True`):
 
-- `lane-terminal` — lane-ending: ends a `loop`
-- `lane-blocked` — lane-ending: ends a `loop`
-- `builder-exited` — lane-ending: ends a `loop`
-- `stack-state-changed` — benign: passed over under `loop`
-- `pr-set-changed` — benign: passed over under `loop`; never reported by `run`
-- `lane-stale` — lane-ending: ends a `loop`
-- `timer` — benign: re-arms under `loop`; `run` returns it when nothing else is due
+- `lane-terminal`
+- `lane-blocked`
+- `builder-exited`
+- `stack-state-changed`
+- `pr-set-changed` — never reported by `run`
+- `lane-stale`
+- `timer` — `run` returns it when nothing else is due
 
 **Precedence**, highest first:
 

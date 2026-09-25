@@ -2583,6 +2583,13 @@ def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
     pr_sets = [{1}, {1, 2}, {1, 2, 3}, {1, 2, 3}]
     arm = [0]
     real_run = ww.watch_arm
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
 
     def gh_for_arm(argv, **kwargs):
         idx = min(max(arm[0] - 1, 0), len(pr_sets) - 1)
@@ -2600,7 +2607,8 @@ def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
                 gh_run=gh_for_arm,
                 max_seconds=5,
                 interval_seconds=1,
-                sleep=lambda _d: None,
+                monotonic=mono,
+                sleep=fake_sleep,
                 ledger_observed=kwargs.get("ledger_observed"),
                 pr_state=kwargs.get("pr_state"),
                 stack_state=kwargs.get("stack_state"),
@@ -2617,7 +2625,7 @@ def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
 
     result = ww.loop(
         repo, "batch-982", max_seconds=5, interval_seconds=1,
-        run_fn=run_fn, sleep=lambda _d: None,
+        run_fn=run_fn, monotonic=mono, sleep=fake_sleep,
     )
     assert result["event"] == "lane-terminal"
     assert result["passedOverCount"] == 2
