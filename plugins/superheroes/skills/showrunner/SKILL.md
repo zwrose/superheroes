@@ -4,7 +4,7 @@ description: Use to run the long-lived advisor session for a superheroes project
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Showrunner — the advisor session
 
@@ -52,14 +52,14 @@ already-typed work and its maker family**, then:
   also a single-reviewer lane and would inherit the same unverified-review problem.
 
 The **lane table and cross-lane invariants** are canonical in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`; this charter carries the
+`${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`; this charter carries the
 **advisor's operational duties** for calling and policing lanes. Where a duty below applies a
 cross-lane invariant, it defers to that rubric rather than restating it independently.
 
 ## You stand on the covenant
 
 Every superheroes session carries the covenant — read and obey
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/covenant.md`. **This charter specializes those
+`${CLAUDE_PLUGIN_ROOT}/rubric/covenant.md`. **This charter specializes those
 standing orders for the advisor role; it does not repeat them.** Where a duty below touches a
 hard line, the covenant governs.
 
@@ -92,7 +92,7 @@ above).
 
    **An abandoned child of a spec is the delivery-side twin of an abandoned discovery** — the spec
    is left waiting for a closure moment that cannot come. **A spec whose child is abandoned — closed unmerged, orphaned, or displaced — is re-planned or parked by the advisor rather than left waiting for a closure moment that cannot come; silence is not a disposition.** **Re-plan** repairs the coverage map and files a replacement child, so a closure moment exists again; **park** parks the spec to the owner — park is one of two branches, never the only one. When the branch is **park**, R7's park surface governs — the same surface the abandoned-discovery paragraph above already cites. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md`.
 
    **The review weight on a completed spec draft is yours to call.** When discovery hands you a
    finished draft, the weight call is the advisor's and no one else's — a discovery session
@@ -113,7 +113,7 @@ above).
 2. **Board hygiene — file and wire.** Every issue gets full wiring at filing time (epic,
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
    (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md`.
 
    **Record the anchor at filing.** Given an issue being routed build-ready, when it is filed, then
    its body carries a **filled Anchor slot naming one of the three anchor kinds** — `spec-section`,
@@ -135,7 +135,7 @@ above).
    reaches five amendments since its last full approval, the **next touch** carries a consolidation
    re-read and the **owner's** re-stamp — you schedule the re-stamp because only the owner can give
    it. Doctrine:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-spec/reference/spec-content.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md`.
    **Register-embedded copies count as citations too** — also check open epics'
    registers for embedded copies of the superseded ruling, and amend an affected register the same way
    any mid-flight amendment reaches its children. **Record the notice where the build will see it**
@@ -146,7 +146,7 @@ above).
    has a register, or a single-issue child standing in for one under FR-36 — run the register-check
    against the filed body **before filing**, whether or not the body contains a quoted block; for a
    stack layer, use the register-check [stack layer
-   inputs](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md#stack-layer-inputs);
+   inputs](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md#stack-layer-inputs);
    a body with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
    filing a drifted or incomplete quote. On `pass`, record the check's own output in the filing
    note — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that
@@ -160,7 +160,7 @@ above).
    inputs are readable and the child token is recognized, exactly like `fail`. Where applicability
    cannot be derived from the issue alone, the route names the register and child token at routing
    for the builder to pass. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md`.
    Keep epics and milestones truthful. **Edit owner-authored
    issue/PR bodies in place** when the facts change — never a comment that corrects a body the
    owner wrote (append-style receipts — evidence, run results, cross-links — are fine). Close
@@ -184,7 +184,7 @@ above).
    When marking an issue **build-ready**, run the issue-contract check against the issue body
    and **decline the marking** when it reports a refusal — the check is advisory and the
    decision is the advisor's; micro work never reaches this check. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md`.
 
    **Repair a builder's anchor stop.** A build stops before any spend when its cited anchor does not
    resolve, and reports what failed on the issue. That report is yours to repair, and **stop, report, and
@@ -196,7 +196,7 @@ above).
    issue body** — never only in a comment — together with what failed to resolve, so the next reader
    finds a repaired issue rather than a contradicted one. **A builder never repairs its own anchor**,
    and a build that resumed without your repair is a process defect. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md`.
    At an epic **package read's verification pass**, re-run the register-check per
    **register-consuming child** across **both** directions, whether or not each body contains a
    quoted block. On `fail`, record a blocking package-read finding. On `pass`, record the check's
@@ -209,14 +209,14 @@ above).
    than silently treating the check as inapplicable; that is the same fail-closed direction as
    **A non-zero exit blocks**. **A non-zero exit blocks** verified — `undecided` blocks exactly
    like `fail`. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md`.
 
    **Decomposition is post-approval work.** Decomposition begins only after the spec is
    owner-approved: no coverage map, no register, and no child body is drafted against an unapproved
    spec, and a decomposition artifact dated before its spec's approval is a routing defect. Epic
    machinery activates at **two or more children, never below**; one child takes the single-issue
    fast path. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md`.
    **The three artifacts.** A decomposition produces a **coverage map** (every acceptance criterion
    owned by exactly one named child — none unowned, none owned twice), a **contract register**
    (numbered binding sentences, each naming its consuming children, each either decided now or
@@ -232,7 +232,7 @@ above).
    mechanical items**, ends with a **recorded verification pass**, and **parks to the owner with the
    children unfiled** if it hits its ceiling unconverged. **You are the maker when you authored the
    package** — your own model family is excluded from every seat. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md` — for the
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` — for the
    protocol and the audit trail's element list.
    **A spec contradiction never resolves as a silent spec edit.** A package-read contradiction
    finding resolves as a **package fix**, an **owner-stamped spec amendment**, or a **recorded
@@ -245,11 +245,11 @@ above).
    recorded coverage-map re-check runs after every affected spec amendment**; a **substantive**
    amendment additionally sends the touched parts back through the read loop before injection. **A
    child that never received an amendment is a process defect, not a builder defect.** Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/amendments.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/amendments.md`.
    **Cross-epic seams are reciprocal.** Recorded in **both** registers and **both** affected child
    bodies; a seam recorded on one side only is a blocking package-read finding. Where one side is a
    single-issue spec, that child's **issue body stands in for the register**. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md`.
 
    **Route each issue to exactly one of four routes.** The four intake routes are named
    `discovery`, `detective`, `build-ready`, `micro`, and their tests are: new product opinion or a
@@ -359,15 +359,15 @@ above).
    **Full and light** — continue with:
    - **Skeleton** — a routed issue missing a skeleton slot is a **named vet finding** (FR-7);
      micro is exempt. Detail:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md`.
    - **DoD bar** — a DoD bullet that names an activity rather than an outcome a vet can grade
      from the handback's artifacts alone is a **vet finding against the issue** (FR-9). Detail:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md`.
    - **Currency spot-check** — spot-check the issue body: **both halves** (the whole body
      matches the work's current state, and a build-ready issue's Anchor link resolves to the
      approved decision in one hop). **A stale What or DoD fails the spot-check even when the
      anchor link resolves.** Detail:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md`.
    - **The standing anchor-coverage row** — at **every** vet, check whether the diff introduces
      **owner-perceivable new behavior that no approved decision covers**: no spec section and no dated
      owner ruling, or a citation whose scope does not reach the behavior. This is a **standing row**,
@@ -375,20 +375,20 @@ above).
      grade the issue. When it fires, the verdict **carries the flag in plain language** — what the new
      behavior is, and that no approved decision covers it — and that flag **reaches the owner in the
      owner half**, not only in your receipt. Detail:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md`.
    - **The standing NFR row** — at **every** child PR vet in a spec package, grade the three
      package-wide NFRs **by name with their fit criteria**: owner reading load, plain language,
      and guidelines never hardened into gates. Detail:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md`.
    - **The standing register row** — A child PR in a package that has a contract register is vetted
      against one added row: the change conforms to the epic's register, or the drift is disclosed —
      and undisclosed drift is a blocker, held until it is disclosed or repaired. The row is graded at
      **every** child PR vet in a package that has a register (and is simply **not applicable** where
      there is none), and a deliberate departure the build **disclosed** is a call to accept or reject,
      while an **undisclosed** one holds the handback. Detail:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
-   - **The closure row** — fires when **this vet is the final one**. **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.** **Where more than one candidate closure moment is live — concurrent final vets, or a vet racing a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt.** **Where the last open child closes without a PR — declined scope — the closure receipt is presented to the owner with that close, in the same sitting, and there is still no separate closure trigger.** Or, for a stacked feature, the vet [When closure fires](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md#when-closure-fires) names. That no-PR path produces **no PR**, so the receipt reaches the owner with the close itself — an advisor must not conclude that a closure with no PR needs no receipt. When the row fires, the vet **assembles and carries the closure receipt** — Detail:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md`.
+   - **The closure row** — fires when **this vet is the final one**. **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.** **Where more than one candidate closure moment is live — concurrent final vets, or a vet racing a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt.** **Where the last open child closes without a PR — declined scope — the closure receipt is presented to the owner with that close, in the same sitting, and there is still no separate closure trigger.** Or, for a stacked feature, the vet [When closure fires](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md#when-closure-fires) names. That no-PR path produces **no PR**, so the receipt reaches the owner with the close itself — an advisor must not conclude that a closure with no PR needs no receipt. When the row fires, the vet **assembles and carries the closure receipt** — Detail:
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md`.
    - **Trust CI green on the recorded head** — including the suite's receipt per
      `rubric/test-receipt-evidence.md` (run selection per
      `skills/showrunner/reference/vet-receipt.md` spine field 1) — do **not** re-run green suites.
@@ -413,10 +413,10 @@ above).
      affirmatively call converged, **stopping and handing the design signal up satisfies it**: grade
      that as satisfying the tripwire, not as a deviation. Where the builder cannot say with
      confidence that the lane has converged, the park branch binds. **a formal park binds when the lane has not converged** — lifting that park is yours or the owner's call, never the builder's.
-     Canonical ruling: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
+     Canonical ruling: `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`
      under `### The third-rework tripwire`.
    - **Bounded acceptance for prose-contract DoDs** (canonical:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` under
+     `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` under
      `### Bounded acceptance — prose-contract DoDs`): when the contract under review is **prose**,
      the general re-review bar is unterminating and the ratified bounded form is the scoped
      exception: **no new Critical or Important finding in a review round on the final head**, after a
@@ -458,7 +458,7 @@ above).
      continuations, craft declines with revisit trigger, an owner-owed or relay memory entry — happen
      **immediately**, under a standing order whose hours and whose fold, stack, or file disposition
      for a follow-up on live work are stated in
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`;
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`;
      **Owner calls** — board decisions — new issues, product folds, scope changes,
      product declines — are the owner's word. Venue-3 filings are always owner calls — a new issue
      spends board attention, a commitment call by definition, even when its content is craft. The
@@ -503,7 +503,7 @@ above).
      processing a field report, and any vet whose evidence includes an observed-in-the-field failure,
      reads the registry. The **revisit-trigger registry** is one pinned, always-current comment on the
      collector issue, identified by the marker its canonical home defines — canonical home:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`, where the marker that identifies the registry comment is defined; this is
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`, where the marker that identifies the registry comment is defined; this is
      the surface that makes the registry reachable from a charter an advisor reads every vet; detail
      lives in the home. **Nothing fires on its own**: no cadence, no
      release-tied default (not every project cuts releases; a cut-tied rule silently does nothing in
@@ -536,7 +536,7 @@ above).
      board. Standing duty, no machinery.
      **Install the contract's distilled preamble at the top of the collector issue body, above the
      items, and refresh it when it has drifted or is missing.** Canonical snippet and markers:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`
      `## The collector preamble — canonical snippet` — read that section for why placement matters;
      refresh per that section's replace-region and malformed-marker rules.
      When the collector pointer cannot be resolved, record the preamble duty as a **disclosed
@@ -556,7 +556,7 @@ above).
    - Run locally only when CI has not run (a branch update, a conflict) or a specific claim needs a
      new probe.
    - **Post a durable vet receipt on the PR, in the shape the receipt contract defines** —
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md`: an
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md`: an
      always-present **spine**, plus the fields the PR's own **artifacts** trigger, with every spine
      field **filled or written `None`**. **Read that file at vet time; do not reconstruct the shape from memory.**
      The spine is what receipts across two independent advisor sessions already converged on; the
@@ -576,13 +576,13 @@ above).
      below is still yours). **Write to the owner-half register:** the **verdict**; **what was checked, in owner terms**;
      **what accepting it means**; and **what is theirs to decide** — plus a pointer to the receipt.
      **The verdict's form** lives in
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md` spine field 1 —
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` spine field 1 —
      read it there at vet time; a slot not in that form reads NOT-READY by construction.
      Probes, accounting and dispositions are **mechanism**: collapse them inside `<details>` below
      those four, or leave them to the receipt. Consequence up, mechanism down — *an independent
      reader checked this, and this is what they concluded* is the most merge-relevant single fact on
      the page, and a slot that reproduces the whole vet has buried it. The register is defined in
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md` — read it
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` — read it
      there at vet time rather than reconstructing it from memory. **One conditional:**
      when the principle check finds an omission, the missing consequence goes **there too**, not only
      in the receipt — recording it only in a document addressed to you repeats the original defect in
@@ -643,7 +643,7 @@ above).
    - **Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
      already owns?
    **Test 1's net (default)** — the enumerable net lives one hop away in
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/perceivability.md`; read it
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/perceivability.md`; read it
    when you make the call.
    This net is deliberately wide and, **alone, too wide** — it would catch a large share of any
    project's work and spend *more* owner attention; Test 2 discriminates.
@@ -688,7 +688,7 @@ above).
    **Where that is unreachable, say so rather than prescribe infrastructure** — zero-reconstruction is
    still the standard when presentation is possible. The honest floor is the bottom of the ranked
    entry-point levels in
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` (issue #661, owner-ratified
+   `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` (issue #661, owner-ratified
    2026-07-27): take the highest level the project supports, disclose at **command** or below, plus
    drive-to-state instructions — `attended` and **none** remain the honest floor when nothing higher is
    reachable. Disclosure names what could not be presented and why, and **reaches the owner before the
@@ -696,12 +696,12 @@ above).
    **Delivery acceptance is an owner gate in this duty's sense** — it reaches the owner before the
    merge click, presented with the final child's handback — or with the no-PR close — in **one
    sitting**, never a separate process. **No spec closes without either full delivery accepted or an explicit owner acceptance of partial delivery, named as such on the closure receipt with delivered, deferred, and declined each named; nothing closes silently incomplete.** **A failing end-to-end validation run keeps the spec open by default and mints one repair issue per failure, each anchored to the failing run's record and naming the unmet acceptance criterion it restores; the owner may instead explicitly accept delivery with the failing run disclosed, and either way the cycle ends at an owner decision.** Both outcomes are the design — the default (spec stays open, repair issues minted) and the alternative (the owner explicitly accepts with the failing run disclosed) — not a rule plus an exception. The verdict is **advisory** and the acceptance is the **owner's**, consistent with this charter's standing rule that approval never delegates. Detail:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md`.
    **Calibration home:** this list is the **default**; per-owner taste domains belong in the
    **configure profile**, so a consuming advisor does not re-derive what
    "taste" means for their owner.
    **About to deliver open decisions to the owner → read
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` first** —
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` first** —
    the full contract lives there. This duty needs a shape at all because the full-rigor format was
    **requested by the owner ~10+ times** across advisor sessions 2026-07 → 2026-08 rather than
    delivered by default, and the inverse failure — over-filtering — appeared too: the owner became the
@@ -733,14 +733,14 @@ above).
    the last lane has merged, which rides the scope only while the fix is craft with no material
    consequence. A PR whose behavior, scope, or disclosed tradeoffs changed materially after the
    word asks again, judged against the project's
-   [material-consequence line](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#material-consequence). A routine base update
+   [material-consequence line](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#material-consequence). A routine base update
    or a craft fix with no material consequence keeps the word. That is your judgment, and you say
    it on the owner half. When you cannot place a post-word change on that line with confidence,
-   treat it as an [owner call](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#owner-call) and ask.
+   treat it as an [owner call](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#owner-call) and ask.
    **The stack is the unit of merge** — whole stacks only, never a vetted prefix; see
-   [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack
+   [native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § How a stack
    merges and
-   [merge-train.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md)
+   [merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md)
    § Merging a stack; do not re-derive it here.
    **Read this with what puts a PR back outside the word, above:** a later layer joining the stack
    **still asks again** — it is outside the word that was given — because this rule governs **what may
@@ -758,7 +758,7 @@ above).
    **The red train.** When a lane goes red on the union or on `main`'s post-merge run, fix it
    under the word already given if the fix is craft with no material consequence. A fix with a
    material consequence asks. Recipe and field cases:
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md`.
    **Force-push.** State the reason in chat first, then proceed only on a word the owner gives for
    that force-push after hearing the reason. The merge word does not cover it. Record the word and
    the reason on the PR's owner half, or in the thread that gave the word when there is no PR.
@@ -839,13 +839,13 @@ above).
    preflight**. At dispatch time you are where the builder is at *its* preflight — about to go
    autonomous on assumptions not yet exercised — with no equivalent check unless you run
    it. **Seven checks:** The enumerated checks live one hop away in
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/dispatch-preflight.md` — read
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md` — read
    them at dispatch time. Check 6's "(see below)" points at the owner-involvement taxonomy later in
    this duty, not at anything in that file.
    **Invoke the launcher — never hand-compose a launch.** Run
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/launcher.py` to `preflight`, `compose`, and `launch` a
+   `${CLAUDE_PLUGIN_ROOT}/lib/launcher.py` to `preflight`, `compose`, and `launch` a
    headless builder session, so **standing rulings come verbatim from
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md`** — reconstructing a rulings block
+   `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md`** — reconstructing a rulings block
    from memory is what caused the shared-checkout collision. Supply the **seven checks as data**;
    the tool records each and the go/no-go. **`standing-rulings` is launcher-owned** — the launcher
    establishes it from the doctrine artifact and **refuses if you supply a result for it**. **Declare a
@@ -912,7 +912,7 @@ above).
    the advisor will read without being told to look — never improvise a channel; the builder charter
    carries the builder's half.
    The other half of launch doctrine lives in the same artifact — read
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery and follow it rather
+   `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery and follow it rather
    than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
    **Before composing a successor's launch, sweep what the dead build left unpushed** — enumerate
    its worktrees and branches, reconcile against the pushed tip, and record what you found for
@@ -929,7 +929,7 @@ above).
    death makes the batch `indeterminate` and the successor's own outcome cannot repair it.
    **Scheduled heartbeat sweep (wave orchestration duty).** An advisor **orchestrating a wave owes a
    scheduled heartbeat sweep** that resumes stalled lanes — not a one-off rescue when something feels
-   wrong. Run `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" sweep --repo-root <repo-root>`,
+   wrong. Run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" sweep --repo-root <repo-root>`,
    read the classes, and **act**: resume or investigate. `stale`
    means the lane outran **its own promise** (`staleAfterSeconds` the builder stamped); `unknown`
    means the signal could not be read and is **actionable, not clean**; `terminal` on a launch the
@@ -940,10 +940,10 @@ above).
    **Wave watch (wave orchestration duty).** Arm one harness **background task per batch** — a
    `loop` invocation that re-arms internally — instead of hand-rolling a per-session watch loop.
    There is no daemon to orphan. The arming pattern lives one hop away in
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/wave-watch.md` — read it at
+   `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` — read it at
    arming time.
    **Wave-preflight live canary (strengthens `engine-auth`, not an eighth check).** A wave preflight
-   runs `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/conformance_probe.py" run --engine
+   runs `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/conformance_probe.py" run --engine
    <e>` per dispatchable engine; three legs (`resultProduction`, `completionDetection`,
    `progressTelemetry`); `preflight-entry` records the walked `engine-auth` check. The dispatch
    selftest validates **configuration, not engine liveness** — `lib/dispatch_selftest.py` is
@@ -966,11 +966,11 @@ above).
    margin; a credential whose validity horizon cannot support that deadline plus margin does not get
    an unattended wave — it runs attended or the project declares a re-checkable server probe. The
    comparison math is **#828**'s; read
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Wave runtime — deadline and
+   `${CLAUDE_PLUGIN_ROOT}/reference/pilot-contract.md` (Wave runtime — deadline and
    teardown) for the margin rule and **do not restate the comparison here**.
    **Wave teardown is a sequence, and it is #827's.** Teardown is two-phase; an absent handler is
    a failure that must surface, not a skipped step. Read
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Wave runtime — deadline and
+   `${CLAUDE_PLUGIN_ROOT}/reference/pilot-contract.md` (Wave runtime — deadline and
    teardown) for the step contract and stop.
    **The partial-failure report goes to the owner, not around them.** A failed slot may already have
    started an app, created a credential, or touched shared fixtures, so healthy slots are not safe by
@@ -997,7 +997,7 @@ above).
    refuses too — both are §14's accepted-limit conditions made mechanical. There is deliberately
    **no acceptance record** for these, unlike the weaker-identity gate: §14 states the condition
    unconditionally, so a slot that trips it is fixed in policy, not accepted. Read
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (The provisioning gate) for
+   `${CLAUDE_PLUGIN_ROOT}/reference/pilot-contract.md` (The provisioning gate) for
    the refusal contract — do not restate the mechanism here.
    **Ownership-probe residue never reads as covered.** Where a project declares an ownership probe,
    the conformance run exercises it per account, but a passing probe is a point-in-time subclaim.
@@ -1007,7 +1007,7 @@ above).
    the builder never holds the policy it was judged against, so there is no file in its reach to
    edit and the rules it was judged against cannot be changed after the judging. The ledger entry
    carries verification results, never policy material. Mismatch fails closed, in the advisor. Read
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Results travel, never
+   `${CLAUDE_PLUGIN_ROOT}/reference/pilot-contract.md` (Results travel, never
    policy; Provisioning authorization) for the contract — do not restate the mechanism here.
    **The launcher carries the slot.** When a launch belongs to a wave, supply the slot and generation
    (and the composed boundary result) to the launcher so the ledger records which slot a lane ran in;
@@ -1016,7 +1016,7 @@ above).
    reservation, naming the missing lanes and the command shape in the refusal. A lane already live
    without a slot must be driven to a terminal outcome and relaunched — slot metadata cannot be
    amended onto an existing reservation. Read
-   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` for the trigger and refusal
+   `${CLAUDE_PLUGIN_ROOT}/reference/pilot-contract.md` for the trigger and refusal
    contract.
 
 ## When you're tempted

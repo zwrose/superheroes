@@ -4,7 +4,7 @@ description: "First action in a new, restarted, or compacted showrunner advisor 
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # showrunner-resume — pick the advisor seat back up
 
@@ -27,7 +27,7 @@ Load the showrunner charter itself (`skills/showrunner/SKILL.md` under this plug
 Every launcher, watch, and canary call this seat makes carries **this** session's own configuration directory, never the previous seat's.
 
 1. **The rule:** each launch pins the calling seat's own `CLAUDE_CONFIG_DIR` (or the host's equivalent configuration root) on the child it spawns and on the ledger record.
-2. **The backstop:** the launcher refuses a launch whose pinned configuration directory is not the calling seat's own, naming both directories in the refusal. Read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/launcher.py` for the refusal tokens (`launch-foreign-instance-pin`, `launch-seat-instance-undetermined`, `premise-stack-fields-incomplete`, `premise-stack-field-invalid`, `premise-stack-layers-planned-incomplete`, `premise-stack-layers-planned-invalid`, `premise-stack-layers-planned-under-position`, `premise-dependency-invalid`, `base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`, `layer-position-occupied`, `dependency-closed-unmerged`, `dependency-open-ready-pr`, `dependency-read-unavailable`) and the deliberate-override flag (`--allow-foreign-instance`). Do not re-implement the check in this skill.
+2. **The backstop:** the launcher refuses a launch whose pinned configuration directory is not the calling seat's own, naming both directories in the refusal. Read `${CLAUDE_PLUGIN_ROOT}/lib/launcher.py` for the refusal tokens (`launch-foreign-instance-pin`, `launch-seat-instance-undetermined`, `premise-stack-fields-incomplete`, `premise-stack-field-invalid`, `premise-stack-layers-planned-incomplete`, `premise-stack-layers-planned-invalid`, `premise-stack-layers-planned-under-position`, `premise-dependency-invalid`, `base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`, `layer-position-occupied`, `dependency-closed-unmerged`, `dependency-open-ready-pr`, `dependency-read-unavailable`) and the deliberate-override flag (`--allow-foreign-instance`). Do not re-implement the check in this skill.
 3. **The override rule:** pass `--allow-foreign-instance` **only on the owner's instruction, naming the instance — never on the advisor's own judgment.**
 
 On a host that does not expose the calling session's own process identity, the launcher cannot make that comparison and does not run the pin gate — on such a host the rule is the advisor's alone.
@@ -43,12 +43,12 @@ Read **no other source when choosing a row**, and in particular read **no handed
 5. each lane's issue and pull request: any **park record** on either, with its stated blocker and any owner or advisor ruling to resume; whether the pull request exists, whether it is still a draft, whether a durable review receipt stands on it (the receipt `skills/workhorse/SKILL.md` § 10. Review before handback requires — that section is the term's one definition, and every later use here means that receipt), the **remote** head commit, and the continuous integration conclusion for **that exact commit**, selected by workflow name **plus** head commit — never by "the newest run";
 6. each lane's own session transcript — the one named by the **session identifier recorded on that lane's own launch record**, looked up under **the configuration root that launch record itself recorded** — never the seat's own root, and never "the newest transcript"; exactly one file may match. Whether the transcript resolved is evidence for the decision table's row 2; the table decides. The reader **stats the file only** and never reads its contents.
 
-When row 4 is the candidate for a lane, also read that lane's dead worktrees, local branches, and pushed tip — **only** as the unpushed-work sweep `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Sweep for unpushed work before adopting defines. Do not re-describe that sweep here.
+When row 4 is the candidate for a lane, also read that lane's dead worktrees, local branches, and pushed tip — **only** as the unpushed-work sweep `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Sweep for unpushed work before adopting defines. Do not re-describe that sweep here.
 
 Shell forms for 1–4:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 REPO_ROOT="<absolute path to the project repository>"
 ```
 
@@ -62,7 +62,7 @@ python3 -B "$ROOT_DIR/lib/launcher.py" count --repo-root "$REPO_ROOT" --batch "$
 python3 -B "$ROOT_DIR/lib/heartbeat.py" sweep --repo-root "$REPO_ROOT"
 ```
 
-Probe each lane's recorded leader pid from the ledger's `started` record — a double-confirmed process check, never a global process match. Detail: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery.
+Probe each lane's recorded leader pid from the ledger's `started` record — a double-confirmed process check, never a global process match. Detail: `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery.
 
 For 5, read each lane's issue and pull request through the host-neutral actions your forge exposes — park records, existence, draft state, durable review receipt, remote head sha, and the integration run for that workflow name on that sha. Do not pin a particular forge's command syntax here.
 
@@ -75,7 +75,7 @@ Read rows **top to bottom**; the **first row whose required evidence holds** dec
 | **1. parked** | A park record on the lane's issue or pull request (read completed) whose stated blocker is **not** cleared, and no owner or advisor ruling to resume it. This row needs no process, heartbeat, or transcript read — which is why a park record outranks a failed transcript read. | Report the lane as parked, awaiting a decision; nothing is relaunched, armed, or recorded. |
 | **2. re-arm** | **All** of: the recorded leader process is **positively live** (the double-confirmed probe in Step 3); the lane's heartbeat classifies **`fresh`** in the heartbeat sweep — the sweep's `fresh` class, the lane's age inside its own `staleAfterSeconds` promise, as CONVENTIONS §15 defines it; and the lane's session transcript **resolved** (Step 3, source 6: exactly one file found by the identity rule, not dated into the future). **A transcript alone never re-arms.** | Nothing is relaunched and no outcome recorded; the lane's batch is a candidate for Step 6 arming. |
 | **3. vet** | **All** of: the pull request exists, is **not** a draft, carries a durable review receipt, its **remote** head is the commit that receipt names, and CI concluded success on that exact commit (selected by workflow name plus head commit). | If the ledger carries no terminal outcome, record `handback` first (Step 5); **never relaunched**. |
-| **4. adopt** | **All** of: the recorded leader process is **positively not live** (the probe completed and found it dead); the pull-request read (Step 3, source 5) completed and found the lane's pull request **absent or a draft** — a ready (non-draft) pull request never satisfies this row; the park-record read completed and found either no park record, or a park whose stated blocker is cleared or which the owner or advisor has ruled should resume; and the unpushed-work sweep of `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Sweep for unpushed work before adopting has run for this lane and its residue is durable. | Record the lane's terminal outcome first (Step 5), then adopt by that section's procedure (cite `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Sweep for unpushed work before adopting). |
+| **4. adopt** | **All** of: the recorded leader process is **positively not live** (the probe completed and found it dead); the pull-request read (Step 3, source 5) completed and found the lane's pull request **absent or a draft** — a ready (non-draft) pull request never satisfies this row; the park-record read completed and found either no park record, or a park whose stated blocker is cleared or which the owner or advisor has ruled should resume; and the unpushed-work sweep of `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Sweep for unpushed work before adopting has run for this lane and its residue is durable. | Record the lane's terminal outcome first (Step 5), then adopt by that section's procedure (cite `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Sweep for unpushed work before adopting). |
 | **5. unresolved** | None — the last row, for any lane no earlier row could establish. | The lane is named in the report with the read that failed or the evidence that is missing; nothing is relaunched, armed, or recorded. |
 
 A finished lane is never spent again as a fresh launch, and an unreadable lane is never treated as a dead one.
@@ -105,11 +105,11 @@ The check is **fail-closed:** a hit, an ambiguous reading, an unavailable listin
 <!-- WORKAROUND: duplicate-loop check via process listing before background arming
      delete-when: a durable batch watcher makes the duplicate-loop check and this arming shape unnecessary -->
 
-**Arming is a background task, always.** Cite `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/wave-watch.md` for the arming pattern and its flags rather than restating them.
+**Arming is a background task, always.** Cite `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` for the arming pattern and its flags rather than restating them.
 
-This skill does **not** take that reference's suggestion of a one-off foreground spot check before arming. The one-off watch verb polls until something actionable happens or its window expires; against a quiet live lane it blocks for the whole window. That is why it is not used here.
+The reference's one-off check returns at once and is safe to run before arming, but a mistyped batch id reads as a quiet batch (`timer`), so check the batch id against the launch record rather than trusting the check.
 
-**Residual:** the check and the arm are two steps, so two advisor seats resuming the same project at the same moment could both find nothing and both arm. This skill rests on there being one advisor seat per project; do not imply the check is atomic.
+**Residual:** the check and the arm are two steps, so two advisor seats resuming the same project at the same moment could both find nothing and both arm; `loop` itself also refuses a second live loop on the same batch (`loop-already-live`), so two seats racing to arm end with one watcher and one refusal, not two watchers. This skill rests on there being one advisor seat per project; do not imply the check is atomic.
 
 ## Step 7 — report in three lines
 
@@ -163,7 +163,7 @@ Watches: wave-e not armed — no row-2 lane in the batch. Owner: #350 is ready b
 
 A seat that blocks in the foreground is a seat the owner cannot reach.
 
-Three instances: the one-off watch verb is not used at all; the terminal-outcome verb runs in the foreground only with a zero wait; arming is a background task only.
+Three instances: the one-off watch verb returns at once and never waits; the terminal-outcome verb runs in the foreground only with a zero wait; arming is a background task only.
 
 ## Failure modes
 
@@ -187,6 +187,5 @@ Three instances: the one-off watch verb is not used at all; the terminal-outcome
 | Treating a missing heartbeat as a dead builder | → a missing read satisfies no row; see Step 4. |
 | Using the newest CI run instead of workflow+sha | Select the run for the remote head commit the receipt names. |
 | Killing a duplicate watcher before arming | The duplicate check is read-only; never kill on either reading. |
-| Running a foreground one-off watch before arming | Cite wave-watch for arming only; the spot check blocks on quiet lanes. |
 | Passing `--allow-foreign-instance` on your own judgment | Only on the owner's instruction, naming the instance. |
 | Waiting in the foreground for a live child to exit | Use `--await-exit 0` in the foreground; positive waits are background tasks. |

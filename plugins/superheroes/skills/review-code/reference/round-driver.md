@@ -16,7 +16,7 @@
 `lib/round_driver.py` is the **one entrypoint** for the review-code auto-fix loop (#507). It
 collapses the old `code_loop_plan.py` plan/record/decide choreography, the manual circuit-breaker
 call, and the head-diff derivation into a single `next`/`submit` state machine the orchestrator
-obeys. `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`.
+obeys. `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`.
 
 ## The one entrypoint
 
@@ -39,7 +39,7 @@ shape — never a silent off-ramp.
 Fresh state (first `next` of a session):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/round_driver.py" next \
   --session-dir "$SESSION_DIR" \
   --diff-path "$SESSION_DIR/round-1/diff.txt" \

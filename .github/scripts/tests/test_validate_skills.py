@@ -7,24 +7,43 @@ import validate_skills as vs
 def test_links_resolve(tmp_path):
     (tmp_path / "rubric").mkdir()
     (tmp_path / "rubric" / "review-base.md").write_text("x")
-    text = "Read the base rubric (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`)."
+    text = "Read the base rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`)."
     assert vs.check_links("p/s", text, str(tmp_path)) == []
 
 def test_links_flag_missing_target(tmp_path):
-    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/gone.md`."
+    text = "See `${CLAUDE_PLUGIN_ROOT}/rubric/gone.md`."
     out = vs.check_links("p/s", text, str(tmp_path))
     assert out and "reference-link" in out[0] and "gone.md" in out[0]
+
+def test_links_flag_retired_plugin_root_form(tmp_path):
+    # the retired fallback form is flagged even when its target resolves
+    (tmp_path / "rubric").mkdir()
+    (tmp_path / "rubric" / "review-base.md").write_text("x")
+    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`."
+    assert vs.check_links("p/s", text, str(tmp_path)) == [
+        "reference-link: p/s: retired plugin-root form rubric/review-base.md"]
+
+def test_links_flag_retired_form_beside_valid_citations(tmp_path):
+    (tmp_path / "rubric").mkdir()
+    (tmp_path / "rubric" / "review-base.md").write_text("x")
+    text = (
+        "Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`.\n"
+        "Then `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/gone.md`.\n"
+        "And again `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`.\n"
+    )
+    assert vs.check_links("p/s", text, str(tmp_path)) == [
+        "reference-link: p/s: retired plugin-root form rubric/gone.md"]
 
 # Fix A: directory targets must NOT be flagged
 def test_links_accept_directory_target(tmp_path):
     (tmp_path / "lib").mkdir()
-    text = 'LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"'
+    text = 'LIB="${CLAUDE_PLUGIN_ROOT}/lib"'
     assert vs.check_links("p/s", text, str(tmp_path)) == []
 
 # Fix B: allowlist suppresses known sentinel references
 def test_links_allowlist_suppresses_sentinel(tmp_path):
     # missing file IS flagged when not in allowlist
-    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/loop_state.py`."
+    text = "See `${CLAUDE_PLUGIN_ROOT}/lib/loop_state.py`."
     out = vs.check_links("p/s", text, str(tmp_path))
     assert out and "reference-link" in out[0]
 
@@ -32,7 +51,7 @@ def test_gather_allowlist_suppresses_sentinel(tmp_path):
     root = str(tmp_path / "plugins"); os.makedirs(root)
     body = (
         "---\nname: producer\ndescription: Use when build tasks should run\n---\n"
-        "LIB=\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/loop_state.py\"\n"
+        "LIB=\"${CLAUDE_PLUGIN_ROOT}/lib/loop_state.py\"\n"
     )
     d = os.path.join(root, "myplugin", "skills", "producer")
     os.makedirs(d)
@@ -64,31 +83,45 @@ def test_conventions_section_numbers_and_refs():
 def test_depth_ok_when_reference_has_no_further_refs(tmp_path):
     (tmp_path / "reference").mkdir()
     (tmp_path / "reference" / "a.md").write_text("leaf content, no further refs")
-    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/a.md`."
+    text = "See `${CLAUDE_PLUGIN_ROOT}/reference/a.md`."
     assert vs.check_depth("p/s", text, str(tmp_path)) == []
 
 def test_depth_flags_a_chain(tmp_path):
     (tmp_path / "reference").mkdir()
     (tmp_path / "reference" / "a.md").write_text(
-        "more at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/b.md`")
-    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/a.md`."
+        "more at `${CLAUDE_PLUGIN_ROOT}/reference/b.md`")
+    text = "See `${CLAUDE_PLUGIN_ROOT}/reference/a.md`."
     out = vs.check_depth("p/s", text, str(tmp_path))
-    assert out and "reference-depth" in out[0]
+    assert out == [
+        "reference-depth: p/s: reference/a.md itself references another file "
+        "(chain deeper than one hop)"]
+
+def test_depth_flags_a_chain_in_retired_form(tmp_path):
+    # a cited reference whose only nested citation uses the retired fallback form still
+    # trips the one-hop gate, and the retired form is reported rather than invisible
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "reference" / "a.md").write_text(
+        "more at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/b.md`")
+    text = "See `${CLAUDE_PLUGIN_ROOT}/reference/a.md`."
+    assert vs.check_depth("p/s", text, str(tmp_path)) == [
+        "reference-depth: p/s: reference/a.md itself references another file "
+        "(chain deeper than one hop)",
+        "reference-link: p/s: retired plugin-root form reference/b.md (in reference/a.md)"]
 
 def test_depth_ignores_unresolved_target_that_is_check_links_job(tmp_path):
     # a reference to a missing file is NOT a depth violation (resolution is check_links')
-    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/missing.md`."
+    text = "See `${CLAUDE_PLUGIN_ROOT}/reference/missing.md`."
     assert vs.check_depth("p/s", text, str(tmp_path)) == []
 
 def test_depth_deduplicates_same_reference(tmp_path):
     """Citing the same chained reference file twice yields exactly ONE violation."""
     (tmp_path / "reference").mkdir()
     (tmp_path / "reference" / "a.md").write_text(
-        "more at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/b.md`")
+        "more at `${CLAUDE_PLUGIN_ROOT}/reference/b.md`")
     # Reference a.md twice in the body
     text = (
-        "First `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/a.md`. "
-        "Second `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/a.md`."
+        "First `${CLAUDE_PLUGIN_ROOT}/reference/a.md`. "
+        "Second `${CLAUDE_PLUGIN_ROOT}/reference/a.md`."
     )
     out = vs.check_depth("p/s", text, str(tmp_path))
     depth_violations = [v for v in out if "reference-depth" in v]

@@ -3,7 +3,7 @@ name: architect-init
 description: "Internal helper reached from `superheroes:configure` to refresh the-architect's doc-policy layer — where definition-docs live, in-repo committed vs gitignored. Not a front door; owners run `superheroes:configure` instead."
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # architect-init
 
@@ -15,7 +15,7 @@ setup step that `architect-discovery` and the rest of the band depend on.
 ## Step 1 — Resolve the storage mode
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys; sys.path.insert(0, '$ROOT_DIR/lib')
 import mode_registry, os
@@ -31,7 +31,7 @@ band-wide init, not by this skill (CONVENTIONS `§2.3`).
 ## Step 2 — Check for an existing policy (idempotency gate)
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json, os; sys.path.insert(0, '$ROOT_DIR/lib')
 import architect_config
@@ -55,7 +55,7 @@ Run `architect_config.analyze_repo` to get the recommended location and
 visibility (committed vs gitignored) from the repo's existing doc layout:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json, os; sys.path.insert(0, '$ROOT_DIR/lib')
 import architect_config
@@ -67,7 +67,7 @@ Apply the analysis-informed default directly with `confirmed: false` (provisiona
 non-interactive CLI invocation takes this path — no branch on an unanswered gate:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json, os; sys.path.insert(0, '$ROOT_DIR/lib')
 import architect_config

@@ -120,10 +120,10 @@ Anchor hold, the reported token is the header-form refusal.
 > not claimed as one.
 
 **Invocation:** write the issue body to a file, then run (from a plugin-cache install,
-`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/issue_contract.py" check-build-ready --body-file <path>
 ```
 
@@ -161,10 +161,10 @@ contract, whose one home is [`owner-decisions.md`](owner-decisions.md).
 
 **Intake grading.** Pipe the tier claim as JSON on stdin to `front_door grade` in
 [`../../../lib/front_door.py`](../../../lib/front_door.py) — from a plugin-cache install,
-`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`:
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 echo '<claim-json>' | python3 -B "$ROOT_DIR/lib/front_door.py" grade --cwd <repo> [--root <store>]
 ```
 

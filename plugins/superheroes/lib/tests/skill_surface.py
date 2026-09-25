@@ -5,8 +5,9 @@ import re
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SKILLS = os.path.normpath(os.path.join(_HERE, "..", "..", "skills"))
 
+# Bites on: a SKILL.md reference link in the ${CLAUDE_PLUGIN_ROOT}/skills/<s>/reference/<f>.md form (other forms are not collected).
 _REF = re.compile(
-    r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}/skills/([A-Za-z0-9._-]+)/reference/([A-Za-z0-9._-]+\.md)"
+    r"\$\{CLAUDE_PLUGIN_ROOT\}/skills/([A-Za-z0-9._-]+)/reference/([A-Za-z0-9._-]+\.md)"
 )
 
 
