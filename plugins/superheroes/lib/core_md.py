@@ -2483,6 +2483,7 @@ def confirm(cwd, *, root=None, now=None):
       - {action: "noop"}       already confirmed (idempotent)
       - {action: "absent"}     no core.md to confirm
       - {action: "behind"}     core.md is a NEWER schema — refuse to rewrite (UFR-3)
+      - {action: "refused"}    vet checks malformed in raw core (vet-checks-malformed)
       - {action: "deferred"}   lock contended / store unwritable (UFR-4), or core.md unreadable
         (includes reason/detail when unreadable — not retryable)"""
     with store_core.repo_identity_memo():
@@ -2524,6 +2525,17 @@ def confirm(cwd, *, root=None, now=None):
                 return {"action": "behind", "record": existing}
             if existing.get("status") == "confirmed":
                 return {"action": "noop", "record": existing}
+            try:
+                path = core_path(cwd, root)
+                with open(path, encoding="utf-8") as fh:
+                    raw_text = fh.read()
+            except OSError:
+                mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+                return {"action": "deferred", "record": None}
+            vet_parsed = parse_vet_checks(raw_text)
+            if vet_parsed["malformed"]:
+                return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
+                        "malformed": vet_parsed["malformed"], "record": existing}
             # axis: confirm preserves vetChecks in allowlist
             facts = {k: existing[k] for k in (
                 "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",

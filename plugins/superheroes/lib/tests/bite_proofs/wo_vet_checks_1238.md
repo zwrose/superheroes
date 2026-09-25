@@ -124,7 +124,8 @@ Parser branches E6–E13: neutralize the guarded `entry_reasons.append` (or stra
 ### E23
 
 - **guarded element:** `core_md.py:1271` — **axis:** refuse smuggled superheroes-core block in Evidence (`vet-checks-round-trip-refused`)
-- **neutralization:** prefix guard condition with `False and`
+- **neutralization:** `if (new_parsed is None` → `if False and (new_parsed is None`
 - **raw red:** `test_write_vet_checks_refused_when_evidence_smuggles_json_block` — expected `refused`, got `written`
-- **restore:** remove `False and`
+- **restore:** `if False and (new_parsed is None` → `if (new_parsed is None`
+- **restore receipt:** guard at `core_md.py:1272` reads `if (new_parsed is None or not _prose_field_round_trip_ok(orig, new_parsed, "vetChecks")` (no `False and` prefix); `git status --porcelain` over `plugins/superheroes/lib/core_md.py` empty after restore
 - **raw green:** `1 passed`

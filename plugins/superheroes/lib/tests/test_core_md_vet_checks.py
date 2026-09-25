@@ -239,6 +239,28 @@ def test_confirm_preserves_vet_checks_on_provisional_core(tmp_path):
     assert after["checks"] == before
 
 
+def test_confirm_refused_when_vet_checks_section_duplicated(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    dup_core = (
+        _section_duplicated_core()
+        .replace("status=confirmed", "status=provisional", 1)
+        .replace('"status": "confirmed"', '"status": "provisional"', 1)
+    )
+    path = CM.core_path(repo, store)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(dup_core)
+    before = open(path, encoding="utf-8").read()
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "refused"
+    assert res["reason"] == "vet-checks-malformed"
+    assert [(m["entry"], m["reason"]) for m in res["malformed"]] == [
+        (None, "section-duplicated"),
+    ]
+    assert open(path, encoding="utf-8").read() == before
+    assert CM.read(repo, root=store)["status"] == "provisional"
+
+
 def _write_core(repo, store, **extra):
     facts = dict(_CORE_FACTS, **extra)
     CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
