@@ -92,6 +92,7 @@ _EXPECTED_CMD_NAMES = (
     "cmd_record_missing",
     "cmd_record_result",
     "cmd_relocate",  # no durable seat records: rewrites checkout keys + journal
+    "cmd_rule",  # no durable seat records: ledger + round rulings + journal; refuses an answered attempt
     "cmd_submit",
 )
 

@@ -19,6 +19,9 @@ _ALLOWED_WRITER_FUNCTIONS = frozenset({
     "_record_disposition",
     "_record_merged_into",
     "_archive_departures",
+    # The rulings verb's fold (#1419): seeds an audit new-issue candidate the Nit cap kept out of
+    # the ledger, as a raised row, before `_record_disposition` closes it — a fold-time write.
+    "_seed_candidate_ledger_row",
 })
 _ALLOWED_LEDGER_KEY_FUNCTIONS = frozenset({_WRITER_NAME})
 _SESSION_CONTRACT_BASENAME = "session_contract.py"
