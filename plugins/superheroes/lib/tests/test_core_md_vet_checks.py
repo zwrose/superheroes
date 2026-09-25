@@ -338,6 +338,41 @@ def test_parse_rejects_indented_code_as_vet_entry_heading():
     assert (None, "stray-text") in _malformed_pairs(parsed)
 
 
+def test_parse_rejects_fenced_heading_as_second_vet_check():
+    body = (
+        "### Real\n"
+        "- **Evidence:** real evidence\n"
+        "- **The vet records:** real receipt\n"
+        "  ```markdown\n"
+        "### Fake\n"
+        "- **Evidence:** fake evidence\n"
+        "- **The vet records:** fake receipt ```\n"
+    )
+    checks, malformed = CM._parse_vet_checks_body(body.splitlines())
+    assert checks == []
+    assert ("Real", "unrecognized-line") in [(m["entry"], m["reason"]) for m in malformed]
+    assert not any(m["entry"] == "Fake" for m in malformed)
+    ok, bad = CM._vet_checks_prose_body_acceptance(body)
+    assert ok is False
+    assert any(m["reason"] == "unrecognized-line" for m in bad)
+
+
+def test_write_vet_checks_refused_fenced_heading_smuggle(tmp_path):
+    repo, store = _repo_store(tmp_path)
+    body = (
+        "### Real\n"
+        "- **Evidence:** real evidence\n"
+        "- **The vet records:** real receipt\n"
+        "  ```markdown\n"
+        "### Fake\n"
+        "- **Evidence:** fake evidence\n"
+        "- **The vet records:** fake receipt ```\n"
+    )
+    res = CM.write_vet_checks(repo, body, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == "vet-checks-malformed"
+
+
 def test_write_vet_checks_refused_indented_code_entry(tmp_path):
     repo, store = _repo_store(tmp_path)
     body = (

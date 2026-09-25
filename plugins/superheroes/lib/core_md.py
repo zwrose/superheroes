@@ -1043,21 +1043,27 @@ def _vet_checks_malformed_item(entry, reason, detail):
     return {"entry": entry, "reason": reason, "detail": detail}
 
 
+def _vet_checks_live_entry_heading(inert, index, line):
+    return not inert[index] and _vet_checks_line_is_entry_heading(line)
+
+
 def _parse_vet_checks_body(body_lines):
     """Parse entry bodies inside one Vet checks section."""
     malformed = []
     checks = []
     names_seen = {}
+    fence_scan = _vet_checks_scan_lines(body_lines)
+    inert = fence_scan.inert
     i = 0
     n = len(body_lines)
 
     while i < n and not body_lines[i].strip():
         i += 1
-    if i < n and not _vet_checks_line_is_entry_heading(body_lines[i]):
+    if i < n and not _vet_checks_live_entry_heading(inert, i, body_lines[i]):
         # axis: stray-text before first ### entry
         malformed.append(_vet_checks_malformed_item(
             None, "stray-text", "non-entry text before the first check heading"))
-        while i < n and not _vet_checks_line_is_entry_heading(body_lines[i]):
+        while i < n and not _vet_checks_live_entry_heading(inert, i, body_lines[i]):
             i += 1
 
     while i < n:
@@ -1065,6 +1071,9 @@ def _parse_vet_checks_body(body_lines):
             i += 1
         if i >= n:
             break
+        if inert[i]:
+            i += 1
+            continue
         line = body_lines[i]
         if _vet_checks_line_is_indented_code(line):
             i += 1
@@ -1076,7 +1085,7 @@ def _parse_vet_checks_body(body_lines):
                 malformed.append(_vet_checks_malformed_item(
                     None, "unrecognized-line", "line is not a valid check heading"))
                 i += 1
-                while i < n and not _vet_checks_line_is_entry_heading(body_lines[i]):
+                while i < n and not _vet_checks_live_entry_heading(inert, i, body_lines[i]):
                     i += 1
                 continue
             i += 1
@@ -1101,8 +1110,13 @@ def _parse_vet_checks_body(body_lines):
 
         while i < n:
             raw = body_lines[i]
-            if _vet_checks_line_is_entry_heading(raw):
+            if _vet_checks_live_entry_heading(inert, i, raw):
                 break
+            if inert[i]:
+                # axis: unrecognized-line fenced/inert content inside entry
+                entry_reasons.append(("unrecognized-line", "fenced or inert line inside check body"))
+                i += 1
+                continue
             if not raw.strip():
                 i += 1
                 continue
