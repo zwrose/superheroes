@@ -77,6 +77,7 @@ import order_lint  # noqa: E402
 import panel_tally  # noqa: E402
 import payload_contracts  # noqa: E402
 import review_base_guard  # noqa: E402
+import review_diff_bytes  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_gate_policy  # noqa: E402
@@ -4273,6 +4274,9 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
         _after_audits(state, config)
         return
     if then == VERIFY_THEN_PANEL:
+        if not _refresh_panel_diff_at_verified_head(
+                state, config, verified_head, panel_diff_seam=panel_diff_seam):
+            return
         state["step"] = P_PANEL
         return
     # VERIFY_THEN_CEILING, and the legacy position (a gate pending with no flag): the round advance
@@ -4356,13 +4360,8 @@ def _derive_panel_diff_at_head(config):
     if verify.returncode != 0:
         return None, "baseRef not a commit"
     try:
-        proc = subprocess.run(
-            ["git", "diff", "%s...HEAD" % base],
-            cwd=repo_root,
-            capture_output=True,
-            text=False,
-            timeout=120,
-        )
+        proc = review_diff_bytes.run_git_diff_three_dot_head(
+            repo_root, base, timeout=120)
     except (FileNotFoundError, OSError) as exc:
         return None, "git unavailable: %s" % exc
     except subprocess.SubprocessError as exc:
@@ -4381,6 +4380,38 @@ def _derive_panel_diff_at_head(config):
     if not diff_text:
         return None, "empty diff"
     return diff_text, None
+
+
+def _refresh_panel_diff_at_verified_head(state, config, verified_head, panel_diff_seam=None):
+    """Re-derive unknown-surface panel diff at verify fold time (``VERIFY_THEN_PANEL``).
+
+    HEAD may have moved after the pre-verify derivation; bind ``reviewedDiff`` to the verified
+    head's ``git diff <base>...HEAD`` or park ``panel-diff-underivable``."""
+    derive = panel_diff_seam or _derive_panel_diff_at_head
+    recorded = state.get("rounds", {}).get(str(state["round"]), {})
+    derived_head = recorded.get("fixFoldHead") if isinstance(recorded, dict) else None
+    if not isinstance(derived_head, str) or not derived_head:
+        cfg = config if isinstance(config, dict) else {}
+        derived_head = cfg.get(FIX_FOLD_HEAD_KEY)
+    if isinstance(verified_head, str) and verified_head and isinstance(derived_head, str):
+        if derived_head != verified_head:
+            repo_root = config.get("repoRoot") if isinstance(config, dict) else None
+            if isinstance(repo_root, str) and repo_root:
+                current = store_core.run_git(repo_root, "rev-parse", "HEAD")
+                if current != verified_head:
+                    _park_cannot_certify(
+                        state,
+                        "%s: verified head %s disagrees with repo HEAD %s"
+                        % (PANEL_DIFF_UNDERIVABLE_CAUSE, verified_head, current or "?"))
+                    return False
+    diff_text, refuse_detail = derive(config)
+    if refuse_detail is not None:
+        _park_cannot_certify(
+            state, "%s: %s" % (PANEL_DIFF_UNDERIVABLE_CAUSE, refuse_detail))
+        return False
+    state["headDiff"] = diff_text
+    state["reviewedDiff"] = diff_text
+    return True
 
 
 def _schedule_full_panel_unknown(state, config, detail, panel_diff_seam=None):

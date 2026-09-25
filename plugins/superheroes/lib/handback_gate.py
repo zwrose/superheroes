@@ -43,6 +43,7 @@ import os
 import re
 import subprocess
 
+import review_diff_bytes
 import round_driver as RD
 import round_records as RR
 import store_core
@@ -781,11 +782,8 @@ def _refuse(reason, detail, *, subject=None, sidecar_path=None, head_sha=None):
 def _recompute_diff_sha256(base_sha, repo_root):
     """Pinned diff recompute — plain ``git diff`` matching production review-code."""
     try:
-        r = subprocess.run(
-            ["git", "-C", repo_root, "diff", "%s...HEAD" % base_sha],
-            capture_output=True,
-            timeout=10,
-        )
+        r = review_diff_bytes.run_git_diff_three_dot_head(
+            repo_root, base_sha, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
