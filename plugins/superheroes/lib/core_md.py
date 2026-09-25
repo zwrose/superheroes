@@ -221,7 +221,7 @@ def parse_core(text):
         "patterns": _section(text, "Canonical patterns"),
         "showItSurface": _section(text, "Show-it surface"),
         "ratifiedResiduals": _section(text, "Ratified residuals"),
-        "vetChecks": _section(text, "Vet checks"),
+        "vetChecks": _section_vet_checks(text),
         "created": created,
         "updated": updated,
     }
@@ -984,6 +984,15 @@ def _vet_checks_section_spans(text):
         else:
             i += 1
     return spans, lines
+
+
+def _section_vet_checks(text):
+    """Prose under the live ``## Vet checks`` section (fence-aware; not ``_section``)."""
+    spans, lines = _vet_checks_section_spans(text)
+    if not spans:
+        return ""
+    start, end = spans[0]
+    return "\n".join(lines[start + 1:end]).strip()
 
 
 def _vet_line_is_continuation(line):
@@ -2578,9 +2587,13 @@ def confirm(cwd, *, root=None, now=None):
                 "ratifiedResiduals", "vetChecks", REVIEW_GATE_POLICY_KEY, PROJECT_CONFIGURATION_KEY,
                 DECLARED_DEPENDENCIES_KEY)}
             created = existing.get("created") or stamp
+            candidate = render_core(facts, "confirmed", created, stamp)
+            vet_candidate = parse_vet_checks(candidate)
+            if vet_candidate["malformed"]:
+                return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
+                        "malformed": vet_candidate["malformed"], "record": existing}
             try:
-                store_core.atomic_write(core_path(cwd, root),
-                                        render_core(facts, "confirmed", created, stamp))
+                store_core.atomic_write(core_path(cwd, root), candidate)
             except OSError:
                 mark_pending(cwd, root, detail={"reason": "store-unwritable"})
                 return {"action": "deferred", "record": None}

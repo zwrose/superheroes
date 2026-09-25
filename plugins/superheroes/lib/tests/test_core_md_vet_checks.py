@@ -363,6 +363,27 @@ def test_write_vet_checks_preserves_patterns_with_pseudo_vet_headings(tmp_path):
     assert CM._section(after, "Canonical patterns") == patterns_before
 
 
+def test_confirm_does_not_manufacture_vet_checks_from_patterns_pseudo_heading(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(
+        repo,
+        dict(_CORE_FACTS, patterns=_PATTERNS_WITH_PSEUDO_VET_HEADINGS),
+        "provisional",
+        root=store,
+        now="2026-06-26",
+    )
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    assert CM.parse_core(before)["vetChecks"] == ""
+    patterns_before = CM._section(before, "Canonical patterns")
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "confirmed"
+    text = open(path, encoding="utf-8").read()
+    assert CM.parse_vet_checks(text) == {"declared": False, "checks": [], "malformed": []}
+    assert CM._section(text, "Canonical patterns") == patterns_before
+
+
 def test_write_vet_checks_refused_clear_when_section_duplicated(tmp_path):
     repo, store = _repo_store(tmp_path)
     path = CM.core_path(repo, store)
