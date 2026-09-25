@@ -3884,12 +3884,12 @@ def _derive_head_diff_from_git(session_dir, state):
 
 
 def _advance_reviewed_diff(state):
-    """The one writer that moves ``reviewedDiff`` to the post-fix head diff. It advances only on a
-    known, non-empty head diff and clears the stale marker when it does; otherwise the reviewed
-    diff is left as it was and the stale marker (set at fixer fold) keeps any panel from reviewing
-    it."""
+    """The one writer that moves ``reviewedDiff`` to the post-fix head diff. It advances on any
+    known head diff — including a known-empty one (``""``: the fix left no diff against the base) —
+    and clears the stale marker when it does; only an unknown head (``None``) leaves the reviewed
+    diff as it was, and the stale marker (set at fixer fold) keeps any panel from reviewing it."""
     head = state.get("headDiff")
-    if isinstance(head, str) and head:
+    if isinstance(head, str):
         state["reviewedDiff"] = head
         state.pop("_reviewedDiffStale", None)
 

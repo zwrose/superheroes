@@ -164,3 +164,40 @@ def test_a_known_head_diff_clears_the_stale_marker():
     state = {"reviewedDiff": "old", "headDiff": None, "_reviewedDiffStale": True}
     RD._advance_reviewed_diff(state)
     assert state["reviewedDiff"] == "old" and state["_reviewedDiffStale"] is True
+    state = {"reviewedDiff": "old", "headDiff": "", "_reviewedDiffStale": False}
+    RD._advance_reviewed_diff(state)
+    assert state["reviewedDiff"] == "" and "_reviewedDiffStale" not in state
+
+
+def test_known_empty_head_diff_rearm_panel_reviews_the_empty_diff(tmp_path, monkeypatch):
+    """A fixer that hands back a known-empty head diff (`headDiff: ""`) is not stale; the
+    cross-cutting confirmation re-arm's full panel then reviews that empty diff, never the
+    pre-fix round-1 diff (red token: the re-armed panel's diff.txt equals the round-1 diff)."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    seen = {}
+    base_respond = TRD._responder(round1_findings=[
+        {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}])
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_PANEL:
+            seen.setdefault("panels", []).append(rnd)
+        if phase == RD.P_FIXER:
+            # The head moves, but its tree matches the base: the post-fix diff is known-empty.
+            with open(os.path.join(checkout, "f.py"), "w", encoding="utf-8") as fh:
+                fh.write("new\nmore\nfixed\n")
+            _git(checkout, "commit", "-qam", "fix")
+            _git(checkout, "revert", "--no-edit", "HEAD")
+            return {"fixes": [], "headDiff": ""}
+        return base_respond(phase, payload, rnd)
+
+    monkeypatch.setattr(RD, "derive_changed_subjects",
+                        lambda reviewed, head, findings: ["Code", "Security", "Test"])
+    TRD._drive_cli(d, TRD._cfg(baseRef=base), respond)
+    panels = seen.get("panels") or []
+    assert len(panels) >= 2 and panels[0] == 1, seen
+    with open(os.path.join(RR.round_dir(d, 1), "diff.txt"), encoding="utf-8") as fh:
+        assert fh.read() != ""
+    with open(os.path.join(RR.round_dir(d, panels[1]), "diff.txt"), encoding="utf-8") as fh:
+        assert fh.read() == "", "the re-armed panel reviewed the pre-fix diff"
