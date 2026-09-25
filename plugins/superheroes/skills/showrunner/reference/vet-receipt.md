@@ -3,6 +3,7 @@
 - [The vet receipt — shape](#the-vet-receipt--shape)
 - [The spine — always present, filled or `None`](#the-spine--always-present-filled-or-none)
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
+- [Project vet checks](#project-vet-checks)
 - [The `None` convention](#the-none-convention)
 - [The owner-half write — register](#the-owner-half-write--register)
 - [Markers](#markers)
@@ -185,6 +186,7 @@ are never holding the inventory in working memory.
 | this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR) | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
 | the build record records a **full-lane** pre-handback review | the **certified-loop check** — the driver's own round receipt, or a skip disclosure citing an open `driver-blocker` issue by number, or a skip disclosure citing an explicit owner direction as a dated record (the venue-citation convention, `skills/showrunner/reference/issue-contract.md` § Anchor resolution; the subordinated owner-directed ending). A citation that is absent, or that names a closed issue, is a finding; whether a cited skip still passes at all is governed by the driver-mandate flip in `rubric/review-discipline.md`, which is the one home for that timing — post-flip, an owner-direction citation is recorded in this receipt **named as the owner's override** of driver-or-park, never as a citation-pass |
 | the build record shows a **full-lane** review **not driven by the certified loop** | the **seat-provenance parity check** — each seat's seat-map assignment, plus a recorded attempt or terminal forfeit on the vendor that seat was assigned; a missing assignment is a finding. A seat that ran off its seat-map assignment with no recorded forfeit on the vendor it was assigned is a finding |
+| the project's `core.md` declares a `## Vet checks` section (read with the `vet-checks` verb) | one line per declared check, and a finding for every malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
@@ -198,6 +200,76 @@ is raised by a number the artifacts carry rather than by your memory of having c
 **Known limit, carried knowingly:** a trigger is weaker than a check. A build record that omits a
 sequential-order run raises no field. You read the diff too, so the trigger is a second chance rather
 than the only one — but it is not a guarantee.
+
+## Project vet checks
+
+The project's `core.md` may carry an optional prose section headed exactly `## Vet checks`. It is
+the enforcement home for rules whose evidence lives in the PR body or a ledger — surfaces review
+seats cannot read. **This section defines the shape only.** Encoding checks into the section is the
+project's work, done through `configure`.
+
+The section ends at the next top-level `## ` line or the `` ```json superheroes-core `` fence.
+Each check is one entry:
+
+```markdown
+## Vet checks
+
+### <check name>
+- **Evidence:** <where the vet reads it — a PR-body section, a ledger path, a receipt>
+- **The vet records:** <what the vet receipt carries for this check>
+```
+
+Field labels are the literal strings `- **Evidence:**` and `- **The vet records:**` (bullet `-`,
+bold label, colon inside the bold). A field value may continue on following lines indented two or
+more spaces; continuation lines are joined to the value with a single space. A continuation line is
+valid only directly after a field line or another continuation line. Blank lines are ignored
+anywhere. Nothing else is allowed in the section.
+
+- **Evidence** — where you read the rule's proof: a named PR-body section, a ledger path, a receipt.
+- **The vet records** — what this receipt must carry when the evidence is present and readable.
+
+**Malformed reasons** (closed set — the parser emits exactly these tokens):
+
+| token | when |
+|---|---|
+| `section-duplicated` | more than one `## Vet checks` heading in the core text |
+| `section-empty` | heading present, no non-blank line in its body |
+| `stray-text` | a non-blank line in the section before the first `### ` entry |
+| `name-empty` | a `###` entry heading whose name is empty after stripping |
+| `name-duplicated` | a second entry whose stripped, casefolded name equals an earlier one |
+| `field-duplicated` | a field label given twice in one entry |
+| `field-empty` | a field whose value (after continuation joining) is empty |
+| `evidence-missing` | an entry with no `Evidence` field |
+| `records-missing` | an entry with no `The vet records` field |
+| `unrecognized-line` | a non-blank line inside an entry that is neither a field line nor a valid continuation |
+
+A malformed item is `{"entry": <stripped name, or null for section-level reasons>, "reason": <token>,
+"detail": <short human string>}`. Only well-formed entries appear in `checks`; an entry with any
+malformed reason is excluded from `checks` (all its reasons reported).
+
+**Read verb.** From the project cwd:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "$ROOT_DIR/lib/core_md.py" vet-checks --cwd .
+```
+
+It prints one JSON object and exits 0:
+
+`{"declared": bool, "checks": [{"name": str, "evidence": str, "records": str}, ...], "malformed":
+[...], "reason": null | "core-md-absent" | "core-md-unparseable" | "repo-root-unavailable"}`.
+
+`declared` is true iff at least one `## Vet checks` heading exists. When `reason` is non-null,
+`declared` is false and both lists are empty — a broken or missing calibration is never reported as
+"no checks declared" (`reason: null, declared: false`).
+
+**How the vet acts on the read.**
+
+- Each well-formed declared check → **one receipt line**: the check's name, what you read from its
+  named evidence, and what you record per the check's *The vet records* field.
+- A non-empty `malformed` list or a non-null `reason` → a **finding** in the receipt naming the
+  entry and token — never a silent skip.
+- `declared: false` with `reason: null` → the field is absent; no vet-check lines are owed.
 
 ## The `None` convention
 

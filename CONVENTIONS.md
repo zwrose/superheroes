@@ -142,7 +142,9 @@ band-wide storage mode**.
 ```
 
 - **`core.md`** carries band-wide project facts: stack, the canonical *verify* command,
-  threat model, canonical patterns. Its **single writer** is the calibration owner
+  threat model, canonical patterns. It may also carry an optional `## Vet checks` prose section,
+  owner-declared through `configure`, read by the advisor's vet; the section's shape is homed in
+  `plugins/superheroes/skills/showrunner/reference/vet-receipt.md`. Its **single writer** is the calibration owner
   (`init` / the profile-management skill) — not `the-architect` (which owns the `spec`
   definition-doc). Because `core.md` is project-keyed and shared across a project's
   checkouts (§2.3), the writer **serializes its writes under the project-scoped config
