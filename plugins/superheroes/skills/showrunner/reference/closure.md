@@ -30,8 +30,14 @@ when the vet starts is not "already merged," even if the plan assumed it would b
 **A stacked feature** is a child whose delivery is a native stack: every layer pull request names
 only its own sub-issue with a non-closing verb, so **no layer merge closes the feature issue**.
 The vet that carries the closure receipt is the **top layer's** vet — the last vet before the
-stack merges — and it applies the present-tense test to the stack's other layers and to the spec's
-other children at that moment.
+atomic stack merge. At that moment the stack-specific test replaces the ordinary present-tense
+rule for layers: **every other layer of this stack already has a green vet** (they are not merged
+yet — the stack merges only after every layer is vetted). The ordinary present-tense test still
+applies to the spec's **other children** outside this stack: each must already be merged or
+closed. The receipt is **presented with the top layer's handback** in one sitting; the atomic
+stack merge and the advisor's post-merge issue closes are follow-through only — they do not mint a
+second closure trigger or a second receipt. The merge receipt on each closed issue references the
+closure receipt already accepted on the top layer's vet.
 
 Candidate closure moments look like two final vets running concurrently, or a vet racing a sibling's
 no-PR close. In the concurrent case, both PRs may look "final" until one merges — the advisor holds

@@ -344,10 +344,13 @@ and each of the three is established from the **remote**, never from a local ass
   a sub-issue; non-closing verb rule in §11).
 - **Branch from the layer below's head** and set the **PR base to that branch** — the bottom layer
   branches from and targets the stack's base (normally `main`).
-- **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests, so
-  the **bottom layer** has nothing to link to at its own handback: it records that the stack does not
-  exist yet and names the layer that will form it. Parallel layers and which lane links once both
-  have pull requests: [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md)
+- **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests.
+  When the **bottom layer** hands back **before** any upper-layer pull request exists, it has
+  nothing to link yet: it records that the stack does not exist and names the layer that will form
+  it. Once **both** layers have pull requests, **whichever lane hands back second** runs
+  `gh stack link` with pull request numbers only, bottom to top — including when the upper layer
+  handed back first and the bottom layer is second. Parallel layers and the full rule:
+  [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md)
   § Each layer is a sub-issue, item 4. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist).
   A base-branch chain that was never linked **is not a stack** — nothing downstream, not the advisor's click list,
   not the atomic merge, works on it.
