@@ -3919,7 +3919,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
                           "fixes": len(artifact.get("fixes") or [])})
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
     if session_dir:
-        head, head_err = _resolve_fix_fold_head_sha(session_dir, state, artifact)
+        head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
         if head_err:
             _record_round(state, "fixFoldHeadRefused", head_err)
         else:
@@ -4331,14 +4331,12 @@ def _enter_post_fix(state, config, session_dir=None, panel_diff_seam=None):
     rec = state.get("rounds", {}).get(str(state["round"]), {})
     panel_head = rec.get("fixFoldHead") if isinstance(rec, dict) else None
     if not isinstance(panel_head, str) or not panel_head:
-        if session_dir:
-            panel_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
-            if head_err:
-                panel_head = None
-        else:
+        if session_dir is None:
             panel_head = config.get(FIX_FOLD_HEAD_KEY) if isinstance(config, dict) else None
             if not isinstance(panel_head, str) or not panel_head:
                 panel_head = None
+        else:
+            panel_head = None
     if not _advance_round(state, config, reason="post-fix-advance"):
         return
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
@@ -5871,15 +5869,13 @@ def _verified_head_at_fold(session_dir, state):
     return (None, "verified head: no session dir — the in-process leg records no verified head")
 
 
-def _resolve_fix_fold_head_sha(session_dir, state, artifact=None):
+def _resolve_fix_fold_head_sha(session_dir, state):
     """Resolve the certified head once at fix-fold time — never the session-setup headSha.
 
     Returns (head_sha, error). On success the head is persisted so a resumed session reads the
     same value rather than re-deriving a now-different one."""
-    fold_fixes = isinstance(artifact, dict) and bool(artifact.get("fixes"))
-    cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
-    if fold_fixes or _fix_batch_paths(state, artifact):
-        repo_root = _repo_root_for_panel_diff(cfg, session_dir, state)
+    if _fix_batch_paths(state):
+        repo_root = _resolve_repo_root(session_dir, state)
         if not repo_root:
             return None, "fix-fold head: repo root unresolvable"
         head = store_core.run_git(repo_root, "rev-parse", "HEAD")
@@ -5887,6 +5883,7 @@ def _resolve_fix_fold_head_sha(session_dir, state, artifact=None):
             return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
         _persist_fix_fold_head_sha(session_dir, state, head)
         return head, None
+    cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
     persisted = cfg.get(FIX_FOLD_HEAD_KEY)
     if isinstance(persisted, str) and persisted:
         return persisted, None
@@ -5897,7 +5894,7 @@ def _resolve_fix_fold_head_sha(session_dir, state, artifact=None):
             cfg[FIX_FOLD_HEAD_KEY] = persisted
             state["config"] = cfg
         return persisted, None
-    repo_root = _repo_root_for_panel_diff(cfg, session_dir, state)
+    repo_root = _resolve_repo_root(session_dir, state)
     if not repo_root:
         return None, "fix-fold head: repo root unresolvable"
     head = store_core.run_git(repo_root, "rev-parse", "HEAD")
@@ -5940,15 +5937,6 @@ def _resolve_repo_root(session_dir, state):
         return os.path.realpath(repo_root)
     root = store_core.repo_root(os.getcwd())
     return os.path.realpath(root) if root else None
-
-
-def _repo_root_for_panel_diff(config, session_dir, state):
-    """Repo root that matches ``_derive_panel_diff_at_head`` — config ``repoRoot`` when set."""
-    if isinstance(config, dict):
-        cfg_root = config.get("repoRoot")
-        if isinstance(cfg_root, str) and cfg_root:
-            return os.path.realpath(cfg_root)
-    return _resolve_repo_root(session_dir, state)
 
 
 def _fixed_ledger_content_paths(state, artifact=None):

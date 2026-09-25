@@ -2,6 +2,7 @@
 """#1419 — unknown-surface full panel reviews git-derived head diff, never a stale reviewed diff."""
 import hashlib
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -65,6 +66,14 @@ def _init_two_commit_repo(tmp_path, first_body="old\n", second_body="new\n", pat
     return str(repo), base_sha, _git_diff(str(repo), base_sha)
 
 
+def _seed_session_meta(session_dir, repo):
+    """Mirror review-code setup: record repoRoot in meta.json for session checkout resolution."""
+    os.makedirs(session_dir, exist_ok=True)
+    meta_path = os.path.join(session_dir, "meta.json")
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"repoRoot": repo}) + "\n")
+
+
 def _commit_file(repo, path, body, message="fix"):
     full = os.path.join(repo, path)
     os.makedirs(os.path.dirname(full) or repo, exist_ok=True)
@@ -94,6 +103,7 @@ _A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 
 def test_b1_panel_diff_at_head_after_fixer_without_head_diff(tmp_path):
     repo, base_sha, diff_commit1 = _init_two_commit_repo(tmp_path)
     d = str(tmp_path / "session")
+    _seed_session_meta(d, repo)
     cfg = _cfg(verifyCommand="pytest -q", diff=diff_commit1, repoRoot=repo, baseRef=base_sha)
     diff_round1 = diff_commit1
 
@@ -128,6 +138,7 @@ def test_b1_panel_diff_at_head_after_fixer_without_head_diff(tmp_path):
 def test_b1_panel_diff_follows_head_moved_between_fixer_and_verify(tmp_path):
     repo, base_sha, diff_round1 = _init_two_commit_repo(tmp_path)
     d = str(tmp_path / "session")
+    _seed_session_meta(d, repo)
     cfg = _cfg(verifyCommand="pytest -q", diff=diff_round1, repoRoot=repo, baseRef=base_sha)
 
     def respond(phase, payload, rnd):
@@ -258,13 +269,24 @@ def test_b2_git_diff_non_utf8_parks(tmp_path, monkeypatch):
 
 
 def test_b3_review_diff_producer_byte_identical_across_consumers(tmp_path):
-    trailing = "line one\nline two   \n"
-    repo, base_sha, _ = _init_two_commit_repo(
-        tmp_path, first_body="base\n", second_body=trailing, path="ws.py")
-    head_sha = _rev_parse(repo)
-    _git(repo, "mv", "ws.py", "renamed.py")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    repo = str(repo_path)
+    _git(repo, "init", "-q", "-b", "main")
+    big_body = "".join("payload line %02d same shape\n" % i for i in range(20))
+    _commit_file(repo, "big.py", big_body, "add big")
+    base_sha = _rev_parse(repo)
+    _git(repo, "mv", "big.py", "moved.py")
     _git(repo, "commit", "-qm", "rename")
     head_sha = _rev_parse(repo)
+    diff_with_renames = subprocess.run(
+        ["git", "diff", "%s...%s" % (base_sha, head_sha)],
+        cwd=repo, capture_output=True, text=True, check=True)
+    assert "rename from" in diff_with_renames.stdout
+    diff_no_renames = subprocess.run(
+        ["git", "diff", "--no-renames", "%s...%s" % (base_sha, head_sha)],
+        cwd=repo, capture_output=True, text=True, check=True)
+    assert diff_no_renames.stdout != diff_with_renames.stdout
     proc = rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=120)
     assert proc.returncode == 0
     panel_bytes = proc.stdout
