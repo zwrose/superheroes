@@ -198,7 +198,9 @@ its roadmap, and a project extends it rather than minting a second one.
 1. **At routing, any issue estimated over 1,000 non-test lines carries one of two things**: a
    **stack or layer design** (one concern per layer, merged bottom-up, using the project's
    sanctioned stacking tool) or a **recorded reason a single pull request is right**. The estimate is
-   a routing estimate, never a measurement.
+   a routing estimate, never a measurement. When the design is a stack, its planned layers are
+   filed as sub-issues per
+   [Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue).
 2. **This is a mandatory consideration with a durable trace, never a mandatory split.** A reader who
    takes this for a split rule has misread it.
 3. **The stacking tool is a project configuration item**; its home is the
