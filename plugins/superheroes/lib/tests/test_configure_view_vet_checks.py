@@ -100,3 +100,16 @@ def test_render_vet_checks_unreadable_when_core_corrupt(tmp_path):
     sc.atomic_write(path, text.replace('"schemaVersion": 2', '"schemaVersion": "bad"'))
     screen = cv.render(str(tmp_path), root=root)
     assert "⚠ vet checks unreadable: core-md-unparseable" in screen
+
+
+def test_render_vet_checks_unreadable_when_core_not_utf8(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    path = os.path.join(cdir, "core.md")
+    with open(path, "wb") as fh:
+        fh.write(b"\xff")
+    screen = cv.render(str(tmp_path), root=root)
+    assert "⚠ vet checks unreadable: core-md-unparseable" in screen

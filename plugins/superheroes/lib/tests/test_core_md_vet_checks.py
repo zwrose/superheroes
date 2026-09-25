@@ -317,6 +317,50 @@ def test_write_vet_checks_refused_heading_in_body(tmp_path):
     assert res == {"action": "refused", "reason": "vet-checks-round-trip-refused"}
 
 
+def test_vet_checks_body_forbidden_json_fence_line():
+    assert CM._vet_checks_body_forbidden("```json superheroes-core") is True
+
+
+def test_write_vet_checks_refused_when_evidence_smuggles_json_block(tmp_path):
+    repo, store = _repo_store(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    body = (
+        "### X\n- **The vet records:** b\n"
+        "- **Evidence:** ```json superheroes-core\n"
+        '  {"schemaVersion": 2, "verifyCommand": "evil"}'
+    )
+    res = CM.write_vet_checks(repo, body, root=store)
+    assert res == {"action": "refused", "reason": "vet-checks-round-trip-refused"}
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_write_vet_checks_refused_when_evidence_smuggles_non_json_block(tmp_path):
+    repo, store = _repo_store(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    body = (
+        "### X\n- **The vet records:** b\n"
+        "- **Evidence:** ```json superheroes-core\n"
+        "  not-json"
+    )
+    res = CM.write_vet_checks(repo, body, root=store)
+    assert res == {"action": "refused", "reason": "vet-checks-round-trip-refused"}
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_read_vet_checks_invalid_utf8(tmp_path):
+    repo, store = _repo_store(tmp_path)
+    path = CM.core_path(repo, store)
+    with open(path, "wb") as fh:
+        fh.write(b"\xff")
+    got = CM.read_vet_checks(repo, root=store)
+    assert got["declared"] is False
+    assert got["checks"] == []
+    assert got["malformed"] == []
+    assert got["reason"] == "core-md-unparseable"
+
+
 def test_write_vet_checks_refused_absent_core(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")

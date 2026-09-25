@@ -36,10 +36,11 @@ Full capture log: `/private/tmp/wo-c-1238/bite-captures.txt` (E3–E22 batch); E
 | E20 | configure unreadable line (`configure_view.py:449`) | `core-md-unparseable` line | `test_render_vet_checks_unreadable_when_core_corrupt` | proven |
 | E21 | configure malformed line (`configure_view.py`) | `⚠ malformed:` line | `test_render_vet_checks_malformed_line` | proven |
 | E22 | parser heading/label literals (`core_md.py:935`) | literal pin test | `test_literal_pins_for_vet_checks_markers` | proven |
+| E23 | writer other-facts round-trip (`core_md.py:1271`) | `vet-checks-round-trip-refused` | `test_write_vet_checks_refused_when_evidence_smuggles_json_block` | proven |
 
 ## When the proof cannot be produced
 
-**Unprovable as placed — writer other-facts round-trip** (`core_md.py:1248–1253`). `write_vet_checks` splices only the vet section; no stdin body can change non-vet facts while exercising `_prose_field_round_trip_ok` / `_show_it_json_blocks_unchanged` on that path. **Construction bound:** protection on that branch is unverified at the public writer entry; a unit seam would need a direct call to the guarded `if` with a synthetic `orig`/`new_text` pair.
+(none for this WO — E23 covers the other-facts round-trip guard at `core_md.py:1271`.)
 
 ### E1
 
@@ -118,4 +119,12 @@ Parser branches E6–E13: neutralize the guarded `entry_reasons.append` (or stra
 - **neutralization:** `Evidence` → `EvidenceX` in regex
 - **raw red:** `test_literal_pins_for_vet_checks_markers` — `got["checks"] == []` or malformed non-empty
 - **restore:** literal regex restored
+- **raw green:** `1 passed`
+
+### E23
+
+- **guarded element:** `core_md.py:1271` — **axis:** refuse smuggled superheroes-core block in Evidence (`vet-checks-round-trip-refused`)
+- **neutralization:** prefix guard condition with `False and`
+- **raw red:** `test_write_vet_checks_refused_when_evidence_smuggles_json_block` — expected `refused`, got `written`
+- **restore:** remove `False and`
 - **raw green:** `1 passed`

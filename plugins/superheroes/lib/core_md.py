@@ -993,7 +993,18 @@ def _parse_vet_checks_body(body_lines):
             break
         line = body_lines[i]
         m = _VET_ENTRY_HEADING.match(line)
-        name = (m.group(1) if m else line.lstrip()[3:]).strip()
+        if m is None:
+            if line.lstrip().startswith("###"):
+                # axis: unrecognized-line invalid entry heading
+                malformed.append(_vet_checks_malformed_item(
+                    None, "unrecognized-line", "line is not a valid check heading"))
+                i += 1
+                while i < n and not body_lines[i].lstrip().startswith("###"):
+                    i += 1
+                continue
+            i += 1
+            continue
+        name = m.group(1).strip()
         i += 1
         entry_reasons = []
         fields = {}
@@ -1124,10 +1135,14 @@ def read_vet_checks(cwd, root=None):
         # axis: read-vet-checks core-md-absent
         return {"declared": False, "checks": [], "malformed": [],
                 "reason": SHOW_IT_REASON_ABSENT}
+    if cls.status != CONFIG_OK:
+        # axis: read-vet-checks core-md-unparseable (classifier)
+        return {"declared": False, "checks": [], "malformed": [],
+                "reason": SHOW_IT_REASON_UNPARSEABLE}
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return {"declared": False, "checks": [], "malformed": [],
                 "reason": SHOW_IT_REASON_UNPARSEABLE}
     if parse_core(text) is None:
@@ -1253,7 +1268,7 @@ def write_vet_checks(cwd, body, *, root=None):
             return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
                     "malformed": bad_malformed}
         new_parsed = parse_core(new_text)
-        # bite-proof: Unprovable as placed — splice touches only the vet section; no stdin body reaches other-facts round-trip
+        # bite-proof: E23 — writer other-facts round-trip (`test_write_vet_checks_refused_when_evidence_smuggles_json_block`)
         if (new_parsed is None or not _prose_field_round_trip_ok(orig, new_parsed, "vetChecks")
                 or not _show_it_json_blocks_unchanged(text, new_text)):
             # axis: vet-checks-round-trip-refused other facts changed
