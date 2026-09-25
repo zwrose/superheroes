@@ -198,7 +198,7 @@ def _dispatch_journal_with_binding(
         "stdoutBytes": 10,
         "wallSeconds": 1.0,
         "toolCalls": 1,
-        "runKind": _run_kind_for_phase(PANEL_PHASE),
+        "runKind": session_contract.run_kind_for_phase(PANEL_PHASE),
         **_binding_fields(nonce, result_digest=DEFAULT_FINDINGS_RESULT_SHA),
     }
     row = {
@@ -275,16 +275,10 @@ def _observation_fields(*, read="engaged", tool_calls=1):
     }
 
 
-def _run_kind_for_phase(phase):
-    if phase == "dispatch-fixer":
-        return "write"
-    return "review"
-
-
 def _execution_evidence(binding, *, read="engaged", phase=PANEL_PHASE):
     return {
         **binding,
-        "runKind": _run_kind_for_phase(phase),
+        "runKind": session_contract.run_kind_for_phase(phase),
         "observation": _observation_fields(read=read),
     }
 

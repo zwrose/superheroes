@@ -65,12 +65,6 @@ def _observation_fields(*, read="engaged", tool_calls=1):
     }
 
 
-def _run_kind_for_phase(phase):
-    if phase == round_phases.P_FIXER:
-        return "write"
-    return "review"
-
-
 def _execution_evidence(nonce, *, payload=None, read="engaged", tool_calls=1, source="runner",
                         run_kind="review"):
     return {
@@ -114,7 +108,7 @@ def production_hand_landed_envelope(seat, payload, *, phase=PANEL_PHASE, attempt
 def production_dispatch_observed_envelope(seat, payload, *, phase=PANEL_PHASE, attempt=0,
                                             occurrence=0, payload_sha=None, read="engaged",
                                             binding=None):
-    run_kind = _run_kind_for_phase(phase)
+    run_kind = session_contract.run_kind_for_phase(phase)
     if binding is None:
         evidence = _execution_evidence(
             _slot_nonce(seat, phase, attempt, occurrence), payload=payload, read=read,

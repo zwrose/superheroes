@@ -61,11 +61,9 @@ def test_execution_evidence_telemetry_values_match_records():
     assert RC.EXECUTION_EVIDENCE_TELEMETRY_VALUES == RR.EXECUTION_EVIDENCE_TELEMETRY_VALUES
 
 
-def test_execution_evidence_binding_fields_match_records():
-    base = tuple(
-        field for field in RR.EXECUTION_EVIDENCE_FIELDS if field != "observation"
-    )
-    assert RC.EXECUTION_EVIDENCE_BINDING_FIELDS == base + ("runKind",)
+def test_execution_evidence_binding_fields_match_session_contract():
+    assert RC.EXECUTION_EVIDENCE_BINDING_FIELDS is session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
+    assert RR.EXECUTION_EVIDENCE_BINDING_FIELDS is session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
 
 
 def test_head_content_blobs_file_name():

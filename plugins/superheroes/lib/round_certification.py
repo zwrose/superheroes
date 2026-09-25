@@ -53,14 +53,7 @@ RECEIPT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 
 EXECUTION_EVIDENCE_READ_VALUES = frozenset(("engaged", "unknown"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
-EXECUTION_EVIDENCE_BINDING_FIELDS = (
-    "source",
-    "runnerNonce",
-    "recordDigest",
-    "resultDigest",
-    "resultKind",
-    "runKind",
-)
+EXECUTION_EVIDENCE_BINDING_FIELDS = session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry")
 )
@@ -528,6 +521,8 @@ def _resolve_repo_head_sha(ctx):
 
 def _run_kind_refusal_detail(phase, found_kind):
     expected = session_contract.run_kind_for_phase(phase)
+    if expected is None:
+        return "phase %r has no admissible runKind (found %r)" % (phase, found_kind)
     return "phase %r requires runKind %r (found %r)" % (phase, expected, found_kind)
 
 
@@ -535,6 +530,8 @@ def _dispatch_run_kind_qualifies(obs, phase):
     if not isinstance(obs, dict):
         return False, None
     expected = session_contract.run_kind_for_phase(phase)
+    if expected is None:
+        return False, obs.get("runKind")
     run_kind = obs.get("runKind")
     return (isinstance(run_kind, str) and run_kind == expected), run_kind
 

@@ -189,7 +189,9 @@ def _execution_evidence_for_payload(payload, source="runner", read="unknown", ph
     else:
         evidence = _execution_evidence(observation=observation, source=source)
     if phase is not None:
-        evidence["runKind"] = session_contract.run_kind_for_phase(phase)
+        run_kind = session_contract.run_kind_for_phase(phase)
+        if run_kind is not None:
+            evidence["runKind"] = run_kind
     return evidence
 
 

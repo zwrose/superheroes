@@ -86,10 +86,14 @@ from the four escape classes so misses-log escape accounting stays trustworthy.
 
 ## Execution-evidence field set
 
-Declared once in this module:
+One home in `session_contract` (`EXECUTION_EVIDENCE_BINDING_FIELDS`); the writer and records
+layer re-export the same tuple object.
 
-**Binding fields** (`EXECUTION_EVIDENCE_BINDING_FIELDS`): `source`, `runnerNonce`, `recordDigest`,
-`resultDigest`, `resultKind`.
+**Binding fields** (`session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS`): `source`,
+`runnerNonce`, `recordDigest`, `resultDigest`, `resultKind`, `runKind`. At terminal
+certification every binding field is mandatory on dispatch-observed and hand-landed evidence;
+at ingest `runKind` may still be absent on the durable projection (`round_records` optional
+field) and is refused at certification when missing or mismatched (`evidence-run-kind-mismatch`).
 
 **Observation fields** (`EXECUTION_EVIDENCE_OBSERVATION_FIELDS`): `tokens`, `toolCalls`,
 `stdoutBytes`, `wallSeconds`, `source`, `read`, `telemetry`.
@@ -98,6 +102,9 @@ Declared once in this module:
 
 - `read`: `engaged`, `unknown` (`EXECUTION_EVIDENCE_READ_VALUES`)
 - `telemetry`: `tool-calls`, `none` (`EXECUTION_EVIDENCE_TELEMETRY_VALUES`)
+- `runKind`: `review`, `write` (`session_contract.RUN_KIND_VALUES`); expected value per phase
+  from `session_contract.run_kind_for_phase` — `write` on `dispatch-fixer`, `review` on
+  `dispatch-panel` and `dispatch-audits`, refusal when the phase is outside that closed set
 
 Journal `recorded` rows and landed `seat-result/2` envelopes both carry an `executionEvidence`
 block validated against these same constants — `_journal_execution_binding` reads binding fields

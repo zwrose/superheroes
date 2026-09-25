@@ -85,6 +85,7 @@ __all__ = (
     "RUN_KIND_VALUES",
     "run_kind_value_ok",
     "run_kind_for_phase",
+    "EXECUTION_EVIDENCE_BINDING_FIELDS",
     "verify_result_for_head",
     "runner_channel_vendor",
     "RE_EMIT_CMD",
@@ -147,11 +148,23 @@ def run_kind_value_ok(value):
     return isinstance(value, str) and value in RUN_KIND_VALUES
 
 
+EXECUTION_EVIDENCE_BINDING_FIELDS = (
+    "source",
+    "runnerNonce",
+    "recordDigest",
+    "resultDigest",
+    "resultKind",
+    "runKind",
+)
+
+
 def run_kind_for_phase(phase):
-    """Expected executionEvidence.runKind for a dispatch phase — write on fixer, review elsewhere."""
+    """Expected executionEvidence.runKind for a dispatch phase, or None when phase is unknown."""
     if phase == FIXER_PHASE:
         return RUN_KIND_WRITE
-    return RUN_KIND_REVIEW
+    if phase in (PANEL_PHASE, AUDITS_PHASE):
+        return RUN_KIND_REVIEW
+    return None
 
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
