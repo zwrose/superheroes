@@ -4,7 +4,7 @@ description: Use to run the Guardian sweep — a periodic read-only sweep of rep
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Guardian
 
@@ -37,7 +37,7 @@ The sweep runs in the advisor's own session, read-only. No external dispatch —
 Save the bundle JSON to a temp file. Sub-tools `guardian_store.py paths` and `guardian_sweep.py verify-config` are available when you need resolved artifact paths or fact verification.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 BUNDLE=$(mktemp /tmp/guardian-bundle-XXXXXXXX.json)
 python3 -B "$ROOT_DIR/lib/guardian_sweep.py" collect --cwd . > "$BUNDLE"
 cat "$BUNDLE" | jq .
@@ -46,14 +46,14 @@ cat "$BUNDLE" | jq .
 Optional — resolved storage paths (CONVENTIONS §2):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/guardian_store.py" paths --cwd . | jq .
 ```
 
 Optional — trust-but-verify the four FACTS before validating:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/guardian_sweep.py" verify-config --cwd . | jq .
 ```
 
@@ -91,7 +91,7 @@ DISP=$(mktemp /tmp/guardian-disp-XXXXXXXX.json)
 ### 3. Finalize
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/guardian_sweep.py" finalize --cwd . \
   --bundle "$BUNDLE" --dispositions "$DISP" | jq .
 ```
@@ -111,7 +111,7 @@ than implying none; the baseline still advances.
 ### 4. Commit the ledger (advisor, at consult/triage)
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/guardian_sweep.py" commit-ledger --cwd . \
   --bundle "$BUNDLE" --dispositions "$DISP" | jq .
 ```
@@ -169,7 +169,7 @@ Adding a health lens is a PR that meets [the lens contract](reference/lens-contr
 Deterministic collectors run in seconds plus one model pass. The sweep's cadence is a
 project configuration item — a guardian staleness setting the project configures
 (defaults: ≥10 merges or ≥14 days since the last sweep). The advisor reads that
-staleness at the [gardening pass](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#gardening-pass); when the project is stale, the advisor runs the sweep
+staleness at the [gardening pass](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#gardening-pass); when the project is stale, the advisor runs the sweep
 in that pass and triages its report in the same sitting. There is no superheroes-owned
 scheduler, no cron, and no cloud routine — the sweep's artifact paths follow the
 configured storage mode (in-repo with the repo; in global mode the out-of-repo project

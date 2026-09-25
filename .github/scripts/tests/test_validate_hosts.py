@@ -6,8 +6,8 @@ _V = os.path.join(_HERE, "..", "validate_hosts.py")
 spec = importlib.util.spec_from_file_location("validate_hosts", _V)
 VH = importlib.util.module_from_spec(spec); spec.loader.exec_module(VH)
 
-# Full pointer line — must use the seam form `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` so POINTER_RE matches.
-POINTER = "Resolve actions via `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` — `claude-tools.md` on Claude, `codex-tools.md` on Codex."
+# Full pointer line — must use `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` so POINTER_RE matches.
+POINTER = "Resolve actions via `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` — `claude-tools.md` on Claude, `codex-tools.md` on Codex."
 
 def test_lint_flags_banned_prose():
     bad = "# S\n\nUse the Agent tool with subagent_type: superheroes:code-reviewer.\n" + POINTER
@@ -20,32 +20,29 @@ def test_lint_flags_each_banned_token(tok):
     lints = VH.lint_skill(bad)
     assert any(tok in v for v in lints), f"Token {tok!r} not flagged in lints: {lints}"
 
-def test_lint_allows_portable_seam_and_requires_pointer():
-    good = '# S\n\n' + POINTER + '\n\n```bash\nROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"\npython3 "$ROOT_DIR/lib/x.py"\n```\n'
+def test_lint_allows_plugin_root_and_requires_pointer():
+    good = '# S\n\n' + POINTER + '\n\n```bash\nROOT_DIR="${CLAUDE_PLUGIN_ROOT}"\npython3 "$ROOT_DIR/lib/x.py"\n```\n'
     assert VH.lint_skill(good) == []
 
 def test_lint_flags_missing_pointer():
-    nopointer = '# S\n\n```bash\nROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"\n```\n'
+    nopointer = '# S\n\n```bash\nROOT_DIR="${CLAUDE_PLUGIN_ROOT}"\n```\n'
     assert any("pointer" in v.lower() for v in VH.lint_skill(nopointer))
 
 @pytest.mark.parametrize("bad_ref", [
     "hosts/claude-tools.md",       # hardcodes a concrete host instead of the placeholder
     "hosts/codex-tools.md",        # ditto, the other host
     "hosts/whatever-blah-tools.md",  # arbitrary garbage that still ends in -tools.md
-    "hosts/<your-host>-tools.md",  # right placeholder, but missing the ${...} seam prefix
+    "hosts/<your-host>-tools.md",  # right placeholder, but missing the ${CLAUDE_PLUGIN_ROOT} prefix
+    "${CLAUDE_PLUGIN_ROOT:" + "-${PLUGIN" + "_ROOT}}/hosts/<your-host>-tools.md",  # the retired fallback form no longer satisfies the pointer check
 ])
 def test_lint_flags_malformed_pointer_line(bad_ref):
-    """A pointer line that does not use the seam-anchored
-    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` is malformed and must
-    be flagged — POINTER_RE must reject both a hardcoded host and a bare (un-seamed)
-    placeholder."""
+    """A pointer line that does not use the plugin-root-anchored
+    `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` is malformed and must
+    be flagged — POINTER_RE must reject both a hardcoded host and a placeholder
+    without the ${CLAUDE_PLUGIN_ROOT} prefix."""
     malformed = "# S\n\nResolve actions via `" + bad_ref + "` directly.\n"
     assert any("pointer" in v.lower() for v in VH.lint_skill(malformed)), \
         f"malformed pointer ref {bad_ref!r} was not flagged"
-
-def test_lint_flags_bare_claude_plugin_root():
-    bare = '# S\n\n' + POINTER + '\n\n```bash\npython3 "${CLAUDE_PLUGIN_ROOT}/lib/x.py"\n```\n'
-    assert any("CLAUDE_PLUGIN_ROOT" in v for v in VH.lint_skill(bare))
 
 # --- fixture-driven tests for the CI-gating paths (containment / identity / byte-equality / main exit) ---
 import json

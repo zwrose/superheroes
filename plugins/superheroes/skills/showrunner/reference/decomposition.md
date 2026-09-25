@@ -126,7 +126,9 @@ against an untested seam.
 
 Every multi-PR child is planned as a [native stack](../../../rubric/native-stacks.md); an exception
 is owner-ruled and recorded. What a stack is and the terms around it live in that file and in
-[`rubric/glossary.md`](../../../rubric/glossary.md).
+[`rubric/glossary.md`](../../../rubric/glossary.md). [Each layer is a
+sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue) states how each planned
+layer is filed and where its order lives.
 
 **One surface per layer.** A layer is sized by how many surfaces it touches, not by its line count
 — because that is what drives review cost. A layer that touches one contested seam converges; a
@@ -253,7 +255,7 @@ recorded in the trail; the tool checks completeness and well-formedness, never r
 The stable invocation (`ROOT_DIR` is the plugin root):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/package_read_audit.py" check --trail <path to the trail .md>
 ```
 

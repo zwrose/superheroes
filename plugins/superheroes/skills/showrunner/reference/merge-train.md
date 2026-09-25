@@ -148,10 +148,14 @@ saw. Nothing in the tooling closes that gap; this rule does.
    — and then this file's existing rules apply unchanged: the train is green when **`main`'s own
    post-merge run** is green on the merged head, selected by workflow name plus head sha ([A merge
    train's "green" includes post-merge `main` CI](#a-merge-trains-green-includes-post-merge-main-ci),
-   [Selecting the run to watch](#selecting-the-run-to-watch)).
+   [Selecting the run to watch](#selecting-the-run-to-watch)). Closing the feature issue and its
+   layer sub-issues follows [Each layer is a
+   sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue).
 
 7. **What a vet checks per layer, and what it checks once per stack.** **Per layer:** its own DoD
-   rows, its own review dispositions and receipts, its own CI on its own head, its base — for each
+   rows (the layer's DoD and order live in its own sub-issue — [Each layer is a
+   sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)), its own review
+   dispositions and receipts, its own CI on its own head, its base — for each
    non-bottom layer, the layer below's branch; for the bottom layer, the stack's base
    (`baseRefName`) — and its membership read back. **Once per stack, at the top:** that the ordered
    entries **through the chosen target pull request** equal the layers the advisor planned and the

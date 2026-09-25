@@ -126,7 +126,7 @@ crash surface and, because this repo bakes PR bodies into commit messages, a fal
 Such a commit is reported as a notice instead, so the case is visible rather than silently
 absorbed.
 
-The same check is runnable locally (`python3 .github/scripts/check_release_bump.py`) for a
+The same check is runnable locally (`scripts/pinned-python .github/scripts/check_release_bump.py`) for a
 pre-cut audit — that manual run is how the second incident was caught.
 
 ## Recovery

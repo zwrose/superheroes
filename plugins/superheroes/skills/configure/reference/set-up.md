@@ -18,7 +18,7 @@ end to end: storage mode, the shared core, the light hero layers, and named prov
 for optional heroes. Set-up takes declared defaults and discloses them in the layer carriers — it
 does not interview.
 
-`ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash block below.
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash block below.
 
 ## 1 — Decide the storage mode (FR-2), with disclosure
 
@@ -30,7 +30,7 @@ anyone with the repo. Resolve the band-wide decision (it is decided once and is 
 <!-- decision-point: id=configure-setup-storage-location mode=notify kind=storage-location default="recorded mode when one exists, else provisional global (out-of-repo)" carrier=review-crew-layer -->
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero; halting rather than taking an undisclosed storage default" >&2; exit 1; }
 LOC=$(printf '%s' "$DEC" | jq -r '.mode')
 SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
@@ -121,7 +121,7 @@ continue. Only when the owner explicitly declines an optional hero in this turn,
 view tune-menu does not re-offer it on every run (FR-6 / #121):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero test-pilot
 # or, for guardian:
 python3 -B "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero guardian
@@ -137,7 +137,7 @@ run the headless conformance pass before set-up completes (normative CLI in
 `reference/pilot-contract.md` §The conformance run):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 REPORT_JSON="$(mktemp)"
 trap 'rm -f "$REPORT_JSON"' EXIT
 CONFORMANCE_ARGS=(run --cwd .)
@@ -202,7 +202,7 @@ the declaration via `/superheroes:configure`.
 To persist a declaration when the owner supplies one in this turn (multi-line prose on stdin):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 printf '%s\n' '<Level/What-the-owner-does/Notes prose>' | \
   python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
 ```
@@ -234,7 +234,7 @@ Follow-up: `/superheroes:configure`.
    what to fix:
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/engine_detect.py"   # JSON verdict per engine: installed/authed + remediation
    ```
    A not-ready engine is shown with its next-command remediation; it is never offered as ready.
@@ -291,14 +291,14 @@ step blocks set-up.
    calibration.
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/project_config.py" dependencies --cwd .
    ```
 
    When the project has a dependency to declare, persist it with JSON on stdin:
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    printf '%s' '"standing-proposals"' | \
      python3 -B "$ROOT_DIR/lib/project_config.py" declare --dependency collector --cwd .
    ```
@@ -310,7 +310,7 @@ step blocks set-up.
    degrades calibration with a disclosure and never refuses it.
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
    python3 -B "$ROOT_DIR/lib/kind_labels.py" --repo "$REPO" --apply
    ```

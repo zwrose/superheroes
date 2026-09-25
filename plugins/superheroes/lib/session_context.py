@@ -69,15 +69,15 @@ def _read_text(path):
 # ----------------------------------------------------------------- resolved roots
 def resolved_roots(plugin_root, host):
     """Context note stating the absolute plugin root + absolute host-map path, so a
-    skill's `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<host>-tools.md` Read lands
+    skill's `${CLAUDE_PLUGIN_ROOT}/hosts/<host>-tools.md` Read lands
     on the real file. No env exports — context injection only."""
     root = os.path.abspath(plugin_root or ".")
     host_map = os.path.join(root, "hosts", "%s-tools.md" % host)
     return (
         "Plugin root (absolute): %s\n"
         "Host tool map (absolute): %s\n"
-        "When a skill tells you to read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/<path>`, "
-        "treat `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` as the plugin root above and read "
+        "When a skill tells you to read `${CLAUDE_PLUGIN_ROOT}/<path>`, "
+        "treat `${CLAUDE_PLUGIN_ROOT}` as the plugin root above and read "
         "that absolute path (this also fixes the host-tool-map pointer)." % (root, host_map)
     )
 

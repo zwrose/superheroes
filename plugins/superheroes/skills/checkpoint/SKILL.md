@@ -4,7 +4,7 @@ description: "Use before compaction in a showrunner, workhorse, or detective cha
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # checkpoint
 
@@ -41,7 +41,7 @@ or `None`; the roster lives in `charter_detect.CHARTER_NAMES`). It never raises 
 missing file, bad JSON line, or any internal error returns `None`.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 TRANSCRIPT_PATH="<absolute path to this session's transcript>"
 python3 -B -c "
 import sys, os

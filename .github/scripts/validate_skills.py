@@ -30,9 +30,10 @@ def check_line_count(skill_key, total_lines, ceilings):
 
 import re
 
-# WORKAROUND: CI lint enforces the portable plugin-root seam on skill reference paths
-# delete-when: every host resolves plugin root through one variable without this fallback seam
-_REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}/([A-Za-z0-9._/\-]+)")
+# Bites on: a ${CLAUDE_PLUGIN_ROOT}/<path> citation that does not resolve, or a cited reference that cites another file.
+_REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9._/\-]+)")
+# Bites on: a citation still written in the retired ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/<path> fallback form.
+_RETIRED_REF = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}/([A-Za-z0-9._/\-]+)")
 _HEADING = re.compile(r"^#+\s+(\d+(?:\.\d+)*)\b", re.MULTILINE)
 # Only CONVENTIONS-qualified citations are validated. A bare "§N" is ambiguous — skills
 # also use §N for their OWN internal section cross-references (e.g. review-code's §12),
@@ -47,6 +48,8 @@ def check_links(skill_key, text, plugin_dir):
         rel = m.group(1)
         if not os.path.exists(os.path.join(plugin_dir, rel)):
             out.append(f"reference-link: {skill_key}: unresolved reference {rel}")
+    for m in _RETIRED_REF.finditer(text):
+        out.append(f"reference-link: {skill_key}: retired plugin-root form {m.group(1)}")
     return out
 
 
@@ -256,10 +259,15 @@ def check_depth(skill_key, text, plugin_dir):
         if not os.path.isfile(target):
             continue  # resolution is check_links' job
         with open(target, encoding="utf-8") as fh:
-            if _REF.search(fh.read()):
-                out.append(
-                    f"reference-depth: {skill_key}: {rel} itself references another "
-                    f"file (chain deeper than one hop)")
+            cited = fh.read()
+        retired = list(_RETIRED_REF.finditer(cited))
+        if _REF.search(cited) or retired:
+            out.append(
+                f"reference-depth: {skill_key}: {rel} itself references another "
+                f"file (chain deeper than one hop)")
+        for r in retired:
+            out.append(
+                f"reference-link: {skill_key}: retired plugin-root form {r.group(1)} (in {rel})")
     return out
 
 
@@ -355,8 +363,8 @@ def main(argv=None):
     if yaml is None:
         sys.stderr.write(
             "validate_skills.py requires PyYAML (import yaml failed). "
-            "Run under an interpreter with PyYAML installed "
-            "(e.g. /usr/bin/python3) or: python3 -m pip install pyyaml\n"
+            "Run it through scripts/pinned-python, which provides PyYAML "
+            "from requirements-dev.txt.\n"
         )
         return 1
     argparse.ArgumentParser(description="validate skill token-shape").parse_args(argv or [])

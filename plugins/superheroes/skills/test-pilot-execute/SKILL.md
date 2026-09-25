@@ -3,7 +3,7 @@ name: test-pilot-execute
 description: Use when a test-pilot plan should be exercised before human spot-check — "run the test plan", "pilot this PR", "verify the branch in the browser". Drives the app via a browser MCP, records what it observes at each step, and posts a results comment. Observe-and-report only — a bug it finds is a finding, never an edit.
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # test-pilot-execute
 
@@ -22,13 +22,13 @@ orchestrator or a human) routes each finding to a fix as it sees fit.
 2. **Navigation is constrained** to origins matching the profile's
    `baseUrl` (plus `allowedOrigins`). Anywhere else is off-limits.
 3. **Every quoted diagnostic is scrubbed** before it reaches a comment:
-   `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/pr_comment.py" scrub` (stdin→stdout).
+   `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_comment.py" scrub` (stdin→stdout).
    Never quote raw request headers.
 4. The plan comment's checkboxes belong to the human — never check them.
 
 ## Flow
 
-The execution step-body lives at **`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/test-pilot-execute/reference/execution-steps.md`** — read it and
+The execution step-body lives at **`${CLAUDE_PLUGIN_ROOT}/skills/test-pilot-execute/reference/execution-steps.md`** — read it and
 follow it. That file is the **one home** of the eight steps; this section
 points at it rather than restating them, so a dispatched consumer that cannot
 reach this skill (the `pilot` build subagent has no Skill tool) cites the same

@@ -16,7 +16,7 @@ may carry dates). Match each file's voice and density.
 A sibling order (WO-A) is adding `plugins/superheroes/lib/conformance_probe.py`. Its contract, which
 you describe and never restate as code:
 
-- Command: `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/conformance_probe.py" run --engine <codex|cursor>`
+- Command: `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/conformance_probe.py" run --engine <codex|cursor>`
   (optional `--repo-root`, `--run-dir`, `--timeout`; no argument beyond the engine name is required).
   It dispatches one real review run through the shell's own library entry on the engine's declared
   channel (native for codex, the marker channel with the marker grader for cursor) using the engine's

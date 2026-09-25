@@ -120,10 +120,10 @@ Anchor hold, the reported token is the header-form refusal.
 > not claimed as one.
 
 **Invocation:** write the issue body to a file, then run (from a plugin-cache install,
-`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/issue_contract.py" check-build-ready --body-file <path>
 ```
 
@@ -161,10 +161,10 @@ contract, whose one home is [`owner-decisions.md`](owner-decisions.md).
 
 **Intake grading.** Pipe the tier claim as JSON on stdin to `front_door grade` in
 [`../../../lib/front_door.py`](../../../lib/front_door.py) — from a plugin-cache install,
-`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`:
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 echo '<claim-json>' | python3 -B "$ROOT_DIR/lib/front_door.py" grade --cwd <repo> [--root <store>]
 ```
 
@@ -198,7 +198,9 @@ its roadmap, and a project extends it rather than minting a second one.
 1. **At routing, any issue estimated over 1,000 non-test lines carries one of two things**: a
    **stack or layer design** (one concern per layer, merged bottom-up, using the project's
    sanctioned stacking tool) or a **recorded reason a single pull request is right**. The estimate is
-   a routing estimate, never a measurement.
+   a routing estimate, never a measurement. When the design is a stack, its planned layers are
+   filed as sub-issues per
+   [Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue).
 2. **This is a mandatory consideration with a durable trace, never a mandatory split.** A reader who
    takes this for a split rule has misread it.
 3. **The stacking tool is a project configuration item**; its home is the

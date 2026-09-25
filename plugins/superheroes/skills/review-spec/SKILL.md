@@ -4,7 +4,7 @@ description: Use to review the-architect's `spec` definition-doc (the plain-lang
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Review Spec
 
@@ -28,7 +28,7 @@ verdict mapping.
 
 This is the **spec leg of the superheroes Review Crew** — the automated *spec-review*
 the-architect's `discovery` skill calls (an automated **review**, not a gate: it never
-grants `passed`). Read the base rubric (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`)
+grants `passed`). Read the base rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`)
 for severity calibration and the verification rules every finding must pass; if anything
 below contradicts the base rubric, the base rubric wins.
 
@@ -78,17 +78,17 @@ SESSION_DIR=$(mktemp -d /tmp/review-spec-XXXXXXXX)
 
 ### 1. Setup
 
-**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
 **Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt rather than assuming uncalibrated.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 CAL=$(python3 -B "$ROOT_DIR/lib/calibration_resolve.py" resolve) || { echo "calibration_resolve resolve exited non-zero (exit $?); halting rather than assuming uncalibrated" >&2; exit 1; }
 CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
 LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
@@ -100,10 +100,10 @@ DRES=$(python3 -B "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 ```
 
-Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
+Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 PLUGIN_VERSION=$(python3 -B -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])")
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
@@ -111,7 +111,7 @@ RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" 
 **Staleness self-check (first action).** Before the profile bootstrap and before locating the spec or dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. review-spec reads the working tree (default root), so no `--root` is passed. Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below, not to staleness:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 if [ "$EXISTS" = "true" ]; then
   DOCTOR_JSON=$(python3 -B "$ROOT_DIR/lib/repo_doctor.py" \
     "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION")
@@ -124,7 +124,7 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 
 <!-- decision-point: id=review-spec-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-spec-receipt -->
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 if [ "$LOCATION" = "none" ]; then
   DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
@@ -173,7 +173,7 @@ Copy the spec to a stable artifact path and classify what it touches (over the r
 ```bash
 cp "$SPEC_PATH" "$SESSION_DIR/spec.md"
 
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 RUN_ID="review-${WORK_ITEM}-${SESSION_DIR##*/}"
 REVIEWED_HASH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SESSION_DIR/spec.md")
 LEASE="${SESSION_DIR##*/}"
@@ -205,7 +205,7 @@ The classification is informational — **it never narrows the dispatch** (the r
 **Compute additive doc focus notes.** `doc_focus_flags.py` deterministically scans the spec for migration / external-service signals and emits emphasis notes for the reviewer prompts. Like the `touches` classification, these are **additive — they add emphasis, they NEVER narrow the script-owned dispatch**:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 FOCUS_NOTES=$(python3 -B "$ROOT_DIR/lib/doc_focus_flags.py" --spec "$SESSION_DIR/spec.md" | jq -r '.focusNote // empty')
 ```
 
@@ -230,7 +230,7 @@ via the shared knob, honoring any `## Model tiers` override block in the project
 (`$PROFILE`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 MT="$ROOT_DIR/lib/model_tier_resolve.py"
 OV=$(python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
 REVIEWER_MODEL=$(python3 -B "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
@@ -307,7 +307,7 @@ into the spec, don't add more.** A good spec is:
   work-item, or several bundled (should it be decomposed)? Are requirements mutually
   consistent — **no two that contradict** (cross-requirement contradiction)? Is anything
   specified that isn't this work-item's job? Flag an **annex that introduces a new opinion**
-  — see `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-spec/reference/spec-detail.md` (Annex opinion).
+  — see `${CLAUDE_PLUGIN_ROOT}/skills/review-spec/reference/spec-detail.md` (Annex opinion).
 - **Safety & access** (`security-reviewer`): are the **owner-visible**
   security/privacy/access requirements captured — who may see/do what, what the wrong
   person sees, what must never leak — as outcomes, not mechanisms? Flag a sensitive
@@ -357,7 +357,7 @@ After dispatch, wait for all dispatched agents to return. Each writes its findin
 
 ### 4. Compile Findings (main context)
 
-As the **FIRST compile action** (main context, every round), run the deterministic citation validator — `python3 -B "$ROOT_DIR/lib/citation_validator.py" check --spec "$SESSION_DIR/spec.md" --root "$ROOT"` (prints a JSON findings array, possibly `[]`) — and MERGE its findings into the pool. Then read the `$SESSION_DIR/findings-*.json` files of the dimensions that ran this round (a skipped dimension carried a clean result and contributes none) into the same pool. The validator runs at the **compile layer**, NOT as a sixth dispatched dimension, and does NOT touch `spec_loop_plan.DIMENSIONS`; its findings cite the spec `file:line`, so they survive the citation check, dedupe, and verdict steps below. See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-spec/reference/provenance.md` for the mirror/grounding detail. Apply, in order:
+As the **FIRST compile action** (main context, every round), run the deterministic citation validator — `python3 -B "$ROOT_DIR/lib/citation_validator.py" check --spec "$SESSION_DIR/spec.md" --root "$ROOT"` (prints a JSON findings array, possibly `[]`) — and MERGE its findings into the pool. Then read the `$SESSION_DIR/findings-*.json` files of the dimensions that ran this round (a skipped dimension carried a clean result and contributes none) into the same pool. The validator runs at the **compile layer**, NOT as a sixth dispatched dimension, and does NOT touch `spec_loop_plan.DIMENSIONS`; its findings cite the spec `file:line`, so they survive the citation check, dedupe, and verdict steps below. See `${CLAUDE_PLUGIN_ROOT}/skills/review-spec/reference/provenance.md` for the mirror/grounding detail. Apply, in order:
 
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
 2. **Dedupe by spec section + topic.** When two findings target the same requirement and same topic (e.g. both flagging "no acceptance criterion"), merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Test + Code"`).
@@ -427,7 +427,7 @@ Each round:
    safe-capture pattern) defined in setup:
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    RUBRIC_RES=$(python3 -B "$ROOT_DIR/lib/escalation_resolve.py" rubric --root "$REPO_ROOT")
    ```
 
@@ -443,7 +443,7 @@ Each round:
 8. **Refresh + continuation gate.** Re-copy the revised spec: `cp "$SPEC_PATH" "$SESSION_DIR/spec.md"`. Whether to re-review — and **which dimensions run next round, at which tier** — is **decided by a script, not by you** — a model rationalizes early exits ("the revision obviously resolved it", "it'll be clean next round"). Compute `SKIPPED_BLOCKING` = the count of Critical/Important findings in this round's `compiled.findings` whose identity is in the `skip-set` — the *present* skipped blockers (equivalently: blocking findings minus blocking **effective** findings from step 3). Count this **cumulatively every round**, not just the ones you added this round — the specialists re-flag a skipped finding each round, so a once-skipped blocker stays present and must keep being counted as skipped, else it reads as "present and addressed" forever and the loop can never reach `exit_skipped`. The gate wraps `loop_state.py`'s continuation decision and the shared round policy (`review_round_policy.py`, the spine scheduler's parity-locked twin): it **derives the blockers addressed from this round's `compiled.json`** (not yours to self-report) and the changed surface from **diffing its own per-round spec snapshots** (never your summary of the revisions), and fails toward run-all on any corrupt or unknown input. Run it and obey its output verbatim:
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/spec_loop_plan.py" decide --session-dir "$SESSION_DIR" --round <N> \
      --max-rounds 7 --compiled "$SESSION_DIR/compiled.json" --skipped-blocking <SKIPPED_BLOCKING>
    ```
@@ -519,7 +519,7 @@ POSTED=
 [ -n "$ISSUE" ] && command -v gh >/dev/null 2>&1 && \
   gh issue comment "$ISSUE" --body-file "$SESSION_DIR/receipt.md" && POSTED=yes
 if [ -z "$POSTED" ]; then
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   STORE_DIR=$(python3 -B -c "import sys, os; sys.path.insert(0, '$ROOT_DIR/lib'); import mode_registry; print(mode_registry.project_store_dir(os.getcwd()))")
   DURABLE_RECEIPT="$STORE_DIR/review-spec-receipts/${LEASE}.md"
   mkdir -p "$(dirname "$DURABLE_RECEIPT")" && cp "$SESSION_DIR/receipt.md" "$DURABLE_RECEIPT"
@@ -554,4 +554,4 @@ Agents flag departures from these — the spec contract (CONVENTIONS §3.2):
 
 ## Common Mistakes
 
-The common-mistake table for review-spec is in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-spec/reference/spec-detail.md` — read it before finalizing findings.
+The common-mistake table for review-spec is in `${CLAUDE_PLUGIN_ROOT}/skills/review-spec/reference/spec-detail.md` — read it before finalizing findings.

@@ -40,7 +40,7 @@ def test_generated_certification_fixtures_match_producer():
             raise AssertionError(
                 "generated certification fixtures drifted from producer; "
                 "regenerate with: cd plugins/superheroes/lib && "
-                "/usr/bin/python3 -B tests/generate_round_certification_fixtures.py "
+                "../../../scripts/pinned-python -B tests/generate_round_certification_fixtures.py "
                 "(missing in checked-in tree: %s; extra: %s)"
                 % (missing, extra))
         assert len(FIXTURE_BUILDERS) == len(
