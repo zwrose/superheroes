@@ -3,6 +3,7 @@
 - [The vet receipt — shape](#the-vet-receipt--shape)
 - [The spine — always present, filled or `None`](#the-spine--always-present-filled-or-none)
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
+- [Project vet checks](#project-vet-checks)
 - [The `None` convention](#the-none-convention)
 - [The owner-half write — register](#the-owner-half-write--register)
 - [Markers](#markers)
@@ -186,6 +187,7 @@ are never holding the inventory in working memory.
 | this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR), or for a stacked feature the vet `skills/showrunner/reference/closure.md#when-closure-fires` § When closure fires names | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
 | the build record records a **full-lane** pre-handback review | the **certified-loop check** — the driver's own round receipt, or a skip disclosure citing an open `driver-blocker` issue by number, or a skip disclosure citing an explicit owner direction as a dated record (the venue-citation convention, `skills/showrunner/reference/issue-contract.md` § Anchor resolution; the subordinated owner-directed ending). A citation that is absent, or that names a closed issue, is a finding; whether a cited skip still passes at all is governed by the driver-mandate flip in `rubric/review-discipline.md`, which is the one home for that timing — post-flip, an owner-direction citation is recorded in this receipt **named as the owner's override** of driver-or-park, never as a citation-pass |
 | the build record shows a **full-lane** review **not driven by the certified loop** | the **seat-provenance parity check** — each seat's seat-map assignment, plus a recorded attempt or terminal forfeit on the vendor that seat was assigned; a missing assignment is a finding. A seat that ran off its seat-map assignment with no recorded forfeit on the vendor it was assigned is a finding |
+| the `vet-checks` verb reports `declared: true`, or any non-null `reason` | one receipt line per declared check, and a finding per malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
@@ -199,6 +201,59 @@ is raised by a number the artifacts carry rather than by your memory of having c
 **Known limit, carried knowingly:** a trigger is weaker than a check. A build record that omits a
 sequential-order run raises no field. You read the diff too, so the trigger is a second chance rather
 than the only one — but it is not a guarantee.
+
+## Project vet checks
+
+The `` ```json superheroes-core `` `` block in `core.md` may carry an optional `vetChecks` key: a
+JSON list of objects, each with exactly `name`, `evidence`, and `records` (non-empty strings);
+check names must be unique; `[]` means zero checks. It is the enforcement home for rules whose
+evidence lives in the PR body or a ledger — surfaces review seats cannot read. **This section
+defines the shape only.** Encoding checks is the project's work, done through `configure`.
+
+Example (inside the fence):
+
+```json
+"vetChecks": [
+  {
+    "name": "Example check",
+    "evidence": "PR body · Build record",
+    "records": "what was read from the evidence and what the vet recorded"
+  }
+]
+```
+
+**Malformed reasons** — the authoritative closed set is the module constant
+`VET_CHECKS_MALFORMED_REASONS` in `lib/core_md.py`; each token names which rule of the shape above
+was broken. Malformed entries report as `{"index", "field", "reason"}`; when any entry is malformed,
+`checks` is empty — never a partial list.
+
+**Read verb.** From the project cwd:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/core_md.py" vet-checks --cwd .
+```
+
+It prints one JSON object and exits 0:
+
+`{"declared": bool, "checks": [{"name", "evidence", "records"}, ...], "malformed": [...],
+"reason": null | <token>, "detail": null | str, "behind": bool}`.
+
+The key absent → `declared: false`, `reason: null` (no vet-check lines owed). When `reason` is a
+calibration-read failure token (`core-md-absent`, `repo-root-unavailable`, `core-md-unreadable`,
+`core-md-unparseable`, `multiple-core-blocks`, `duplicate-core-key:<key>`), `declared` is false and
+both lists are empty. `vet-checks-malformed` comes with `declared: true`, the items in `malformed`,
+and `checks` empty.
+
+**How the vet acts on the read.**
+
+- Each well-formed declared check → **one receipt line**: the check's name, what you read from its
+  `evidence`, and what you record per its `records` field.
+- `reason: core-md-absent` → no calibration file, so no vet checks are declared: **one plain
+  receipt line** — **not a finding**.
+- Any other non-null `reason`, or a non-empty `malformed` list → **findings** naming the token or
+  each malformed index — never a silent skip.
+- `declared: false` with `reason: null` → the key is absent; no vet-check lines are owed.
 
 ## The `None` convention
 
