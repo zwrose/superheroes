@@ -2825,6 +2825,89 @@ def test_astra_probe_continuation_redispatches_without_duplicate_record(tmp_path
     assert len(calls) == 2
 
 
+# bite-axis: a pending claim snapshots its seat at claim time (#1435 fix-batch v0). A
+# same-wave re-invocation that continues that claim must dispatch — and, on eventual
+# completion, attribute the outcome to — the SNAPSHOTTED seat, even if the registration-probe
+# cell resolves to a different model in the meantime (a mid-wave registry change must not
+# orphan the pending claim's dispatch with a seat mismatch, nor misattribute the outcome).
+def test_astra_probe_continuation_uses_claimed_seat_after_cell_changes(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    resolved = {"model": "gpt-6-astra", "effort": "medium"}
+    seats = []
+
+    def fake_resolve(role, vendor, model, effort):
+        return {"ok": True, "model_id": resolved["model"], "effort": resolved["effort"]}
+
+    calls = []
+
+    def dispatch(**kwargs):
+        seats.append(kwargs["seat"])
+        calls.append(1)
+        if len(calls) == 1:
+            return {"ok": False, "terminal": False, "findings": None}
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
+
+    out1, code1 = CP.astra_probe(repo, "wave-cell-change", run_dir, dispatch=dispatch)
+    assert code1 == 0
+    assert out1.get("continue") is True
+    assert seats[0]["model"] == "gpt-6-astra"
+
+    # The registration-probe cell moves to a different model while the claim is pending.
+    resolved["model"] = "gpt-6-sol"
+    resolved["effort"] = "high"
+
+    out2, code2 = CP.astra_probe(repo, "wave-cell-change", run_dir, dispatch=dispatch)
+    assert code2 == 0
+    assert out2["outcome"] == "pass"
+    # Dispatched with — and attributed to — the seat the claim snapshotted, not the
+    # freshly resolved gpt-6-sol seat.
+    assert seats[1]["model"] == "gpt-6-astra"
+    assert seats[1]["effort"] == "medium"
+    assert out2["model"] == "gpt-6-astra"
+    assert out2["effort"] == "medium"
+    ledger_dir, _ = CP._conformance_record_dir(repo)
+    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    assert attempts[0]["model"] == "gpt-6-astra"
+
+
+# bite-axis: a legacy claim written before the seat-snapshot fix carries no `model` (the
+# field would read None). Continuing that claim keeps today's behavior — the freshly
+# resolved registry seat — because there is no snapshot to honor.
+def test_astra_probe_continuation_legacy_claim_without_snapshot_uses_current_seat(
+        tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    run_dir_real = os.path.realpath(run_dir)
+
+    # Simulate a legacy claim (written before claims recorded model/effort).
+    CP._write_astra_claim(ledger_dir, "wave-legacy", run_dir_real, model=None, effort=None)
+
+    def fake_resolve(role, vendor, model, effort):
+        return {"ok": True, "model_id": "gpt-6-sol", "effort": "high"}
+
+    seats = []
+
+    def dispatch(**kwargs):
+        seats.append(kwargs["seat"])
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
+
+    out, code = CP.astra_probe(repo, "wave-legacy", run_dir, dispatch=dispatch)
+    assert code == 0
+    assert seats[0]["model"] == "gpt-6-sol"
+    assert seats[0]["effort"] == "high"
+    assert out["model"] == "gpt-6-sol"
+    assert out["effort"] == "high"
+
+
 def test_astra_probe_owner_proposal_on_third_miss(tmp_path, monkeypatch):
     _astra_ledger(tmp_path, monkeypatch)
     repo = _repo(tmp_path)

@@ -1115,6 +1115,20 @@ def astra_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=
             claimed_real = claimed_dir
         if claimed_real != run_dir_real:
             return _astra_probe_refusal(wave, claim)
+        claimed_model = claim.get("model")
+        if claimed_model is not None:
+            # Continuing a claim that snapshotted a seat: dispatch (and attribute
+            # any recorded outcome) with THAT seat, not the freshly resolved one —
+            # a mid-wave registry change must not orphan a pending claim's dispatch
+            # or misattribute its outcome to a model it never ran on. A legacy
+            # claim with no snapshot (claimed_model is None) falls through and
+            # keeps today's behavior: the freshly resolved seat.
+            seat = {
+                "vendor": "codex",
+                "model": claimed_model,
+                "effort": claim.get("effort"),
+                "role": ASTRA_PROBE_ROLE,
+            }
     recorded = _attempt_for_wave(attempts, wave)
     if recorded is not None:
         return recorded, (0 if recorded.get("ok") else 1)
