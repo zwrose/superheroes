@@ -1081,9 +1081,14 @@ def test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling():
     # hard floor probe)
     assert EP.codex_write_probe_model(
         {"codexModels": {"implementer": "gpt-5.6-sol", "code-fixer": "gpt-5.6-sol"}}) == "gpt-5.6-sol"
-    # implementer is the ceiling (unpinned code-fixer clamps to the floor, which is stronger than the
-    # pin-only model) -> the probe dispatches the floor. Proves the probe covers BOTH write roles, not
-    # just code-fixer (drops-a-write-role mutant dies here).
+    # code-fixer is unpinned and clamps to the opus peer floor, which is stronger than the
+    # implementer's pin-only model -> the probe dispatches the floor, not the pin. Proves the probe
+    # covers BOTH write roles, not just implementer (drops-a-write-role mutant dies here).
+    pin_only = MR.pin_only_models("codex")[0]
+    assert EP.codex_write_probe_model(
+        {"codexModels": {"implementer": pin_only}}) == MR.codex_peer_for_claude_tier("opus")
+    # BOTH write roles pinned to different real models -> the STRONGER of the two pins wins (max of
+    # two pins), not either pin alone or the floor.
     assert EP.codex_write_probe_model(
         {"codexModels": {"implementer": "gpt-6-astra", "code-fixer": "gpt-5.6-sol"}}) == "gpt-6-astra"
 

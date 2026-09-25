@@ -867,6 +867,15 @@ def test_i2_retired_terra_direct_dispatch_named_not_generic_park():
     assert resolved["dispatch_token"] is None
 
 
+# bite-axis: the explicit-model retired check runs before the empty-allowlist early return, so a
+# role with NO sanctioned model on the vendor (codex `pilot`) still names `model-retired` for an
+# explicitly named retired model, instead of falling into the generic "no sanctioned model" park.
+def test_i2_retired_terra_named_even_on_a_role_with_no_sanctioned_model():
+    resolved = MR.resolve_dispatch("pilot", "codex", "gpt-5.6-terra", None)
+    assert resolved["ok"] is False
+    assert resolved["reason"] == _RETIRED_TERRA_REASON
+
+
 # bite-axis: pin-only gpt-5.6-sol is appended to the allowlist after the ladder slice, at the cell's own effort
 def test_i3_pin_only_sol_appended_after_ladder_slice_at_cell_effort():
     for role in MR.codex_pin_roles():

@@ -222,7 +222,8 @@ A consumer meets:
   composition-liveness check when the installed Codex CLI falls short of the registry's floor for
   the models the codex defaults use, or when its version can't be parsed;
 - `gpt-5.6-sol`, registered pin-only: never a default, ladder rung, peer, or escalation target, but
-  a valid pin for any codex pin role at that role's own effort;
+  a valid pin for any codex pin role that has a codex cell (reviewer, reviewer-deep, code-fixer,
+  implementer), at that role's own effort;
 - `seat_map compose` flags `--host-model` and `--implementation-engine` and degradations
   `host-model-unknown`, `role-pin-not-live`, `role-pin-not-honorable`;
 - `SUPERHEROES_HOST_MODEL`, exported by the session-start hook from the host payload (empty when
