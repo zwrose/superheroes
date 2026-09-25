@@ -6,6 +6,7 @@ import os
 import sys
 
 import engine_dispatch
+import model_registry
 import pytest
 import resolved_inputs_vocab as riv
 import round_adapters
@@ -27,6 +28,10 @@ _SPEC = importlib.util.spec_from_file_location(
 )
 tdi = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(tdi)
+
+_CODEX_REVIEWER_DEEP_MODEL, _CODEX_REVIEWER_DEEP_EFFORT = model_registry.matrix_config(
+    "reviewer-deep", "codex"
+)
 
 HEAD = HEAD_SHA
 
@@ -59,10 +64,10 @@ def test_journal_execution_evidence_fields_copies_optional_engine_model():
         "resultDigest": "e" * 64,
         "resultKind": "findings",
         "observation": {"read": "engaged"},
-        "engineModel": "gpt-5.6-sol",
+        "engineModel": _CODEX_REVIEWER_DEEP_MODEL,
     }
     copied = RD._journal_execution_evidence_fields(evidence)
-    assert copied["engineModel"] == "gpt-5.6-sol"
+    assert copied["engineModel"] == _CODEX_REVIEWER_DEEP_MODEL
     without_optional = dict(evidence)
     del without_optional["engineModel"]
     copied_without = RD._journal_execution_evidence_fields(without_optional)
@@ -219,8 +224,8 @@ def _record_runner_seat_with_resolved_inputs(tmp_path, runner_seat):
     tdi._write_dispatch_manifest(session_dir, pend, slots, tdi._auditor_vendor_for(state))
     seat_spec = {
         "vendor": "codex",
-        "model": "gpt-5.6-sol",
-        "effort": "xhigh",
+        "model": _CODEX_REVIEWER_DEEP_MODEL,
+        "effort": _CODEX_REVIEWER_DEEP_EFFORT,
         "role": "reviewer-deep",
     }
     occurrence = 0
@@ -234,7 +239,7 @@ def _record_runner_seat_with_resolved_inputs(tmp_path, runner_seat):
             round_records.storage_key(seat, occurrence), pend["attempt"],
         )
         snapshot = _resolved_inputs_for_runner_seat(tmp_path, seat_spec)
-        assert snapshot["engineModel"] == "gpt-5.6-sol"
+        assert snapshot["engineModel"] == _CODEX_REVIEWER_DEEP_MODEL
         run_dir = tdi._execution_run_dir(
             tmp_path, order_path, [], resolved_inputs=snapshot,
         )
@@ -261,7 +266,7 @@ def test_receipt_seat_model_is_the_runner_records_engine_model(tmp_path):
         tmp_path, runner_seat,
     )
     assert recorded_row[session_contract.SEAT_TRANSPORT_KEY] == session_contract.SEAT_TRANSPORT_RUNNER
-    assert recorded_row["executionEvidence"]["engineModel"] == "gpt-5.6-sol"
+    assert recorded_row["executionEvidence"]["engineModel"] == _CODEX_REVIEWER_DEEP_MODEL
     runner_row = dict(recorded_row)
     runner_row.update(RD._journal_stored_revision(stored))
     runner_row["headSha"] = HEAD
@@ -287,7 +292,7 @@ def test_receipt_seat_model_is_the_runner_records_engine_model(tmp_path):
     receipt, refusal = RC.certify(session_dir)
     assert refusal is None, refusal
     row = next(item for item in receipt["seats"] if item["seat"] == runner_seat)
-    assert row["model"] == "gpt-5.6-sol"
+    assert row["model"] == _CODEX_REVIEWER_DEEP_MODEL
     assert all(item.get("model") != "gpt-6-astra" for item in receipt["seats"])
 
 

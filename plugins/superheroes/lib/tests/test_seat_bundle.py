@@ -36,6 +36,11 @@ _REVIEW_ROLE = "reviewer"
 _WRITE_ROLE = "implementer"
 _BRIEF_ROLE = "brief-check"
 
+_PIN_MODEL = MR.pin_only_models("codex")[0]
+_REVIEW_CODEX_MODEL, _REVIEW_CODEX_EFFORT = MR.matrix_config(_REVIEW_ROLE, "codex")
+_WRITE_CODEX_MODEL, _WRITE_CODEX_EFFORT = MR.matrix_config(_WRITE_ROLE, "codex")
+_BRIEF_CODEX_MODEL, _BRIEF_CODEX_EFFORT = MR.matrix_config(_BRIEF_ROLE, "codex")
+
 
 @pytest.mark.parametrize(
     "cli_module,subcmd,role",
@@ -57,7 +62,7 @@ def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, su
     wt.mkdir()
     (wt / ".git").write_text("gitdir: /fake\n", encoding="utf-8")
 
-    json_seat = _seat_json("codex", "gpt-5.6-sol", "high", role)
+    json_seat = _seat_json("codex", _PIN_MODEL, "high", role)
     if cli_module is ED and subcmd == "dispatch-review":
         argv = [
             subcmd, "--seat", json_seat,
@@ -107,12 +112,12 @@ def test_entry_clis_route_through_chokepoint_and_expose_seat_flag(cli_module, su
 )
 def test_four_key_seat_json_accepted(verb, role):
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "high", role),
+        _seat_json("codex", _PIN_MODEL, "high", role),
         verb=verb,
     )
     assert resolved["ok"] is True
     assert resolved["vendor"] == "codex"
-    assert resolved["model"] == "gpt-5.6-sol"
+    assert resolved["model"] == _PIN_MODEL
     assert resolved["effort"] == "high"
     assert resolved["role"] == role
 
@@ -139,7 +144,7 @@ def _valid_cli_paths(tmp_path):
 def test_dropped_flags_refuse_and_name_seat_dispatch_review(flag, spelling, tmp_path, capsys):
     # axis: R8 — dropped legacy flag refuses dispatch-review CLI and names the seat
     repo, prompt, run_dir, _wt = _valid_cli_paths(tmp_path)
-    seat = _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE)
+    seat = _seat_json("codex", _PIN_MODEL, "high", _REVIEW_ROLE)
     base = [
         "dispatch-review", "--seat", seat,
         "--prompt-path", str(prompt), "--repo-root", str(repo), "--run-dir", str(run_dir),
@@ -161,7 +166,7 @@ def test_dropped_flags_refuse_and_name_seat_dispatch_review(flag, spelling, tmp_
 def test_dropped_flags_refuse_and_name_seat_dispatch_write(flag, spelling, tmp_path, capsys):
     # axis: R8 — dropped legacy flag refuses dispatch-write CLI and names the seat
     _repo, prompt, run_dir, wt = _valid_cli_paths(tmp_path)
-    seat = _seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE)
+    seat = _seat_json("codex", _PIN_MODEL, "high", _WRITE_ROLE)
     base = [
         "dispatch-write", "--seat", seat,
         "--prompt-path", str(prompt), "--cwd", str(wt), "--run-dir", str(run_dir),
@@ -182,7 +187,7 @@ def test_dropped_flags_refuse_and_name_seat_dispatch_write(flag, spelling, tmp_p
 @pytest.mark.parametrize("spelling", ["value", "equals"])
 def test_dropped_flags_refuse_and_name_seat_guard_check(flag, spelling, capsys):
     # axis: R8 — dropped legacy flag refuses guard-check CLI and names the seat
-    seat = _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE)
+    seat = _seat_json("codex", _PIN_MODEL, "high", _REVIEW_ROLE)
     if spelling == "value":
         argv = ["check", "--seat", seat, flag, "codex"]
     else:
@@ -204,7 +209,7 @@ def test_dropped_flags_refuse_and_name_seat_guard_check(flag, spelling, capsys):
         {"engine": "codex"},
         {"model": "sonnet"},
         {"effort": "high"},
-        {"engine_model": "gpt-5.6-sol"},
+        {"engine_model": _PIN_MODEL},
         {"role": "reviewer"},
         {"engine": "codex", "model": "sonnet", "effort": "high"},
     ],
@@ -240,7 +245,7 @@ def test_dispatch_write_legacy_library_refusal_full_terminal_envelope():
 
 def test_dispatch_review_unknown_keyword_refused():
     res = ED.dispatch_review(
-        seat=_seat_json("codex", "gpt-5.6-sol", "high"),
+        seat=_seat_json("codex", _PIN_MODEL, "high"),
         prompt_path="p",
         repo_root="/tmp",
         prompt_pat="typo",
@@ -254,7 +259,7 @@ def test_dispatch_review_unknown_keyword_refused():
 
 def test_dispatch_write_unknown_keyword_refused():
     res = ED.dispatch_write(
-        seat=_seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE),
+        seat=_seat_json("codex", _PIN_MODEL, "high", _WRITE_ROLE),
         prompt_path="p",
         cwd="/tmp",
         prompt_pat="typo",
@@ -268,7 +273,7 @@ def test_dispatch_write_unknown_keyword_refused():
 
 def test_dispatch_write_refuses_read_only_role():
     res = ED.dispatch_write(
-        seat=_seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
+        seat=_seat_json("codex", _PIN_MODEL, "high", _REVIEW_ROLE),
         prompt_path="p",
         cwd="/tmp",
         run_dir="/tmp/r",
@@ -283,7 +288,7 @@ def test_dispatch_write_refuses_read_only_role():
 
 def test_dispatch_review_refuses_write_only_role():
     res = ED.dispatch_review(
-        seat=_seat_json("codex", "gpt-5.6-sol", "high", _WRITE_ROLE),
+        seat=_seat_json("codex", _PIN_MODEL, "high", _WRITE_ROLE),
         prompt_path="p",
         repo_root="/tmp",
     )
@@ -299,7 +304,7 @@ def test_dropped_vendor_flag_refuses():
     argv = [
         "dispatch-review",
         "--vendor", "codex",
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--seat", _seat_json("codex", _PIN_MODEL, "high"),
         "--prompt-path", "p",
         "--repo-root", "/tmp",
         "--run-dir", "/tmp/r",
@@ -313,7 +318,7 @@ def test_dropped_role_flag_refuses_and_names_replacement():
     argv = [
         "dispatch-review",
         "--role", _REVIEW_ROLE,
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--seat", _seat_json("codex", _PIN_MODEL, "high"),
         "--prompt-path", "p",
         "--repo-root", "/tmp",
         "--run-dir", "/tmp/r",
@@ -354,7 +359,7 @@ def test_grok_xhigh_accepted():
 
 def test_codex_effort_accepted():
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "high"),
+        _seat_json("codex", _PIN_MODEL, "high"),
         verb="guard-check",
     )
     assert resolved["ok"] is True
@@ -458,7 +463,7 @@ def test_bare_token_seat_refused():
 
 def test_brief_check_mode_reviewer_seat_refused():
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "xhigh", _REVIEW_ROLE),
+        _seat_json("codex", _REVIEW_CODEX_MODEL, "xhigh", _REVIEW_ROLE),
         verb="dispatch-review",
         mode="brief-check",
     )
@@ -469,7 +474,7 @@ def test_brief_check_mode_reviewer_seat_refused():
 
 def test_brief_check_role_normal_review_mode_refused():
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "xhigh", _BRIEF_ROLE),
+        _seat_json("codex", _BRIEF_CODEX_MODEL, "xhigh", _BRIEF_ROLE),
         verb="dispatch-review",
         mode="review",
     )
@@ -480,7 +485,7 @@ def test_brief_check_role_normal_review_mode_refused():
 
 def test_brief_check_role_omitted_mode_refused_on_dispatch_review():
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "xhigh", _BRIEF_ROLE),
+        _seat_json("codex", _BRIEF_CODEX_MODEL, "xhigh", _BRIEF_ROLE),
         verb="dispatch-review",
     )
     assert resolved["ok"] is False
@@ -489,7 +494,7 @@ def test_brief_check_role_omitted_mode_refused_on_dispatch_review():
 
 def test_brief_check_role_guard_check_omitted_mode_accepted():
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "xhigh", _BRIEF_ROLE),
+        _seat_json("codex", _BRIEF_CODEX_MODEL, "xhigh", _BRIEF_ROLE),
         verb="guard-check",
     )
     assert resolved["ok"] is True
@@ -536,7 +541,7 @@ def test_null_model_unique_effort_match_review_role(verb):
         verb=verb,
     )
     assert resolved["ok"] is True
-    assert resolved["model"] == "gpt-5.6-sol"
+    assert resolved["model"] == _REVIEW_CODEX_MODEL
     assert resolved["effort"] == "xhigh"
     assert resolved["modelSource"] == "resolved"
 
@@ -548,7 +553,7 @@ def test_null_model_unique_effort_match_write_role(verb):
         verb=verb,
     )
     assert resolved["ok"] is True
-    assert resolved["model"] == "gpt-5.6-sol"
+    assert resolved["model"] == _WRITE_CODEX_MODEL
     assert resolved["effort"] == "xhigh"
     assert resolved["modelSource"] == "resolved"
 
@@ -565,7 +570,7 @@ def test_null_model_effort_without_allowlist_pair_refused():
 
 def test_effort_source_matches_allowlist_verdict():
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", None, _REVIEW_ROLE),
+        _seat_json("codex", _PIN_MODEL, None, _REVIEW_ROLE),
         verb="guard-check",
     )
     assert resolved["ok"] is True
@@ -583,7 +588,7 @@ def test_effort_source_map_is_closed_canonical_vocabulary():
 
 def test_resolve_entry_refusal_has_no_reason_key():
     resolved = SB.resolve_entry(
-        '{"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"}',
+        f'{{"vendor": "codex", "model": "{_PIN_MODEL}", "effort": "high"}}',
         verb="guard-check",
     )
     assert resolved["ok"] is False
@@ -597,7 +602,7 @@ def test_semantic_allowlist_verdict_empty_pairs_refused(monkeypatch):
 
     monkeypatch.setattr(SB.dispatch_allowlist, "validate", _fake_validate)
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "high"),
+        _seat_json("codex", _PIN_MODEL, "high"),
         verb="guard-check",
     )
     assert resolved["ok"] is False
@@ -606,12 +611,12 @@ def test_semantic_allowlist_verdict_empty_pairs_refused(monkeypatch):
 
 
 def test_semantic_allowlist_verdict_role_vendor_mismatch_refused(monkeypatch):
-    verdict = DG.validate("reviewer", "codex", "gpt-5.6-sol", "high")
+    verdict = DG.validate("reviewer", "codex", _PIN_MODEL, "high")
     verdict = dict(verdict)
     verdict["role"] = "implementer"
     monkeypatch.setattr(SB.dispatch_allowlist, "validate", lambda *a, **k: verdict)
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "high"),
+        _seat_json("codex", _PIN_MODEL, "high"),
         verb="guard-check",
     )
     assert resolved["ok"] is False
@@ -619,12 +624,12 @@ def test_semantic_allowlist_verdict_role_vendor_mismatch_refused(monkeypatch):
 
 
 def test_semantic_allowlist_verdict_pair_absent_refused(monkeypatch):
-    verdict = DG.validate("reviewer", "codex", "gpt-5.6-sol", "high")
+    verdict = DG.validate("reviewer", "codex", _PIN_MODEL, "high")
     verdict = dict(verdict)
-    verdict["allowlist_pairs"] = [["gpt-5.6-terra", "high"]]
+    verdict["allowlist_pairs"] = [["gpt-nope", "high"]]
     monkeypatch.setattr(SB.dispatch_allowlist, "validate", lambda *a, **k: verdict)
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "high"),
+        _seat_json("codex", _PIN_MODEL, "high"),
         verb="guard-check",
     )
     assert resolved["ok"] is False
@@ -637,7 +642,7 @@ def test_allowlist_guard_raise_refused(monkeypatch):
 
     monkeypatch.setattr(SB.dispatch_allowlist, "validate", _boom)
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "high"),
+        _seat_json("codex", _PIN_MODEL, "high"),
         verb="guard-check",
     )
     assert resolved["ok"] is False
@@ -664,7 +669,7 @@ def test_build_argv_vendors_public_name_matches_dispatchable_set(monkeypatch):
 
 def test_dict_seat_without_ok_promotion_refused():
     resolved = SB.resolve_entry(
-        {"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+        {"vendor": "codex", "model": _PIN_MODEL, "effort": "high"},
         verb="guard-check",
     )
     assert resolved["ok"] is False
@@ -709,11 +714,11 @@ def test_edge1_cursor_implementer_null_model_resolves(verb):
 @pytest.mark.parametrize("verb", ["guard-check", "dispatch-review"])
 def test_edge2_codex_reviewer_null_effort_resolves(verb):
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", None, _REVIEW_ROLE),
+        _seat_json("codex", _PIN_MODEL, None, _REVIEW_ROLE),
         verb=verb,
     )
     assert resolved["ok"] is True
-    assert resolved["model"] == "gpt-5.6-sol"
+    assert resolved["model"] == _PIN_MODEL
     assert resolved["effort"] == "high"
     assert resolved["modelSource"] == "caller"
     assert resolved["effortSource"] == "resolved"
@@ -727,8 +732,8 @@ def test_edge3_null_model_ambiguous_effort_refuses_naming_models(verb):
     )
     assert resolved["ok"] is False
     assert resolved["entryReason"] == "model-ambiguous"
-    assert "gpt-5.6-terra" in resolved["detail"]
-    assert "gpt-5.6-sol" in resolved["detail"]
+    assert _REVIEW_CODEX_MODEL in resolved["detail"]
+    assert _PIN_MODEL in resolved["detail"]
 
 
 @pytest.mark.parametrize("verb", ["guard-check", "dispatch-write"])
@@ -752,7 +757,7 @@ def test_edge6_brief_check_mode_reviewer_refused_before_allowlist(monkeypatch):
 
     monkeypatch.setattr(SB.dispatch_allowlist, "validate", _boom)
     resolved = SB.resolve_entry(
-        _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
+        _seat_json("codex", _PIN_MODEL, "high", _REVIEW_ROLE),
         verb="dispatch-review",
         mode="brief-check",
     )
@@ -774,7 +779,7 @@ def test_dropped_flag_with_valid_seat_still_refuses():
     argv = [
         "dispatch-review",
         "--engine", "codex",
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high"),
+        "--seat", _seat_json("codex", _PIN_MODEL, "high"),
         "--prompt-path", "p",
         "--repo-root", "/tmp",
         "--run-dir", "/tmp/r",

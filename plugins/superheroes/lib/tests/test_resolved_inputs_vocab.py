@@ -113,7 +113,10 @@ def _fake_build_view(tmp_path):
 
 
 def _codex_seat():
-    return {"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high", "role": "reviewer"}
+    import model_registry as mr
+
+    model_id, effort = mr.matrix_config("reviewer", "codex")
+    return {"vendor": "codex", "model": model_id, "effort": effort, "role": "reviewer"}
 
 
 def _opened_resolved_inputs(run_dir):

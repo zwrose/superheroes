@@ -6091,10 +6091,11 @@ def test_cli_launch_parser_threads_allow_foreign_instance(tmp_path, monkeypatch)
 def test_walk_preflight_failed_check_carries_checks(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     checks = _all_checks()
+    _cell_model, _cell_effort = L.model_registry.matrix_config("reviewer-deep", "codex")
     checks["engine-auth"] = {
         "state": "fail",
         "reason": "conformance probe failed: codex",
-        "evidence": "codex channel=native cell=codex/gpt-5.6-sol/xhigh",
+        "evidence": f"codex channel=native cell=codex/{_cell_model}/{_cell_effort}",
     }
     result = L.walk_preflight(checks, repo)
     assert result["ok"] is False

@@ -36,8 +36,8 @@ SC = _load("store_core", "store_core.py")
 _TIERS = {
     "implementer": "composer-2.5",
     "pilot": "sonnet",
-    "reviewer": "gpt-5.6-terra",
-    "reviewer-deep": "gpt-5.6-sol",
+    "reviewer": MR.matrix_config("reviewer", "codex")[0],
+    "reviewer-deep": MR.pin_only_models("codex")[0],
 }
 _CALIB_PREFS = {"implementation": "cursor", "reviewer": "codex"}
 

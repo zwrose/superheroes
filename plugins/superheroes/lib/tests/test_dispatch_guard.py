@@ -60,7 +60,7 @@ def test_we511_shape_parks():
     [
         ("cursor", "composer-2.5", "composer-2.5"),
         ("cursor", "cursor-grok-4.6-xhigh", "cursor-grok-4.6-xhigh"),
-        ("codex", "gpt-6-sol", "gpt-6-sol"),
+        ("codex", MR.matrix_config("implementer", "codex")[0], MR.matrix_config("implementer", "codex")[0]),
     ],
 )
 def test_listed_models_pass(vendor, model, expected):
@@ -82,7 +82,7 @@ def test_defaulted_resolves_to_listed():
 
     r2 = DG.validate("implementer", "codex", None)
     assert r2["ok"] is True
-    assert r2["resolved_model"] == "gpt-6-sol"
+    assert r2["resolved_model"] == MR.matrix_config("implementer", "codex")[0]
 
 
 def test_registered_role_with_no_model_on_vendor_parks():
@@ -235,9 +235,10 @@ def test_structured_triple_success_all_vendors():
 
     r_codex = DG.validate("brief-check", "codex", None)
     _assert_success_triple(r_codex)
-    assert r_codex["model_id"] == "gpt-6-sol"
-    assert r_codex["effort"] == "xhigh"
-    assert r_codex["dispatch_token"] == "gpt-6-sol"
+    _brief_model, _brief_effort = MR.matrix_config("brief-check", "codex")
+    assert r_codex["model_id"] == _brief_model
+    assert r_codex["effort"] == _brief_effort
+    assert r_codex["dispatch_token"] == _brief_model
 
     r_claude = DG.validate("reviewer", "claude", "sonnet")
     _assert_success_triple(r_claude)
@@ -397,6 +398,8 @@ def test_edge1_null_model_cursor_implementer_resolves_via_cli():
 
 
 def test_edge2_null_effort_codex_reviewer_resolves_via_cli():
+    pin_model = MR.pin_only_models("codex")[0]
+    _reviewer_model, reviewer_effort = MR.matrix_config("reviewer", "codex")
     proc = subprocess.run(
         [
             sys.executable,
@@ -405,7 +408,7 @@ def test_edge2_null_effort_codex_reviewer_resolves_via_cli():
             "--seat",
             json.dumps({
                 "vendor": "codex",
-                "model": "gpt-5.6-sol",
+                "model": pin_model,
                 "effort": None,
                 "role": "reviewer",
             }),
@@ -417,13 +420,14 @@ def test_edge2_null_effort_codex_reviewer_resolves_via_cli():
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
     assert payload["ok"] is True
-    assert payload["model_id"] == "gpt-5.6-sol"
-    assert payload["effort"] == "high"
+    assert payload["model_id"] == pin_model
+    assert payload["effort"] == reviewer_effort
     assert payload["resolved_model"]
 
 
 def test_cli_effort_source_matches_seat_snapshot_not_registry_given():
-    seat = {"vendor": "codex", "model": "gpt-5.6-sol", "effort": None, "role": "reviewer"}
+    pin_model = MR.pin_only_models("codex")[0]
+    seat = {"vendor": "codex", "model": pin_model, "effort": None, "role": "reviewer"}
     spec = importlib.util.spec_from_file_location(
         "seat_bundle_cli_test", os.path.join(_HERE, "..", "seat_bundle.py"),
     )
@@ -465,8 +469,8 @@ def test_edge3_null_model_ambiguous_effort_refuses_via_cli():
     payload = json.loads(proc.stdout)
     assert payload["ok"] is False
     assert payload["reason"] == "model-ambiguous"
-    assert "gpt-6-sol" in payload["seat_detail"]
-    assert "gpt-5.6-sol" in payload["seat_detail"]
+    assert MR.matrix_config("reviewer", "codex")[0] in payload["seat_detail"]
+    assert MR.pin_only_models("codex")[0] in payload["seat_detail"]
 
 
 def test_fail_closed_edge_11_override_only_fable():
