@@ -15,6 +15,15 @@ from finding_identity import finding_identity
 
 AUDIT_RULINGS = ("discharged", "not-discharged", "discharged-but-new-issue")
 
+UNAUTHENTICATED_NO_AUDITOR_RECORDED = "no-auditor-recorded"
+UNAUTHENTICATED_MANIFEST_ENTRY_MISSING = "manifest-entry-missing"
+UNAUTHENTICATED_MANIFEST_VENDOR_MISMATCH = "manifest-vendor-mismatch"
+UNAUTHENTICATED_CAUSES = (
+    UNAUTHENTICATED_NO_AUDITOR_RECORDED,
+    UNAUTHENTICATED_MANIFEST_ENTRY_MISSING,
+    UNAUTHENTICATED_MANIFEST_VENDOR_MISMATCH,
+)
+
 # The rulings whose fix counts as discharged for stall/continuation accounting. A
 # `discharged-but-new-issue` clears the ORIGINAL finding (a new candidate is emitted separately),
 # so it is not a stall on that finding; only `not-discharged` is.
@@ -144,13 +153,13 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     echo_mismatch = []
     matched_ids = set()
 
-    def _reject_unauthenticated(base, fid, reason):
+    def _reject_unauthenticated(base, fid, reason, cause):
         """Fail-closed a clearing ruling the orchestrator's manifest could not authenticate:
         not-discharged, disclosed as `unauthenticated`."""
         if fid is not None:
             unauthenticated.append(fid)
             not_discharged.append(fid)
-        base.update(ruling="not-discharged", reason=reason)
+        base.update(ruling="not-discharged", reason=reason, unauthenticatedCause=cause)
         audits.append(base)
 
     for f in audited:
@@ -225,7 +234,8 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 _reject_unauthenticated(
                     base, fid,
                     "no independent auditor was recorded for this target — cannot prove the audit "
-                    "came from an independent auditor; treated as not-discharged")
+                    "came from an independent auditor; treated as not-discharged",
+                    UNAUTHENTICATED_NO_AUDITOR_RECORDED)
                 continue
             manifest_vendor = None
             if isinstance(collection_manifest, dict) and fid is not None:
@@ -236,13 +246,15 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 _reject_unauthenticated(
                     base, fid,
                     "no dispatch-manifest entry for this target — the orchestrator did not record "
-                    "which engine executed the audit; cannot authenticate; treated as not-discharged")
+                    "which engine executed the audit; cannot authenticate; treated as not-discharged",
+                    UNAUTHENTICATED_MANIFEST_ENTRY_MISSING)
                 continue
             if manifest_vendor != expected_auditor:
                 _reject_unauthenticated(
                     base, fid,
                     "the dispatch manifest names %r but the selected independent auditor is %r — "
-                    "treated as not-discharged" % (manifest_vendor, expected_auditor))
+                    "treated as not-discharged" % (manifest_vendor, expected_auditor),
+                    UNAUTHENTICATED_MANIFEST_VENDOR_MISMATCH)
                 continue
             # Authenticated by the orchestrator's manifest. The recorded auditor is the TRUSTED value
             # (the manifest, not the claimant echo). An echo that disagrees is advisory noise —

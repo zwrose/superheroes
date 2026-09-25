@@ -317,8 +317,10 @@ def load_records(path, dimensions):
 # bodies land in the best-effort round-bodies dump, and the final round's bodies live in
 # terminal-record.json. summarize_record is idempotent, so pre-D3 full-bodied files load
 # (and re-persist) cleanly through the same path.
+# "findingKey" mirrors session_contract.FINDING_KEY_FIELD; literal kept to avoid importing session_contract (R28).
 _SKELETON_FIELDS = ("file", "line", "title", "severity", "taxonomy", "dimension",
-                    "classKey", "carried", "sourceRound", "synthesisUnverified", "docSection")
+                    "classKey", "carried", "sourceRound", "synthesisUnverified", "docSection",
+                    "findingKey")
 
 
 def _skeleton_finding(finding):
