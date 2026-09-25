@@ -782,9 +782,11 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
             "fixContentBytes": len(_FIX_PRESENT_BYTES),
         },
     }
+    canonical_key = session_contract.finding_identity_key(finding)
+    finding[session_contract.FINDING_KEY_FIELD] = canonical_key
     panel_payload = {"findings": []}
     panel_envelope = _dispatch_envelope_for("code-reviewer", PANEL_PHASE, 1, payload=panel_payload)
-    audit_target = finding["id"]
+    audit_target = canonical_key
     audit_envelope = _audit_dispatch_envelope(audit_target, 2) if include_audit else None
     scoped_envelope = (
         _dispatch_envelope_for(SCOPED_SEAT, SCOPED_PHASE, 2) if include_scoped else None
@@ -825,6 +827,17 @@ def _case07_core(tmp_path, *, include_audit=True, include_scoped=True):
                 "shapeDrivers": [],
             },
             "findings": [finding],
+            "_auditTargets": [
+                {
+                    "id": canonical_key,
+                    session_contract.FINDING_KEY_FIELD: canonical_key,
+                    "auditorVendor": "codex",
+                    "file": finding["file"],
+                    "line": finding["line"],
+                    "title": finding["title"],
+                    "severity": finding["severity"],
+                },
+            ],
             "rounds": {
                 "1": {
                     "roundKind": "baseline",

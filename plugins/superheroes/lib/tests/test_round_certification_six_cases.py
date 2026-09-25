@@ -106,6 +106,15 @@ def test_case_5_critical_skipped_refuses(tmp_path):
     assert refusal["artifact"] == "C-skip"
 
 
+def _mutate_panel_omitted_expected_dimension(session_dir):
+    state_path = os.path.join(session_dir, RC.STATE_FILE)
+    state = json.load(open(state_path, encoding="utf-8"))
+    cfg = state.setdefault("config", {})
+    cfg["dimensions"] = ["code-reviewer", "security-reviewer"]
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, sort_keys=True)
+
+
 def _mutate_panel_two_heads(session_dir):
     from round_certification_fixtures import (
         _dispatch_envelope_for,
@@ -235,6 +244,17 @@ def test_case_7_missing_audit_dispatch_refuses_fix_receipt_leg(tmp_path):
     assert refusal["class"] == "unrun-review"
     assert refusal["bindingFailure"] == "execution-evidence-stale-head"
     assert "audited-chain-gap:fix-receipt" in refusal["detail"]
+
+
+def test_case_7_omitted_panel_dimension_refuses_roster_gap(tmp_path):
+    session_dir = case07_audited_chain(tmp_path)
+    _mutate_panel_omitted_expected_dimension(session_dir)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-stale-head"
+    assert "audited-chain-gap:panel" in refusal["detail"]
 
 
 @pytest.mark.parametrize(

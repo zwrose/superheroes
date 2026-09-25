@@ -588,78 +588,150 @@ def _audit_cited_head_rule(ctx, repo_root, certified_head):
     return _rule
 
 
+def _audit_runner_vendor_from_envelope(envelope):
+    """Trusted vendor for collection-manifest binding — runner evidence only."""
+    evidence = envelope.get("executionEvidence") if isinstance(envelope, dict) else None
+    if not isinstance(evidence, dict):
+        return None
+    source = evidence.get("source")
+    if isinstance(source, str) and source and source in model_registry.VENDORS:
+        return source
+    return None
+
+
+def _audit_expected_auditors_from_ctx(ctx):
+    """Driver-recorded selected auditor per target id; empty dict when absent, None on read fault."""
+    state = ctx.get("state")
+    if not isinstance(state, dict):
+        return {}
+    raw = state.get("_auditTargets")
+    if raw is None:
+        return {}
+    if not isinstance(raw, list):
+        return None
+    expected = {}
+    for row in raw:
+        if not isinstance(row, dict):
+            return None
+        tid = row.get("id")
+        if not isinstance(tid, str) or not tid:
+            return None
+        vendor = row.get("auditorVendor")
+        if isinstance(vendor, str) and vendor:
+            expected[tid] = vendor
+    return expected
+
+
+def _audit_admitted_dispatch_result(session_dir, journal, event, certified_head, head_rule):
+    """Return (payload, envelope) when a dispatch-audits journal row passes admission gates."""
+    if event.get("outcome") != "recorded" or event.get("phase") != P_AUDITS:
+        return None
+    seat, phase, attempt, occurrence, rnd = _journal_event_slot(event)
+    if not isinstance(seat, str) or attempt is None:
+        return None
+    env, _path = _load_envelope(session_dir, rnd, phase, seat, attempt, occurrence)
+    if not isinstance(env, dict):
+        return None
+    payload = env.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    declared = env.get("payloadSha256")
+    try:
+        computed = session_contract.payload_sha256(payload)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(declared, str) or computed != declared:
+        return None
+    provenance = event.get("provenance") or env.get("provenance")
+    cited = event.get("headSha") or event.get("citedHead")
+    slot_nonces = _journal_recorded_runner_nonces_for_slot(
+        journal, seat, phase, attempt, occurrence, rnd)
+    journal_binding = _journal_execution_binding(
+        journal, seat, phase, attempt, occurrence, rnd)
+    if provenance == PROVENANCE_DISPATCH_OBSERVED:
+        obs = _journal_observation_for_seat(
+            journal, seat, phase, attempt, occurrence, rnd)
+        ok, _binding = _observation_qualifies(
+            obs,
+            certified_head,
+            cited,
+            journal_binding=journal_binding,
+            recorded_nonces=slot_nonces,
+            require_runner_action=True,
+            head_rule=head_rule,
+        )
+        if not ok:
+            return None
+        rk_ok, _found_kind = _dispatch_run_kind_qualifies(obs, phase)
+        if not rk_ok:
+            return None
+    elif provenance == PROVENANCE_HAND_LANDED:
+        ok, _binding = _hand_landed_evidence_qualifies(
+            env,
+            certified_head,
+            journal_binding=journal_binding,
+            recorded_nonces=slot_nonces,
+            phase=phase,
+        )
+        if not ok:
+            return None
+    else:
+        return None
+    return dict(payload), env
+
+
 def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root):
     session_dir = ctx.get("session_dir")
     journal = ctx.get("journal") or []
     if session_dir is None or not isinstance(journal, list):
         return False
-    target_id = finding.get("id")
-    if not isinstance(target_id, str) or not target_id:
-        target_id = _finding_identity_key(finding)
-    if not isinstance(target_id, str) or not target_id:
+    canonical_id = _finding_identity_key(finding)
+    if not isinstance(canonical_id, str) or not canonical_id:
         return False
     disposition_round = finding.get("dispositionRound")
     if isinstance(disposition_round, bool) or not isinstance(disposition_round, int):
         return False
+    expected_auditors = _audit_expected_auditors_from_ctx(ctx)
+    if expected_auditors is None:
+        return False
     head_rule = _audit_cited_head_rule(ctx, repo_root, certified_head)
+    results = []
+    collection_manifest = {}
     for event in journal:
-        if event.get("outcome") != "recorded" or event.get("phase") != P_AUDITS:
+        if not isinstance(event, dict) or event.get("round") != disposition_round:
             continue
-        if event.get("round") != disposition_round:
+        admitted = _audit_admitted_dispatch_result(
+            session_dir, journal, event, certified_head, head_rule)
+        if admitted is None:
             continue
-        seat, phase, attempt, occurrence, rnd = _journal_event_slot(event)
-        if not isinstance(seat, str) or attempt is None:
-            continue
-        env, _path = _load_envelope(session_dir, rnd, phase, seat, attempt, occurrence)
-        if not isinstance(env, dict):
-            continue
-        payload = env.get("payload")
-        if not audits.audit_payload_clears_target(payload, target_id):
-            continue
-        declared = env.get("payloadSha256")
-        try:
-            computed = session_contract.payload_sha256(payload)
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(declared, str) or computed != declared:
-            continue
-        provenance = event.get("provenance") or env.get("provenance")
-        cited = event.get("headSha") or event.get("citedHead")
-        slot_nonces = _journal_recorded_runner_nonces_for_slot(
-            journal, seat, phase, attempt, occurrence, rnd)
-        journal_binding = _journal_execution_binding(
-            journal, seat, phase, attempt, occurrence, rnd)
-        if provenance == PROVENANCE_DISPATCH_OBSERVED:
-            obs = _journal_observation_for_seat(
-                journal, seat, phase, attempt, occurrence, rnd)
-            ok, _binding = _observation_qualifies(
-                obs,
-                certified_head,
-                cited,
-                journal_binding=journal_binding,
-                recorded_nonces=slot_nonces,
-                require_runner_action=True,
-                head_rule=head_rule,
-            )
-            if not ok:
-                continue
-            rk_ok, _found_kind = _dispatch_run_kind_qualifies(obs, phase)
-            if not rk_ok:
-                continue
-        elif provenance == PROVENANCE_HAND_LANDED:
-            ok, _binding = _hand_landed_evidence_qualifies(
-                env,
-                certified_head,
-                journal_binding=journal_binding,
-                recorded_nonces=slot_nonces,
-                phase=phase,
-            )
-            if not ok:
-                continue
-        else:
-            continue
-        return True
-    return False
+        payload, env = admitted
+        results.append(payload)
+        pid = payload.get("id")
+        if isinstance(pid, str) and pid:
+            vendor = _audit_runner_vendor_from_envelope(env)
+            if vendor is not None:
+                collection_manifest[pid] = vendor
+    audited_target = {
+        "id": canonical_id,
+        "file": finding.get("file"),
+        "line": finding.get("line"),
+        "title": finding.get("title"),
+        "severity": finding.get("severity"),
+    }
+    marker = finding.get(session_contract.FINDING_KEY_FIELD)
+    if isinstance(marker, str) and marker:
+        audited_target[session_contract.FINDING_KEY_FIELD] = marker
+    vendor = finding.get("auditorVendor")
+    if isinstance(vendor, str) and vendor:
+        audited_target["auditorVendor"] = vendor
+    outcome = audits.apply_audit_results(
+        [audited_target],
+        results,
+        expected_auditors=expected_auditors,
+        collection_manifest=collection_manifest,
+    )
+    discharged = outcome.get("discharged") or []
+    return canonical_id in discharged
 
 
 def _is_ancestor(repo_root, ancestor, descendant):
