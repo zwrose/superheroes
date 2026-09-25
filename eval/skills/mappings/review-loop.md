@@ -2,6 +2,8 @@
 
 > **Status (v2): historical.** Maps the retired v1 skill surface (review-plan/review-tasks, retired in #478/#479) alongside the still-current review-spec. Kept as provenance; the v2 review-eval rebuild rides the S2 lane (#476).
 
+> **Note (plugin-root form).** Paths quoted below are shown in the current `${CLAUDE_PLUGIN_ROOT}` form; when this record was written they carried a fallback form of the root variable, since retired.
+
 Records every pre-change instruction unit relocated into
 `plugins/superheroes/reference/review-loop.md` (Task 15).
 
@@ -17,10 +19,10 @@ Records every pre-change instruction unit relocated into
   4 minor wording differences (more detail in Provisional-profile confirmation and
   Recording a dismissal sub-sections) with no behavioral difference. The canonical
   version (review-spec / review-tasks) was used as the reference content.
-- The block contains `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` assignments
-  but no `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/<path>` literals, so FR-5
+- The block contains `ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` assignments
+  but no `${CLAUDE_PLUGIN_ROOT}/<path>` literals, so FR-5
   (leaves-only constraint) is satisfied.
 - Each SKILL.md now has a one-hop reference line in place of the block:
   `The shared dispatch/compile/revise learning-loop steps and staleness nudge are in
-  \`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/review-loop.md\` — read it and
+  \`${CLAUDE_PLUGIN_ROOT}/reference/review-loop.md\` — read it and
   apply it where this skill's flow references those steps.`

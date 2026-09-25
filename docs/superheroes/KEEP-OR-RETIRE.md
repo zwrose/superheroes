@@ -1275,6 +1275,16 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — check_release_bump is structural (release-blocking-quiet class); never-fired
   validators are harness-limit guards on cheap static checks.
+- **Retirement — the plugin-root seam.** Retired the fallback form of the plugin-root variable in
+  skill and reference prose (every occurrence now reads `${CLAUDE_PLUGIN_ROOT}`), `validate_hosts.py`'s
+  ban on the bare variable, and the two seam workaround markers; `validate_hosts.py` keeps its
+  host-map pointer check and `validate_skills.py` keeps its citation resolver, both now keyed on
+  `${CLAUDE_PLUGIN_ROOT}`. Condition met: Codex sets `CLAUDE_PLUGIN_ROOT` as a compatibility alias
+  ("Codex also sets CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA for compatibility with existing plugin
+  hooks", learn.chatgpt.com/docs/hooks, read 2026-09-25), so every host resolves the plugin root
+  through one variable. A live smoke the same day showed an ordinary shell sees neither variable on
+  Codex 0.153.4 or Claude Code 2.1.281, so the fallback never resolved a shell command. Receipt:
+  PR #1432 (issue #1425).
 
 #### G2 — Rail lane (doc↔code drift tests, censuses, drift pins)
 
@@ -1852,12 +1862,6 @@ file, returns exactly that set.
 
 > **The six orchestration pieces are kept.** The background-session trial's receipt (`LEDGERS.md` §5.5) reads **needed** on every line, so all six pieces stay as plain keeps: detached spawn, wave-watch arming and the re-arm ritual, transcript-mtime liveness, the turn-end doctrine with its slice recipes, multi-account provisioning transport, and the launcher-enforced half of the own-worktree ruling. Each marker below carries its restated delete-when condition from the receipt's piece lines (`LEDGERS.md` §5.4). Every one of those conditions is satisfied only by a re-run of the trial that observes it on the path the plugin actually uses, never by reading a diff. The launch ledger (`plugins/superheroes/lib/launch_ledger.py`) and the launch doctrine's rulings block (`plugins/superheroes/rubric/launch-doctrine.md`, between the `launch-doctrine:rulings` markers) are doctrine, not workarounds, and stay.
 
-- `.github/scripts/validate_hosts.py` — portable plugin-root seam and host-map lint for dual-host
-  skill prose. **delete-when:** every host resolves plugin root through one variable without this
-  fallback seam.
-- `.github/scripts/validate_skills.py` — CI lint enforces the portable plugin-root seam on skill
-  reference paths. **delete-when:** every host resolves plugin root through one variable without
-  this fallback seam.
 - `plugins/superheroes/hooks/bash_timeout.py` — PreToolUse Bash timeout floor when the model omits
   an explicit timeout. **delete-when:** the host Bash tool defaults to at least 600 s without a
   PreToolUse rewrite hook.
@@ -1876,9 +1880,6 @@ file, returns exactly that set.
 - `plugins/superheroes/lib/launch_doctrine.py` — machine parser for launch doctrine prose the host
   does not supply natively. **delete-when:** the host injects launch rulings and preflight checks
   without a parsed artifact.
-- `plugins/superheroes/lib/launch_ledger.py` — file-backed launch batch ledger when the host has no
-  durable batch accounting. **delete-when:** the host records launch batches durably without this
-  ledger module.
 - `plugins/superheroes/lib/launcher.py` — headless builders must survive parent session exit via
   detached spawn. **delete-when:** the builders this launcher spawns are observed surviving their
   spawner's turn end on the path it actually spawns, and the service that holds them has been

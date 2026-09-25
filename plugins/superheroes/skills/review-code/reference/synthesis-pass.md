@@ -26,7 +26,7 @@ and this document does not govern it. Do not wire `loop_synthesis` into the roun
 
 The **fail-closed rules live only in `lib/loop_synthesis.py`** — do not judge keep/drop
 yourself and do not reimplement them here or in a second script. `$ROOT_DIR` is
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` and `$SYNTH_MODEL` / `$RUBRIC` are resolved in Setup.
+`${CLAUDE_PLUGIN_ROOT}` and `$SYNTH_MODEL` / `$RUBRIC` are resolved in Setup.
 
 ## Where it runs
 

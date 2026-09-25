@@ -2,6 +2,8 @@
 
 > **Status (v2): historical.** Maps a relocation within the still-current review-code skill, alongside the now-retired review-tasks (retired in #478/#479) cited as the canonical wording source. Kept as provenance; the v2 review-eval rebuild rides the S2 lane (#476).
 
+> **Note (plugin-root form).** Paths quoted below are shown in the current `${CLAUDE_PLUGIN_ROOT}` form; when this record was written they carried a fallback form of the root variable, since retired.
+
 Records every pre-change instruction unit relocated out of
 `plugins/superheroes/skills/review-code/SKILL.md` (Task 16).
 
@@ -21,7 +23,7 @@ Records every pre-change instruction unit relocated out of
 
 - All relocated blocks are verbatim (byte-for-byte from SKILL.md into the reference file).
 - The Learning Loop section in review-code's SKILL.md had minor wording differences from the canonical review-spec/review-tasks version (more descriptive phrase "after the review output / end-of-loop summary" vs "after the terminal summary"; "Fix as suggested (and any auto-fix the user implicitly accepted by not skipping)" vs "Apply as suggested (and step-6 auto-revises)"; extra detail in Provisional-profile confirmation and Recording-a-dismissal sub-sections). The shared `review-loop.md` canonical (review-spec wording) is used; the pointer from SKILL.md points to that shared file.
-- The fixer guard note (lines 507–525) contained `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` without a `/<path>` suffix, satisfying FR-5 (leaves-only: no literal `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/<path>` references in the reference file).
+- The fixer guard note (lines 507–525) contained `${CLAUDE_PLUGIN_ROOT}` without a `/<path>` suffix, satisfying FR-5 (leaves-only: no literal `${CLAUDE_PLUGIN_ROOT}/<path>` references in the reference file).
 - The triage and fixer pointer lines were merged into a single `### Triage and Fixer subagent prompts` section to reduce SKILL.md line count.
 - Before: 784 lines. After: 499 lines.
 - `auto-fix-loop.md` is 259 lines (>100), opens with `<!-- auto-fix-loop-version: 1 -->` and a `## Contents` TOC (FR-6 satisfied).
@@ -36,7 +38,7 @@ Records every pre-change instruction unit relocated out of
 
 ### Notes
 
-- Both blocks moved byte-exact except the two `reference-depth` path-token rewrites: line 79 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md` → `$ROOT_DIR/rubric/review-base.md`; line 113 `from \`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/.claude-plugin/plugin.json\`` → `from \`$ROOT_DIR/.claude-plugin/plugin.json\``.
+- Both blocks moved byte-exact except the two `reference-depth` path-token rewrites: line 79 `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md` → `$ROOT_DIR/rubric/review-base.md`; line 113 `from \`${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json\`` → `from \`$ROOT_DIR/.claude-plugin/plugin.json\``.
 - Before: 512 lines. After: 367 lines (measured).
 - `reference/setup.md` opens with a `## Contents` TOC.
 - Registry ceiling moved 515 → 400.
