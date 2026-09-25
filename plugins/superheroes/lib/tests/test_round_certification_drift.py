@@ -62,9 +62,10 @@ def test_execution_evidence_telemetry_values_match_records():
 
 
 def test_execution_evidence_binding_fields_match_records():
-    assert RC.EXECUTION_EVIDENCE_BINDING_FIELDS == tuple(
+    base = tuple(
         field for field in RR.EXECUTION_EVIDENCE_FIELDS if field != "observation"
     )
+    assert RC.EXECUTION_EVIDENCE_BINDING_FIELDS == base + ("runKind",)
 
 
 def test_head_content_blobs_file_name():

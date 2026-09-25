@@ -26,6 +26,7 @@ def _hand_landed_evidence_binding(**overrides):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": SC.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -39,11 +40,13 @@ def _hand_landed_evidence_binding(**overrides):
 
 
 def _write_stamp_evidence(**overrides):
-    return _hand_landed_evidence_binding(
-        resultKind=SC.WRITE_RESULT_KIND,
-        resultDigest=SC.payload_sha256({"testFailed": False, "testPassed": True}),
-        **overrides,
-    )
+    base = {
+        "resultKind": SC.WRITE_RESULT_KIND,
+        "resultDigest": SC.payload_sha256({"testFailed": False, "testPassed": True}),
+    }
+    if "runKind" not in overrides:
+        base["runKind"] = SC.RUN_KIND_WRITE
+    return _hand_landed_evidence_binding(**base, **overrides)
 
 
 def _hand_landed_envelope(evidence, payload, *, order_sha="f" * 64):

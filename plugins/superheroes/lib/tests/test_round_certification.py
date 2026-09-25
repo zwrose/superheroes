@@ -1689,6 +1689,7 @@ def test_hand_landed_unrecorded_runner_nonce_refuses(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1727,6 +1728,7 @@ def _hand_landed_evidence_binding(**overrides):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1750,6 +1752,7 @@ def _hand_landed_envelope(evidence, payload, *, order_sha="f" * 64):
 def test_hand_landed_write_run_kind_qualifies_without_payload_key():
     evidence = _hand_landed_evidence_binding(
         resultKind=session_contract.WRITE_RESULT_KIND,
+        runKind=session_contract.RUN_KIND_WRITE,
         resultDigest=session_contract.payload_sha256(
             {"testFailed": False, "testPassed": True}),
     )
@@ -1802,6 +1805,7 @@ def test_hand_landed_journal_digest_mismatch_refuses(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -2232,6 +2236,7 @@ def test_dispatch_observed_matching_runner_nonce_certifies(tmp_path):
 def test_dispatch_observed_unrecorded_journal_binding_refuses(tmp_path):
     envelope_evidence = {
         **_binding_fields("orphan-nonce"),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",

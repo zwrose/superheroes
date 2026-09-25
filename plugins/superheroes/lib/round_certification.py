@@ -59,6 +59,7 @@ EXECUTION_EVIDENCE_BINDING_FIELDS = (
     "recordDigest",
     "resultDigest",
     "resultKind",
+    "runKind",
 )
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry")
@@ -979,15 +980,22 @@ def _journal_execution_binding(journal, seat, phase, attempt, occurrence=0, rnd=
     return None
 
 
-def _execution_binding_matches_journal(evidence, journal_binding, recorded_nonces):
+def _execution_binding_matches_journal(
+    evidence, journal_binding, recorded_nonces, *, envelope_run_kind_evidence=None
+):
     if not isinstance(evidence, dict):
         return False, "execution-evidence-absent"
     source = evidence.get("source")
     if _execution_evidence_source_is_caller_supplied(source):
         return False, "execution-evidence-caller-supplied"
     for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
-        val = evidence.get(field)
+        if field == "runKind" and isinstance(envelope_run_kind_evidence, dict):
+            val = envelope_run_kind_evidence.get(field)
+        else:
+            val = evidence.get(field)
         if not isinstance(val, str) or not val:
+            if field == "runKind":
+                return False, "evidence-run-kind-mismatch"
             return False, "execution-evidence-binding-incomplete"
     if journal_binding is None:
         return False, "execution-evidence-dispatch-unrecorded"
@@ -995,7 +1003,13 @@ def _execution_binding_matches_journal(evidence, journal_binding, recorded_nonce
     if runner_nonce not in recorded_nonces:
         return False, "execution-evidence-dispatch-unrecorded"
     for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
-        if evidence.get(field) != journal_binding.get(field):
+        if field == "runKind" and isinstance(envelope_run_kind_evidence, dict):
+            bound_val = envelope_run_kind_evidence.get(field)
+        else:
+            bound_val = evidence.get(field)
+        if bound_val != journal_binding.get(field):
+            if field == "runKind":
+                return False, "evidence-run-kind-mismatch"
             return False, "execution-evidence-binding-mismatch"
     return True, None
 
@@ -1026,6 +1040,7 @@ def _observation_qualifies(
     recorded_nonces=None,
     *,
     require_runner_action=False,
+    envelope_run_kind_evidence=None,
 ):
     if not isinstance(obs, dict):
         return False, "execution-evidence-absent"
@@ -1048,7 +1063,10 @@ def _observation_qualifies(
     if cited_head and certified_head and cited_head != certified_head:
         return False, "execution-evidence-stale-head"
     ok, binding_failure = _execution_binding_matches_journal(
-        obs, journal_binding, recorded_nonces or set()
+        obs,
+        journal_binding,
+        recorded_nonces or set(),
+        envelope_run_kind_evidence=envelope_run_kind_evidence,
     )
     if not ok:
         return False, binding_failure
@@ -1175,6 +1193,21 @@ def check_unrun_review(ctx):
             obs = _journal_observation_for_seat(
                 journal, seat, phase, attempt, occurrence, rnd
             )
+            env, env_path = _load_envelope(
+                session_dir,
+                rnd,
+                phase,
+                seat,
+                attempt,
+                occurrence,
+            )
+            if env is None:
+                return _refusal(
+                    "unfetched-findings",
+                    env_path,
+                    "dispatch-observed envelope missing or unreadable",
+                )
+            envelope_evidence = env.get("executionEvidence")
             journal_binding = _journal_execution_binding(
                 journal,
                 seat,
@@ -1190,6 +1223,9 @@ def check_unrun_review(ctx):
                 journal_binding=journal_binding,
                 recorded_nonces=slot_nonces,
                 require_runner_action=True,
+                envelope_run_kind_evidence=(
+                    envelope_evidence if isinstance(envelope_evidence, dict) else None
+                ),
             )
             if not ok:
                 return _refusal(
@@ -1198,7 +1234,10 @@ def check_unrun_review(ctx):
                     "dispatch-observed seat lacks qualifying execution telemetry",
                     binding_failure=binding,
                 )
-            rk_ok, found_kind = _dispatch_run_kind_qualifies(obs, phase)
+            run_kind_evidence = (
+                envelope_evidence if isinstance(envelope_evidence, dict) else obs
+            )
+            rk_ok, found_kind = _dispatch_run_kind_qualifies(run_kind_evidence, phase)
             if not rk_ok:
                 return _refusal(
                     "unrun-review",

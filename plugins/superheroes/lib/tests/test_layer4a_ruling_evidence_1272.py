@@ -278,6 +278,31 @@ def test_edge8_old_evidence_without_model_still_valid():
     assert RR._validate_execution_evidence(evidence) is None
 
 
+@pytest.mark.parametrize("bad_run_kind", [[], {}, "probe"])
+def test_bad_run_kind_value_refuses_malformed(bad_run_kind):
+    """Malformed executionEvidence.runKind refuses without raising."""
+    evidence = {
+        "source": "codex",
+        "runnerNonce": "nonce-bad-run-kind",
+        "recordDigest": "d" * 64,
+        "resultDigest": "e" * 64,
+        "resultKind": "ruling",
+        "runKind": bad_run_kind,
+        "observation": {
+            "tokens": None,
+            "toolCalls": 1,
+            "stdoutBytes": 10,
+            "wallSeconds": 1.0,
+            "source": "codex",
+            "read": "engaged",
+            "telemetry": "tool-calls",
+        },
+    }
+    reason, extra = RR._validate_execution_evidence(evidence)
+    assert reason == "execution-evidence-malformed"
+    assert extra == {}
+
+
 @pytest.mark.parametrize("bad_model", ["", 42, ["list"]])
 def test_edge9_bad_model_value_refuses_malformed(bad_model):
     """Edge 9 — model present but empty, numeric, or list refuses malformed."""

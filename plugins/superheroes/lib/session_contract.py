@@ -144,7 +144,7 @@ RUN_KIND_VALUES = frozenset((RUN_KIND_REVIEW, RUN_KIND_WRITE))
 
 
 def run_kind_value_ok(value):
-    return value in RUN_KIND_VALUES
+    return isinstance(value, str) and value in RUN_KIND_VALUES
 
 
 def run_kind_for_phase(phase):
