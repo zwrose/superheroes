@@ -801,7 +801,20 @@ def write(cwd, facts, status, *, root=None, now=None):
                 return {"action": "proposed", "record": existing, "proposals": proposals}
             return {"action": "reused", "record": existing, "proposals": []}
         created = facts.get("created") or stamp
+        vet_prose = facts.get("vetChecks") or ""
+        if vet_prose.strip() and _vet_checks_body_forbidden(vet_prose):
+            return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP,
+                    "record": None, "proposals": []}
         text = render_core(facts, status, created, stamp)
+        if vet_prose.strip():
+            ok, bad_malformed = _vet_checks_prose_body_acceptance(vet_prose)
+            if not ok:
+                return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
+                        "malformed": bad_malformed, "record": None, "proposals": []}
+        ok, bad_malformed = _vet_checks_write_acceptance(text, vet_prose)
+        if not ok:
+            return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
+                    "malformed": bad_malformed, "record": None, "proposals": []}
         try:
             store_core.atomic_write(core_path(cwd, root), text)
         except RepoRootUnavailable as exc:
@@ -947,6 +960,12 @@ def _vet_checks_line_is_indented_code(line):
     return md_fence.indent_width(line) >= md_fence.INDENT_CODE_BLOCK_COLUMNS
 
 
+def _vet_checks_line_is_entry_heading(line):
+    if _vet_checks_line_is_indented_code(line):
+        return False
+    return _VET_ENTRY_HEADING.match(line) is not None
+
+
 def _vet_checks_is_live_prose_line(inert, line):
     return not inert and not _vet_checks_line_is_indented_code(line)
 
@@ -1017,11 +1036,11 @@ def _parse_vet_checks_body(body_lines):
 
     while i < n and not body_lines[i].strip():
         i += 1
-    if i < n and not body_lines[i].lstrip().startswith("###"):
+    if i < n and not _vet_checks_line_is_entry_heading(body_lines[i]):
         # axis: stray-text before first ### entry
         malformed.append(_vet_checks_malformed_item(
             None, "stray-text", "non-entry text before the first check heading"))
-        while i < n and not body_lines[i].lstrip().startswith("###"):
+        while i < n and not _vet_checks_line_is_entry_heading(body_lines[i]):
             i += 1
 
     while i < n:
@@ -1030,6 +1049,9 @@ def _parse_vet_checks_body(body_lines):
         if i >= n:
             break
         line = body_lines[i]
+        if _vet_checks_line_is_indented_code(line):
+            i += 1
+            continue
         m = _VET_ENTRY_HEADING.match(line)
         if m is None:
             if line.lstrip().startswith("###"):
@@ -1037,7 +1059,7 @@ def _parse_vet_checks_body(body_lines):
                 malformed.append(_vet_checks_malformed_item(
                     None, "unrecognized-line", "line is not a valid check heading"))
                 i += 1
-                while i < n and not body_lines[i].lstrip().startswith("###"):
+                while i < n and not _vet_checks_line_is_entry_heading(body_lines[i]):
                     i += 1
                 continue
             i += 1
@@ -1062,7 +1084,7 @@ def _parse_vet_checks_body(body_lines):
 
         while i < n:
             raw = body_lines[i]
-            if raw.lstrip().startswith("###"):
+            if _vet_checks_line_is_entry_heading(raw):
                 break
             if not raw.strip():
                 i += 1
@@ -1237,6 +1259,30 @@ def replace_vet_checks_section(text, prose):
     return "".join(lines[:start]) + new_block + "".join(lines[end:])
 
 
+def _vet_checks_prose_lines(prose):
+    """Split vet-checks prose without whole-string strip (preserves indented-code lines)."""
+    lines = list((prose or "").splitlines())
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
+def _vet_checks_prose_body_acceptance(prose):
+    """Acceptance on raw prose before render strips leading indentation."""
+    lines = _vet_checks_prose_lines(prose)
+    if not lines:
+        return True, []
+    checks, malformed = _parse_vet_checks_body(lines)
+    if malformed:
+        return False, malformed
+    if not checks:
+        return False, [_vet_checks_malformed_item(
+            None, "stray-text", "non-entry text before the first check heading")]
+    return True, []
+
+
 def _vet_checks_write_acceptance(new_text, body):
     """Writer invariant via ``parse_vet_checks`` on the candidate text."""
     parsed = parse_vet_checks(new_text)
@@ -1293,6 +1339,11 @@ def write_vet_checks(cwd, body, *, root=None):
         if prose.strip() and _vet_checks_body_forbidden(prose):
             # axis: vet-checks-round-trip-refused injected heading or fence
             return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP}
+        if prose.strip():
+            ok_prose, bad_prose = _vet_checks_prose_body_acceptance(prose)
+            if not ok_prose:
+                return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
+                        "malformed": bad_prose}
         orig_spans, _ = _vet_checks_section_spans(text)
         if len(orig_spans) > 1:
             sec_dup = [m for m in parse_vet_checks(text)["malformed"]

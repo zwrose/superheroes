@@ -299,6 +299,54 @@ def test_write_vet_checks_clear(tmp_path):
     assert got["reason"] is None
 
 
+def test_write_refused_malformed_vet_checks_on_initial_write(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    bad = "### Broken\n- **The vet records:** only"
+    facts = dict(_CORE_FACTS, vetChecks=bad)
+    res = CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+    assert res["action"] == "refused"
+    assert res["reason"] == "vet-checks-malformed"
+    assert res["malformed"]
+    assert CM._classify_core_md_at_path(CM.core_path(repo, store)).status == CM.CONFIG_ABSENT
+
+
+def test_parse_rejects_indented_code_as_vet_entry_heading():
+    body = (
+        "    ### Indented code, not a heading\n"
+        "- **Evidence:** PR body\n"
+        "- **The vet records:** receipt"
+    )
+    checks, malformed = CM._parse_vet_checks_body(body.splitlines())
+    assert checks == []
+    assert (None, "stray-text") in [(m["entry"], m["reason"]) for m in malformed]
+    ok, bad = CM._vet_checks_prose_body_acceptance(body)
+    assert ok is False
+    core_with_indent = (
+        CM.render_core(dict(_CORE_FACTS), "confirmed", "2026-06-26", "2026-06-26")
+        .replace(
+            "```json superheroes-core",
+            "## Vet checks\n\n" + body + "\n\n```json superheroes-core",
+            1,
+        )
+    )
+    parsed = CM.parse_vet_checks(core_with_indent)
+    assert parsed["checks"] == []
+    assert (None, "stray-text") in _malformed_pairs(parsed)
+
+
+def test_write_vet_checks_refused_indented_code_entry(tmp_path):
+    repo, store = _repo_store(tmp_path)
+    body = (
+        "    ### Indented code, not a heading\n"
+        "- **Evidence:** PR body\n"
+        "- **The vet records:** receipt"
+    )
+    res = CM.write_vet_checks(repo, body, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == "vet-checks-malformed"
+
+
 def test_write_vet_checks_refused_malformed(tmp_path):
     repo, store = _repo_store(tmp_path)
     bad = "### X\n- **The vet records:** only records"
