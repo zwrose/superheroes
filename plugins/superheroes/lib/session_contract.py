@@ -68,6 +68,7 @@ __all__ = (
     "minted_identity_key",
     "finding_content_canonical",
     "content_hash_suffix",
+    "coerce_line",
     "HeadContentRead",
     "classify_head_content_read",
     "resolve_merged_into_entry",
@@ -458,6 +459,24 @@ def evidence_digest_subject(payload, result_kind):
     if isinstance(value, list):
         return True, value
     return False, None
+
+
+def coerce_line(value):
+    """Return ``(ok, line)``: an int (never a bool) passes as itself; a numeric string
+    (``"291"``, surrounding whitespace tolerated) coerces to its int; anything else refuses."""
+    if isinstance(value, bool):
+        return False, value
+    if isinstance(value, int):
+        return True, value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped.isascii() and stripped.isdecimal():
+            try:
+                return True, int(stripped)
+            except ValueError:
+                return False, value
+        return False, value
+    return False, value
 
 
 def minted_identity_key(finding):
