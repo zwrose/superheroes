@@ -44,6 +44,12 @@ def _git_diff(repo, base):
         cwd=repo, capture_output=True, text=False, check=True).stdout.decode("utf-8")
 
 
+def _git_diff_at(repo, base, head):
+    return subprocess.run(
+        ["git", "diff", "%s...%s" % (base, head)],
+        cwd=repo, capture_output=True, text=False, check=True).stdout.decode("utf-8")
+
+
 def _init_two_commit_repo(tmp_path, first_body="old\n", second_body="new\n", path="f.py"):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -75,7 +81,10 @@ def _unknown_surface_state(config):
     state["_headDiffUnknown"] = True
     state["_headDiffSource"] = "unknown"
     state["decisions"] = []
-    RD._enter_delta_round(state, config)
+    panel_head = config.get(RD.FIX_FOLD_HEAD_KEY) if isinstance(config, dict) else None
+    if not isinstance(panel_head, str) or not panel_head:
+        panel_head = None
+    RD._enter_delta_round(state, config, panel_head=panel_head)
     return state
 
 
@@ -159,7 +168,8 @@ def test_b1_panel_diff_follows_head_moved_between_fixer_and_verify(tmp_path):
 )
 def test_b2_parks_when_panel_diff_underivable(tmp_path, edge_id, config_over, monkey):
     repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    head_sha = _rev_parse(repo)
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha, **{RD.FIX_FOLD_HEAD_KEY: head_sha})
     cfg.update(config_over)
     if monkey == "repo":
         pass
@@ -173,7 +183,8 @@ def test_b2_parks_when_panel_diff_underivable(tmp_path, edge_id, config_over, mo
 
 def test_b2_git_unavailable_parks(tmp_path, monkeypatch):
     repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha,
+               **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
     real_run = subprocess.run
 
     def _raise_file_not_found(*_a, **_k):
@@ -188,7 +199,8 @@ def test_b2_git_unavailable_parks(tmp_path, monkeypatch):
 
 def test_b2_git_diff_nonzero_parks(tmp_path, monkeypatch):
     repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha,
+               **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
     real_run = subprocess.run
 
     def _wrapped(*args, **kwargs):
@@ -209,7 +221,8 @@ def test_b2_git_diff_nonzero_parks(tmp_path, monkeypatch):
 
 def test_b2_git_timeout_parks(tmp_path, monkeypatch):
     repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha,
+               **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
 
     def _timeout(*_a, **_k):
         raise subprocess.TimeoutExpired(cmd="git", timeout=120)
@@ -222,7 +235,8 @@ def test_b2_git_timeout_parks(tmp_path, monkeypatch):
 
 def test_b2_git_diff_non_utf8_parks(tmp_path, monkeypatch):
     repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha,
+               **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
     real_run = subprocess.run
 
     def _wrapped(*args, **kwargs):
@@ -247,13 +261,62 @@ def test_b3_review_diff_producer_byte_identical_across_consumers(tmp_path):
     trailing = "line one\nline two   \n"
     repo, base_sha, _ = _init_two_commit_repo(
         tmp_path, first_body="base\n", second_body=trailing, path="ws.py")
-    proc = rdb.run_git_diff_three_dot_head(repo, base_sha, timeout=120)
+    head_sha = _rev_parse(repo)
+    _git(repo, "mv", "ws.py", "renamed.py")
+    _git(repo, "commit", "-qm", "rename")
+    head_sha = _rev_parse(repo)
+    proc = rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=120)
     assert proc.returncode == 0
     panel_bytes = proc.stdout
-    handback_digest = hg._recompute_diff_sha256(base_sha, repo)
+    handback_digest = hg._recompute_diff_sha256(base_sha, repo, head_sha)
     assert handback_digest == hashlib.sha256(panel_bytes).hexdigest()
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha, **{RD.FIX_FOLD_HEAD_KEY: head_sha})
     state = _unknown_surface_state(cfg)
     assert state.get("terminal") != "cannot-certify"
     assert state["reviewedDiff"] == panel_bytes.decode("utf-8")
     assert state["headDiff"] == panel_bytes.decode("utf-8")
+
+
+def test_b4_commit_after_verify_panel_reviews_verified_head(tmp_path):
+    repo, base_sha, _diff_h1 = _init_two_commit_repo(tmp_path)
+    h1 = _rev_parse(repo)
+    _commit_file(repo, "f.py", "after verify\n", "post verify")
+    h2 = _rev_parse(repo)
+    diff_at_h1 = _git_diff_at(repo, base_sha, h1)
+    diff_at_h2 = _git_diff_at(repo, base_sha, h2)
+    assert diff_at_h1 != diff_at_h2
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    state = RD.new_state(cfg)
+    state["round"] = 2
+    state["rounds"] = {"2": {}}
+    state["_verifyThen"] = RD.VERIFY_THEN_PANEL
+    RD._fold_verify(state, cfg, {"result": "pass"}, resolution=(h1, None))
+    assert state["reviewedDiff"] == diff_at_h1
+    assert state["reviewedDiff"] != diff_at_h2
+    assert state["step"] == RD.P_PANEL
+
+
+def test_b4_unresolved_panel_head_parks(tmp_path):
+    repo, base_sha, _ = _init_two_commit_repo(tmp_path)
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    state = RD.new_state(cfg)
+    state["round"] = 2
+    state["rounds"] = {"2": {}}
+    state["_verifyThen"] = RD.VERIFY_THEN_PANEL
+    RD._fold_verify(state, cfg, {"result": "pass"}, resolution=(None, "refused"))
+    assert state["terminal"] == "cannot-certify"
+    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
+    assert "head unresolved" in state["certification"]["reason"]
+
+
+def test_b4_producer_refuses_live_head(tmp_path):
+    repo, base_sha, _ = _init_two_commit_repo(tmp_path)
+    head_sha = _rev_parse(repo)
+    with pytest.raises(ValueError, match="explicit commit"):
+        rdb.run_git_diff_three_dot(repo, base_sha, "HEAD", timeout=10)
+    with pytest.raises(ValueError, match="explicit commit"):
+        rdb.run_git_diff_three_dot(repo, base_sha, " head ", timeout=10)
+    with pytest.raises(ValueError, match="explicit commit"):
+        rdb.run_git_diff_three_dot(repo, base_sha, None, timeout=10)
+    proc = rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=10)
+    assert proc.returncode == 0

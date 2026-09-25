@@ -1081,12 +1081,12 @@ def test_bite_diff_invocation_matches_production(tmp_path, monkeypatch):
     red = hg.validate_handback("gh pr ready", repo)
     assert red["decision"] == "allow"
     bad_rdb = patched_module(rdb, [
-        ('        ["git", "-C", repo_root, "diff", "%s...HEAD" % base_sha],',
-         '        ["git", "-C", repo_root, "-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", "%s...HEAD" % base_sha],'),
+        ('        ["git", "-C", repo_root, "diff", "%s...%s" % (base_sha, head_sha)],',
+         '        ["git", "-C", repo_root, "-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", "%s...%s" % (base_sha, head_sha)],'),
     ])
     monkeypatch.setattr(
-        hg.review_diff_bytes, "run_git_diff_three_dot_head",
-        bad_rdb.run_git_diff_three_dot_head)
+        hg.review_diff_bytes, "run_git_diff_three_dot",
+        bad_rdb.run_git_diff_three_dot)
     green = hg.validate_handback("gh pr ready", repo)
     assert green["reason"] == "handback-diff-mismatch"
 

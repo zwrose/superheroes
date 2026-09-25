@@ -111,7 +111,7 @@ def test_orchestrator_fulfilled_sink_binds_order_anchor(tmp_path, adapters, monk
     monkeypatch.setattr(
         RD,
         "_derive_panel_diff_at_head",
-        lambda _config: ("diff --git a/x b/x\n", None),
+        lambda _config, _head: ("diff --git a/x b/x\n", None),
     )
     d = _SESSION(tmp_path)
     _AT_RUN_VERIFY(tmp_path, d)

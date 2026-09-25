@@ -1960,7 +1960,7 @@ def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(t
     monkeypatch.setattr(
         RD,
         "_derive_panel_diff_at_head",
-        lambda _config: ("diff --git a/x b/x\n", None),
+        lambda _config, _head: ("diff --git a/x b/x\n", None),
     )
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)

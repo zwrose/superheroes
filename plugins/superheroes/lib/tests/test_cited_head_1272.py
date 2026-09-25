@@ -653,7 +653,7 @@ def test_orchestrator_fulfilled_declares_order_anchor_cited_head_source(tmp_path
     monkeypatch.setattr(
         RD,
         "_derive_panel_diff_at_head",
-        lambda _config: ("diff --git a/x b/x\n", None),
+        lambda _config, _head: ("diff --git a/x b/x\n", None),
     )
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)

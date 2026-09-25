@@ -3919,7 +3919,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
                           "fixes": len(artifact.get("fixes") or [])})
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
     if session_dir:
-        head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+        head, head_err = _resolve_fix_fold_head_sha(session_dir, state, artifact)
         if head_err:
             _record_round(state, "fixFoldHeadRefused", head_err)
         else:
@@ -4284,7 +4284,8 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
-    _enter_delta_round(state, config, panel_diff_seam=panel_diff_seam)
+    _enter_delta_round(
+        state, config, panel_diff_seam=panel_diff_seam, panel_head=verified_head)
 
 
 def _try_reuse_ceiling_verify_gate(state, config, session_dir):
@@ -4327,17 +4328,29 @@ def _enter_post_fix(state, config, session_dir=None, panel_diff_seam=None):
         state["_verifyThen"] = VERIFY_THEN_CEILING
         state["step"] = P_VERIFY
         return
+    rec = state.get("rounds", {}).get(str(state["round"]), {})
+    panel_head = rec.get("fixFoldHead") if isinstance(rec, dict) else None
+    if not isinstance(panel_head, str) or not panel_head:
+        if session_dir:
+            panel_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+            if head_err:
+                panel_head = None
+        else:
+            panel_head = config.get(FIX_FOLD_HEAD_KEY) if isinstance(config, dict) else None
+            if not isinstance(panel_head, str) or not panel_head:
+                panel_head = None
     if not _advance_round(state, config, reason="post-fix-advance"):
         return
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
     state["_postFixEntry"] = True
-    _enter_delta_round(state, config, panel_diff_seam=panel_diff_seam)
+    _enter_delta_round(
+        state, config, panel_diff_seam=panel_diff_seam, panel_head=panel_head)
 
 
 # ---- delta rounds (2+) ----------------------------------------------------------------------
 
-def _derive_panel_diff_at_head(config):
-    """Derive ``git diff <baseRef>...HEAD`` at ``config.repoRoot`` for unknown-surface full panels.
+def _derive_panel_diff_at_head(config, head_sha):
+    """Derive ``git diff <baseRef>...<head_sha>`` at ``config.repoRoot`` for unknown-surface panels.
 
     Returns ``(diff_text, None)`` on success or ``(None, detail)`` when derivation must refuse."""
     repo_root = config.get("repoRoot")
@@ -4346,6 +4359,8 @@ def _derive_panel_diff_at_head(config):
         return None, "repoRoot missing"
     if not isinstance(base, str) or not base:
         return None, "baseRef missing"
+    if not isinstance(head_sha, str) or not head_sha:
+        return None, "head unresolved"
     try:
         verify = subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", "%s^{commit}" % base],
@@ -4360,8 +4375,8 @@ def _derive_panel_diff_at_head(config):
     if verify.returncode != 0:
         return None, "baseRef not a commit"
     try:
-        proc = review_diff_bytes.run_git_diff_three_dot_head(
-            repo_root, base, timeout=120)
+        proc = review_diff_bytes.run_git_diff_three_dot(
+            repo_root, base, head_sha, timeout=120)
     except (FileNotFoundError, OSError) as exc:
         return None, "git unavailable: %s" % exc
     except subprocess.SubprocessError as exc:
@@ -4385,26 +4400,10 @@ def _derive_panel_diff_at_head(config):
 def _refresh_panel_diff_at_verified_head(state, config, verified_head, panel_diff_seam=None):
     """Re-derive unknown-surface panel diff at verify fold time (``VERIFY_THEN_PANEL``).
 
-    HEAD may have moved after the pre-verify derivation; bind ``reviewedDiff`` to the verified
-    head's ``git diff <base>...HEAD`` or park ``panel-diff-underivable``."""
+    Binds ``reviewedDiff`` to ``git diff <base>...<verified_head>`` by construction or parks
+    ``panel-diff-underivable``."""
     derive = panel_diff_seam or _derive_panel_diff_at_head
-    recorded = state.get("rounds", {}).get(str(state["round"]), {})
-    derived_head = recorded.get("fixFoldHead") if isinstance(recorded, dict) else None
-    if not isinstance(derived_head, str) or not derived_head:
-        cfg = config if isinstance(config, dict) else {}
-        derived_head = cfg.get(FIX_FOLD_HEAD_KEY)
-    if isinstance(verified_head, str) and verified_head and isinstance(derived_head, str):
-        if derived_head != verified_head:
-            repo_root = config.get("repoRoot") if isinstance(config, dict) else None
-            if isinstance(repo_root, str) and repo_root:
-                current = store_core.run_git(repo_root, "rev-parse", "HEAD")
-                if current != verified_head:
-                    _park_cannot_certify(
-                        state,
-                        "%s: verified head %s disagrees with repo HEAD %s"
-                        % (PANEL_DIFF_UNDERIVABLE_CAUSE, verified_head, current or "?"))
-                    return False
-    diff_text, refuse_detail = derive(config)
+    diff_text, refuse_detail = derive(config, verified_head)
     if refuse_detail is not None:
         _park_cannot_certify(
             state, "%s: %s" % (PANEL_DIFF_UNDERIVABLE_CAUSE, refuse_detail))
@@ -4414,12 +4413,12 @@ def _refresh_panel_diff_at_verified_head(state, config, verified_head, panel_dif
     return True
 
 
-def _schedule_full_panel_unknown(state, config, detail, panel_diff_seam=None):
+def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_seam=None):
     """The fail-closed unknown→run-everything rule: an unresolvable delta surface schedules a FULL
     reviewer-deep panel over the git-derived head diff, never a stale reviewed diff or a silently-
     scoped round. When head diff cannot be derived, parks ``cannot-certify`` instead."""
     derive = panel_diff_seam or _derive_panel_diff_at_head
-    diff_text, refuse_detail = derive(config)
+    diff_text, refuse_detail = derive(config, panel_head)
     if refuse_detail is not None:
         _park_cannot_certify(
             state, "%s: %s" % (PANEL_DIFF_UNDERIVABLE_CAUSE, refuse_detail))
@@ -4434,16 +4433,18 @@ def _schedule_full_panel_unknown(state, config, detail, panel_diff_seam=None):
     return True
 
 
-def _after_unknown_surface_panel(state, config, detail, post_fix, panel_diff_seam=None):
+def _after_unknown_surface_panel(
+        state, config, detail, post_fix, panel_head, panel_diff_seam=None):
     """Schedule a full unknown-surface panel when derivable; honor post-fix verify-then-panel."""
-    if not _schedule_full_panel_unknown(state, config, detail, panel_diff_seam=panel_diff_seam):
+    if not _schedule_full_panel_unknown(
+            state, config, detail, panel_head, panel_diff_seam=panel_diff_seam):
         return
     if post_fix:
         state["_verifyThen"] = VERIFY_THEN_PANEL
         state["step"] = P_VERIFY
 
 
-def _enter_delta_round(state, config, panel_diff_seam=None):
+def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     """Rounds 2+: split_fix_surface(reviewed, head, fixBatch). unknown → schedule a FULL panel
     (the existing unknown→run-everything rule). Else audit the fixed findings + scoped-find the new
     surface."""
@@ -4457,14 +4458,14 @@ def _enter_delta_round(state, config, panel_diff_seam=None):
             state, config,
             "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
             % state.get("_headDiffSource"),
-            post_fix, panel_diff_seam=panel_diff_seam)
+            post_fix, panel_head, panel_diff_seam=panel_diff_seam)
         return
     baseline = state.get("deltaBaseline")
     if not isinstance(baseline, dict):
         cause = "no baseline record" if baseline is None else "baseline is not a record"
         _after_unknown_surface_panel(
             state, config, "%s: %s" % (DELTA_BASELINE_ABSENT, cause), post_fix,
-            panel_diff_seam=panel_diff_seam)
+            panel_head, panel_diff_seam=panel_diff_seam)
         return
     stamped_round = baseline.get("round")
     current_round = state["round"]
@@ -4474,20 +4475,20 @@ def _enter_delta_round(state, config, panel_diff_seam=None):
             state, config,
             "%s: baseline stamped round %s, current round %s"
             % (DELTA_BASELINE_ABSENT, stamped_round, current_round),
-            post_fix, panel_diff_seam=panel_diff_seam)
+            post_fix, panel_head, panel_diff_seam=panel_diff_seam)
         return
     reviewed = baseline.get("diff")
     if not isinstance(reviewed, str):
         _after_unknown_surface_panel(
             state, config, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT, post_fix,
-            panel_diff_seam=panel_diff_seam)
+            panel_head, panel_diff_seam=panel_diff_seam)
         return
     split = delta_surface.split_fix_surface(
         reviewed, state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
         _after_unknown_surface_panel(
             state, config, "delta surface unknown — full reviewer-deep panel", post_fix,
-            panel_diff_seam=panel_diff_seam)
+            panel_head, panel_diff_seam=panel_diff_seam)
         return
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
@@ -5870,13 +5871,15 @@ def _verified_head_at_fold(session_dir, state):
     return (None, "verified head: no session dir — the in-process leg records no verified head")
 
 
-def _resolve_fix_fold_head_sha(session_dir, state):
+def _resolve_fix_fold_head_sha(session_dir, state, artifact=None):
     """Resolve the certified head once at fix-fold time — never the session-setup headSha.
 
     Returns (head_sha, error). On success the head is persisted so a resumed session reads the
     same value rather than re-deriving a now-different one."""
-    if _fix_batch_paths(state):
-        repo_root = _resolve_repo_root(session_dir, state)
+    fold_fixes = isinstance(artifact, dict) and bool(artifact.get("fixes"))
+    cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
+    if fold_fixes or _fix_batch_paths(state, artifact):
+        repo_root = _repo_root_for_panel_diff(cfg, session_dir, state)
         if not repo_root:
             return None, "fix-fold head: repo root unresolvable"
         head = store_core.run_git(repo_root, "rev-parse", "HEAD")
@@ -5884,7 +5887,6 @@ def _resolve_fix_fold_head_sha(session_dir, state):
             return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
         _persist_fix_fold_head_sha(session_dir, state, head)
         return head, None
-    cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
     persisted = cfg.get(FIX_FOLD_HEAD_KEY)
     if isinstance(persisted, str) and persisted:
         return persisted, None
@@ -5895,7 +5897,7 @@ def _resolve_fix_fold_head_sha(session_dir, state):
             cfg[FIX_FOLD_HEAD_KEY] = persisted
             state["config"] = cfg
         return persisted, None
-    repo_root = _resolve_repo_root(session_dir, state)
+    repo_root = _repo_root_for_panel_diff(cfg, session_dir, state)
     if not repo_root:
         return None, "fix-fold head: repo root unresolvable"
     head = store_core.run_git(repo_root, "rev-parse", "HEAD")
@@ -5938,6 +5940,15 @@ def _resolve_repo_root(session_dir, state):
         return os.path.realpath(repo_root)
     root = store_core.repo_root(os.getcwd())
     return os.path.realpath(root) if root else None
+
+
+def _repo_root_for_panel_diff(config, session_dir, state):
+    """Repo root that matches ``_derive_panel_diff_at_head`` — config ``repoRoot`` when set."""
+    if isinstance(config, dict):
+        cfg_root = config.get("repoRoot")
+        if isinstance(cfg_root, str) and cfg_root:
+            return os.path.realpath(cfg_root)
+    return _resolve_repo_root(session_dir, state)
 
 
 def _fixed_ledger_content_paths(state, artifact=None):

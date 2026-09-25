@@ -600,10 +600,10 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         # replays them (fixture semantics + goldens unchanged, #507 finding v2).
         return last_fix["changedSubjects"]
 
-    def panel_diff(config):
+    def panel_diff(config, head_sha):
         # Scripted replay of the just-run fix's synthetic head diff for unknown-surface full panels.
-        # The library default derives ``git diff <baseRef>...HEAD``; this harness has no checkout
-        # config, so the seam replays the same head diff fix_step surfaced (fixture semantics unchanged).
+        # The library default derives ``git diff <baseRef>...<head_sha>``; this harness has no
+        # checkout config, so the seam replays the same head diff fix_step surfaced (ignores head_sha).
         diff = last_fix.get("headDiff")
         if not isinstance(diff, str) or not diff:
             return None, "empty diff"
