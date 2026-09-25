@@ -777,8 +777,7 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   assert set(after_obj) - set(_env) == {
       "executionEvidence", "payloadHashSource", "headSha", "citedHeadSource"}
   assert set(_env) - set(after_obj) == set()
-  assert after_obj["executionEvidence"] == {
-      key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
+  assert after_obj["executionEvidence"] == RR.execution_evidence_fields(record)
   assert after_obj["envelopeSha256"] == RR.envelope_sha256(
       after_obj["payload"], after_obj["executionEvidence"])
   assert after_obj["payloadHashSource"] == "seat-declared"
@@ -840,8 +839,7 @@ def test_seam_a_record_result_evidence_binding_accepts_genuine_run(tmp_path, ada
   assert "executionEvidence" in stored
   record, ev_err = ED.run_execution_record(run_dir)
   assert ev_err is None
-  assert stored["executionEvidence"] == {
-      key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
+  assert stored["executionEvidence"] == RR.execution_evidence_fields(record)
 
 
 def test_seam_a_evidence_result_digest_mismatch_refuses(tmp_path, adapters):

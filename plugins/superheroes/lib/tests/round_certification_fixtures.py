@@ -18,6 +18,8 @@ DEFAULT_PANEL_PAYLOAD = {"findings": []}
 DEFAULT_PANEL_PAYLOAD_SHA = RR.payload_sha256(DEFAULT_PANEL_PAYLOAD)
 DEFAULT_FINDINGS_RESULT_SHA = RR.payload_sha256(DEFAULT_PANEL_PAYLOAD["findings"])
 AUDIT_PHASE = "dispatch-audits"
+SCOPED_PHASE = "dispatch-scoped-finder"
+SCOPED_SEAT = "scoped-finder"
 SIXTEEN_AUDIT_SEATS = tuple("audit-target-%02d" % i for i in range(16))
 
 META_FILE = "meta.json"
@@ -198,6 +200,7 @@ def _dispatch_journal_with_binding(
         "stdoutBytes": 10,
         "wallSeconds": 1.0,
         "toolCalls": 1,
+        "runKind": _run_kind_for_phase(PANEL_PHASE),
         **_binding_fields(nonce, result_digest=DEFAULT_FINDINGS_RESULT_SHA),
     }
     row = {
@@ -274,8 +277,18 @@ def _observation_fields(*, read="engaged", tool_calls=1):
     }
 
 
-def _execution_evidence(binding, *, read="engaged"):
-    return {**binding, "observation": _observation_fields(read=read)}
+def _run_kind_for_phase(phase):
+    if phase == "dispatch-fixer":
+        return "write"
+    return "review"
+
+
+def _execution_evidence(binding, *, read="engaged", phase=PANEL_PHASE):
+    return {
+        **binding,
+        "runKind": _run_kind_for_phase(phase),
+        "observation": _observation_fields(read=read),
+    }
 
 
 def _slot_nonce(seat, phase, attempt, occurrence=0):
@@ -407,7 +420,7 @@ def _ad_hoc_envelope(seat, payload, spec):
             _slot_nonce(seat, phase, attempt, occurrence),
             result_digest=result_digest,
         )
-        evidence = _execution_evidence(binding)
+        evidence = _execution_evidence(binding, phase=phase)
     envelope = {
         "schema": RR.SEAT_RESULT_SCHEMA_V2,
         "session": "test-session-001",
@@ -626,6 +639,202 @@ def case05_critical_skipped(tmp_path):
 
 def case06_mixed_panel(tmp_path):
     return _load_generated("case-06-mixed-panel", tmp_path)
+
+
+def _orders_manifest_for_seat(seat, *, rnd=1, attempt=0, phase=PANEL_PHASE):
+    return {
+        "schema": "orders-manifest/1",
+        "session": "test-session-001",
+        "round": rnd,
+        "phase": phase,
+        "attempt": attempt,
+        "orders": "not-emitted",
+        "seats": {
+            seat: {
+                "storeKey": seat,
+                "seat": seat,
+                "occurrence": 0,
+                "vendor": "codex",
+                "model": "gpt-5.6-sol",
+                "engine": "codex",
+                "resultContract": "seat-result/2",
+                "orderSha256": ANCHOR_SHA,
+                "orderPath": "/dev/null",
+                "envelopeStubPath": "/dev/null",
+            },
+        },
+    }
+
+
+def _write_orders_manifest(session_dir, manifest):
+    path = RC._orders_manifest_path(
+        session_dir, manifest["round"], manifest["phase"], manifest["attempt"])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    text = session_contract.canonical(manifest)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return session_contract.sha256_text(text)
+
+
+def _dispatch_envelope_for(seat, phase, rnd, *, payload=None):
+    payload = payload if payload is not None else DEFAULT_PANEL_PAYLOAD
+    payload_sha = RR.payload_sha256(payload)
+    spec = {
+        "seat": seat,
+        "phase": phase,
+        "round": rnd,
+        "payload": payload,
+        "payloadSha256": payload_sha,
+    }
+    return _ad_hoc_envelope(seat, payload, spec)
+
+
+def _recorded_row_from_envelope(envelope, seat, phase, rnd, *, head_sha, attempt=0):
+    row = {
+        "cmd": "record-result",
+        "outcome": "recorded",
+        "phase": phase,
+        "round": rnd,
+        "attempt": attempt,
+        "seat": seat,
+        "occurrence": 0,
+        "provenance": RC.PROVENANCE_DISPATCH_OBSERVED,
+        "payloadSha256": envelope["payloadSha256"],
+        "headSha": head_sha,
+        "recordIdentity": {
+            "phase": phase,
+            "seat": seat,
+            "occurrence": 0,
+            "attempt": attempt,
+        },
+    }
+    row.update(
+        RR.recorded_row_fields(envelope, head_sha, RR.CITED_HEAD_SOURCE_ORDER_ANCHOR)
+    )
+    return row
+
+
+def case07_audited_chain(tmp_path):
+    """Audited-chain certification: panel at ancestor head, fix + scoped finder + verify at tip."""
+    from session_checkout import _git, make_checkout
+
+    repo = tmp_path / "repo"
+    panel_head = make_checkout(repo)
+    delta_path = repo / "delta.txt"
+    delta_path.write_text("delta\n", encoding="utf-8")
+    _git(repo, "add", "delta.txt")
+    _git(repo, "commit", "-q", "-m", "certified tip")
+    certified_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    fix_path = "src/guard.py"
+    fix_digest = hashlib.sha256(_FIX_PRESENT_BYTES).hexdigest()
+    finding = {
+        "id": "F-fix",
+        "file": fix_path,
+        "line": 12,
+        "title": "missing bounds guard",
+        "severity": "Important",
+        "disposition": "fixed",
+        "dispositionReceipt": {
+            "headSha": certified_head,
+            "verifyResult": "pass",
+            "fixContentHeadSha": certified_head,
+            "fixContentDigest": fix_digest,
+            "fixContentBytes": len(_FIX_PRESENT_BYTES),
+        },
+    }
+    panel_payload = {"findings": []}
+    panel_envelope = _dispatch_envelope_for("code-reviewer", PANEL_PHASE, 1, payload=panel_payload)
+    scoped_envelope = _dispatch_envelope_for(SCOPED_SEAT, SCOPED_PHASE, 2)
+
+    manifest = _orders_manifest_for_seat("code-reviewer")
+    orders_row = {
+        "cmd": "advance",
+        "outcome": "orders-emitted",
+        "phase": PANEL_PHASE,
+        "round": 1,
+        "attempt": 0,
+    }
+
+    session_dir = write_session(
+        tmp_path,
+        name="case07-audited-chain",
+        meta={
+            "repoRoot": str(repo),
+            "headSha": panel_head,
+            session_contract.FIX_FOLD_HEAD_KEY: certified_head,
+        },
+        state={
+            "round": 2,
+            "config": {
+                "fixerVendor": "claude",
+                "baseGuard": RC.BASE_GUARD_CHECKED,
+                "headSha": panel_head,
+                "repoRoot": str(repo),
+                session_contract.FIX_FOLD_HEAD_KEY: certified_head,
+            },
+            "certification": {
+                "shape": "audited-chain",
+                "fullPanel": True,
+                "independence": "independent",
+                "base": "fetched",
+                "shapeDrivers": [],
+            },
+            "findings": [finding],
+            "rounds": {
+                "1": {
+                    "roundKind": "baseline",
+                    "seatStatus": {"code-reviewer": "run"},
+                    "blockingCount": 1,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                    "verifiedHead": panel_head,
+                },
+                "2": {
+                    "roundKind": "fix",
+                    "seatStatus": {SCOPED_SEAT: "run"},
+                    "blockingCount": 0,
+                    "verifyResult": "pass",
+                    "verifyPasses": [],
+                    "verifiedHead": certified_head,
+                },
+            },
+        },
+        journal_lines=[
+            orders_row,
+            _recorded_row_from_envelope(
+                panel_envelope, "code-reviewer", PANEL_PHASE, 1, head_sha=panel_head),
+            _recorded_row_from_envelope(
+                scoped_envelope, SCOPED_SEAT, SCOPED_PHASE, 2, head_sha=certified_head),
+        ],
+        envelopes=[
+            {"seat": "code-reviewer", "phase": PANEL_PHASE, "round": 1, "envelope": panel_envelope},
+            {
+                "seat": SCOPED_SEAT,
+                "phase": SCOPED_PHASE,
+                "round": 2,
+                "envelope": scoped_envelope,
+            },
+        ],
+        faithful_session=True,
+    )
+    manifest_sha = _write_orders_manifest(session_dir, manifest)
+    orders_row["manifestSha256"] = manifest_sha
+    journal_path = os.path.join(session_dir, JOURNAL_FILE)
+    lines = []
+    with open(journal_path, encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if row.get("outcome") == "orders-emitted" and row.get("phase") == PANEL_PHASE:
+                row["manifestSha256"] = manifest_sha
+            lines.append(row)
+    with open(journal_path, "w", encoding="utf-8") as fh:
+        for row in lines:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    blobs = _head_content_blobs_for_findings([finding], certified_head)
+    if blobs is not None:
+        _write_head_content_blobs(session_dir, blobs)
+    return session_dir
 
 
 def specimen_must_certify_sixteen_seat_audit(tmp_path):

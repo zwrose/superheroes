@@ -106,12 +106,12 @@ _receipt_round_disclosures = receipt_round_disclosures
 _declared_disclosures = declared_disclosures
 
 
-def _certification_shape(state, seats):
-    """Hand-landed shape override — tested directly; receipt certificationShape follows driver parity."""
+def _certification_shape(state, seats, chain_used=False):
+    """Hand-landed / audited-chain shape override — tested directly; receipt follows driver parity."""
     cert = state.get("certification") or {}
     shape = cert.get("shape")
     hand_landed = any(s.get("provenance") == PROVENANCE_HAND_LANDED for s in seats)
-    if hand_landed:
+    if hand_landed or chain_used:
         if shape == "full-panel-confirmed":
             return "audited-chain"
         if isinstance(shape, str) and shape.startswith("full-panel"):
@@ -523,6 +523,294 @@ def _resolve_repo_head_sha(ctx):
         return None
     head = proc.stdout.strip()
     return head if head else None
+
+
+_SCOPED_FINDER_PHASE = "dispatch-scoped-finder"
+_AUDITED_CHAIN_MEMO_KEY = "_auditedChainMemo"
+_CHAIN_QUALIFIED_KEY = "_auditedChainQualified"
+
+
+def _git_clean_env():
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def _is_ancestor(repo_root, ancestor, descendant):
+    if not isinstance(ancestor, str) or not isinstance(descendant, str):
+        return False
+    if not ancestor or not descendant:
+        return False
+    if len(ancestor) not in (40, 64) or len(descendant) not in (40, 64):
+        return False
+    if ancestor == descendant:
+        return True
+    if not isinstance(repo_root, str) or not repo_root:
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo_root, "merge-base", "--is-ancestor", ancestor, descendant],
+            capture_output=True,
+            timeout=30,
+            env=_git_clean_env(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    return False
+
+
+def _repo_root_from_ctx(ctx):
+    meta = ctx.get("meta") or {}
+    cfg = (ctx.get("state") or {}).get("config") or {}
+    return meta.get("repoRoot") or cfg.get("repoRoot")
+
+
+def _panel_orders_emitted_event(journal):
+    best = None
+    best_rnd = -1
+    if not isinstance(journal, list):
+        return None
+    for event in journal:
+        if not isinstance(event, dict):
+            continue
+        if event.get("outcome") != "orders-emitted":
+            continue
+        if event.get("phase") != PANEL_PHASE:
+            continue
+        rnd = event.get("round")
+        if isinstance(rnd, bool) or not isinstance(rnd, int):
+            continue
+        if rnd > best_rnd:
+            best_rnd = rnd
+            best = event
+    return best
+
+
+def _latest_recorded_head_for_slot(journal, seat, phase, occurrence, rnd):
+    if not isinstance(journal, list):
+        return None
+    for event in reversed(journal):
+        if not isinstance(event, dict) or event.get("outcome") != "recorded":
+            continue
+        ev_seat, ev_phase, _ev_attempt, ev_occ, ev_round = _journal_event_slot(event)
+        if ev_seat != seat or ev_phase != phase or ev_occ != occurrence or ev_round != rnd:
+            continue
+        head = event.get("headSha") or event.get("citedHead")
+        if isinstance(head, str) and head:
+            return head
+    return None
+
+
+def _audited_chain(ctx):
+    memo = ctx.get(_AUDITED_CHAIN_MEMO_KEY)
+    if isinstance(memo, dict):
+        return memo
+    out = {
+        "complete": False,
+        "gap": "panel",
+        "panelHead": None,
+        "panelRound": None,
+    }
+    try:
+        state = ctx.get("state") or {}
+        journal = ctx.get("journal") or []
+        session_dir = ctx.get("session_dir")
+        certified_head = _certified_head_sha(ctx)
+        if not isinstance(certified_head, str) or not certified_head:
+            out["gap"] = "verify"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+
+        panel_event = _panel_orders_emitted_event(journal)
+        if panel_event is None or session_dir is None:
+            out["gap"] = "panel"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+        panel_round = panel_event.get("round")
+        if isinstance(panel_round, bool) or not isinstance(panel_round, int):
+            out["gap"] = "panel"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+        roster, roster_refusal = _orders_emitted_roster_or_refusal(session_dir, panel_event)
+        if roster_refusal is not None or not roster:
+            out["gap"] = "panel"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+        heads = []
+        for seat, occurrence in roster:
+            head = _latest_recorded_head_for_slot(
+                journal, seat, PANEL_PHASE, occurrence, panel_round
+            )
+            if not head:
+                out["gap"] = "panel"
+                ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+                return out
+            heads.append(head)
+        if len(set(heads)) != 1:
+            out["gap"] = "panel"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+        panel_head = heads[0]
+        out["panelHead"] = panel_head
+        out["panelRound"] = panel_round
+
+        repo_root = _repo_root_from_ctx(ctx)
+        if not _is_ancestor(repo_root, panel_head, certified_head):
+            out["gap"] = "descent"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+
+        by_key, marker_refusal = _certification_findings_by_key(state)
+        if marker_refusal is not None:
+            out["gap"] = "fix-receipt"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+        for finding in by_key.values():
+            if not isinstance(finding, dict):
+                continue
+            graded = _effective_certification_finding(finding, by_key)
+            if graded.get("disposition") != "fixed":
+                continue
+            receipt = graded.get("dispositionReceipt")
+            if not isinstance(receipt, dict) or receipt.get("verifyResult") != "pass":
+                out["gap"] = "fix-receipt"
+                ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+                return out
+
+        rounds = state.get("rounds")
+        if not isinstance(rounds, dict):
+            out["gap"] = "scoped-finder"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+        round_nums = []
+        for key in rounds:
+            try:
+                round_nums.append(int(key))
+            except (TypeError, ValueError):
+                continue
+        if not round_nums:
+            out["gap"] = "scoped-finder"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+        last_round = max(round_nums)
+        for rnd in range(panel_round + 1, last_round + 1):
+            satisfied = False
+            for event in journal:
+                if not isinstance(event, dict):
+                    continue
+                if event.get("outcome") != "recorded":
+                    continue
+                if event.get("phase") != _SCOPED_FINDER_PHASE:
+                    continue
+                if event.get("round") == rnd:
+                    satisfied = True
+                    break
+            if not satisfied:
+                rec = rounds.get(str(rnd))
+                if isinstance(rec, dict) and rec.get("scopedFinder") == "skipped-empty-surface":
+                    satisfied = True
+            if not satisfied:
+                out["gap"] = "scoped-finder"
+                ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+                return out
+
+        scoped_ok = False
+        for event in journal:
+            if not isinstance(event, dict) or event.get("outcome") != "recorded":
+                continue
+            if event.get("phase") != _SCOPED_FINDER_PHASE:
+                continue
+            cited = event.get("headSha") or event.get("citedHead")
+            if cited != certified_head:
+                continue
+            seat = event.get("seat")
+            phase = event.get("phase")
+            attempt = event.get("attempt")
+            occurrence = event.get("occurrence", 0)
+            rnd = event.get("round")
+            if not isinstance(seat, str) or attempt is None:
+                continue
+            obs = event.get("executionEvidence")
+            slot_nonces = _journal_recorded_runner_nonces_for_slot(
+                journal, seat, phase, attempt, occurrence, rnd
+            )
+            journal_binding = _journal_execution_binding(
+                journal, seat, phase, attempt, occurrence, rnd
+            )
+            ok, _binding = _observation_qualifies(
+                obs,
+                certified_head,
+                cited,
+                journal_binding=journal_binding,
+                recorded_nonces=slot_nonces,
+                require_runner_action=True,
+            )
+            if ok:
+                scoped_ok = True
+                break
+        if not scoped_ok:
+            out["gap"] = "scoped-finder"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+
+        if session_contract.verify_result_for_head(state, certified_head) != "pass":
+            out["gap"] = "verify"
+            ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+            return out
+
+        out["complete"] = True
+        out["gap"] = None
+    except Exception:
+        out = {
+            "complete": False,
+            "gap": "panel",
+            "panelHead": out.get("panelHead"),
+            "panelRound": out.get("panelRound"),
+        }
+    ctx[_AUDITED_CHAIN_MEMO_KEY] = out
+    return out
+
+
+def _cited_head_qualifies(ctx, cited_head):
+    certified_head = _certified_head_sha(ctx)
+    if not isinstance(cited_head, str) or not cited_head:
+        return False, "audited-chain-gap:panel"
+    if cited_head == certified_head:
+        return True, None
+    chain = _audited_chain(ctx)
+    if not chain.get("complete"):
+        gap = chain.get("gap") or "panel"
+        return False, "audited-chain-gap:%s" % (gap,)
+    repo_root = _repo_root_from_ctx(ctx)
+    if not _is_ancestor(repo_root, cited_head, certified_head):
+        return False, "audited-chain-gap:descent"
+    return True, None
+
+
+def _expected_run_kind_for_phase(phase):
+    if phase == P_FIXER:
+        return "write"
+    return "review"
+
+
+def _run_kind_refusal_detail(phase, found_kind):
+    return "phase %r requires runKind %r (found %r)" % (
+        phase,
+        _expected_run_kind_for_phase(phase),
+        found_kind,
+    )
+
+
+def _dispatch_run_kind_qualifies(obs, phase):
+    if not isinstance(obs, dict):
+        return False, None
+    run_kind = obs.get("runKind")
+    expected = _expected_run_kind_for_phase(phase)
+    if not isinstance(run_kind, str) or run_kind != expected:
+        return False, run_kind
+    return True, None
 
 
 def _journal_event_slot(event):
@@ -1013,6 +1301,7 @@ def _observation_qualifies(
     recorded_nonces=None,
     *,
     require_runner_action=False,
+    head_rule=None,
 ):
     if not isinstance(obs, dict):
         return False, "execution-evidence-absent"
@@ -1033,7 +1322,11 @@ def _observation_qualifies(
         if set(observation.keys()) != EXECUTION_EVIDENCE_OBSERVATION_FIELDS:
             return False, "execution-evidence-malformed"
     if cited_head and certified_head and cited_head != certified_head:
-        return False, "execution-evidence-stale-head"
+        if head_rule is None:
+            return False, "execution-evidence-stale-head"
+        ok, gap_detail = head_rule(cited_head)
+        if not ok:
+            return False, "execution-evidence-stale-head"
     ok, binding_failure = _execution_binding_matches_journal(
         obs, journal_binding, recorded_nonces or set()
     )
@@ -1170,21 +1463,45 @@ def check_unrun_review(ctx):
                 occurrence,
                 rnd,
             )
+            cited = seat_entry.get("citedHead")
             ok, binding = _observation_qualifies(
                 obs,
                 certified_head,
-                seat_entry.get("citedHead"),
+                cited,
                 journal_binding=journal_binding,
                 recorded_nonces=slot_nonces,
                 require_runner_action=True,
+                head_rule=lambda ch: _cited_head_qualifies(ctx, ch),
             )
             if not ok:
+                detail = "dispatch-observed seat lacks qualifying execution telemetry"
+                if binding == "execution-evidence-stale-head":
+                    _, gap_detail = _cited_head_qualifies(ctx, cited)
+                    detail = "%s (%s)" % (detail, gap_detail)
                 return _refusal(
                     "unrun-review",
                     seat,
-                    "dispatch-observed seat lacks qualifying execution telemetry",
+                    detail,
                     binding_failure=binding,
                 )
+            rk_ok, found_kind = _dispatch_run_kind_qualifies(obs, phase)
+            if not rk_ok:
+                return _refusal(
+                    "unrun-review",
+                    seat,
+                    _run_kind_refusal_detail(phase, found_kind),
+                    binding_failure="evidence-run-kind-mismatch",
+                )
+            if (
+                isinstance(cited, str)
+                and cited
+                and isinstance(certified_head, str)
+                and certified_head
+                and cited != certified_head
+            ):
+                chain_ok, _gap = _cited_head_qualifies(ctx, cited)
+                if chain_ok:
+                    ctx[_CHAIN_QUALIFIED_KEY] = True
         elif provenance == PROVENANCE_HAND_LANDED:
             env, path = _load_envelope(
                 session_dir,
@@ -1222,6 +1539,27 @@ def check_unrun_review(ctx):
                     "hand-landed seat lacks qualifying execution-evidence binding",
                     binding_failure=binding,
                 )
+            cited = seat_entry.get("citedHead")
+            if isinstance(cited, str) and cited and cited != certified_head:
+                chain_ok, gap_detail = _cited_head_qualifies(ctx, cited)
+                if not chain_ok:
+                    return _refusal(
+                        "unrun-review",
+                        seat,
+                        "hand-landed seat cited head is stale (%s)" % (gap_detail,),
+                        binding_failure="execution-evidence-stale-head",
+                    )
+                ctx[_CHAIN_QUALIFIED_KEY] = True
+            evidence = env.get("executionEvidence") if isinstance(env, dict) else None
+            if isinstance(evidence, dict) and "runKind" in evidence:
+                rk_ok, found_kind = _dispatch_run_kind_qualifies(evidence, phase)
+                if not rk_ok:
+                    return _refusal(
+                        "unrun-review",
+                        seat,
+                        _run_kind_refusal_detail(phase, found_kind),
+                        binding_failure="evidence-run-kind-mismatch",
+                    )
     return None
 
 
@@ -1378,7 +1716,7 @@ def check_seat_independence(ctx):
                 binding_failure="auditor-vendor-underivable",
             )
         vendor = vendor_status
-        fam = model_registry.family_for("verifier", vendor)
+        fam = model_registry.family_for("auditor", vendor)
         if fam is None:
             return _refusal(
                 "unfetched-findings",
@@ -1413,7 +1751,7 @@ def _independence_block(ctx):
         if vendor_status == "missing":
             continue
         vendor = vendor_status
-        fam = model_registry.family_for("verifier", vendor)
+        fam = model_registry.family_for("auditor", vendor)
         model = _runner_recorded_model(obs, ctx["session_dir"], seat_entry)
         audit_seats.append(
             {
@@ -2114,10 +2452,24 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     if mode_resolved["resolved"]:
         base["mode"] = mode_resolved["mode"]
     cert = state.get("certification")
+    chain_used = bool(ctx.get(_CHAIN_QUALIFIED_KEY))
+    chain_info = _audited_chain(ctx) if chain_used else None
+    derived_labels = [
+        "schemaVersion",
+        "scriptRan",
+        "terminalState",
+        "terminalCause",
+        "seats",
+        "disclosures",
+        "certificationShape",
+        "independence",
+    ]
+    if chain_used and isinstance(chain_info, dict) and chain_info.get("panelHead"):
+        derived_labels.append("auditedChain")
     receipt = {
         "schemaVersion": _receipt_version(state),
         "verdict": state.get("terminal"),
-        "certificationShape": _certification_shape(state, seat_rows),
+        "certificationShape": _certification_shape(state, seat_rows, chain_used=chain_used),
         "certification": cert,
         "rounds": rounds,
         "findings": findings,
@@ -2135,16 +2487,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         "disclosures": _receipt_disclosures(ctx, state),
         "independence": _independence_block(ctx),
         "provenanceLabels": {
-            "derived": [
-                "schemaVersion",
-                "scriptRan",
-                "terminalState",
-                "terminalCause",
-                "seats",
-                "disclosures",
-                "certificationShape",
-                "independence",
-            ],
+            "derived": derived_labels,
             "makerAuthored": [
                 "verdict",
                 "certification",
@@ -2165,6 +2508,14 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     policy_applied = state.get("_policyApplied")
     if isinstance(policy_applied, list) and policy_applied:
         receipt["policyApplied"] = list(policy_applied)
+    if chain_used and isinstance(chain_info, dict):
+        panel_head = chain_info.get("panelHead")
+        panel_round = chain_info.get("panelRound")
+        if isinstance(panel_head, str) and panel_head and isinstance(panel_round, int):
+            receipt["auditedChain"] = {
+                "panelHead": panel_head,
+                "panelRound": panel_round,
+            }
     return receipt, None
 
 
