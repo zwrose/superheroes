@@ -162,7 +162,13 @@ def test_panel_order_emission_is_the_one_stale_refusal_site():
         "_refuse_stale_panel_emission", "_cmd_next_locked", "_cmd_re_emit_locked"}
     assert _calls_in(tree, "_emit_orders_manifest") == {"_cmd_next_locked", "_cmd_re_emit_locked"}
     assert _calls_in(tree, "_park_reviewed_diff_stale") == {
-        "_cmd_next_locked", "_cmd_re_emit_locked"}
+        "_cmd_next_locked", "_cmd_re_emit_locked", "_stale_pending_panel_park"}
+    # The consumption side: a panel order already pending is checked where it is replayed or folded.
+    assert _calls_in(tree, "_stale_pending_panel_park") == {
+        "_cmd_next_locked", "_advance_locked", "_cmd_submit_prepare"}
+    # One staleness rule, read by the emission check, the consumption check, and run_loop.
+    assert _calls_in(tree, "_reviewed_diff_is_stale") == {
+        "_refuse_stale_panel_emission", "_stale_pending_panel_park", "run_loop"}
     assert "_reviewedDiffStale" not in source
     defined = {fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)}
     assert not defined & {"_enter_panel", "_reviewed_diff_stale", "_stale_panel_blocks_loaded"}
@@ -401,3 +407,69 @@ def test_stale_panel_cannot_be_re_emitted(tmp_path, capsys):
     out = RD.cmd_re_emit(d, "tester")
     _assert_parked(out)
     assert RE._anchor_for(d, 1, RD.P_PANEL, 1) is None
+
+
+def _older_driver_pending_panel(tmp_path):
+    """A session an older driver saved after an unknown-head fix, with the round-2 panel order it
+    had ALREADY emitted still pending: no fold count, no bound head, pending `dispatch-panel`."""
+    d, respond, seen = _stale_session(tmp_path)
+
+    def pending_panel(state):
+        _legacy(state)
+        state["step"] = RD.P_PANEL
+        state.pop("_verifyThen", None)
+        state["pending"] = {"action": RD.P_PANEL, "round": state["round"], "phase": RD.P_PANEL,
+                            "attempt": 0, "payload": {"dimensions": list(RD.DIMENSIONS)}}
+    _rewrite_state(d, pending_panel)
+    return d, seen
+
+
+def test_an_already_pending_stale_panel_is_not_replayed_via_next(tmp_path):
+    """Consumption via `next`: the older driver's pending panel order is never replayed over the
+    pre-fix diff (red token: `next` answers the pending `dispatch-panel`)."""
+    d, seen = _older_driver_pending_panel(tmp_path)
+    _assert_parked(RD.cmd_next(d))
+    assert seen.get("panels") == [1], seen
+
+
+def test_an_already_pending_stale_panel_is_not_folded_via_advance(tmp_path):
+    """Consumption via durable `advance`: it parks before any roster check (red token: `advance`
+    answers `incomplete-roster`, or folds the panel)."""
+    d, _seen = _older_driver_pending_panel(tmp_path)
+    _rewrite_state(d, lambda state: state.pop("_submitUsed", None))
+    out = RD.cmd_advance(d)
+    assert out.get("ok") and out.get("folded") is None, out
+    _assert_parked(out["nextAction"])
+    assert RD.load_state(d)[1]["terminal"] == "cannot-certify"
+
+
+def test_an_already_pending_stale_panel_is_not_folded_via_submit(tmp_path):
+    """Consumption via hand `submit`: the pending panel's artifact is never folded (red token: the
+    submit is accepted and the loop moves on from a panel over the pre-fix diff)."""
+    d, _seen = _older_driver_pending_panel(tmp_path)
+    state = RD.load_state(d)[1]
+    out = RD.cmd_submit(d, RD.P_PANEL, 0, RD.state_hash(state),
+                        {"seats": {dm: {"findings": []} for dm in RD.DIMENSIONS}})
+    assert out.get("ok") and out.get("nextStep") == RD.P_TERMINAL, out
+    after = RD.load_state(d)[1]
+    assert after["terminal"] == "cannot-certify"
+    assert RD.REVIEWED_DIFF_STALE in after["certification"]["reason"]
+
+
+def test_run_loop_never_runs_a_panel_over_a_stale_reviewed_diff():
+    """The in-process `run_loop` path renders no orders; it reads the same rule before a panel
+    (red token: the reviewer seam is called for round 2 over the pre-fix diff)."""
+    calls = []
+
+    def reviewer(dim, tier, rnd, ctx):
+        calls.append(rnd)
+        if rnd == 1 and dim == "code-reviewer":
+            return [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+        return []
+    seams = TRD._seams(reviewer=reviewer,
+                       fix_step=lambda batch, rnd, payload: {"fixes": [], "changedSubjects": ["Code"]})
+    _refusal, loop_receipt = TRD._run_loop_with_loop_receipt(seams, TRD._cfg())
+    assert calls and set(calls) == {1}, calls
+    assert loop_receipt["verdict"] == "cannot-certify", loop_receipt.get("verdict")
+    assert any(RD.REVIEWED_DIFF_STALE in str(dc.get("detail"))
+               for dc in loop_receipt.get("decisions") or []), loop_receipt.get("decisions")

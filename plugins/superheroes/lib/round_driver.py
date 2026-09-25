@@ -3911,14 +3911,31 @@ class ReviewedDiffStale(ValueError):
     """Raised at panel-order emission when the reviewed diff is older than the fix-fold head."""
 
 
-def _refuse_stale_panel_emission(state, phase):
-    """THE chokepoint: a panel is never dispatched over a diff older than the head it certifies.
-    Every `dispatch-panel` order is rendered in `_emit_orders_manifest`, which `next`, `advance`
-    (through `next`) and `re-emit` all reach; it raises here when the reviewed diff's bound head is
-    not the current fix-fold head (an unknown head is stale). The callers park `reviewed-diff-stale`."""
+def _reviewed_diff_is_stale(state):
+    """The one staleness rule: the reviewed diff is not bound to the current fix-fold head (an
+    unknown head — a state an older driver saved after a fix — is stale)."""
     head = _fix_fold_head(state)
-    if phase == P_PANEL and (head is None or state.get("reviewedDiffHead", 0) != head):
+    return head is None or state.get("reviewedDiffHead", 0) != head
+
+
+def _refuse_stale_panel_emission(state, phase):
+    """THE emission chokepoint: a panel is never dispatched over a diff older than the head it
+    certifies. Every `dispatch-panel` order is rendered in `_emit_orders_manifest`, which `next`,
+    `advance` (through `next`) and `re-emit` all reach. The callers park `reviewed-diff-stale`."""
+    if phase == P_PANEL and _reviewed_diff_is_stale(state):
         raise ReviewedDiffStale(REVIEWED_DIFF_STALE)
+
+
+def _stale_pending_panel_park(session_dir, state, cmd):
+    """The consumption side of the same rule: a panel order already pending (emitted, possibly by
+    an older driver) is never replayed or folded over a stale reviewed diff. Parks and answers the
+    terminal when it is; None otherwise."""
+    pending = state.get("pending") if isinstance(state.get("pending"), dict) else {}
+    if state.get("terminal") or pending.get("phase") != P_PANEL:
+        return None
+    if not _reviewed_diff_is_stale(state):
+        return None
+    return _park_reviewed_diff_stale(session_dir, state, cmd)
 
 
 def _park_reviewed_diff_stale(session_dir, state, cmd):
@@ -6405,6 +6422,10 @@ def run_loop(seams, config=None):
             action = step["action"]
             if action == P_TERMINAL:
                 break
+            if action == P_PANEL and _reviewed_diff_is_stale(state):
+                _park_cannot_certify(state, "%s: the in-process panel would review a diff older "
+                                            "than the fix-fold head" % REVIEWED_DIFF_STALE)
+                break
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
             artifact = _run_seam(seams, action, step["payload"], state, state["config"])
             if action == P_VERIFIERS and isinstance(artifact, dict):
@@ -6547,6 +6568,9 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, "next")
         if refusal is not None:
             return refusal
+        parked = _stale_pending_panel_park(session_dir, state, "next")
+        if parked is not None:
+            return parked
         return _next_response(session_dir, state, pend, "next")
     step = _advance(state, state["config"])
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
@@ -7577,6 +7601,11 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         fault = _terminal_receipt_gate(session_dir, state)
         if fault:
             return _receipt_fault_response(fault)
+        return {"ok": True, "round": state["round"], "phase": phase, "nextStep": P_TERMINAL}
+    parked = _stale_pending_panel_park(session_dir, state, "submit")
+    if parked is not None:
+        if not parked.get("ok"):
+            return parked
         return {"ok": True, "round": state["round"], "phase": phase, "nextStep": P_TERMINAL}
     if not _via_advance and state.get("_advanceUsed"):
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
@@ -11038,6 +11067,12 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
     phase, rnd, attempt, refusal = _pending_of(session_dir, state, "advance")
     if refusal is not None:
         return refusal
+    parked = _stale_pending_panel_park(session_dir, state, "advance")
+    if parked is not None:
+        if not parked.get("ok"):
+            return parked
+        side = _publish_sidecar(session_dir, state, git=git)
+        return {"ok": True, "folded": None, "nextAction": parked, "sidecar": side.get("path")}
     if owner_artifact_path is not None and phase not in OWNER_GATE_PHASES:
         return _refuse_cmd(session_dir, "advance", "advance-submit-interleaved",
                            fault=FAULT_CALLER, phase=phase, rnd=rnd, attempt=attempt,
