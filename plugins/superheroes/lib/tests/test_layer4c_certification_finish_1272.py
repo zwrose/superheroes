@@ -895,7 +895,7 @@ def test_fix_receipt_refuses_hand_landed_audit_on_panel_head(tmp_path):
     _assert_fix_receipt_audited_chain_refusal(refusal)
 
 
-def test_fix_receipt_discharged_but_new_issue_refuses_while_undispositioned(tmp_path):
+def test_fix_receipt_discharged_but_new_issue_refuses_on_legacy_ledger_owner(tmp_path):
     import record_paths
 
     session_dir = case07_audited_chain(tmp_path)
@@ -920,7 +920,7 @@ def test_fix_receipt_discharged_but_new_issue_refuses_while_undispositioned(tmp_
     assert refusal is not None
     assert refusal["class"] == "unrun-review"
     assert refusal["bindingFailure"] == "execution-evidence-stale-head"
-    assert "audited-chain-gap:new-issue-undispositioned" in refusal["detail"]
+    assert "audited-chain-gap:new-issue-ledger-owner-unrecognized" in refusal["detail"]
     assert "audited-chain-gap:fix-receipt" not in refusal["detail"]
 
 
