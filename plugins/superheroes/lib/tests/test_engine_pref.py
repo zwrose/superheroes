@@ -18,6 +18,7 @@ def _load_module(basename, mod_name=None):
 
 
 EP = _load_module("engine_pref.py", "engine_pref")
+MR = _load_module("model_registry.py", "model_registry")
 
 
 def test_resolve_engine_maps_role_to_key():
@@ -180,8 +181,9 @@ def test_implementer_and_pilot_are_codex_pin_roles():
 
 
 def test_codex_model_pin_on_implementer():
+    pin = MR.pin_only_models("codex")[0]
     assert EP.resolve_engine_model("codex", "implementer", "sonnet",
-                                   {"codexModels": {"implementer": "gpt-5.6-terra"}}) == "gpt-5.6-terra"
+                                   {"codexModels": {"implementer": pin}}) == pin
 
 
 def test_load_engine_prefs_surfaces_brief_check_and_pilot_keys(tmp_path):
@@ -197,33 +199,43 @@ def test_brief_check_claude_fallback_tier_is_opus():
     assert EP.BRIEF_CHECK_CLAUDE_FALLBACK_TIER == "opus"
 
 
-def test_resolve_engine_model_maps_shared_tiers_to_gpt_5_6_family():
-    assert EP.resolve_engine_model("codex", "mechanical", "haiku", {}) == "gpt-5.6-terra"
-    assert EP.resolve_engine_model("codex", "reviewer", "sonnet", {}) == "gpt-5.6-terra"
-    assert EP.resolve_engine_model("codex", "reviewer-deep", "opus", {}) == "gpt-5.6-sol"
+def test_resolve_engine_model_maps_shared_tiers_to_codex_peer():
+    assert EP.resolve_engine_model("codex", "mechanical", "haiku", {}) == \
+        MR.codex_peer_for_claude_tier("haiku")
+    assert EP.resolve_engine_model("codex", "reviewer", "sonnet", {}) == \
+        MR.codex_peer_for_claude_tier("sonnet")
+    assert EP.resolve_engine_model("codex", "reviewer-deep", "opus", {}) == \
+        MR.codex_peer_for_claude_tier("opus")
     assert EP.resolve_engine_model("codex", "implementer", "fable", {}) is None
 
 
 def test_resolve_engine_model_persistent_codex_pin_wins_per_role():
-    prefs = {"codexModels": {"reviewer": "gpt-5.6-terra", "implementer": "gpt-5.6-terra"}}
-    assert EP.resolve_engine_model("codex", "reviewer", "sonnet", prefs) == "gpt-5.6-terra"
-    assert EP.resolve_engine_model("codex", "implementer", "opus", prefs) == "gpt-5.6-terra"
+    pin = MR.pin_only_models("codex")[0]
+    prefs = {"codexModels": {"reviewer": pin, "implementer": pin}}
+    assert EP.resolve_engine_model("codex", "reviewer", "sonnet", prefs) == pin
+    assert EP.resolve_engine_model("codex", "implementer", "opus", prefs) == pin
     # A sibling role still derives from its tier; pins never become global.
-    assert EP.resolve_engine_model("codex", "reviewer-deep", "opus", prefs) == "gpt-5.6-sol"
+    assert EP.resolve_engine_model("codex", "reviewer-deep", "opus", prefs) == \
+        MR.codex_peer_for_claude_tier("opus")
 
 
 def test_resolve_engine_model_is_provider_isolated_and_fails_capable():
-    prefs = {"codexModels": {"reviewer": "gpt-5.6-terra"}}
+    pin = MR.pin_only_models("codex")[0]
+    prefs = {"codexModels": {"reviewer": pin}}
     assert EP.resolve_engine_model("claude", "reviewer", "sonnet", prefs) is None
     assert EP.resolve_engine_model("cursor", "reviewer", "sonnet", prefs) is None
-    assert EP.resolve_engine_model("codex", "reviewer", "experimental-tier", {}) == "gpt-5.6-sol"
+    assert EP.resolve_engine_model("codex", "reviewer", "experimental-tier", {}) == \
+        MR.codex_peer_for_claude_tier("opus")
     assert EP.resolve_engine_model("codex", "reviewer", "sonnet",
-                                   {"codexModels": {"reviewer": "not-a-model"}}) == "gpt-5.6-terra"
+                                   {"codexModels": {"reviewer": "not-a-model"}}) == \
+        MR.codex_peer_for_claude_tier("sonnet")
 
 
-def test_codex_model_effort_validation_keeps_max_opt_in_and_5_6_only():
-    assert EP.valid_codex_model_effort("gpt-5.6-sol", "max") is True
-    assert EP.valid_codex_model_effort("gpt-5.6-terra", "max") is True
+def test_codex_model_effort_validation_keeps_max_opt_in_and_registered_only():
+    pin = MR.pin_only_models("codex")[0]
+    default = MR.matrix_config("implementer", "codex")[0]
+    assert EP.valid_codex_model_effort(pin, "max") is True
+    assert EP.valid_codex_model_effort(default, "max") is True
     assert EP.valid_codex_model_effort("gpt-5.6-luna", "max") is False
     assert EP.valid_codex_model_effort("gpt-5.5", "xhigh") is False
     assert EP.valid_codex_model_effort("gpt-5.5", "max") is False
@@ -348,7 +360,7 @@ def test_load_engine_prefs_does_not_surface_idle_timeout_config_channel(tmp_path
     assert got["effort"] == {"review": "high"}
 
 
-def test_dispatch_calibration_rows_codex_implementer_reports_gpt_model_not_claude_tier():
+def test_dispatch_calibration_rows_codex_implementer_reports_resolved_model_not_claude_tier():
     # Fix A: honest per-engine provenance — a codex implementer reports the RESOLVED Codex model
     # (the sonnet->GPT tier map), never the Claude tier it would show if engine were ignored.
     rows = EP.dispatch_calibration_rows(
@@ -356,7 +368,7 @@ def test_dispatch_calibration_rows_codex_implementer_reports_gpt_model_not_claud
         {"implementer": "sonnet", "pilot": "sonnet", "reviewer": "sonnet", "reviewer-deep": "opus"})
     by_role = {r["role"]: r for r in rows}
     assert by_role["implementer"]["engine"] == "codex"
-    assert by_role["implementer"]["model"] == "gpt-5.6-terra"
+    assert by_role["implementer"]["model"] == MR.codex_peer_for_claude_tier("sonnet")
 
 
 def test_dispatch_calibration_rows_codex_implementer_honors_persistent_pin():
@@ -392,7 +404,7 @@ def test_dispatch_calibration_rows_brief_check_reports_effective_provider_model(
     rows = EP.dispatch_calibration_rows({"briefCheck": "codex"}, tiers)
     by_role = {r["role"]: r for r in rows}
     assert by_role["brief-check"]["engine"] == "codex"
-    assert by_role["brief-check"]["model"] == "gpt-5.6-sol"   # opus-tier codex peer
+    assert by_role["brief-check"]["model"] == MR.codex_peer_for_claude_tier("opus")
 
     rows = EP.dispatch_calibration_rows({"briefCheck": "cursor"}, tiers)
     by_role = {r["role"]: r for r in rows}
@@ -403,7 +415,7 @@ def test_dispatch_calibration_rows_brief_check_reports_effective_provider_model(
     rows = EP.dispatch_calibration_rows({}, tiers)
     by_role = {r["role"]: r for r in rows}
     assert by_role["brief-check"]["engine"] == "codex"
-    assert by_role["brief-check"]["model"] == "gpt-5.6-sol"
+    assert by_role["brief-check"]["model"] == MR.codex_peer_for_claude_tier("opus")
 
     # explicit claude fallback is unchanged: the opus tier literal
     rows = EP.dispatch_calibration_rows({"briefCheck": "claude"}, tiers)
@@ -585,22 +597,24 @@ def test_load_engine_prefs_surfaces_effort_submap_and_resolve_effort_honors_it(t
 
 def test_load_engine_prefs_remaps_legacy_fixer_pin_to_code_fixer(tmp_path):
     repo = str(tmp_path)
-    _write_core_with_prefs(repo, {"codexModels": {"fixer": "gpt-5.6-terra"}})
+    pin = MR.pin_only_models("codex")[0]
+    _write_core_with_prefs(repo, {"codexModels": {"fixer": pin}})
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
-    assert got["codexModels"] == {"code-fixer": "gpt-5.6-terra"}
+    assert got["codexModels"] == {"code-fixer": pin}
     assert "fixer" not in got.get("invalidCodexModels", {})
     assert "code-fixer" not in got.get("invalidCodexModels", {})
 
 
 def test_load_engine_prefs_canonical_code_fixer_wins_over_legacy_fixer(tmp_path):
+    pin = MR.pin_only_models("codex")[0]
     for i, codex_models in enumerate((
-        {"fixer": "gpt-5.6-terra", "code-fixer": "gpt-5.6-sol"},
-        {"code-fixer": "gpt-5.6-sol", "fixer": "gpt-5.6-terra"},
+        {"fixer": "gpt-nope", "code-fixer": pin},
+        {"code-fixer": pin, "fixer": "gpt-nope"},
     )):
         repo = str(tmp_path / str(i))
         _write_core_with_prefs(repo, {"codexModels": codex_models})
         got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
-        assert got["codexModels"] == {"code-fixer": "gpt-5.6-sol"}
+        assert got["codexModels"] == {"code-fixer": pin}
 
 
 def test_dispatch_calibration_rows_fable_tier_on_codex_shows_unsupported_marker():
@@ -613,7 +627,6 @@ def test_dispatch_calibration_rows_fable_tier_on_codex_shows_unsupported_marker(
     assert by_role["implementer"]["model"] != "fable"
 
 
-MR = _load_module("model_registry.py", "model_registry")
 DG = _load_module("dispatch_guard.py", "dispatch_guard")
 EA = _load_module("engine_adapter.py", "engine_adapter")
 
@@ -771,13 +784,13 @@ def test_assert_model_cell_category_rejects_token_on_seatless_role():
 
 def test_dispatch_calibration_rows_refused_deep_pin_shows_default_cell():
     rows = EP.dispatch_calibration_rows(
-        {"reviewer": "codex", "codexModels": {"reviewer-deep": "gpt-5.6-terra"}},
+        {"reviewer": "codex", "codexModels": {"reviewer-deep": "gpt-nope"}},
         _CALIBRATION_TIERS,
     )
     review_code = {r["role"]: r for r in rows}["review-code"]["model"]
     parts = _parse_review_code_model_cell(review_code)
     _assert_model_cell_category(parts["reviewer-deep"], "reviewer-deep", "codex")
-    assert parts["reviewer-deep"] == "gpt-5.6-sol"
+    assert parts["reviewer-deep"] == MR.codex_peer_for_claude_tier("opus")
 
 
 def test_dispatch_calibration_rows_model_cells_are_token_composite_or_marker():
@@ -944,7 +957,7 @@ def test_parse_review_code_model_cell_round_trips_spaced_marker_in_reviewer_deep
     pilot_marker = by_role["pilot"]["model"]
     assert pilot_marker == "(unsupported on codex: pilot)"
     parts = _parse_review_code_model_cell(by_role["review-code"]["model"])
-    assert parts["reviewer"] == "gpt-5.6-terra"
+    assert parts["reviewer"] == MR.codex_peer_for_claude_tier("sonnet")
     synthetic = "reviewer=%s reviewer-deep=%s" % (parts["reviewer"], pilot_marker)
     round_tripped = _parse_review_code_model_cell(synthetic)
     assert round_tripped["reviewer-deep"] == pilot_marker
@@ -1010,19 +1023,23 @@ def test_dispatch_calibration_rows_tolerates_non_dict_prefs_and_tiers():
 
 def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_path):
     repo = str(tmp_path)
+    pin = MR.pin_only_models("codex")[0]
+    default_model = MR.matrix_config("implementer", "codex")[0]
     _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "codex",
-                                  "codexModels": {"reviewer": "gpt-5.6-terra",
-                                                  "reviewer-deep": "gpt-5.6-sol",
-                                                  "implementer": "gpt-5.6-sol",
-                                                  "code-fixer": "gpt-5.6-terra",
-                                                  "pilot": "gpt-5.6-terra",
-                                                  "bogus-role": "gpt-5.6-terra",
+                                  "codexModels": {"reviewer": pin,
+                                                  "reviewer-deep": pin,
+                                                  "implementer": pin,
+                                                  "code-fixer": pin,
+                                                  # pilot has no codex matrix seat, so even a
+                                                  # registered default-cell model is refused.
+                                                  "pilot": default_model,
+                                                  "bogus-role": "gpt-nope",
                                                   }})
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
-    assert got["codexModels"] == {"reviewer": "gpt-5.6-terra",
-                                  "reviewer-deep": "gpt-5.6-sol",
-                                  "implementer": "gpt-5.6-sol",
-                                  "code-fixer": "gpt-5.6-terra"}
+    assert got["codexModels"] == {"reviewer": pin,
+                                  "reviewer-deep": pin,
+                                  "implementer": pin,
+                                  "code-fixer": pin}
     assert got["invalidCodexModels"]["bogus-role"] == "unknown role 'bogus-role' rejected"
     assert got["invalidCodexModels"]["pilot"].startswith("pin-not-on-allowlist:")
     invalid_repo = str(tmp_path / "invalid")
@@ -1041,31 +1058,39 @@ def test_codex_model_strength_covers_every_valid_model():
 
 
 def test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling():
-    # #409: the write-auth probe dispatches the strongest model the codex implementation (build/fix)
-    # role will actually run — its pins, else the sol floor for any UNPINNED write role.
-    floor = EP.CODEX_MODEL_BY_TIER["opus"]  # gpt-5.6-sol
-    # no pins at all -> the sol capability floor (both write roles unpinned)
+    # #409/#1435 WO-2: the write-auth probe dispatches the strongest model the codex implementation
+    # (build/fix) role will actually run — its pins, else the registry's opus peer floor for any
+    # UNPINNED write role.
+    floor = EP.CODEX_MODEL_BY_TIER["opus"]  # gpt-6-sol
+    # no pins at all -> the opus peer floor (both write roles unpinned)
     assert EP.codex_write_probe_model(None) == floor
     assert EP.codex_write_probe_model({}) == floor
     assert EP.codex_write_probe_model({"codexModels": {}}) == floor
     assert EP.codex_write_probe_model({"codexModels": "nope"}) == floor
-    # BOTH write roles pinned to unregistered gpt-5.5 -> treated as unpinned -> sol floor
+    # BOTH write roles pinned to unregistered gpt-5.5 -> treated as unpinned -> the floor
     assert EP.codex_write_probe_model(
         {"codexModels": {"implementer": "gpt-5.5", "code-fixer": "gpt-5.5"}}) == floor
-    # PARTIAL pin: one write role unpinned derives a GPT-5.6 tier model, so the probe clamps up to the
-    # sol floor rather than under-testing at gpt-5.5 (the premortem fail-direction regression, closed).
+    # PARTIAL pin: one write role unpinned derives the peer floor, so the probe clamps up to the
+    # floor rather than under-testing at gpt-5.5 (the premortem fail-direction regression, closed).
     assert EP.codex_write_probe_model({"codexModels": {"implementer": "gpt-5.5"}}) == floor
     # a reviewer pin is irrelevant to the WRITE probe — it does not lower or raise the write ceiling
     assert EP.codex_write_probe_model(
         {"codexModels": {"implementer": "gpt-5.5", "code-fixer": "gpt-5.5",
-                         "reviewer": "gpt-5.6-sol"}}) == floor
-    # both write roles pinned to valid 5.6 family -> the stronger of the two
+                         "reviewer": "gpt-6-sol"}}) == floor
+    # both write roles pinned ENTIRELY to the pin-only model -> that model (not falsely failed by a
+    # hard floor probe)
     assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": "gpt-5.6-terra", "code-fixer": "gpt-5.6-terra"}}) == "gpt-5.6-terra"
-    # implementer is the ceiling (stronger than code-fixer) -> the probe dispatches implementer's model.
-    # Proves the probe covers BOTH write roles, not just code-fixer (drops-a-write-role mutant dies here).
+        {"codexModels": {"implementer": "gpt-5.6-sol", "code-fixer": "gpt-5.6-sol"}}) == "gpt-5.6-sol"
+    # code-fixer is unpinned and clamps to the opus peer floor, which is stronger than the
+    # implementer's pin-only model -> the probe dispatches the floor, not the pin. Proves the probe
+    # covers BOTH write roles, not just implementer (drops-a-write-role mutant dies here).
+    pin_only = MR.pin_only_models("codex")[0]
     assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": "gpt-5.6-sol", "code-fixer": "gpt-5.6-terra"}}) == "gpt-5.6-sol"
+        {"codexModels": {"implementer": pin_only}}) == MR.codex_peer_for_claude_tier("opus")
+    # BOTH write roles pinned to different real models -> the STRONGER of the two pins wins (max of
+    # two pins), not either pin alone or the floor.
+    assert EP.codex_write_probe_model(
+        {"codexModels": {"implementer": "gpt-6-astra", "code-fixer": "gpt-5.6-sol"}}) == "gpt-6-astra"
 
 
 def test_load_engine_prefs_rejects_unregistered_model_before_dispatch(tmp_path):
@@ -1500,14 +1525,15 @@ def test_builder_tier_reason_display_none():
 
 
 def test_normalize_codex_pin_map_legacy_alias_and_canonical_wins():
-    result = EP.normalize_codex_pin_map({"fixer": "gpt-5.6-terra"})
-    assert result["pins"] == {"code-fixer": "gpt-5.6-terra"}
+    pin = MR.pin_only_models("codex")[0]
+    result = EP.normalize_codex_pin_map({"fixer": pin})
+    assert result["pins"] == {"code-fixer": pin}
     assert result["invalid"] == {}
     both = EP.normalize_codex_pin_map({
-        "fixer": "gpt-5.6-terra",
-        "code-fixer": "gpt-5.6-sol",
+        "fixer": "gpt-nope",
+        "code-fixer": pin,
     })
-    assert both["pins"] == {"code-fixer": "gpt-5.6-sol"}
+    assert both["pins"] == {"code-fixer": pin}
     assert "fixer" not in both["pins"]
 
 
@@ -1539,6 +1565,38 @@ def test_normalize_seat_pin_map_vendor_only_and_empty_model_rejected():
     assert bad["pins"] == {}
     assert "security" in bad["invalid"]
     assert "model" in bad["invalid"]["security"]
+
+
+# --- #1435 WO-2: I2c/I2e — retired codex model refused everywhere a model is named by config ----
+
+_RETIRED_TERRA_REASON = "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
+
+
+# bite-axis: normalize_seat_pin_map refuses a codex seat pin naming retired gpt-5.6-terra, but leaves a non-codex vendor naming the same string untouched
+def test_normalize_seat_pin_map_refuses_retired_codex_model():
+    got = EP.normalize_seat_pin_map(
+        {"security-reviewer": {"vendor": "codex", "model": "gpt-5.6-terra"}})
+    assert got["pins"] == {}
+    assert got["invalid"] == {"security-reviewer": _RETIRED_TERRA_REASON}
+    # a non-codex vendor naming the same string is untouched by the retired check
+    other = EP.normalize_seat_pin_map(
+        {"security-reviewer": {"vendor": "claude", "model": "gpt-5.6-terra"}})
+    assert other["pins"] == {"security-reviewer": {"vendor": "claude", "model": "gpt-5.6-terra"}}
+    assert other["invalid"] == {}
+
+
+# bite-axis: load_engine_prefs reports both invalidCodexModels and invalidSeatPins for retired gpt-5.6-terra, dropping it from the valid maps
+def test_load_engine_prefs_reports_invalid_seat_pins_and_codex_models_for_retired_terra(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {
+        "codexModels": {"reviewer": "gpt-5.6-terra"},
+        "seatPins": {"security-reviewer": {"vendor": "codex", "model": "gpt-5.6-terra"}},
+    })
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert got.get("codexModels", {}) == {}
+    assert got["invalidCodexModels"]["reviewer"] == _RETIRED_TERRA_REASON
+    assert "seatPins" not in got
+    assert got["invalidSeatPins"]["security-reviewer"] == _RETIRED_TERRA_REASON
 
 
 def test_builder_tier_sources_cover_all_resolution_sources():

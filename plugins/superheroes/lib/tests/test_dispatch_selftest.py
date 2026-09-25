@@ -132,8 +132,9 @@ def test_cursor_sanctioned_model_ids_exactly():
 
 def test_cursor_build_argv_refuses_third_party_model_ids():
     import engine_adapter as ea
+    import model_registry as mr
 
-    for model_id in ("opus-5.5", "gpt-5.6-sol"):
+    for model_id in ("opus-5.5", mr.pin_only_models("codex")[0]):
         seat = {"vendor": "cursor", "model": model_id, "effort": "high"}
         res = ea.build_argv_result(seat, "build", {})
         assert res["reason"] == "unregistered-engine-model", model_id

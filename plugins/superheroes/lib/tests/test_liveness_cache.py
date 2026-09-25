@@ -5,6 +5,7 @@ import pytest
 
 import liveness_cache as lc
 import mode_registry
+import model_registry as MR
 
 
 def _good_liveness():
@@ -729,6 +730,11 @@ def test_live_from_dead_note_redacts_absolute_paths():
     detail_with_path = "failed at %s: timeout" % secret_path
 
     def _run(argv, **kwargs):
+        # The codex-CLI-floor gate's own `codex --version` probe must pass so the real
+        # per-cell probe below (the one under test) actually runs.
+        if list(argv) == ["codex", "--version"]:
+            return SimpleNamespace(
+                returncode=0, stdout="codex-cli %s\n" % MR.codex_min_cli()[0], stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr=detail_with_path)
 
     needed = {"codex": [("gpt-5.6-sol", "xhigh")]}

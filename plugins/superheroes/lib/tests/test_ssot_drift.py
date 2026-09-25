@@ -177,11 +177,25 @@ def test_complete_codex_policy_single_sourced():
         doc = _read(rel)
         id_pattern = r"(?<![A-Za-z0-9._-])gpt-[0-9][A-Za-z0-9._-]*(?![A-Za-z0-9._-])"
         documented_ids = {m.rstrip(".") for m in re.findall(id_pattern, doc)}
-        assert documented_ids == expected_ids, "%s Codex model IDs drifted from model_registry" % rel
+        # (a) every registered codex model must be documented (unchanged strength).
+        missing = expected_ids - documented_ids
+        assert not missing, "%s missing registered Codex model IDs: %r" % (rel, missing)
+        # (b) every documented gpt-… id must be a registered codex model or a retired
+        # one (judged by model_registry.retired_model_reason, never a re-spelled list).
+        undocumented_extra = {
+            mid for mid in documented_ids - expected_ids
+            if model_registry.retired_model_reason("codex", mid) is None
+        }
+        assert not undocumented_extra, (
+            "%s Codex model IDs drifted from model_registry (neither registered nor "
+            "retired): %r" % (rel, undocumented_extra))
         mapping_text = _one(re.findall(r"Codex tier map:\s*([^\n]+(?:\n(?!\s*\n)[^\n]+)?)", doc),
                             "Codex tier map", rel, "tier=model, ...")
-        documented_map = dict(re.findall(
-            r"(haiku|sonnet|opus)=(gpt-5\.6-(?:sol|terra))", mapping_text))
+        documented_map = {
+            tier: mid.rstrip(".")
+            for tier, mid in re.findall(
+                r"(haiku|sonnet|opus)=(gpt-[0-9][A-Za-z0-9._-]*)", mapping_text)
+        }
         assert documented_map == engine_pref.CODEX_MODEL_BY_TIER, (
             "%s Codex tier map drifted from engine_pref.py" % rel)
 
@@ -1341,6 +1355,7 @@ def test_wave_watch_suppressible_events_in_wave_watch_doc():
 _CONCRETE_MODEL_TOKENS = (
     "gpt-5.6-terra",
     "gpt-5.6-sol",
+    "gpt-6-sol",
     "gpt-6-astra",
     "gpt-5.5",
     "gpt-5.6-luna",

@@ -203,16 +203,17 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
   `reviewer`, `reviewer-deep`, `code-fixer`, `implementer`, and `pilot`; valid
-  model IDs are `gpt-5.6-terra`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for
+  model IDs are `gpt-6-sol`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for
   `reviewer-deep` at effort `high`; pinning it on any other role is refused
-  `pin-role-not-eligible`). A pin must
-  also resolve on its role's own codex allowlist, else it is refused `pin-not-on-allowlist` (Terra
-  on `reviewer-deep`; any model on `pilot`, which has no codex cell — it remains a valid role key
+  `pin-role-not-eligible`). A pin to the retired `gpt-5.6-terra` is refused at write time
+  (`model-retired: gpt-5.6-terra is retired; use gpt-6-sol`). A pin must
+  also resolve on its role's own codex allowlist, else it is refused `pin-not-on-allowlist`
+  (any model on `pilot`, which has no codex cell — it remains a valid role key
   but admits no codex model).
-  Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol; an unpinned project never
-  dispatches Astra and Sol stays the default deep cell. A pinned model runs at the effort its role's
-  registry allowlist resolves for it — Sol at `high` on `reviewer`, `code-fixer` and `implementer`
-  and `xhigh` on `reviewer-deep`, Terra at `high`, and Astra at `high` — the
+  Codex tier map: haiku=gpt-6-sol, sonnet=gpt-6-sol, opus=gpt-6-sol; an unpinned project never
+  dispatches Astra and gpt-6-sol is the default deep cell. A pinned model runs at the effort its role's
+  registry allowlist resolves for it — gpt-6-sol and gpt-5.6-sol at `high` on `reviewer`, `code-fixer`
+  and `implementer` and `xhigh` on `reviewer-deep`, and Astra at `high` — the
   role's `enginePreferences.effort` setting is not
   consulted for a pinned model. Show the current engine preferences and effective model first, merge
   only the requested role into the existing object, and preserve every sibling key. Before writing,
@@ -227,7 +228,7 @@ action that owns it, leaving the rest of the calibration untouched:
       "implementation": "codex",
       "briefCheck": "codex",
       "effort": {"review": "high"},
-      "codexModels": {"reviewer": "gpt-5.6-terra"}
+      "codexModels": {"reviewer": "gpt-5.6-sol"}
     }
   }
   ```
@@ -238,7 +239,7 @@ action that owns it, leaving the rest of the calibration untouched:
   the seat falls back to the default cell with a `role-pin-not-live` degradation, and a pin the
   tier's allowlist does not admit falls back with `role-pin-not-honorable` carrying the refusal's
   reason. Per-run preflight model
-  overrides have highest precedence, followed by this persistent pin, then the shared-tier GPT-5.6
+  overrides have highest precedence, followed by this persistent pin, then the shared-tier codex
   mapping.
 
 - **`enginePreferences.effort`** — a `{role_kind: effort_token}` map under `core.md`'s
@@ -252,7 +253,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  printf '%s\n' '{"reviewer": "gpt-5.6-terra"}' | \
+  printf '%s\n' '{"reviewer": "gpt-5.6-sol"}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
   ```
 

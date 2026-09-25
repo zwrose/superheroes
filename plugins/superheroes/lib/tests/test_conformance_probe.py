@@ -36,8 +36,8 @@ SC = _load("store_core", "store_core.py")
 _TIERS = {
     "implementer": "composer-2.5",
     "pilot": "sonnet",
-    "reviewer": "gpt-5.6-terra",
-    "reviewer-deep": "gpt-5.6-sol",
+    "reviewer": MR.matrix_config("reviewer", "codex")[0],
+    "reviewer-deep": MR.pin_only_models("codex")[0],
 }
 _CALIB_PREFS = {"implementation": "cursor", "reviewer": "codex"}
 
@@ -2385,10 +2385,11 @@ def test_astra_probe_pass_matches_plant_and_records_attempt(tmp_path, monkeypatc
     attempts, _ = CP._read_astra_attempts(ledger_dir)
     assert len(attempts) == 1
     assert attempts[0]["wave"] == "wave-pass"
+    probe_model, probe_effort = MR.matrix_config("registration-probe", "codex")
     assert calls[0]["seat"] == {
         "vendor": "codex",
-        "model": "gpt-6-astra",
-        "effort": "high",
+        "model": probe_model,
+        "effort": probe_effort,
         "role": "registration-probe",
     }
 
@@ -2396,7 +2397,11 @@ def test_astra_probe_pass_matches_plant_and_records_attempt(tmp_path, monkeypatc
 # bite-axis: the registration-probe seat is admitted by the real dispatch guard
 def test_astra_probe_seat_admitted_by_the_real_guard():
     DA = _load("dispatch_allowlist", "dispatch_allowlist.py")
-    assert DA.validate("registration-probe", "codex", "gpt-6-astra", "high")["ok"] is True
+    probe_model, probe_effort = MR.matrix_config("registration-probe", "codex")
+    assert (
+        DA.validate("registration-probe", "codex", probe_model, probe_effort)["ok"]
+        is True
+    )
 
 
 # bite-axis: unresolvable registry cell refuses before any claim or dispatch
@@ -2722,6 +2727,32 @@ def test_astra_probe_seat_is_the_registry_cell(tmp_path, monkeypatch):
     }
 
 
+# bite-axis: astra_probe dispatches — and the ledger records — whatever model the registry's
+# `registration-probe` codex cell currently names, not a model hardcoded to "Astra". The command,
+# ledger file, and refusal tokens are reused machinery kept stable across a cell change (#1435);
+# only the docstring/help text describing them may ever diverge from this real registry read.
+def test_astra_probe_dispatches_and_records_the_live_registration_probe_cell(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    expected_model, expected_effort = CP.model_registry.matrix_config("registration-probe", "codex")
+    seats = []
+
+    def dispatch(**kwargs):
+        seats.append(kwargs["seat"])
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.astra_probe(repo, "wave-live-cell", run_dir, dispatch=dispatch)
+    assert code == 0
+    assert seats[0]["model"] == expected_model
+    assert seats[0]["effort"] == expected_effort
+    assert out["model"] == expected_model
+    ledger_dir, _ = CP._conformance_record_dir(repo)
+    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    assert attempts[0]["model"] == expected_model
+
+
 # bite-axis: each attempt records the hash of the exact prompt sent
 def test_astra_probe_attempt_records_prompt_hash(tmp_path, monkeypatch):
     _astra_ledger(tmp_path, monkeypatch)
@@ -2794,6 +2825,89 @@ def test_astra_probe_continuation_redispatches_without_duplicate_record(tmp_path
     assert len(calls) == 2
 
 
+# bite-axis: a pending claim snapshots its seat at claim time (#1435 fix-batch v0). A
+# same-wave re-invocation that continues that claim must dispatch — and, on eventual
+# completion, attribute the outcome to — the SNAPSHOTTED seat, even if the registration-probe
+# cell resolves to a different model in the meantime (a mid-wave registry change must not
+# orphan the pending claim's dispatch with a seat mismatch, nor misattribute the outcome).
+def test_astra_probe_continuation_uses_claimed_seat_after_cell_changes(tmp_path, monkeypatch):
+    _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    resolved = {"model": "gpt-6-astra", "effort": "medium"}
+    seats = []
+
+    def fake_resolve(role, vendor, model, effort):
+        return {"ok": True, "model_id": resolved["model"], "effort": resolved["effort"]}
+
+    calls = []
+
+    def dispatch(**kwargs):
+        seats.append(kwargs["seat"])
+        calls.append(1)
+        if len(calls) == 1:
+            return {"ok": False, "terminal": False, "findings": None}
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
+
+    out1, code1 = CP.astra_probe(repo, "wave-cell-change", run_dir, dispatch=dispatch)
+    assert code1 == 0
+    assert out1.get("continue") is True
+    assert seats[0]["model"] == "gpt-6-astra"
+
+    # The registration-probe cell moves to a different model while the claim is pending.
+    resolved["model"] = "gpt-6-sol"
+    resolved["effort"] = "high"
+
+    out2, code2 = CP.astra_probe(repo, "wave-cell-change", run_dir, dispatch=dispatch)
+    assert code2 == 0
+    assert out2["outcome"] == "pass"
+    # Dispatched with — and attributed to — the seat the claim snapshotted, not the
+    # freshly resolved gpt-6-sol seat.
+    assert seats[1]["model"] == "gpt-6-astra"
+    assert seats[1]["effort"] == "medium"
+    assert out2["model"] == "gpt-6-astra"
+    assert out2["effort"] == "medium"
+    ledger_dir, _ = CP._conformance_record_dir(repo)
+    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    assert attempts[0]["model"] == "gpt-6-astra"
+
+
+# bite-axis: a legacy claim written before the seat-snapshot fix carries no `model` (the
+# field would read None). Continuing that claim keeps today's behavior — the freshly
+# resolved registry seat — because there is no snapshot to honor.
+def test_astra_probe_continuation_legacy_claim_without_snapshot_uses_current_seat(
+        tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    run_dir_real = os.path.realpath(run_dir)
+
+    # Simulate a legacy claim (written before claims recorded model/effort).
+    CP._write_astra_claim(ledger_dir, "wave-legacy", run_dir_real, model=None, effort=None)
+
+    def fake_resolve(role, vendor, model, effort):
+        return {"ok": True, "model_id": "gpt-6-sol", "effort": "high"}
+
+    seats = []
+
+    def dispatch(**kwargs):
+        seats.append(kwargs["seat"])
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
+
+    out, code = CP.astra_probe(repo, "wave-legacy", run_dir, dispatch=dispatch)
+    assert code == 0
+    assert seats[0]["model"] == "gpt-6-sol"
+    assert seats[0]["effort"] == "high"
+    assert out["model"] == "gpt-6-sol"
+    assert out["effort"] == "high"
+
+
 def test_astra_probe_owner_proposal_on_third_miss(tmp_path, monkeypatch):
     _astra_ledger(tmp_path, monkeypatch)
     repo = _repo(tmp_path)
@@ -2814,8 +2928,11 @@ def test_astra_probe_owner_proposal_on_third_miss(tmp_path, monkeypatch):
             assert out["ownerProposal"] is False
 
 
-def _write_astra_claim_at(ledger_dir, wave, run_dir_real, claimed_at):
+def _write_astra_claim_at(ledger_dir, wave, run_dir_real, claimed_at, model=None, effort=None):
     claim = {"wave": wave, "runDir": run_dir_real, "claimedAt": claimed_at}
+    if model is not None:
+        claim["model"] = model
+        claim["effort"] = effort
     path = CP._astra_claim_path(ledger_dir, wave)
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
@@ -2938,6 +3055,70 @@ def test_astra_probe_orphan_claim_recorded_as_miss(tmp_path, monkeypatch):
     assert orphan["dispatchReason"] == "abandoned-claim"
     assert orphan["misses"] == 1
     assert out["outcome"] == "pass"
+
+
+# bite-axis: an orphan claim settles with the model/effort it was itself claimed under, not
+# whatever the registry cell resolves to at settle time (a cell change must not repaint history)
+def test_astra_probe_orphan_claim_keeps_its_own_seat_model(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    claimed_at = now - timedelta(seconds=CP.ASTRA_CLAIM_ABANDON_SECONDS + 60)
+    claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    old_wave = "wave-a"
+    old_run = str(tmp_path / "run-a")
+    os.makedirs(old_run)
+    _write_astra_claim_at(
+        ledger_dir, old_wave, old_run, claimed_iso, model="model-a", effort="effort-a")
+    new_run = str(tmp_path / "new-run")
+    os.makedirs(new_run)
+
+    def resolve_current(role, vendor, model, effort):
+        return {"ok": True, "model_id": "model-b", "effort": "effort-b"}
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", resolve_current)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
+    assert code == 0
+    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    orphan = next(a for a in attempts if a.get("wave") == old_wave)
+    assert orphan["model"] == "model-a"
+    assert orphan["effort"] == "effort-a"
+
+
+# bite-axis: a legacy claim written before claims carried a model snapshot settles as
+# explicitly unrecorded rather than being attributed to whatever cell resolves at settle time
+def test_astra_probe_orphan_legacy_claim_without_model_settles_unrecorded(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    claimed_at = now - timedelta(seconds=CP.ASTRA_CLAIM_ABANDON_SECONDS + 60)
+    claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    old_wave = "wave-legacy"
+    old_run = str(tmp_path / "legacy-run")
+    os.makedirs(old_run)
+    _write_astra_claim_at(ledger_dir, old_wave, old_run, claimed_iso)
+    new_run = str(tmp_path / "new-run")
+    os.makedirs(new_run)
+
+    def resolve_current(role, vendor, model, effort):
+        return {"ok": True, "model_id": "model-current", "effort": "effort-current"}
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", resolve_current)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
+    assert code == 0
+    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    orphan = next(a for a in attempts if a.get("wave") == old_wave)
+    assert orphan["model"] == CP.ASTRA_CLAIM_UNRECORDED_MODEL
+    assert orphan["model"] != "model-current"
+    assert orphan["effort"] is None
 
 
 def test_astra_probe_miss_string_line_not_matched(tmp_path, monkeypatch):

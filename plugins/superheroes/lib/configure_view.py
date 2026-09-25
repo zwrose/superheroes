@@ -592,7 +592,7 @@ def render(cwd, *, root=None):
             for role, model in sorted(codex_models.items()):
                 out.append(f"  {role}: {model}")
         else:
-            out.append("  (none; GPT-5.6 models derive from shared tiers)")
+            out.append("  (none; codex models derive from shared tiers)")
         rejected = eng.get("invalidCodexModels") if isinstance(eng.get("invalidCodexModels"), dict) else {}
         if rejected:
             out.append("Rejected Codex model pins (not applied — dispatch falls to the tier default):")

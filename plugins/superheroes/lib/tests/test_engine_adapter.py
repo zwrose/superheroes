@@ -143,17 +143,16 @@ def test_build_argv_codex_fix_low_effort():
     assert argv[argv.index("--sandbox") + 1] == "workspace-write"
 
 
-def test_build_argv_codex_maps_shared_tier_to_gpt_5_6_model():
-    expected = {"haiku": "gpt-5.6-terra", "sonnet": "gpt-5.6-terra",
-                "opus": "gpt-5.6-sol"}
-    for tier, model in expected.items():
+def test_build_argv_codex_maps_shared_tier_to_codex_peer():
+    for tier in ("haiku", "sonnet", "opus"):
         argv = EA.build_argv(_seat("codex", None, "high"), "review", {"model": tier})
-        assert argv[argv.index("-m") + 1] == model
+        assert argv[argv.index("-m") + 1] == EA.model_registry.codex_peer_for_claude_tier(tier)
 
 
 def test_build_argv_codex_explicit_engine_model_pin_wins():
-    argv = EA.build_argv(_seat("codex", "gpt-5.6-terra", "xhigh"), "review", {"model": "opus"})
-    assert argv[argv.index("-m") + 1] == "gpt-5.6-terra"
+    pin = EA.model_registry.pin_only_models("codex")[0]
+    argv = EA.build_argv(_seat("codex", pin, "xhigh"), "review", {"model": "opus"})
+    assert argv[argv.index("-m") + 1] == pin
 
 
 def test_build_argv_codex_invalid_engine_model_fails_capable():
@@ -192,13 +191,14 @@ def test_codex_argv_unchanged_by_delivery_table():
 
 
 def test_build_argv_cli(capsys):
-    rc = EA.main(["build-argv", "--seat", _seat_json("codex", "gpt-5.6-terra", "high", "implementer"),
+    model = EA.model_registry.matrix_config("implementer", "codex")[0]
+    rc = EA.main(["build-argv", "--seat", _seat_json("codex", model, "high", "implementer"),
                   "--run-kind", "build", "--cwd", "/wt"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert isinstance(out, list)
     assert out[0] == "codex" and "workspace-write" in out
-    assert out[out.index("-m") + 1] == "gpt-5.6-terra"
+    assert out[out.index("-m") + 1] == model
 
 
 def test_parse_result_codex_review_critical():
@@ -998,10 +998,11 @@ def test_build_argv_cli_off_allowlist_refused(capsys):
 
 
 def test_build_argv_cli_reviewer_run_kind_build_refused(capsys):
+    model = EA.model_registry.matrix_config("reviewer", "codex")[0]
     rc = EA.main([
         "build-argv",
         "--seat",
-        _seat_json("codex", "gpt-5.6-terra", "high", "reviewer"),
+        _seat_json("codex", model, "high", "reviewer"),
         "--run-kind",
         "build",
     ])
@@ -1014,10 +1015,11 @@ def test_build_argv_cli_reviewer_run_kind_build_refused(capsys):
 
 
 def test_build_argv_cli_implementer_run_kind_review_refused(capsys):
+    model = EA.model_registry.matrix_config("implementer", "codex")[0]
     rc = EA.main([
         "build-argv",
         "--seat",
-        _seat_json("codex", "gpt-5.6-terra", "high", "implementer"),
+        _seat_json("codex", model, "high", "implementer"),
         "--run-kind",
         "review",
     ])
