@@ -593,6 +593,11 @@ above).
      **The write goes through `vet_slot.py write`**, whose command form and refusals the register
      in `vet-receipt.md` states. Fix a refusal at its source: add the missing disposition to the
      receipt, or have the builder correct its list. Never work around a refusal with a hand edit.
+     Re-stamping a dropped marker or creating the slot on a pre-contract PR (below) stays your own
+     hand edit to your own slot, made before the command runs. A build record that predates keyed
+     follow-ups (the command refuses `followups-malformed` on an unkeyed list) is the one refusal
+     written by hand, with the command's safe steps (check the read, a non-empty body, both markers,
+     re-read before the push), and the receipt says the command could not run and why.
      **The verdict's form** lives in
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` spine field 1 —
      read it there at vet time; a slot not in that form reads NOT-READY by construction.

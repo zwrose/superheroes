@@ -308,7 +308,12 @@ that says what was wrong, and writes nothing, except `write-unconfirmed`: the ed
 one that failed or timed out) but the readback failed or differed from the pushed body. `check --pr <n> --repo <owner/name>` runs the same
 comparison with no write. The command exists because a hand-rolled write fails silently: a shell
 redirect truncates the target file *before* `gh` runs, so a `gh` read that fails leaves an empty
-file that the next `--body-file` pushes as the body.
+file that the next `--body-file` pushes as the body. Two cases stay outside the command. Re-stamping a dropped
+`advisor-vet` marker, or creating the slot on a pre-contract PR, is the advisor's own hand edit to its
+own slot, made before the command runs. A PR whose build record predates keyed follow-ups (the
+command refuses `followups-malformed` on an unkeyed list) is written by hand with the steps the command
+performs — check the read's exit status, a non-empty body, and both markers, and re-read before the
+push — and the receipt says the command could not run and why.
 
 **Probes, accounting and dispositions are mechanism.** Where they belong in the slot at all they go
 **collapsed inside `<details>`**, below the four elements, never above them; the pointer to the

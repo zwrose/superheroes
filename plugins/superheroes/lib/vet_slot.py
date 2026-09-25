@@ -42,6 +42,7 @@ _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
 _ITEM_RE = re.compile(r"^- FU(\d+) \[([a-z-]+)\] \S")
 _NESTED_RE = re.compile(r"^(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?FU\d+\b")
+_ANY_ITEM_RE = re.compile(r"^(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?FU(\d+) \[")
 _COUNT_RE = re.compile(r"^Follow-ups: (\d+) \((\d+) owner-call\)$")
 _DISPOSITION_RE = re.compile(r"^- FU(\d+): (\S.*)$")
 
@@ -85,10 +86,30 @@ def _heading(line):
 
 
 def _parse_followups(body, build_offset):
-    """Return the list of FU ids, or None for an explicit ``None`` section."""
+    """Return the list of FU ids, or None for an explicit ``None`` section.
+
+    The section parse checks the format; then every FU-item-shaped id on a live line anywhere
+    below the build-record marker must be one of the section's top-level ids."""
     bare, starts = _lines(body)
     inert = md_fence.scan_contexts(bare).inert
     first = next(i for i, s in enumerate(starts) if s >= build_offset)
+    live = [i for i in range(first, len(bare)) if not inert[i]]
+    headings = [i for i in live if _heading(bare[i])[1] == FOLLOWUPS_HEADING]
+    if len(headings) > 1:
+        raise _malformed("follow-ups heading appears %d times" % len(headings))
+    ids = _parse_section(bare, inert, first)
+    found = []
+    for i in live:
+        match = _ANY_ITEM_RE.match(bare[i].strip())
+        if match and "FU%d" % int(match.group(1)) not in found:
+            found.append("FU%d" % int(match.group(1)))
+    outside = [fu for fu in found if fu not in (ids or [])]
+    if outside:
+        raise _malformed("follow-up ids outside the follow-ups list: %s" % ", ".join(outside))
+    return ids
+
+
+def _parse_section(bare, inert, first):
     heading_at = level = None
     depth = 0  # live <details nesting; the first opener is the build record's own
 
@@ -96,8 +117,13 @@ def _parse_followups(body, build_offset):
         nonlocal depth
         if inert[i]:
             return False
-        depth += bare[i].count("<details") - bare[i].count("</details>")
-        return "</details>" in bare[i] and depth <= 0
+        line = bare[i].strip()
+        if line.startswith("<details") and not line.endswith("</details>"):
+            depth += 1
+        elif line == "</details>":
+            depth -= 1
+            return depth <= 0
+        return False
 
     for i in range(first, len(bare)):
         if closes_record(i):
@@ -190,9 +216,12 @@ def _select_receipt(comments):
 def _parse_dispositions(receipt_body):
     """Return the list of FU ids disposed, or None for an explicit ``None`` field."""
     bare, _ = _lines(receipt_body)
-    start = next((i for i, l in enumerate(bare) if l.lstrip().startswith(DISPOSITIONS_PREFIX)), None)
+    inert = md_fence.scan_contexts(bare).inert
+    start = next((i for i, l in enumerate(bare)
+                  if not inert[i] and l.lstrip().startswith(DISPOSITIONS_PREFIX)), None)
     end = None if start is None else next(
-        (i for i in range(start + 1, len(bare)) if bare[i].strip() == PENDING_MARKER), None)
+        (i for i in range(start + 1, len(bare)) if not inert[i] and bare[i].strip() == PENDING_MARKER),
+        None)
     if end is None:
         raise _Refusal("dispositions-malformed", "no completed-dispositions field closed by the "
                        "pending-proposals marker")
@@ -202,8 +231,9 @@ def _parse_dispositions(receipt_body):
     pieces = [p for p in pieces + [l.strip() for l in bare[start + 1:end]] if p]
     if len(pieces) == 1 and pieces[0] in NONE_WORDS:
         return None
-    none_first = bool(pieces) and pieces[0] in NONE_WORDS
-    inert = md_fence.scan_contexts(bare).inert
+    tail = [head[close + 2:].strip()] if close >= 0 else []
+    has_none = any(p in NONE_WORDS for p in tail + [
+        bare[i].strip() for i in range(start + 1, end) if not inert[i]])
     ids = []
     for i in range(start + 1, end):
         match = None if inert[i] else _DISPOSITION_RE.match(bare[i])
@@ -216,7 +246,7 @@ def _parse_dispositions(receipt_body):
         if fu_id in ids:
             raise _Refusal("dispositions-malformed", "duplicate disposition for %s" % fu_id)
         ids.append(fu_id)
-    if none_first and ids:
+    if has_none and ids:
         raise _Refusal("dispositions-malformed", "None and keyed dispositions both appear: %s"
                        % ", ".join(ids))
     return ids

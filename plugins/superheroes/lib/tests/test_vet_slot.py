@@ -229,6 +229,20 @@ BODY_CASES = [
     ("followups-malformed", "heading inside the build record",
      BODY.replace("### Follow-ups for the advisor\n", "### Other\n")
      .replace("trailer\n", "### Follow-ups for the advisor\nNone\n")),
+    # every FU item below the build-record marker is compared, wherever it sits
+    ("followups-malformed", "outside the follow-ups list: FU2",
+     _body_with_followups("- FU1 [defect] first\n</details>\n- FU2 [defect] missing\n")),
+    ("followups-malformed", "follow-ups heading appears 2 times",
+     _body_with_followups("- FU1 [defect] x\n- FU2 [defect] y\n\n### Follow-ups for the advisor\n"
+                          "- FU3 [defect] z\n")),
+    ("followups-malformed", "follow-ups heading appears 2 times",
+     _body_with_followups("None\n\n### Follow-ups for the advisor\n- FU1 [defect] missing\n")),
+    ("followups-malformed", "outside the follow-ups list: FU3",
+     _body_with_followups("- FU1 [defect] x\n- FU2 [defect] y\n\n### Other\n- FU3 [defect] hidden\n")),
+    ("followups-malformed", "outside the follow-ups list: FU1",
+     _body_with_followups("None\n\n### Other\n1. FU1 [defect] hidden\n")),
+    ("followups-malformed", "outside the follow-ups list: FU3",
+     BODY.replace("trailer\n", "- FU3 [defect] after the record\n")),
 ]
 
 
@@ -278,6 +292,13 @@ RECEIPT_CASES = [
      _receipt_with("**Dispositions — completed.** None\n- FU1: filed #1\n- FU2: fixed\n")),
     ("dispositions-malformed", "None and keyed dispositions both appear: FU1, FU2",
      _receipt_with("**Dispositions — completed.**\n`None`\n- FU1: filed #1\n- FU2: fixed\n")),
+    ("dispositions-malformed", "None and keyed dispositions both appear: FU1, FU2",
+     _receipt_with("**Dispositions — completed.** Vet items done.\n- FU1: filed #1\n- FU2: fixed\n"
+                   "None\n")),
+    # a fenced copy of the field heading is not the field
+    ("dispositions-malformed", "no completed-dispositions field",
+     RECEIPT.replace("**Dispositions — completed.**", "**Other.**")
+     .replace("**Vet 1: READY.**\n", "**Vet 1: READY.**\n```\n**Dispositions — completed.**\n```\n")),
 ]
 
 
@@ -290,6 +311,14 @@ def test_receipt_refusals_make_no_edit(token, detail, receipt, verb, slot_file):
     assert result["reason"] == token
     assert detail in result["detail"]
     assert fake.edit_calls() == []
+
+
+def test_fenced_field_copy_before_the_live_field_reads_the_live_field():
+    receipt = RECEIPT.replace("**Vet 1: READY.**\n", "**Vet 1: READY.**\n```\n**Dispositions — completed.** "
+                              "None\n```\n")
+    result = vs.run_verb("check", PR, REPO, run=_ok_fake(receipt=receipt))
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
 
 
 NONE_BODY = _body_with_followups("`None`\n")
@@ -574,6 +603,17 @@ def test_nested_details_before_followups_passes(verb, slot_file):
     assert result["followups"] == ["FU1", "FU2"]
 
 
+@pytest.mark.parametrize("verb", ["write", "check"])
+def test_details_substring_mid_list_does_not_hide_later_ids(verb, slot_file):
+    body = _body_with_followups("- FU1 [defect] first </details>\n  - see the `</details>` closer\n"
+                                "- FU2 [defect] missing\n")
+    receipt = _receipt_with("**Dispositions — completed.**\n- FU1: filed #12\n")
+    fake = _ok_fake(body=body, receipt=receipt)
+    result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
+    assert result == {"ok": False, "reason": "followup-undispositioned", "detail": "FU2: no disposition"}
+    assert fake.edit_calls() == []
+
+
 def test_section_bounded_by_next_heading():
     body = BODY.replace("</details>\n", "### Next\n- stray bullet\n</details>\n")
     fake = _ok_fake(body=body)
@@ -674,13 +714,20 @@ def _one_block(blocks, needle, where):
     return found[0]
 
 
+def _listed_tokens(block, lead, where):
+    """The backticked tokens of the one sentence that starts at ``lead``."""
+    found = re.findall(re.escape(lead) + r"(.*?)\.(?:\s|$)", block, re.S)
+    assert len(found) == 1, "%s: expected one %r sentence, found %d" % (where, lead, len(found))
+    return set(re.findall(r"`([^`]+)`", found[0]))
+
+
 def test_followup_vocabulary_is_named_in_the_teaching_prose():
     workhorse = _doc(PLUGIN, "skills", "workhorse", "SKILL.md").split("\n\n")
     followups = _one_block(workhorse, "`- FU<n> [<class>] <text>`", "workhorse Follow-ups paragraph")
     assert "**%s**" % vs.FOLLOWUPS_HEADING in followups
     assert "`Follow-ups: <n> (<m> owner-call)`" in followups
+    assert _listed_tokens(followups, "class one of ", "workhorse class list") == set(vs.CLASSES)
     for cls in sorted(vs.CLASSES):
-        assert "`%s`" % cls in followups, cls
         assert vs._ITEM_RE.match("- FU1 [%s] text" % cls), cls
     receipt = _doc(PLUGIN, "skills", "showrunner", "reference", "vet-receipt.md")
     field7 = re.search(r"^7\. \*\*Dispositions.*?(?=^\d+\. |\Z)", receipt, re.M | re.S)
@@ -688,8 +735,9 @@ def test_followup_vocabulary_is_named_in_the_teaching_prose():
     field7 = field7.group(0)
     assert "`- FU<n>: <disposition>`" in field7
     assert "`%s.**`" % vs.DISPOSITIONS_PREFIX in field7
+    assert _listed_tokens(field7, "The disposition begins with ", "field 7 disposition list") == set(
+        vs.DISPOSITIONS)
     for word in sorted(vs.DISPOSITIONS):
-        assert "`%s`" % word in field7, word
         assert vs._DISPOSITION_RE.match("- FU1: %s x" % word), word
 
 
