@@ -548,7 +548,8 @@ above).
      `<!-- superheroes:build-record -->` is the grep anchor it never had) and reconcile against the
      board. Standing duty. It may run `vet_slot.py check --pr <n> --repo <owner/name>` per PR. It
      also flags a PR **closed** unmerged whose follow-ups list is not `None` and that has no vet
-     receipt. Those follow-ups carry into the superseding PR's build record.
+     receipt. Those follow-ups carry into the superseding PR's build record, each under the next
+     unused FU number, its origin as text: `- FU<n> [<class>] (from #N FU<m>) <text>`.
      **Install the contract's distilled preamble at the top of the collector issue body, above the
      items, and refresh it when it has drifted or is missing.** Canonical snippet and markers:
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`
@@ -595,9 +596,8 @@ above).
      receipt, or have the builder correct its list. Never work around a refusal with a hand edit.
      Re-stamping a dropped marker or creating the slot on a pre-contract PR (below) stays your own
      hand edit to your own slot, made before the command runs. A build record that predates keyed
-     follow-ups (the command refuses `followups-malformed` on an unkeyed list) is the one refusal
-     written by hand, with the command's safe steps (check the read, a non-empty body, both markers,
-     re-read before the push), and the receipt says the command could not run and why.
+     follow-ups is keyed in place first: number its items FU1.. in order with a class each, change
+     nothing else, record that edit in the receipt, then run the command.
      **The verdict's form** lives in
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` spine field 1 —
      read it there at vet time; a slot not in that form reads NOT-READY by construction.

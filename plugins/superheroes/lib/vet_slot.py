@@ -88,8 +88,8 @@ def _heading(line):
 def _parse_followups(body, build_offset):
     """Return the list of FU ids, or None for an explicit ``None`` section.
 
-    The section parse checks the format; then every FU-item-shaped id on a live line anywhere
-    below the build-record marker must be one of the section's top-level ids."""
+    The section parse checks the format; then every FU-item-shaped live line anywhere below the
+    build-record marker must be one of the section's own item lines, counted, not deduplicated."""
     bare, starts = _lines(body)
     inert = md_fence.scan_contexts(bare).inert
     first = next(i for i, s in enumerate(starts) if s >= build_offset)
@@ -98,12 +98,14 @@ def _parse_followups(body, build_offset):
     if len(headings) > 1:
         raise _malformed("follow-ups heading appears %d times" % len(headings))
     ids = _parse_section(bare, inert, first)
-    found = []
+    spare, outside = list(ids or []), []
     for i in live:
         match = _ANY_ITEM_RE.match(bare[i].strip())
-        if match and "FU%d" % int(match.group(1)) not in found:
-            found.append("FU%d" % int(match.group(1)))
-    outside = [fu for fu in found if fu not in (ids or [])]
+        fu = match and "FU%d" % int(match.group(1))
+        if fu in spare:
+            spare.remove(fu)
+        elif fu:
+            outside.append(fu)
     if outside:
         raise _malformed("follow-up ids outside the follow-ups list: %s" % ", ".join(outside))
     return ids

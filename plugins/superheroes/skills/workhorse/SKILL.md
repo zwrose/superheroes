@@ -1137,8 +1137,8 @@ with the class one of `owner-call`, `defect`, `craft`, `flake`, or `info`. An op
 counts them: `Follow-ups: <n> (<m> owner-call)`. Indented sub-bullets may add detail, but an `FU`
 id sits only at top level. The advisor's slot writer refuses any other line, so an unkeyed item
 cannot drop out unseen. The handback comment states the same count line. When a PR closes or is
-superseded before its vet, carry its follow-ups into the superseding build record as
-`- FU<n> [<class>] (from #N) <text>`. For both lanes the build record also carries a **size tripwire** row,
+superseded before its vet, carry its follow-ups into the superseding build record, each under the
+next unused FU number, its origin as text: `- FU<n> [<class>] (from #N FU<m>) <text>`. For both lanes the build record also carries a **size tripwire** row,
 filled by §4's size step: `not crossed (N of estimate M)`; `crossed at <commit>; messaged <time>;
 advisor ruled <split|continue|park> (<issue comment link>)`; `crossed at <commit>; messaged <time>;
 parked, no reply (<issue comment link>)`; `crossed at <commit>; messaging

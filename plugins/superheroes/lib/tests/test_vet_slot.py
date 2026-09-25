@@ -232,6 +232,10 @@ BODY_CASES = [
     # every FU item below the build-record marker is compared, wherever it sits
     ("followups-malformed", "outside the follow-ups list: FU2",
      _body_with_followups("- FU1 [defect] first\n</details>\n- FU2 [defect] missing\n")),
+    ("followups-malformed", "outside the follow-ups list: FU1",
+     _body_with_followups("- FU1 [defect] first\n</details>\n- FU1 [defect] missing\n")),
+    ("followups-malformed", "duplicate follow-up id: FU1",
+     _body_with_followups("- FU1 [defect] new\n- FU1 [defect] (from #42 FU1) old\n")),
     ("followups-malformed", "follow-ups heading appears 2 times",
      _body_with_followups("- FU1 [defect] x\n- FU2 [defect] y\n\n### Follow-ups for the advisor\n"
                           "- FU3 [defect] z\n")),
@@ -346,6 +350,13 @@ def test_zero_count_then_none_is_ok(slot_file):
     assert result["ok"] is True
     assert result["followups"] == []
     assert len(fake.edit_calls()) == 1
+
+
+def test_carried_item_with_fresh_id_passes(slot_file):
+    body = _body_with_followups("- FU1 [defect] new\n- FU2 [defect] (from #42 FU1) old\n")
+    result = _write(_ok_fake(body=body), slot_file)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
 
 
 def test_check_no_receipt_with_none_followups_is_ok():
