@@ -178,9 +178,18 @@ above).
    enum**, name the **union coupling** (parallel lanes each extend the same shared set, so the
    registry/kind-set/enum is only complete once all have landed) in each issue — and name the
    **completeness gate** (the check that fails until the extension is exhaustive) so **every lane
-   after the first** expects it to fire and budgets the integration commit. When a builder discloses mid-build that the diff has crossed **twice its
-   brief's estimate** and offers a split, **take the split seriously** — that disclosure is the
-   tripwire working, not a builder stalling.
+   after the first** expects it to fire and budgets the integration commit. When a builder messages you mid-build at the size tripwire and proposes a split, **take the
+   split seriously** — that message is the tripwire working, not a builder stalling. **Reply by
+   message** and record the ruling on the issue for the owner's veto; the rulings open to you, the
+   split test and the builder's wait live in `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § Size.
+   **Answer a builder's size message within 15 minutes** — the builder parks after that, and a missed
+   reply becomes a park you repair: rule, write the order into the issue, relaunch. When a light build
+   messages you for its missing estimate, reply with a non-test line estimate (a number or a range)
+   and write it into the issue's order so it is on record. **A reply is not a durable order:** a split
+   ruling files each new piece as a layer sub-issue of the feature, fully wired
+   (`${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md`), and writes the continuation order into the issue
+   body's top STATE block, before or alongside the reply, so the order agrees with the reply the
+   builder acts on.
    When marking an issue **build-ready**, run the issue-contract check against the issue body
    and **decline the marking** when it reports a refusal — the check is advisory and the
    decision is the advisor's; micro work never reaches this check. Detail:
@@ -281,7 +290,10 @@ above).
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
    else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
    process constraints (test right-sizing, E2E policy), and launch context (local export paths,
-   known-broken links, environment quirks). **Any scope exclusion that leaves an audience or delivery
+   known-broken links, environment quirks) — and **an order you launch names this advisor session** for the
+   builder to message, plus a size estimate for a light build
+   (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The size-consideration
+   slot). **Any scope exclusion that leaves an audience or delivery
    channel on old behavior must be stated as a plain consequence at filing time** — in the issue, when
    it is filed, in plain language: *who* is still on the old behavior, and *what they will still
    experience* — not discovered at build time, and not left implicit in what the issue omits. **Headless
