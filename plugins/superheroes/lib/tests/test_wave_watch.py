@@ -1973,6 +1973,8 @@ def test_loop_first_non_timer_ok_terminates_with_arms(tmp_path, monkeypatch):
     assert result["arms"] == 1
     assert calls[0] == 1
     assert violations == []
+    assert result["passedOverCount"] == 0
+    assert result["passedOver"] == []
 
 
 def test_loop_refusal_terminates_immediately_with_arms(tmp_path, monkeypatch):
@@ -2517,6 +2519,23 @@ def test_loop_refusal_interval_invalid_has_arms_zero(tmp_path, monkeypatch):
     assert result["arms"] == 0
     assert calls[0] == 0
     assert violations == []
+    assert result["passedOverCount"] == 0
+    assert result["passedOver"] == []
+
+
+def test_loop_internal_error_returns_empty_passed_over(tmp_path, monkeypatch):
+    repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+
+    def run_fn(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_INTERNAL_ERROR
+    assert result["passedOverCount"] == 0
+    assert result["passedOver"] == []
 
 
 # --- C15 layer 1 watcher (issue #1274) ----------------------------------------
@@ -2573,6 +2592,84 @@ def test_second_loop_on_same_batch_refuses(tmp_path, monkeypatch):
     assert result["arms"] == 0
     assert result["liveLoop"]["pid"] == os.getpid()
     assert calls[0] == 0
+    assert violations == []
+
+
+def test_loop_stack_state_idle_seat_exits_otherwise_passes_over(tmp_path, monkeypatch):
+    repo_idle = _init_repo(tmp_path / "repo-idle")
+    _setup_stack_batch(
+        repo_idle, tmp_path, monkeypatch,
+        launch_specs=[
+            {
+                "launch_id": "lane-pos1",
+                "stack": _STACK_NUM,
+                "layer_position": 1,
+                "layers_planned": 3,
+            },
+            {
+                "launch_id": "lane-pos2",
+                "stack": _STACK_NUM,
+                "layer_position": 2,
+                "layers_planned": 3,
+            },
+        ],
+    )
+    _patch_pr_vet(monkeypatch, {
+        50: {"state": _pr_vet_state()},
+        51: {"state": _pr_vet_state()},
+    })
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def sleep(duration):
+        clock[0] += duration
+
+    idle_result = ww.loop(
+        repo_idle,
+        "batch-982",
+        max_seconds=2,
+        interval_seconds=1,
+        gh_run=_gh_open_prs([50, 51]),
+        membership_reader=_membership_for_stack([50, 51]),
+        monotonic=mono,
+        sleep=sleep,
+        max_total_seconds=5,
+    )
+    assert idle_result["event"] == ww.EVENT_STACK_STATE_CHANGED
+    assert idle_result["arms"] == 1
+    assert {
+        "flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
+        "stack": _STACK_NUM,
+        "position": 2,
+    } in idle_result["flags"]
+    assert idle_result["passedOverCount"] == 0
+
+    repo_benign = _valid_repo_for_loop(tmp_path, monkeypatch)
+    benign_stack = {
+        "ok": True,
+        "event": "stack-state-changed",
+        "batchId": "batch-982",
+        "degraded": [],
+        "stacks": [{"state": ww.STACK_STATE_COMPLETE}],
+        "flags": [],
+    }
+    terminal = {
+        "ok": True,
+        "event": "lane-terminal",
+        "batchId": "batch-982",
+        "degraded": [],
+        "launchId": "lane-a",
+        "launches": [],
+    }
+    run_fn, _calls, violations = _scripted_run_fn([benign_stack, terminal])
+    benign_result = ww.loop(
+        repo_benign, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
+    )
+    assert benign_result["event"] == "lane-terminal"
+    assert benign_result["passedOverCount"] == 1
+    assert benign_result["passedOver"][0]["event"] == "stack-state-changed"
     assert violations == []
 
 
@@ -5370,6 +5467,79 @@ def test_baseline_advances_unchanged_complete_does_not_refire(tmp_path, monkeypa
         repo, "batch-982", **run_kwargs, monotonic=_advancing_monotonic(),
     )
     assert second["event"] != ww.EVENT_STACK_STATE_CHANGED
+
+
+def test_loop_completed_stack_passes_over_once_with_real_watch_arm(
+    tmp_path, monkeypatch,
+):
+    # axis: shared stack_state across loop arms; unchanged complete stack fires once
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    batch_id = "batch-982"
+    ll.declare_batch(repo, batch_id, 4)
+    ll.append(
+        repo,
+        _reserved_stack(
+            "lane-pos1", batch_id, ["plugins/superheroes/lib"], repo,
+            _STACK_NUM, 1, 2,
+        ),
+    )
+    ll.append(
+        repo,
+        _reserved_stack(
+            "lane-pos2", batch_id, ["plugins/superheroes/lib"], repo,
+            _STACK_NUM, 2, 2,
+        ),
+    )
+    ll.append(
+        repo,
+        _reserved(
+            "lane-stale-trigger", batch_id, ["plugins/superheroes/lib"], repo,
+        ),
+    )
+    ll.append(repo, _started("lane-stale-trigger", pid=os.getpid()))
+    wall = [time.time()]
+    hb.stamp(
+        repo,
+        state="working",
+        phase="watch",
+        launch_id="lane-stale-trigger",
+        stale_after_seconds=3,
+        now=wall[0],
+    )
+    _patch_pr_vet(monkeypatch, {
+        50: {"state": _pr_vet_state()},
+        51: {"state": _pr_vet_state()},
+    })
+    config = tmp_path / "claude-config"
+    config.mkdir(exist_ok=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def sleep(duration):
+        clock[0] += duration
+        wall[0] += duration
+
+    monkeypatch.setattr(time, "time", lambda: wall[0])
+
+    result = ww.loop(
+        repo,
+        batch_id,
+        max_seconds=5,
+        interval_seconds=1,
+        gh_run=_gh_open_prs([50, 51]),
+        membership_reader=_membership_for_stack([50, 51]),
+        monotonic=mono,
+        sleep=sleep,
+    )
+    assert result["event"] == ww.EVENT_LANE_STALE
+    assert result["passedOverCount"] == 1
+    assert len(result["passedOver"]) == 1
+    assert result["passedOver"][0]["event"] == ww.EVENT_STACK_STATE_CHANGED
 
 
 def test_precedence_stack_state_over_pr_set_pr_baseline_unchanged(

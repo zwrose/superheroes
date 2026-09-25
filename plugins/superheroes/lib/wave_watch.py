@@ -1292,7 +1292,13 @@ for _event in EVENT_PRECEDENCE:
 def _loop_exits_on(result):
     if result.get("ok") is not True:
         return True
-    return result.get("event") not in BENIGN_EVENTS
+    event = result.get("event")
+    if event == EVENT_STACK_STATE_CHANGED:
+        for entry in result.get("flags") or ():
+            if entry.get("flag") == FLAG_IDLE_SEAT_LAUNCHABLE_CHILD:
+                return True
+        return False
+    return event not in BENIGN_EVENTS
 
 
 def _utc_started_at():
