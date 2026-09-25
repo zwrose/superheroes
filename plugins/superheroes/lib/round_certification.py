@@ -790,14 +790,20 @@ def _audit_admitted_dispatch_result(session_dir, journal, event, certified_head,
     return dict(payload), env
 
 
-def _new_issues_dispositioned(state, fold_id, fold_round, new_issues):
-    """True when every new issue raised by fold_id's discharged-but-new-issue fold is dispositioned."""
+def _new_issues_reconciliation_gap(state, fold_id, fold_round, new_issues):
+    """None when reconciled; otherwise an audited-chain-gap suffix for the refusal."""
+    _evidence = "new-issue-evidence-malformed"
+    _ledger_owner = "new-issue-ledger-owner-unrecognized"
+    _ledger = "new-issue-ledger-malformed"
+    _duplicate = "new-issue-duplicate-identity"
+    _merge = "new-issue-merge-unresolvable"
+    _undispositioned = "new-issue-undispositioned"
     if not isinstance(fold_id, str) or not fold_id:
-        return False
+        return _evidence
     if not isinstance(fold_round, int) or isinstance(fold_round, bool):
-        return False
+        return _evidence
     if not isinstance(new_issues, list):
-        return False
+        return _evidence
     linked = []
     for entry in new_issues:
         if not isinstance(entry, dict):
@@ -805,13 +811,13 @@ def _new_issues_dispositioned(state, fold_id, fold_round, new_issues):
         if entry.get("originAuditId") == fold_id:
             linked.append(entry)
     if not linked:
-        return False
+        return _evidence
     if (session_contract.disposition_ledger_owner_classification(state)
             != session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED):
-        return False
+        return _ledger_owner
     ledger_rows, ledger_fault = session_contract.read_disposition_ledger(state, required=True)
     if ledger_fault is not None:
-        return False
+        return _ledger
     ledger_index = {}
     key_counts = {}
     for row in ledger_rows:
@@ -823,50 +829,52 @@ def _new_issues_dispositioned(state, fold_id, fold_round, new_issues):
         ledger_index[key] = row
         key_counts[key] = key_counts.get(key, 0) + 1
     if any(count > 1 for count in key_counts.values()):
-        return False
+        return _duplicate
     for cand in linked:
         copy = dict(cand)
         copy.pop(session_contract.FINDING_KEY_FIELD, None)
         copy.pop("originAuditId", None)
         file_val = copy.get("file")
         if not isinstance(file_val, str) or not file_val:
-            return False
+            return _evidence
         ok, line = session_contract.coerce_line(copy.get("line"))
         if not ok:
-            return False
+            return _evidence
         copy["line"] = line
         key = session_contract.minted_identity_key(copy)
         if not isinstance(key, str) or not key:
-            return False
+            return _evidence
         if key == fold_id:
-            return False
+            return _evidence
         count = key_counts.get(key, 0)
+        if count == 0:
+            return _undispositioned
         if count != 1:
-            return False
+            return _duplicate
         row = ledger_index[key]
         raised_round = row.get(session_contract.RAISED_ROUND_FIELD)
         if not isinstance(raised_round, int) or isinstance(raised_round, bool):
-            return False
+            return _ledger
         if raised_round < fold_round:
-            return False
+            return _ledger
         raised_seq = row.get(session_contract.RAISED_SEQ_FIELD)
         if not isinstance(raised_seq, int) or isinstance(raised_seq, bool):
-            return False
+            return _ledger
         effective = session_contract.resolve_merged_into_entry(row, ledger_index)
         if effective is None:
-            return False
+            return _merge
         rep_key = session_contract.finding_identity_key(effective)
         if rep_key == fold_id:
-            return False
+            return _merge
         disposition = effective.get("disposition")
         if disposition not in session_contract.DISPOSITIONS:
-            return False
+            return _undispositioned
         disp_seq = effective.get(session_contract.DISPOSITION_SEQ_FIELD)
         if not isinstance(disp_seq, int) or isinstance(disp_seq, bool):
-            return False
+            return _undispositioned
         if disp_seq <= raised_seq:
-            return False
-    return True
+            return _undispositioned
+    return None
 
 
 def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root):
@@ -952,10 +960,11 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
         if ruling == "discharged":
             return None
         if ruling == "discharged-but-new-issue":
-            if _new_issues_dispositioned(
-                    state, fold_id, fold_round, outcome.get("newIssues") or []):
+            gap = _new_issues_reconciliation_gap(
+                state, fold_id, fold_round, outcome.get("newIssues") or [])
+            if gap is None:
                 return None
-            return "new-issue-undispositioned"
+            return gap
     return "fix-receipt"
 
 

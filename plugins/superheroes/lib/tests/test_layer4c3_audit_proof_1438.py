@@ -60,11 +60,15 @@ def _new_issue_key(candidate=None):
     return SC.minted_identity_key(cand)
 
 
-def _assert_new_issue_gap(refusal):
+def _assert_reconciliation_gap(refusal, suffix):
     assert refusal is not None
     assert refusal["class"] == "unrun-review"
     assert refusal["bindingFailure"] == "execution-evidence-stale-head"
-    assert "audited-chain-gap:new-issue-undispositioned" in refusal["detail"]
+    assert "audited-chain-gap:%s" % suffix in refusal["detail"]
+
+
+def _assert_new_issue_gap(refusal):
+    _assert_reconciliation_gap(refusal, "new-issue-undispositioned")
 
 
 def _assert_fix_receipt_gap(refusal):
@@ -306,7 +310,7 @@ def test_e1_empty_linked_set_refuses(tmp_path, monkeypatch):
 
     monkeypatch.setattr(audits, "apply_audit_results", _empty_linked_outcome)
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-evidence-malformed")
 
 
 def test_e2_foreign_candidates_only_refuses(tmp_path):
@@ -318,8 +322,8 @@ def test_e2_foreign_candidates_only_refuses(tmp_path):
     state = _load_state(session_dir)
     linked = [dict(candidate, originAuditId=fold_id)]
     foreign = [dict(candidate, originAuditId="other-audit")]
-    assert RC._new_issues_dispositioned(state, fold_id, 2, foreign) is False
-    assert RC._new_issues_dispositioned(state, fold_id, 2, linked) is True
+    assert RC._new_issues_reconciliation_gap(state, fold_id, 2, foreign) == "new-issue-evidence-malformed"
+    assert RC._new_issues_reconciliation_gap(state, fold_id, 2, linked) is None
 
 
 def test_e3_non_coercible_line_refuses(tmp_path):
@@ -328,7 +332,7 @@ def test_e3_non_coercible_line_refuses(tmp_path):
     bad = dict(_new_issue_template(), line="not-a-number")
     _mutate_audit_payload(session_dir, _fold_id(state), new_issues=[bad])
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-evidence-malformed")
 
 
 def test_e4_candidate_key_equals_fold_id_refuses(tmp_path):
@@ -343,7 +347,7 @@ def test_e4_candidate_key_equals_fold_id_refuses(tmp_path):
     }
     _mutate_audit_payload(session_dir, fold_id, new_issues=[same])
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-evidence-malformed")
 
 
 def test_e5_unrecognized_ledger_owner_refuses(tmp_path):
@@ -351,7 +355,7 @@ def test_e5_unrecognized_ledger_owner_refuses(tmp_path):
     fold_id = _case07_fold_id(session_dir)
     _mutate_audit_payload(session_dir, fold_id, new_issues=_default_case08_new_issues())
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-ledger-owner-unrecognized")
 
 
 def test_e6_zero_ledger_rows_refuses(tmp_path):
@@ -368,7 +372,7 @@ def test_e7_duplicate_ledger_rows_refuses(tmp_path):
     state[SC.DISPOSITION_LEDGER_KEY].extend([row, dict(row)])
     _save_state(session_dir, state)
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-duplicate-identity")
 
 
 def test_e8_stale_raised_round_refuses(tmp_path):
@@ -376,7 +380,7 @@ def test_e8_stale_raised_round_refuses(tmp_path):
     cand = _new_issue_template()
     _append_disposition(session_dir, cand, raised_round=1, disposition="refuted", refutedReason="x")
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-ledger-malformed")
 
 
 def test_e9_missing_raised_seq_refuses(tmp_path):
@@ -388,7 +392,7 @@ def test_e9_missing_raised_seq_refuses(tmp_path):
     state[SC.DISPOSITION_LEDGER_KEY].append(row)
     _save_state(session_dir, state)
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-ledger-malformed")
 
 
 def test_e10_unresolvable_merge_refuses(tmp_path):
@@ -400,7 +404,7 @@ def test_e10_unresolvable_merge_refuses(tmp_path):
     state[SC.DISPOSITION_LEDGER_KEY].append(row)
     _save_state(session_dir, state)
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-merge-unresolvable")
 
 
 def test_e11b_representative_is_fold_target_with_later_seq_refuses(tmp_path):
@@ -424,7 +428,7 @@ def test_e11b_representative_is_fold_target_with_later_seq_refuses(tmp_path):
     state[SC.DISPOSITION_LEDGER_KEY].append(member)
     _save_state(session_dir, state)
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-merge-unresolvable")
 
 
 def test_e11_representative_key_equals_fold_id_refuses(tmp_path):
@@ -437,7 +441,7 @@ def test_e11_representative_key_equals_fold_id_refuses(tmp_path):
     state[SC.DISPOSITION_LEDGER_KEY].append(member)
     _save_state(session_dir, state)
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-merge-unresolvable")
 
 
 def test_e12b_minor_seq_without_disposition_refuses(tmp_path):
@@ -532,7 +536,7 @@ def test_e15_duplicate_merge_representative_both_orders_refuse(tmp_path, order):
     _save_state(session_dir, state)
     _mutate_audit_payload(session_dir, fold_id, new_issues=[cand])
     _, refusal = _certify(session_dir)
-    _assert_new_issue_gap(refusal)
+    _assert_reconciliation_gap(refusal, "new-issue-duplicate-identity")
 
 
 @pytest.mark.parametrize("order", ["pass-first", "fail-first"])
