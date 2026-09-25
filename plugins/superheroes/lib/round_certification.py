@@ -10,10 +10,12 @@ import os
 import re
 import subprocess
 
+import audits
 import circuit_breaker
 import decision_kinds
 import model_registry
 import record_paths
+import round_panel_contract
 import receipt_disclosures
 import seat_map_receipts
 import session_contract
@@ -536,36 +538,9 @@ def _resolve_repo_head_sha(ctx):
     return head if head else None
 
 
-_SCOPED_FINDER_PHASE = "dispatch-scoped-finder"
+_SCOPED_FINDER_PHASE = round_panel_contract.P_SCOPED_FINDER_PHASE
 _AUDITED_CHAIN_MEMO_KEY = "_auditedChainMemo"
 _CHAIN_QUALIFIED_KEY = "_auditedChainQualified"
-_CLEARING_AUDIT_RULINGS = frozenset(("discharged", "discharged-but-new-issue"))
-# Kept equal to round_phases.DIMENSIONS / panel_dimensions (register R5: driverless writer).
-_DEFAULT_PANEL_DIMENSIONS = (
-    "architecture-reviewer",
-    "code-reviewer",
-    "security-reviewer",
-    "test-reviewer",
-    "premortem-reviewer",
-)
-
-
-def _panel_dimensions_from_config(config):
-    dims = config.get("dimensions") if isinstance(config, dict) else None
-    if isinstance(dims, (list, tuple)):
-        strings = [d for d in dims if isinstance(d, str)]
-        return strings if strings else list(_DEFAULT_PANEL_DIMENSIONS)
-    return list(_DEFAULT_PANEL_DIMENSIONS)
-
-
-def _audit_payload_discharges(payload, target_id):
-    if not isinstance(payload, dict):
-        return False
-    pid = payload.get("id")
-    if not isinstance(pid, str) or not pid or pid != target_id:
-        return False
-    ruling = payload.get("ruling")
-    return isinstance(ruling, str) and ruling in _CLEARING_AUDIT_RULINGS
 
 
 def _panel_lens_coverage_complete(lc, expected_count):
@@ -587,7 +562,7 @@ def _panel_lens_coverage_complete(lc, expected_count):
 def _audited_chain_panel_coverage_ok(state, manifest, panel_round):
     """Panel leg: manifest roster must cover configured dimensions or round lensCoverage."""
     cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
-    dims = _panel_dimensions_from_config(cfg)
+    dims = round_panel_contract.panel_dimensions_from_config(cfg)
     if not dims:
         return True
     seats = manifest.get("seats") if isinstance(manifest, dict) else None
@@ -639,7 +614,7 @@ def _fixed_finding_has_discharging_audit(ctx, finding, certified_head, repo_root
         if not isinstance(env, dict):
             continue
         payload = env.get("payload")
-        if not _audit_payload_discharges(payload, target_id):
+        if not audits.audit_payload_clears_target(payload, target_id):
             continue
         declared = env.get("payloadSha256")
         try:

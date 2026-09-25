@@ -5,6 +5,7 @@ import decision_kinds
 import receipt_disclosures
 import round_certification as RC
 import round_driver as RD
+import round_panel_contract
 import round_phases
 import round_records as RR
 import session_contract
@@ -91,3 +92,12 @@ def test_phase_tokens_match_round_phases():
     assert session_contract.PANEL_PHASE == round_phases.P_PANEL
     assert session_contract.FIXER_PHASE == round_phases.P_FIXER
     assert session_contract.AUDITS_PHASE == round_phases.P_AUDITS
+
+
+def test_scoped_finder_phase_matches_round_panel_contract():
+    assert RC._SCOPED_FINDER_PHASE == round_panel_contract.P_SCOPED_FINDER_PHASE
+    assert round_phases.P_SCOPED == round_panel_contract.P_SCOPED_FINDER_PHASE
+
+
+def test_default_panel_dimensions_match_round_panel_contract():
+    assert tuple(round_phases.DIMENSIONS) == round_panel_contract.DEFAULT_PANEL_DIMENSIONS
