@@ -437,7 +437,29 @@ def collect(cwd, root=None):
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
             "modelTierRefusal": model_tier_refusal,
             "enginePrefs": engine_prefs, "guardian": guardian,
-            "reviewGatePolicy": review_gate}
+            "reviewGatePolicy": review_gate,
+            "vetChecks": core_md.read_vet_checks(cwd, root)}
+
+
+def _vet_checks_view_lines(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    reason = payload.get("reason")
+    lines = ["### Vet checks"]
+    if reason:
+        lines.append("⚠ vet checks unreadable: %s" % reason)
+        return lines
+    if not payload.get("declared"):
+        lines.append("(none declared — the vet runs no project vet checks)")
+        return lines
+    for check in payload.get("checks") or []:
+        lines.append("- %s" % check.get("name", ""))
+        lines.append("  evidence: %s" % check.get("evidence", ""))
+        lines.append("  the vet records: %s" % check.get("records", ""))
+    for item in payload.get("malformed") or []:
+        entry = item.get("entry")
+        label = entry if entry else "(section)"
+        lines.append("⚠ malformed: %s — %s" % (label, item.get("reason", "")))
+    return lines
 
 
 def _health_line(counts):
@@ -494,6 +516,9 @@ def render(cwd, *, root=None):
         out.append("(no core calibration yet)")
         _append_builder_dispatch_row(out, cwd, root)
         out.append("")
+        for line in _vet_checks_view_lines(data.get("vetChecks")):
+            out.append(line)
+        out.append("")
         out.append("## Review gate policy")
         for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
             out.append(line)
@@ -511,6 +536,9 @@ def render(cwd, *, root=None):
             out.append(show_it)
         else:
             out.append('(not declared — the presentation level for this project is "none")')
+        out.append("")
+        for line in _vet_checks_view_lines(data.get("vetChecks")):
+            out.append(line)
         prefs = core.get("enginePreferences")
         prefs = prefs if isinstance(prefs, dict) else {}
         out.append("")

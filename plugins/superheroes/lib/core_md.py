@@ -2,7 +2,7 @@
 # plugins/superheroes/lib/core_md.py
 """Shared core.md calibration brain (CONVENTIONS §2.1/§2.2/§4.2/§4.4). Stdlib-only, mirrors
 architect_config.py. The format (parse/render) and pure read are side-effect-free;
-write/write_layer/confirm*/write_show_it_surface are the lock-guarded fail-open writers
+write/write_layer/confirm*/write_show_it_surface/write_vet_checks are the lock-guarded fail-open writers
 (mode_registry.config_lock; return a `deferred` action, never raise, never block). The
 legacy-profile migration path was removed in favour of a named refusal (issue #724)."""
 import collections
@@ -62,6 +62,8 @@ SHOW_IT_REASON_ABSENT = "core-md-absent"
 SHOW_IT_REASON_UNPARSEABLE = "core-md-unparseable"
 SHOW_IT_REASON_PROSE_FORBIDDEN = "show-it-prose-forbidden"
 SHOW_IT_REASON_ROUND_TRIP = "show-it-round-trip-refused"
+VET_CHECKS_REASON_MALFORMED = "vet-checks-malformed"
+VET_CHECKS_REASON_ROUND_TRIP = "vet-checks-round-trip-refused"
 BUILDER_DISPATCH_REASON_ABSENT = "core-md-absent"
 BUILDER_DISPATCH_REASON_UNPARSEABLE = "core-md-unparseable"
 BUILDER_DISPATCH_REASON_ROUND_TRIP = "builder-dispatch-round-trip-refused"
@@ -131,17 +133,22 @@ def render_core(facts, status, created, updated):
     ratified_block = ""
     if ratified:
         ratified_block = "## Ratified residuals\n\n%s\n\n" % ratified
+    vet_checks = (facts.get("vetChecks") or "").strip()
+    vet_checks_block = ""
+    if vet_checks:
+        vet_checks_block = "## Vet checks\n\n%s\n\n" % vet_checks
     return (
         "<!-- superheroes-core: schemaVersion=%d status=%s created=%s updated=%s -->\n\n"
         "## Threat model\n\n%s\n\n"
         "## Canonical patterns\n\n%s\n\n"
-        "%s%s"
+        "%s%s%s"
         "```json superheroes-core\n%s\n```\n"
         % (SCHEMA_VERSION, status, created, updated,
            (facts.get("threatModel") or "").strip(),
            (facts.get("patterns") or "").strip(),
            show_it_block,
            ratified_block,
+           vet_checks_block,
            json.dumps(block, indent=2))
     )
 
@@ -212,6 +219,7 @@ def parse_core(text):
         "patterns": _section(text, "Canonical patterns"),
         "showItSurface": _section(text, "Show-it surface"),
         "ratifiedResiduals": _section(text, "Ratified residuals"),
+        "vetChecks": _section(text, "Vet checks"),
         "created": created,
         "updated": updated,
     }
@@ -451,6 +459,7 @@ def read(cwd, root=None):
         "patterns": facts["patterns"],
         "showItSurface": facts["showItSurface"],
         "ratifiedResiduals": facts["ratifiedResiduals"],
+        "vetChecks": facts["vetChecks"],
         "behind": behind,
         "created": facts["created"],
         "updated": facts["updated"],
@@ -912,6 +921,337 @@ def write_show_it_surface(cwd, prose, *, root=None):
         new_parsed = parse_core(new_text)
         if new_parsed is None or not _show_it_json_blocks_unchanged(text, new_text):
             return {"action": "refused", "reason": SHOW_IT_REASON_ROUND_TRIP}
+        try:
+            store_core.atomic_write(path, new_text)
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred"}
+        clear_pending(cwd, root)
+        return {"action": "written"}
+
+
+_VET_CHECKS_HEADING = re.compile(r"^\s*##\s+Vet checks\s*$", re.IGNORECASE)
+_VET_ENTRY_HEADING = re.compile(r"^\s*###\s+(.*)$")
+_VET_FIELD_EVIDENCE = re.compile(r"^-\s+\*\*Evidence:\*\*\s*(.*)$")
+_VET_FIELD_RECORDS = re.compile(r"^-\s+\*\*The vet records:\*\*\s*(.*)$")
+
+
+def _vet_checks_section_spans(text):
+    """Every ``## Vet checks`` section as (start_line, end_line) indices; end is exclusive."""
+    lines = (text or "").splitlines()
+    spans = []
+    i = 0
+    while i < len(lines):
+        if _VET_CHECKS_HEADING.match(lines[i]):
+            start = i
+            end = len(lines)
+            for j in range(i + 1, len(lines)):
+                if _TOP_LEVEL_SECTION.match(lines[j]) or _JSON_FENCE_LINE.match(lines[j]):
+                    end = j
+                    break
+            spans.append((start, end))
+            i = end
+        else:
+            i += 1
+    return spans, lines
+
+
+def _vet_line_is_continuation(line):
+    if not line or not line.strip():
+        return False
+    if line.lstrip().startswith("###"):
+        return False
+    return (len(line) - len(line.lstrip(" "))) >= 2
+
+
+def _vet_checks_malformed_item(entry, reason, detail):
+    return {"entry": entry, "reason": reason, "detail": detail}
+
+
+def _parse_vet_checks_body(body_lines):
+    """Parse entry bodies inside one Vet checks section."""
+    malformed = []
+    checks = []
+    names_seen = {}
+    i = 0
+    n = len(body_lines)
+
+    while i < n and not body_lines[i].strip():
+        i += 1
+    if i < n and not body_lines[i].lstrip().startswith("###"):
+        malformed.append(_vet_checks_malformed_item(
+            None, "stray-text", "non-entry text before the first check heading"))
+        # axis: stray-text before first ### entry
+
+    while i < n:
+        while i < n and not body_lines[i].strip():
+            i += 1
+        if i >= n:
+            break
+        line = body_lines[i]
+        if not line.lstrip().startswith("###"):
+            if line.strip():
+                malformed.append(_vet_checks_malformed_item(
+                    None, "unrecognized-line", "line outside a check entry"))
+                # axis: unrecognized-line outside entry
+            i += 1
+            continue
+        m = _VET_ENTRY_HEADING.match(line)
+        name = (m.group(1) if m else line.lstrip()[3:]).strip()
+        i += 1
+        entry_reasons = []
+        fields = {}
+        pending_label = None
+        pending_parts = []
+        evidence_count = 0
+        records_count = 0
+
+        def _flush_pending():
+            nonlocal pending_label, pending_parts
+            if pending_label is None:
+                return
+            joined = " ".join(part for part in pending_parts if part is not None).strip()
+            fields[pending_label] = joined
+            pending_label = None
+            pending_parts = []
+
+        while i < n:
+            raw = body_lines[i]
+            if raw.lstrip().startswith("###"):
+                break
+            if not raw.strip():
+                i += 1
+                continue
+            ev = _VET_FIELD_EVIDENCE.match(raw)
+            rec = _VET_FIELD_RECORDS.match(raw)
+            if ev is not None:
+                _flush_pending()
+                evidence_count += 1
+                if evidence_count > 1:
+                    entry_reasons.append(("field-duplicated", "Evidence field repeated"))
+                    # axis: field-duplicated Evidence
+                pending_label = "evidence"
+                pending_parts = [ev.group(1).strip()]
+                i += 1
+                continue
+            if rec is not None:
+                _flush_pending()
+                records_count += 1
+                if records_count > 1:
+                    entry_reasons.append(("field-duplicated", "The vet records field repeated"))
+                    # axis: field-duplicated records
+                pending_label = "records"
+                pending_parts = [rec.group(1).strip()]
+                i += 1
+                continue
+            if _vet_line_is_continuation(raw):
+                if pending_label is None:
+                    entry_reasons.append(("unrecognized-line", "indented line without a field"))
+                    # axis: unrecognized-line continuation without field
+                else:
+                    pending_parts.append(raw.strip())
+                i += 1
+                continue
+            entry_reasons.append(("unrecognized-line", "line is not a field or continuation"))
+            # axis: unrecognized-line inside entry
+            i += 1
+        _flush_pending()
+
+        if not name:
+            entry_reasons.append(("name-empty", "check name is empty"))
+            # axis: name-empty
+        else:
+            folded = name.casefold()
+            if folded in names_seen:
+                entry_reasons.append(("name-duplicated", "duplicate check name"))
+                # axis: name-duplicated
+            names_seen[folded] = True
+
+        if "evidence" not in fields:
+            entry_reasons.append(("evidence-missing", "Evidence field is missing"))
+            # axis: evidence-missing
+        elif not fields["evidence"]:
+            entry_reasons.append(("field-empty", "Evidence value is empty"))
+            # axis: field-empty evidence
+        if "records" not in fields:
+            entry_reasons.append(("records-missing", "The vet records field is missing"))
+            # axis: records-missing
+        elif not fields["records"]:
+            entry_reasons.append(("field-empty", "The vet records value is empty"))
+            # axis: field-empty records
+
+        if entry_reasons:
+            seen = set()
+            for reason, detail in entry_reasons:
+                if reason in seen:
+                    continue
+                seen.add(reason)
+                malformed.append(_vet_checks_malformed_item(name or None, reason, detail))
+        else:
+            checks.append({"name": name, "evidence": fields["evidence"],
+                           "records": fields["records"]})
+    return checks, malformed
+
+
+def parse_vet_checks(core_text):
+    """Parse every ``## Vet checks`` section from full core text (not via ``_section``)."""
+    spans, lines = _vet_checks_section_spans(core_text)
+    declared = len(spans) > 0
+    malformed = []
+    if not spans:
+        return {"declared": False, "checks": [], "malformed": []}
+    if len(spans) > 1:
+        malformed.append(_vet_checks_malformed_item(
+            None, "section-duplicated", "more than one Vet checks heading"))
+        # axis: section-duplicated
+    start, end = spans[0]
+    body_lines = lines[start + 1:end]
+    if not any(line.strip() for line in body_lines):
+        malformed.append(_vet_checks_malformed_item(
+            None, "section-empty", "Vet checks heading has an empty body"))
+        # axis: section-empty
+        return {"declared": declared, "checks": [], "malformed": malformed}
+    parsed_checks, entry_malformed = _parse_vet_checks_body(body_lines)
+    malformed.extend(entry_malformed)
+    return {"declared": declared, "checks": parsed_checks, "malformed": malformed}
+
+
+def read_vet_checks(cwd, root=None):
+    """Read-verb payload for Vet checks; never raises."""
+    try:
+        path = core_path(cwd, root)
+    except RepoRootUnavailable:
+        return {"declared": False, "checks": [], "malformed": [],
+                "reason": GATE_REASON_ROOT_UNAVAILABLE}
+    cls = _classify_core_md_at_path(path)
+    if cls.status == CONFIG_ABSENT:
+        return {"declared": False, "checks": [], "malformed": [],
+                "reason": SHOW_IT_REASON_ABSENT}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return {"declared": False, "checks": [], "malformed": [],
+                "reason": SHOW_IT_REASON_UNPARSEABLE}
+    if parse_core(text) is None:
+        return {"declared": False, "checks": [], "malformed": [],
+                "reason": SHOW_IT_REASON_UNPARSEABLE}
+    parsed = parse_vet_checks(text)
+    return {"declared": parsed["declared"], "checks": parsed["checks"],
+            "malformed": parsed["malformed"], "reason": None}
+
+
+def _render_vet_checks_block(prose):
+    body = (prose or "").strip()
+    if not body:
+        return ""
+    return "## Vet checks\n\n" + body + "\n\n"
+
+
+def _vet_checks_body_forbidden(prose):
+    for line in (prose or "").splitlines():
+        if _TOP_LEVEL_SECTION.match(line) or _JSON_FENCE_LINE.match(line):
+            return True
+    return False
+
+
+def replace_vet_checks_section(text, prose):
+    """Create, replace, or clear only the ``## Vet checks`` section; preserve all else."""
+    new_block = _render_vet_checks_block(prose)
+    lines = (text or "").splitlines(keepends=True)
+    start = None
+    for i, line in enumerate(lines):
+        if _VET_CHECKS_HEADING.match(line):
+            start = i
+            break
+    if start is None:
+        if not new_block:
+            return text
+        insert_at = len(lines)
+        for i, line in enumerate(lines):
+            if _JSON_FENCE_LINE.match(line):
+                insert_at = i
+                break
+        return "".join(lines[:insert_at]) + new_block + "".join(lines[insert_at:])
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if _TOP_LEVEL_SECTION.match(lines[j]) or _JSON_FENCE_LINE.match(lines[j]):
+            end = j
+            break
+    if not new_block:
+        return "".join(lines[:start]) + "".join(lines[end:])
+    return "".join(lines[:start]) + new_block + "".join(lines[end:])
+
+
+def _vet_checks_write_acceptance(new_text, body):
+    """Writer invariant via ``parse_vet_checks`` on the candidate text."""
+    parsed = parse_vet_checks(new_text)
+    spans, _lines = _vet_checks_section_spans(new_text)
+    if body.strip():
+        if not parsed["declared"] or parsed["malformed"] or len(spans) != 1:
+            return False, parsed["malformed"]
+        return True, []
+    if parsed["declared"] or parsed["malformed"]:
+        return False, parsed["malformed"]
+    if len(spans) != 0:
+        return False, [_vet_checks_malformed_item(
+            None, "section-duplicated", "duplicate Vet checks heading remains after clear")]
+    return True, []
+
+
+def write_vet_checks(cwd, body, *, root=None):
+    """Lock-guarded surgical write of the Vet checks prose section only. Never raises."""
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+        return {"action": "deferred"}
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": "lock-contended"})
+            return {"action": "deferred"}
+        record = read(cwd, root)
+        if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": SHOW_IT_REASON_ABSENT}
+            return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {"action": "behind", "record": record}
+        try:
+            path = core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred"}
+        orig = parse_core(text)
+        if orig is None:
+            return {"action": "refused", "reason": SHOW_IT_REASON_UNPARSEABLE}
+        prose = body if body is not None else ""
+        if prose.strip() and _vet_checks_body_forbidden(prose):
+            return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP}
+            # axis: vet-checks-round-trip-refused injected heading or fence
+        new_text = replace_vet_checks_section(text, prose)
+        if new_text == text:
+            return {"action": "noop"}
+        ok, bad_malformed = _vet_checks_write_acceptance(new_text, prose)
+        if not ok:
+            return {"action": "refused", "reason": VET_CHECKS_REASON_MALFORMED,
+                    "malformed": bad_malformed}
+            # axis: vet-checks-malformed writer invariant
+        new_parsed = parse_core(new_text)
+        if (new_parsed is None or not _prose_field_round_trip_ok(orig, new_parsed, "vetChecks")
+                or not _show_it_json_blocks_unchanged(text, new_text)):
+            return {"action": "refused", "reason": VET_CHECKS_REASON_ROUND_TRIP}
+            # axis: vet-checks-round-trip-refused other facts changed
         try:
             store_core.atomic_write(path, new_text)
         except OSError:
@@ -2165,7 +2505,7 @@ def confirm(cwd, *, root=None, now=None):
                 return {"action": "noop", "record": existing}
             facts = {k: existing[k] for k in (
                 "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",
-                "ratifiedResiduals", REVIEW_GATE_POLICY_KEY, PROJECT_CONFIGURATION_KEY,
+                "ratifiedResiduals", "vetChecks", REVIEW_GATE_POLICY_KEY, PROJECT_CONFIGURATION_KEY,
                 DECLARED_DEPENDENCIES_KEY)}
             created = existing.get("created") or stamp
             try:
@@ -2288,6 +2628,12 @@ def main(argv):
     wtm = sub.add_parser("write-threat-model")
     wtm.add_argument("--cwd", default=".")
     wtm.add_argument("--root", default=None)
+    vcp = sub.add_parser("vet-checks")
+    vcp.add_argument("--cwd", default=".")
+    vcp.add_argument("--root", default=None)
+    wvc = sub.add_parser("write-vet-checks")
+    wvc.add_argument("--cwd", default=".")
+    wvc.add_argument("--root", default=None)
     wgc = sub.add_parser("write-guardian-cadence")
     wgc.add_argument("--cwd", default=".")
     wgc.add_argument("--root", default=None)
@@ -2448,6 +2794,25 @@ def main(argv):
     elif args.cmd == "write-threat-model":
         try:
             out = write_threat_model(args.cwd, sys.stdin.read(), root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred"}
+    elif args.cmd == "vet-checks":
+        try:
+            out = read_vet_checks(args.cwd, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"declared": False, "checks": [], "malformed": [],
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"declared": False, "checks": [], "malformed": [],
+                    "reason": SHOW_IT_REASON_UNPARSEABLE}
+    elif args.cmd == "write-vet-checks":
+        try:
+            out = write_vet_checks(args.cwd, sys.stdin.read(), root=args.root)
         except RepoRootUnavailable as exc:
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,
