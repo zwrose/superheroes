@@ -891,6 +891,100 @@ def _is_ancestor(repo_root, ancestor, descendant):
     return proc.returncode == 0
 
 
+def _panel_round_unified_head(journal, panel_round, roster):
+    """Single cited head across every panel seat recorded for ``panel_round``, or None."""
+    if not isinstance(journal, list):
+        return None
+
+    def _slot_head(seat, occ):
+        for event in reversed(journal):
+            if not isinstance(event, dict) or event.get("outcome") != "recorded":
+                continue
+            ev_seat, ev_phase, _, ev_occ, ev_round = _journal_event_slot(event)
+            if (ev_seat == seat and ev_phase == PANEL_PHASE and ev_occ == occ
+                    and ev_round == panel_round):
+                head = event.get("headSha") or event.get("citedHead")
+                if isinstance(head, str) and head:
+                    return head
+        return None
+
+    heads = [_slot_head(seat, occ) for seat, occ in roster]
+    if not all(heads) or len(set(heads)) != 1:
+        return None
+    return heads[0]
+
+
+def _confirmation_panel_at_head_satisfies_scoped(ctx, rnd, certified_head):
+    """A complete panel at the certified head on ``rnd`` supersedes scoped-finder for that round."""
+    journal = ctx.get("journal") or []
+    session_dir = ctx.get("session_dir")
+    state = ctx.get("state") or {}
+    if session_dir is None or not isinstance(journal, list):
+        return False
+    for event in journal:
+        if not isinstance(event, dict):
+            continue
+        if event.get("outcome") != "orders-emitted" or event.get("phase") != PANEL_PHASE:
+            continue
+        if event.get("round") != rnd:
+            continue
+        roster, roster_refusal = _orders_emitted_roster_or_refusal(session_dir, event)
+        if roster_refusal is not None or not roster:
+            return False
+        manifest, manifest_refusal = _verified_orders_manifest(session_dir, event)
+        if manifest_refusal is not None or not _audited_chain_panel_coverage_ok(
+                state, manifest, rnd):
+            return False
+        head = _panel_round_unified_head(journal, rnd, roster)
+        return head == certified_head
+    return False
+
+
+def _scoped_finder_record_qualifies(ctx, event, certified_head):
+    """Whether a scoped-finder journal row has qualifying execution evidence at the tip."""
+    journal = ctx.get("journal") or []
+    session_dir = ctx.get("session_dir")
+    cited = event.get("headSha") or event.get("citedHead")
+    seat, phase, attempt = event.get("seat"), event.get("phase"), event.get("attempt")
+    occurrence, rnd = event.get("occurrence", 0), event.get("round")
+    if not isinstance(seat, str) or attempt is None:
+        return False
+    slot_nonces = _journal_recorded_runner_nonces_for_slot(
+        journal, seat, phase, attempt, occurrence, rnd)
+    journal_binding = _journal_execution_binding(
+        journal, seat, phase, attempt, occurrence, rnd)
+    provenance = event.get("provenance")
+    if provenance == PROVENANCE_DISPATCH_OBSERVED:
+        ok, _binding = _observation_qualifies(
+            event.get("executionEvidence"),
+            certified_head,
+            cited,
+            journal_binding=journal_binding,
+            recorded_nonces=slot_nonces,
+            require_runner_action=True,
+        )
+        return ok
+    if provenance == PROVENANCE_HAND_LANDED:
+        if session_dir is None:
+            return False
+        env, _path = _load_envelope(session_dir, rnd, phase, seat, attempt, occurrence)
+        if env is None:
+            return False
+        ok, _binding = _hand_landed_evidence_qualifies(
+            env,
+            certified_head,
+            journal_binding=journal_binding,
+            recorded_nonces=slot_nonces,
+            phase=phase,
+        )
+        if not ok:
+            return False
+        evidence = env.get("executionEvidence") if isinstance(env, dict) else None
+        ok_read, _binding = _hand_landed_read_qualifies(evidence)
+        return ok_read
+    return False
+
+
 def _audited_chain_legs(ctx):
     state, journal = ctx.get("state") or {}, ctx.get("journal") or []
     session_dir, certified_head = ctx.get("session_dir"), _certified_head_sha(ctx)
@@ -900,21 +994,19 @@ def _audited_chain_legs(ctx):
     gap_out = lambda gap: (False, gap, panel_head, panel_round)
     if not isinstance(certified_head, str) or not certified_head:
         return gap_out("verify")
-    panel_event = None
-    best_rnd = -1
+    panel_candidates = []
     if isinstance(journal, list):
         for event in journal:
             if (not isinstance(event, dict) or event.get("outcome") != "orders-emitted"
                     or event.get("phase") != PANEL_PHASE):
                 continue
             rnd = event.get("round")
-            if isinstance(rnd, int) and not isinstance(rnd, bool) and rnd > best_rnd:
-                best_rnd, panel_event = rnd, event
-    if panel_event is None or session_dir is None:
+            if isinstance(rnd, int) and not isinstance(rnd, bool):
+                panel_candidates.append((rnd, event))
+    if not panel_candidates or session_dir is None:
         return gap_out("panel")
-    panel_round = panel_event.get("round")
-    if isinstance(panel_round, bool) or not isinstance(panel_round, int):
-        return gap_out("panel")
+    panel_candidates.sort(key=lambda item: item[0])
+    panel_round, panel_event = panel_candidates[-1]
     roster, roster_refusal = _orders_emitted_roster_or_refusal(session_dir, panel_event)
     if roster_refusal is not None or not roster:
         return gap_out("panel")
@@ -922,23 +1014,25 @@ def _audited_chain_legs(ctx):
     if manifest_refusal is not None or not _audited_chain_panel_coverage_ok(
             state, manifest, panel_round):
         return gap_out("panel")
-    def _slot_head(seat, occ):
-        if not isinstance(journal, list):
-            return None
-        for event in reversed(journal):
-            if not isinstance(event, dict) or event.get("outcome") != "recorded":
-                continue
-            ev_seat, ev_phase, _, ev_occ, ev_round = _journal_event_slot(event)
-            if ev_seat == seat and ev_phase == PANEL_PHASE and ev_occ == occ and ev_round == panel_round:
-                head = event.get("headSha") or event.get("citedHead")
-                if isinstance(head, str) and head:
-                    return head
-        return None
-
-    heads = [_slot_head(seat, occ) for seat, occ in roster]
-    if not all(heads) or len(set(heads)) != 1:
+    panel_head = _panel_round_unified_head(journal, panel_round, roster)
+    if panel_head is None:
         return gap_out("panel")
-    panel_head = heads[0]
+    if panel_head == certified_head and len(panel_candidates) > 1:
+        for rnd, ev in reversed(panel_candidates[:-1]):
+            roster_i, roster_refusal_i = _orders_emitted_roster_or_refusal(session_dir, ev)
+            if roster_refusal_i is not None or not roster_i:
+                continue
+            manifest_i, manifest_refusal_i = _verified_orders_manifest(session_dir, ev)
+            if manifest_refusal_i is not None or not _audited_chain_panel_coverage_ok(
+                    state, manifest_i, rnd):
+                continue
+            head_i = _panel_round_unified_head(journal, rnd, roster_i)
+            if head_i is None or head_i == certified_head:
+                continue
+            panel_round, panel_event = rnd, ev
+            roster, manifest = roster_i, manifest_i
+            panel_head = head_i
+            break
     if not _is_ancestor(repo_root, panel_head, certified_head):
         return gap_out("descent")
     by_key, marker_refusal = _certification_findings_by_key(state)
@@ -980,6 +1074,8 @@ def _audited_chain_legs(ctx):
             rec = rounds.get(str(rnd))
             satisfied = isinstance(rec, dict) and rec.get("scopedFinder") == "skipped-empty-surface"
         if not satisfied:
+            satisfied = _confirmation_panel_at_head_satisfies_scoped(ctx, rnd, certified_head)
+        if not satisfied:
             return gap_out("scoped-finder")
     scoped_ok = False
     cert_round = None
@@ -999,18 +1095,7 @@ def _audited_chain_legs(ctx):
             cited = event.get("headSha") or event.get("citedHead")
             if cited != certified_head:
                 continue
-            seat, phase, attempt = event.get("seat"), event.get("phase"), event.get("attempt")
-            occurrence, rnd = event.get("occurrence", 0), event.get("round")
-            if not isinstance(seat, str) or attempt is None:
-                continue
-            ok, _binding = _observation_qualifies(
-                event.get("executionEvidence"), certified_head, cited,
-                journal_binding=_journal_execution_binding(
-                    journal, seat, phase, attempt, occurrence, rnd),
-                recorded_nonces=_journal_recorded_runner_nonces_for_slot(
-                    journal, seat, phase, attempt, occurrence, rnd),
-                require_runner_action=True)
-            if ok:
+            if _scoped_finder_record_qualifies(ctx, event, certified_head):
                 scoped_ok = True
                 break
     if not scoped_ok:
