@@ -130,15 +130,26 @@ def test_absolute_in_workflow_run(tmp_path):
     "snippet",
     [
         "/usr/bin/env python3",
-        ".venv/bin/python",
         "scripts/pinned-python",
-        "plugins/x/python",
     ],
 )
 def test_absolute_negatives_not_flagged(tmp_path, snippet):
     _scaffold_healthy(tmp_path)
     _write(tmp_path, "CLAUDE.md", snippet + "\n")
     assert not _has_rule(_violations(tmp_path), "absolute-interpreter-path")
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        ".venv/bin/python gate.py\n",
+        "plugins/x/python gate.py\n",
+    ],
+)
+def test_relative_interpreter_path_positives(tmp_path, snippet):
+    _scaffold_healthy(tmp_path)
+    _write(tmp_path, "CLAUDE.md", snippet)
+    assert _has_rule(_violations(tmp_path), "absolute-interpreter-path", "CLAUDE.md")
 
 
 @pytest.mark.parametrize(
@@ -355,6 +366,14 @@ def test_pin_home_duplicate_nested_python_version(tmp_path):
     )
 
 
+def test_pin_home_duplicate_root_tool_versions(tmp_path):
+    _scaffold_healthy(tmp_path)
+    _write(tmp_path, ".tool-versions", "python 3.11\n")
+    assert _has_rule(
+        _violations(tmp_path), "pin-home-duplicate", ".tool-versions"
+    )
+
+
 def test_pin_home_duplicate_root_only_ok(tmp_path):
     _scaffold_healthy(tmp_path)
     assert not _has_rule(_violations(tmp_path), "pin-home-duplicate")
@@ -448,6 +467,31 @@ jobs:
 """
     _write(tmp_path, ".github/workflows/ci.yml", wf)
     assert _has_rule(
+        _violations(tmp_path), "workflow-python-before-setup"
+    )
+
+
+def test_workflow_explicit_bash_overrides_job_default_shell_python(tmp_path):
+    _scaffold_healthy(tmp_path)
+    wf = """\
+name: ci
+on: push
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: python
+    steps:
+      - uses: actions/checkout@v4
+      - shell: bash
+        run: echo safe
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+"""
+    _write(tmp_path, ".github/workflows/ci.yml", wf)
+    assert not _has_rule(
         _violations(tmp_path), "workflow-python-before-setup"
     )
 

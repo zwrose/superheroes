@@ -4,6 +4,8 @@ import yaml
 
 import validate_skills as vs
 
+from ci_requirements_helpers import active_requirement_names, active_requirements_content
+
 def test_links_resolve(tmp_path):
     (tmp_path / "rubric").mkdir()
     (tmp_path / "rubric" / "review-base.md").write_text("x")
@@ -206,7 +208,7 @@ def _expand_requirements(run_text: str, repo_root: str) -> str:
             if not os.path.isfile(req_path):
                 raise AssertionError(f"requirements file does not exist: {req_rel}")
             with open(req_path, encoding="utf-8") as fh:
-                expanded += "\n" + fh.read()
+                expanded += "\n" + active_requirements_content(fh.read())
             i += 2
         else:
             i += 1
@@ -223,7 +225,7 @@ def test_ci_installs_pyyaml_before_validate_skills():
     validate_skills_idx = None
     for i, step in enumerate(steps):
         run = _expand_requirements(step.get("run", ""), repo)
-        if "pip install" in run and "pyyaml" in run:
+        if "pip install" in run and "pyyaml" in active_requirement_names(run):
             pip_idx = i
         if "validate_skills.py" in run:
             validate_skills_idx = i

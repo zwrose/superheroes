@@ -17,6 +17,11 @@ if _LIB not in sys.path:
 
 import guardian_coupling_adapters as adapters  # noqa: E402
 
+from ci_requirements_helpers import (  # noqa: E402
+    active_requirement_names,
+    active_requirements_content,
+)
+
 
 def _ci_data():
     import yaml
@@ -53,7 +58,7 @@ def _expand_requirements(run_text: str, repo_root: str) -> str:
             if not os.path.isfile(req_path):
                 raise AssertionError(f"requirements file does not exist: {req_rel}")
             with open(req_path, encoding="utf-8") as fh:
-                expanded += "\n" + fh.read()
+                expanded += "\n" + active_requirements_content(fh.read())
             i += 2
         else:
             i += 1
@@ -219,7 +224,8 @@ def test_validate_installs_all_coupling_collectors():
     collectors_run = _validate_step_run(
         data, "Install coupling collectors (ungate coupling lens real-seam tests)"
     )
-    assert "import-linter" in python_deps_run
+    req_names = active_requirement_names(python_deps_run)
+    assert "import-linter" in req_names
     assert "dependency-cruiser" in collectors_run
     assert "typescript" in collectors_run
 
@@ -236,9 +242,17 @@ def test_ci_collector_pins_match_guardian_adapters():
     collectors_run = _validate_step_run(
         data, "Install coupling collectors (ungate coupling lens real-seam tests)"
     )
+    import_linter_lines = [
+        ln
+        for ln in python_deps_run.splitlines()
+        if ln.strip().lower().startswith("import-linter")
+    ]
     assert f"dependency-cruiser@{adapters.DEPCRUISE_PIN}" in collectors_run
     assert f"typescript@{adapters.TYPESCRIPT_PIN}" in collectors_run
-    assert f"import-linter>={adapters.IMPORT_LINTER_PIN}," in python_deps_run
+    assert any(
+        f"import-linter>={adapters.IMPORT_LINTER_PIN}," in ln
+        for ln in import_linter_lines
+    )
 
 
 def test_expand_requirements_raises_when_named_file_missing(tmp_path):

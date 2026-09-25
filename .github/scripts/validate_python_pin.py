@@ -41,6 +41,10 @@ _ABS_INTERPRETER_RE = re.compile(
     r"(?<![\w.$-])(?:~)?/(?:[\w.+-]+/)+python(?:\d+(?:\.\d+)*)?(?![\w.-])"
 )
 
+_REL_INTERPRETER_RE = re.compile(
+    r"(?<![\w.$-])(?:\.[\w.-]+|[\w.-]+)(?:/[\w.+-]+)+/python(?:\d+(?:\.\d+)*)?(?![\w.-])"
+)
+
 _VERSION_PATTERNS: Sequence[tuple[re.Pattern[str], Optional[str]]] = (
     (re.compile(r"python-version\s*:\s*[\"']?(\d+(?:\.\d+)+)", re.I), None),
     (re.compile(r"\bpython(\d+(?:\.\d+)+)\b", re.I), None),
@@ -132,6 +136,23 @@ def _check_pin_home_duplicates(root: str, violations: List[Violation]) -> None:
                         "competing Python pin home",
                     )
                 )
+            elif name == ".tool-versions":
+                try:
+                    tool_raw = open(full, encoding="utf-8").read()
+                except OSError:
+                    continue
+                for tline in tool_raw.splitlines():
+                    parts = tline.strip().split()
+                    if len(parts) >= 2 and parts[0] == "python":
+                        violations.append(
+                            Violation(
+                                "pin-home-duplicate",
+                                rel,
+                                None,
+                                "competing Python pin home (.tool-versions)",
+                            )
+                        )
+                        break
             elif name == ".python-version" and os.path.normpath(full) != root_pin:
                 violations.append(
                     Violation(
@@ -223,7 +244,7 @@ def _scan_line_rules(
     workflow_only: bool,
 ) -> None:
     for line_no, line in enumerate(text.splitlines(), start=1):
-        if _ABS_INTERPRETER_RE.search(line):
+        if _ABS_INTERPRETER_RE.search(line) or _REL_INTERPRETER_RE.search(line):
             violations.append(
                 Violation(
                     "absolute-interpreter-path",
@@ -292,12 +313,20 @@ def _step_runs_python(step: dict, job_default_shell: Optional[str]) -> bool:
     if not isinstance(step, dict):
         return False
     shell = step.get("shell")
-    if isinstance(shell, str) and shell.strip().lower().startswith("python"):
-        return True
+    effective_shell: Optional[str]
+    if isinstance(shell, str):
+        if shell.strip().lower().startswith("python"):
+            return True
+        effective_shell = None
+    else:
+        effective_shell = job_default_shell
     run = step.get("run")
     if not isinstance(run, str):
         return False
-    if job_default_shell and job_default_shell.strip().lower().startswith("python"):
+    if (
+        effective_shell
+        and effective_shell.strip().lower().startswith("python")
+    ):
         return True
     return bool(_RUN_PYTHON_BEFORE_RE.search(run))
 
