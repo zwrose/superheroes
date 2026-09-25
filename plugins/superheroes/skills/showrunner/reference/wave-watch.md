@@ -19,13 +19,12 @@
 
 `lib/wave_watch.py` is a ledger-driven watcher over one launch batch. It has two verbs:
 
-- **`loop`** — the arming shape. Re-arms an internal arm (`watch_arm`) and exits only on a
-  **lane-ending** event (membership in **`LANE_ENDING_EVENTS`** in `lib/wave_watch.py`), on a
-  refusal, or at `--max-total-seconds`. Events in **`BENIGN_EVENTS`** there never end it: each benign
-  non-timer event is passed over, written as a `--log` line in the same
-  `{"arm", "elapsedSeconds", "result"}` shape as timer arms, and recorded in the loop result. When it
-  exits it prints one JSON line on stdout and exits. Arm as **one harness background task per batch**
-  at wave launch.
+- **`loop`** — the arming shape. Re-arms an internal arm (`watch_arm`) and exits on any successful
+  event **not** in **`BENIGN_EVENTS`** in `lib/wave_watch.py` (every lane-ending token and any
+  unknown token alike), on a refusal, or at `--max-total-seconds`. Each benign non-timer event is
+  passed over, written as a `--log` line in the same `{"arm", "elapsedSeconds", "result"}` shape as
+  timer arms, and recorded in the loop result. When it exits it prints one JSON line on stdout and
+  exits. Arm as **one harness background task per batch** at wave launch.
 - **`run`** — a true one-shot. One ledger read (and at most one open-PR read, for stack state), no
   waiting, then prints one JSON line on stdout and exits. It does **not** re-arm.
 
