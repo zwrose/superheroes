@@ -120,3 +120,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Category 2 (what a person sees or can do at a given moment): kept, separate from category 1. Owner: "this one is definitely owner."
 - Category 3 (whether a thing exists at all): kept.
 - Category 4 (risk tolerance and trust boundaries): kept.
+- Category 5 (the owner's own time, attention, and habits): kept, tentatively ("keep i think"); revisit at the final read.
