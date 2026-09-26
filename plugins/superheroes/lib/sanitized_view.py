@@ -122,7 +122,7 @@ _COMMIT_GRAPH_OFF = ("-c", "core.commitGraph=false")
 # Patch-presentation policy for ``git diff`` only: the commit-graph pin plus
 # quotePath and diff formatting overrides. Do not borrow this bundle for
 # non-patch commands (e.g. diff-base ``rev-parse`` peeling).
-_DIFF_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
+DIFF_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
     "-c",
     "core.quotePath=false",
     "-c",
@@ -134,7 +134,7 @@ _DIFF_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
 )
 
 # Belt-and-braces for _git_ls_tree_export and _git_tree_entries; -z already suppresses
-# quoting. Patch-presentation keys from _DIFF_CONFIG_OVERRIDES deliberately do not
+# quoting. Patch-presentation keys from DIFF_CONFIG_OVERRIDES deliberately do not
 # appear here.
 _CENSUS_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + ("-c", "core.quotePath=false")
 
@@ -153,7 +153,7 @@ _DIFF_PATCH_FLAGS = (
 _DIFF_READ_POLL_SECONDS = 1.0
 
 
-def _git_env():
+def git_env():
     env = os.environ.copy()
     for var in _GIT_ROUTING_VARS:
         env.pop(var, None)
@@ -172,12 +172,12 @@ def _git_env():
 
 
 def _git_run(*args, **kwargs):
-    kwargs["env"] = _git_env()
+    kwargs["env"] = git_env()
     return subprocess.run(*args, **kwargs)
 
 
 def _git_popen(*args, **kwargs):
-    kwargs["env"] = _git_env()
+    kwargs["env"] = git_env()
     return subprocess.Popen(*args, **kwargs)
 
 
@@ -1281,7 +1281,7 @@ def _effective_review_diff_argv_budget():
     except (AttributeError, ValueError, OSError):
         arg_max = None
     if arg_max is not None and arg_max > 0:
-        env = _git_env()
+        env = git_env()
         env_bytes = sum(
             len(k.encode("utf-8", errors="surrogateescape"))
             + len(v.encode("utf-8", errors="surrogateescape"))
@@ -1298,7 +1298,7 @@ def _review_diff_argv_prefix(repo_real, merge_base, head_sha):
         "git",
         "-C",
         repo_real,
-        *_DIFF_CONFIG_OVERRIDES,
+        *DIFF_CONFIG_OVERRIDES,
         *_DIFF_PATCH_FLAGS,
         merge_base,
         head_sha,

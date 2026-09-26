@@ -1894,7 +1894,7 @@ def test_review_diff_argv_budget_counts_env_bytes_not_chars(monkeypatch):
     def fake_git_env():
         return {"BUDGET_PROBE": multibyte_value}
 
-    monkeypatch.setattr(sv, "_git_env", fake_git_env)
+    monkeypatch.setattr(sv, "git_env", fake_git_env)
     monkeypatch.setattr(os, "sysconf", lambda name: 10000 if name == "SC_ARG_MAX" else 0)
 
     budget = sv._effective_review_diff_argv_budget()
@@ -2041,7 +2041,7 @@ def test_review_diff_census_ignores_replace_refs(tmp_path):
 def test_git_env_disables_lazy_fetch(monkeypatch):
     """#797: construction never waits on git's on-demand object fetching."""
     monkeypatch.setenv("GIT_REPLACE_REF_BASE", "/tmp/fake-replace")
-    env = sv._git_env()
+    env = sv.git_env()
     assert env["GIT_NO_LAZY_FETCH"] == "1"
     assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
     assert env["LC_ALL"] == "C"
@@ -2051,7 +2051,7 @@ def test_git_env_disables_lazy_fetch(monkeypatch):
 def test_git_env_no_lazy_fetch_survives_a_hostile_inherited_value(monkeypatch):
     """An inherited ``GIT_NO_LAZY_FETCH=0`` cannot re-enable the fetch."""
     monkeypatch.setenv("GIT_NO_LAZY_FETCH", "0")
-    assert sv._git_env()["GIT_NO_LAZY_FETCH"] == "1"
+    assert sv.git_env()["GIT_NO_LAZY_FETCH"] == "1"
     assert sv._neutral_git_env()["GIT_NO_LAZY_FETCH"] == "1"
 
 

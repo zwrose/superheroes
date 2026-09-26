@@ -3863,16 +3863,16 @@ _GIT_DIFF_FORMAT_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
 # The one home of the review-diff command: the same argv SKILL.md's Setup runs for the round diff
 # (pinned equal by test). The config pins keep a user's diff settings (noprefix, mnemonic
 # prefixes, relative paths, quoted paths) from reshaping the bytes a panel reviews.
-GIT_REVIEW_DIFF_ARGV = (("git",) + sanitized_view._DIFF_CONFIG_OVERRIDES + ("diff",)
+GIT_REVIEW_DIFF_ARGV = (("git",) + sanitized_view.DIFF_CONFIG_OVERRIDES + ("diff",)
                         + _GIT_DIFF_FORMAT_FLAGS)
 
 
 def _hardened_head(repo_root):
-    """`git rev-parse HEAD` under the shared git env hardening (sanitized_view._git_env) — the
+    """`git rev-parse HEAD` under the shared git env hardening (sanitized_view.git_env) — the
     head the review diff is derived at is never resolved through inherited GIT_* routing."""
     try:
         proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_root,
-                              env=sanitized_view._git_env(), capture_output=True, text=True,
+                              env=sanitized_view.git_env(), capture_output=True, text=True,
                               timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -3891,7 +3891,7 @@ def review_diff_text(repo_root, base, head):
     try:
         proc = subprocess.run(
             list(GIT_REVIEW_DIFF_ARGV) + ["%s...%s" % (base, head)],
-            cwd=repo_root, env=sanitized_view._git_env(),
+            cwd=repo_root, env=sanitized_view.git_env(),
             capture_output=True, text=False, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -3951,17 +3951,28 @@ class ReviewedDiffStale(ValueError):
     """Raised at panel-order emission when the reviewed diff is older than the fix-fold head."""
 
 
-def _reviewed_diff_is_stale(state):
-    """The one staleness rule: the reviewed diff is not bound to the current fix-fold head (an
-    unknown head — a state an older driver saved after a fix — is stale)."""
+def _reviewed_diff_stale_cause(state):
+    """The one staleness rule, naming its cause: the reviewed diff is not bound to the current
+    fix-fold head (an unknown head — a state an older driver saved after a fix — is stale). None
+    when the reviewed diff is current."""
     head = _fix_fold_head(state)
-    if head is None or state.get("reviewedDiffHead", 0) != head:
-        return True
+    if head is None:
+        return "the fix-fold head is unknown (a state saved by an older driver after a fix)"
+    if state.get("reviewedDiffHead", 0) != head:
+        return "the head moved and no diff at the post-fix head is derivable from git"
     # Bound to a SHA: it must be the head being certified. The fix-fold head is re-read at the
     # verify fold, so a commit landed after the fold moves it and the reviewed diff goes stale.
     bound = state.get("reviewedDiffSha")
     certified = (state.get("config") or {}).get(FIX_FOLD_HEAD_KEY)
-    return bool(bound and certified and bound != certified)
+    if bound and certified and bound != certified:
+        return ("a commit landed after the reviewed diff was derived (reviewed %s, head %s)"
+                % (bound, certified))
+    return None
+
+
+def _reviewed_diff_is_stale(state):
+    """True when `_reviewed_diff_stale_cause` names a cause."""
+    return _reviewed_diff_stale_cause(state) is not None
 
 
 def _refuse_stale_panel_emission(state, phase):
@@ -3987,8 +3998,8 @@ def _stale_pending_panel_park(session_dir, state, cmd):
 def _park_reviewed_diff_stale(session_dir, state, cmd):
     """Park `cannot-certify` with the token and answer the terminal, on every emission path."""
     _park_cannot_certify(
-        state, "%s: the head moved and no diff at the post-fix head is derivable from git — a "
-               "panel would review a diff older than the head" % REVIEWED_DIFF_STALE)
+        state, "%s: %s — a panel would review a diff older than the head"
+        % (REVIEWED_DIFF_STALE, _reviewed_diff_stale_cause(state) or "the reviewed diff is stale"))
     pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL, "attempt": 0,
                "payload": {"verdict": state["terminal"],
                            "certification": state.get("certification")}}
@@ -4032,8 +4043,9 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         _record_round(state, "reviewedDiffSource", REVIEWED_DIFF_SOURCE_GIT)
     state["headDiff"] = head
     state["_headDiffSource"] = head_source
-    # No trusted head diff (none supplied, or none derivable) is an unknown surface: full panel.
-    state["_headDiffUnknown"] = head_source == "unknown" or head is None
+    # No head diff derivable from git is an unknown surface: full panel. A supplied diff carries no
+    # authority, so whether one was supplied does not decide it.
+    state["_headDiffUnknown"] = head is None
     # The head moved: until `_advance_reviewed_diff` binds a diff at this head, no panel reviews it.
     state["fixFolds"] = (_fix_fold_head(state) or 0) + 1
     _record_round(state, "headDiffSource", head_source)

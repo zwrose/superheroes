@@ -87,25 +87,31 @@ def _receipt(session_dir):
         return json.load(fh)
 
 
-def test_unknown_head_diff_is_derived_from_git_for_the_full_panel(tmp_path):
-    """The full panel after an unknown-head fix reviews `git diff base...head`, not round 1's
-    diff. Bite-proof: `lib/tests/bite_proofs/l4d_armD_stale_diff.md` (red token: the round-2
-    diff.txt equals the round-1 diff)."""
+def test_an_unsupplied_head_diff_is_derived_from_git_and_reviewed(tmp_path):
+    """A fixer that hands back no readable head diff does not make the surface unknown: the driver
+    derives `git diff base...head` itself, the delta round reviews that (never round 1's diff), and
+    the loop converges. The unknown surface is keyed on the derivation alone. Bite-proof:
+    `lib/tests/bite_proofs/l4d_armD_stale_diff.md` (red token: the reviewed diff is not git's)."""
     d = str(tmp_path / "session")
     os.makedirs(d)
     checkout, base = _seed_checkout(d)
     seen = {}
-    payload = TRD._drive_cli(
-        d, TRD._cfg(baseRef=base), _respond(checkout, str(tmp_path / "missing.txt"), seen))
-    head = _git(checkout, "rev-parse", "HEAD").strip()
-    assert seen.get("panels") == [1, 2], seen
-    assert not seen.get("scoped")
-    with open(os.path.join(RR.round_dir(d, 2), "diff.txt"), encoding="utf-8") as fh:
-        panel_diff = fh.read()
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+    captured = {}
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_VERIFY and "reviewed" not in captured and rnd >= 2:
+            captured["reviewed"] = RD.load_state(d)[1].get("reviewedDiff")
+            captured["head"] = _git(checkout, "rev-parse", "HEAD").strip()
+        return inner(phase, payload, rnd)
+    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base), _discharging(respond))
     with open(os.path.join(RR.round_dir(d, 1), "diff.txt"), encoding="utf-8") as fh:
         round1_diff = fh.read()
-    assert panel_diff != round1_diff, "the round-2 panel reviewed the pre-fix diff"
-    assert panel_diff == _expected_diff(checkout, base, head)
+    assert captured.get("reviewed") != round1_diff, "the delta round reviewed the pre-fix diff"
+    assert captured.get("reviewed") == _expected_diff(checkout, base, captured["head"]), \
+        "the reviewed diff is not git's"
+    # A known surface: the delta round runs, never a second full panel.
+    assert seen.get("panels") == [1], seen
     assert payload["verdict"] == "converged", payload
     rounds = _receipt(d)["rounds"]
     assert any(r.get("headDiffSource") == "unknown" for r in rounds), rounds
@@ -552,6 +558,60 @@ def test_a_supplied_head_diff_equal_to_git_is_accepted(tmp_path):
     assert payload["verdict"] == "converged", payload
 
 
+@pytest.mark.parametrize("agrees", [True, False], ids=["path-agrees-with-git",
+                                                        "path-disagrees-with-git"])
+def test_a_readable_head_diff_path_carries_no_authority(tmp_path, agrees):
+    """A readable `headDiffPath` is read (`headDiffSource: path`) but carries no authority: whether
+    its bytes agree with git's or not, the reviewed diff is git's diff at the fold head and the
+    loop converges without parking. Bite-proof: `lib/tests/bite_proofs/l4d_armD_stale_diff.md`
+    record N (red token: `the reviewed diff equals the path's bytes`)."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    seen = {}
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+    path = str(tmp_path / "head.diff")
+    captured = {}
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_VERIFY and "reviewed" not in captured and rnd >= 2:
+            captured["reviewed"] = RD.load_state(d)[1].get("reviewedDiff")
+            captured["head"] = _git(checkout, "rev-parse", "HEAD").strip()
+        art = inner(phase, payload, rnd)
+        if phase == RD.P_FIXER:
+            head = _git(checkout, "rev-parse", "HEAD").strip()
+            text = (_expected_diff(checkout, base, head) if agrees
+                    else "diff --git a/f.py b/f.py\n@@ -1 +1 @@\n-x\n+not what git says\n")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            captured["supplied"] = text
+            art = {"fixes": [], "headDiffPath": path}
+        return art
+    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base), _discharging(respond))
+    if not agrees:
+        assert captured["reviewed"] != captured["supplied"], "the reviewed diff equals the path's bytes"
+    expected = _expected_diff(checkout, base, captured["head"])
+    assert captured["reviewed"] == expected, "the reviewed diff is not git's diff at the fold head"
+    assert payload["verdict"] == "converged", payload
+    rounds = _receipt(d)["rounds"]
+    assert any(r.get("headDiffSource") == "path" for r in rounds), rounds
+    assert any(r.get("reviewedDiffSource") == "git-derived" for r in rounds), rounds
+
+
+def test_the_stale_park_names_its_cause():
+    """The `reviewed-diff-stale` park says why: an unknown fix-fold head, a head that moved with no
+    derivable diff, or a commit landed after the reviewed diff was derived — never one fixed
+    reason for all three (red token: two causes share one message)."""
+    unknown = {"_headDiffSource": "path"}
+    moved = {"fixFolds": 1, "reviewedDiffHead": 0}
+    late = {"fixFolds": 1, "reviewedDiffHead": 1, "reviewedDiffSha": "a" * 40,
+            "config": {RD.FIX_FOLD_HEAD_KEY: "b" * 40}}
+    causes = [RD._reviewed_diff_stale_cause(s) for s in (unknown, moved, late)]
+    assert all(causes) and len(set(causes)) == 3, "two causes share one message: %r" % causes
+    assert "derivable from git" in causes[1] and "a" * 40 in causes[2] and "b" * 40 in causes[2]
+    assert RD._reviewed_diff_stale_cause({"fixFolds": 1, "reviewedDiffHead": 1}) is None
+
+
 def test_the_contract_literals_are_pinned():
     """The derivation's flags and the named tokens are an external contract: pinned as literals."""
     assert RD._GIT_DIFF_FORMAT_FLAGS == ("--no-color", "--no-ext-diff", "--no-textconv")
@@ -685,7 +745,7 @@ def test_the_git_env_strips_every_ancestry_and_config_shaping_variable(monkeypat
     config-injection variable (red token: the variable survives into the git env)."""
     import sanitized_view
     monkeypatch.setenv(var, "/hostile")
-    assert var not in sanitized_view._git_env()
+    assert var not in sanitized_view.git_env()
 
 
 def test_a_commit_after_the_fold_is_never_certified_unseen(tmp_path):
