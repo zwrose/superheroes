@@ -109,3 +109,10 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
   threshold; I059's split)? The corpus says the advisor owns them and shows them.
 - Does the line differ between weekly-eats (product) and superheroes (workflow)? The corpus
   suggests the categories are the same and only the mix differs.
+
+## Owner rulings (walk in progress, started 2026-09-21, resumed 2026-09-26)
+
+- The one-paragraph line: rewrite it last, from whatever survives the walk.
+- Four tests: tests 1, 2 and 4 kept. Test 3 reworded: drop "attention"; it reads "depends on
+  how much risk or cost the owner is willing to carry, or on a principle the owner has stated."
+  Attention lives only in category 5.
