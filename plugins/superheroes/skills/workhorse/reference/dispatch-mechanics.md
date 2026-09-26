@@ -766,12 +766,15 @@ inferred cause. "One caller's bad script" is the alternative reading that sits b
 An external engine can forfeit *after* writing files — characteristically with cursor's
 **`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
 on-disk work already complete and correct. Field evidence: three builds in one wave; in one of them
-four of six dispatches forfeited, every one with correct files on disk. **Long cursor write
-dispatches.** A long cursor `dispatch-write` run can forfeit after its work lands
-(`worktree-dirtied-by-attempt`): the grading never runs, and a partial landing can lack its tests.
-Split long write orders into smaller ones. After any write forfeit, verify the declared paths
-yourself — that each is present and that its tests exist and run — before you re-order. Never retry
-a forfeit blind. **Inspect the worktree before discarding or re-dispatching** — "inspect the diff" alone is not a
+four of six dispatches forfeited, every one with correct files on disk.
+
+**Long cursor write dispatches.** A long cursor `dispatch-write` run can forfeit after its work lands
+(`worktree-dirtied-by-attempt`): no admissible result is graded — `attemptDetail` names why (for
+example `native-result-missing`) — and a partial landing can lack its tests. Split long write
+orders into smaller ones. After any write forfeit, verify the declared paths yourself — that each
+is present and that its tests exist and run — before you re-order. Never retry a forfeit blind.
+
+**Inspect the worktree before discarding or re-dispatching** — "inspect the diff" alone is not a
 decision rule:
 
 - **What the tree inspection establishes.** Before dispatching, the build worktree must be **clean** —

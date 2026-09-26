@@ -2781,8 +2781,6 @@ def _honest_refusal_stdout():
     return "Stopped per order.\n" + EA.WRITE_REPORT_SENTINEL + "\n" + body
 
 
-
-
 # --- WO F1: continuation owns argv/cwd/view; journal before build_view -------------
 
 
@@ -4693,18 +4691,6 @@ def test_grade_review_attempt_second_payload_shape_pair_carries_echo_nonce(tmp_p
     assert "payloadShape" not in grade
 
 
-def _engaged_review_stdout_with_nonce_example(echo_nonce):
-    padding = (
-        "Review notes for lib/auth.py:12 and lib/gate.py:99.\n"
-        "- first observation\n"
-        "- second observation\n\n"
-        "## Findings draft\n\n"
-    ) * 8
-    return padding + json.dumps(RFS.example_findings_object(echo_nonce))
-
-
-
-
 def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
     """Genuinely empty raw stdout still yields empty-stdout."""
     run_dir = str(tmp_path / "run")
@@ -5281,10 +5267,8 @@ def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
 
 
 def _artifact_pad(text):
-    out = text
-    while len(out.encode("utf-8")) < 200 + 20:
-        out += " Additional review context padding."
-    return out
+    # Callers only need multi-line review prose; no byte floor remains after detector retirement.
+    return text
 
 
 def _poster_child_attempt1_stdout():
@@ -18377,4 +18361,3 @@ def test_review_terminal_forfeit_surfaces_dropped_cause():
         dropped_cause="stdout-truncated",
     )
     assert terminal["droppedCause"] == "stdout-truncated"
-

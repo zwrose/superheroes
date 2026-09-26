@@ -215,8 +215,6 @@ def REVIEW_RESULT_CONTRACT(expected_result_kind=None):
     return "\n".join(lines) + "\n"
 
 
-
-
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
 BUILD_ARGV_REFUSAL_TOKENS = frozenset({
@@ -1385,7 +1383,6 @@ def _scrub_mapping(obj):
     if isinstance(obj, list):
         return [_scrub_mapping(x) for x in obj]
     return obj
-
 
 
 _INVESTIGATED_LOCATOR_SUFFIX_RE = re.compile(r":(\d+)(?::(\d+))?$")

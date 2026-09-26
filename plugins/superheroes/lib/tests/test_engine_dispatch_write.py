@@ -835,12 +835,6 @@ def test_worktree_dirtied_refuses_retry(tmp_path):
     assert res["attempts"] == 1
 
 
-
-
-
-
-
-
 def test_write_run_opened_records_fed_prompt(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     prompt_text = "Implement exactly the assigned work order.\n"
@@ -860,8 +854,6 @@ def test_write_run_opened_records_fed_prompt(tmp_path):
         prompt_text, ERC.write_result_contract_from_schema(schema),
     )
     assert opened["fedPrompt"] == expected
-
-
 
 
 def test_write_success_terminal(tmp_path):
@@ -2124,44 +2116,6 @@ def test_write_contracted_report_success_end_to_end(tmp_path):
     assert res["itemCheck"]["missing"] == []
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
@@ -2967,8 +2921,8 @@ def test_native_write_report_survives_item_evidence_unavailable(tmp_path, monkey
     assert res["report"] == obj["report"]
 
 
-# axis: native codex write without result file forfeits dirtied, not report-missing-items-delivered.
-def test_native_write_delivered_items_without_result_is_not_report_missing(tmp_path):
+# axis: delivered scope items with no native result file forfeit worktree-dirtied with native-result-missing.
+def test_native_write_delivered_items_without_result_forfeits_worktree_dirtied(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     target = os.path.join(wt, "delivered.txt")
 
