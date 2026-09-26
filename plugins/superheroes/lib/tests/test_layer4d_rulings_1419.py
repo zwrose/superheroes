@@ -115,12 +115,16 @@ def test_ruling_out_a_continuation_slice_enters_post_fix_and_never_redispatches_
 
 def test_the_ruling_vocabulary_is_derived_from_the_ledger_and_judgment_homes():
     """Drift pin: every ledger disposition but the audit-only `fixed` is a closing ruling kind with
-    a reason field, and the guidance kind is the judgment gate's guidance token."""
-    closing = set(SC.DISPOSITIONS) - {"fixed"}
+    a reason field, each ruling kind is the named ledger or judgment token itself, and the ledger
+    vocabulary is built from its named tokens."""
+    assert SC.DISPOSITIONS == (SC.DISPOSITION_FIXED, SC.DISPOSITION_REFUTED,
+                               SC.DISPOSITION_OUT_OF_SCOPE)
+    closing = set(SC.DISPOSITIONS) - {SC.DISPOSITION_FIXED}
     assert set(RD.RULING_CLOSING_KINDS) == closing
     assert set(RD.RULING_REASON_FIELDS) == closing, (
         "ruling-reason-field-drift: a ledger disposition has no ruling reason field")
-    assert {RD.RULING_OUT_OF_SCOPE, RD.RULING_REFUTED} <= closing
+    assert RD.RULING_OUT_OF_SCOPE is SC.DISPOSITION_OUT_OF_SCOPE
+    assert RD.RULING_REFUTED is SC.DISPOSITION_REFUTED
     assert RD.RULING_GUIDANCE in RD.JUDGMENT_DISPOSITIONS
     assert set(RD.RULING_KINDS) == closing | {RD.RULING_GUIDANCE}
 
@@ -261,8 +265,8 @@ def test_a_closing_ruling_on_a_pending_audit_target_is_refused_until_the_audit_f
     with open(state_path, "rb") as fh:
         before = fh.read()
     out = _rule(tmp_path, d, ruling)
-    assert out["ok"] is False and out["reason"] == "ruling-target-under-audit", out
-    assert "after the audit folds" in out["detail"], out
+    assert out["ok"] is False and out["reason"] == "ruling-target-in-pending-wave", out
+    assert "after the %s wave folds" % RD.P_AUDITS in out["detail"], out
     with open(state_path, "rb") as fh:
         assert fh.read() == before
     phase, adv = TRI._drive_one_phase(d, gitdir, findings, head_path)
@@ -271,6 +275,55 @@ def test_a_closing_ruling_on_a_pending_audit_target_is_refused_until_the_audit_f
     row = next(r for r in TRI._state(d)[SC.DISPOSITION_LEDGER_KEY]
                if r.get(SC.FINDING_KEY_FIELD) == key)
     assert row["disposition"] == "refuted", row
+
+
+def test_a_closing_ruling_during_a_pending_scoped_finder_wave_is_refused_not_lost(tmp_path):
+    """The scoped fold re-stages the audits' new-issue candidates, re-stamping each raise after any
+    disposition written meanwhile — so a closing ruling on a candidate lodged while that wave is
+    pending would be silently lost. It is refused with the one pending-wave token, folds nothing,
+    and lodges once the waves that re-stage the candidate have folded."""
+    findings = [TRI._blocking_finding("unchecked index", 2)]
+    d, gitdir, head_path = _drive_to_audits(tmp_path, findings=findings, name="rule-scoped")
+    phase, adv = TRI._drive_one_phase(d, gitdir, findings, head_path)
+    assert phase == RD.P_AUDITS and adv["ok"], adv
+    if TRI._state(d)["step"] == RD.P_VERIFY:
+        TRI._drive_one_phase(d, gitdir, findings, head_path)
+    state = TRI._state(d)
+    assert state["step"] == RD.P_SCOPED and state["pending"]["phase"] == RD.P_SCOPED, (
+        state.get("step"))
+    cand = dict(TRI._blocking_finding("a fresh defect the audit saw", 3), originAuditId="audit-1")
+    state["_newIssues"] = [cand]
+    state["rounds"][str(state["round"])]["auditNewIssues"] = RD._audit_new_issue_rows([cand])
+    RD.save_state(d, state)
+    key = SC.new_issue_candidate_key(cand)
+    ruling = [{"id": key, "ruling": "refuted", "reason": "the audit misread the guard"}]
+    state_path = os.path.join(d, RD.STATE_FILE)
+    with open(state_path, "rb") as fh:
+        before = fh.read()
+    out = _rule(tmp_path, d, ruling)
+    assert out["ok"] is False and out["reason"] == "ruling-target-in-pending-wave", out
+    assert "after the %s wave folds" % RD.P_SCOPED in out["detail"], out
+    with open(state_path, "rb") as fh:
+        assert fh.read() == before
+    for _ in range(4):
+        if TRI._state(d)["step"] == RD.P_FIXER:
+            break
+        TRI._drive_one_phase(d, gitdir, findings, head_path)
+    assert TRI._state(d)["step"] == RD.P_FIXER, TRI._state(d).get("step")
+    assert _rule(tmp_path, d, ruling, name="after-scoped.json")["ok"] is True
+    row = next(r for r in TRI._state(d)[SC.DISPOSITION_LEDGER_KEY]
+               if r.get(SC.FINDING_KEY_FIELD) == key)
+    assert row["disposition"] == "refuted", row
+    assert row[SC.DISPOSITION_SEQ_FIELD] > row[SC.RAISED_SEQ_FIELD], row
+
+
+def test_a_step_with_no_declared_wave_reach_refuses_every_closing_ruling():
+    """Fail closed: a step the reach table does not declare reaches every target."""
+    assert RD._pending_wave_reach({"step": RD.P_VERIFY}) is RD._WAVE_REACH_ALL
+    assert RD._pending_wave_reach({"step": RD.P_VERIFY, "_verifyThen": RD.VERIFY_THEN_POST_AUDITS,
+                                   "_newIssues": [{"id": "k"}]}) >= {"k"}
+    assert RD._pending_wave_reach({"step": "dispatch-some-future-wave"}) is RD._WAVE_REACH_ALL
+    assert RD._pending_wave_reach({"step": RD.P_FIXER, "_newIssues": [{"id": "k"}]}) == set()
 
 
 def test_a_superseded_attempt_is_never_reissued(tmp_path):

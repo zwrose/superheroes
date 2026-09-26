@@ -838,8 +838,12 @@ addressable). One ruling per `id`. Kinds:
 Every entry and target is validated before anything folds. A closing ruling is written to the
 disposition ledger after the finding's latest raise, and the fix-batch chokepoint excludes any
 finding closed after its latest raise, so a ruled finding leaves the live batch and never re-enters
-one unless it is raised again. A closing ruling on a target of the pending fix audit is refused
-(the audit's fold would record `fixed` over it); lodge it after the audit folds. **A re-raise
+one unless it is raised again. A closing ruling on a target within reach of the pending wave is
+refused: a wave whose fold would write that target (the fix audit records `fixed`, the scoped
+finder re-stages the audits' new-issue candidates, the verifiers and synthesis re-disposition
+their staged findings) would silently overwrite the ruling, so it is lodged after that wave folds.
+The fix leg is exempt (the ruling re-derives its batch), and a step with no declared reach, such as
+the verify gate, refuses every closing ruling. **A re-raise
 reopens a ruled finding by design:** when a later round raises the finding again (a scoped-finder
 or panel re-raise), the earlier ruling answered only the earlier raise, so the finding is live work
 again and needs a fresh ruling. Each ruling is recorded on the round (`rulings`, with the
@@ -862,7 +866,7 @@ completes on the next terminal answer.
 | `ruling-provenance-missing` | `_provenance` absent or malformed |
 | `ruling-entry-invalid` | a repeated id, unknown kind, missing reason/guidance/followUp, Critical out of scope, guidance with no unexecuted fixer slice |
 | `ruling-target-unknown` | the id names no ledger finding and no recorded audit new-issue candidate |
-| `ruling-target-under-audit` | a closing ruling names a target of the pending fix audit — lodge it after the audit folds |
+| `ruling-target-in-pending-wave` | a closing ruling names a target the pending wave's fold would overwrite or re-stage — lodge it after that wave folds |
 | `ruling-owner-gate-pending` | an owner gate is pending — use `advance --owner-artifact` |
 | `ruling-attempt-has-results` | the pending attempt already has a landed or recorded result |
 | `ruling-session-terminal` | a terminal session that is certified, receipt-faulted, or has no refusal on disk |

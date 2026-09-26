@@ -31,6 +31,9 @@ __all__ = (
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
     "VERIFIED_HEAD_FIELD",
+    "DISPOSITION_FIXED",
+    "DISPOSITION_REFUTED",
+    "DISPOSITION_OUT_OF_SCOPE",
     "DISPOSITIONS",
     "FOLLOW_UP_FIELDS",
     "follow_up_shape_fault",
@@ -217,7 +220,10 @@ FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
 VERIFIED_HEAD_FIELD = "verifiedHead"
 FINDING_KEY_FIELD = "findingKey"
 
-DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
+DISPOSITION_FIXED = "fixed"
+DISPOSITION_REFUTED = "refuted"
+DISPOSITION_OUT_OF_SCOPE = "out-of-scope"
+DISPOSITIONS = (DISPOSITION_FIXED, DISPOSITION_REFUTED, DISPOSITION_OUT_OF_SCOPE)
 FOLLOW_UP_FIELDS = ("item", "revisitTrigger", "classClosure")
 
 

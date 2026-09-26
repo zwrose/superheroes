@@ -37,6 +37,7 @@ test-fixture fix below, no source file; green: `test_layer4d_rulings_1419.py` �
 | B12 | `if seed_round is not None:` → `if False and ...` | same test → `'recertified': {... 'certified': False ...}` / `assert False is True` |
 | B13 | `if key not in guidance_keys:` → `if False and ...` | `test_guidance_needs_an_unexecuted_fixer_slice` → `{'ok': True, ... 'phase': 'dispatch-audits' ...}` |
 | B14 | `_fold_audits`: `if candidates:` → `if False and candidates:` | `test_the_audits_fold_records_each_new_issue_candidate_on_the_round` → `KeyError: 'auditNewIssues'` |
+| B15 | `_plan_rulings` pending-wave refusal: `if entry.get("ruling") in RULING_CLOSING_KINDS and (` → `if False and ...` (fix round 2, in the build tree, reverted by the inverse edit) | `test_a_closing_ruling_during_a_pending_scoped_finder_wave_is_refused_not_lost` → `assert out["ok"] is False and out["reason"] == "ruling-target-in-pending-wave", out` / `{'ok': True, 'ruled': ['src/f00.py::a fresh defect the audit saw@L3'], 'superseded': {'attempt': 0, 'phase': 'dispatch-scoped-finder', 'round': 2}}`; a throwaway probe driving the scoped fold under the same neutralization read the ledger row back as `{'disposition': 'refuted', 'dispositionSeq': None, 'raisedSeq': 6}` — the ruling lost its sequence to the re-stage. Green after the inverse edit: `1 passed` |
 
 **Fixture fix found by B10 (bite-proof rubric, vacuous-proof face 2).** The first B10 run stayed
 **green** under neutralization: after a successful re-certification the refusal file is already

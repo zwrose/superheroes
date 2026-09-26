@@ -7358,17 +7358,18 @@ def _cmd_re_emit_locked(session_dir, by):
 # record with provenance), retires any emitted-but-unanswered order wave, and lets `next` emit the
 # re-derived step — so the order a seat runs is driver-rendered with the ruling already in it.
 
-# The ruling vocabulary is derived, never restated: a closing ruling is any ledger disposition but
-# the one only the audits fold records, and the guidance ruling is the judgment gate's guidance
-# token. Each closing kind names the ledger field its reason is written to; a ledger disposition
-# added without a reason field here fails the drift test that pins this table to the ledger.
-_AUDIT_ONLY_DISPOSITION = "fixed"
+# The ruling vocabulary is derived, never restated: every kind is a named ledger or judgment token.
+# A closing ruling is any ledger disposition but the one only the audits fold records, and the
+# guidance ruling is the judgment gate's guidance token. Each closing kind names the ledger field its
+# reason is written to; a ledger disposition added without a reason field here fails the drift test
+# that pins this table to the ledger.
+_AUDIT_ONLY_DISPOSITION = session_contract.DISPOSITION_FIXED
 RULING_CLOSING_KINDS = tuple(d for d in session_contract.DISPOSITIONS
                              if d != _AUDIT_ONLY_DISPOSITION)
 RULING_GUIDANCE = round_phases.JUDGMENT_FIX_WITH_GUIDANCE
 RULING_KINDS = RULING_CLOSING_KINDS + (RULING_GUIDANCE,)
-RULING_OUT_OF_SCOPE = "out-of-scope"
-RULING_REFUTED = "refuted"
+RULING_OUT_OF_SCOPE = session_contract.DISPOSITION_OUT_OF_SCOPE
+RULING_REFUTED = session_contract.DISPOSITION_REFUTED
 RULING_REASON_FIELDS = {RULING_OUT_OF_SCOPE: "outOfScopeReason", RULING_REFUTED: "refutedReason"}
 
 RULING_SESSION_UNREADABLE = "ruling-session-unreadable"
@@ -7377,7 +7378,7 @@ RULING_ARTIFACT_SHAPE = "ruling-artifact-shape"
 RULING_PROVENANCE_MISSING = "ruling-provenance-missing"
 RULING_ENTRY_INVALID = "ruling-entry-invalid"
 RULING_TARGET_UNKNOWN = "ruling-target-unknown"
-RULING_TARGET_UNDER_AUDIT = "ruling-target-under-audit"
+RULING_TARGET_IN_PENDING_WAVE = "ruling-target-in-pending-wave"
 RULING_OWNER_GATE_PENDING = "ruling-owner-gate-pending"
 RULING_ATTEMPT_HAS_RESULTS = "ruling-attempt-has-results"
 RULING_SESSION_TERMINAL = "ruling-session-terminal"
@@ -7436,11 +7437,11 @@ def _ruling_entry_fault(entry, target, terminal, guidance_keys, guided_keys):
             return "a Critical finding may not be ruled out of scope"
         fault = session_contract.follow_up_shape_fault(entry.get("followUp"))
         if fault is not None:
-            return "out-of-scope followUp: %s" % fault[1]
+            return "%s followUp: %s" % (RULING_OUT_OF_SCOPE, fault[1])
     if kind == RULING_GUIDANCE:
         guidance = entry.get("guidance")
         if not isinstance(guidance, str) or not guidance.strip():
-            return "a fix-with-guidance ruling needs non-empty guidance"
+            return "a %s ruling needs non-empty guidance" % RULING_GUIDANCE
         key = entry.get("id")
         if key not in guidance_keys:
             return ("guidance reaches a fixer only through an unexecuted fix slice; %r is not in "
@@ -7448,6 +7449,50 @@ def _ruling_entry_fault(entry, target, terminal, guidance_keys, guided_keys):
         if key in guided_keys:
             return "%r already carries guidance this round" % key
     return None
+
+
+# A closing ruling writes the ledger now; any pending wave whose fold later writes the same target —
+# a disposition over it, or a re-stage that re-stamps its raise — would silently lose the ruling.
+# So a closing ruling is refused on every target within the pending wave's reach: the state carries
+# that wave's fold reads findings from. The fix leg is the one step whose wave the ruling re-derives
+# (`_requeue_ruled_fix_batch`), so its reach is empty; the panel folds only its seats' fresh raises
+# (a re-raise reopens a ruled finding by design). The verify gate's reach is the reach of the fold it
+# hands off to: after the audits it runs the scoped fold. A step with no declared reach — the verify
+# gate before a delta round's audits, and any step added later — reaches every target: the refusal
+# fails closed.
+_WAVE_REACH_ALL = object()
+_WAVE_FOLD_CARRIES = {
+    P_FIXER: (),
+    P_PANEL: (),
+    P_VERIFIERS: ("_toVerify",),
+    P_SYNTHESIS: ("_verified", "_verifiedCarry"),
+    P_GAPSWEEP: ("findings",),
+    P_AUDITS: ("_auditTargets",),
+    P_SCOPED: ("_newIssues",),
+}
+_VERIFY_GATE_FOLD_CARRIES = {VERIFY_THEN_POST_AUDITS: _WAVE_FOLD_CARRIES[P_SCOPED]}
+
+
+def _pending_wave_reach(state):
+    """The finding keys the pending step's fold can write, or `_WAVE_REACH_ALL` when the step
+    declares no reach (fail closed)."""
+    step = state.get("step")
+    if step == P_VERIFY:
+        carries = _VERIFY_GATE_FOLD_CARRIES.get(state.get("_verifyThen"))
+    else:
+        carries = _WAVE_FOLD_CARRIES.get(step)
+    if carries is None:
+        return _WAVE_REACH_ALL
+    reach = set()
+    for field in carries:
+        rows = state.get(field)
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            keys = (row.get("id"), row.get(session_contract.FINDING_KEY_FIELD),
+                    _finding_identity_key(row), session_contract.new_issue_candidate_key(row))
+            reach.update(k for k in keys if isinstance(k, str) and k)
+    return reach
 
 
 def _plan_rulings(state, rulings, terminal):
@@ -7470,12 +7515,7 @@ def _plan_rulings(state, rulings, terminal):
     round_rec = state.get("rounds", {}).get(str(state.get("round")), {})
     guided_keys = {_history_row_key(r) for r in _guidance_log_rows(round_rec)
                    if isinstance(r, dict) and r.get("disposition") == RULING_GUIDANCE}
-    under_audit = set()
-    if not terminal and state.get("step") == P_AUDITS:
-        for t in state.get("_auditTargets") or []:
-            keys = ((t.get("id"), t.get(session_contract.FINDING_KEY_FIELD))
-                    if isinstance(t, dict) else ())
-            under_audit.update(k for k in keys if isinstance(k, str) and k)
+    wave_reach = set() if terminal else _pending_wave_reach(state)
     plan, seen = [], set()
     for i, entry in enumerate(rulings):
         where = "rulings[%d]" % i
@@ -7501,12 +7541,12 @@ def _plan_rulings(state, rulings, terminal):
             # Re-raised after its ledger raise: this fresh ruling re-stamps the raise, so a ruling
             # recorded before the re-raise never answers it.
             seed_round, target = hit
-        if key in under_audit and entry.get("ruling") in RULING_CLOSING_KINDS:
-            # The pending audit's fold records `fixed` over any disposition written now, so the
-            # ruling would be silently lost: it is lodged after the audit folds instead.
-            return None, RULING_TARGET_UNDER_AUDIT, (
-                "%s id %r is a pending audit target; lodge the ruling after the audit folds"
-                % (where, key))
+        if entry.get("ruling") in RULING_CLOSING_KINDS and (
+                wave_reach is _WAVE_REACH_ALL or key in wave_reach):
+            return None, RULING_TARGET_IN_PENDING_WAVE, (
+                "%s id %r is within reach of the pending %s wave, whose fold would overwrite or "
+                "re-stage the ruling; lodge the ruling after the %s wave folds"
+                % (where, key, state.get("step"), state.get("step")))
         fault_detail = _ruling_entry_fault(entry, target, terminal, guidance_keys, guided_keys)
         if fault_detail is not None:
             return None, RULING_ENTRY_INVALID, "%s (%r): %s" % (where, key, fault_detail)
