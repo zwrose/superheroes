@@ -1,5 +1,17 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
+## Head `62e2662f`: the `review-diff` verb, SHA binding, and a wider env strip (advisor S5 ruling)
+
+The probe worktree was detached at `62e2662f`. Each neutralization was a targeted edit, reverted by
+the inverse edit. After the last restore, `git status --porcelain` printed nothing. Green:
+`test_layer4d_stale_diff_1419.py`, `44 passed`.
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| L1 | `_reviewed_diff_is_stale`: SHA comparison off (`return False and bool(...)`; fold-counter binding only) | `test_a_commit_after_the_fold_is_never_certified_unseen` → `assert 'converged' == 'cannot-certify'`: a commit landed after the fold certified unseen |
+| L2 | `sanitized_view`: `GIT_GRAFT_FILE` removed from the strip list, and the `GIT_CONFIG_KEY_`/`VALUE_` prefix loop off | `test_the_git_env_strips_every_ancestry_and_config_shaping_variable[GIT_GRAFT_FILE]`, `[GIT_CONFIG_KEY_0]`, `[GIT_CONFIG_VALUE_0]` failed (3). The other 11 variables share the tuple mechanism already proven by the `GIT_GRAFT_FILE` case. |
+| L3 | the `review-diff` verb bypasses `review_diff_text` (a plain `git diff`) | `test_the_review_diff_verb_output_is_the_one_review_diff` → `AssertionError: diff --git .gitattributes .gitattributes` (the user's `diff.noprefix` reshaped the output) |
+
 ## Head `237f8841`: one hardened review-diff home; the eval replay seam (advisor S4 ruling)
 
 The probe worktree was detached at `237f8841`. Each neutralization was a targeted edit, reverted by
