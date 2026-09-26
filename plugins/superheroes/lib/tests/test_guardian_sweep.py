@@ -3285,6 +3285,41 @@ def test_verify_diff_scoped_dirty_worktree_at_head_pytest_summary_not_suite_vita
         assert vitals_out["notCollected"][name] == note
 
 
+def test_verify_diff_scoped_git_unavailable_at_head_pytest_summary_not_suite_vitals(
+        tmp_path, monkeypatch):
+    """Base equals HEAD but worktree diff unknown: fail closed, no suite vitals."""
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    summary = "=== 5 passed in 1.23s ==="
+    real_run_git_result = sc.run_git_result
+
+    def stub_run_git_result(cwd, *args, **kwargs):
+        if args[:4] == ("diff", "--name-only", "-z", "HEAD"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "TimeoutExpired")
+        return real_run_git_result(cwd, *args, **kwargs)
+
+    monkeypatch.setattr(sc, "run_git_result", stub_run_git_result)
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = summary
+            stderr = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "ok"
+    assert fact["diffScoped"] is True
+    assert fact["note"] == sc.VERIFY_DIFF_SCOPED_NOTE
+    vitals_out = gv.collect(repo, verify_result=out["verifyResult"])
+    note = sc.VERIFY_DIFF_SCOPED_NOTE
+    for name in ("suiteTestCount", "suiteSkipped", "suiteRuntimeSeconds"):
+        assert vitals_out["vitals"][name] is None
+        assert vitals_out["notCollected"][name] == note
+
+
 def test_verify_command_unresolvable_base_ref_is_not_run(tmp_path):
     repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
     calls = []

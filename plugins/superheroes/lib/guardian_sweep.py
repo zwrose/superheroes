@@ -319,21 +319,33 @@ def _worktree_paths_vs_head(cwd):
 
     Matches ``verify_touched_tests.changed_paths`` when the merge-base with the bound
     base is HEAD: fix-round edits are uncommitted and must still diff-scope verify vitals.
+
+    Returns ``None`` when git did not answer (``GIT_UNAVAILABLE`` or other non-``GIT_OK``
+    status) so callers fail closed instead of treating an unknown as a clean tree.
     """
     paths = set()
     diff = store_core.run_git_result(cwd, "diff", "--name-only", "-z", "HEAD")
-    if diff.status == store_core.GIT_OK and diff.out:
+    if diff.status != store_core.GIT_OK:
+        return None
+    if diff.out:
         paths |= {p for p in diff.out.split("\0") if p}
     untracked = store_core.run_git_result(
         cwd, "ls-files", "--others", "--exclude-standard", "-z")
-    if untracked.status == store_core.GIT_OK and untracked.out:
+    if untracked.status != store_core.GIT_OK:
+        return None
+    if untracked.out:
         paths |= {p for p in untracked.out.split("\0") if p}
     return sorted(paths)
 
 
 def _verify_diff_scoped_at_head(cwd, pin):
     """True when the bound base is HEAD but the working tree still scopes touched tests."""
-    return _pinned_base_equals_head(cwd, pin) and bool(_worktree_paths_vs_head(cwd))
+    if not _pinned_base_equals_head(cwd, pin):
+        return False
+    paths = _worktree_paths_vs_head(cwd)
+    if paths is None:
+        return True
+    return bool(paths)
 
 
 def _verify_base_equals_head_extra(stdout):
