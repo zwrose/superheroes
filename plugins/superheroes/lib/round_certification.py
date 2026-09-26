@@ -2881,6 +2881,8 @@ def _build_receipt_rounds(state, form):
             "selfRecovery": rec.get("selfRecovery"),
             "stallChoice": rec.get("stallChoice"),
         }
+        if not receipt_disclosures.reviewed_diff_source_carried(state):
+            del rd["reviewedDiffSource"]
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
         if _round_entry_key_allowed("verifyPasses", form, state):

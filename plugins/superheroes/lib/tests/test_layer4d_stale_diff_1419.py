@@ -1335,8 +1335,9 @@ def test_no_certified_head_is_read_from_live_head():
     rd = trees["round_driver.py"]
     assert _calls_in(rd, "_hardened_head") == {"derive_review_diff",
                                                "_resolve_fix_fold_head_sha"}
-    assert _calls_in(rd, "derive_review_diff") == {"_derive_head_diff_from_git",
-                                                   "_bind_round_diff_head", "_dispatch"}
+    # `_dispatch` holds both the `review-diff` verb and the fresh `next`, whose one derivation
+    # feeds the preliminary numstat binding and `_bind_round_diff_head` alike.
+    assert _calls_in(rd, "derive_review_diff") == {"_derive_head_diff_from_git", "_dispatch"}
     writers = []
     for fn in ast.walk(rd):
         if not isinstance(fn, ast.FunctionDef):
@@ -1399,3 +1400,98 @@ def test_reviewed_bytes_that_are_not_the_derived_ones_never_certify():
     RD._terminal_converged(state, state["config"], full_panel=True)
     assert state["terminal"] == "cannot-certify", state["certification"]
     assert "reviewed-diff-stale" in state["certification"]["reason"]
+
+
+@pytest.mark.parametrize("digest", ["absent", None, "", "0" * 63, "G" * 64, "mismatched"],
+                         ids=["absent", "none", "empty", "short", "not-hex", "mismatched"])
+def test_a_recorded_head_without_its_bound_digest_never_certifies(digest):
+    """The recorded pair, or nothing: a recorded SHA with no digest, a malformed digest, or
+    reviewed bytes that do not hash to it binds no bytes, so the reviewed diff is stale and the
+    terminal parks `reviewed-diff-stale`. The same state with the digest of its reviewed bytes is
+    current, so only the unbound half is refused (red token: `converged` naming the SHA)."""
+    sha = "a" * 40
+    diff = "diff --git a/f.py b/f.py\n@@ -0,0 +1 @@\n+x\n"
+    state = RD.new_state(TRD._cfg(diff=diff, diffHead={"sha": sha,
+                                                       "digest": RD.review_diff_digest(diff)}))
+    assert RD._reviewed_diff_stale_cause(state) is None
+    if digest == "absent":
+        state.pop("reviewedDiffDigest", None)
+    elif digest == "mismatched":
+        state["reviewedDiff"] = diff + "+tampered\n"
+    else:
+        state["reviewedDiffDigest"] = digest
+    assert RD._reviewed_diff_stale_cause(state) == (
+        "the reviewed diff is not the diff derived at its recorded head")
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["terminal"] == "cannot-certify", state["certification"]
+    assert "reviewed-diff-stale" in state["certification"]["reason"]
+    assert state["certification"].get("certifiedHead") is None
+
+
+def test_a_seam_backed_fixer_fold_claims_no_git_provenance(monkeypatch):
+    """Only the real git derivation earns `git-derived`: a head-diff seam (the eval harness's
+    scripted replay) performs no git operation, so the round records no source — while the git
+    branch of the same fold still records it (red token: `git-derived` on a seam fold)."""
+    monkeypatch.setattr(RD, "_enter_post_fix", lambda state, config, session_dir=None: None)
+    subjects = lambda reviewed, head, findings: ["Code"]  # noqa: E731
+
+    def fold(**kw):
+        state = {"round": 2, "rounds": {}, "decisions": [], "_fixBatch": [{"id": "a"}],
+                 "_fixBatchIndex": 0}
+        RD._fold_fixer(state, {"fixerVendor": "claude"}, {"fixes": []}, subjects, **kw)
+        return state
+
+    seamed = fold(head_diff_seam=lambda state: "diff --git a/x b/x\n")
+    assert seamed["headDiff"] == "diff --git a/x b/x\n"
+    assert "reviewedDiffSource" not in seamed["rounds"]["2"], seamed["rounds"]["2"]
+    monkeypatch.setattr(RD, "_derive_head_diff_from_git",
+                        lambda session_dir, state: "diff --git a/x b/x\n")
+    derived = fold()
+    assert derived["rounds"]["2"].get("reviewedDiffSource") == "git-derived"
+
+
+@pytest.mark.parametrize("version", [2, 3, 4, 5, 6])
+def test_reviewed_diff_source_rides_only_v6_receipts(version):
+    """A state minted before version 6 keeps the receipt shape its schema identifier names: no
+    `reviewedDiffSource` key in either receipt builder's round entries; a v6 state carries it
+    (red token: the key on a v2–5 round entry)."""
+    import round_certification as RC
+    state = RD.new_state(TRD._cfg())
+    state["schemaVersion"] = version
+    state["rounds"] = {"1": {"roundKind": "full", "reviewedDiffSource": "git-derived"}}
+    driver_rounds = RD.build_receipt(state)["rounds"]
+    writer_rounds = RC._build_receipt_rounds(state, RD.RECEIPT_FORM_CERTIFIED)
+    for rounds in (driver_rounds, writer_rounds):
+        assert len(rounds) == 1, rounds
+        if version >= 6:
+            assert rounds[0]["reviewedDiffSource"] == "git-derived", rounds
+        else:
+            assert "reviewedDiffSource" not in rounds[0], rounds
+
+
+def test_the_first_round_binding_reads_the_hardened_git_config(tmp_path, capsys, monkeypatch):
+    """The fresh `next` preliminary binding recomputes its numstat under the same hardening as
+    `derive_review_diff`: an inherited `GIT_CONFIG_*` that turns rename detection off cannot make
+    it disagree with a rename-form review diff (red token: `round-diff-base-mismatch`)."""
+    import json as _json
+    d = str(tmp_path)
+    argv = TRD._guard_argv(d)
+    repo = argv[1]
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    meta_path = os.path.join(d, RR.META_FILE)
+    with open(meta_path, encoding="utf-8") as fh:
+        meta = _json.load(fh)
+    meta["baseRef"] = base
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        _json.dump(meta, fh)
+    _git(repo, "mv", "f.py", "g.py")
+    _git(repo, "commit", "-qm", "rename")
+    _sha, text, refusal = RD.derive_review_diff(repo, base)
+    assert refusal is None and "rename from f.py" in text, text
+    with open(os.path.join(d, "round-1", "diff.txt"), "w", encoding="utf-8") as fh:
+        fh.write(text)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "diff.renames")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+    rc, out = TRD._cli_next_json(d, argv, capsys)
+    assert rc == 0 and out.get("ok"), out

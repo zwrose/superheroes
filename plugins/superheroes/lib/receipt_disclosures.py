@@ -18,6 +18,9 @@ SUPPORTED_STATE_VERSIONS = tuple(range(SCHEMA_VERSION, STATE_SCHEMA_VERSION + 1)
 # The C13 recorded-version boundary: `findingKey` receipt rows and the non-blocking Minor/Nit
 # disclosure ride every state version from 5 on (later bumps keep them).
 RECORDED_VERSION_BOUNDARY = 5
+# The C13 layer-4d boundary: a round entry carries `reviewedDiffSource` only for a state minted at
+# version 6 or later; an older state's receipt keeps the shape its schema identifier names.
+REVIEWED_DIFF_SOURCE_VERSION_BOUNDARY = 6
 
 VENDOR_SOURCE_DEFAULTED = "defaulted"
 
@@ -144,6 +147,10 @@ def _state_version(state):
 
 def _receipt_version(state):
     return _state_version(state) or SCHEMA_VERSION
+
+
+def reviewed_diff_source_carried(state):
+    return _receipt_version(state) >= REVIEWED_DIFF_SOURCE_VERSION_BOUNDARY
 
 
 def _round_entry_form_schema(form, state):

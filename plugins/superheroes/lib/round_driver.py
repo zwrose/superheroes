@@ -3862,6 +3862,8 @@ def _resolve_head_diff(artifact):
 
 
 REVIEWED_DIFF_SOURCE_GIT = "git-derived"
+# A review-diff digest (`review_diff_digest`): lowercase SHA-256 hex.
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 REVIEWED_DIFF_STALE = "reviewed-diff-stale"
 REVIEW_DIFF_TOO_LARGE = "review-diff-too-large"
 REVIEW_DIFF_UNAVAILABLE = "review-diff-unavailable"
@@ -4006,11 +4008,6 @@ def _reviewed_diff_stale_cause(state):
             return ("the diff at the post-fix head exceeds the review-diff size cap (%s) — a "
                     "partial diff is never reviewed" % REVIEW_DIFF_TOO_LARGE)
         return "the head moved and no diff at the post-fix head is derivable from git"
-    # The reviewed bytes must be the ones derived at the recorded SHA.
-    digest = state.get("reviewedDiffDigest")
-    reviewed = state.get("reviewedDiff")
-    if digest and not (isinstance(reviewed, str) and review_diff_digest(reviewed) == digest):
-        return "the reviewed diff is not the diff derived at its recorded head"
     # Bound to a SHA: it must be the head being certified. The fix-fold head is re-read at the
     # verify fold, so a commit landed after the fold moves it and the reviewed diff goes stale.
     bound = state.get("reviewedDiffSha")
@@ -4018,6 +4015,16 @@ def _reviewed_diff_stale_cause(state):
     if bound and certified and bound != certified:
         return ("a commit landed after the reviewed diff was derived (reviewed %s, head %s)"
                 % (bound, certified))
+    # The reviewed bytes must be the ones derived at the recorded SHA. A recorded SHA without a
+    # well-formed digest binds no bytes at all, so it is stale too — never a SHA-only certificate.
+    # (A malformed SHA records no head at all: certification withholds `reviewed-head-unrecorded`.)
+    digest = state.get("reviewedDiffDigest")
+    reviewed = state.get("reviewedDiff")
+    recorded = isinstance(bound, str) and _FULL_HEX_ID.fullmatch(bound)
+    if (recorded or digest) and not (
+            isinstance(digest, str) and _SHA256_HEX.fullmatch(digest)
+            and isinstance(reviewed, str) and review_diff_digest(reviewed) == digest):
+        return "the reviewed diff is not the diff derived at its recorded head"
     return None
 
 
@@ -4090,10 +4097,14 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     _clear_round(state, "reviewedDiffSource")
     for key in ("headDiffSha", "headDiffDigest", "headDiffRefusal"):
         state.pop(key, None)
-    head = (head_diff_seam(state) if head_diff_seam is not None
-            else _derive_head_diff_from_git(session_dir, state))
-    if head is not None:
-        _record_round(state, "reviewedDiffSource", REVIEWED_DIFF_SOURCE_GIT)
+    # Only the real git derivation earns the git-derived provenance; a seam (the eval harness's
+    # scripted replay) performs no git operation, so it records no source at all.
+    if head_diff_seam is not None:
+        head = head_diff_seam(state)
+    else:
+        head = _derive_head_diff_from_git(session_dir, state)
+        if head is not None:
+            _record_round(state, "reviewedDiffSource", REVIEWED_DIFF_SOURCE_GIT)
     state["headDiff"] = head
     state["_headDiffSource"] = head_source
     # No head diff derivable from git is an unknown surface: full panel. A supplied diff carries no
@@ -5485,6 +5496,8 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "compileDrops": rec.get("compileDrops"),
               "selfRecovery": rec.get("selfRecovery"),
               "stallChoice": rec.get("stallChoice")}
+        if not receipt_disclosures.reviewed_diff_source_carried(state):
+            del rd["reviewedDiffSource"]
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
         # Fossil-channel census requires a literal per-channel round-record read — not a variable
@@ -6821,17 +6834,35 @@ def _refuse_base_guard(session_dir, reason, detail=None, value=None):
     return 1
 
 
-def _bind_round_diff_head(session_dir, repo_root, base, round_diff, overrides):
-    """Bind the round-1 diff to the commit it was taken at, through `derive_review_diff` — the
-    same call SKILL.md's Setup runs as the `review-diff` verb. The supplied diff must be exactly
-    the review diff at the resolved SHA (else HEAD moved since Setup), and a head the session
-    recorded in meta (the PR's `headRefOid` in PR mode) must be that SHA (else the checkout is
-    behind or ahead). Records the pair in `overrides["diffHead"]`; returns a refusal exit or
-    None."""
-    head, text, refusal = derive_review_diff(repo_root, base)
-    if text is None:
-        return _refuse_base_guard(session_dir, refusal,
-                                  "the review diff at HEAD %s could not be derived" % head)
+def _hardened_numstat_run(head):
+    """The `run` seam `review_base_guard.check_diff_binding` recomputes its numstat through: the
+    same git env hardening (`sanitized_view.git_env`) and diff config pins
+    (`sanitized_view.DIFF_CONFIG_OVERRIDES`) the review diff is derived under, at the explicit
+    `head` SHA in place of `HEAD` — so the preliminary binding and `derive_review_diff` never read
+    two different git configurations. Returns stdout bytes, or None (no head, or git failed)."""
+    def run(cwd, *args):
+        if not head:
+            return None
+        revs = [("%s...%s" % (a[:-len("...HEAD")], head)) if a.endswith("...HEAD") else a
+                for a in args]
+        argv = ["git", "-C", cwd] + list(sanitized_view.DIFF_CONFIG_OVERRIDES) + revs
+        try:
+            proc = subprocess.run(argv, env=sanitized_view.git_env(), capture_output=True,
+                                  timeout=10)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+        return proc.stdout if proc.returncode == 0 else None
+    return run
+
+
+def _bind_round_diff_head(session_dir, derived, round_diff, overrides):
+    """Bind the round-1 diff to the commit it was taken at, through the `derive_review_diff`
+    result the fresh `next` took (`derived`, an admitted `(sha, text, refusal)`) — the same call
+    SKILL.md's Setup runs as the `review-diff` verb. The supplied diff must be exactly the review
+    diff at the resolved SHA (else HEAD moved since Setup), and a head the session recorded in
+    meta (the PR's `headRefOid` in PR mode) must be that SHA (else the checkout is behind or
+    ahead). Records the pair in `overrides["diffHead"]`; returns a refusal exit or None."""
+    head, text, _refusal = derived
     if text != round_diff:
         return _refuse_base_guard(
             session_dir, ROUND_DIFF_HEAD_MISMATCH,
@@ -12168,8 +12199,16 @@ def _dispatch(args):
                     return _refuse_base_guard(args.session_dir, res["reason"], res.get("detail"),
                                               value=args.diff_path if args.diff_path else None)
                 overrides["diff"] = res["text"]
+                # One derivation serves both bindings: the preliminary numstat binding reads the
+                # SHA it resolved, under the same hardening, never a second lookup of HEAD.
+                derived = derive_review_diff(repo_root, guard["baseRef"])
+                if derived[1] is None:
+                    return _refuse_base_guard(
+                        args.session_dir, derived[2],
+                        "the review diff at HEAD %s could not be derived" % derived[0])
                 bind = review_base_guard.check_diff_binding(
-                    res["text"], guard["baseRef"], repo_root)
+                    res["text"], guard["baseRef"], repo_root,
+                    run=_hardened_numstat_run(derived[0]))
                 if not bind["ok"]:
                     return _refuse_base_guard(
                         args.session_dir, bind["reason"], bind.get("detail"))
@@ -12179,8 +12218,7 @@ def _dispatch(args):
                         overrides[key] = guard[key]
                 overrides["baseGuard"] = BASE_GUARD_CHECKED
                 overrides["diffBinding"] = bind["binding"]
-                refusal = _bind_round_diff_head(args.session_dir, repo_root, guard["baseRef"],
-                                                res["text"], overrides)
+                refusal = _bind_round_diff_head(args.session_dir, derived, res["text"], overrides)
                 if refusal is not None:
                     return refusal
             elif args.diff_path:
