@@ -46,6 +46,7 @@ Advisor seat `~/.claude-four` (session 4189b35c). Vet tree: detached `67dbc18f`,
 - FU6: filed #1447 (one cleanup issue with FU3 and FU4)
 - FU7: folded into #1420 (C13 4e)
 - FU8: declined, since C13 answers the probe's keep-or-retire question from the probe record (trigger: that read, or GPT-6 Sol missing the plant in 3 of its first 5 probes)
+<!-- superheroes:dispositions FU1 FU2 FU3 FU4 FU5 FU6 FU7 FU8 -->
 
 Registry rows are on #695.
 

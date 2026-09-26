@@ -1133,12 +1133,15 @@ against the registry allowlist (#600), so the advisor can vet what ran without y
 but cannot file yourself (you never wire the board). List them under that exact heading (write
 **None** when there are none) so the advisor can turn them into issues and the advisor's triage
 backstop can grep the section. Key every item as one top-level bullet, `- FU<n> [<class>] <text>`,
-with the class one of `CLASSES` in `lib/vet_slot.py`. An optional first line
-counts them: `Follow-ups: <n> (<m> owner-call)`. Indented sub-bullets may add detail, but an `FU`
-id sits only at top level. The advisor's slot writer refuses any other line, so an unkeyed item
-cannot drop out unseen. The handback comment states the same count line. When a PR closes or is
-superseded before its vet, carry its follow-ups into the superseding build record, each under the
-next unused FU number, its origin as text: `- FU<n> [<class>] (from #N FU<m>) <text>`. For both lanes the build record also carries a **size tripwire** row,
+with the class one of `owner-call`, `defect`, `craft`, `flake`, or `info`. An optional first line
+counts them: `Follow-ups: <n> (<m> owner-call)`. Indented sub-bullets may add detail. Below the
+list, write one marker line, the machine's copy of the same ids from the same list:
+`<!-- superheroes:followups FU1 FU2 -->`, or `<!-- superheroes:followups none -->` when the section
+says None. The advisor's slot writer compares this marker, not the prose, with the receipt's
+dispositions marker; it trusts the marker as your declaration, and the vet reads both. The handback
+comment states the same count line. When a PR closes or is superseded before its vet, carry its
+follow-ups into the superseding build record, each under the next unused FU number (in the marker
+too), its origin as text: `- FU<n> [<class>] (from #N FU<m>) <text>`. For both lanes the build record also carries a **size tripwire** row,
 filled by §4's size step: `not crossed (N of estimate M)`; `crossed at <commit>; messaged <time>;
 advisor ruled <split|continue|park> (<issue comment link>)`; `crossed at <commit>; messaged <time>;
 parked, no reply (<issue comment link>)`; `crossed at <commit>; messaging

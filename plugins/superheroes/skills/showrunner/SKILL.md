@@ -546,8 +546,9 @@ above).
      **The merged-PR backstop gets the same actor and the same trigger:** at vet, grep merged-PR
      bodies for the **Follow-ups for the advisor** heading (the workhorse charter standardizes it;
      `<!-- superheroes:build-record -->` is the grep anchor it never had) and reconcile against the
-     board. Standing duty. It may run `vet_slot.py check --pr <n> --repo <owner/name>` per PR. It
-     also flags a PR **closed** unmerged whose follow-ups list is not `None` and that has no vet
+     board. Standing duty. It may run `vet_slot.py check --pr <n> --repo <owner/name>` per PR, which
+     compares the build record's followups marker with the receipt's dispositions marker. It also
+     flags a PR **closed** unmerged whose followups marker is not `none` and that has no vet
      receipt. Those follow-ups carry into the superseding PR's build record in the carry format
      the **workhorse** charter's §11 defines — that section is the one home for the bullet shape.
      **Install the contract's distilled preamble at the top of the collector issue body, above the
@@ -596,8 +597,9 @@ above).
      receipt, or have the builder correct its list. Never work around a refusal with a hand edit.
      Re-stamping a dropped marker or creating the slot on a pre-contract PR (below) stays your own
      hand edit to your own slot, made before the command runs. A build record that predates keyed
-     follow-ups is keyed in place first: number its items FU1.. in order with a class each, change
-     nothing else, record that edit in the receipt, then run the command.
+     follow-ups is keyed in place first: number its items FU1.. in order with a class each and add
+     the followups marker line, change nothing else, record that edit in the receipt, and put the
+     dispositions marker in the receipt before the command runs.
      **The verdict's form** lives in
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` spine field 1 —
      read it there at vet time; a slot not in that form reads NOT-READY by construction.

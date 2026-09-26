@@ -2,22 +2,26 @@
 """Write or check the advisor-vet slot of a PR body against its vet receipt.
 
 Consumers: the showrunner vet's owner-half write (``write``) and the merged or
-closed-PR follow-ups sweep (``check``). ``write`` changes the PR body only in the
-span strictly between the advisor-vet marker line and the build-record marker
-line, and only after every follow-up id in the build record has exactly one
-recognized disposition bullet in the latest vet receipt (and vice versa). Any
-failed read or check is a refusal with one of ten reasons (``bad-argument``,
-``read-failed``, ``markers-invalid``, ``followups-malformed``, ``receipt-missing``,
-``dispositions-malformed``, ``followup-undispositioned``, ``none-over-list``,
-``write-failed``, ``write-unconfirmed``) and a detail naming what was wrong; no edit
-is made, except for ``write-unconfirmed``: the edit call was launched (and may have
-failed) but the readback failed or differed from the pushed body. One JSON line on stdout; exit 0 on ok, 1 on refusal."""
+closed-PR follow-ups sweep (``check``). The writer compares two machine-readable
+marker lists and reads no other prose: the build record's
+``<!-- superheroes:followups FU1 FU2 -->`` marker (or ``none``) and the latest vet
+receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
+``write`` changes the PR body only in the span strictly between the advisor-vet
+marker line and the build-record marker line, and only when the two lists name the
+same ids. The followups marker is the builder's own declaration; the writer trusts
+it and does not re-derive it from the prose; the vet reads both. Any failed read or
+check is a refusal with one of nine reasons (``bad-argument``, ``read-failed``,
+``markers-invalid``, ``receipt-missing``, ``followup-undispositioned``,
+``disposition-unknown``, ``none-over-list``, ``write-failed``,
+``write-unconfirmed``) and a detail naming what was wrong; no edit is made, except
+for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
+readback failed or differed from the pushed body. One JSON line on stdout; exit 0
+on ok, 1 on refusal."""
 import argparse
 import json
 import os
 import re
 import shutil
-import string
 import subprocess
 import sys
 import tempfile
@@ -32,19 +36,10 @@ import md_fence  # noqa: E402
 GH_TIMEOUT = 120
 RECEIPT_MARKER = "<!-- superheroes:vet-receipt -->"
 PENDING_MARKER = "<!-- superheroes:pending-proposals -->"
-FOLLOWUPS_HEADING = "Follow-ups for the advisor"
-DISPOSITIONS_PREFIX = "**Dispositions — completed"
-CLASSES = frozenset({"owner-call", "defect", "craft", "flake", "info"})
-DISPOSITIONS = frozenset({"fixed", "filed", "folded", "collector", "declined", "info"})
-NONE_WORDS = ("None", "`None`")
+FOLLOWUPS_MARKER_NAME = "followups"
+DISPOSITIONS_MARKER_NAME = "dispositions"
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
-_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
-_ITEM_RE = re.compile(r"^- FU(\d+) \[([a-z-]+)\] \S")
-_MARKUP_RE = re.compile(r"^(?:[ \t>*_`+-]|\d{1,9}[.)]|\[[ xX]\])+")
-_FU_LEAD_RE = re.compile(r"^FU(\d+)\b")
-_COUNT_RE = re.compile(r"^Follow-ups: (\d+) \((\d+) owner-call\)$")
-_DISPOSITION_RE = re.compile(r"^- FU(\d+): (\S.*)$")
 
 
 class _Refusal(Exception):
@@ -52,10 +47,6 @@ class _Refusal(Exception):
         super().__init__(reason)
         self.reason = reason
         self.detail = detail
-
-
-def _malformed(detail):
-    return _Refusal("followups-malformed", detail)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -67,166 +58,68 @@ def _refusal(reason, detail):
     return {"ok": False, "reason": reason, "detail": detail}
 
 
-def _lines(text):
-    """(bare lines, start offsets)."""
-    lines = text.splitlines(keepends=True)
-    starts, pos = [], 0
-    for line in lines:
-        starts.append(pos)
-        pos += len(line)
-    return [line.rstrip("\r\n") for line in lines], starts
+def read_marker_list(text, name, after=0):
+    """Return the ids of the one live ``<!-- superheroes:<name> ... -->`` line, or None for ``none``.
 
-
-def _heading(line):
-    match = _HEADING_RE.match(line)
-    if not match:
-        return None, None
-    text = re.sub(r"(?:^|[ \t]+)#+$", "", (match.group(2) or "")).strip()
-    return len(match.group(1)), text
-
-
-def _lead_fu(line):
-    """The FU id the line's visible text begins with, past any leading markup, else None."""
-    match = _FU_LEAD_RE.match(_MARKUP_RE.sub("", line))
-    return match and "FU%d" % int(match.group(1))
-
-
-def _uncommented(bare, inert):
-    """(lines with HTML-comment spans blanked, comment-open-at-line-start flags); fenced lines
-    pass through unchanged and never open a comment."""
-    out, opened, is_open = [], [], False
-    for line, dead in zip(bare, inert):
-        opened.append(is_open)
-        if dead:
-            out.append(line)
-            continue
-        keep, pos = [], 0
-        while True:
-            if is_open:
-                end = line.find("-->", pos)
-                if end < 0:
-                    break
-                is_open, pos = False, end + 3
-            else:
-                start = line.find("<!--", pos)
-                if start < 0:
-                    keep.append(line[pos:])
-                    break
-                keep.append(line[pos:start])
-                is_open, pos = True, start + 4
-        out.append("".join(keep))
-    return out, opened
-
-
-def _parse_followups(body, build_offset):
-    """Return the list of FU ids, or None for an explicit ``None`` section.
-
-    The section parse checks the format; then every FU-item-shaped live line anywhere below the
-    build-record marker must be one of the section's own item lines, counted, not deduplicated."""
-    bare, starts = _lines(body)
+    A marker line starts at column zero, outside any code fence and outside any HTML comment left
+    open by an earlier line; it must not start above offset ``after``."""
+    prefix = "<!-- superheroes:%s" % name
+    raw = text.splitlines(keepends=True)
+    bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
-    first = next(i for i, s in enumerate(starts) if s >= build_offset)
-    live = [i for i in range(first, len(bare)) if not inert[i]]
-    headings = [i for i in live if _heading(bare[i])[1] == FOLLOWUPS_HEADING]
-    if len(headings) > 1:
-        raise _malformed("follow-ups heading appears %d times" % len(headings))
-    ids = _parse_section(bare, inert, first)
-    spare, outside = list(ids or []), []
-    for i in live:
-        fu = _lead_fu(bare[i])
-        if fu in spare:
-            spare.remove(fu)
-        elif fu:
-            outside.append(fu)
-    if outside:
-        raise _malformed("follow-up ids outside the follow-ups list: %s" % ", ".join(outside))
-    return ids
-
-
-def _parse_section(bare, inert, first):
-    heading_at = level = None
-    depth = 0  # live <details nesting; the first opener is the build record's own
-
-    def closes_record(i):
-        nonlocal depth
-        if inert[i]:
-            return False
-        line = bare[i].strip()
-        if line.startswith("<details") and not line.endswith("</details>"):
-            depth += 1
-        elif line == "</details>":
-            depth -= 1
-            return depth <= 0
-        return False
-
-    for i in range(first, len(bare)):
-        if closes_record(i):
-            break
-        lvl, text = (None, None) if inert[i] else _heading(bare[i])
-        if lvl is not None and text == FOLLOWUPS_HEADING:
-            heading_at, level = i, lvl
-            break
-    if heading_at is None:
-        raise _malformed("no %r heading inside the build record" % FOLLOWUPS_HEADING)
-    section = []
-    for i in range(heading_at + 1, len(bare)):
-        if not inert[i]:
-            lvl, _ = _heading(bare[i])
-            if (lvl is not None and lvl <= level) or closes_record(i):
-                break
-        if bare[i].strip():
-            section.append((bare[i], inert[i]))
-    count = None
-    if section and not section[0][1] and _COUNT_RE.match(section[0][0].rstrip()):
-        count = _COUNT_RE.match(section[0][0].rstrip())
-        section = section[1:]
-    if len(section) == 1 and not section[0][1] and section[0][0].strip() in NONE_WORDS:
-        if count is not None and (count.group(1), count.group(2)) != ("0", "0"):
-            raise _malformed("count line says %s (%s owner-call) over None" % (
-                count.group(1), count.group(2)))
+    found, offset, in_comment = [], 0, False
+    for line, dead, whole in zip(bare, inert, raw):
+        if not dead:
+            rest = line[len(prefix):]
+            if not in_comment and line.startswith(prefix) and (rest[:1] == " " or rest[:3] == "-->"):
+                found.append((offset, line))
+            pos = 0
+            while True:  # carry the open-comment state to the next line
+                pos = line.find("-->" if in_comment else "<!--", pos)
+                if pos < 0:
+                    break
+                pos, in_comment = pos + (3 if in_comment else 4), not in_comment
+        offset += len(whole)
+    # axis: a followups or dispositions marker present other than exactly once refuses markers-invalid
+    if len(found) != 1:
+        raise _Refusal("markers-invalid", "%s marker appears %d times" % (name, len(found)))
+    start, line = found[0]
+    # axis: a followups marker above the build-record marker refuses markers-invalid
+    if start < after:
+        raise _Refusal("markers-invalid", "%s marker is not below the build-record marker" % name)
+    match = re.match(r"^<!-- superheroes:%s (none|FU[1-9][0-9]*(?: FU[1-9][0-9]*)*) -->$"
+                     % re.escape(name), line.rstrip())
+    # axis: a marker line off the exact shape refuses markers-invalid
+    if not match:
+        raise _Refusal("markers-invalid", "%s marker is malformed: %s" % (name, line))
+    if match.group(1) == "none":
         return None
-    ids, owner_calls, have_item = [], 0, False
-    for line, is_inert in section:
-        indent = md_fence.indent_width(line)
-        if is_inert or indent >= 2:
-            if _lead_fu(line):
-                raise _malformed("nested follow-up id: %s" % line.strip())
-            if not have_item:
-                raise _malformed("unkeyed line: %s" % line.strip())
-            continue
-        match = _ITEM_RE.match(line)
-        if not match:
-            raise _malformed("unkeyed line: %s" % line.strip())
-        if match.group(2) not in CLASSES:
-            raise _malformed("unknown class: %s" % match.group(2))
-        fu_id = "FU%d" % int(match.group(1))
-        if fu_id in ids:
-            raise _malformed("duplicate follow-up id: %s" % fu_id)
-        ids.append(fu_id)
-        owner_calls += match.group(2) == "owner-call"
-        have_item = True
-    if not ids:
-        raise _malformed("unkeyed section: no follow-up items and not None")
-    if count is not None and (int(count.group(1)), int(count.group(2))) != (len(ids), owner_calls):
-        raise _malformed("count line says %s (%s owner-call), items are %d (%d owner-call)" % (
-            count.group(1), count.group(2), len(ids), owner_calls))
+    ids = match.group(1).split()
+    for i, fu_id in enumerate(ids):
+        # axis: an id listed twice in one marker refuses markers-invalid
+        if fu_id in ids[:i]:
+            raise _Refusal("markers-invalid", "%s marker repeats %s" % (name, fu_id))
     return ids
 
 
 def analyze_body(body):
-    """Check the body's markers and follow-ups; return (advisor_offset, build_offset, ids)."""
-    if not body.strip():
-        raise _Refusal("read-failed", "PR body is empty")
+    """Check the body read and its markers; return (advisor_offset, build_offset, followups)."""
+    # axis: an empty or non-string body read refuses read-failed
+    if not isinstance(body, str) or not body.strip():
+        raise _Refusal("read-failed", "PR body is empty" if isinstance(body, str) else
+                       "PR body is not a string")
     offsets = {}
     for name in ("advisor-vet", "build-record"):
         found = grounding_stage.find_standalone_markers(body, grounding_stage.REGION_MARKERS[name])
+        # axis: a slot marker present other than exactly once refuses markers-invalid
         if len(found) != 1:
             raise _Refusal("markers-invalid", "%s marker appears %d times" % (name, len(found)))
         offsets[name] = found[0]
+    # axis: an advisor-vet marker not above the build-record marker refuses markers-invalid
     if offsets["advisor-vet"] >= offsets["build-record"]:
         raise _Refusal("markers-invalid", "advisor-vet marker is not above the build-record marker")
-    ids = _parse_followups(body, offsets["build-record"])
-    return offsets["advisor-vet"], offsets["build-record"], ids
+    followups = read_marker_list(body, FOLLOWUPS_MARKER_NAME, after=offsets["build-record"])
+    return offsets["advisor-vet"], offsets["build-record"], followups
 
 
 def check_slot_text(slot_text):
@@ -247,46 +140,6 @@ def _select_receipt(comments):
     return best
 
 
-def _parse_dispositions(receipt_body):
-    """Return the list of FU ids disposed, or None for an explicit ``None`` field."""
-    raw, _ = _lines(receipt_body)
-    inert = md_fence.scan_contexts(raw).inert
-    bare, opened = _uncommented(raw, inert)  # a disposition counts only if visible
-    start = next((i for i, l in enumerate(bare)
-                  if not inert[i] and l.lstrip().startswith(DISPOSITIONS_PREFIX)), None)
-    end = None if start is None else next(
-        (i for i in range(start + 1, len(bare))
-         if not inert[i] and not opened[i] and raw[i].strip() == PENDING_MARKER), None)
-    if end is None:
-        raise _Refusal("dispositions-malformed", "no completed-dispositions field closed by the "
-                       "pending-proposals marker")
-    head = bare[start].lstrip()[len(DISPOSITIONS_PREFIX):]
-    close = head.find("**")
-    pieces = [head[close + 2:].strip()] if close >= 0 else []
-    pieces = [p for p in pieces + [l.strip() for l in bare[start + 1:end]] if p]
-    if len(pieces) == 1 and pieces[0] in NONE_WORDS:
-        return None
-    tail = [head[close + 2:].strip()] if close >= 0 else []
-    has_none = any(p in NONE_WORDS for p in tail + [
-        bare[i].strip() for i in range(start + 1, end) if not inert[i]])
-    ids = []
-    for i in range(start + 1, end):
-        match = None if inert[i] else _DISPOSITION_RE.match(bare[i])
-        if not match:
-            continue
-        fu_id = "FU%d" % int(match.group(1))
-        word = match.group(2).split()[0].lower().rstrip(string.punctuation)
-        if word not in DISPOSITIONS:
-            raise _Refusal("dispositions-malformed", "unrecognized disposition %s: %s" % (fu_id, word))
-        if fu_id in ids:
-            raise _Refusal("dispositions-malformed", "duplicate disposition for %s" % fu_id)
-        ids.append(fu_id)
-    if has_none and ids:
-        raise _Refusal("dispositions-malformed", "None and keyed dispositions both appear: %s"
-                       % ", ".join(ids))
-    return ids
-
-
 def evaluate(verb, body, comments, slot_text=None):
     """The chokepoint: every check, then the result (with ``newBody`` for write)."""
     try:
@@ -299,15 +152,18 @@ def evaluate(verb, body, comments, slot_text=None):
                 return {"ok": True, "verb": "check", "followups": [], "receipt": None,
                         "receiptPresent": False}
             raise _Refusal("receipt-missing", "no comment opens with the vet-receipt marker")
-        disposed = _parse_dispositions(receipt["body"])
+        disposed = read_marker_list(receipt["body"], DISPOSITIONS_MARKER_NAME)
+        # axis: a none dispositions marker over a followups list refuses none-over-list
         if ids is not None and disposed is None:
-            raise _Refusal("none-over-list", "receipt dispositions read None over %s" % ", ".join(ids))
+            raise _Refusal("none-over-list", "receipt dispositions read none over %s" % " ".join(ids))
         missing = [i for i in (ids or []) if i not in (disposed or [])]
+        # axis: a follow-up id with no disposition refuses followup-undispositioned
         if missing:
             raise _Refusal("followup-undispositioned", "%s: no disposition" % ", ".join(missing))
         unknown = [i for i in (disposed or []) if i not in (ids or [])]
+        # axis: a disposition id the build record lacks refuses disposition-unknown
         if unknown:
-            raise _Refusal("dispositions-malformed", "unknown follow-up ids: %s" % ", ".join(unknown))
+            raise _Refusal("disposition-unknown", "%s: not in the followups marker" % ", ".join(unknown))
     except _Refusal as exc:
         return _refusal(exc.reason, exc.detail)
     result = {"ok": True, "verb": verb, "followups": ids or [],

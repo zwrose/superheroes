@@ -16,6 +16,9 @@ VIEW = ("gh", "pr", "view", "42", "-R", REPO, "--json", "body")
 COMMENTS = ("gh", "api", "repos/owner/example/issues/42/comments", "--paginate", "--slurp")
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "vet_slot")
 
+FU_MARKER = "<!-- superheroes:followups FU1 FU2 -->"
+DISP_MARKER = "<!-- superheroes:dispositions FU1 FU2 -->"
+
 BODY = """## Advisor vet
 <!-- superheroes:advisor-vet -->
 old slot text
@@ -29,6 +32,7 @@ Follow-ups: 2 (1 owner-call)
 - FU1 [owner-call] decide the thing
   - a sub-bullet with detail
 - FU2 [defect] fix the other thing
+<!-- superheroes:followups FU1 FU2 -->
 </details>
 
 trailer
@@ -40,6 +44,7 @@ RECEIPT = """<!-- superheroes:vet-receipt -->
 **Dispositions — completed.** The vet's own items are done.
 - FU1: filed #12
 - FU2: fixed in PR
+<!-- superheroes:dispositions FU1 FU2 -->
 
 <!-- superheroes:pending-proposals -->
 **Pending.** `None`.
@@ -159,28 +164,32 @@ def test_ok_check_reports_receipt_present():
 
 # --- refusal fixtures: literal token, a distinguishing detail, zero edit calls -------------
 
-def test_module_emits_exactly_ten_tokens():
+NINE_TOKENS = {
+    "bad-argument", "read-failed", "markers-invalid", "receipt-missing",
+    "followup-undispositioned", "disposition-unknown", "none-over-list", "write-failed",
+    "write-unconfirmed",
+}
+
+
+def test_module_emits_exactly_nine_tokens():
     source = inspect.getsource(vs)
     emitted = set(re.findall(r'_Refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'_refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'reason="([a-z-]+)"', source))
-    assert emitted == {
-        "bad-argument", "read-failed", "markers-invalid", "followups-malformed",
-        "receipt-missing", "dispositions-malformed", "followup-undispositioned",
-        "none-over-list", "write-failed", "write-unconfirmed",
-    }
+    assert emitted == NINE_TOKENS
+    for retired in ("followups-malformed", "dispositions-malformed"):
+        assert retired not in source, retired
 
 
-def _body_with_followups(section):
-    return BODY.replace(
-        "Follow-ups: 2 (1 owner-call)\n- FU1 [owner-call] decide the thing\n"
-        "  - a sub-bullet with detail\n- FU2 [defect] fix the other thing\n", section)
+def _body_marker(line):
+    """BODY with its live followups marker line replaced by ``line`` (may be several lines)."""
+    assert BODY.count(FU_MARKER + "\n") == 1
+    return BODY.replace(FU_MARKER + "\n", line)
 
 
-def _receipt_with(field):
-    return RECEIPT.replace(
-        "**Dispositions — completed.** The vet's own items are done.\n- FU1: filed #12\n"
-        "- FU2: fixed in PR\n", field)
+def _receipt_marker(line):
+    assert RECEIPT.count(DISP_MARKER + "\n") == 1
+    return RECEIPT.replace(DISP_MARKER + "\n", line)
 
 
 BODY_CASES = [
@@ -195,71 +204,32 @@ BODY_CASES = [
      BODY.replace("<!-- superheroes:build-record -->\n", "")),
     ("markers-invalid", "build-record marker appears 2 times",
      BODY.replace("trailer", "<!-- superheroes:build-record -->")),
-    ("markers-invalid", "not above",
-     "<!-- superheroes:build-record -->\nx\n<!-- superheroes:advisor-vet -->\n"
-     "### Follow-ups for the advisor\nNone\n"),
-    ("followups-malformed", "heading", BODY.replace("### Follow-ups for the advisor", "### Other")),
-    ("followups-malformed", "heading",
-     BODY.replace("### Follow-ups for the advisor", "```\n### Follow-ups for the advisor\n```")),
-    ("followups-malformed", "no follow-up items", _body_with_followups("")),
-    ("followups-malformed", "unkeyed line: None", _body_with_followups("None\n- FU1 [defect] x\n")),
-    ("followups-malformed", "unkeyed line: - plain bullet", _body_with_followups("- plain bullet\n")),
-    ("followups-malformed", "unkeyed line: indented",
-     _body_with_followups("  indented before any item\n- FU1 [defect] x\n")),
-    ("followups-malformed", "no follow-up items", _body_with_followups("Follow-ups: 0 (0 owner-call)\n")),
-    ("followups-malformed", "nested follow-up id: - FU2",
-     _body_with_followups("- FU1 [defect] x\n  - FU2 [craft] hidden\n")),
-    ("followups-malformed", "nested follow-up id: FU2",
-     _body_with_followups("- FU1 [defect] x\n    FU2 [craft] hidden\n")),
-    ("followups-malformed", "nested follow-up id: + FU2",
-     _body_with_followups("- FU1 [defect] x\n  + FU2 [craft] hidden\n")),
-    ("followups-malformed", "nested follow-up id: 1. FU2",
-     _body_with_followups("- FU1 [defect] x\n  1. FU2 [craft] hidden\n")),
-    ("followups-malformed", "nested follow-up id: 1) FU2",
-     _body_with_followups("- FU1 [defect] x\n  1) FU2 [craft] hidden\n")),
-    ("followups-malformed", "unknown class: bogus", _body_with_followups("- FU1 [bogus] x\n")),
-    ("followups-malformed", "duplicate follow-up id: FU1",
-     _body_with_followups("- FU1 [defect] x\n- FU1 [craft] y\n")),
-    ("followups-malformed", "count line says 3 (0 owner-call), items are 1 (0 owner-call)",
-     _body_with_followups("Follow-ups: 3 (0 owner-call)\n- FU1 [defect] x\n")),
-    ("followups-malformed", "count line says 1 (1 owner-call), items are 1 (0 owner-call)",
-     _body_with_followups("Follow-ups: 1 (1 owner-call)\n- FU1 [defect] x\n")),
-    ("followups-malformed", "count line says 1 (0 owner-call) over None",
-     _body_with_followups("Follow-ups: 1 (0 owner-call)\nNone\n")),
-    ("followups-malformed", "heading inside the build record",
-     BODY.replace("### Follow-ups for the advisor\n", "### Other\n")
-     .replace("trailer\n", "### Follow-ups for the advisor\nNone\n")),
-    # every FU item below the build-record marker is compared, wherever it sits
-    ("followups-malformed", "outside the follow-ups list: FU2",
-     _body_with_followups("- FU1 [defect] first\n</details>\n- FU2 [defect] missing\n")),
-    ("followups-malformed", "outside the follow-ups list: FU1",
-     _body_with_followups("- FU1 [defect] first\n</details>\n- FU1 [defect] missing\n")),
-    ("followups-malformed", "duplicate follow-up id: FU1",
-     _body_with_followups("- FU1 [defect] new\n- FU1 [defect] (from #42 FU1) old\n")),
-    ("followups-malformed", "follow-ups heading appears 2 times",
-     _body_with_followups("- FU1 [defect] x\n- FU2 [defect] y\n\n### Follow-ups for the advisor\n"
-                          "- FU3 [defect] z\n")),
-    ("followups-malformed", "follow-ups heading appears 2 times",
-     _body_with_followups("None\n\n### Follow-ups for the advisor\n- FU1 [defect] missing\n")),
-    ("followups-malformed", "outside the follow-ups list: FU3",
-     _body_with_followups("- FU1 [defect] x\n- FU2 [defect] y\n\n### Other\n- FU3 [defect] hidden\n")),
-    ("followups-malformed", "outside the follow-ups list: FU1",
-     _body_with_followups("None\n\n### Other\n1. FU1 [defect] hidden\n")),
-    ("followups-malformed", "outside the follow-ups list: FU3",
-     BODY.replace("trailer\n", "- FU3 [defect] after the record\n")),
-    # an id behind leading markup (task box, blockquote, emphasis) is still an id
-    ("followups-malformed", "nested follow-up id: - [ ] FU2",
-     _body_with_followups("- FU1 [defect] a\n  - [ ] FU2 [defect] b\n")),
-    ("followups-malformed", "unkeyed line: - [ ] FU2",
-     _body_with_followups("- FU1 [defect] a\n- [ ] FU2 [defect] b\n")),
-    ("followups-malformed", "unkeyed line: - **FU2**",
-     _body_with_followups("- FU1 [defect] a\n- **FU2** [defect] b\n")),
-    ("followups-malformed", "outside the follow-ups list: FU2",
-     BODY.replace("trailer\n", "> - FU2 [defect] x\n")),
-    ("followups-malformed", "outside the follow-ups list: FU3",
-     BODY.replace("trailer\n", "- [x] FU3 [defect] x\n")),
-    ("followups-malformed", "outside the follow-ups list: FU3",
-     BODY.replace("trailer\n", "- **FU3** [defect] x\n")),
+    ("markers-invalid", "advisor-vet marker is not above",
+     "<!-- superheroes:build-record -->\nx\n<!-- superheroes:advisor-vet -->\n" + FU_MARKER + "\n"),
+    # the followups marker: exactly one, below the build-record marker, well formed, unique ids
+    ("markers-invalid", "followups marker appears 0 times", _body_marker("")),
+    ("markers-invalid", "followups marker appears 2 times",
+     BODY.replace("trailer", FU_MARKER)),
+    ("markers-invalid", "followups marker appears 0 times",
+     _body_marker("```\n" + FU_MARKER + "\n```\n")),
+    ("markers-invalid", "followups marker appears 0 times",
+     _body_marker("<!-- draft\n" + FU_MARKER + "\n-->\n")),
+    ("markers-invalid", "followups marker is not below the build-record marker",
+     _body_marker("").replace("old slot text", FU_MARKER)),
+    ("markers-invalid", "followups marker is malformed: <!-- superheroes:followups FU01 FU2 -->",
+     _body_marker("<!-- superheroes:followups FU01 FU2 -->\n")),
+    ("markers-invalid", "followups marker is malformed: <!-- superheroes:followups FU -->",
+     _body_marker("<!-- superheroes:followups FU -->\n")),
+    ("markers-invalid", "followups marker is malformed: <!-- superheroes:followups fu1 fu2 -->",
+     _body_marker("<!-- superheroes:followups fu1 fu2 -->\n")),
+    ("markers-invalid", "followups marker is malformed: <!-- superheroes:followups FU1 FU2\n",
+     _body_marker("<!-- superheroes:followups FU1 FU2\n")),
+    ("markers-invalid", "followups marker is malformed: <!-- superheroes:followups FU1 FU2 done -->",
+     _body_marker("<!-- superheroes:followups FU1 FU2 done -->\n")),
+    ("markers-invalid", "followups marker is malformed: <!-- superheroes:followups  -->",
+     _body_marker("<!-- superheroes:followups  -->\n")),
+    ("markers-invalid", "followups marker repeats FU1",
+     _body_marker("<!-- superheroes:followups FU1 FU2 FU1 -->\n")),
 ]
 
 
@@ -270,7 +240,7 @@ def test_body_refusals_make_no_edit(token, detail, body, verb, slot_file):
     result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
     assert result["ok"] is False
     assert result["reason"] == token
-    assert detail in result["detail"]
+    assert detail.rstrip("\n") in result["detail"]
     assert set(result) == {"ok", "reason", "detail"}
     assert fake.edit_calls() == []
     assert fake.calls == [list(VIEW)]  # a bad body never reaches the comments read
@@ -284,43 +254,44 @@ def test_empty_read_refuses_read_failed(slot_file):
     assert fake.edit_calls() == []
 
 
+def test_non_string_body_refuses_read_failed():
+    result = vs.evaluate("write", None, [_comment(RECEIPT)], SLOT)
+    assert result == {"ok": False, "reason": "read-failed", "detail": "PR body is not a string"}
+
+
+@pytest.mark.parametrize("slot_text,detail", [
+    ("", "slot text is empty"), ("  \n", "slot text is empty"),
+    ("x\n<!-- superheroes:advisor-vet -->\n", "slot text carries a marker"),
+])
+def test_evaluate_refuses_bad_slot_text(slot_text, detail):
+    result = vs.evaluate("write", BODY, [_comment(RECEIPT)], slot_text)
+    assert result["reason"] == "write-failed"
+    assert detail in result["detail"]
+    assert "newBody" not in result
+
+
 RECEIPT_CASES = [
-    ("dispositions-malformed", "no completed-dispositions field",
-     RECEIPT.replace("**Dispositions — completed.**", "**Other.**")),
-    ("dispositions-malformed", "no completed-dispositions field",
-     RECEIPT.replace("<!-- superheroes:pending-proposals -->", "")),
-    ("none-over-list", "None over FU1, FU2", _receipt_with("**Dispositions — completed.** `None`\n")),
-    ("none-over-list", "None over FU1, FU2", _receipt_with("**Dispositions — completed.**\n\nNone\n")),
+    ("markers-invalid", "dispositions marker appears 0 times", _receipt_marker("")),
+    ("markers-invalid", "dispositions marker appears 2 times",
+     _receipt_marker(DISP_MARKER + "\n" + DISP_MARKER + "\n")),
+    ("markers-invalid", "dispositions marker appears 0 times",
+     _receipt_marker("```\n" + DISP_MARKER + "\n```\n")),
+    ("markers-invalid", "dispositions marker appears 0 times",
+     _receipt_marker("<!-- draft\n" + DISP_MARKER + "\n-->\n")),
+    ("markers-invalid", "dispositions marker is malformed: <!-- superheroes:dispositions FU1 FU2 -- ",
+     _receipt_marker("<!-- superheroes:dispositions FU1 FU2 -- \n")),
+    ("markers-invalid", "dispositions marker is malformed: <!-- superheroes:dispositions FU1, FU2 -->",
+     _receipt_marker("<!-- superheroes:dispositions FU1, FU2 -->\n")),
+    ("markers-invalid", "dispositions marker repeats FU2",
+     _receipt_marker("<!-- superheroes:dispositions FU1 FU2 FU2 -->\n")),
+    ("none-over-list", "none over FU1 FU2",
+     _receipt_marker("<!-- superheroes:dispositions none -->\n")),
     ("followup-undispositioned", "FU2: no disposition",
-     _receipt_with("**Dispositions — completed.**\n- FU1: filed #12\n")),
-    ("followup-undispositioned", "FU1, FU2: no disposition",
-     _receipt_with("**Dispositions — completed.** FU1 and FU2 filed.\n")),
-    ("dispositions-malformed", "unknown follow-up ids: FU3",
-     _receipt_with("**Dispositions — completed.**\n- FU1: filed #1\n- FU2: fixed\n- FU3: info\n")),
-    ("dispositions-malformed", "duplicate disposition for FU1",
-     _receipt_with("**Dispositions — completed.**\n- FU1: filed #1\n- FU1: fixed\n- FU2: info\n")),
-    ("dispositions-malformed", "unrecognized disposition FU1: ignored",
-     _receipt_with("**Dispositions — completed.**\n- FU1: ignored it\n- FU2: fixed\n")),
+     _receipt_marker("<!-- superheroes:dispositions FU1 -->\n")),
     ("followup-undispositioned", "FU1: no disposition",
-     _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n```\n- FU1: filed #12\n```\n")),
-    ("followup-undispositioned", "FU1: no disposition",
-     _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n  - FU1: filed #12\n")),
-    ("dispositions-malformed", "None and keyed dispositions both appear: FU1, FU2",
-     _receipt_with("**Dispositions — completed.** None\n- FU1: filed #1\n- FU2: fixed\n")),
-    ("dispositions-malformed", "None and keyed dispositions both appear: FU1, FU2",
-     _receipt_with("**Dispositions — completed.**\n`None`\n- FU1: filed #1\n- FU2: fixed\n")),
-    ("dispositions-malformed", "None and keyed dispositions both appear: FU1, FU2",
-     _receipt_with("**Dispositions — completed.** Vet items done.\n- FU1: filed #1\n- FU2: fixed\n"
-                   "None\n")),
-    # a commented-out disposition is not visible, so it does not count
-    ("followup-undispositioned", "FU1: no disposition",
-     _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n<!-- draft\n- FU1: filed #123\n-->\n")),
-    ("followup-undispositioned", "FU1: no disposition",
-     _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n<!-- - FU1: filed #123 -->\n")),
-    # a fenced copy of the field heading is not the field
-    ("dispositions-malformed", "no completed-dispositions field",
-     RECEIPT.replace("**Dispositions — completed.**", "**Other.**")
-     .replace("**Vet 1: READY.**\n", "**Vet 1: READY.**\n```\n**Dispositions — completed.**\n```\n")),
+     _receipt_marker("<!-- superheroes:dispositions FU2 -->\n")),
+    ("disposition-unknown", "FU3: not in the followups marker",
+     _receipt_marker("<!-- superheroes:dispositions FU1 FU2 FU3 -->\n")),
 ]
 
 
@@ -335,60 +306,42 @@ def test_receipt_refusals_make_no_edit(token, detail, receipt, verb, slot_file):
     assert fake.edit_calls() == []
 
 
-def test_fenced_field_copy_before_the_live_field_reads_the_live_field():
-    receipt = RECEIPT.replace("**Vet 1: READY.**\n", "**Vet 1: READY.**\n```\n**Dispositions — completed.** "
-                              "None\n```\n")
-    result = vs.run_verb("check", PR, REPO, run=_ok_fake(receipt=receipt))
-    assert result["ok"] is True
-    assert result["followups"] == ["FU1", "FU2"]
+NONE_BODY = _body_marker("<!-- superheroes:followups none -->\n").replace(
+    "Follow-ups: 2 (1 owner-call)\n- FU1 [owner-call] decide the thing\n"
+    "  - a sub-bullet with detail\n- FU2 [defect] fix the other thing\n", "None\n")
+NONE_RECEIPT = _receipt_marker("<!-- superheroes:dispositions none -->\n")
 
 
-def test_visible_disposition_beside_a_comment_passes():
-    receipt = _receipt_with("**Dispositions — completed.**\n<!-- draft\n- FU1: declined\n-->\n"
-                            "- FU1: filed #123\n- FU2: fixed <!-- note -->\n")
-    result = vs.run_verb("check", PR, REPO, run=_ok_fake(receipt=receipt))
-    assert result["ok"] is True
-    assert result["followups"] == ["FU1", "FU2"]
-
-
-NONE_BODY = _body_with_followups("`None`\n")
-
-
-def test_none_build_with_any_receipt_id_is_unknown():
+@pytest.mark.parametrize("verb", ["write", "check"])
+def test_list_over_none_build_is_disposition_unknown(verb, slot_file):
     fake = _ok_fake(body=NONE_BODY)
-    result = vs.run_verb("check", PR, REPO, run=fake)
-    assert result["reason"] == "dispositions-malformed"
-    assert "unknown follow-up ids: FU1, FU2" in result["detail"]
+    result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
+    assert result["reason"] == "disposition-unknown"
+    assert "FU1, FU2: not in the followups marker" in result["detail"]
+    assert fake.edit_calls() == []
 
 
 def test_none_build_with_none_receipt_is_ok(slot_file):
-    fake = _ok_fake(body=NONE_BODY, receipt=_receipt_with("**Dispositions — completed.** None\n"))
+    fake = _ok_fake(body=NONE_BODY, receipt=NONE_RECEIPT)
     result = _write(fake, slot_file)
     assert result["ok"] is True
     assert result["followups"] == []
     assert len(fake.edit_calls()) == 1
 
 
-def test_none_build_with_empty_dispositions_field_passes(slot_file):
-    fake = _ok_fake(body=NONE_BODY, receipt=_receipt_with("**Dispositions — completed.**\n"))
-    result = _write(fake, slot_file)
-    assert result["ok"] is True
-    assert result["followups"] == []
-    assert len(fake.edit_calls()) == 1
-
-
-def test_zero_count_then_none_is_ok(slot_file):
-    body = _body_with_followups("Follow-ups: 0 (0 owner-call)\nNone\n")
-    fake = _ok_fake(body=body, receipt=_receipt_with("**Dispositions — completed.** None\n"))
-    result = _write(fake, slot_file)
-    assert result["ok"] is True
-    assert result["followups"] == []
-    assert len(fake.edit_calls()) == 1
-
-
-def test_carried_item_with_fresh_id_passes(slot_file):
-    body = _body_with_followups("- FU1 [defect] new\n- FU2 [defect] (from #42 FU1) old\n")
+def test_fenced_marker_above_the_live_marker_is_ignored(slot_file):
+    body = BODY.replace("### Follow-ups for the advisor\n",
+                        "```\n<!-- superheroes:followups FU9 -->\n```\n\n### Follow-ups for the advisor\n")
     result = _write(_ok_fake(body=body), slot_file)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_inline_marker_mention_in_prose_is_ignored():
+    body = BODY.replace("trailer\n", "See the <!-- superheroes:followups FU7 --> marker.\n")
+    receipt = RECEIPT.replace("**Vet 1: READY.**\n",
+                              "**Vet 1: READY.** Wrote <!-- superheroes:dispositions FU7 --> once.\n")
+    result = vs.run_verb("check", PR, REPO, run=_ok_fake(body=body, receipt=receipt))
     assert result["ok"] is True
     assert result["followups"] == ["FU1", "FU2"]
 
@@ -411,7 +364,9 @@ def test_write_no_receipt_is_receipt_missing(body, slot_file):
 
 def test_check_no_receipt_with_followups_is_receipt_missing():
     fake = FakeGh([BODY], _pages([]))
-    assert vs.run_verb("check", PR, REPO, run=fake)["reason"] == "receipt-missing"
+    result = vs.run_verb("check", PR, REPO, run=fake)
+    assert result["reason"] == "receipt-missing"
+    assert "vet-receipt marker" in result["detail"]
 
 
 @pytest.mark.parametrize("comments_out,detail", [
@@ -439,7 +394,7 @@ def test_comments_nonzero_exit_is_read_failed(slot_file):
 
 
 def test_receipt_on_page_two_is_newest_and_selected():
-    stale = _receipt_with("**Dispositions — completed.**\n- FU1: filed #1\n")
+    stale = _receipt_marker("<!-- superheroes:dispositions FU1 -->\n")
     pages = _pages(
         [_comment(stale, "2026-09-25T09:00:00Z", 1), _comment("chatter", "2026-09-25T12:00:00Z", 2)],
         [_comment("﻿  " + RECEIPT, "2026-09-25T11:00:00Z", 3)],
@@ -619,7 +574,7 @@ def test_property_every_refusal_is_editless_and_ok_preserves_outside_span(slot_f
         assert _write(fake, slot_file)["ok"] is False
         assert fake.edit_calls() == []
     for body in (BODY, NONE_BODY):
-        receipt = RECEIPT if body is BODY else _receipt_with("**Dispositions — completed.** None\n")
+        receipt = RECEIPT if body is BODY else NONE_RECEIPT
         result = vs.evaluate("write", body, [_comment(receipt)], SLOT)
         new = result["newBody"]
         a = body.index("-->\n") + 4
@@ -627,42 +582,6 @@ def test_property_every_refusal_is_editless_and_ok_preserves_outside_span(slot_f
         b2 = new.index("<!-- superheroes:build-record -->")
         assert new[:a] == body[:a]
         assert new[b2:] == body[b:]
-
-
-# --- the section bounds ------------------------------------------------------------------------
-
-def test_section_bounded_by_details_with_followups_last():
-    body = BODY.replace("</details>\n\ntrailer\n", "</details>\n\n- not a follow-up after details\n")
-    fake = _ok_fake(body=body)
-    assert vs.run_verb("check", PR, REPO, run=fake)["ok"] is True
-
-
-@pytest.mark.parametrize("verb", ["write", "check"])
-def test_nested_details_before_followups_passes(verb, slot_file):
-    body = BODY.replace("\n### Follow-ups for the advisor",
-                        "<details><summary>Receipts</summary>\nreceipt\n</details>\n"
-                        "\n### Follow-ups for the advisor")
-    fake = _ok_fake(body=body)
-    result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
-    assert result["ok"] is True
-    assert result["followups"] == ["FU1", "FU2"]
-
-
-@pytest.mark.parametrize("verb", ["write", "check"])
-def test_details_substring_mid_list_does_not_hide_later_ids(verb, slot_file):
-    body = _body_with_followups("- FU1 [defect] first </details>\n  - see the `</details>` closer\n"
-                                "- FU2 [defect] missing\n")
-    receipt = _receipt_with("**Dispositions — completed.**\n- FU1: filed #12\n")
-    fake = _ok_fake(body=body, receipt=receipt)
-    result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
-    assert result == {"ok": False, "reason": "followup-undispositioned", "detail": "FU2: no disposition"}
-    assert fake.edit_calls() == []
-
-
-def test_section_bounded_by_next_heading():
-    body = BODY.replace("</details>\n", "### Next\n- stray bullet\n</details>\n")
-    fake = _ok_fake(body=body)
-    assert vs.run_verb("check", PR, REPO, run=fake)["ok"] is True
 
 
 # --- real-shape fixtures -----------------------------------------------------------------------
@@ -693,19 +612,20 @@ def test_real_1442_pair_passes_write(slot_file):
     assert new[a:b2] == "\n" + SLOT.strip("\n") + "\n\n"
 
 
-def test_real_1437_legacy_body_refuses_unkeyed():
+def test_real_1437_legacy_body_refuses_markers_invalid():
     _body, fake = _real_fake(body_name="pr1437_body_legacy.md")
     result = vs.run_verb("check", PR, REPO, run=fake)
-    assert result["reason"] == "followups-malformed"
-    assert "unkeyed line" in result["detail"]
+    assert result["reason"] == "markers-invalid"
+    assert "followups marker appears 0 times" in result["detail"]
+    assert fake.edit_calls() == []
 
 
 def test_receipt_missing_fu2_refuses_followup_undispositioned(slot_file):
     receipt = _fixture("pr1442_receipt.md")
-    lines = receipt.split("\n")
-    fu2 = [line for line in lines if line.startswith("- FU2:")]
-    assert len(fu2) == 1
-    receipt = "\n".join(line for line in lines if not line.startswith("- FU2:"))
+    marker = "<!-- superheroes:dispositions FU1 FU2 FU3 FU4 FU5 FU6 FU7 FU8 -->"
+    assert receipt.count(marker) == 1
+    assert receipt.count("\n- FU2:") == 1  # the prose bullet stays; only the marker loses FU2
+    receipt = receipt.replace(marker, marker.replace(" FU2", ""))
     _body, fake = _real_fake(receipt=receipt)
     result = _write(fake, slot_file)
     assert result["ok"] is False
@@ -752,7 +672,7 @@ def test_cli_help_prints_one_json_line(capsys, argv):
     assert json.loads(out)["reason"] == "bad-argument"
 
 
-# --- vocabulary drift: the prose that teaches the shapes names every token this writer enforces --
+# --- marker drift: the prose that teaches the markers matches what the writer reads ------------
 
 PLUGIN = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
@@ -768,45 +688,26 @@ def _one_block(blocks, needle, where):
     return found[0]
 
 
-def _cites_one_home(block, constant, members, where):
-    """The prose points at ``constant`` in lib/vet_slot.py and keeps no hand-copied member list."""
-    assert "`%s` in `lib/vet_slot.py`" % constant in block, where
-    assert hasattr(vs, constant), constant
-    listed = [
-        m
-        for m in sorted(members)
-        if re.search(r"`%s`\s*,\s*`" % re.escape(m), block)
-        or re.search(r"\|\s*%s\b|\b%s\b[^|\n<>]*\|" % (re.escape(m), re.escape(m)), block)
-    ]
-    assert not listed, "%s: re-enumerates %s members %s" % (where, constant, listed)
-
-
-def test_followup_vocabulary_is_named_in_the_teaching_prose():
+def test_marker_shapes_are_taught_in_the_prose():
     workhorse = _doc(PLUGIN, "skills", "workhorse", "SKILL.md").split("\n\n")
     followups = _one_block(workhorse, "`- FU<n> [<class>] <text>`", "workhorse Follow-ups paragraph")
-    assert "**%s**" % vs.FOLLOWUPS_HEADING in followups
-    assert "`Follow-ups: <n> (<m> owner-call)`" in followups
-    _cites_one_home(followups, "CLASSES", vs.CLASSES, "workhorse class list")
-    for cls in sorted(vs.CLASSES):
-        assert vs._ITEM_RE.match("- FU1 [%s] text" % cls), cls
     receipt = _doc(PLUGIN, "skills", "showrunner", "reference", "vet-receipt.md")
     field7 = re.search(r"^7\. \*\*Dispositions.*?(?=^\d+\. |\Z)", receipt, re.M | re.S)
     assert field7, "vet-receipt.md field 7 not found"
     field7 = field7.group(0)
-    assert "`- FU<n>: <disposition>`" in field7
-    assert "`%s.**`" % vs.DISPOSITIONS_PREFIX in field7
-    _cites_one_home(field7, "DISPOSITIONS", vs.DISPOSITIONS, "field 7 disposition list")
+    taught = [
+        (followups, vs.FOLLOWUPS_MARKER_NAME, "<!-- superheroes:followups FU1 FU2 -->", ["FU1", "FU2"]),
+        (followups, vs.FOLLOWUPS_MARKER_NAME, "<!-- superheroes:followups none -->", None),
+        (field7, vs.DISPOSITIONS_MARKER_NAME, "<!-- superheroes:dispositions FU1 FU2 -->", ["FU1", "FU2"]),
+        (field7, vs.DISPOSITIONS_MARKER_NAME, "<!-- superheroes:dispositions none -->", None),
+    ]
+    for block, name, example, ids in taught:
+        assert "`%s`" % example in block, example
+        assert vs.read_marker_list(example + "\n", name) == ids, example
     skeleton = re.search(r"^<!-- superheroes:vet-receipt -->$.*?^```$", receipt, re.M | re.S)
     assert skeleton, "vet-receipt.md receipt skeleton not found"
-    skeleton_line = [ln for ln in skeleton.group(0).splitlines() if ln.startswith("- FU<n>:")]
-    assert len(skeleton_line) == 1, "receipt skeleton: expected one `- FU<n>:` line"
-    assert skeleton_line[0].startswith("- FU<n>: <disposition>")
-    _cites_one_home(skeleton_line[0], "DISPOSITIONS", vs.DISPOSITIONS, "receipt skeleton disposition line")
-    for example in ("filed #12", "declined"):
-        assert "`%s`" % example in field7, example
-        assert example.split()[0] in vs.DISPOSITIONS, example
-    for word in sorted(vs.DISPOSITIONS):
-        assert vs._DISPOSITION_RE.match("- FU1: %s x" % word), word
+    assert [ln for ln in skeleton.group(0).splitlines()
+            if ln.startswith("<!-- superheroes:dispositions ")], "receipt skeleton lacks the marker"
 
 
 def test_receipt_markers_match_conventions_10_7():
@@ -815,3 +716,5 @@ def test_receipt_markers_match_conventions_10_7():
     assert section, "CONVENTIONS section 10.7 not found"
     for marker in (vs.RECEIPT_MARKER, vs.PENDING_MARKER):
         assert "`%s`" % marker in section.group(0), marker
+    for prefix in ("<!-- superheroes:followups", "<!-- superheroes:dispositions"):
+        assert prefix in section.group(0), prefix

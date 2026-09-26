@@ -915,12 +915,16 @@ PR-body markers from the retired execution spine survive independently of it:
   A slot with **no marker at all** is read against the advisor's own receipt: with no receipt comment it is a body predating the contract (*not yet vetted*); with a receipt already posted it is a rewrite that dropped the verdict and marker together.
   Because the receipt is posted before the body write, a standing reminder means the **owner-half write** is owed — the receipt may already exist, so the advisor checks for its own existing receipt comment before posting another.
 - **Keyed follow-ups** — the build record's *Follow-ups for the advisor* section keys each item
-  `- FU<n> [<class>] <text>` (or reads **None**), and the vet receipt's completed dispositions key
-  one bullet per id, `- FU<n>: <disposition>`. The one home for the class and disposition
-  vocabulary is `plugins/superheroes/lib/vet_slot.py` (`CLASSES`, `DISPOSITIONS`), whose `write` is
-  also the one home for the `## Advisor vet` slot write and refuses when the two lists disagree. The
-  charters teach the formats: the build-record list in the **workhorse** charter's §11, the receipt
-  field and the command in `plugins/superheroes/skills/showrunner/reference/vet-receipt.md`.
+  `- FU<n> [<class>] <text>` and carries one `<!-- superheroes:followups FU1 FU2 -->` marker (or
+  `<!-- superheroes:followups none -->`); the vet receipt's completed dispositions key one bullet
+  per id, `- FU<n>: <disposition>`, and carry one `<!-- superheroes:dispositions FU1 FU2 -->` marker
+  (or `<!-- superheroes:dispositions none -->`). `plugins/superheroes/lib/vet_slot.py`'s `write` is
+  the one home for the `## Advisor vet` slot write and refuses when the two markers disagree. The
+  class and disposition vocabulary is taught, not coded: the build-record list in the **workhorse**
+  charter's §11, the receipt field and the command in
+  `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` field 7. Accepted limit: each
+  marker is its author's declaration, so the writer reads no prose and the vet reads the prose
+  against the markers.
 
 **Omission floor (owner half).** Anything the owner still **carries after merging** appears
 in the PR's owner half, **stated as a consequence**. The checkable floor beneath that

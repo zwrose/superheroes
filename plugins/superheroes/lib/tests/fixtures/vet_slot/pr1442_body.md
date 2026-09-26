@@ -178,6 +178,7 @@ Follow-ups: 8 (0 owner-call)
 - FU6 [craft] Test hygiene: `test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling` max-of-two-pins case pins Astra on implementer (rejected in production); `test_load_engine_prefs_canonical_code_fixer_wins_over_legacy_fixer` lost its two-valid-pins premise; opaque Terra strings in `test_liveness_cache.py` and a few `test_seat_map.py` shape tests.
 - FU7 [defect] Review-driver gaps seen here: native synthesis seats always refuse certification (`unrun-review`); audit rulings cannot bind runner evidence.
 - FU8 [info] Data point for model governance: GPT-5.6 Sol at xhigh missed the control plant in both probes this build ran.
+<!-- superheroes:followups FU1 FU2 FU3 FU4 FU5 FU6 FU7 FU8 -->
 
 </details>
 
