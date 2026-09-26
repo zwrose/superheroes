@@ -270,6 +270,7 @@ def test_edge3_restage_reapplies_out_of_scope(tmp_path):
 def test_edge4_guidance_lifts_out_of_scope(tmp_path):
     session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    key_b = RD._fix_batch_row_key(row_b)
     p1 = _write_ruling_file(tmp_path / "r1.json", [
         {"id": id_b, "ruling": "out-of-scope", "reason": "skip",
          "followUp": _follow_up()}])
@@ -277,7 +278,17 @@ def test_edge4_guidance_lifts_out_of_scope(tmp_path):
     p2 = _write_ruling_file(tmp_path / "r2.json", [
         {"id": id_b, "ruling": "guidance", "reason": "fix now", "guidance": "use guard X"}])
     assert _rule(session_dir, p2)["ok"]
-    assert id_b not in RD._live_out_of_scope_ruling_keys(_state(session_dir))
+    state = _state(session_dir)
+    assert id_b not in RD._live_out_of_scope_ruling_keys(state)
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY) or []
+    entry = next(e for e in ledger if RD._finding_identity_key(e) == key_b)
+    assert entry.get("disposition") != "out-of-scope"
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert refusal is None
+    assert by_key[key_b].get("disposition") != "out-of-scope"
+    combined = (state.get("_fixBatch") or []) + (state.get("_fixQueue") or [])
+    batch_keys = {RD._fix_batch_row_key(row) for row in combined if isinstance(row, dict)}
+    assert key_b in batch_keys
 
 
 def test_critical_restage_not_suppressed_by_stale_out_of_scope(tmp_path):
@@ -314,7 +325,7 @@ def test_ruling_target_ambiguous_when_staged_id_reused():
     assert fault == RD.RULING_TARGET_AMBIGUOUS
 
 
-def test_rule_supersession_closes_prior_fixer_attempt_for_certification(tmp_path):
+def test_rule_refuses_out_of_scope_when_fixer_orders_emitted(tmp_path):
     session_dir, _, _, _, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     before = _state_bytes(session_dir)
@@ -411,7 +422,7 @@ def test_edge7_guidance_off_batch_no_supersede(tmp_path):
     assert _state_bytes(session_dir) == before
 
 
-def test_edge8_empty_batch_advances(tmp_path):
+def test_rule_refuses_dual_out_of_scope_when_fixer_orders_emitted(tmp_path):
     session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
@@ -422,6 +433,55 @@ def test_edge8_empty_batch_advances(tmp_path):
     assert out.get("ok") is False, out
     assert out.get("reason") == "ruling-attempt-pending", out
     assert _state_bytes(session_dir) == before
+
+
+def test_pre_emission_out_of_scope_reconciles_fix_batch(tmp_path):
+    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    key_b = RD._fix_batch_row_key(row_b)
+    id_b = row_b.get("id") or key_b
+    state = _state(session_dir)
+    state["pending"] = None
+    RD.save_state(session_dir, state)
+    assert _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
+         "followUp": _follow_up()}]))["ok"]
+    state = _state(session_dir)
+    batch_keys = {RD._fix_batch_row_key(r) for r in (state.get("_fixBatch") or [])
+                  if isinstance(r, dict)}
+    queue_keys = {RD._fix_batch_row_key(r) for r in (state.get("_fixQueue") or [])
+                  if isinstance(r, dict)}
+    assert key_b not in batch_keys
+    assert key_b not in queue_keys
+    assert RD.cmd_next(session_dir).get("ok")
+    batch_path = RD._ensure_fix_batch_file(session_dir, state["round"], _state(session_dir))
+    with open(batch_path, encoding="utf-8") as fh:
+        batch_doc = json.load(fh)
+    materialized_keys = {
+        RD._fix_batch_row_key(row) or row.get("id")
+        for row in (batch_doc if isinstance(batch_doc, list) else [])
+        if isinstance(row, dict)}
+    assert key_b not in materialized_keys
+
+
+def test_out_of_scope_filters_queued_row_on_fixer_reslice(tmp_path):
+    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    key_b = RD._fix_batch_row_key(row_b)
+    assert _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
+         "followUp": _follow_up()}]))["ok"]
+    state = _state(session_dir)
+    combined = list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or [])
+    combined.append(dict(row_b))
+    filtered, fault = RD._filter_excluded_discharged_fixes(state, combined)
+    assert fault is None
+    keys = {RD._fix_batch_row_key(r) for r in filtered if isinstance(r, dict)}
+    assert key_b not in keys
+    batch_path = RD._ensure_fix_batch_file(session_dir, state["round"], state)
+    with open(batch_path, encoding="utf-8") as fh:
+        batch_doc = json.load(fh)
+    materialized_keys = {RD._fix_batch_row_key(r) for r in batch_doc if isinstance(r, dict)}
+    assert key_b not in materialized_keys
 
 
 def test_fix_batch_unreadable_refuses_order_render(tmp_path, monkeypatch):

@@ -59,42 +59,34 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_binding_
 
 ## BP-2
 
-- **Guarded element:** `round_driver.py` — `_filter_excluded_discharged_fixes`, out-of-scope key skip (≈3842–3844).
-- **Axis:** Live out-of-scope ruling keys are excluded from queued fix-batch rows.
-- **Neutralization:** Deleted the `if key and key in oos_keys: continue` guard; rows append regardless of `oos_keys`.
+- **Guarded element:** `round_driver.py` — `_filter_excluded_discharged_fixes`, out-of-scope key skip (≈3851–3853).
+- **Axis:** Live out-of-scope ruling keys are excluded from queued fix-batch rows (Critical rows exempt via `_live_out_of_scope_blocks_row`).
+- **Neutralization:** Deleted the live out-of-scope skip; rows append regardless of `oos_keys`.
 
 ```python
         key = _fix_batch_row_key(row)
         filtered.append(row)
 ```
 
-- **Detector:** `test_edge8_empty_batch_advances` (WO-S: edge-8 now asserts `ruling-attempt-pending` with unchanged state bytes).
-- **Failing assertion:** `assert out.get("reason") == "ruling-attempt-pending"`
+- **Detector:** `test_out_of_scope_filters_queued_row_on_fixer_reslice`
+- **Failing assertion:** `assert key_b not in keys`
 - **Raw red:**
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_______________________ test_edge8_empty_batch_advances ________________________
+____________ test_out_of_scope_filters_queued_row_on_fixer_reslice _____________
 
-tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-7721/test_edge8_empty_batch_advance0')
+    def test_out_of_scope_filters_queued_row_on_fixer_reslice(tmp_path):
+        ...
+        keys = {RD._fix_batch_row_key(r) for r in batch_doc if isinstance(r, dict)}
+>       assert key_b not in keys
+E       AssertionError: assert 'src/f00.py::bounds B@L3' not in {'src/f00.py::bounds B@L3'}
 
-    def test_edge8_empty_batch_advances(tmp_path):
-        session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
-        id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
-        id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
-        out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
-            {"id": id_a, "ruling": "out-of-scope", "reason": "a", "followUp": _follow_up()},
-            {"id": id_b, "ruling": "out-of-scope", "reason": "b", "followUp": _follow_up()}]))
-        assert out.get("ok"), out
->       assert out.get("reason") == "ruling-attempt-pending"
-E       AssertionError: assert 'order-render-refused' == 'ruling-attempt-pending'
-E        +    where <built-in method get of dict object at 0x106419880> = {'action': 'dispatch-fixer', 'attempt': 0, 'expectedStateHash': '11edd2dbd6acd277c038a1b36a025eb17f1b310dc8d07fbeec6c887c5a17e6fc', 'ok': True, ...}.get
-
-plugins/superheroes/lib/tests/test_rulings_channel_1445.py:324: AssertionError
+plugins/superheroes/lib/tests/test_rulings_channel_1445.py:497: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_edge8_empty_batch_advances
-1 failed in 16.85s
+FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_out_of_scope_filters_queued_row_on_fixer_reslice
+1 failed in 18.42s
 ```
 
 - **Restore:** Reinserted oos-key skip before `filtered.append(row)`.
@@ -102,7 +94,7 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_edge8_em
 
 ```python
         key = _fix_batch_row_key(row)
-        if key and key in oos_keys:
+        if key and key in oos_keys and not _live_out_of_scope_blocks_row(row):
             continue
         filtered.append(row)
 ```
@@ -118,7 +110,7 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_edge8_em
 
 ## BP-3
 
-- **Guarded element:** `round_driver.py` — `_stage_findings`, live out-of-scope re-apply via `_record_disposition` (≈1548–1554).
+- **Guarded element:** `round_driver.py` — `_stage_findings`, live out-of-scope re-apply via `_record_disposition` (≈1549–1555).
 - **Axis:** Restaging findings re-applies live out-of-scope dispositions from the rulings log.
 - **Neutralization:** Removed the `live_oos` / `_record_disposition(...)` block inside the compile loop.
 
@@ -152,7 +144,7 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_edge3_re
 
 ```python
         live_oos = _live_out_of_scope_ruling_for_key(state, key)
-        if live_oos is not None:
+        if live_oos is not None and not _live_out_of_scope_blocks_row(entry):
             _record_disposition(
                 state, key, "out-of-scope", round_no,
                 outOfScopeReason=live_oos.get("reason"),

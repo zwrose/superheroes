@@ -1618,6 +1618,82 @@ def _live_out_of_scope_ruling_keys(state):
     return keys
 
 
+def _ruling_disposition_ledger_refusal(session_dir, state, phase, rnd, attempt):
+    """Fail-closed ledger gate for ``rule`` — same owner/malformed contract as ``next``/fold."""
+    owner = session_contract.disposition_ledger_owner_classification(state)
+    if owner == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED:
+        return _refuse_cmd(session_dir, RULE_CMD, DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE,
+                           phase=phase, rnd=rnd, attempt=attempt)
+    if owner == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED:
+        _, fault = session_contract.read_disposition_ledger(state, required=True)
+        if fault is not None:
+            return _refuse_cmd(session_dir, RULE_CMD, fault.token, phase=phase, rnd=rnd,
+                               attempt=attempt, detail=fault.detail)
+    return None
+
+
+def _clear_superseded_out_of_scope_disposition(state, key):
+    """Drop a stale out-of-scope disposition family when guidance becomes the live ruling."""
+    if not isinstance(key, str) or not key:
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    if key in seen and isinstance(ledger[seen[key]], dict):
+        entry = ledger[seen[key]]
+        if entry.get("disposition") == "out-of-scope":
+            cleaned = _strip_disposition_family(dict(entry))
+            cleaned.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+            ledger[seen[key]] = cleaned
+    live = _live_finding_by_key(state, key)
+    if live is not None and live.get("disposition") == "out-of-scope":
+        for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+            live.pop(field, None)
+        live.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+
+
+def _reconcile_live_ruling_fix_batches(state, config):
+    """Re-filter ``_fixBatch`` / ``_fixQueue`` after a ruling changes live out-of-scope keys."""
+    if state.get("step") != P_FIXER:
+        return None
+    combined = list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or [])
+    present = {_fix_batch_row_key(row) for row in combined
+                if isinstance(row, dict) and _fix_batch_row_key(row)}
+    for key, live in _live_ruling_by_key(state).items():
+        if live.get("ruling") != "guidance" or key in present:
+            continue
+        row = _live_finding_by_key(state, key)
+        if row is None:
+            ledger_by_key, _ = _disposition_ledger_by_key(state)
+            row = ledger_by_key.get(key)
+        if isinstance(row, dict):
+            combined.append(dict(row))
+            present.add(key)
+    if not combined:
+        return None
+    filtered, ledger_fault = _filter_excluded_discharged_fixes(state, combined)
+    if ledger_fault is not None:
+        return ledger_fault
+    cap = _fix_batch_cap(config)
+    batch_index = state.get("_fixBatchIndex") or 0
+    offered_nonempty = bool(combined)
+    state["_fixBatch"] = filtered[:cap]
+    state["_fixQueue"] = filtered[cap:]
+    if offered_nonempty and not filtered:
+        rec = state["rounds"].setdefault(str(state["round"]), {})
+        prior = rec.get("fixBatchExcludedByDischarge") or 0
+        _record_round(state, "fixBatchExcludedByDischarge", prior + len(combined))
+        if batch_index == 0:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "without fixer dispatch")
+            _resolve_empty_fix_batch_convergence(state, config)
+        else:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "remaining queue exhausted, the round proceeds to post-fix")
+    return None
+
+
 def _append_round_rulings(state, rows):
     rec = state["rounds"].setdefault(str(state["round"]), {})
     prev = rec.get("rulings")
@@ -7527,8 +7603,11 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
         return _refuse_cmd(session_dir, RULE_CMD, shape_reason, value=ruling_file)
     pending = state.get("pending")
     phase = pending.get("phase") if isinstance(pending, dict) else None
-    rnd = pending.get("round") if isinstance(pending, dict) else None
+    rnd = pending.get("round") if isinstance(pending, dict) else state.get("round")
     attempt = pending.get("attempt") if isinstance(pending, dict) else None
+    ledger_refusal = _ruling_disposition_ledger_refusal(session_dir, state, phase, rnd, attempt)
+    if ledger_refusal is not None:
+        return ledger_refusal
     for entry in parsed:
         key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
         if target_fault == RULING_TARGET_AMBIGUOUS:
@@ -7584,21 +7663,30 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                 state, key, "out-of-scope", state["round"],
                 outOfScopeReason=entry["reason"], followUp=entry.get("followUp"),
                 rulingSeq=seq)
+        elif entry["ruling"] == "guidance":
+            _clear_superseded_out_of_scope_disposition(state, key)
         _decision(state, "ruling-recorded",
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
-    pending_render_check = state.get("pending")
-    if isinstance(pending_render_check, dict) and pending_render_check.get("phase") == P_FIXER:
-        rnd_render = pending_render_check.get("round")
-        if rnd_render is None:
-            rnd_render = state.get("round")
+    reconcile_fault = _reconcile_live_ruling_fix_batches(state, cfg)
+    if reconcile_fault is not None:
+        return _refuse_cmd(session_dir, RULE_CMD, reconcile_fault.token, phase=phase, rnd=rnd,
+                           attempt=attempt, detail=reconcile_fault.detail)
+    fixer_leg_active = state.get("step") == P_FIXER or (
+        isinstance(pending, dict) and pending.get("phase") == P_FIXER)
+    if fixer_leg_active:
+        rnd_render = state.get("round")
+        if isinstance(pending, dict) and pending.get("round") is not None:
+            rnd_render = pending.get("round")
         try:
             _gate_guidance_block(_gate_guidance_entries(state, rnd_render))
         except ValueError as exc:
+            pend_phase = pending.get("phase") if isinstance(pending, dict) else P_FIXER
+            pend_rnd = pending.get("round") if isinstance(pending, dict) else rnd_render
+            pend_attempt = pending.get("attempt") if isinstance(pending, dict) else None
             return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
-                               phase=pending_render_check.get("phase"),
-                               rnd=pending_render_check.get("round"),
-                               attempt=pending_render_check.get("attempt"), detail=str(exc))
+                               phase=pend_phase, rnd=pend_rnd, attempt=pend_attempt,
+                               detail=str(exc))
     journal_entry = _journal_entry_for_commit(
         session_dir, RULE_CMD, "ruling-recorded", phase=phase, round=rnd, attempt=attempt,
         rulingFileSha256=file_sha, count=len(parsed))
