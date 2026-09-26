@@ -304,3 +304,27 @@ git status --porcelain
 ```
 
 (only this record file plus the round-1 fix sources differ from HEAD after restore)
+
+---
+
+## Final-head re-run at `12b3b95e` (review session 4, orchestrator-run)
+
+Run by the build orchestrator in a detached probe worktree at `12b3b95e`, the layer's final code head. Each neutralization was a targeted edit through the host's edit action, reverted by the inverse edit, never by `git checkout`. Each red selected the exact detector node id. After every restore, `git status --porcelain` in the probe tree was empty. Green: `test_rulings_channel_1445.py` **38 passed** (EXIT=0), and the four fold detectors **27 passed** (EXIT=0).
+
+| Proof | Guarded element | Neutralization | Detector | Raw red at `12b3b95e` |
+|---|---|---|---|---|
+| BP-1 (DoD binding) | `_gate_guidance_entries` ruling-channel loop | `continue` as the loop's first statement | `test_binding_ruling_rides_hashed_order_and_certifies` | `'reason': 'evidence-order-mismatch'` — 1 failed |
+| BP-2 | `_filter_excluded_discharged_fixes` out-of-scope skip | guard deleted | `test_out_of_scope_queue_row_absent_after_fixer_landing` | `assert 'src/f00.py::bounds b@L3' not in {...}` — 1 failed |
+| BP-3 | `_stage_findings` live out-of-scope re-apply | `live_oos` / `_record_disposition` block deleted | `test_edge3_restage_reapplies_out_of_scope` | `assert None == 'out-of-scope'` — 1 failed |
+| BP-4 | `FIX_BATCH_SHA256` render context | `batch_sha = "0" * 64` | `test_fixer_order_pins_fix_batch_sha256` | literal `- Fix batch sha256: <64-hex>` absent from the order — 1 failed |
+| BP-5 | `ruling-critical-out-of-scope` refusal | guard prefixed `False and` | `test_rule_refusal_tokens[ruling-critical-out-of-scope-critical_oos]` | `assert True is False` (rule answered ok; no refusal) — 1 failed |
+| BP-7 | `ruling-attempt-pending` refusal | guard prefixed `False and` | `test_rule_refusal_tokens[ruling-attempt-pending-attempt_recorded]` | `assert True is False` — 1 failed |
+| BP-8 (new) | `ruling-guidance-not-fixer` refusal (`step != P_FIXER`) | guard prefixed `False and` | `test_edge9_non_fixer_step_refuses_guidance` | `{'action': 'dispatch-audits', ..., 'ok': True}` / `assert True is False` — 1 failed |
+| BP-9 (new) | `rulings-log-malformed` checks run for every owner classification | the rulings-log and counter checks moved back behind `if classification != RECOGNIZED: return None` (the advisor-named neutralization) | `test_rule_refuses_malformed_rulings_log_owner_absent[bad_log0]`, `[None]`, `test_rule_refuses_malformed_ruling_seq_counter_owner_absent` | `AttributeError: 'dict' object has no attribute 'append'`; `[None]`: `'ok': True` (the log silently rewritten to `[]`, which is the original Critical); `TypeError: can only concatenate str (not "int") to str` — 3 failed. The two recognized-owner detectors stayed green, as expected: this element doesn't guard them. |
+| BP-10 (new) | pre-emission journal attribution (`rnd = state.get("round")` when nothing is pending) | `rnd = None` | `test_preemission_ruling_journal_carries_round_phase` | `assert None == 1` on the journal row's `round` — 1 failed |
+| BP-v1 | `review_diff_bytes._require_explicit_commit_sha` | body reverted to the old `HEAD`-only denylist | `test_panel_diff_at_head_1419.py::test_v1_explicit_commit_guard_rejects_non_full_oid` | `AssertionError: subprocess.run must not be called` — 16 failed, 8 passed |
+| BP-v2 | `_derive_panel_diff_at_head` `except ValueError` mapping | the two lines deleted | `test_panel_diff_at_head_1419.py::test_v2_derive_panel_diff_maps_head_value_error` | `ValueError: head_sha must be an explicit commit` escapes — 1 failed |
+| BP-v1-base | `_derive_panel_diff_at_head` passes `verified_base` | raw `base` passed instead | `test_panel_diff_at_head_1419.py::test_v1_derive_panel_diff_resolves_short_base_ref` | `assert 'base_sha must be an explicit commit' is None` — 1 failed |
+| BP-v1-caller | `handback_gate` recompute on `verified_base` | `pinned_base` passed instead | `test_handback_gate.py::test_short_base_sha_in_sidecar_still_recomputes_diff` | `assert 'refuse' == 'allow'` — 1 failed |
+
+BP-6 stays superseded by BP-7. Refusal-token note: BP-5, BP-7, BP-8 and BP-9's owner-absent arms go red on `ok: True`. Each detector asserts `ok is False` before it asserts the exact token (`RD.<TOKEN>`), so the neutralized guard fails at the first assertion, and the token assertion is never reached.
