@@ -208,9 +208,9 @@ BODY_CASES = [
      BODY.replace("<!-- superheroes:advisor-vet -->\n", "")),
     ("markers-invalid", "advisor-vet marker appears 2 times",
      BODY.replace("trailer", "<!-- superheroes:advisor-vet -->")),
-    ("markers-invalid", "advisor-vet marker appears 0 times",
+    ("markers-invalid", "advisor-vet marker appears 2 times",
      BODY.replace("<!-- superheroes:advisor-vet -->\n",
-                  "<!-- draft\n<!-- superheroes:advisor-vet -->\n")),
+                  "<!-- draft\n<!-- superheroes:advisor-vet -->\n-->\n<!-- superheroes:advisor-vet -->\n")),
     ("markers-invalid", "advisor-vet marker appears 0 times",
      BODY.replace("<!-- superheroes:advisor-vet -->\n", "```\n<!-- superheroes:advisor-vet -->\n```\n")),
     ("markers-invalid", "build-record marker appears 0 times",
@@ -225,8 +225,8 @@ BODY_CASES = [
      BODY.replace("trailer", FU_MARKER)),
     ("markers-invalid", "followups marker appears 0 times",
      _body_marker("```\n" + FU_MARKER + "\n```\n")),
-    ("markers-invalid", "followups marker appears 0 times",
-     _body_marker("<!-- draft\n" + FU_MARKER + "\n-->\n")),
+    ("markers-invalid", "followups marker appears 2 times",
+     _body_marker("<!-- draft\n" + FU_MARKER + "\n-->\n" + FU_MARKER + "\n")),
     ("markers-invalid", "followups marker is not below the build-record marker",
      _body_marker("").replace("old slot text", FU_MARKER)),
     ("markers-invalid", "followups marker is malformed: <!-- superheroes:followups FU01 FU2 -->",
@@ -275,6 +275,10 @@ def test_non_string_body_refuses_read_failed():
 @pytest.mark.parametrize("slot_text,detail", [
     ("", "slot text is empty"), ("  \n", "slot text is empty"),
     ("x\n<!-- superheroes:advisor-vet -->\n", "slot text carries a marker"),
+    ("Owner half\n<!-- draft", "slot text carries an HTML comment opener or closer"),
+    ("Owner half <!--", "slot text carries an HTML comment opener or closer"),
+    ("a --> b", "slot text carries an HTML comment opener or closer"),
+    ("x <!-- y -->", "slot text carries an HTML comment opener or closer"),
 ])
 def test_evaluate_refuses_bad_slot_text(slot_text, detail):
     result = vs.evaluate("write", BODY, [_comment(RECEIPT)], slot_text, advisor_login="advisor")
@@ -285,7 +289,6 @@ def test_evaluate_refuses_bad_slot_text(slot_text, detail):
 
 @pytest.mark.parametrize("slot_text", [
     "```bash\ncommand",
-    "Owner half\n<!-- draft",
 ])
 def test_evaluate_refuses_slot_that_shadows_markers(slot_text):
     result = vs.evaluate("write", BODY, [_comment(RECEIPT)], slot_text, advisor_login="advisor")
@@ -294,10 +297,14 @@ def test_evaluate_refuses_slot_that_shadows_markers(slot_text):
     assert "newBody" not in result
 
 
-def test_evaluate_slot_with_mid_line_opener_does_not_shadow_markers():
-    result = vs.evaluate("write", BODY, [_comment(RECEIPT)], "Owner half <!--", advisor_login="advisor")
-    assert result["ok"] is True
-    assert "Owner half <!--" in result["newBody"]
+def test_write_refuses_slot_file_carrying_html_comment_opener(slot_file):
+    with open(slot_file, "w", encoding="utf-8") as handle:
+        handle.write("Owner half\n<!-- draft\n")
+    fake = _ok_fake()
+    result = _write(fake, slot_file)
+    assert result["reason"] == "write-failed"
+    assert "slot text carries an HTML comment opener or closer" in result["detail"]
+    assert fake.edit_calls() == []
 
 
 def test_write_refuses_unclosed_fence_in_slot(slot_file):
@@ -311,7 +318,7 @@ def test_write_refuses_unclosed_fence_in_slot(slot_file):
     assert fake.edit_calls() == []
 
 
-# --- HTML comments open only at the start of a line ---
+# --- HTML comments are not modelled: a marker line always counts ---
 
 RECEIPT_MID_LINE_CODE_SPAN = RECEIPT.replace(
     "- FU1: filed #12", "- FU1: filed #12 (see `<!--` in the diff)")
@@ -359,14 +366,22 @@ def test_body_mid_line_bare_opener_above_marker_still_reads(verb, slot_file):
     assert result["followups"] == ["FU1", "FU2"]
 
 
-def test_three_space_indented_opener_still_hides_marker_below(slot_file):
-    """Edge 6 (three spaces): a line-start opener within the three-column allowance still opens."""
+def test_three_space_indented_opener_does_not_hide_marker_below(slot_file):
+    """Edge 6 (three spaces): a marker below what looks like an opener still counts."""
     body = _body_marker("   <!-- draft\n" + FU_MARKER + "\n")
+    fake = _ok_fake(body=body)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_three_space_indented_opener_with_draft_marker_and_real_marker_is_two_times(slot_file):
+    body = _body_marker("   <!-- draft\n" + FU_MARKER + "\n-->\n" + FU_MARKER + "\n")
     fake = _ok_fake(body=body)
     result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
     assert result["ok"] is False
     assert result["reason"] == "markers-invalid"
-    assert "followups marker appears 0 times" in result["detail"]
+    assert "followups marker appears 2 times" in result["detail"]
 
 
 def test_four_space_indented_opener_does_not_hide_marker_below(slot_file):
@@ -387,14 +402,78 @@ def test_closer_followed_by_bare_opener_does_not_reopen_comment(slot_file):
     assert result["followups"] == ["FU1", "FU2"]
 
 
+def test_closer_followed_by_bare_opener_with_second_marker_is_two_times(slot_file):
+    """f1: a draft-shaped closer/opener line, then a repeated real marker below."""
+    body = _body_marker("<!-- draft\nclosed --> x <!--\n" + FU_MARKER + "\n" + FU_MARKER + "\n")
+    fake = _ok_fake(body=body)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is False
+    assert result["reason"] == "markers-invalid"
+    assert "followups marker appears 2 times" in result["detail"]
+
+
+def test_dash_list_opener_does_not_hide_marker_below(slot_file):
+    """f2: a `- <!-- draft` line does not hide a marker below it."""
+    body = _body_marker("- <!-- draft\n" + FU_MARKER + "\n")
+    fake = _ok_fake(body=body)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_dash_list_opener_with_second_marker_is_two_times(slot_file):
+    body = _body_marker("- <!-- draft\n" + FU_MARKER + "\n" + FU_MARKER + "\n")
+    fake = _ok_fake(body=body)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is False
+    assert result["reason"] == "markers-invalid"
+    assert "followups marker appears 2 times" in result["detail"]
+
+
+def test_receipt_closer_followed_by_bare_opener_does_not_reopen_comment(slot_file):
+    """Receipt-side f1: the dispositions marker after a closer/opener line still counts."""
+    receipt = _receipt_marker("<!-- draft\nclosed --> x <!--\n" + DISP_MARKER + "\n")
+    fake = _ok_fake(receipt=receipt)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_receipt_dash_list_opener_does_not_hide_marker_below(slot_file):
+    """Receipt-side f2: the dispositions marker under a `- <!-- draft` line still counts."""
+    receipt = _receipt_marker("- <!-- draft\n" + DISP_MARKER + "\n")
+    fake = _ok_fake(receipt=receipt)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_followups_marker_inside_draft_comment_counts(slot_file):
+    """A lone followups marker inside what looks like a draft comment is the declaration."""
+    body = _body_marker("<!-- draft\n" + FU_MARKER + "\n-->\n")
+    fake = _ok_fake(body=body)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_dispositions_marker_inside_draft_comment_counts(slot_file):
+    """A lone dispositions marker inside what looks like a draft comment is the declaration."""
+    receipt = _receipt_marker("<!-- draft\n" + DISP_MARKER + "\n-->\n")
+    fake = _ok_fake(receipt=receipt)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
 RECEIPT_CASES = [
     ("markers-invalid", "dispositions marker appears 0 times", _receipt_marker("")),
     ("markers-invalid", "dispositions marker appears 2 times",
      _receipt_marker(DISP_MARKER + "\n" + DISP_MARKER + "\n")),
     ("markers-invalid", "dispositions marker appears 0 times",
      _receipt_marker("```\n" + DISP_MARKER + "\n```\n")),
-    ("markers-invalid", "dispositions marker appears 0 times",
-     _receipt_marker("<!-- draft\n" + DISP_MARKER + "\n-->\n")),
+    ("markers-invalid", "dispositions marker appears 2 times",
+     _receipt_marker("<!-- draft\n" + DISP_MARKER + "\n-->\n" + DISP_MARKER + "\n")),
     ("markers-invalid", "dispositions marker is malformed: <!-- superheroes:dispositions FU1 FU2 -- ",
      _receipt_marker("<!-- superheroes:dispositions FU1 FU2 -- \n")),
     ("markers-invalid", "dispositions marker is malformed: <!-- superheroes:dispositions FU1, FU2 -->",

@@ -59,37 +59,25 @@ def _refusal(reason, detail):
 
 
 def _live_lines(text):
-    """Yield ``(offset, line)`` for every line outside code fences and outside an open HTML comment.
+    """Yield ``(offset, line)`` for every line outside a code fence.
 
-    A line opens a comment only when, outside any fence, its first non-whitespace characters —
-    after at most three columns of indentation — are ``<!--``; that comment stays open through
-    later lines until one contains ``-->`` at or after the opener, and a ``<!--`` anywhere else in
-    a line never changes the comment state."""
+    HTML comments are not modelled: a marker line always counts, whether or not it sits inside
+    what looks like an HTML comment."""
     raw = text.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
-    offset, in_comment = 0, False
+    offset = 0
     for line, dead, whole in zip(bare, inert, raw):
         if not dead:
-            if not in_comment:
-                yield offset, line
-            if in_comment:
-                if "-->" in line:
-                    in_comment = False
-            else:
-                stripped = line.lstrip(" \t")
-                lead = len(line) - len(stripped)
-                if md_fence.indent_width(line) <= 3 and stripped.startswith("<!--"):
-                    if "-->" not in line[lead + 4:]:
-                        in_comment = True
+            yield offset, line
         offset += len(whole)
 
 
 def read_marker_list(text, name, after=0):
     """Return the ids of the one live ``<!-- superheroes:<name> ... -->`` line, or None for ``none``.
 
-    A marker line starts at column zero, outside any code fence and outside any HTML comment left
-    open by an earlier line; it must not start above offset ``after``."""
+    A marker line starts at column zero, outside any code fence; it must not start above offset
+    ``after``."""
     prefix = "<!-- superheroes:%s" % name
     found = []
     for offset, line in _live_lines(text):
@@ -119,7 +107,7 @@ def read_marker_list(text, name, after=0):
 
 
 def _find_live_standalone_markers(body, marker):
-    """Fence-aware, zero-indent standalone ``marker`` lines outside open HTML comments."""
+    """Fence-aware, zero-indent standalone ``marker`` lines."""
     found = []
     for offset, line in _live_lines(body):
         if md_fence.indent_width(line) == 0 and line.strip() == marker:
@@ -154,6 +142,9 @@ def check_slot_text(slot_text):
     for line in slot_text.splitlines():
         if line.strip().startswith("<!-- superheroes:"):
             raise _Refusal("write-failed", "slot text carries a marker: %s" % line.strip())
+    # axis: slot text carrying an HTML comment opener or closer anywhere refuses write-failed
+    if "<!--" in slot_text or "-->" in slot_text:
+        raise _Refusal("write-failed", "slot text carries an HTML comment opener or closer")
 
 
 def _select_receipt(comments, advisor_login):
