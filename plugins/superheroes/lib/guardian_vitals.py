@@ -505,7 +505,10 @@ def _collect_suite_vitals(verify_result, budget_seconds):
     # Prefer the pytest summary's own duration when parseable (excludes harness/startup
     # noise); fall back to the verify command's wall clock only when the summary has no
     # `in Ns` token. `sources` records which path was taken.
-    if parsed["suiteRuntimeSeconds"] is not None:
+    base_equals_head_note = verify_result.get("note")
+    if base_equals_head_note == store_core.VERIFY_BASE_EQUALS_HEAD_NOTE:
+        missing["suiteRuntimeSeconds"] = base_equals_head_note
+    elif parsed["suiteRuntimeSeconds"] is not None:
         vitals["suiteRuntimeSeconds"] = parsed["suiteRuntimeSeconds"]
         sources["suiteRuntimeSeconds"] = (
             "verify command run this sweep (test-summary line)")

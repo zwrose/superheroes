@@ -295,6 +295,8 @@ def run_git(cwd, *args):
 
 # Calibrated verify commands and ``gh pr create`` implicit ``--base`` share this contract.
 VERIFY_BASE_TOKEN = "{baseRef}"
+# Named on verify-command facts when the bound base tip equals HEAD (no diff-scoped tests).
+VERIFY_BASE_EQUALS_HEAD_NOTE = "base-equals-head: no touched tests to select"
 VERIFY_BASE_PIN_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 

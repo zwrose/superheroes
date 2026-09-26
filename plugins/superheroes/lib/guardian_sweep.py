@@ -42,6 +42,7 @@ _DEFAULT_VERIFY_BUDGET_SECONDS = 300
 _DEFAULT_FIRST_BASELINE_VALIDATE_MAX = 10
 _VERIFY_STDOUT_CAP = 8 * 1024
 VERIFY_BASE_TOKEN = store_core.VERIFY_BASE_TOKEN
+VERIFY_BASE_EQUALS_HEAD_NOTE = store_core.VERIFY_BASE_EQUALS_HEAD_NOTE
 COVERAGE_NO_LENS_TOKEN = "coverage-entry-no-lens"
 # Aggregate budget across all filed-issue `gh issue view` lookups in one collect.
 # Per-call timeout is capped so one hung call cannot consume the whole budget alone.
@@ -296,6 +297,27 @@ def _bind_verify_base_ref(cwd):
     return pin, None
 
 
+def _pinned_base_equals_head(cwd, pin):
+    """True when the bound base tip is HEAD (no diff-scoped touched tests to select)."""
+    if not isinstance(pin, str) or not pin.strip():
+        return False
+    head = store_core.run_git(cwd, "rev-parse", "HEAD")
+    if head is None:
+        return False
+    head = head.strip().lower()
+    if pin.strip().lower() == head:
+        return True
+    merge = store_core.run_git(cwd, "merge-base", pin, "HEAD")
+    if merge is None:
+        return False
+    return merge.strip().lower() == head
+
+
+def _verify_base_equals_head_receipt():
+    """Extra verify-command fields when the bound base equals HEAD."""
+    return {"testsSelected": 0, "note": VERIFY_BASE_EQUALS_HEAD_NOTE}
+
+
 def _coverage_entry_unbound(entry):
     if not isinstance(entry, dict):
         return False
@@ -358,6 +380,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
         else:
             stdout = ""
             duration = None
+            base_equals_head = False
             if VERIFY_BASE_TOKEN in vcmd:
                 # bite-proof axis: {baseRef} is bound to a pinned commit or the command does not run.
                 pin, why = _bind_verify_base_ref(cwd)
@@ -377,6 +400,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                         "receipt": receipt,
                     })
                 else:
+                    base_equals_head = _pinned_base_equals_head(cwd, pin)
                     vcmd = vcmd.replace(VERIFY_BASE_TOKEN, pin)
             if not any(f.get("fact") == "verify-command" for f in facts):
                 try:
@@ -405,14 +429,19 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                     "stdout": stdout,
                     "durationSeconds": duration,
                 }
+                if status == "ok" and base_equals_head:
+                    verify_result.update(_verify_base_equals_head_receipt())
                 # Trust boundary: raw verify stdout stays local to verify_result for the
                 # vitals parser. Never leak it into factVerdicts / the model-facing bundle.
-                facts.append({
+                fact_row = {
                     "fact": "verify-command",
                     "status": status,
                     "receipt": receipt,
                     "durationSeconds": duration,
-                })
+                }
+                if status == "ok" and base_equals_head:
+                    fact_row.update(_verify_base_equals_head_receipt())
+                facts.append(fact_row)
 
     # 2. recorded-coverage
     cov = config.get("coverage") or []

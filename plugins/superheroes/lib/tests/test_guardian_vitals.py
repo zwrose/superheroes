@@ -276,6 +276,23 @@ def test_wall_clock_fallback_when_summary_has_no_duration(tmp_path):
     assert "wall clock" in out["sources"]["suiteRuntimeSeconds"]
 
 
+def test_base_equals_head_verify_skips_suite_runtime_wall_clock(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    note = sc.VERIFY_BASE_EQUALS_HEAD_NOTE
+    out = gv.collect(repo, verify_result={
+        "status": "ok",
+        "receipt": "validators → exit 0",
+        "stdout": "verify-touched-tests: no code changed; no tests to run.\n",
+        "durationSeconds": 4.2,
+        "testsSelected": 0,
+        "note": note,
+    })
+    assert out["vitals"]["suiteRuntimeSeconds"] is None
+    assert out["notCollected"]["suiteRuntimeSeconds"] == note
+    assert "base-equals-head" in out["notCollected"]["suiteRuntimeSeconds"]
+    assert "wall clock" not in (out.get("sources") or {})
+
+
 def test_missing_lens_digest_is_not_collected_with_reason(tmp_path):
     repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
     out = gv.collect(repo, lens_results={})

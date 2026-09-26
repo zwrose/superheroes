@@ -3169,6 +3169,10 @@ def test_verify_command_binds_base_ref_to_origin_head(tmp_path):
     assert gsw.VERIFY_BASE_TOKEN not in recorded[0]
     fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
     assert fact["status"] == "ok"
+    assert fact["testsSelected"] == 0
+    assert fact["note"] == sc.VERIFY_BASE_EQUALS_HEAD_NOTE
+    assert out["verifyResult"]["testsSelected"] == 0
+    assert out["verifyResult"]["note"] == sc.VERIFY_BASE_EQUALS_HEAD_NOTE
 
 
 def test_verify_command_binds_base_ref_to_gh_merge_base(tmp_path):
@@ -3179,11 +3183,11 @@ def test_verify_command_binds_base_ref_to_gh_merge_base(tmp_path):
     _git(repo, "add", "other.txt")
     _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
          "commit", "-q", "-m", "other")
-    other_sha = _head_sha(repo)
-    _git(repo, "update-ref", "refs/remotes/origin/other", other_sha)
+    feature_sha = _head_sha(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/other", feature_sha)
     branch = subprocess.check_output(
         ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
-    _git(repo, "config", "branch.%s.gh-merge-base" % branch, "other")
+    _git(repo, "config", "branch.%s.gh-merge-base" % branch, "main")
     recorded = []
 
     def fake_run(cmd, **kwargs):
@@ -3194,11 +3198,15 @@ def test_verify_command_binds_base_ref_to_gh_merge_base(tmp_path):
             stderr = ""
         return R()
 
-    gsw.verify_config(
+    out = gsw.verify_config(
         repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
-    assert main_sha != other_sha
-    assert recorded == ["echo --base %s" % other_sha]
-    assert main_sha not in recorded[0]
+    assert main_sha != feature_sha
+    assert recorded == ["echo --base %s" % main_sha]
+    assert feature_sha not in recorded[0]
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "ok"
+    assert "testsSelected" not in fact
+    assert "note" not in fact
 
 
 def test_verify_command_unresolvable_base_ref_is_not_run(tmp_path):
@@ -3223,6 +3231,41 @@ def test_verify_command_unresolvable_base_ref_is_not_run(tmp_path):
 def test_verify_base_token_literal_matches_round_driver():
     assert gsw.VERIFY_BASE_TOKEN is sc.VERIFY_BASE_TOKEN
     assert rd.VERIFY_BASE_TOKEN is sc.VERIFY_BASE_TOKEN
+
+
+def test_verify_base_equals_head_note_literal():
+    # bite-proof axis: the named note carries the exact token base-equals-head.
+    assert sc.VERIFY_BASE_EQUALS_HEAD_NOTE == (
+        "base-equals-head: no touched tests to select")
+    assert gsw.VERIFY_BASE_EQUALS_HEAD_NOTE is sc.VERIFY_BASE_EQUALS_HEAD_NOTE
+
+
+def _expect_assertion_error(fn, *, match):
+    try:
+        fn()
+    except AssertionError as exc:
+        if not re.search(match, str(exc)):
+            raise AssertionError(
+                "detector raised AssertionError but message %r does not match %r"
+                % (str(exc), match)
+            ) from None
+        return exc
+    except BaseException as exc:  # noqa: BLE001
+        raise AssertionError(
+            "detector did not bite: expected AssertionError, got %s: %s"
+            % (type(exc).__name__, exc)
+        ) from None
+    raise AssertionError("detector did not bite: no exception raised")
+
+
+def test_verify_base_equals_head_note_bite_proof_red_on_token(monkeypatch):
+    monkeypatch.setattr(sc, "VERIFY_BASE_EQUALS_HEAD_NOTE", "base-equals-head: drift")
+
+    def _check():
+        assert sc.VERIFY_BASE_EQUALS_HEAD_NOTE == (
+            "base-equals-head: no touched tests to select")
+
+    _expect_assertion_error(_check, match=r"no touched tests to select")
 
 
 def test_coverage_entry_with_tool_but_no_lens_is_reported(tmp_path):
