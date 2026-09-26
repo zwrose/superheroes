@@ -506,7 +506,8 @@ def _collect_suite_vitals(verify_result, budget_seconds):
     # noise); fall back to the verify command's wall clock only when the summary has no
     # `in Ns` token. `sources` records which path was taken.
     base_equals_head_note = verify_result.get("note")
-    if base_equals_head_note == store_core.VERIFY_BASE_EQUALS_HEAD_NOTE:
+    if (base_equals_head_note == store_core.VERIFY_BASE_EQUALS_HEAD_NOTE
+            and parsed["suiteTestCount"] is None):
         missing["suiteRuntimeSeconds"] = base_equals_head_note
     elif parsed["suiteRuntimeSeconds"] is not None:
         vitals["suiteRuntimeSeconds"] = parsed["suiteRuntimeSeconds"]

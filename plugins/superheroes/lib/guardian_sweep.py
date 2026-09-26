@@ -313,8 +313,14 @@ def _pinned_base_equals_head(cwd, pin):
     return merge.strip().lower() == head
 
 
-def _verify_base_equals_head_receipt():
-    """Extra verify-command fields when the bound base equals HEAD."""
+def _verify_base_equals_head_extra(stdout):
+    """Extra verify-command fields when the bound base equals HEAD.
+
+    Diff-scoped selection is empty at HEAD, but the calibrated command may still
+    run a full suite (e.g. gate + pytest). Stamp zero selected tests only when
+    the transcript has no parseable pytest summary."""
+    if guardian_vitals.parse_verify_output(stdout)["suiteTestCount"] is not None:
+        return {}
     return {"testsSelected": 0, "note": VERIFY_BASE_EQUALS_HEAD_NOTE}
 
 
@@ -430,7 +436,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                     "durationSeconds": duration,
                 }
                 if status == "ok" and base_equals_head:
-                    verify_result.update(_verify_base_equals_head_receipt())
+                    verify_result.update(_verify_base_equals_head_extra(stdout))
                 # Trust boundary: raw verify stdout stays local to verify_result for the
                 # vitals parser. Never leak it into factVerdicts / the model-facing bundle.
                 fact_row = {
@@ -440,7 +446,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                     "durationSeconds": duration,
                 }
                 if status == "ok" and base_equals_head:
-                    fact_row.update(_verify_base_equals_head_receipt())
+                    fact_row.update(_verify_base_equals_head_extra(stdout))
                 facts.append(fact_row)
 
     # 2. recorded-coverage
