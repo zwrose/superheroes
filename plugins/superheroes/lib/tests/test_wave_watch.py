@@ -158,6 +158,81 @@ def _advancing_monotonic(step=0.1):
     return mono
 
 
+_WATCHER_CLOCK_CALL_BUDGET = 10_000
+
+
+class _WatcherClock:
+    """Virtual clock for wave_watch: time moves only when the watcher sleeps.
+
+    Host load cannot move it, so an arm's deadline, tick spacing and gh budget
+    are the same on a busy machine as on an idle one.
+    """
+
+    def __init__(self):
+        self.now = 0.0
+        self.calls = 0
+
+    def monotonic(self):
+        self.calls += 1
+        if self.calls > _WATCHER_CLOCK_CALL_BUDGET:
+            raise AssertionError(
+                f"wave_watch read the virtual clock {_WATCHER_CLOCK_CALL_BUDGET} "
+                "times; a sleep that never advances it hangs the watcher"
+            )
+        return self.now
+
+    def sleep(self, duration):
+        if duration > 0:
+            self.now += duration
+
+
+class _WatcherTimeModule:
+    """Stands in for wave_watch's `time`: virtual monotonic/sleep, real everything else."""
+
+    def __init__(self, clock):
+        self.monotonic = clock.monotonic
+        self.sleep = clock.sleep
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+@pytest.fixture(autouse=True)
+def watcher_clock(monkeypatch):
+    # Every default monotonic/sleep in wave_watch resolves through its module-level
+    # `time` at call time, so this one swap covers every arm a test does not clock.
+    clock = _WatcherClock()
+    monkeypatch.setattr(ww, "time", _WatcherTimeModule(clock))
+    return clock
+
+
+def test_wave_watch_defaults_never_reach_the_real_clock(watcher_clock):
+    assert ww.time.monotonic is not time.monotonic
+    assert ww.time.sleep is not time.sleep
+    assert ww.time.monotonic() == 0.0
+    ww.time.sleep(5)
+    assert ww.time.monotonic() == 5.0
+    assert ww.time.time is time.time
+
+
+def test_unclocked_arm_runs_to_its_deadline_on_the_virtual_clock(
+    tmp_path, monkeypatch, watcher_clock,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.watch_arm(
+        repo, "batch-982", max_seconds=5, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "timer"
+    assert watcher_clock.now == 5.0
+
+
+def test_watcher_clock_budget_fails_a_non_advancing_loop(watcher_clock):
+    with pytest.raises(AssertionError, match="never advances"):
+        for _ in range(_WATCHER_CLOCK_CALL_BUDGET + 1):
+            watcher_clock.monotonic()
+
+
 def _fake_gh_cli_env(tmp_path):
     shim_dir = tmp_path / "gh-shim"
     shim_dir.mkdir()
@@ -902,7 +977,7 @@ def test_stale_heartbeat_not_started_no_lane_stale(tmp_path, monkeypatch):
 
 
 def test_lane_never_stamped_not_latched_when_stamp_arrives_on_tick_two(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, watcher_clock,
 ):
     repo = _init_repo(tmp_path / "repo")
     store_root = _ledger_env(tmp_path, monkeypatch)
@@ -922,6 +997,7 @@ def test_lane_never_stamped_not_latched_when_stamp_arrives_on_tick_two(
                 stale_after_seconds=3600,
             )
             stamped[0] = True
+        watcher_clock.sleep(duration)
 
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=1,
@@ -989,7 +1065,7 @@ def test_ignore_launch_suppresses_stale_lane(tmp_path, monkeypatch):
     assert result["event"] != "lane-stale"
 
 
-def test_precedence_pr_set_changed_beats_lane_stale(tmp_path, monkeypatch):
+def test_precedence_pr_set_changed_beats_lane_stale(tmp_path, monkeypatch, watcher_clock):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(
         repo, tmp_path, monkeypatch, pid=os.getpid(), stamp_state="working",
@@ -1011,6 +1087,7 @@ def test_precedence_pr_set_changed_beats_lane_stale(tmp_path, monkeypatch):
             stale_after_seconds=1,
             now=time.time() - 60,
         )
+        watcher_clock.sleep(duration)
 
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=5, interval_seconds=1,
@@ -1234,7 +1311,7 @@ def test_working_lane_fires_nothing(tmp_path, monkeypatch):
 # --- mid-watch launch ---------------------------------------------------------
 
 
-def test_mid_watch_launch_detected_within_one_interval(tmp_path, monkeypatch):
+def test_mid_watch_launch_detected_within_one_interval(tmp_path, monkeypatch, watcher_clock):
     repo = _init_repo(tmp_path / "repo")
     store_root = _ledger_env(tmp_path, monkeypatch)
     _precreate_repo_store_dir(repo, store_root)
@@ -1244,6 +1321,7 @@ def test_mid_watch_launch_detected_within_one_interval(tmp_path, monkeypatch):
     def sleep_fn(duration):
         ll.append(repo, _reserved("lane-late", "batch-982", ["plugins/superheroes/lib"], repo))
         ll.append(repo, _started("lane-late", pid=dead))
+        watcher_clock.sleep(duration)
 
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=3, interval_seconds=1,
@@ -3392,7 +3470,9 @@ def test_lane_and_benign_event_partition():
     assert not ww.LANE_ENDING_EVENTS & ww.BENIGN_EVENTS
 
 
-def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch):
+def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch, capsys):
+    # In-process main(), not a subprocess: the gh poll this asserts needs the
+    # virtual clock, which a child interpreter would not inherit.
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     shim_dir = tmp_path / "gh-shim"
@@ -3403,15 +3483,15 @@ def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch):
         '#!/bin/sh\ntouch "' + str(marker) + '"\necho \'[{"number": 1}]\'\n'
     )
     gh_script.chmod(0o755)
-    env = dict(os.environ)
-    env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
-    proc = _run_cli([
+    monkeypatch.setenv("PATH", str(shim_dir) + os.pathsep + os.environ.get("PATH", ""))
+    returncode = ww.main([
+        _WW_SCRIPT,
         "loop", "--repo-root", repo, "--batch", "batch-982",
         "--max-seconds", "2", "--interval-seconds", "1",
         "--max-total-seconds", "3",
-    ], env=env)
-    assert proc.returncode == 0
-    out = json.loads(proc.stdout.strip())
+    ])
+    assert returncode == 0
+    out = json.loads(capsys.readouterr().out.strip())
     assert out["ok"] is True
     assert out["event"] == "timer"
     assert marker.exists(), "CLI loop must invoke the gh shim, not bypass it"
@@ -4895,7 +4975,7 @@ def test_run_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
     assert recorded == [99]
 
 
-def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
+def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch, watcher_clock):
     repo = _valid_repo_for_loop(tmp_path, monkeypatch)
 
     def membership_reader(*, pr, repo, **kwargs):
@@ -4935,7 +5015,7 @@ def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch):
         "batch-982",
         max_seconds=2,
         interval_seconds=1,
-        sleep=lambda _d: None,
+        sleep=watcher_clock.sleep,
         run_fn=run_fn,
         membership_reader=membership_reader,
     )
@@ -6023,7 +6103,7 @@ def test_repo_slug_resolved_once_per_run_tick(tmp_path, monkeypatch):
 
 
 def test_slug_resolution_failure_adds_stack_signal_degradation(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, watcher_clock,
 ):
     # axis: slug read failure yields membership-unresolved and degradation
     repo = _init_repo(tmp_path / "repo")
@@ -6062,7 +6142,7 @@ def test_slug_resolution_failure_adds_stack_signal_degradation(
         interval_seconds=1,
         gh_run=gh_run,
         membership_reader=_membership_for_stack([50, 51]),
-        sleep=lambda _d: None,
+        sleep=watcher_clock.sleep,
     )
     assert ww.DEGRADATION_STACK_SIGNAL_UNAVAILABLE in result["degraded"]
 
