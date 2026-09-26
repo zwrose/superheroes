@@ -7541,12 +7541,19 @@ def _plan_rulings(state, rulings, terminal):
     """Validate every entry and resolve every target before anything is folded.
 
     Returns (plan, refusal_reason, detail). A plan row is (entry, target, seed_round) where
-    `seed_round` is set when the target is an audit new-issue candidate the ledger never held."""
+    `seed_round` is set when the target is an audit new-issue candidate the ledger never held.
+    A ledger whose owner marker is unrecognized is refused before any entry is read: a ruling
+    never folds into a ledger schema this driver does not own."""
+    owner_class = session_contract.disposition_ledger_owner_classification(state)
+    if owner_class == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED:
+        return None, DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE, (
+            "%s is %r, which this driver does not own"
+            % (session_contract.DISPOSITION_LEDGER_OWNER_FIELD,
+               state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD)))
     ledger_by_key, fault = _disposition_ledger_by_key(state)
     if fault is not None:
         return None, RULING_ENTRY_INVALID, fault.detail
-    owner_ok = (session_contract.disposition_ledger_owner_classification(state)
-                == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED)
+    owner_ok = owner_class == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED
     candidates = _ruling_candidate_rows(state)
     guidance_keys = set()
     if not terminal and state.get("step") == P_FIXER:

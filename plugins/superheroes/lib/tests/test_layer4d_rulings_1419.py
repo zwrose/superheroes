@@ -669,3 +669,38 @@ def test_a_ruling_recorded_before_a_re_raise_never_certifies_it_and_a_fresh_ruli
     assert sum(1 for r in state[SC.DISPOSITION_LEDGER_KEY]
                if r.get(SC.FINDING_KEY_FIELD) == key) == 1
     assert RC._new_issues_reconciliation_gap(state, _FOLD_THREE, 3, [_cand(_FOLD_THREE)]) is None
+
+
+def _plant_future_ledger_owner(session_dir):
+    state = RD.load_state(session_dir)[1]
+    state[SC.DISPOSITION_LEDGER_OWNER_FIELD] = "ledger-v2"
+    RD.save_state(session_dir, state)
+    with open(os.path.join(session_dir, RD.STATE_FILE), "rb") as fh:
+        return fh.read()
+
+
+def _assert_owner_refused_byte_unchanged(tmp_path, session_dir, key, before):
+    out = _rule(tmp_path, session_dir, [{"id": key, "ruling": "refuted", "reason": "r"}])
+    assert out["ok"] is False, out
+    assert out["reason"] == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE, out
+    with open(os.path.join(session_dir, RD.STATE_FILE), "rb") as fh:
+        assert fh.read() == before
+    assert not _journal_rows(session_dir, RD.RULE_CMD, "ruled")
+
+
+def test_a_live_ruling_on_a_ledgered_finding_refuses_an_unrecognized_ledger_owner(tmp_path):
+    """A well-formed ledger row matching the ruling, under a future owner marker, is never folded:
+    `rule` refuses before planning and leaves the state bytes as they were."""
+    d = _session_at_fixer(tmp_path, name="rule-owner-live")
+    key = _keys(TRI._state(d)["_fixBatch"])[0]
+    assert any(r.get(SC.FINDING_KEY_FIELD) == key
+               for r in TRI._state(d)[SC.DISPOSITION_LEDGER_KEY])
+    before = _plant_future_ledger_owner(d)
+    _assert_owner_refused_byte_unchanged(tmp_path, d, key, before)
+
+
+def test_a_terminal_ruling_refuses_an_unrecognized_ledger_owner(
+        tmp_path, refused_new_issue_session):
+    d, key = refused_new_issue_session
+    before = _plant_future_ledger_owner(d)
+    _assert_owner_refused_byte_unchanged(tmp_path, d, key, before)
