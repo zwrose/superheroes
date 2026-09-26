@@ -299,7 +299,7 @@ def _bind_verify_base_ref(cwd):
 
 
 def _pinned_base_equals_head(cwd, pin):
-    """True when the bound base tip is HEAD (no diff-scoped touched tests to select)."""
+    """True when the bound base tip is HEAD (commits only — see worktree helper)."""
     if not isinstance(pin, str) or not pin.strip():
         return False
     head = store_core.run_git(cwd, "rev-parse", "HEAD")
@@ -312,6 +312,28 @@ def _pinned_base_equals_head(cwd, pin):
     if merge is None:
         return False
     return merge.strip().lower() == head
+
+
+def _worktree_paths_vs_head(cwd):
+    """Repo-relative paths changed in the working tree vs HEAD (untracked included).
+
+    Matches ``verify_touched_tests.changed_paths`` when the merge-base with the bound
+    base is HEAD: fix-round edits are uncommitted and must still diff-scope verify vitals.
+    """
+    paths = set()
+    diff = store_core.run_git_result(cwd, "diff", "--name-only", "-z", "HEAD")
+    if diff.status == store_core.GIT_OK and diff.out:
+        paths |= {p for p in diff.out.split("\0") if p}
+    untracked = store_core.run_git_result(
+        cwd, "ls-files", "--others", "--exclude-standard", "-z")
+    if untracked.status == store_core.GIT_OK and untracked.out:
+        paths |= {p for p in untracked.out.split("\0") if p}
+    return sorted(paths)
+
+
+def _verify_diff_scoped_at_head(cwd, pin):
+    """True when the bound base is HEAD but the working tree still scopes touched tests."""
+    return _pinned_base_equals_head(cwd, pin) and bool(_worktree_paths_vs_head(cwd))
 
 
 def _verify_base_equals_head_extra(stdout):
@@ -393,6 +415,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
             stdout = ""
             duration = None
             base_equals_head = False
+            verify_diff_scoped = False
             verify_base_bound = False
             if VERIFY_BASE_TOKEN in vcmd:
                 # bite-proof axis: {baseRef} is bound to a pinned commit or the command does not run.
@@ -415,6 +438,10 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                 else:
                     base_equals_head = _pinned_base_equals_head(cwd, pin)
                     verify_base_bound = True
+                    if base_equals_head:
+                        verify_diff_scoped = _verify_diff_scoped_at_head(cwd, pin)
+                    else:
+                        verify_diff_scoped = True
                     vcmd = vcmd.replace(VERIFY_BASE_TOKEN, pin)
             if not any(f.get("fact") == "verify-command" for f in facts):
                 try:
@@ -443,7 +470,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                     "stdout": stdout,
                     "durationSeconds": duration,
                 }
-                if verify_base_bound and not base_equals_head:
+                if verify_base_bound and verify_diff_scoped:
                     verify_result.update(_verify_diff_scoped_extra())
                 elif status == "ok" and base_equals_head:
                     verify_result.update(_verify_base_equals_head_extra(stdout))
@@ -455,7 +482,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                     "receipt": receipt,
                     "durationSeconds": duration,
                 }
-                if verify_base_bound and not base_equals_head:
+                if verify_base_bound and verify_diff_scoped:
                     fact_row.update(_verify_diff_scoped_extra())
                 elif status == "ok" and base_equals_head:
                     fact_row.update(_verify_base_equals_head_extra(stdout))

@@ -3256,6 +3256,35 @@ def test_verify_diff_scoped_head_ahead_of_base_pytest_summary_not_suite_vitals(t
         assert "diff-scoped" in vitals_out["notCollected"][name]
 
 
+def test_verify_diff_scoped_dirty_worktree_at_head_pytest_summary_not_suite_vitals(tmp_path):
+    """Bound base equals HEAD but uncommitted test edits still diff-scope verify vitals."""
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_dirty.py").write_text("def test_dirty():\n    assert True\n")
+    summary = "=== 5 passed in 1.23s ==="
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = summary
+            stderr = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "ok"
+    assert fact["diffScoped"] is True
+    assert fact["note"] == sc.VERIFY_DIFF_SCOPED_NOTE
+    vitals_out = gv.collect(repo, verify_result=out["verifyResult"])
+    note = sc.VERIFY_DIFF_SCOPED_NOTE
+    for name in ("suiteTestCount", "suiteSkipped", "suiteRuntimeSeconds"):
+        assert vitals_out["vitals"][name] is None
+        assert vitals_out["notCollected"][name] == note
+
+
 def test_verify_command_unresolvable_base_ref_is_not_run(tmp_path):
     repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
     calls = []
