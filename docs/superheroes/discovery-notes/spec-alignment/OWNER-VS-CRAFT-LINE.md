@@ -121,3 +121,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Category 3 (whether a thing exists at all): kept.
 - Category 4 (risk tolerance and trust boundaries): kept.
 - Category 5 (the owner's own time, attention, and habits): kept, tentatively ("keep i think"); revisit at the final read.
+- Category 6: reworded to "a case that tests or creates a principle." If a stated principle plainly decides it, craft; if the case seems to conflict with one, or no principle covers it, owner.
