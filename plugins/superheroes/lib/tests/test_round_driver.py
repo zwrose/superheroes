@@ -422,12 +422,26 @@ def test_journal_appended_per_call(tmp_path):
 # a scripted driver harness (CLI end-to-end)
 # =============================================================================
 
+def _seed_repo_root_if_missing(session_dir, checkout_path):
+    """When meta.json lacks repoRoot, record the fixture checkout (never overwrite)."""
+    meta_path = os.path.join(session_dir, "meta.json")
+    meta = {}
+    if os.path.isfile(meta_path):
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+    if meta.get("repoRoot"):
+        return
+    seed_session_meta(session_dir, checkout_path)
+
+
 def _drive_cli(session_dir, cfg, respond, max_steps=80):
     """Drive next/submit to a terminal using `respond(phase, payload, round) -> artifact`.
 
     The driven session runs inside a real checkout (`<session_dir>/checkout`), as it does in
     production, so the driver's cwd-discovered repository read resolves a HEAD."""
-    enter_checkout(os.path.join(session_dir, "checkout"))
+    checkout = os.path.join(session_dir, "checkout")
+    enter_checkout(checkout)
+    _seed_repo_root_if_missing(session_dir, checkout)
     first = True
     for _ in range(max_steps):
         n = RD.cmd_next(session_dir, cfg if first else None)
@@ -510,7 +524,9 @@ def _drive_to_phase(session_dir, cfg, respond, target_phase, max_steps=80):
     `next`. Asserts the loop did not reach a terminal first, so a routing change that stops
     reaching the phase fails loudly instead of silently skipping the test's body. The driven
     session runs inside a real checkout (`<session_dir>/checkout`), as it does in production."""
-    enter_checkout(os.path.join(session_dir, "checkout"))
+    checkout = os.path.join(session_dir, "checkout")
+    enter_checkout(checkout)
+    _seed_repo_root_if_missing(session_dir, checkout)
     first = True
     for _ in range(max_steps):
         n = RD.cmd_next(session_dir, cfg if first else None)

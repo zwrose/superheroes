@@ -4372,13 +4372,18 @@ def _derive_panel_diff_at_head(config, head_sha):
         return None, "git rev-parse failed: %s" % exc
     if verify.returncode != 0:
         return None, "baseRef not a commit"
+    verified_base = verify.stdout.decode("utf-8", errors="replace").strip()
+    if not verified_base:
+        return None, "baseRef not a commit"
     try:
         proc = review_diff_bytes.run_git_diff_three_dot(
-            repo_root, base, head_sha, timeout=120)
+            repo_root, verified_base, head_sha, timeout=120)
     except (FileNotFoundError, OSError) as exc:
         return None, "git unavailable: %s" % exc
     except subprocess.SubprocessError as exc:
         return None, "git diff failed: %s" % exc
+    except ValueError as exc:
+        return None, str(exc)
     if proc.returncode != 0:
         err = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
         err = err.strip()
