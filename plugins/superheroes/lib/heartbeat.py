@@ -60,14 +60,6 @@ def _is_finite_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def _is_positive_int(value, *, min_val, max_val):
-    return (
-        isinstance(value, int)
-        and not isinstance(value, bool)
-        and min_val <= value <= max_val
-    )
-
-
 def _path_inside(parent, child):
     parent = os.path.realpath(parent)
     child = os.path.realpath(child)

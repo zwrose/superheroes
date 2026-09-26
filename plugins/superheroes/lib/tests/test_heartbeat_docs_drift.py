@@ -143,6 +143,10 @@ _CENSUS_ALLOWLIST = frozenset({
     ("plugins/superheroes/lib/heartbeat.py", "stale-after"),
 })
 
+_CENSUS_TEXT_SUFFIXES = (
+    ".py", ".md", ".json", ".sh", ".txt", ".yml", ".yaml", ".toml",
+)
+
 
 def test_no_reader_or_builder_keeps_the_retired_promise():
     offenders = []
@@ -152,8 +156,11 @@ def test_no_reader_or_builder_keeps_the_retired_promise():
         if "tests" in parts:
             dirnames.clear()
             continue
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
         for name in filenames:
             if name == "CHANGELOG.md":
+                continue
+            if not any(name.endswith(suffix) for suffix in _CENSUS_TEXT_SUFFIXES):
                 continue
             files.append(os.path.join(dirpath, name))
     conv = os.path.join(_REPO_ROOT, "CONVENTIONS.md")
