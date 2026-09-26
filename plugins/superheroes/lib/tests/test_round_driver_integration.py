@@ -162,7 +162,7 @@ def _execution_evidence(**over):
     return evidence
 
 
-def _execution_evidence_for_payload(payload):
+def _execution_evidence_for_payload(payload, source="runner"):
     observation = {
         "tokens": None,
         "toolCalls": None,
@@ -178,8 +178,9 @@ def _execution_evidence_for_payload(payload):
                 resultKind=kind,
                 resultDigest=round_records.payload_sha256(payload[kind]),
                 observation=observation,
+                source=source,
             )
-    return _execution_evidence(observation=observation)
+    return _execution_evidence(observation=observation, source=source)
 
 
 def _land(session_dir, state, pend, seat, payload, occurrence=0):
@@ -205,7 +206,8 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0):
         "payload": payload,
     }
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
-        evidence = _execution_evidence_for_payload(payload)
+        evidence_source = _auditor_vendor_for(state)(seat)
+        evidence = _execution_evidence_for_payload(payload, source=evidence_source)
         envelope["executionEvidence"] = evidence
         envelope["provenance"] = round_records.PROVENANCE_HAND_LANDED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, evidence)
@@ -883,6 +885,14 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
             _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
             out = _record(session_dir, seat, occurrence=occurrence)
         assert out["ok"], (phase, seat, occurrence, out)
+    if phase == round_driver.P_PANEL and telemetry_shape != "no-telemetry":
+        # The runner record names the seat's real vendor (codex), so the harness owes
+        # the control probe a real codex seat would have landed before advance.
+        probe = {"engine": "codex", "outcome": "ok", "engaged": True, "detectedPlant": True,
+                 "evidence": {"probe": "seat_canary"}}
+        round_records.atomic_write_json(
+            round_records.canary_path(session_dir, pend["round"], "codex", pend["attempt"]),
+            probe)
     out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
     return phase, out
 

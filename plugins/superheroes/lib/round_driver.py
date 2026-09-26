@@ -64,6 +64,7 @@ import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import diff_scope  # noqa: E402
 import engine_adapter  # noqa: E402
+import payload_contracts  # noqa: E402
 import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
@@ -290,6 +291,10 @@ round_entry_key_declared = receipt_disclosures.round_entry_key_declared
 round_entry_key_allowed = receipt_disclosures.round_entry_key_allowed
 receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
+live_vendors = receipt_disclosures.live_vendors
+independent_auditor = receipt_disclosures.independent_auditor
+independent_auditor_available = receipt_disclosures.independent_auditor_available
+_live_vendors = receipt_disclosures.live_vendors
 str_list = receipt_disclosures.str_list
 dict_list = receipt_disclosures.dict_list
 bool_value = receipt_disclosures.bool_value
@@ -467,6 +472,29 @@ class RoundCeilingRefusal(ValueError):
         super().__init__(reason)
         self.reason = reason
         self.value = value
+
+
+RECEIPT_FAULT_WRITE = "receipt-write"                 # round-receipt.json could not be written
+RECEIPT_FAULT_CERTIFICATION = "certification-artifact"  # certification receipt/refusal artifact could not be written
+RECEIPT_FAULT_VERIFY = "receipt-verify"               # the on-disk receipt failed re-verification
+RECEIPT_FAULT_KINDS = (RECEIPT_FAULT_WRITE, RECEIPT_FAULT_CERTIFICATION, RECEIPT_FAULT_VERIFY)
+
+
+class ReceiptFault(str):
+    """A terminal-receipt fault detail that carries its class as data. It IS the detail string
+    (every consumer — CLI responses, `_receiptFault` in state, the tests that read it — keeps
+    reading a str); `kind` is the classification minted at the raise site."""
+    def __new__(cls, detail, kind):
+        if kind not in RECEIPT_FAULT_KINDS:
+            raise ValueError("unknown receipt fault kind %r" % (kind,))
+        obj = str.__new__(cls, detail)
+        obj.kind = kind
+        return obj
+
+
+class ReceiptWriteError(Exception):
+    """Raised by `_write_receipt` around the OSError: the raise site names the class."""
+    kind = RECEIPT_FAULT_WRITE
 
 
 class JournalFaultUnrecordable(Exception):
@@ -847,13 +875,6 @@ def author_justification_filter(findings, prior_comments):
 # independence + certification shape
 # =============================================================================================
 
-def _live_vendors(config):
-    vendors = config.get("vendors") if isinstance(config, dict) else None
-    if not isinstance(vendors, list) or not vendors:
-        return ["claude"]
-    return [v for v in vendors if isinstance(v, str) and v]
-
-
 def _auditor_vendor(config, fixer_vendor):
     """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
     on family, not the dispatch CLI). Independence is NEVER satisfied between two cursor first-party
@@ -862,15 +883,10 @@ def _auditor_vendor(config, fixer_vendor):
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
     independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
     rider 4a); see test_auditor_and_code_fixer_families_match_per_vendor in test_model_registry."""
+    vendor, _fam = receipt_disclosures.independent_auditor(config, fixer_vendor)
+    if vendor is not None:
+        return vendor, "independent"
     live = _live_vendors(config)
-    fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
-    if fixer_fam is None:
-        return (live[0] if live else fixer_vendor), "degraded"
-    for v in live:
-        if v != fixer_vendor:
-            cand_fam = model_registry.family_for("auditor", v)
-            if cand_fam is not None and cand_fam != fixer_fam:
-                return v, "independent"
     return (live[0] if live else fixer_vendor), "degraded"
 
 
@@ -1028,7 +1044,12 @@ def new_state(config=None):
         "auditRounds": [],
         "confirmations": 0,
         "selfRecovered": False,
-        "independenceDegraded": len(_live_vendors(cfg)) < 2,
+        # A single live vendor is degraded only when no live vendor is family-independent of the
+        # declared fixer; duplicate vendor entries never count twice toward the two-vendor pool.
+        "independenceDegraded": (
+            len(_live_vendors(cfg)) < 2
+            and not receipt_disclosures.independent_auditor_available(cfg)[0]
+        ),
         # Seeded from `--seat-map` when one was supplied (#723) as receipt round "0".
         "seatMapReceipts": ([{"round": "0", "map": dict(seeded_seat_map)}]
                             if isinstance(seeded_seat_map, dict) and seeded_seat_map else []),
@@ -2869,6 +2890,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state.setdefault("_coverage", []).extend(d for d in cds if isinstance(d, dict))
     _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
                                  "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))})
+    _record_round(state, "fixerVendor", config.get("fixerVendor"))
     state.pop("_escalatedRung", None)
     if session_dir:
         head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
@@ -3259,6 +3281,68 @@ def _audit_targets(state, config, audit_targets_map):
     return targets
 
 
+AUDIT_PROVENANCE_RUNNER_RECORD = "runner-record"
+AUDIT_PROVENANCE_HAND_LANDED = "hand-landed-evidence"
+AUDIT_PROVENANCE_MIXED = "mixed-evidence"
+AUDIT_PROVENANCE_COLLECTION_MANIFEST = "collection-manifest"
+_LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST = "dispatch-manifest"
+
+
+def _audit_adapter_disclosures(state, artifact):
+    """The adapter disclosures block for the audits fold — from the artifact if still present, else
+    from the round record `_record_adapter_provenance` wrote earlier in the same `_fold` call."""
+    prov = artifact.get("provenance") if isinstance(artifact, dict) else None
+    if isinstance(prov, dict):
+        return prov
+    rec = state.get("rounds", {}).get(str(state["round"]), {})
+    adapter = rec.get("adapterProvenance")
+    if not isinstance(adapter, dict):
+        return None
+    by_phase = adapter.get("byPhase")
+    if isinstance(by_phase, dict):
+        phase_prov = by_phase.get(P_AUDITS)
+        return phase_prov if isinstance(phase_prov, dict) else None
+    return adapter if adapter and "byPhase" not in adapter else None
+
+
+def _audit_provenance_basis(state, artifact):
+    """Per-round auditProvenance from adapter-recorded seat sources, not the fold path alone."""
+    if state.get("_submitUsed"):
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+    disclosures = _audit_adapter_disclosures(state, artifact)
+    prov_src = (disclosures.get("provenanceSource")
+                if isinstance(disclosures, dict) else None)
+    if not isinstance(prov_src, dict) or not prov_src:
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+    targets = state.get("_auditTargets") or []
+    seat_ids = [t.get("id") for t in targets
+                if isinstance(t, dict) and t.get("id") is not None]
+    if not seat_ids:
+        seat_ids = list(prov_src)
+    sources = set()
+    for seat in seat_ids:
+        src = prov_src.get(seat)
+        if src is None:
+            return AUDIT_PROVENANCE_MIXED
+        sources.add(src)
+    if not sources:
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+    if len(sources) == 1:
+        only = next(iter(sources))
+        if only == AUDIT_PROVENANCE_RUNNER_RECORD:
+            return AUDIT_PROVENANCE_RUNNER_RECORD
+        if only == AUDIT_PROVENANCE_HAND_LANDED:
+            return AUDIT_PROVENANCE_HAND_LANDED
+        if only == _LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST:
+            return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+        return AUDIT_PROVENANCE_MIXED
+    return AUDIT_PROVENANCE_MIXED
+
+
+# audits._reject_unauthenticated — missing manifest entry reason prefix.
+_MISSING_MANIFEST_ENTRY_REASON_PREFIX = "no dispatch-manifest entry for this target"
+
+
 def _fold_audits(state, config, artifact):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
@@ -3267,13 +3351,13 @@ def _fold_audits(state, config, artifact):
     # The DRIVER records the SELECTED independent auditor per target (its own seating decision).
     expected_auditors = {t.get("id"): t.get("auditorVendor")
                          for t in targets if isinstance(t, dict) and t.get("id") is not None}
-    # Provenance rests on the ORCHESTRATOR's out-of-band dispatch manifest — {result-id: vendor} the
-    # orchestrator recorded from its OWN dispatch records and carried in the submit artifact's
+    # Provenance rests on the recorded dispatch provenance (the runner record at state v5; the
+    # dispatch manifest on a legacy session) — {result-id: vendor} carried in the submit artifact's
     # `collectionManifest`, NEVER derived from the result contents. The fold authenticates a clearing
     # ruling against THIS manifest (must exist AND equal the recorded selection); the in-result
     # `auditorVendor` echo is advisory only. The driver cannot cryptographically verify engine
-    # identity and does not pretend to — the guarantee is exactly as strong as the orchestrator's
-    # dispatch manifest (#507 WO-FIX-RECOVERY).
+    # identity and does not pretend to — the guarantee is exactly as strong as the recorded dispatch
+    # provenance (#507 WO-FIX-RECOVERY).
     collection_manifest = artifact.get("collectionManifest")
     if not isinstance(collection_manifest, dict):
         collection_manifest = None
@@ -3292,16 +3376,40 @@ def _fold_audits(state, config, artifact):
         for a in outcome["audits"]]}
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
-        _decision(state, "audit-provenance-fail",
-                  "audit result for %s could not be authenticated against the orchestrator's "
-                  "dispatch manifest (missing entry or wrong vendor) — not-discharged" % pid)
+        audit_reason = None
+        for audit in outcome.get("audits", []):
+            if isinstance(audit, dict) and audit.get("id") == pid:
+                audit_reason = audit.get("reason")
+                break
+        if isinstance(audit_reason, str) and audit_reason.startswith("the dispatch manifest names"):
+            detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+        elif (isinstance(audit_reason, str)
+              and audit_reason.startswith(_MISSING_MANIFEST_ENTRY_REASON_PREFIX)
+              and (not isinstance(collection_manifest, dict)
+                   or pid not in collection_manifest)):
+            found_keys = (sorted(collection_manifest)
+                          if isinstance(collection_manifest, dict) else [])
+            detail = ("audit result for %s could not be authenticated — expected a "
+                      "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+                      "found: %s — not-discharged"
+                      % (pid, pid, found_keys))
+        elif isinstance(audit_reason, str) and audit_reason:
+            detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+        else:
+            found_keys = (sorted(collection_manifest)
+                          if isinstance(collection_manifest, dict) else [])
+            detail = ("audit result for %s could not be authenticated — expected a "
+                      "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+                      "found: %s — not-discharged"
+                      % (pid, pid, found_keys))
+        _decision(state, "audit-provenance-fail", detail)
     for pid in outcome.get("echoMismatch", []):
         _decision(state, "audit-echo-mismatch",
-                  "audit result for %s echoed a vendor other than the orchestrator's dispatch "
-                  "manifest — advisory only; the manifest governed and the discharge stands" % pid)
-    # Provenance rests on the orchestrator's dispatch manifest (never the result echo) — recorded
-    # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY).
-    _record_round(state, "auditProvenance", "collection-manifest")
+                  "audit result for %s echoed a vendor other than the recorded dispatch provenance "
+                  "— advisory only; the manifest governed and the discharge stands" % pid)
+    # Provenance rests on the adapter-recorded seat sources (never the fold path alone) — recorded
+    # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY, #1272 WO-R3).
+    _record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))
     _record_round(state, "audits", outcome["audits"])
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
@@ -4292,7 +4400,8 @@ def _validate_certified_receipt(receipt):
     missing scriptRan or the seat map, or with a non-list rounds/findings/decisions/degraded/
     skippedBlockers, is rejected with a reason. `skippedBlockers` is REQUIRED (possibly empty) so a
     receipt can never omit the skipped-blocking channel (the exit_skipped invariant). Per-round entries
-    may carry an `auditProvenance` field (`collection-manifest` when the round ran fix audits) — it is
+    may carry an `auditProvenance` field (`runner-record`, `hand-landed-evidence`, `mixed-evidence`,
+    or `collection-manifest` on a hand `submit`) — it is
     ACCEPTED, not required. The optional top-level `base` block (pinned diff-base metadata from a CLI
     `next` that ran the base guard) is likewise ACCEPTED, not required — library/eval runs omit it. The
     always-present `baseGuard` field records whether the CLI base guard ran (``BASE_GUARD_CHECKED``,
@@ -4754,8 +4863,10 @@ def _write_certification_artifacts(session_dir):
         round_commit.atomic_write_bytes(
             path, (json.dumps(refusal, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     except OSError as exc:
-        return ("certification refusal artifact write failed (%s) — cannot certify; treat as park"
-                % exc)
+        return ReceiptFault(
+            "certification refusal artifact write failed (%s) — cannot certify; treat as park"
+            % exc,
+            RECEIPT_FAULT_CERTIFICATION)
     return None
 
 
@@ -5486,13 +5597,16 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
 
 
 def _write_receipt(session_dir, state):
-    """Write the terminal receipt atomically. OSError PROPAGATES — a receipt-write failure is itself
-    a receipt defect the CLI must surface (see _finalize_receipt), never a silent swallow (#507
-    v14)."""
+    """Write the terminal receipt atomically. ReceiptWriteError PROPAGATES — a receipt-write failure
+    is itself a receipt defect the CLI must surface (see _finalize_receipt), never a silent swallow
+    (#507 v14)."""
     receipt = build_receipt(state, session_dir)
     path = os.path.join(session_dir, RECEIPT_FILE)
-    round_commit.atomic_write_bytes(
-        path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    try:
+        round_commit.atomic_write_bytes(
+            path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    except OSError as exc:
+        raise ReceiptWriteError(str(exc)) from exc
     return receipt
 
 
@@ -5511,18 +5625,28 @@ def _verify_terminal_receipt(session_dir):
         with open(os.path.join(session_dir, RECEIPT_FILE), encoding="utf-8") as fh:
             on_disk = json.load(fh)
     except (OSError, ValueError) as exc:
-        return "terminal receipt unreadable (%s) — cannot certify; treat as park" % exc
+        return ReceiptFault(
+            "terminal receipt unreadable (%s) — cannot certify; treat as park" % exc,
+            RECEIPT_FAULT_VERIFY)
     if receipt_kind(on_disk) == RECEIPT_INTERIM_SCHEMA:
-        return ("terminal receipt is interim — cannot certify; treat as park")
+        return ReceiptFault(
+            "terminal receipt is interim — cannot certify; treat as park",
+            RECEIPT_FAULT_VERIFY)
     ok, why = validate_receipt(on_disk)
     if not ok:
-        return "terminal receipt invalid (%s) — cannot certify; treat as park" % why
+        return ReceiptFault(
+            "terminal receipt invalid (%s) — cannot certify; treat as park" % why,
+            RECEIPT_FAULT_VERIFY)
     if not (on_disk.get("scriptRan") or {}).get("invocations"):
-        return ("terminal receipt scriptRan is empty — the journal (the driver's ran evidence) did "
-                "not persist; cannot certify; treat as park")
+        return ReceiptFault(
+            "terminal receipt scriptRan is empty — the journal (the driver's ran evidence) did "
+            "not persist; cannot certify; treat as park",
+            RECEIPT_FAULT_VERIFY)
     if _journal_faulted(session_dir):
-        return ("driver journal recorded a write fault — the scriptRan evidence is incomplete "
-                "(a next/submit event was lost); cannot certify; treat as park")
+        return ReceiptFault(
+            "driver journal recorded a write fault — the scriptRan evidence is incomplete "
+            "(a next/submit event was lost); cannot certify; treat as park",
+            RECEIPT_FAULT_VERIFY)
     return None
 
 
@@ -5534,8 +5658,10 @@ def _finalize_receipt(session_dir, state):
     Returns None on success."""
     try:
         _write_receipt(session_dir, state)
-    except OSError as exc:
-        return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
+    except ReceiptWriteError as exc:
+        return ReceiptFault(
+            "terminal receipt write failed (%s) — cannot certify; treat as park" % exc,
+            exc.kind)
     _persist_head_content_blobs(
         session_dir,
         state,
@@ -5560,7 +5686,8 @@ def _terminal_receipt_gate(session_dir, state):
     later replayed `next` that re-wrote the receipt from state and answered ok. Once finalized, only a
     genuinely valid ON-DISK receipt (re-read fresh each call) clears the fault; a state overwrite
     cannot. Returns a fault detail string or None, persisting the finalized mark and the durable
-    `_receiptFault` detail so the durability survives across separate CLI processes (#507).
+    `_receiptFault` detail so the durability survives across separate CLI processes (#507). The fault
+    class is data minted at the raise site, not inferred from exception text.
 
     INVARIANT (#507, third audit): no terminal-phase invocation — first-emission next, replayed next,
     terminating submit, or a duplicate/replayed submit — may answer ok without a fresh on-disk receipt
@@ -5569,9 +5696,13 @@ def _terminal_receipt_gate(session_dir, state):
         fault = _verify_terminal_receipt(session_dir)
     else:
         fault = _finalize_receipt(session_dir, state)
-        if fault is None or "certification" not in fault:
+        if fault is not None and not isinstance(fault, ReceiptFault):
+            raise TypeError("terminal receipt fault without a class: %r" % (fault,))
+        # axis: finalization is decided by the fault's minted class, never by the text of an exception.
+        if fault is None or fault.kind != RECEIPT_FAULT_CERTIFICATION:
             state["_receiptFinalized"] = True
     state["_receiptFault"] = fault or None
+    state["_receiptFaultClass"] = fault.kind if fault else None
     save_state(session_dir, state)
     return fault
 
@@ -7300,6 +7431,20 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
         return _lock_held_refusal(session_dir, "record-result", held)
 
 
+def _runner_shaped_result(phase, result_kind, envelope_payload):
+    """The runner-shaped result whose payload the seat landed — derived from the seat-payload
+    contract's declared type for the kind (payload_contracts), so the digest subject comes from
+    engine_adapter's own semantics."""
+    contract, _ = payload_contracts.payload_contract(phase)
+    types = contract.get("types") or {}
+    declared = types.get(result_kind)
+    # List kinds wrap under the kind key; scalar kinds land the record itself
+    # (payload_contracts.TYPE_TOKENS: list-of-objects, nullable-list-of-objects).
+    if declared in ("list-of-objects", "nullable-list-of-objects"):
+        return {"ok": True, "resultKind": result_kind, **envelope_payload}
+    return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
+
+
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     """Bind runner telemetry to the driver's order hash. Returns (envelope, refusal_reason, extra)."""
     if not evidence_run_dir:
@@ -7323,10 +7468,16 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
     if result_kind == session_contract.WRITE_RESULT_KIND:
         pass
     else:
-        if not isinstance(envelope_payload, dict) or result_kind not in envelope_payload:
+        if not isinstance(envelope_payload, dict):
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "resultKind": result_kind}
-        payload_digest = round_records.payload_sha256(envelope_payload[result_kind])
+        carried, subject = engine_adapter.review_payload_carried(
+            _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload),
+            result_kind)
+        if not carried:
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "resultKind": result_kind}
+        payload_digest = round_records.payload_sha256(subject)
         if result_digest != payload_digest:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
                                                        "payloadSha256": payload_digest,
@@ -7485,7 +7636,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
         supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
         seat_result_schema=seat_schema,
-        envelope_override=assembled)
+        envelope_override=assembled,
+        evidence_minted=assembled is not None)
     if landing_refusal is not None:
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
@@ -8211,6 +8363,9 @@ def _dispatch_manifest_disclosure(mpath, merr):
     whether the manifest's contents are valid, and never a refusal (a manifest-less run is a
     disclosed degradation by design). A definite ``ENOENT`` / ``ENOTDIR`` is ``absent``; every other
     read failure on a path that exists (or cannot be ruled absent) is ``unreadable``.
+
+    At state v5 the manifest is ignored when every landed envelope is ``seat-result/2``
+    (`dispatchManifestIgnored`); provenance is the runner record on each stored envelope.
 
     Manifest-less runs are a disclosed degradation by design — this never refuses `advance`, only
     surfaces the expected path so an operator is not left guessing after a stall."""

@@ -35,7 +35,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import model_registry  # noqa: E402
+import model_registry  # noqa: E402 — stdlib-only leaf; no cycle with records layer
 import record_paths  # noqa: E402
 import round_phases  # noqa: E402
 import session_contract  # noqa: E402
@@ -72,6 +72,8 @@ REVISION_IDENTITY_FIELDS = ("payloadSha256", "casToken", "executionEvidence", "p
 PROVENANCE_DISPATCH_OBSERVED = "dispatch-observed"
 PROVENANCE_HAND_LANDED = "hand-landed"
 PROVENANCE_ORCHESTRATOR_FULFILLED = "orchestrator-fulfilled"
+# Phases whose discharge depends on who executed the seat (runner record, not orchestrator manifest).
+PROVENANCE_RUNNER_RECORD_PHASES = (round_phases.P_AUDITS,)
 SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
                    PROVENANCE_ORCHESTRATOR_FULFILLED)
 EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
@@ -698,7 +700,8 @@ def _probe_store_entry(spath):
 
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                      supersede=False, expect_sha256=None, anchor=None, occurrence=0,
-                     seat_result_schema=None, envelope_override=None):
+                     seat_result_schema=None, envelope_override=None,
+                     evidence_minted=False):
     """Every check `ingest_landing` performs, with NO write.
 
     When ``envelope_override`` is a dict, that dict is validated in place of reading the
@@ -808,6 +811,31 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
             if declared_envelope_sha != computed_envelope_sha:
                 return None, _refuse("envelope-torn", computed=computed_envelope_sha,
                                      declared=declared_envelope_sha, landingPath=lpath)
+            if phase in PROVENANCE_RUNNER_RECORD_PHASES:
+                # axis: on a discharge-bearing phase, a stored envelope's vendor provenance is
+                # derivable from a runner record — never from a file the orchestrator typed.
+                if provenance == PROVENANCE_DISPATCH_OBSERVED and not evidence_minted:
+                    return None, _refuse("provenance-underivable", seat=seat_key, phase=phase,
+                                         provenance=provenance,
+                                         detail=("dispatch-observed provenance derives from a runner "
+                                                 "run directory (record-result --evidence-run-dir); "
+                                                 "a landed executionEvidence block, a sweep, or a "
+                                                 "record-result without a run directory cannot "
+                                                 "establish who executed this seat"))
+                if provenance == PROVENANCE_HAND_LANDED and "executionEvidence" not in envelope:
+                    return None, _refuse("provenance-underivable", seat=seat_key, phase=phase,
+                                         provenance=provenance,
+                                         detail=("hand-landed provenance derives from the "
+                                                 "execution-evidence binding on the landed "
+                                                 "envelope; none is present"))
+                if provenance in EVIDENCE_BEARING_PROVENANCE and "executionEvidence" in envelope:
+                    source = envelope["executionEvidence"].get("source")
+                    if source not in model_registry.VENDORS:
+                        return None, _refuse("provenance-underivable", seat=seat_key, phase=phase,
+                                             provenance=provenance, source=source,
+                                             detail=("executionEvidence.source must name the "
+                                                     "executing vendor (one of %s)"
+                                                     % ", ".join(model_registry.VENDORS)))
     elif schema == SEAT_MISSING_SCHEMA:
         if envelope.get("reason") not in MISSING_REASONS:
             return None, _refuse("missing-reason",
@@ -850,7 +878,7 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
 
 def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                    supersede=False, expect_sha256=None, anchor=None, occurrence=0,
-                   seat_result_schema=None):
+                   seat_result_schema=None, evidence_minted=False):
     """Ingest ONE landed seat envelope into the durable store. Never raises on bad input.
 
     Returns `{"ok": True, "storePath", "payloadSha256", "superseded"}` or a refusal
@@ -884,7 +912,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
                                      current_attempt=current_attempt, roster=roster,
                                      supersede=supersede, expect_sha256=expect_sha256,
                                      anchor=anchor, occurrence=occurrence,
-                                     seat_result_schema=seat_result_schema)
+                                     seat_result_schema=seat_result_schema,
+                                     evidence_minted=evidence_minted)
     if refusal is not None:
         return refusal
     atomic_write_json(plan["storePath"], plan["envelope"])
@@ -895,7 +924,7 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
 
 
 def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None,
-                  seat_result_schema=None):
+                  seat_result_schema=None, evidence_minted=False):
     """Ingest every unclaimed landing file for `phase` at `current_attempt`.
 
     Idempotent by construction: a seat already in the store is reported `already-stored` with
@@ -955,7 +984,8 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
                 continue
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
                              current_attempt=current_attempt, roster=roster, anchor=anchor,
-                             occurrence=occurrence, seat_result_schema=seat_result_schema)
+                             occurrence=occurrence, seat_result_schema=seat_result_schema,
+                             evidence_minted=evidence_minted)
         out.setdefault("seatKey", seat_key)
         out.setdefault("storageKey", skey)
         out.setdefault("occurrence", occurrence)
