@@ -205,7 +205,7 @@ The implementer's own record ran only E1. I replaced it with my final-head runs,
 - **No certification record.** Promised: a signed certification of the review loop. Delivered: the driver verdict `converged` / `audited-chain-degraded`, with the certification writer refusing `unrun-review`. Why: synthesis can only run as a native Claude subagent (registry cell claude-only; runner refuses the synthesis role), so it carries no execution evidence.
 - **r3 step 2 orchestrator-typed.** Promised: the full lane delegates all implementation. Delivered: I applied the three-line docs substitution myself (`8949f100`). Why: the advisor's order gave the exact text; there was no design choice left for an implementer. The cursor seat reviewed it.
 - **r3 reviewed by one seat.** Promised: independent review of every change. Delivered: one cursor seat. Codex came back `vacuous` on the docs-heavy delta, which the order anticipated. Why: the advisor's r3 order sets that review floor. The seat's `investigated` list names files, not a per-check outcome.
-- **Judgment gate owner-unattributed.** Promised: an owner ruling on a tradeoff finding. Delivered: the gate's fail-closed default (`fix-as-suggested`). Why: the owner was absent during the headless run.
+- **Judgment gate owner-unattributed.** Promised: an owner ruling on a tradeoff finding. Delivered: the gate's fail-closed default (`fix-as-suggested`). Why: the owner was absent during the unattended run.
 
 ### Dispatch provenance
 
