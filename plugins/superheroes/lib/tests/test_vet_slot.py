@@ -247,6 +247,19 @@ BODY_CASES = [
      _body_with_followups("None\n\n### Other\n1. FU1 [defect] hidden\n")),
     ("followups-malformed", "outside the follow-ups list: FU3",
      BODY.replace("trailer\n", "- FU3 [defect] after the record\n")),
+    # an id behind leading markup (task box, blockquote, emphasis) is still an id
+    ("followups-malformed", "nested follow-up id: - [ ] FU2",
+     _body_with_followups("- FU1 [defect] a\n  - [ ] FU2 [defect] b\n")),
+    ("followups-malformed", "unkeyed line: - [ ] FU2",
+     _body_with_followups("- FU1 [defect] a\n- [ ] FU2 [defect] b\n")),
+    ("followups-malformed", "unkeyed line: - **FU2**",
+     _body_with_followups("- FU1 [defect] a\n- **FU2** [defect] b\n")),
+    ("followups-malformed", "outside the follow-ups list: FU2",
+     BODY.replace("trailer\n", "> - FU2 [defect] x\n")),
+    ("followups-malformed", "outside the follow-ups list: FU3",
+     BODY.replace("trailer\n", "- [x] FU3 [defect] x\n")),
+    ("followups-malformed", "outside the follow-ups list: FU3",
+     BODY.replace("trailer\n", "- **FU3** [defect] x\n")),
 ]
 
 
@@ -299,6 +312,11 @@ RECEIPT_CASES = [
     ("dispositions-malformed", "None and keyed dispositions both appear: FU1, FU2",
      _receipt_with("**Dispositions — completed.** Vet items done.\n- FU1: filed #1\n- FU2: fixed\n"
                    "None\n")),
+    # a commented-out disposition is not visible, so it does not count
+    ("followup-undispositioned", "FU1: no disposition",
+     _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n<!-- draft\n- FU1: filed #123\n-->\n")),
+    ("followup-undispositioned", "FU1: no disposition",
+     _receipt_with("**Dispositions — completed.**\n- FU2: fixed\n<!-- - FU1: filed #123 -->\n")),
     # a fenced copy of the field heading is not the field
     ("dispositions-malformed", "no completed-dispositions field",
      RECEIPT.replace("**Dispositions — completed.**", "**Other.**")
@@ -320,6 +338,14 @@ def test_receipt_refusals_make_no_edit(token, detail, receipt, verb, slot_file):
 def test_fenced_field_copy_before_the_live_field_reads_the_live_field():
     receipt = RECEIPT.replace("**Vet 1: READY.**\n", "**Vet 1: READY.**\n```\n**Dispositions — completed.** "
                               "None\n```\n")
+    result = vs.run_verb("check", PR, REPO, run=_ok_fake(receipt=receipt))
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_visible_disposition_beside_a_comment_passes():
+    receipt = _receipt_with("**Dispositions — completed.**\n<!-- draft\n- FU1: declined\n-->\n"
+                            "- FU1: filed #123\n- FU2: fixed <!-- note -->\n")
     result = vs.run_verb("check", PR, REPO, run=_ok_fake(receipt=receipt))
     assert result["ok"] is True
     assert result["followups"] == ["FU1", "FU2"]

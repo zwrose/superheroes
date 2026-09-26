@@ -41,8 +41,8 @@ NONE_WORDS = ("None", "`None`")
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
 _ITEM_RE = re.compile(r"^- FU(\d+) \[([a-z-]+)\] \S")
-_NESTED_RE = re.compile(r"^(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?FU\d+\b")
-_ANY_ITEM_RE = re.compile(r"^(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?FU(\d+) \[")
+_MARKUP_RE = re.compile(r"^(?:[ \t>*_`+-]|\d{1,9}[.)]|\[[ xX]\])+")
+_FU_LEAD_RE = re.compile(r"^FU(\d+)\b")
 _COUNT_RE = re.compile(r"^Follow-ups: (\d+) \((\d+) owner-call\)$")
 _DISPOSITION_RE = re.compile(r"^- FU(\d+): (\S.*)$")
 
@@ -85,6 +85,39 @@ def _heading(line):
     return len(match.group(1)), text
 
 
+def _lead_fu(line):
+    """The FU id the line's visible text begins with, past any leading markup, else None."""
+    match = _FU_LEAD_RE.match(_MARKUP_RE.sub("", line))
+    return match and "FU%d" % int(match.group(1))
+
+
+def _uncommented(bare, inert):
+    """(lines with HTML-comment spans blanked, comment-open-at-line-start flags); fenced lines
+    pass through unchanged and never open a comment."""
+    out, opened, is_open = [], [], False
+    for line, dead in zip(bare, inert):
+        opened.append(is_open)
+        if dead:
+            out.append(line)
+            continue
+        keep, pos = [], 0
+        while True:
+            if is_open:
+                end = line.find("-->", pos)
+                if end < 0:
+                    break
+                is_open, pos = False, end + 3
+            else:
+                start = line.find("<!--", pos)
+                if start < 0:
+                    keep.append(line[pos:])
+                    break
+                keep.append(line[pos:start])
+                is_open, pos = True, start + 4
+        out.append("".join(keep))
+    return out, opened
+
+
 def _parse_followups(body, build_offset):
     """Return the list of FU ids, or None for an explicit ``None`` section.
 
@@ -100,8 +133,7 @@ def _parse_followups(body, build_offset):
     ids = _parse_section(bare, inert, first)
     spare, outside = list(ids or []), []
     for i in live:
-        match = _ANY_ITEM_RE.match(bare[i].strip())
-        fu = match and "FU%d" % int(match.group(1))
+        fu = _lead_fu(bare[i])
         if fu in spare:
             spare.remove(fu)
         elif fu:
@@ -157,7 +189,7 @@ def _parse_section(bare, inert, first):
     for line, is_inert in section:
         indent = md_fence.indent_width(line)
         if is_inert or indent >= 2:
-            if _NESTED_RE.match(line.lstrip()):
+            if _lead_fu(line):
                 raise _malformed("nested follow-up id: %s" % line.strip())
             if not have_item:
                 raise _malformed("unkeyed line: %s" % line.strip())
@@ -217,13 +249,14 @@ def _select_receipt(comments):
 
 def _parse_dispositions(receipt_body):
     """Return the list of FU ids disposed, or None for an explicit ``None`` field."""
-    bare, _ = _lines(receipt_body)
-    inert = md_fence.scan_contexts(bare).inert
+    raw, _ = _lines(receipt_body)
+    inert = md_fence.scan_contexts(raw).inert
+    bare, opened = _uncommented(raw, inert)  # a disposition counts only if visible
     start = next((i for i, l in enumerate(bare)
                   if not inert[i] and l.lstrip().startswith(DISPOSITIONS_PREFIX)), None)
     end = None if start is None else next(
-        (i for i in range(start + 1, len(bare)) if not inert[i] and bare[i].strip() == PENDING_MARKER),
-        None)
+        (i for i in range(start + 1, len(bare))
+         if not inert[i] and not opened[i] and raw[i].strip() == PENDING_MARKER), None)
     if end is None:
         raise _Refusal("dispositions-malformed", "no completed-dispositions field closed by the "
                        "pending-proposals marker")
