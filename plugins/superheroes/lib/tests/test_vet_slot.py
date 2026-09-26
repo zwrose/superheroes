@@ -343,6 +343,14 @@ def test_none_build_with_none_receipt_is_ok(slot_file):
     assert len(fake.edit_calls()) == 1
 
 
+def test_none_build_with_empty_dispositions_field_passes(slot_file):
+    fake = _ok_fake(body=NONE_BODY, receipt=_receipt_with("**Dispositions — completed.**\n"))
+    result = _write(fake, slot_file)
+    assert result["ok"] is True
+    assert result["followups"] == []
+    assert len(fake.edit_calls()) == 1
+
+
 def test_zero_count_then_none_is_ok(slot_file):
     body = _body_with_followups("Follow-ups: 0 (0 owner-call)\nNone\n")
     fake = _ok_fake(body=body, receipt=_receipt_with("**Dispositions — completed.** None\n"))
@@ -709,6 +717,15 @@ def test_cli_bad_argument(capsys, argv):
     assert json.loads(capsys.readouterr().out)["reason"] == "bad-argument"
 
 
+@pytest.mark.parametrize("argv", [["-h"], ["--help"], ["check", "-h"], ["write", "--help"]])
+def test_cli_help_prints_one_json_line(capsys, argv):
+    code = vs.main(argv, run=_ok_fake())
+    out = capsys.readouterr().out
+    assert code == 1
+    assert out.endswith("\n") and out.count("\n") == 1
+    assert json.loads(out)["reason"] == "bad-argument"
+
+
 # --- vocabulary drift: the prose that teaches the shapes names every token this writer enforces --
 
 PLUGIN = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
@@ -725,11 +742,12 @@ def _one_block(blocks, needle, where):
     return found[0]
 
 
-def _listed_tokens(block, lead, where):
-    """The backticked tokens of the one sentence that starts at ``lead``."""
-    found = re.findall(re.escape(lead) + r"(.*?)\.(?:\s|$)", block, re.S)
-    assert len(found) == 1, "%s: expected one %r sentence, found %d" % (where, lead, len(found))
-    return set(re.findall(r"`([^`]+)`", found[0]))
+def _cites_one_home(block, constant, members, where):
+    """The prose points at ``constant`` in lib/vet_slot.py and keeps no hand-copied member list."""
+    assert "`%s` in `lib/vet_slot.py`" % constant in block, where
+    assert hasattr(vs, constant), constant
+    listed = [m for m in sorted(members) if re.search(r"`%s`\s*,\s*`" % re.escape(m), block)]
+    assert not listed, "%s: re-enumerates %s members %s" % (where, constant, listed)
 
 
 def test_followup_vocabulary_is_named_in_the_teaching_prose():
@@ -737,7 +755,7 @@ def test_followup_vocabulary_is_named_in_the_teaching_prose():
     followups = _one_block(workhorse, "`- FU<n> [<class>] <text>`", "workhorse Follow-ups paragraph")
     assert "**%s**" % vs.FOLLOWUPS_HEADING in followups
     assert "`Follow-ups: <n> (<m> owner-call)`" in followups
-    assert _listed_tokens(followups, "class one of ", "workhorse class list") == set(vs.CLASSES)
+    _cites_one_home(followups, "CLASSES", vs.CLASSES, "workhorse class list")
     for cls in sorted(vs.CLASSES):
         assert vs._ITEM_RE.match("- FU1 [%s] text" % cls), cls
     receipt = _doc(PLUGIN, "skills", "showrunner", "reference", "vet-receipt.md")
@@ -746,8 +764,10 @@ def test_followup_vocabulary_is_named_in_the_teaching_prose():
     field7 = field7.group(0)
     assert "`- FU<n>: <disposition>`" in field7
     assert "`%s.**`" % vs.DISPOSITIONS_PREFIX in field7
-    assert _listed_tokens(field7, "The disposition begins with ", "field 7 disposition list") == set(
-        vs.DISPOSITIONS)
+    _cites_one_home(field7, "DISPOSITIONS", vs.DISPOSITIONS, "field 7 disposition list")
+    for example in ("filed #12", "declined"):
+        assert "`%s`" % example in field7, example
+        assert example.split()[0] in vs.DISPOSITIONS, example
     for word in sorted(vs.DISPOSITIONS):
         assert vs._DISPOSITION_RE.match("- FU1: %s x" % word), word
 

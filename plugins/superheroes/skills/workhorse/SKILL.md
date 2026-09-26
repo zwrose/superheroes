@@ -1133,7 +1133,7 @@ against the registry allowlist (#600), so the advisor can vet what ran without y
 but cannot file yourself (you never wire the board). List them under that exact heading (write
 **None** when there are none) so the advisor can turn them into issues and the advisor's triage
 backstop can grep the section. Key every item as one top-level bullet, `- FU<n> [<class>] <text>`,
-with the class one of `owner-call`, `defect`, `craft`, `flake`, or `info`. An optional first line
+with the class one of `CLASSES` in `lib/vet_slot.py`. An optional first line
 counts them: `Follow-ups: <n> (<m> owner-call)`. Indented sub-bullets may add detail, but an `FU`
 id sits only at top level. The advisor's slot writer refuses any other line, so an unkeyed item
 cannot drop out unseen. The handback comment states the same count line. When a PR closes or is

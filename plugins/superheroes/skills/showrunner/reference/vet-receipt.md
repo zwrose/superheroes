@@ -136,8 +136,8 @@ shape is wrong and the thinking wins.
 7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Under
    `**Dispositions — completed.**`, write one bullet per build-record id, `- FU<n>: <disposition>`.
-   The disposition begins with `fixed` (in this PR), `filed` #…, `folded` into #…, `collector` @…,
-   `declined` (with its revisit trigger), or `info`. Other completed items may follow as prose.
+   The disposition begins with one of `DISPOSITIONS` in `lib/vet_slot.py` — e.g. `filed #12` or
+   `declined` with its revisit trigger. Other completed items may follow as prose.
    Write `None` only over a `None` build record. The slot writer refuses the owner-half write when
    an id has no keyed disposition, or when the receipt names an id the build record lacks. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not

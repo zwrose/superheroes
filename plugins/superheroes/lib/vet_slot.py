@@ -401,10 +401,10 @@ def main(argv=None, run=None):
     if argv is None:
         argv = sys.argv[1:]
     try:
-        parser = _Parser(prog="vet_slot")
+        parser = _Parser(prog="vet_slot", add_help=False)
         verbs = parser.add_subparsers(dest="verb")
         for name in ("write", "check"):
-            sub = verbs.add_parser(name)
+            sub = verbs.add_parser(name, add_help=False)
             sub.add_argument("--pr", type=int, required=True)
             sub.add_argument("--repo", required=True)
             if name == "write":
