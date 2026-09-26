@@ -7346,8 +7346,11 @@ def _resolve_ruling_target(state, ruling_id):
     for row in combined:
         if _row_matches_ruling_finding_key(row, rid):
             return _fix_batch_row_key(row), dict(row), None
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY) or []
-    for entry in ledger:
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    if ledger_fault is not None:
+        return None, None, RULING_FILE_UNREADABLE
+    ledger_entries = list(ledger_by_key.values())
+    for entry in ledger_entries:
         if isinstance(entry, dict) and _row_matches_ruling_finding_key(entry, rid):
             return _finding_identity_key(entry), dict(entry), None
     id_matches = []
@@ -7357,7 +7360,7 @@ def _resolve_ruling_target(state, ruling_id):
     for row in combined:
         if isinstance(row, dict) and row.get("id") == rid:
             id_matches.append((_fix_batch_row_key(row), dict(row)))
-    for entry in ledger:
+    for entry in ledger_entries:
         if isinstance(entry, dict) and entry.get("id") == rid:
             id_matches.append((_finding_identity_key(entry), dict(entry)))
     by_key = {}
@@ -7396,33 +7399,33 @@ def _validate_ruling_entries(doc):
     if not _owner_artifact_provenance_well_formed({"_provenance": provenance}):
         return None, None, RULING_PROVENANCE_MALFORMED
     parsed = []
-    for entry in rulings:
-        if not isinstance(entry, dict):
+    for spec in rulings:
+        if not isinstance(spec, dict):
             return None, None, RULING_FILE_SHAPE
-        rid = entry.get("id")
-        kind = entry.get("ruling")
-        reason = entry.get("reason")
+        rid = spec.get("id")
+        kind = spec.get("ruling")
+        reason = spec.get("reason")
         if not isinstance(rid, str) or not rid.strip():
             return None, None, RULING_FILE_SHAPE
         if kind not in RULING_KINDS:
             return None, None, RULING_UNKNOWN_KIND
         if not isinstance(reason, str) or not reason.strip():
             return None, None, RULING_REASON_MISSING
-        row = {"id": rid.strip(), "ruling": kind, "reason": reason.strip()}
+        entry = {"id": rid.strip(), "ruling": kind, "reason": reason.strip()}
         if kind == "out-of-scope":
-            follow_up = entry.get("followUp")
+            follow_up = spec.get("followUp")
             fault = session_contract.follow_up_shape_fault(follow_up)
             if fault is not None:
                 return None, None, RULING_FOLLOW_UP_MALFORMED
-            row["followUp"] = dict(follow_up)
+            entry["followUp"] = dict(follow_up)
         if kind == "guidance":
-            guidance = entry.get("guidance")
+            guidance = spec.get("guidance")
             if not isinstance(guidance, str) or not guidance.strip():
                 return None, None, RULING_FILE_SHAPE
             if len(guidance.encode("utf-8")) > GATE_GUIDANCE_ROW_BYTE_CAP:
                 return None, None, RULING_GUIDANCE_OVERSIZE
-            row["guidance"] = guidance.strip()
-        parsed.append(row)
+            entry["guidance"] = guidance.strip()
+        parsed.append(entry)
     return parsed, provenance, None
 
 
@@ -7580,6 +7583,8 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
         key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
         if target_fault == RULING_TARGET_AMBIGUOUS:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
+        if target_fault == RULING_FILE_UNREADABLE:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE)
         if key is None:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
         if entry["ruling"] == "out-of-scope":
@@ -7612,6 +7617,8 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
         key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
         if target_fault == RULING_TARGET_AMBIGUOUS:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
+        if target_fault == RULING_FILE_UNREADABLE:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE)
         if key is None:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
         seq = _next_ruling_seq(state)
@@ -7628,8 +7635,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             "rulingFileSha256": file_sha,
             "by": by,
         }
-        if entry.get("followUp") is not None:
-            log_row["followUp"] = entry["followUp"]
+        session_contract.copy_follow_up_field(entry, log_row)
         if entry.get("guidance") is not None:
             log_row["guidance"] = entry["guidance"]
         _rulings_log(state).append(log_row)

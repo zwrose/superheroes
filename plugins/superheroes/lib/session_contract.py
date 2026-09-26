@@ -34,6 +34,7 @@ __all__ = (
     "DISPOSITIONS",
     "FOLLOW_UP_FIELDS",
     "follow_up_shape_fault",
+    "copy_follow_up_field",
     "DISPOSITION_LEDGER_KEY",
     "DISPOSITION_LEDGER_MALFORMED_TOKEN",
     "DispositionLedgerReadFault",
@@ -244,6 +245,12 @@ def follow_up_shape_fault(follow_up, *, require_item=True):
     if not isinstance(closure, str) or not closure.strip():
         return ("missing-class-closure", "out-of-scope follow-up lacks class-closure line")
     return None
+
+
+def copy_follow_up_field(source, target):
+    """Copy followUp from source onto target when the key is present (defensive copy)."""
+    if "followUp" in source:
+        target["followUp"] = dict(source["followUp"])
 
 
 DISPOSITION_LEDGER_KEY = "dispositionLedger"
