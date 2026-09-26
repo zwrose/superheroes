@@ -1,5 +1,20 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
+## Head `df39da64`: a readable `headDiffPath` carries no authority; the unknown surface is keyed on the derivation (advisor S7 ruling)
+
+The probes ran in the build worktree at `df39da64` (no review session was reading it). Each
+neutralization was a targeted edit, reverted by the inverse edit. After the last restore,
+`git status --porcelain` printed nothing. `test_unknown_head_diff_is_derived_from_git_for_the_full_panel`
+(cited in the older sections below) is now `test_an_unsupplied_head_diff_is_derived_from_git_and_reviewed`:
+with the unknown surface keyed on the derivation alone, a derivable head diff runs the delta round,
+not a second full panel.
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| N1 | `_fold_fixer` trusts the path's bytes (`if head_source == "path": head = _supplied`) | `test_a_readable_head_diff_path_carries_no_authority[path-disagrees-with-git]` → `AssertionError: the reviewed diff equals the path's bytes`. `[path-agrees-with-git]` stays green, as it must: agreeing bytes are git's bytes. |
+| N2 | `_headDiffUnknown` keyed on the supplied source again (`head_source == "unknown" or head is None`) | `test_an_unsupplied_head_diff_is_derived_from_git_and_reviewed` → `AssertionError: {'panels': [1, 2]}` / `assert [1, 2] == [1]` |
+| N3 | The moved-head cause reuses the unknown-head message | `test_the_stale_park_names_its_cause` → `AssertionError: two causes share one message: [...]` |
+
 ## Head `76e8b527`: certify what was seen; currency at handback; hardened HEAD (advisor S6 ruling)
 
 The probe worktree was detached at `76e8b527`. Each neutralization was a targeted edit, reverted by
