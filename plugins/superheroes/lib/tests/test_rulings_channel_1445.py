@@ -586,6 +586,10 @@ def test_edge9_non_fixer_step_refuses_guidance(tmp_path):
     assert _state_bytes(session_dir) == before
 
 
+def _owner_absent(state):
+    state.pop(session_contract.DISPOSITION_LEDGER_OWNER_FIELD, None)
+
+
 def test_rule_refuses_malformed_rulings_log(tmp_path):
     session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
     state = _state(session_dir)
@@ -612,6 +616,58 @@ def test_rule_refuses_malformed_ruling_seq_counter(tmp_path):
     assert out.get("ok") is False, out
     assert out.get("reason") == RD.RULINGS_LOG_MALFORMED, out
     assert _state_bytes(session_dir) == before
+
+
+@pytest.mark.parametrize("bad_log", [{"not": "a-list"}, None])
+def test_rule_refuses_malformed_rulings_log_owner_absent(tmp_path, bad_log):
+    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    state = _state(session_dir)
+    _owner_absent(state)
+    state["rulingsLog"] = bad_log
+    RD.save_state(session_dir, state)
+    id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    before = _state_bytes(session_dir)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_a, "ruling": "guidance", "reason": "r", "guidance": "g"}]))
+    assert out.get("ok") is False, out
+    assert out.get("reason") == RD.RULINGS_LOG_MALFORMED, out
+    assert _state_bytes(session_dir) == before
+
+
+def test_rule_refuses_malformed_ruling_seq_counter_owner_absent(tmp_path):
+    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    state = _state(session_dir)
+    _owner_absent(state)
+    state["rulingSeqCounter"] = "not-an-int"
+    RD.save_state(session_dir, state)
+    id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    before = _state_bytes(session_dir)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_a, "ruling": "guidance", "reason": "r", "guidance": "g"}]))
+    assert out.get("ok") is False, out
+    assert out.get("reason") == RD.RULINGS_LOG_MALFORMED, out
+    assert _state_bytes(session_dir) == before
+
+
+def test_preemission_ruling_journal_carries_round_phase(tmp_path):
+    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    state = _state(session_dir)
+    session_round = state["round"]
+    session_step = state.get("step")
+    state["pending"] = None
+    RD.save_state(session_dir, state)
+    id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_a, "ruling": "out-of-scope", "reason": "defer",
+         "followUp": _follow_up()}]))
+    assert out.get("ok"), out
+    rows = [e for e in RD.read_journal(session_dir)
+            if e.get("cmd") == RD.RULE_CMD and e.get("outcome") == "ruling-recorded"]
+    assert rows, "expected ruling-recorded journal row"
+    row = rows[-1]
+    assert row.get("round") == session_round
+    assert row.get("phase") == session_step
+    assert row.get("attempt") is None
 
 
 def test_receipt_parity_rulings_field(tmp_path):

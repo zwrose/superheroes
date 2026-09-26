@@ -6920,15 +6920,14 @@ def _ruling_ledger_precondition_refusal(session_dir, state, pending):
     owner_refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, RULE_CMD)
     if owner_refusal is not None:
         return owner_refusal
-    if session_contract.disposition_ledger_owner_classification(state) != (
+    if session_contract.disposition_ledger_owner_classification(state) == (
             session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED):
-        return None
-    _rows, fault = session_contract.read_disposition_ledger(state, required=True)
-    if fault is not None:
-        return _refuse_cmd(
-            session_dir, RULE_CMD, fault.token,
-            phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
-            detail=fault.detail)
+        _rows, fault = session_contract.read_disposition_ledger(state, required=True)
+        if fault is not None:
+            return _refuse_cmd(
+                session_dir, RULE_CMD, fault.token,
+                phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+                detail=fault.detail)
     _log_rows, log_fault = _read_rulings_log(state)
     if log_fault is not None:
         token, detail = log_fault
@@ -7688,9 +7687,14 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     ledger_refusal = _ruling_ledger_precondition_refusal(session_dir, state, pending)
     if ledger_refusal is not None:
         return ledger_refusal
-    phase = pending.get("phase") if isinstance(pending, dict) else None
-    rnd = pending.get("round") if isinstance(pending, dict) else None
-    attempt = pending.get("attempt") if isinstance(pending, dict) else None
+    if isinstance(pending, dict):
+        phase = pending.get("phase")
+        rnd = pending.get("round")
+        attempt = pending.get("attempt")
+    else:
+        phase = state.get("step")
+        rnd = state.get("round")
+        attempt = None
     for entry in parsed:
         key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
         if target_fault == RULING_TARGET_AMBIGUOUS:
