@@ -2791,13 +2791,13 @@ def test_loop_idle_seat_exits_when_next_member_closed_unmerged(
         sleep=sleep,
         max_total_seconds=5,
     )
-    assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
-    assert result["arms"] == 1
     assert {
         "flag": "idle-seat-launchable-child",
         "stack": _STACK_NUM,
         "position": 1,
-    } in result["flags"]
+    } in (result.get("flags") or [])
+    assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
+    assert result["arms"] == 1
 
 
 def test_run_is_one_shot_against_quiet_live_lane(tmp_path, monkeypatch):
