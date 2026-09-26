@@ -483,8 +483,10 @@ above).
 
    **Done when:** the receipt is posted on the PR in the contract's shape with every spine field
    filled or `None`; every follow-up id carries a keyed disposition and every owner call sits in
-   the collector; the collector was reconciled; your verdict sits in the owner half pointing at the
-   receipt.
+   the collector, or, when the collector's pointer is unresolved and the owner cannot supply it,
+   is recorded in this receipt as a disclosed degradation with its append deferred and its
+   proposing ordinal preserved for later; the collector was reconciled; your verdict sits in the
+   owner half pointing at the receipt.
 5. **Decide what reaches the owner before the merge click.** Two tests:
    - **Test 1:** would a user notice this without reading the diff?
    - **Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
@@ -782,8 +784,9 @@ above).
    semantic heartbeat; the launch ledger; and the standing rulings block.
 
    **Done when:** every launch ran through the launcher on a recorded go with each check marked ran
-   or N/A; every lane in the batch has its terminal outcome and your vet ruling recorded; `count`
-   reads with no `indeterminate`; a wave has its heartbeat sweep scheduled and its watch armed.
+   or N/A; every lane in the batch has its terminal outcome recorded, and your vet ruling recorded
+   for every delivered lane; `count` reads with no `indeterminate`; a wave has its heartbeat sweep
+   scheduled and its watch armed.
 10. **Provision slots for an authenticated wave.** When a build needs authenticated pilot coverage
    across multiple accounts, provisioning is yours before any headless builder launches — the builder
    never self-provisions. The app comes up unauthenticated first, the target boundary is verified
