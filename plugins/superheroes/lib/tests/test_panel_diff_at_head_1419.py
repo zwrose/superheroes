@@ -194,10 +194,13 @@ def test_b2_git_unavailable_parks(tmp_path, monkeypatch):
                **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
     real_run = subprocess.run
 
-    def _raise_file_not_found(*_a, **_k):
-        raise FileNotFoundError("git")
+    def _wrapped(*args, **kwargs):
+        cmd = args[0] if args else []
+        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git" and "diff" in cmd:
+            raise FileNotFoundError("git")
+        return real_run(*args, **kwargs)
 
-    monkeypatch.setattr(rdb.subprocess, "run", _raise_file_not_found)
+    monkeypatch.setattr(rdb.subprocess, "run", _wrapped)
     state = _unknown_surface_state(cfg)
     assert state["certification"]["reason"].startswith(
         "%s: git unavailable" % RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
@@ -230,13 +233,18 @@ def test_b2_git_timeout_parks(tmp_path, monkeypatch):
     repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
     cfg = _cfg(repoRoot=repo, baseRef=base_sha,
                **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
+    real_run = subprocess.run
 
-    def _timeout(*_a, **_k):
-        raise subprocess.TimeoutExpired(cmd="git", timeout=120)
+    def _wrapped(*args, **kwargs):
+        cmd = args[0] if args else []
+        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git" and "diff" in cmd:
+            raise subprocess.TimeoutExpired(cmd="git", timeout=120)
+        return real_run(*args, **kwargs)
 
-    monkeypatch.setattr(rdb.subprocess, "run", _timeout)
+    monkeypatch.setattr(rdb.subprocess, "run", _wrapped)
     state = _unknown_surface_state(cfg)
     assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
+    assert "git diff failed" in state["certification"]["reason"]
     assert state["step"] != RD.P_PANEL
 
 
