@@ -20,11 +20,23 @@ Records per `rubric/bite-proof.md` § The record. Code surface: `plugins/superhe
 - **Raw red:**
 
 ```
-.                                                                        [100%]
-1 passed in 60.98s (0:01:00)
-```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_binding_ruling_rides_hashed_order_and_certifies _____________
 
-**Flag — wrong axis / detector stayed green:** Expected `record-result` refusal with `evidence-order-mismatch`; neutralization did not fail the named detector (binding path uses `_deliver_rulings` appendix when hashed order lacks guidance).
+    def test_binding_ruling_rides_hashed_order_and_certifies(tmp_path):
+        ...
+        rec_out = RD.cmd_record_result(session_dir, seat, occurrence=occurrence,
+                                       evidence_run_dir=run_dir)
+>       assert rec_out.get("ok"), rec_out
+E       AssertionError: {'ok': False, 'orderPromptSha256': 'cf5ec7722451be567fc8d734413465fa9efc693ca35017e02e5b43bf41f9dca5', 'orderSha256': 'e74c47fe02fb6ef6b8139763a48123b43795af8c74f930a5710274323155de5b', 'reason': 'evidence-order-mismatch', ...}
+E       assert False
+
+plugins/superheroes/lib/tests/test_rulings_channel_1445.py:449: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_binding_ruling_rides_hashed_order_and_certifies
+1 failed in 19.32s
+```
 
 - **Restore:** Removed the inserted `continue` line.
 - **Restore receipt (quoted lines):**
@@ -40,7 +52,7 @@ Records per `rubric/bite-proof.md` § The record. Code surface: `plugins/superhe
 
 ```
 .                                                                        [100%]
-1 passed in 49.61s
+1 passed in 22.53s
 ```
 
 ---
@@ -169,19 +181,25 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_edge3_re
         batch_sha = "0" * 64
 ```
 
-- **Detector:** **no detector covers BP-4** — `test_edge7_guidance_off_batch_no_supersede` and `test_binding_ruling_rides_hashed_order_and_certifies` both stayed green under neutralization (spare probe: binding).
-- **Raw red (edge7, stayed green):**
+- **Detector:** `test_fixer_order_pins_fix_batch_sha256`
+- **Failing assertion:** `assert f"- Fix batch sha256: {batch_sha}" in order_text`
+- **Raw red:**
 
 ```
-.                                                                        [100%]
-1 passed in 10.50s
-```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________________ test_fixer_order_pins_fix_batch_sha256 ____________________
 
-- **Raw red (binding spare, stayed green):**
+    def test_fixer_order_pins_fix_batch_sha256(tmp_path):
+        ...
+        order_text = _fixer_order_text(session_dir)
+>       assert f"- Fix batch sha256: {batch_sha}" in order_text
+E       AssertionError: assert '- Fix batch sha256: 3dacacd1123f7a9f9c2b917020c73c700d6626c71f5c536cda43b20dab948f06' in 'You are the fixer for one round of an auto-fix code-review loop.\n\n## Input\n- Findings to fix: ...'
 
-```
-.                                                                        [100%]
-1 passed in 33.96s
+plugins/superheroes/lib/tests/test_rulings_channel_1445.py:392: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_fixer_order_pins_fix_batch_sha256
+1 failed in 13.84s
 ```
 
 - **Restore:** `batch_sha = _fix_batch_file_sha256(session_dir, rnd, state)`
@@ -194,9 +212,11 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_edge3_re
 - **Raw green:**
 
 ```
-.                                                                        [100%]
-1 passed in 20.79s
+.......................                                                  [100%]
+23 passed in 45.72s
 ```
+
+(`plugins/superheroes/lib/tests/test_rulings_channel_1445.py`, `-n auto`, post-restore.)
 
 ---
 

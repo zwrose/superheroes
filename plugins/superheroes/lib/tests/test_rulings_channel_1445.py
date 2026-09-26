@@ -1,4 +1,5 @@
 """#1445 WO-1 — owner/advisor rulings channel (`rule` verb)."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -33,6 +34,7 @@ _write_execution_run_dir = _TRI._write_execution_run_dir
 _fixer_envelope_for_write_run = _TRI._fixer_envelope_for_write_run
 _anchor_hashes = _TRI._anchor_hashes
 _land = _TRI._land
+_dispatch_observed_land = _TRI._dispatch_observed_land
 _write_dispatch_manifest = _TRI._write_dispatch_manifest
 _slots_of = _TRI._slots_of
 _auditor_vendor_for = _TRI._auditor_vendor_for
@@ -378,6 +380,40 @@ def test_receipt_parity_rulings_field(tmp_path):
     assert cert_rounds[0].get("rulings") == state["rounds"][rnd].get("rulings")
 
 
+def test_fixer_order_pins_fix_batch_sha256(tmp_path):
+    f_a = _blocking_finding("bounds A", 2)
+    f_b = _blocking_finding("bounds B", 3)
+    f_b["severity"] = "Minor"
+    session_dir, gitdir, head_path = _bootstrap(
+        tmp_path, name="rulings-1445-sha", fixBatchCap=2)
+    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_FIXER)
+    state = _state(session_dir)
+    pend = state["pending"]
+    rnd = pend["round"]
+    batch_path = RD._ensure_fix_batch_file(session_dir, rnd, state)
+    with open(batch_path, "rb") as fh:
+        batch_sha = hashlib.sha256(fh.read()).hexdigest()
+    order_text = _fixer_order_text(session_dir)
+    sha_line_before = f"- Fix batch sha256: {batch_sha}"
+    assert sha_line_before in order_text
+    row_b = (state.get("_fixBatch") or [None, {}])[1]
+    if not isinstance(row_b, dict):
+        row_b = (state.get("_fixQueue") or [{}])[0]
+    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    assert _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
+         "followUp": _follow_up()}]))["ok"]
+    state = _state(session_dir)
+    batch_path = RD._ensure_fix_batch_file(session_dir, rnd, state)
+    with open(batch_path, "rb") as fh:
+        batch_sha_after = hashlib.sha256(fh.read()).hexdigest()
+    assert batch_sha_after != batch_sha
+    order_after = _fixer_order_text(session_dir)
+    sha_line_after = f"- Fix batch sha256: {batch_sha_after}"
+    assert sha_line_after in order_after
+    assert sha_line_after != sha_line_before
+
+
 def test_binding_ruling_rides_hashed_order_and_certifies(tmp_path):
     session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
@@ -389,9 +425,6 @@ def test_binding_ruling_rides_hashed_order_and_certifies(tmp_path):
     out = _rule(session_dir, path)
     assert out.get("ok"), out
     state = _state(session_dir)
-    order_text = _fixer_order_text(session_dir)
-    log_rows = state.get("rulingsLog") or []
-    prompt = _deliver_rulings(order_text, log_rows)
     pend = state["pending"]
     roster, _ = __import__("round_adapters").roster_for(
         pend["phase"], state, state.get("config") or {})
@@ -399,14 +432,34 @@ def test_binding_ruling_rides_hashed_order_and_certifies(tmp_path):
     skey = RR.storage_key(seat, occurrence)
     order_path = RR.order_prompt_path(
         session_dir, pend["round"], pend["phase"], skey, pend["attempt"])
-    with open(order_path, "w", encoding="utf-8") as fh:
-        fh.write(prompt)
-    run_dir = _write_execution_run_dir(tmp_path, order_path, echo_nonce="rulings-bind")
+    with open(order_path, "rb") as fh:
+        driver_order_bytes = fh.read()
+    _manifest_sha, anchored_order_sha = _anchor_hashes(
+        session_dir, state, pend, seat, occurrence)
+    driver_order_sha = hashlib.sha256(driver_order_bytes).hexdigest()
+    assert driver_order_sha == anchored_order_sha
+    driver_order_text = driver_order_bytes.decode("utf-8")
+    key_b = RD._fix_batch_row_key(row_b)
+    batch_path = RD._ensure_fix_batch_file(session_dir, pend["round"], state)
+    with open(batch_path, encoding="utf-8") as fh:
+        batch_doc = json.load(fh)
+    batch_keys = {
+        RD._fix_batch_row_key(row) or row.get("id")
+        for row in (batch_doc if isinstance(batch_doc, list) else [])
+        if isinstance(row, dict)}
+    assert key_b not in batch_keys
+    order_text = _fixer_order_text(session_dir)
+    log_rows = state.get("rulingsLog") or []
+    prompt = _deliver_rulings(order_text, log_rows)
+    delivered_path = tmp_path / "delivered-fixer-order.md"
+    delivered_path.write_text(prompt, encoding="utf-8")
+    run_dir = _write_execution_run_dir(tmp_path, str(delivered_path), echo_nonce="rulings-bind")
     payload = _TRI._payload_for(session_dir, state, pend, seat, [], head_path)
-    _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+    _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence=occurrence)
     rec_out = RD.cmd_record_result(session_dir, seat, occurrence=occurrence,
                                    evidence_run_dir=run_dir)
     assert rec_out.get("ok"), rec_out
+    assert "apply guard A" in driver_order_text
     adv = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
     assert adv.get("ok"), adv
     while not _state(session_dir).get("terminal"):
