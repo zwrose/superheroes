@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.35.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.34.0...superheroes-v0.35.0) (2026-09-26)
+
+
+### Features
+
+* **superheroes:** builder follow-ups are keyed, and the owner-half writer refuses a dropped one ([#1449](https://github.com/zwrose/superheroes/issues/1449)) ([400afa7](https://github.com/zwrose/superheroes/commit/400afa73bf1cee63a8a9f7c15432771212e5054f))
+
+
+### Bug Fixes
+
+* **superheroes:** wave_watch counts a stack position occupied when the stack already has a PR there ([#1455](https://github.com/zwrose/superheroes/issues/1455)) ([325843f](https://github.com/zwrose/superheroes/commit/325843ff7b0e75b65e6d7862d13448783ea76e4c))
+
+
+### Chores
+
+* **superheroes:** C7 eval suite, layer 1 — R8, workhorse cases, README ([#1481](https://github.com/zwrose/superheroes/issues/1481)) ([2f5c3d3](https://github.com/zwrose/superheroes/commit/2f5c3d3ae967d2034927647db97eae8f7e11cc65))
+* **superheroes:** C7 eval suite, layer 2 — showrunner cases ([#1482](https://github.com/zwrose/superheroes/issues/1482)) ([a6303b3](https://github.com/zwrose/superheroes/commit/a6303b3ecc95e5c911cdde2d7523eed93118ecde))
+* **superheroes:** C7 eval suite, layer 3 — detective and covenant cases, baseline ([#1483](https://github.com/zwrose/superheroes/issues/1483)) ([57c9d8f](https://github.com/zwrose/superheroes/commit/57c9d8f7daa0d7e71170ded9686f3db18f8bc377))
+* **superheroes:** retire the dispatch salvage paths; a sizing note for long cursor write dispatches ([#1463](https://github.com/zwrose/superheroes/issues/1463)) ([a08376c](https://github.com/zwrose/superheroes/commit/a08376c23dca0bb9720a96ce57124e6a286d1b1b))
+
 ## [0.34.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.33.0...superheroes-v0.34.0) (2026-09-25)
 
 
