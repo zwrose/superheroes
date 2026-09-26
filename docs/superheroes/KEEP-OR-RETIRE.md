@@ -1980,9 +1980,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   claim paths.
 - **Start date.** 2026-09-26.
 - **Condition.** Usage-based, 60 days: whether any project store still holds an
-  `astra-probe-attempts.json` or an open `astra-probe-claim-*` file, or any receipt shows the
-  `astra-probe` verb invoked. When neither is seen across the window, a proposal to the owner at a
-  gardening pass to delete the dual read, the legacy continuation, and the alias.
+  `astra-probe-attempts.json` or any `astra-probe-claim-*` file (open or completed — a completed
+  claim still binds its wave to its run dir), or any receipt shows the `astra-probe` verb invoked.
+  When neither is seen across the window, a proposal to the owner at a gardening pass to delete the
+  dual read, the legacy continuation, and the alias. That proposal must carry a migration that keeps
+  each remaining legacy claim's run-dir binding, or wait until no legacy claim file remains.
 - **Last demonstrated benefit.** unknown — no store has been observed reading through it yet.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -1994,20 +1996,25 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** Not a census row. The outcome reason `forfeit-with-engaged-artifact` that stays
   after the salvage paths retired (see S2), and the "Salvage valve" paragraph in
   `rubric/review-discipline.md`. Its readers: `lib/dispatch_outcome.py`, `lib/engine_dispatch.py`,
-  `lib/round_driver.py`, `lib/seat_canary.py`, `rubric/review-discipline.md`,
+  `lib/round_driver.py`, `lib/seat_canary.py`, `lib/canary_outcome.py` and
+  `lib/payload_contracts.py` (both through `NOT_RUN_REASONS`), `rubric/review-discipline.md`,
   `skills/review-code/reference/auto-fix-loop.md`, `skills/review-code/reference/round-driver.md`,
   `skills/workhorse/SKILL.md`, `skills/workhorse/reference/dispatch-mechanics.md`, and
   `TRANSITION.md`. Cost: every outcome consumer keeps a branch for a reason no run mints.
 - **Start date.** 2026-09-26.
-- **Condition.** Usage-based, 60 days: whether any stored run result or journal read by a live
-  session still carries the reason. No run mints it, since the salvage paths that minted it are
-  retired, so a clean window yields a proposal to the owner at a gardening pass to delete the
-  vocabulary, its readers' branches, and the salvage-valve paragraph together.
+- **Condition.** Usage-based, 60 days: whether any stored run result or journal, or any persisted
+  review-panel artifact that a live review session may still fold (a panel submission's seat
+  `reason`, a `canaryResult`), carries the reason. No run mints it, since the salvage paths that
+  minted it are retired, so a clean window yields a proposal to the owner at a gardening pass to
+  delete the vocabulary, its readers' branches, and the salvage-valve paragraph together. Removing
+  the reason from `NOT_RUN_REASONS` while such an artifact is still folded would make a forfeited
+  seat read as having run.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** harness-limit — same reason family as S2; it carries forward from the salvage paths and
-  is not a new mechanism.
+- **Notes.** structural — kept for compatibility with run results and panel artifacts persisted
+  before the salvage paths retired, not to work around a current host property. S2's
+  `harness-limit` tag describes the retired salvage paths themselves.
 
 
 ## The workaround-marker inventory
