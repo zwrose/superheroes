@@ -39,8 +39,9 @@ case (three for W5, S5 and X1). A case that passes there is not testing the plug
 1. **13 cases can gate a head at the 3/3 bar:** R8, W1–W4, S1, S3–S7, D1 and D2. **D1, S4 and S6 now
    read 3/3.** Under the earlier small judge they read 2/3 twice, and the failures traced to the judge.
    With the Opus judge that noise is gone.
-2. **W5 read 2/3, then 3/3 on its re-run.** It can flag a regression, but re-run it once before calling
-   a head failure a regression.
+2. **W5 read 2/3, then 3/3 on its re-run, so it is not among the 13.** Under the 3/3 rule it cannot
+   gate a head. If W5 fails on a head, re-run it and read the failing answers by hand before
+   concluding anything.
 3. **S2 and X1 cannot gate.** S2 read 2/3, then 1/3, and its with-plugin run in the no-plugin pass
    also failed. The Opus judge fails the walk's item template and batch shape on main, so treat S2
    as a hand-read case until that is understood. X1 read 2/3 twice. In both failures, main's agent
