@@ -1,5 +1,21 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
+## Head `e9554246`: the recorded pair or nothing; one derivation feeds both setup bindings (S11 fix leg, advisor ruling (b))
+
+The probes ran in a detached probe worktree at `e9554246` that no review session was reading.
+Each neutralization was a targeted edit, reverted by the inverse edit; the detectors were left
+unedited. After the last restore, `git status --porcelain` printed nothing, and
+`test_layer4d_stale_diff_1419.py` gave `92 passed`. The ruled proof is Y1 (make the digest
+optional again, and the probe state certifies); Y2–Y4 cover the S11 gap-sweep fixes.
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| Y1 | `_reviewed_diff_stale_cause`: `if (recorded or digest) and not (` → `if digest and not (` (the digest optional again) | `test_a_recorded_head_without_its_bound_digest_never_certifies[absent\|none\|empty]` → `assert None == 'the reviewed diff is not the diff derived at its recorded head'` (3 red; `short`, `not-hex` and `mismatched` stay caught by the byte check). The probe state (a recorded SHA `aaaa…`, digest `None`, tampered bytes) run through `_terminal_converged` → `terminal= converged`, `certifiedHead= aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`; restored → `terminal= cannot-certify`, `reason= reviewed-diff-stale: …` |
+| Y2 | `_fold_fixer`, seam branch: add `_record_round(state, "reviewedDiffSource", REVIEWED_DIFF_SOURCE_GIT)` | `test_a_seam_backed_fixer_fold_claims_no_git_provenance` → `assert 'reviewedDiffSource' not in {… 'headDiffSource': 'unknown', …}` |
+| Y3a | `build_receipt`: drop the `reviewed_diff_source_carried` guard | `test_reviewed_diff_source_rides_only_v6_receipts[2\|3\|4\|5]` → `assert 'reviewedDiffSource' not in {'auditProvenance': None, …}` (4 red; `[6]` green) |
+| Y3b | `round_certification._build_receipt_rounds`: drop the same guard | the same four → the same assertion (4 red; `[6]` green) |
+| Y4 | fresh `next`: `check_diff_binding(…, run=_hardened_numstat_run(derived[0]))` → `run=None` (the inherited-env numstat) | `test_the_first_round_binding_reads_the_hardened_git_config` → `{'detail': 'artifact +0/-0 vs pin +1/-1', 'ok': False, 'reason': 'round-diff-base-mismatch'}` / `assert (1 == 0)` |
+
 ## Head `b5e9bbcc`: the writer binds a converged state to its certificate's head only (advisor S10 ruling)
 
 The probes ran in a detached probe worktree (X1–X3 at `6a591d6e`, X4 at `b5e9bbcc`, which adds
