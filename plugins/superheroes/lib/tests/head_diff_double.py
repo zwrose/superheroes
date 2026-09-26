@@ -25,9 +25,16 @@ def _is_round_driver(module):
             and hasattr(module, "_fold_fixer"))
 
 
+_SCAN_CACHE = {"key": None, "found": ()}
+
+
 def round_driver_copies(extra=()):
     """Every loaded copy of round_driver: the imported one and the ones test modules loaded by
-    file spec (held in their globals)."""
+    file spec (held in their globals). The scan is cached while the set of loaded modules (and the
+    requesting test module) is unchanged, so it does not walk every module for every test."""
+    key = (len(sys.modules), tuple(id(m) for m in extra))
+    if _SCAN_CACHE["key"] == key:
+        return list(_SCAN_CACHE["found"])
     found = {}
     roots = [m for m in list(sys.modules.values()) + list(extra) if m is not None]
     # Test modules load their own copies by file spec, sometimes inside another spec-loaded test
@@ -41,6 +48,7 @@ def round_driver_copies(extra=()):
         for value in list(getattr(module, "__dict__", {}).values()):
             if _is_round_driver(value):
                 found[id(value)] = value
+    _SCAN_CACHE["key"], _SCAN_CACHE["found"] = key, tuple(found.values())
     return list(found.values())
 
 

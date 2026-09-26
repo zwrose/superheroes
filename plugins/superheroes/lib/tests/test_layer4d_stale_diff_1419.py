@@ -733,3 +733,71 @@ def test_a_user_diff_noprefix_setting_does_not_reshape_the_derived_diff(tmp_path
     os.makedirs(session_dir)
     got = RD._derive_head_diff_from_git(session_dir, {"config": {"baseRef": base}})
     assert got is not None and got.startswith("diff --git a/f.py b/f.py\n"), got
+
+
+def _certified_session(tmp_path):
+    """A converged, git-derived session (fixer supplies nothing; the driver derives the diff)."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    seen = {}
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+
+    def respond(phase, payload, rnd):
+        art = inner(phase, payload, rnd)
+        if phase == RD.P_FIXER:
+            art = {"fixes": [], "headDiff": "supplied, ignored"}
+        return art
+    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base), _discharging(respond))
+    assert payload["verdict"] == "converged", payload
+    return d, checkout, payload
+
+
+def test_the_certificate_names_the_verified_sha(tmp_path):
+    """Certify what was seen: the certification names the explicit SHA the reviewed diff was
+    derived at, never "HEAD" (red token: no `certifiedHead`, or one that is not the fold SHA)."""
+    d, checkout, payload = _certified_session(tmp_path)
+    state = RD.load_state(d)[1]
+    assert state["reviewedDiffSha"] == _git(checkout, "rev-parse", "HEAD").strip()
+    assert payload["certification"]["certifiedHead"] == state["reviewedDiffSha"], payload
+
+
+def test_a_commit_after_certification_is_refused_at_handback(tmp_path):
+    """Currency is checked where the certificate is consumed: after a late commit the published
+    sidecar still names the certified SHA, and the handback gate refuses the moved head with
+    `handback-head-mismatch` (red token: the gate allows, or the sidecar names the new head)."""
+    import handback_gate as hg
+    import json as _json
+    d, checkout, payload = _certified_session(tmp_path)
+    certified = payload["certification"]["certifiedHead"]
+    with open(os.path.join(checkout, "late.py"), "w", encoding="utf-8") as fh:
+        fh.write("late = 1\n")
+    _git(checkout, "add", "late.py")
+    _git(checkout, "commit", "-qm", "late commit after certification")
+    state = RD.load_state(d)[1]
+    side = RD._publish_sidecar(d, state)
+    assert side.get("ok"), side
+    with open(side["path"], encoding="utf-8") as fh:
+        assert _json.load(fh)["headSha"] == certified
+    superheroes_dir = os.path.dirname(side["path"])
+    with open(os.path.join(superheroes_dir, hg.BUILD_LANE_FILE), "w", encoding="utf-8") as fh:
+        _json.dump({"schema": hg.BUILD_LANE_SCHEMA, "lane": "full", "issue": "#1443",
+                    "declaredAt": "2026-09-26T00:00:00Z", "repoRoot": os.path.realpath(checkout),
+                    "branch": _git(checkout, "rev-parse", "--abbrev-ref", "HEAD").strip()}, fh)
+    result = hg.validate_handback("gh pr ready", checkout)
+    assert result["reason"] == "handback-head-mismatch", result
+
+
+def test_head_resolution_ignores_a_git_dir_decoy(tmp_path, monkeypatch):
+    """The head the review diff is derived at resolves under the hardened env: an inherited
+    `GIT_DIR` pointing at a decoy repository does not redirect it (red token: the decoy's HEAD)."""
+    real = str(tmp_path / "real")
+    decoy = str(tmp_path / "decoy")
+    for path, text in ((real, "r\n"), (decoy, "d\n")):
+        os.makedirs(path)
+        with open(os.path.join(path, "f.txt"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+        session_checkout.make_checkout(path)
+    real_head = _git(real, "rev-parse", "HEAD").strip()
+    monkeypatch.setenv("GIT_DIR", os.path.join(decoy, ".git"))
+    assert RD._hardened_head(real) == real_head

@@ -3867,6 +3867,19 @@ GIT_REVIEW_DIFF_ARGV = (("git",) + sanitized_view._DIFF_CONFIG_OVERRIDES + ("dif
                         + _GIT_DIFF_FORMAT_FLAGS)
 
 
+def _hardened_head(repo_root):
+    """`git rev-parse HEAD` under the shared git env hardening (sanitized_view._git_env) — the
+    head the review diff is derived at is never resolved through inherited GIT_* routing."""
+    try:
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_root,
+                              env=sanitized_view._git_env(), capture_output=True, text=True,
+                              timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    head = proc.stdout.strip() if proc.returncode == 0 else ""
+    return head or None
+
+
 def review_diff_text(repo_root, base, head):
     """THE review diff: `GIT_REVIEW_DIFF_ARGV <base>...<head>` in `repo_root`, byte-mode, under the
     shared git env hardening. The one home both the driver's post-fix derivation and the Setup
@@ -5332,6 +5345,13 @@ def _terminal_converged(state, config, full_panel, note=None):
             "independence": "degraded" if _degraded(state) else "independent",
             "base": _certification_base(state),
             "shapeDrivers": sorted(shape_drivers)}
+    # Certify what was seen: the explicit SHA the reviewed diff was derived at (else the session's
+    # bound head, when no fix moved it) — never "HEAD". Whether the PR is still at that SHA is
+    # checked where the certificate is consumed: the handback gate compares the live head with it.
+    certified_head = (state.get("reviewedDiffSha")
+                      or (state.get("config") or {}).get("headSha"))
+    if isinstance(certified_head, str) and certified_head:
+        cert["certifiedHead"] = certified_head
     if note:
         cert["note"] = note
     skipped = state.get("_skippedBlockers") or []
@@ -5928,7 +5948,7 @@ def _resolve_fix_fold_head_sha(session_dir, state):
         repo_root = _resolve_repo_root(session_dir, state)
         if not repo_root:
             return None, "fix-fold head: repo root unresolvable"
-        head = store_core.run_git(repo_root, "rev-parse", "HEAD")
+        head = _hardened_head(repo_root)
         if not head:
             return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
         _persist_fix_fold_head_sha(session_dir, state, head)
@@ -5947,7 +5967,7 @@ def _resolve_fix_fold_head_sha(session_dir, state):
     repo_root = _resolve_repo_root(session_dir, state)
     if not repo_root:
         return None, "fix-fold head: repo root unresolvable"
-    head = store_core.run_git(repo_root, "rev-parse", "HEAD")
+    head = _hardened_head(repo_root)
     if not head:
         return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
     _persist_fix_fold_head_sha(session_dir, state, head)
@@ -11353,6 +11373,11 @@ def _prepare_sidecar(session_dir, state, git=None, journal_cmd="advance", receip
     if not head_sha:
         return {"reason": "sidecar-gitdir-unresolvable",
                 "detail": "git could not resolve HEAD in %r" % repo_root}
+    # A certified terminal publishes the head it certified, not the live one: a commit landed after
+    # the certification then no longer matches, and the handback gate refuses the moved head.
+    certified_head = (state.get("certification") or {}).get("certifiedHead")
+    if isinstance(certified_head, str) and certified_head:
+        head_sha = certified_head
     receipt_path = os.path.join(session_dir, RECEIPT_FILE)
     if receipt_bytes is None:
         try:
@@ -12100,7 +12125,7 @@ def _dispatch(args):
         # The one home of the review diff: SKILL.md's Setup round diff runs this verb, and the
         # driver's post-fix derivation calls the same `review_diff_text`.
         repo_root = args.repo_root or os.getcwd()
-        head = store_core.run_git(repo_root, "rev-parse", "HEAD")
+        head = _hardened_head(repo_root)
         text = review_diff_text(repo_root, args.base, head) if head else None
         if text is None:
             sys.stderr.write(json.dumps({"ok": False, "reason": "review-diff-unavailable",
