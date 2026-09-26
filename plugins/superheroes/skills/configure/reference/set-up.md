@@ -246,9 +246,9 @@ Follow-up: `/superheroes:configure`.
    An absent block reads as `claude` for every role **except `briefCheck`, which falls open to
    `codex`** (the cross-vendor default — a brief-check on the host model is a disclosed degradation).
    When Codex is selected and no concrete model pin exists, explain the effective codex defaults.
-   Codex tier map: haiku=gpt-6-sol, sonnet=gpt-6-sol, opus=gpt-6-sol.
+   Codex tier map: each Claude tier runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role).
    A `reviewer-deep` Codex pin may also name `gpt-6-astra`; it is valid for `reviewer-deep` only, at effort `high`.
-   A Codex pin may also name the pin-only `gpt-5.6-sol` (any role with a codex cell, at that role's own effort); a pin to the retired `gpt-5.6-terra` is refused `model-retired`.
+   A Codex pin may also name the pin-only `gpt-5.6-sol` (any role with a codex cell, at that role's own effort); a pin to the retired `gpt-5.6-terra` is refused (`model-retired: gpt-5.6-terra is retired; use gpt-6-sol`).
    `max` effort is owner opt-in only (never a default).
 
 3. **Show the build authorization — never apply it (FR-13).** If an external **implementation** engine
