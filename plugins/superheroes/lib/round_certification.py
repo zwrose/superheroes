@@ -938,9 +938,10 @@ def _hand_landed_evidence_qualifies(
     if result_kind == session_contract.WRITE_RESULT_KIND:
         pass
     else:
-        if not isinstance(payload, dict) or result_kind not in payload:
+        carried, subject = session_contract.evidence_digest_subject(payload, result_kind)
+        if not carried:
             return False, "execution-evidence-result-mismatch"
-        computed = session_contract.payload_sha256(payload[result_kind])
+        computed = session_contract.payload_sha256(subject)
         if result_digest != computed:
             return False, "execution-evidence-result-mismatch"
     return True, None

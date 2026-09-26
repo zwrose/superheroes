@@ -174,9 +174,12 @@ def _execution_evidence_for_payload(payload, source="runner"):
     }
     for kind in engine_adapter.REVIEW_RESULT_KINDS + ("fixes", "result"):
         if kind in payload:
+            carried, subject = session_contract.evidence_digest_subject(payload, kind)
+            result_digest = (round_records.payload_sha256(subject)
+                             if carried else round_records.payload_sha256(payload[kind]))
             return _execution_evidence(
                 resultKind=kind,
-                resultDigest=round_records.payload_sha256(payload[kind]),
+                resultDigest=result_digest,
                 observation=observation,
                 source=source,
             )
@@ -566,13 +569,18 @@ def test_two_same_titled_targets_at_different_lines_one_discharged_sibling_not(t
 
 
 def test_a_missing_second_occurrence_is_named_by_slot_not_by_seat(tmp_path):
-    """Two same-location findings in fixBatch yield occurrence-suffixed ids; advance names the
-    absent second target when only the first is recorded."""
+    """Two same-location findings whose titles agree past the clamp yield distinct content-keyed ids; advance names the absent second target when only the first is recorded."""
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="collide-short")
-    findings = [_blocking_finding("unchecked index", 2)]
+    prefix = "unchecked index " + "x" * 160
+    alpha_title = prefix + " alpha"
+    beta_title = prefix + " beta"
+    findings = [_blocking_finding(alpha_title, 2)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, round_driver.P_AUDITS)
     state = _state(session_dir)
-    dup = [_blocking_finding("unchecked index", 2), _blocking_finding("unchecked index", 2)]
+    alpha = _blocking_finding(alpha_title, 2)
+    beta = _blocking_finding(beta_title, 2)
+    assert session_contract.location_key(alpha) == session_contract.location_key(beta)
+    dup = [alpha, beta]
     state["fixBatch"] = dup
     state["_auditTargets"] = round_driver._audit_targets(state, state.get("config") or {}, {})
     round_driver.save_state(session_dir, state)
