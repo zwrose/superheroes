@@ -383,8 +383,9 @@ order goes to an implementer under the one implementer template,
 **Cited paths in every dispatched seat resolve in the build's own worktree** when the cited file is
 part of the change. `${CLAUDE_PLUGIN_ROOT}` resolves to the installed cache and would hand an
 implementer or pilot the released text while the branch edits it. Confirm every absolute path you
-pass into a dispatch sits inside the build worktree. The plugin-relative citations in this charter
-are for your own reading.
+pass into a dispatch sits inside the build worktree when the cited file is part of the change under
+build; an unchanged plugin reference may sit under the installed plugin root instead. The
+plugin-relative citations in this charter are for your own reading.
 
 **Every implementer write dispatch declares its deliverables.** Pass `--expect-item <path>`
 (repeatable) or `--expect-items-file <file>` on `dispatch-write`, naming every file the order must
