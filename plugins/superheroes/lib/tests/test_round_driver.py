@@ -342,7 +342,8 @@ def test_cmd_submit_is_only_fold_caller_besides_run_loop():
                 if child.func.id == "_fold":
                     callers.add(node.name)
                     break
-    assert callers == {"cmd_submit", "run_loop"}
+    # `run_loop` scopes the in-process leg and folds through `_run_loop_in_process`.
+    assert callers == {"cmd_submit", "_run_loop_in_process"}
 
 
 def test_submit_panel_seat_key_custom_dimensions(tmp_path):
@@ -7622,7 +7623,7 @@ def _legacy_sidecar_setup(tmp_path):
         "schemaVersion": 3,
         "verdict": "converged",
         "certificationShape": "audited-chain",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
         "scriptRan": {"byPhase": {}},
         "seatMap": {},
         "rounds": [],
@@ -7660,7 +7661,7 @@ def _legacy_sidecar_setup(tmp_path):
         "terminal": "converged",
         "config": {"repoRoot": repo, "baseRef": base_sha, "baseBranch": "main"},
         "reviewedDiff": "",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
     }
     return session, state, sidecar_path
 
@@ -7702,7 +7703,7 @@ def test_hex_named_branch_sidecar_not_republished(tmp_path):
         "schemaVersion": 3,
         "verdict": "converged",
         "certificationShape": "audited-chain",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
         "scriptRan": {"byPhase": {}},
         "seatMap": {},
         "rounds": [],
@@ -7740,7 +7741,7 @@ def test_hex_named_branch_sidecar_not_republished(tmp_path):
         "terminal": "converged",
         "config": {"repoRoot": repo, "baseBranch": hex_branch},
         "reviewedDiff": "",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
     }
     prepared = RD._prepare_sidecar(session, state)
     assert prepared["ok"] is True and prepared["needs_write"] is False
@@ -7767,7 +7768,7 @@ def test_legacy_sidecar_sha256_base_ref_is_republished(tmp_path):
         "schemaVersion": 3,
         "verdict": "converged",
         "certificationShape": "audited-chain",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
         "scriptRan": {"byPhase": {}},
         "seatMap": {},
         "rounds": [],
@@ -7805,7 +7806,7 @@ def test_legacy_sidecar_sha256_base_ref_is_republished(tmp_path):
         "terminal": "converged",
         "config": {"repoRoot": repo, "baseRef": base_sha, "baseBranch": "main"},
         "reviewedDiff": "",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
     }
     prepared = RD._prepare_sidecar(session, state)
     assert prepared["ok"] is True and prepared["needs_write"] is True

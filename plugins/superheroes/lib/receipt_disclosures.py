@@ -11,7 +11,10 @@ RECEIPT_CERTIFIED_SCHEMA = "receipt-certified/%d"
 RECEIPT_ATTESTED_SCHEMA = "receipt-attested/1"
 RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 SCHEMA_VERSION = 2
-SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5, 6)
+# The one home of the state schema versions: the driver, the certification writer and the records
+# layer all read these (the writer may not import the driver, so the leaf owns them).
+STATE_SCHEMA_VERSION = 6
+SUPPORTED_STATE_VERSIONS = tuple(range(SCHEMA_VERSION, STATE_SCHEMA_VERSION + 1))
 # The C13 recorded-version boundary: `findingKey` receipt rows and the non-blocking Minor/Nit
 # disclosure ride every state version from 5 on (later bumps keep them).
 RECORDED_VERSION_BOUNDARY = 5

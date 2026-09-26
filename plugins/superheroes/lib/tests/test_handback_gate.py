@@ -661,7 +661,8 @@ def test_base_ref_round_trip_from_prepare_sidecar(tmp_path):
             "baseBranch": "main",
         },
         "terminal": "converged",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain",
+                          "certifiedHead": sc.run_git(repo, "rev-parse", "HEAD")},
         "reviewedDiff": _git_diff_text(repo, base_sha),
     }
     prepared = RD._prepare_sidecar(session, state)

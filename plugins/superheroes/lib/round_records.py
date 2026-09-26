@@ -36,6 +36,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import model_registry  # noqa: E402 — stdlib-only leaf; no cycle with records layer
+import receipt_disclosures  # noqa: E402 — leaf; owns the state schema versions
 import record_paths  # noqa: E402
 import round_phases  # noqa: E402
 import session_contract  # noqa: E402
@@ -49,9 +50,11 @@ SEAT_RESULT_SCHEMA_V2 = "seat-result/2"
 SEAT_RESULT_SCHEMAS = (SEAT_RESULT_SCHEMA, SEAT_RESULT_SCHEMA_V2)
 SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
 
-SEAT_RESULT_SCHEMA_BY_STATE_VERSION = {2: SEAT_RESULT_SCHEMA, 3: SEAT_RESULT_SCHEMA,
-                                       4: SEAT_RESULT_SCHEMA, 5: SEAT_RESULT_SCHEMA_V2,
-                                       6: SEAT_RESULT_SCHEMA_V2}
+# Seat results take the v2 shape from state version 5 on; the version list itself has one home.
+SEAT_RESULT_V2_FROM_STATE_VERSION = 5
+SEAT_RESULT_SCHEMA_BY_STATE_VERSION = {
+    v: SEAT_RESULT_SCHEMA_V2 if v >= SEAT_RESULT_V2_FROM_STATE_VERSION else SEAT_RESULT_SCHEMA
+    for v in receipt_disclosures.SUPPORTED_STATE_VERSIONS}
 
 
 def seat_result_schema_for_state_version(version):

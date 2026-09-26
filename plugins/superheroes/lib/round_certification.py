@@ -28,8 +28,8 @@ META_FILE = session_contract.META_FILE
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
 SCHEMA_VERSION = 2
-STATE_SCHEMA_VERSION = 6
-SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5, 6)
+STATE_SCHEMA_VERSION = receipt_disclosures.STATE_SCHEMA_VERSION
+SUPPORTED_STATE_VERSIONS = receipt_disclosures.SUPPORTED_STATE_VERSIONS
 
 CERTIFIED_VERDICTS = (
     "converged",
@@ -508,28 +508,6 @@ def _effective_certification_finding(finding, by_key):
         else:
             effective.pop(field, None)
     return effective
-
-
-def _resolve_repo_head_sha(ctx):
-    meta = ctx.get("meta") or {}
-    cfg = (ctx.get("state") or {}).get("config") or {}
-    repo_root = meta.get("repoRoot") or cfg.get("repoRoot")
-    if not isinstance(repo_root, str) or not repo_root:
-        return None
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    head = proc.stdout.strip()
-    return head if head else None
 
 
 _SCOPED_FINDER_PHASE = round_panel_contract.P_SCOPED_FINDER_PHASE
@@ -1620,7 +1598,13 @@ def _journal_open_seats(journal, session_dir=None):
 
 def _certified_head_sha(ctx):
     meta = ctx.get("meta") or {}
-    cfg = (ctx.get("state") or {}).get("config") or {}
+    state = ctx.get("state") or {}
+    cfg = state.get("config") or {}
+    # A certificate the driver wrote names the head its reviewed diff was derived at; evidence
+    # binds to that head before any other source.
+    head = (state.get("certification") or {}).get("certifiedHead")
+    if state.get("terminal") == "converged" and isinstance(head, str) and head:
+        return head
     head = meta.get(session_contract.FIX_FOLD_HEAD_KEY)
     if isinstance(head, str) and head:
         return head

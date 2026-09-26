@@ -116,6 +116,7 @@ def _assert_absolute_invariant_anchor(baseline):
 
 def _driver_panel_state_with_probe(canary):
     state = RD.new_state(_cfg_cert(leg="panel", vendors=["claude", "codex", "cursor"]))
+    state["reviewedDiffSha"] = HEAD  # the head this fixture's evidence is bound to
     RD._fold_panel(state, state["config"], _cross_vendor_artifact(canary))
     RD._terminal_converged(state, state["config"], full_panel=True)
     return state

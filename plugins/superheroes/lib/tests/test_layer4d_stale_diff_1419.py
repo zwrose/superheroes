@@ -195,7 +195,7 @@ def test_panel_order_emission_is_the_one_stale_refusal_site():
     # run_loop are early exits reading the same rule.
     assert _calls_in(tree, "_reviewed_diff_is_stale") == {
         "_terminal_converged", "_refuse_stale_panel_emission", "_stale_pending_panel_park",
-        "_fold", "run_loop"}
+        "_fold", "_run_loop_in_process"}
     assert "_reviewedDiffStale" not in source
     defined = {fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)}
     assert not defined & {"_enter_panel", "_reviewed_diff_stale", "_stale_panel_blocks_loaded"}
@@ -736,7 +736,8 @@ def test_the_review_diff_verb_output_is_the_one_review_diff(tmp_path):
     assert out.returncode == 0, out.stderr
     assert "diff --git a/f.py b/f.py\n" in out.stdout, out.stdout
     assert "TEXTCONV" not in out.stdout, out.stdout
-    assert out.stdout == RD.review_diff_text(repo, base, head)
+    assert out.stdout == RD.derive_review_diff(repo, base)[1]
+    assert RD.derive_review_diff(repo, base)[0] == head
 
 
 @pytest.mark.parametrize("var", ["GIT_DIR", "GIT_WORK_TREE", "GIT_OBJECT_DIRECTORY",
@@ -922,7 +923,8 @@ def test_configured_diff_prefixes_do_not_reshape_the_review_diff(tmp_path):
     import diff_scope
     repo, base, head = _prefix_repo(tmp_path)
     assert "+++ DST-f.py" in _git(repo, "diff", "%s...%s" % (base, head))
-    text = RD.review_diff_text(repo, base, head)
+    sha, text, _refusal = RD.derive_review_diff(repo, base)
+    assert sha == head
     assert text is not None and text.startswith("diff --git a/f.py b/f.py\n"), text
     assert "\n+++ b/f.py\n" in text, text
     assert 1 in diff_scope.parse_diff_lines(text).get("f.py", ()), text
@@ -935,7 +937,7 @@ def test_an_over_cap_review_diff_is_refused_never_truncated(tmp_path, monkeypatc
     import sanitized_view
     repo, base, head = _prefix_repo(tmp_path)
     monkeypatch.setattr(sanitized_view, "REVIEW_DIFF_MAX_BYTES", 16)
-    assert RD.review_diff_text(repo, base, head) is None
+    assert RD.derive_review_diff(repo, base) == (head, None, "review-diff-too-large")
     assert RD._review_diff(repo, base, head) == (None, "review-diff-too-large")
     rc = RD.main(["review-diff", "--base", base, "--repo-root", repo])
     err = capsys.readouterr().err.strip().splitlines()[-1]
@@ -956,6 +958,8 @@ def test_an_over_cap_post_fix_diff_parks_rather_than_review_a_partial_diff(tmp_p
                              _discharging(_respond(checkout, str(tmp_path / "missing.txt"), seen)))
     assert payload["verdict"] == "cannot-certify", payload
     assert "reviewed-diff-stale" in payload["certification"]["reason"], payload
+    # The park names the size cap, not "no diff derivable".
+    assert "review-diff-too-large" in payload["certification"]["reason"], payload
 
 
 def test_two_real_fix_folds_rebind_the_reviewed_diff_to_each_head(tmp_path):
@@ -1027,10 +1031,19 @@ def test_an_older_driver_refuses_a_session_this_driver_minted(tmp_path, monkeypa
 def test_no_operational_reference_spells_a_raw_per_round_diff():
     """One home, every reader: no review-code instruction runs a raw `git diff` over the round
     base — the per-round diff is always the driver's `review-diff` verb (red token: a
-    `git diff "$BASE_REF"` or `git diff <pinned baseRef>` directive)."""
+    `git diff "$BASE_REF"` or `git diff <pinned baseRef>` directive, with or without git options
+    before `diff` or diff flags after it)."""
     import re
     root = os.path.join(os.path.dirname(_LIB), "skills", "review-code")
-    raw = re.compile(r'git diff\s+("?\$\{?BASE_REF|<pinned)')
+    raw = re.compile(r'git(?:\s+-[cC]\s+\S+)*\s+diff(?:\s+-{1,2}[\w.-]+(?:=\S+)?)*'
+                     r'\s+("?\$\{?BASE_REF|<pinned)')
+    for form in ('git diff "$BASE_REF"...HEAD', 'git diff ${BASE_REF}...HEAD',
+                 'git diff <pinned baseRef>...HEAD',
+                 'git -c core.quotePath=false diff "$BASE_REF"...HEAD',
+                 'git -C "$REPO_ROOT" diff "$BASE_REF"...HEAD',
+                 'git diff --no-color --src-prefix=a/ "$BASE_REF"...HEAD',
+                 'git -c diff.noprefix=false diff -M "$BASE_REF"...HEAD'):
+        assert raw.search(form), form
     hits = []
     for dirpath, _dirs, files in os.walk(root):
         for name in files:
@@ -1044,3 +1057,265 @@ def test_no_operational_reference_spells_a_raw_per_round_diff():
     with open(os.path.join(root, "reference", "auto-fix-loop.md"), encoding="utf-8") as fh:
         row = next(ln for ln in fh if ln.startswith("| Using `gh pr diff` inside the loop"))
     assert 'round_driver.py review-diff --base "$BASE_REF"' in row, row
+
+
+# ---- the certified head is recorded by the call that derives the diff (S9 ruling) ------------
+
+def _meta_update(session_dir, **fields):
+    import json as _json
+    path = os.path.join(session_dir, RR.META_FILE)
+    with open(path, encoding="utf-8") as fh:
+        meta = _json.load(fh)
+    meta.update(fields)
+    with open(path, "w", encoding="utf-8") as fh:
+        _json.dump(meta, fh)
+
+
+def test_the_fresh_next_records_the_derived_head_and_digest(tmp_path, capsys):
+    """The Setup binding records the pair (the SHA the round-1 diff was derived at, the diff's
+    digest) through the one derivation call (red token: no recorded head, or one not HEAD)."""
+    import hashlib
+    d = str(tmp_path)
+    argv = TRD._guard_argv(d)
+    rc, out = TRD._cli_next_json(d, argv, capsys)
+    assert rc == 0 and out["ok"], out
+    state = RD.load_state(d)[1]
+    repo = argv[1]
+    assert state["reviewedDiffSha"] == _git(repo, "rev-parse", "HEAD").strip()
+    with open(os.path.join(d, "round-1", "diff.txt"), "rb") as fh:
+        assert state["reviewedDiffDigest"] == hashlib.sha256(fh.read()).hexdigest()
+
+
+@pytest.mark.parametrize("mode", ["pr", "branch"])
+def test_a_behind_checkout_refuses_at_setup(tmp_path, capsys, mode):
+    """The session's recorded head (the PR's `headRefOid`) is ahead of the checkout: the round-1
+    diff was taken at the checkout's HEAD, so the fresh `next` refuses `round-diff-head-mismatch`
+    and seeds no session — never a certificate naming a commit the panel did not review.
+    Bite-proof: `lib/tests/bite_proofs/l4d_armD_stale_diff.md` (red token: exit 0 and a pending
+    panel)."""
+    d = str(tmp_path)
+    argv = TRD._guard_argv(d, mode=mode)
+    repo = argv[1]
+    checkout_head = _git(repo, "rev-parse", "HEAD").strip()
+    with open(os.path.join(repo, "g.py"), "w", encoding="utf-8") as fh:
+        fh.write("remote only\n")
+    _git(repo, "add", "g.py")
+    _git(repo, "commit", "-qm", "the PR head the checkout does not have")
+    pr_head = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "reset", "-q", "--hard", checkout_head)
+    _meta_update(d, headSha=pr_head)
+    if mode == "pr":
+        import json as _json
+        _git(repo, "remote", "add", "origin", "https://github.com/o/r.git")
+        with open(os.path.join(d, "pr.json"), "w", encoding="utf-8") as fh:
+            _json.dump({"url": "https://github.com/o/r/pull/1", "headRefOid": pr_head}, fh)
+    rc, out = TRD._cli_next_json(d, argv, capsys)
+    assert rc == 1 and out.get("reason") == "round-diff-head-mismatch", out
+    assert RD.load_state(d) == (True, None)
+
+
+def test_a_round_diff_taken_before_head_moved_refuses_at_setup(tmp_path, capsys):
+    """HEAD moved between Setup's review diff and the fresh `next`: the supplied diff is not the
+    review diff at the resolved SHA, so the binding refuses `round-diff-head-mismatch`."""
+    d = str(tmp_path)
+    argv = TRD._guard_argv(d)
+    repo = argv[1]
+    # Same file set and line counts (the stat binding passes); different bytes.
+    with open(os.path.join(repo, "f.py"), "w", encoding="utf-8") as fh:
+        fh.write("b\n")
+    _git(repo, "commit", "-qam", "a commit after Setup's diff")
+    rc, out = TRD._cli_next_json(d, argv, capsys)
+    assert rc == 1 and out.get("reason") == "round-diff-head-mismatch", out
+
+
+def _drive_existing(session_dir, respond, max_steps=40):
+    for _ in range(max_steps):
+        n = RD.cmd_next(session_dir)
+        assert n["ok"], n
+        if n["action"] == RD.P_TERMINAL:
+            return n["payload"]
+        s = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
+                          respond(n["phase"], n["payload"], n["round"]))
+        assert s["ok"], s
+    raise AssertionError("no terminal")
+
+
+@pytest.mark.parametrize("recorded", [None, "HEAD", "abc123", "g" * 40],
+                         ids=["absent", "symbolic", "short", "not-hex"])
+def test_a_no_fix_session_without_a_recorded_head_withholds(tmp_path, recorded):
+    """A clean round with no head recorded by the derivation call (or a malformed one) never
+    certifies: `cannot-certify` with `reviewed-head-unrecorded`, and no config, meta or live HEAD
+    stands in. Bite-proof: same record (red token: `converged`)."""
+    import json as _json
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    TRD.enter_checkout(checkout)
+    head = _git(checkout, "rev-parse", "HEAD").strip()
+    state = RD.new_state(TRD._cfg(baseRef=base, headSha=head))
+    state["reviewedDiffSha"] = recorded
+    with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        _json.dump(state, fh)
+    with open(os.path.join(d, RR.META_FILE), "w", encoding="utf-8") as fh:
+        _json.dump({"headSha": head, "repoRoot": checkout, "sessionId": "s-unrecorded"}, fh)
+    payload = _drive_existing(d, TRD._responder())
+    assert payload["verdict"] == "cannot-certify", payload
+    assert "reviewed-head-unrecorded" in payload["certification"]["reason"], payload
+
+
+@pytest.mark.parametrize("version", [2, 3, 4, 5])
+def test_a_pre_v6_no_fix_session_withholds(tmp_path, version):
+    """An in-flight session an older driver minted (schema 2–5) recorded no head: a clean finish
+    withholds `reviewed-head-unrecorded`; a fresh session recovers (red token: `converged`)."""
+    import json as _json
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    TRD.enter_checkout(checkout)
+    state = RD.new_state(TRD._cfg(baseRef=base))
+    state["schemaVersion"] = version
+    for key in ("reviewedDiffSha", "reviewedDiffDigest", "reviewedDiffHead", "fixFolds"):
+        state.pop(key, None)
+    with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        _json.dump(state, fh)
+    payload = _drive_existing(d, TRD._responder())
+    assert payload["verdict"] == "cannot-certify", payload
+    assert "reviewed-head-unrecorded" in payload["certification"]["reason"], payload
+
+
+def test_a_headless_certificate_is_never_published_with_the_live_head(tmp_path):
+    """The sidecar of a converged terminal carries the certificate's head or nothing: a
+    certificate naming no head refuses `reviewed-head-unrecorded` (red token: a sidecar
+    publishing the live HEAD)."""
+    repo, base, _head = _prefix_repo(tmp_path)
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    state = {"terminal": "converged", "certification": {"shape": "audited-chain"},
+             "config": {"repoRoot": repo, "baseRef": base, "baseBranch": "main"},
+             "reviewedDiff": ""}
+    prepared = RD._prepare_sidecar(d, state)
+    assert prepared.get("reason") == "reviewed-head-unrecorded", prepared
+
+
+def test_only_the_in_process_leg_certifies_without_a_recorded_head():
+    """`run_loop` (no repository) still certifies with no recorded head, and the exemption lives
+    only inside it: the same clean state outside `run_loop` withholds (red token: `converged`
+    outside the loop, or a loop that no longer converges)."""
+    receipt = RD.run_loop(TRD._seams(), TRD._cfg_cert(leg="panel"))
+    assert receipt["loopTerminal"] == "converged", receipt
+    assert RD._IN_PROCESS_LEG.get() is False
+    state = RD.new_state(TRD._cfg(leg="panel"))
+    assert state["reviewedDiffSha"] is None
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["terminal"] == "cannot-certify", state["certification"]
+    assert "reviewed-head-unrecorded" in state["certification"]["reason"]
+
+
+# The live-HEAD reads each module may hold, by innermost enclosing function, and why none of them
+# supplies a certified head. A new read, a second read in a listed function, or a read moved
+# elsewhere fails the census below.
+_LIVE_HEAD_READS = {
+    "round_driver.py": {
+        "_hardened_head": 1,              # the one hardened lookup (the derivation's, and verify's)
+        "_cmd_relocate_locked": 1,        # currency check: refuses a moved checkout
+        "_cmd_re_emit_locked": 1,         # currency check: refuses a moved head
+        "resolve": 1,                     # sidecar recovery: proves a repository, names no head
+        "_prepare_sidecar": 1,            # repository probe; never a certified head
+    },
+    "round_certification.py": {},
+}
+
+
+def _innermost_live_head_reads(tree):
+    """{innermost function name: count} of calls passing the literals "rev-parse", "HEAD"."""
+    counts = {}
+
+    def visit(node, owner):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                visit(child, child.name)
+                continue
+            if isinstance(child, ast.Call):
+                consts = []
+                for arg in child.args:
+                    elts = arg.elts if isinstance(arg, (ast.List, ast.Tuple)) else [arg]
+                    consts += [e.value for e in elts if isinstance(e, ast.Constant)]
+                if any(a == "rev-parse" and b == "HEAD" for a, b in zip(consts, consts[1:])):
+                    counts[owner] = counts.get(owner, 0) + 1
+            visit(child, owner)
+    visit(tree, "<module>")
+    return counts
+
+
+def test_no_certified_head_is_read_from_live_head():
+    """Invariant census: a certificate names exactly the commit whose diff the panel reviewed, and
+    nothing else can supply it. (1) Every live-HEAD read in the driver and the certifier is one of
+    the pinned, non-certifying reads. (2) The hardened lookup is called only by the derivation
+    call and the verify-head resolver, and the derivation call only by its three sanctioned
+    callers. (3) `certifiedHead` has one writer, fed only by `_recorded_review_head`, which reads
+    only the pair the derivation recorded. (4) Only `_advance_reviewed_diff` moves the recorded
+    SHA after setup.
+
+    Rung: a static AST census over `round_driver.py` and `round_certification.py`. It catches a
+    new live-HEAD read, an added read inside a listed function, a new caller of the hardened lookup
+    or the derivation call, and a second or re-sourced `certifiedHead` writer. It does not see a
+    read reached through dynamic dispatch or a helper in another module; the behavioural tests
+    above (setup refusal, the unrecorded-head withhold, the headless sidecar) carry those.
+    Bite-proof: `lib/tests/bite_proofs/l4d_armD_stale_diff.md` (red token: a live-HEAD fallback
+    re-added at certification fails this census)."""
+    trees = {}
+    for name in _LIVE_HEAD_READS:
+        with open(os.path.join(_LIB, name), encoding="utf-8") as fh:
+            trees[name] = ast.parse(fh.read())
+    for name, tree in trees.items():
+        assert _innermost_live_head_reads(tree) == _LIVE_HEAD_READS[name], name
+    rd = trees["round_driver.py"]
+    assert _calls_in(rd, "_hardened_head") == {"derive_review_diff",
+                                               "_resolve_fix_fold_head_sha"}
+    assert _calls_in(rd, "derive_review_diff") == {"_derive_head_diff_from_git",
+                                                   "_bind_round_diff_head", "_dispatch"}
+    writers = []
+    for fn in ast.walk(rd):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Subscript)
+                    and isinstance(node.targets[0].slice, ast.Constant)
+                    and node.targets[0].slice.value in ("certifiedHead", "reviewedDiffSha")):
+                writers.append((node.targets[0].slice.value, fn.name, ast.unparse(node.value)))
+    assert sorted(writers) == [
+        ("certifiedHead", "_terminal_converged", "certified_head"),
+        ("reviewedDiffSha", "_advance_reviewed_diff", "state.get('headDiffSha')"),
+    ], writers
+    term = next(fn for fn in ast.walk(rd)
+                if isinstance(fn, ast.FunctionDef) and fn.name == "_terminal_converged")
+    sources = [ast.unparse(n.value) for n in ast.walk(term) if isinstance(n, ast.Assign)
+               and any(isinstance(t, ast.Name) and t.id == "certified_head" for t in n.targets)]
+    assert sources == ["_recorded_review_head(state)"], sources
+    rec = next(fn for fn in ast.walk(rd)
+               if isinstance(fn, ast.FunctionDef) and fn.name == "_recorded_review_head")
+    reads = sorted({n.args[0].value for n in ast.walk(rec) if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute) and n.func.attr == "get" and n.args
+                    and isinstance(n.args[0], ast.Constant)})
+    assert reads == ["reviewedDiffSha"], reads
+
+
+def test_the_state_schema_versions_have_one_home():
+    """The driver, the certification writer and the records layer read one list of supported
+    state versions, owned by the leaf `receipt_disclosures` (red token: a hand-kept copy)."""
+    import receipt_disclosures
+    import round_certification as RC
+    assert RD.SUPPORTED_STATE_VERSIONS is receipt_disclosures.SUPPORTED_STATE_VERSIONS
+    assert RC.SUPPORTED_STATE_VERSIONS is receipt_disclosures.SUPPORTED_STATE_VERSIONS
+    assert RD.STATE_SCHEMA_VERSION == RC.STATE_SCHEMA_VERSION == 6
+    assert receipt_disclosures.SUPPORTED_STATE_VERSIONS == (2, 3, 4, 5, 6)
+    assert tuple(sorted(RR.SEAT_RESULT_SCHEMA_BY_STATE_VERSION)) == (2, 3, 4, 5, 6)
+    for name in ("round_driver.py", "round_certification.py", "round_records.py"):
+        with open(os.path.join(_LIB, name), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        literal = [ast.unparse(n) for n in ast.walk(tree)
+                   if isinstance(n, ast.Assign) and any(
+                       isinstance(t, ast.Name) and t.id == "SUPPORTED_STATE_VERSIONS"
+                       for t in n.targets) and isinstance(n.value, ast.Tuple)]
+        assert not literal, (name, literal)

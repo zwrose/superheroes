@@ -38,7 +38,7 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 
 | Key | Carries |
 | --- | --- |
-| `schemaVersion` | State schema version (2–5 supported; defaults to 2 when absent or invalid) |
+| `schemaVersion` | State schema version (2–6 supported; defaults to 2 when absent or invalid) |
 | `verdict` | Loop terminal verdict (`converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, `capped-with-open-blocker`, `uncertified-manual`) |
 | `certificationShape` | Writer override — see certification-shape rule below |
 | `certification` | Loop state's `certification` block |

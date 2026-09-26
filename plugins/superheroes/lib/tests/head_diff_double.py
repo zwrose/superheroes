@@ -4,13 +4,17 @@ In production the driver derives the diff a panel reviews from git at the fold h
 session that cannot derive parks — there is no fallback. The suite's fixtures, though, fold fixers
 with synthetic head-diff strings and usually no pinned base or real repository. This double stands
 in for git in those tests: when a fold runs with no explicit derivation seam, "git" answers with
-the diff the fixture supplied. It lives in test code only.
+the diff the fixture supplied, and a session minted from a config (never through the CLI's Setup
+binding) records the head its meta declares, else the one its checkout is at. It lives in test
+code only.
 
 Opt out with ``@pytest.mark.real_git_head_diff`` (module-level ``pytestmark`` works too): the
 stale-diff, derivation and bite-proof tests run with the double OFF, against real temporary git
 repositories.
 """
+import hashlib
 import os
+import subprocess
 import sys
 import types
 
@@ -58,11 +62,68 @@ def _wrap(original, module):
         if head_diff_seam is None:
             supplied, _source = module._resolve_head_diff(
                 artifact if isinstance(artifact, dict) else {})
-            head_diff_seam = lambda _state: supplied  # noqa: E731
+
+            def head_diff_seam(st):
+                # Like git, record the pair: the head the checkout is at now (none on the
+                # in-process leg, which has no repository).
+                if isinstance(supplied, str) and not module._IN_PROCESS_LEG.get():
+                    st["headDiffSha"] = _checkout_head(st.get("config") or {})
+                    st["headDiffDigest"] = module.review_diff_digest(supplied)
+                return supplied
         return original(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
                         head_diff_seam=head_diff_seam)
     setattr(fold_fixer, _DOUBLE_ATTR, True)
     return fold_fixer
+
+
+def _checkout_head(config):
+    """The HEAD of the checkout a fixture session runs in (its `repoRoot`, else the cwd), or a
+    stand-in SHA derived from the fixture's diff when there is no repository."""
+    declared = config.get("headSha")
+    if isinstance(declared, str) and len(declared) in (40, 64):
+        return declared  # the Setup binding refuses unless the declared head is the derived one
+    root = config.get("repoRoot") if isinstance(config.get("repoRoot"), str) else os.getcwd()
+    try:
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                              text=True, timeout=10)
+        head = proc.stdout.strip() if proc.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        head = ""
+    if len(head) in (40, 64):
+        return head
+    return hashlib.sha1(str(config.get("diff")).encode("utf-8")).hexdigest()
+
+
+def _wrap_new_state(original, module):
+    def new_state(config=None):
+        state = original(config)
+        # Like the fresh `next`'s derivation, record the head the round-1 diff was taken at: these
+        # fixtures mint sessions from a config, never through the CLI's Setup binding.
+        cfg = state.get("config") or {}
+        if state.get("reviewedDiffSha") is None and not module._IN_PROCESS_LEG.get():
+            state["reviewedDiffSha"] = _checkout_head(cfg)
+            if isinstance(cfg.get("diff"), str):
+                state["reviewedDiffDigest"] = module.review_diff_digest(cfg["diff"])
+        return state
+    setattr(new_state, _DOUBLE_ATTR, True)
+    return new_state
+
+
+def _wrap_cmd_next_locked(original, module):
+    def cmd_next_locked(session_dir, config_overrides=None):
+        # The Setup binding refuses unless meta's recorded head is the derived one, so a fixture
+        # that declares `meta.headSha` records exactly that head.
+        fresh = not os.path.exists(os.path.join(session_dir, module.STATE_FILE))
+        if fresh and isinstance(config_overrides, dict) and "diffHead" not in config_overrides:
+            meta_head = module._session_meta(session_dir).get("headSha")
+            if isinstance(meta_head, str) and len(meta_head) in (40, 64):
+                diff = config_overrides.get("diff")
+                config_overrides = dict(config_overrides, diffHead={
+                    "sha": meta_head,
+                    "digest": module.review_diff_digest(diff) if isinstance(diff, str) else None})
+        return original(session_dir, config_overrides)
+    setattr(cmd_next_locked, _DOUBLE_ATTR, True)
+    return cmd_next_locked
 
 
 def install(monkeypatch, extra=()):
@@ -71,6 +132,9 @@ def install(monkeypatch, extra=()):
         if getattr(module._fold_fixer, _DOUBLE_ATTR, False):
             continue
         monkeypatch.setattr(module, "_fold_fixer", _wrap(module._fold_fixer, module))
+        monkeypatch.setattr(module, "new_state", _wrap_new_state(module.new_state, module))
+        monkeypatch.setattr(module, "_cmd_next_locked",
+                            _wrap_cmd_next_locked(module._cmd_next_locked, module))
 
 
 def installed(module):
