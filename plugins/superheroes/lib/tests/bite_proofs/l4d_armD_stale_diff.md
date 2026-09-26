@@ -1,5 +1,31 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
+## Head `b5e9bbcc`: the writer binds a converged state to its certificate's head only (advisor S10 ruling)
+
+The probes ran in a detached probe worktree (X1–X3 at `6a591d6e`, X4 at `b5e9bbcc`, which adds
+only the X4 detector) that no review session was reading. Each neutralization was a targeted
+edit, reverted by the inverse edit; the detectors were left unedited. After the last restore,
+`git status --porcelain` printed nothing, and `test_layer4d_stale_diff_1419.py` plus
+`test_round_driver_wo_g_1271.py` gave `86 passed`. The ruled set: X1 (re-add the writer's
+fix-fold/meta/config fallback, and a headless converged state certifies), X2 (the CRLF read) and
+X3 (`test_fix_fold_head_resolution_failure_refuses`, double off). X4 covers the double's fold seam.
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| X1 | `round_certification._certified_head_sha`, converged branch: `return head if isinstance(head, str) and head else None` → `if isinstance(head, str) and head: return head` (falls through to the fix-fold/meta/config chain) | all four `test_the_writer_binds_a_converged_state_to_the_certificate_head_only[meta-fix-fold\|config-fix-fold\|meta-head\|config-head]` → `AssertionError: {'baseGuard': 'checked-stat-bound', 'certification': {… 'certifiedHead': None …}, 'certificationShape': 'full-panel-confirmed', …} is None` (a receipt certified a certificate naming no head) |
+| X2 | `review_base_guard.check_round_diff`: `open(path, encoding="utf-8", newline="")` → `open(path, encoding="utf-8")` | `test_a_crlf_round_diff_binds_at_setup` → `{'detail': 'the round diff is not the review diff at HEAD 4e8d3083… — HEAD moved since … regenerate it', 'ok': False, 'reason': 'round-diff-head-mismatch'}` / `assert (1 == 0)` |
+| X3 | `_fold_fixer`: after `_resolve_fix_fold_head_sha`, `if head_err: head, head_err = config["headSha"], None` (fall back to the declared head) | `test_fix_fold_head_resolution_failure_refuses` (double off) → `KeyError: 'fixFoldHeadRefused'` |
+| X4 | `head_diff_double._live_fold_head`: return a declared `config["headSha"]` first | `test_fix_fold_records_post_fix_head_sha[on]` → `assert 'b5034a81…' == '226703ea…'` (the declared setup head recorded as the fold head); `[off]` stays green (the double is not installed there) |
+
+**Scope of X1 (disclosed design call).** The writer's exclusivity is scoped to a **converged**
+state, the one verdict that certifies a reviewed head, matching the driver's
+`_session_certified_head`. The other certified verdicts (halted, held, stalled, cannot-certify,
+capped) certify no reviewed head and keep their head sources. The in-process `run_loop` never
+reaches the writer (`_materialize_run_loop_session` refuses without a source session), so its
+exemption stays in the driver's `_terminal_converged` alone; a second `certifiedHead` writer in
+`_materialize_run_loop_session` was tried and removed, because the invariant census rightly
+flagged it.
+
 ## Head `902f6489`: the certified head is recorded by the call that derives the diff (advisor S9 ruling)
 
 The probes ran in a detached probe worktree at `902f6489` that no review session was reading.
