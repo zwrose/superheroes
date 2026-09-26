@@ -26,7 +26,7 @@ no-plugin pass.
 | s7-merge-word-scope | 3/3 | | $1.70 | 0/1 |
 | d1-demonstrate-first | 3/3 | | $1.04 | 0/1 |
 | d2-declines-patch | 3/3 | | $0.52 | 0/1 |
-| x1-silent-fallback-disclosed | 2/3 | 2/3 | $2.23 | 0/3 |
+| x1-silent-fallback-disclosed | 2/3 | **1/3** | $2.36 | 0/3 |
 
 Cost is the agent's cost only. The Opus judge added about $0.05 per run: $2.19 across the 48 runs of
 the main pass.
@@ -44,10 +44,11 @@ case (three for W5, S5 and X1). A case that passes there is not testing the plug
    concluding anything.
 3. **S2 and X1 cannot gate.** S2 read 2/3, then 1/3, and its with-plugin run in the no-plugin pass
    also failed. The Opus judge fails the walk's item template and batch shape on main, so treat S2
-   as a hand-read case until that is understood. X1 read 2/3 twice. In both failures, main's agent
-   called the seat "the deep seat" instead of `codex-deep`: once in the `### Disclosed degradations`
-   bullet and once in the owner half. The pass rule needs the seat named in both places, so these are
-   real misses on main, not judge noise.
+   as a hand-read case until that is understood. X1 read 2/3, then 1/3. In all three failing runs
+   the owner half described the seat only in plain words ("the deep, adversarial reviewer"), without
+   the `codex-deep` id. In one of them the build-record bullet also said "the deep seat" without the
+   id. The pass rule needs the id in both places, so these are misses against the rule on main, not
+   judge noise.
 4. **R8, W4 and S3 also pass without the plugin.** For them, a capable model with no plugin already
    does the right thing. They still catch a restructure that makes the agent do worse, but a pass on
    them says little about the charter. R8 passes by construction: with no plugin loaded, no
