@@ -1094,6 +1094,13 @@ class CouplingLens(object):
             }
             for ws in src_census["workspaces"]
         }
+        # bite-proof axis: recorded argv is bounded; operands are summarized, never listed.
+        _operand_summary = "<%d tracked JS/TS files under %s>" % (
+            len(abs_targets), os.path.realpath(repo))
+        if "--" in argv:
+            _recorded_argv = argv[: argv.index("--") + 1] + [_operand_summary]
+        else:
+            _recorded_argv = argv[: len(argv) - len(abs_targets)] + [_operand_summary]
         section = {
             "status": "collected",
             "reason": None,
@@ -1101,7 +1108,8 @@ class CouplingLens(object):
             "outcome": outcome,
             "sourcesCensused": src_census["total"],
             "modulesParsed": len(parsed_paths),
-            "argv": argv,
+            "argv": _recorded_argv,
+            "operandCount": len(abs_targets),
             "typescriptToolchainProvided": ts_toolchain_provided,
         }
         if untracked_filtered:

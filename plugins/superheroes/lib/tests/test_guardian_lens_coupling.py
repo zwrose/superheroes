@@ -2609,9 +2609,35 @@ def test_mixed_file_and_dir_operands_run_end_to_end(tmp_path):
     assert js["status"] == "collected"
     assert out["digest"]["counters"]["modulesParsed"] >= 3
     argv = js["argv"]
-    expected_ops = sorted(
-        os.path.realpath(os.path.join(repo, p))
-        for p in ("vite.config.ts", "src/a.ts", "src/b.ts"))
-    assert _argv_operands_realpath(argv, repo) == expected_ops
-    assert os.path.realpath(os.path.join(repo, "junk/x.ts")) not in _argv_operands_realpath(
-        argv, repo)
+    assert js["operandCount"] == 3
+    sep = argv.index("--")
+    assert len(argv[sep + 1:]) == 1
+    assert argv[sep + 1].startswith("<3 tracked JS/TS files under ")
+    assert js.get("untrackedFiltered", 0) == 0
+
+
+def test_digest_argv_summarizes_file_operands(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    tracked = ["package.json"]
+    for i in range(30):
+        rel = "src/f%d.ts" % i
+        write(repo, rel)
+        tracked.append(rel)
+    captured = []
+
+    def handler(argv, kwargs):
+        captured.append(list(argv))
+        return (0, dc_report(extra_sources=tracked[1:]), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "collected"
+    digest = out["digest"]
+    js_argv = digest["ecosystems"]["js"]["argv"]
+    sep = js_argv.index("--")
+    assert len(js_argv[sep + 1:]) == 1
+    assert js_argv[sep + 1].startswith("<30 tracked JS/TS files under ")
+    assert digest["ecosystems"]["js"]["operandCount"] == 30
+    assert captured, "depcruise must run"
+    run_argv = captured[0]
+    run_sep = run_argv.index("--")
+    assert len(run_argv[run_sep + 1:]) == 30
