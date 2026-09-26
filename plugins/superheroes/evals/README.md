@@ -17,8 +17,8 @@ The older `eval/` directory is a separate harness; this suite does not touch it.
 - Graders named `diag-*` are diagnostics: "did it open page X". The tool refuses a weight of 0, so
   they carry weight 0.001. **Pass counts ignore them**, and `summary.jq` reports them separately.
   The tool's own pass rate does count them, so read pass counts from `summary.jq`, not the report.
-- `summary.jq`: prints, per case and arm, the pass count (outcome graders only), the cost, the
-  diagnostic hit count and the failing graders.
+- `summary.jq`: prints, per case and arm, the pass count (outcome graders only; a run that errored
+  or was never graded never counts), the cost, the diagnostic hit count and the failing graders.
 - `results/`: run output. It is gitignored.
 
 ## Running it
