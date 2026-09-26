@@ -1319,3 +1319,20 @@ def test_the_state_schema_versions_have_one_home():
                        isinstance(t, ast.Name) and t.id == "SUPPORTED_STATE_VERSIONS"
                        for t in n.targets) and isinstance(n.value, ast.Tuple)]
         assert not literal, (name, literal)
+
+
+def test_reviewed_bytes_that_are_not_the_derived_ones_never_certify():
+    """The recorded digest binds the reviewed bytes to the recorded SHA: bytes that are not the
+    ones derived there are stale, and the terminal parks `reviewed-diff-stale` (red token:
+    `converged` over bytes nobody derived at that head)."""
+    sha = "a" * 40
+    diff = "diff --git a/f.py b/f.py\n@@ -0,0 +1 @@\n+x\n"
+    state = RD.new_state(TRD._cfg(diff=diff, diffHead={"sha": sha,
+                                                       "digest": RD.review_diff_digest(diff)}))
+    assert RD._reviewed_diff_stale_cause(state) is None
+    state["reviewedDiff"] = diff + "+tampered\n"
+    assert RD._reviewed_diff_stale_cause(state) == (
+        "the reviewed diff is not the diff derived at its recorded head")
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["terminal"] == "cannot-certify", state["certification"]
+    assert "reviewed-diff-stale" in state["certification"]["reason"]
