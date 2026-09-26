@@ -1,5 +1,18 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
+## Head `8b021ac3`: prefix pins, the review-diff size cap, the no-fix certified head (advisor S8 ruling)
+
+The probes ran in a detached probe worktree at `8b021ac3` that no review session was reading.
+Each neutralization was a targeted edit, reverted by the inverse edit. The detectors were left
+unedited. After the last restore, `git status --porcelain` printed nothing, and
+`test_layer4d_stale_diff_1419.py` gave `57 passed`.
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| V3 | `round_driver._GIT_DIFF_FORMAT_FLAGS`: drop `"--src-prefix=a/", "--dst-prefix=b/"` | `test_configured_diff_prefixes_do_not_reshape_the_review_diff` → `AssertionError: diff --git SRC-f.py DST-f.py` … `+++ DST-f.py` (the repo's `diff.srcPrefix`/`diff.dstPrefix` reshaped the review diff) |
+| V6 | `sanitized_view.bounded_git_diff_output`: `return _git_diff_batch_output(argv, time.monotonic(), 0)[0]` → `return subprocess.run(argv, env=git_env(), capture_output=True).stdout` (unbounded) | `test_an_over_cap_review_diff_is_refused_never_truncated` → `assert 'diff --git a/f.py b/f.py\n…' is None` (an over-cap diff returned); `test_an_over_cap_post_fix_diff_parks_rather_than_review_a_partial_diff` → `assert 'converged' == 'cannot-certify'` |
+| V2 | fresh CLI `next`: `if isinstance(meta_head, str) and …` → `if False and …` (no meta-head seed) | `test_a_no_fix_session_certifies_the_head_its_round_one_diff_was_taken_at` → `KeyError: 'certifiedHead'` (a clean first round converged with no certified head, so the sidecar would fall back to the live HEAD) |
+
 ## Head `df39da64`: a readable `headDiffPath` carries no authority; the unknown surface is keyed on the derivation (advisor S7 ruling)
 
 The probes ran in the build worktree at `df39da64` (no review session was reading it). Each
