@@ -2501,22 +2501,23 @@ def _argv_operands_realpath(argv, repo):
     return sorted(os.path.realpath(p) for p in argv[sep + 1:])
 
 
-def test_js_targets_root_level_file_never_widens_to_repo_root(tmp_path):
+def test_js_targets_are_the_census_files(tmp_path):
     repo = str(tmp_path)
     write(repo, "src" + "/" + "app.ts", "export const x = 1;\n")
     write(repo, "next.config.ts", "export default {};\n")
     got = glc.census(census_ctx(repo, tracked=["src/app.ts", "next.config.ts"]), repo, "js")[0]
     targets = glc._js_targets(repo, got)
-    assert targets == ["next.config.ts", "src"]
+    assert targets == ["next.config.ts", "src/app.ts"]
     assert "." not in targets
+    assert not any(os.path.isdir(os.path.join(repo, t)) for t in targets)
 
 
-def test_collect_argv_never_targets_repo_root_with_root_level_source(tmp_path):
+def test_collect_argv_passes_only_tracked_files(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     write(repo, "package.json", '{"name":"cruise-targets"}\n')
     write(repo, "src/app.ts", "export const x = 1;\n")
     write(repo, "next.config.ts", "export default {};\n")
-    write(repo, "junk/decoy.ts", "export const junk = 1;\n")
+    write(repo, "src/decoy.ts", "export const junk = 1;\n")
     tracked = ["package.json", "src/app.ts", "next.config.ts"]
     captured = []
 
@@ -2529,10 +2530,36 @@ def test_collect_argv_never_targets_repo_root_with_root_level_source(tmp_path):
     assert captured, "depcruise must run"
     expected = sorted(
         os.path.realpath(os.path.join(repo, p))
-        for p in ("next.config.ts", "src"))
+        for p in ("next.config.ts", "src/app.ts"))
     for argv in captured:
         assert _argv_operands_realpath(argv, repo) == expected
         assert os.path.realpath(repo) not in _argv_operands_realpath(argv, repo)
+        assert os.path.realpath(os.path.join(repo, "src/decoy.ts")) not in (
+            _argv_operands_realpath(argv, repo))
+        assert os.path.realpath(os.path.join(repo, "src")) not in (
+            _argv_operands_realpath(argv, repo))
+
+
+def test_operand_budget_exceeded_degrades_without_invoking_depcruise(tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"operand-budget"}\n')
+    write(repo, "src/app.ts", "export const x = 1;\n")
+    tracked = ["package.json", "src/app.ts"]
+    monkeypatch.setattr(glc, "JS_OPERAND_BYTES_MAX", 1)
+    calls = []
+
+    def handler(argv, kwargs):
+        calls.append(list(argv))
+        return (0, dc_report(extra_sources=tracked), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "not-collected"
+    assert out["digest"] is None
+    reason = out.get("reason") or ""
+    assert "operand budget" in reason
+    depcruise_calls = [
+        a for a in calls if a and a[0] == adapters.DEPCRUISE_BIN]
+    assert not depcruise_calls, "depcruise must not run when operand budget exceeded"
 
 
 _V8_OOM_STDERR = (
@@ -2584,7 +2611,7 @@ def test_mixed_file_and_dir_operands_run_end_to_end(tmp_path):
     argv = js["argv"]
     expected_ops = sorted(
         os.path.realpath(os.path.join(repo, p))
-        for p in ("vite.config.ts", "src"))
+        for p in ("vite.config.ts", "src/a.ts", "src/b.ts"))
     assert _argv_operands_realpath(argv, repo) == expected_ops
-    assert os.path.realpath(os.path.join(repo, "junk")) not in _argv_operands_realpath(
+    assert os.path.realpath(os.path.join(repo, "junk/x.ts")) not in _argv_operands_realpath(
         argv, repo)

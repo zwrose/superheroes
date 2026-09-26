@@ -234,6 +234,7 @@ _IDENTITY_TRUNC_MARKER = "~"
 # tripwire a partial census and could manufacture a false collapse (or mask a real one).
 PY_SOURCE_MAX_BYTES = 1 * 1024 * 1024
 PY_CENSUS_MAX_BYTES = 16 * 1024 * 1024
+JS_OPERAND_BYTES_MAX = 512 * 1024
 
 
 # ======================================================================================
@@ -980,6 +981,9 @@ class CouplingLens(object):
         """Run depcruise via run_tool; return a structured ecosystem result."""
         before_cache = adapters.cache_paths_present(repo)
         targets = _js_targets(repo, src_census)
+        if not targets:
+            return self._eco_fail(
+                "js", "%s js: no tracked JS/TS files to cruise" % self.name)
         try:
             abs_targets = adapters.absolute_repo_operands(repo, targets)
         except ValueError as exc:
@@ -989,6 +993,14 @@ class CouplingLens(object):
         toolchain = gt.typescript_toolchain_node_path(
             repo, adapters.TYPESCRIPT_SUPPORTED_MAJORS)
         ts_toolchain_provided = toolchain is not None
+
+        operand_bytes = sum(len(t) + 1 for t in abs_targets)
+        if operand_bytes > JS_OPERAND_BYTES_MAX:
+            reason = (
+                "%s js: %d tracked JS/TS files (%d operand bytes) exceed the "
+                "%d-byte operand budget — not measured"
+                % (self.name, len(abs_targets), operand_bytes, JS_OPERAND_BYTES_MAX))
+            return self._eco_fail("js", reason, ts_toolchain_provided)
 
         argv = adapters.depcruise_argv(abs_targets)
         res = gc.run_tool(argv, ctx, timeout=adapters.COLLECT_TIMEOUT, cwd=repo,
@@ -1594,31 +1606,15 @@ def _collapse_reason(lens_name, src_census, collapse, versions,
 
 
 def _js_targets(repo, src_census):
-    """First-party cruise operands: first-level directories plus each root-level file.
+    """First-party cruise operands: exactly the tracked JS/TS census files.
 
-    Root-level censused sources are passed as their own repo-relative operands; they
-    never widen the cruise to the repo root directory. Vendored trees are never targets.
-    When the census is empty, falls back to ``[\".\"]`` (unchanged).
+    Each repo-relative censused file is one operand — never a directory, never the repo
+    root, never an untracked sibling under a tracked directory. An empty census returns
+    ``[]`` (the caller degrades; depcruise is never handed ``\".\"``).
     """
-    # bite-proof axis: a root-level source file never widens the cruise to the repo root.
-    top_dirs = set()
-    root_files = []
-    for _ws, rel_file, _lang in src_census["files"]:
-        segs = _segments(rel_file)
-        if len(segs) <= 1:
-            root_files.append(rel_file)
-        else:
-            top_dirs.add(segs[0])
-    operands = []
-    for name in top_dirs:
-        if os.path.isdir(os.path.join(repo, name)):
-            operands.append(name)
-    for name in root_files:
-        if os.path.isfile(os.path.join(repo, name)):
-            operands.append(name)
-    if operands:
-        return sorted(operands)
-    return ["."]
+    del repo  # operands are census-relative; existence is guaranteed at census time.
+    # bite-proof axis: operands are the tracked census files, never a directory.
+    return sorted({rel_file for _ws, rel_file, _lang in src_census["files"]})
 
 
 def _filter_depcruise_to_tracked(repo, payload, tracked_set, collector_cwd=None):
