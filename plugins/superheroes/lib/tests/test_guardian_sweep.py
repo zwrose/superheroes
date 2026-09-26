@@ -3176,6 +3176,34 @@ def test_verify_command_binds_base_ref_to_origin_head(tmp_path):
     assert out["verifyResult"]["note"] == sc.VERIFY_BASE_EQUALS_HEAD_NOTE
 
 
+def test_verify_command_base_ref_ignores_shadowing_origin_tag(tmp_path):
+    # bite-proof axis: {baseRef} binds refs/remotes/origin/<base>; a same-named local tag never shadows it.
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    old_sha = _head_sha(repo)
+    (tmp_path / "advance.txt").write_text("advance\n")
+    _git(repo, "add", "advance.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "advance")
+    _setup_origin_main(repo)
+    remote_sha = _head_sha(repo)
+    assert remote_sha != old_sha
+    _git(repo, "tag", "origin/main", old_sha)
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    assert recorded == ["echo --base %s" % remote_sha]
+    assert old_sha not in recorded[0]
+
+
 def test_verify_command_binds_base_ref_to_gh_merge_base(tmp_path):
     repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
     _setup_origin_main(repo)
