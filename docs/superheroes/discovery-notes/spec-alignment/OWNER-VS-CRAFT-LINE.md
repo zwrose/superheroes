@@ -117,3 +117,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
   how much risk or cost the owner is willing to carry, or on a principle the owner has stated."
   Attention lives only in category 5.
 - Category 1 (what the product means to a person): kept.
+- Category 2 (what a person sees or can do at a given moment): kept, separate from category 1. Owner: "this one is definitely owner."
