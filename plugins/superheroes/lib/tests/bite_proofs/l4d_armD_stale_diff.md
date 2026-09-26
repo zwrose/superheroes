@@ -1,6 +1,26 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
-## Final head (`b2e75ca4` + fixture fix): git is the authority (advisor ruling, option a)
+## Final head `b475849d`: the invariant lives at certification (advisor ruling A3/B1/C1/D)
+
+Probe worktree detached at `b475849d`. Each neutralization was a targeted edit, reverted by the
+inverse edit, with the detectors unedited. After the last restore, `git status --porcelain` printed
+nothing. Green: `test_layer4d_stale_diff_1419.py` — `26 passed`, run with the git double OFF.
+
+| # | Neutralization | Result |
+|---|---|---|
+| H1 | `_terminal_converged`: `if _reviewed_diff_is_stale(state):` → `if False and ...` | **red** — `test_a_legacy_resume_past_the_panel_never_certifies` → `assert 'converged' == 'cannot-certify'`. An older driver's post-fix state, resumed at the fix audits, certified `audited-chain-degraded` without a panel. |
+| H2 | emission (`if False and phase == P_PANEL ...`), consumption (`if True or not ...`) and the panel-fold park (`if False and not state.get("terminal") ...`) all off; the certify check **kept** | **green, as the ruling requires** — `test_no_path_certifies_a_head_the_panel_did_not_see` and `test_a_legacy_resume_past_the_panel_never_certifies`: `2 passed`. The certification chokepoint alone carries the invariant. Contrast: the early-exit test `test_persisted_pre_count_state_at_the_panel_parks_stale_via_next` went red under the same edits (`{'action': 'dispatch-panel', 'attempt': 0, ...}`), so the neutralization was live. |
+| H3a | panel-fold park off | **red** — `test_a_stale_panel_submit_keeps_its_output_then_parks` → `assert (True and 'dispatch-verifiers' == 'terminal'` (the stale panel folded and the loop moved on) |
+| H3b | the old pre-fold submit park re-inserted (`_stale_pending_panel_park(...)` before the artifact is hashed) | **red** — same test → `AssertionError: the stale panel's submit was not recorded` / `assert []` (the output was discarded) |
+| H4 | `round_certification._build_receipt_rounds`: dropped `"reviewedDiffSource"` | **red** — `test_unknown_head_diff_is_derived_from_git_for_the_full_panel` → `assert False` on the certification writer's round projection |
+
+**A3.** The byte cross-check (`head-diff-mismatch`) was removed rather than neutralized; the G2
+row below is historical. The supplied-diff test now proves the supplied text is ignored:
+`test_a_supplied_head_diff_is_ignored_and_git_is_reviewed`. Its G1 neutralization, trusting the
+supplied diff, is the same axis as recorded below.
+
+## Previous head `b2e75ca4` + fixture fix: git is the authority (advisor ruling, option a)
+
 
 Probe worktree detached at `b2e75ca4`. Each neutralization is a targeted edit to `round_driver.py`,
 reverted by the inverse edit. Detectors are unedited except for one fixture fix, mirrored into the
