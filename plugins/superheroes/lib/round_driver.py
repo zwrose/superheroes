@@ -1626,7 +1626,32 @@ def _append_round_rulings(state, rows):
     rec["rulings"] = prev + list(rows)
 
 
-def _record_disposition(state, key, disposition, round_no, **fields):
+def _record_disposition(state, key, disposition, round_no, *, clear_out_of_scope=False, **fields):
+    if clear_out_of_scope:
+        if not isinstance(key, str) or not key:
+            return
+        live = _live_finding_by_key(state, key)
+        if isinstance(live, dict) and live.get("disposition") == "out-of-scope":
+            for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+                live.pop(field, None)
+            live.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+        ledger_by_key, fault = _disposition_ledger_by_key(state)
+        if fault is not None:
+            return
+        entry = ledger_by_key.get(key)
+        if not isinstance(entry, dict) or entry.get("disposition") != "out-of-scope":
+            return
+        ledger = _ensure_disposition_ledger_for_write(state)
+        seen = _ledger_index_by_key(ledger)
+        if key not in seen:
+            return
+        stored = ledger[seen[key]]
+        if not isinstance(stored, dict) or stored.get("disposition") != "out-of-scope":
+            return
+        cleared = _strip_disposition_family(dict(stored))
+        cleared.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+        ledger[seen[key]] = cleared
+        return
     if disposition not in session_contract.DISPOSITIONS:
         raise ValueError("unknown disposition %r" % (disposition,))
     disp_seq = _next_disposition_seq(state)
@@ -1657,25 +1682,7 @@ def _record_disposition(state, key, disposition, round_no, **fields):
 
 def _clear_out_of_scope_disposition(state, key):
     """Drop a live out-of-scope disposition family; rulingsLog retains the history."""
-    if not isinstance(key, str) or not key:
-        return
-    live = _live_finding_by_key(state, key)
-    if isinstance(live, dict) and live.get("disposition") == "out-of-scope":
-        for field in session_contract.DISPOSITION_FAMILY_FIELDS:
-            live.pop(field, None)
-        live.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-    if not isinstance(ledger, list):
-        return
-    seen = _ledger_index_by_key(ledger)
-    if key not in seen:
-        return
-    entry = ledger[seen[key]]
-    if not isinstance(entry, dict) or entry.get("disposition") != "out-of-scope":
-        return
-    cleared = _strip_disposition_family(dict(entry))
-    cleared.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
-    ledger[seen[key]] = cleared
+    _record_disposition(state, key, None, 0, clear_out_of_scope=True)
 
 
 def _record_merged_into(state, key, into_key):
@@ -7695,10 +7702,9 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             live_row = _live_finding_by_key(state, key)
             ledger_oos = isinstance(live_row, dict) and live_row.get("disposition") == "out-of-scope"
             if not ledger_oos:
-                ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-                if isinstance(ledger, list):
-                    seen = _ledger_index_by_key(ledger)
-                    stored = ledger[seen[key]] if key in seen else None
+                ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+                if ledger_fault is None:
+                    stored = ledger_by_key.get(key)
                     ledger_oos = isinstance(stored, dict) and stored.get("disposition") == "out-of-scope"
             prior_oos = isinstance(prior_live, dict) and prior_live.get("ruling") == "out-of-scope"
             if prior_oos or ledger_oos:
