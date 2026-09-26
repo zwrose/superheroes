@@ -187,7 +187,7 @@ class _WatcherClock:
 
 
 class _WatcherTimeModule:
-    """Stands in for wave_watch's `time`: virtual monotonic/sleep, real everything else."""
+    """Stands in for a module's `time`: virtual monotonic/sleep, real everything else."""
 
     def __init__(self, clock):
         self.monotonic = clock.monotonic
@@ -201,14 +201,20 @@ class _WatcherTimeModule:
 def watcher_clock(monkeypatch):
     # Every default monotonic/sleep in wave_watch resolves through its module-level
     # `time` at call time, so this one swap covers every arm a test does not clock.
+    # stack_check derives its slug and membership read deadlines from its own
+    # `time.monotonic`, so it reads the same virtual clock. launch_ledger keeps the
+    # real clock: its monotonic/sleep only pace flock retries under contention.
     clock = _WatcherClock()
-    monkeypatch.setattr(ww, "time", _WatcherTimeModule(clock))
+    virtual_time = _WatcherTimeModule(clock)
+    monkeypatch.setattr(ww, "time", virtual_time)
+    monkeypatch.setattr(sc, "time", virtual_time)
     return clock
 
 
 def test_wave_watch_defaults_never_reach_the_real_clock(watcher_clock):
     assert ww.time.monotonic is not time.monotonic
     assert ww.time.sleep is not time.sleep
+    assert sc.time is ww.time
     assert ww.time.monotonic() == 0.0
     ww.time.sleep(5)
     assert ww.time.monotonic() == 5.0
@@ -3472,7 +3478,9 @@ def test_lane_and_benign_event_partition():
 
 def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch, capsys):
     # In-process main(), not a subprocess: the gh poll this asserts needs the
-    # virtual clock, which a child interpreter would not inherit.
+    # virtual clock, which a child interpreter would not inherit. The shim itself
+    # is a real child with a real timeout, so the arm is long enough (virtually
+    # free) that the poll gets the 30-second gh ceiling rather than a 2-second one.
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     shim_dir = tmp_path / "gh-shim"
@@ -3487,8 +3495,8 @@ def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch, capsy
     returncode = ww.main([
         _WW_SCRIPT,
         "loop", "--repo-root", repo, "--batch", "batch-982",
-        "--max-seconds", "2", "--interval-seconds", "1",
-        "--max-total-seconds", "3",
+        "--max-seconds", "60", "--interval-seconds", "60",
+        "--max-total-seconds", "60",
     ])
     assert returncode == 0
     out = json.loads(capsys.readouterr().out.strip())
