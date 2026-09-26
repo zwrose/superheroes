@@ -380,7 +380,7 @@ Two artifacts, two skeletons. **The receipt comment:**
 receipt-integrity catches <…>; panel confirmation rate <rate or `not derivable from the receipt`>,
 inspection <what you did>; window: <…>
 **Dispositions — completed.**
-- FU<n>: <fixed | filed #… | folded into #… | collector @… | declined (trigger) | info> <…>
+- FU<n>: <disposition> <…> <each <disposition> begins with one of `DISPOSITIONS` in `lib/vet_slot.py`>
 <other completed items, as prose> | `None` (only over a `None` build record)
 <!-- superheroes:pending-proposals -->
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`

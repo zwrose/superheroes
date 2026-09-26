@@ -548,8 +548,8 @@ above).
      `<!-- superheroes:build-record -->` is the grep anchor it never had) and reconcile against the
      board. Standing duty. It may run `vet_slot.py check --pr <n> --repo <owner/name>` per PR. It
      also flags a PR **closed** unmerged whose follow-ups list is not `None` and that has no vet
-     receipt. Those follow-ups carry into the superseding PR's build record, each under the next
-     unused FU number, its origin as text: `- FU<n> [<class>] (from #N FU<m>) <text>`.
+     receipt. Those follow-ups carry into the superseding PR's build record in the carry format
+     the **workhorse** charter's §11 defines — that section is the one home for the bullet shape.
      **Install the contract's distilled preamble at the top of the collector issue body, above the
      items, and refresh it when it has drifted or is missing.** Canonical snippet and markers:
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`

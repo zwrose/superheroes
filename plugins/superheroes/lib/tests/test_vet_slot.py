@@ -746,7 +746,12 @@ def _cites_one_home(block, constant, members, where):
     """The prose points at ``constant`` in lib/vet_slot.py and keeps no hand-copied member list."""
     assert "`%s` in `lib/vet_slot.py`" % constant in block, where
     assert hasattr(vs, constant), constant
-    listed = [m for m in sorted(members) if re.search(r"`%s`\s*,\s*`" % re.escape(m), block)]
+    listed = [
+        m
+        for m in sorted(members)
+        if re.search(r"`%s`\s*,\s*`" % re.escape(m), block)
+        or re.search(r"\|\s*%s\b|\b%s\b[^|\n<>]*\|" % (re.escape(m), re.escape(m)), block)
+    ]
     assert not listed, "%s: re-enumerates %s members %s" % (where, constant, listed)
 
 
@@ -765,6 +770,12 @@ def test_followup_vocabulary_is_named_in_the_teaching_prose():
     assert "`- FU<n>: <disposition>`" in field7
     assert "`%s.**`" % vs.DISPOSITIONS_PREFIX in field7
     _cites_one_home(field7, "DISPOSITIONS", vs.DISPOSITIONS, "field 7 disposition list")
+    skeleton = re.search(r"^<!-- superheroes:vet-receipt -->$.*?^```$", receipt, re.M | re.S)
+    assert skeleton, "vet-receipt.md receipt skeleton not found"
+    skeleton_line = [ln for ln in skeleton.group(0).splitlines() if ln.startswith("- FU<n>:")]
+    assert len(skeleton_line) == 1, "receipt skeleton: expected one `- FU<n>:` line"
+    assert skeleton_line[0].startswith("- FU<n>: <disposition>")
+    _cites_one_home(skeleton_line[0], "DISPOSITIONS", vs.DISPOSITIONS, "receipt skeleton disposition line")
     for example in ("filed #12", "declined"):
         assert "`%s`" % example in field7, example
         assert example.split()[0] in vs.DISPOSITIONS, example
