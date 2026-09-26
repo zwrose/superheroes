@@ -1771,7 +1771,6 @@ _VET_RECEIPT_MARKERS = frozenset({
 # receipt's disposition ids) read by lib/vet_slot.py. Their payload varies per PR, so they are not
 # exact-byte anchors: they sit outside both literal families above and are never propagated to the
 # copy-holders. test_vet_slot.py binds their taught shapes to the charters and §10.7.
-_LIST_MARKER_NAMES = ("followups", "dispositions")
 
 
 def _anchor_markers(text):
@@ -1779,10 +1778,13 @@ def _anchor_markers(text):
 
     A list marker is matched by its name followed by a space, so `followupsX` stays an anchor.
     """
+    import vet_slot
+
+    list_names = (vet_slot.FOLLOWUPS_MARKER_NAME, vet_slot.DISPOSITIONS_MARKER_NAME)
     return [
         m
         for m in re.findall(r"(<!-- superheroes:[^>]+ -->)", text)
-        if not any(m.startswith("<!-- superheroes:%s " % name) for name in _LIST_MARKER_NAMES)
+        if not any(m.startswith("<!-- superheroes:%s " % name) for name in list_names)
     ]
 
 
@@ -2180,18 +2182,12 @@ def test_list_markers_are_named_in_conventions_10_7():
     """
     import vet_slot
 
+    names = (vet_slot.FOLLOWUPS_MARKER_NAME, vet_slot.DISPOSITIONS_MARKER_NAME)
     home = _conventions_section_10_7()
-    for name in _LIST_MARKER_NAMES:
+    for name in names:
         assert "<!-- superheroes:%s " % name in home, (
             "CONVENTIONS §10.7 does not name the list marker %r" % name
         )
-    assert set(_LIST_MARKER_NAMES) == {
-        vet_slot.FOLLOWUPS_MARKER_NAME,
-        vet_slot.DISPOSITIONS_MARKER_NAME,
-    }, (
-        "_LIST_MARKER_NAMES %r disagrees with the marker names vet_slot.py reads"
-        % (_LIST_MARKER_NAMES,)
-    )
 
 
 def test_vet_receipt_markers_match_conventions_10_7():

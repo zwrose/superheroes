@@ -102,6 +102,27 @@ def read_marker_list(text, name, after=0):
     return ids
 
 
+def _find_live_standalone_markers(body, marker):
+    """Fence-aware, zero-indent standalone ``marker`` lines outside open HTML comments."""
+    raw = body.splitlines(keepends=True)
+    bare = [line.rstrip("\r\n") for line in raw]
+    inert = md_fence.scan_contexts(bare).inert
+    found, offset, in_comment = [], 0, False
+    for line, dead, whole in zip(bare, inert, raw):
+        if not dead:
+            if md_fence.indent_width(line) == 0 and line.strip() == marker and not in_comment:
+                leading = len(line) - len(line.lstrip())
+                found.append(offset + leading)
+            pos = 0
+            while True:
+                pos = line.find("-->" if in_comment else "<!--", pos)
+                if pos < 0:
+                    break
+                pos, in_comment = pos + (3 if in_comment else 4), not in_comment
+        offset += len(whole)
+    return found
+
+
 def analyze_body(body):
     """Check the body read and its markers; return (advisor_offset, build_offset, followups)."""
     # axis: an empty or non-string body read refuses read-failed
@@ -110,7 +131,7 @@ def analyze_body(body):
                        "PR body is not a string")
     offsets = {}
     for name in ("advisor-vet", "build-record"):
-        found = grounding_stage.find_standalone_markers(body, grounding_stage.REGION_MARKERS[name])
+        found = _find_live_standalone_markers(body, grounding_stage.REGION_MARKERS[name])
         # axis: a slot marker present other than exactly once refuses markers-invalid
         if len(found) != 1:
             raise _Refusal("markers-invalid", "%s marker appears %d times" % (name, len(found)))
@@ -130,9 +151,12 @@ def check_slot_text(slot_text):
             raise _Refusal("write-failed", "slot text carries a marker: %s" % line.strip())
 
 
-def _select_receipt(comments):
+def _select_receipt(comments, advisor_login):
     best = None
     for comment in comments:
+        user = comment.get("user")
+        if not isinstance(user, dict) or user.get("login") != advisor_login:
+            continue
         first = comment["body"].lstrip("﻿ \t\r\n").splitlines()
         if first and first[0].rstrip() == RECEIPT_MARKER:
             if best is None or comment["created_at"] >= best["created_at"]:
@@ -140,13 +164,15 @@ def _select_receipt(comments):
     return best
 
 
-def evaluate(verb, body, comments, slot_text=None):
+def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
     """The chokepoint: every check, then the result (with ``newBody`` for write)."""
     try:
         advisor_at, build_at, ids = analyze_body(body)
         if verb == "write":
             check_slot_text(slot_text)
-        receipt = _select_receipt(comments)
+        if not isinstance(advisor_login, str) or not advisor_login.strip():
+            raise _Refusal("read-failed", "advisor login is missing")
+        receipt = _select_receipt(comments, advisor_login.strip())
         if receipt is None:
             if verb == "check" and ids is None:
                 return {"ok": True, "verb": "check", "followups": [], "receipt": None,
@@ -216,10 +242,21 @@ def _read_comments(run, pr, repo):
         raise _Refusal("read-failed", "comments: pages are not lists")
     comments = [c for page in pages for c in page]
     for c in comments:
+        if not isinstance(c, dict):
+            raise _Refusal("read-failed", "comments: a comment lacks body, created_at, or user.login")
+        user = c.get("user")
         if not (isinstance(c, dict) and isinstance(c.get("body"), str)
-                and isinstance(c.get("created_at"), str)):
-            raise _Refusal("read-failed", "comments: a comment lacks a string body or created_at")
+                and isinstance(c.get("created_at"), str)
+                and isinstance(user, dict) and isinstance(user.get("login"), str)):
+            raise _Refusal("read-failed", "comments: a comment lacks body, created_at, or user.login")
     return comments
+
+
+def _read_advisor_login(run):
+    login = _gh(run, ["gh", "api", "user", "-q", ".login"], "advisor login").strip()
+    if not login:
+        raise _Refusal("read-failed", "advisor login: empty")
+    return login
 
 
 def _normalize(text):
@@ -252,8 +289,9 @@ def _run_verb(verb, pr, repo, slot_file, run):
         except (OSError, UnicodeDecodeError) as exc:
             raise _Refusal("write-failed", "slot file unreadable: %s" % exc)
         check_slot_text(slot_text)
+    advisor_login = _read_advisor_login(run)
     comments = _read_comments(run, pr, repo)
-    result = evaluate(verb, body, comments, slot_text)
+    result = evaluate(verb, body, comments, slot_text, advisor_login=advisor_login)
     if not result["ok"] or verb == "check":
         return result
     new_body = result.pop("newBody")

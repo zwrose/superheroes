@@ -14,6 +14,7 @@ REPO = "owner/example"
 PR = 42
 VIEW = ("gh", "pr", "view", "42", "-R", REPO, "--json", "body")
 COMMENTS = ("gh", "api", "repos/owner/example/issues/42/comments", "--paginate", "--slurp")
+USER = ("gh", "api", "user", "-q", ".login")
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "vet_slot")
 
 FU_MARKER = "<!-- superheroes:followups FU1 FU2 -->"
@@ -58,8 +59,14 @@ def _fixture(name):
         return handle.read()
 
 
-def _comment(body, created="2026-09-25T10:00:00Z", cid=1):
-    return {"id": cid, "html_url": "https://x/c/%d" % cid, "body": body, "created_at": created}
+def _comment(body, created="2026-09-25T10:00:00Z", cid=1, login="advisor"):
+    return {
+        "id": cid,
+        "html_url": "https://x/c/%d" % cid,
+        "body": body,
+        "created_at": created,
+        "user": {"login": login},
+    }
 
 
 def _pages(*pages):
@@ -90,6 +97,8 @@ class FakeGh:
                 return SimpleNamespace(returncode=0, stdout=self.view_raw, stderr="")
             body = self.bodies.pop(0) if len(self.bodies) > 1 else self.bodies[0]
             return SimpleNamespace(returncode=0, stdout=json.dumps({"body": body}), stderr="")
+        if key == USER:
+            return SimpleNamespace(returncode=0, stdout="advisor\n", stderr="")
         if key == COMMENTS:
             return SimpleNamespace(returncode=self.comments_rc, stdout=self.comments_out, stderr="")
         if argv[:6] == ["gh", "pr", "edit", "42", "-R", REPO] and argv[6] == "--body-file":
@@ -149,9 +158,10 @@ def test_ok_write_replaces_only_the_slot_span(slot_file):
         if call[:2] == ["gh", "pr"]:
             assert call[4:6] == ["-R", REPO]
     assert fake.calls[0] == list(VIEW)
-    assert fake.calls[1] == list(COMMENTS)
-    assert fake.calls[2] == list(VIEW)  # pre-push re-read
-    assert fake.calls[4] == list(VIEW)  # readback
+    assert fake.calls[1] == list(USER)
+    assert fake.calls[2] == list(COMMENTS)
+    assert fake.calls[3] == list(VIEW)  # pre-push re-read
+    assert fake.calls[5] == list(VIEW)  # readback
 
 
 def test_ok_check_reports_receipt_present():
@@ -198,6 +208,9 @@ BODY_CASES = [
      BODY.replace("<!-- superheroes:advisor-vet -->\n", "")),
     ("markers-invalid", "advisor-vet marker appears 2 times",
      BODY.replace("trailer", "<!-- superheroes:advisor-vet -->")),
+    ("markers-invalid", "advisor-vet marker appears 0 times",
+     BODY.replace("<!-- superheroes:advisor-vet -->\n",
+                  "<!-- draft\n<!-- superheroes:advisor-vet -->\n")),
     ("markers-invalid", "advisor-vet marker appears 0 times",
      BODY.replace("<!-- superheroes:advisor-vet -->\n", "```\n<!-- superheroes:advisor-vet -->\n```\n")),
     ("markers-invalid", "build-record marker appears 0 times",
@@ -255,7 +268,7 @@ def test_empty_read_refuses_read_failed(slot_file):
 
 
 def test_non_string_body_refuses_read_failed():
-    result = vs.evaluate("write", None, [_comment(RECEIPT)], SLOT)
+    result = vs.evaluate("write", None, [_comment(RECEIPT)], SLOT, advisor_login="advisor")
     assert result == {"ok": False, "reason": "read-failed", "detail": "PR body is not a string"}
 
 
@@ -264,7 +277,7 @@ def test_non_string_body_refuses_read_failed():
     ("x\n<!-- superheroes:advisor-vet -->\n", "slot text carries a marker"),
 ])
 def test_evaluate_refuses_bad_slot_text(slot_text, detail):
-    result = vs.evaluate("write", BODY, [_comment(RECEIPT)], slot_text)
+    result = vs.evaluate("write", BODY, [_comment(RECEIPT)], slot_text, advisor_login="advisor")
     assert result["reason"] == "write-failed"
     assert detail in result["detail"]
     assert "newBody" not in result
@@ -403,6 +416,24 @@ def test_receipt_on_page_two_is_newest_and_selected():
     result = vs.run_verb("check", PR, REPO, run=fake)
     assert result["ok"] is True
     assert result["receipt"] == "https://x/c/3"
+
+
+def test_newer_non_advisor_receipt_does_not_replace_advisors():
+    impostor = _receipt_marker("<!-- superheroes:dispositions FU1 -->\n")
+    pages = _pages([_comment(RECEIPT, "2026-09-25T09:00:00Z", 1),
+                    _comment(impostor, "2026-09-25T12:00:00Z", 2, login="other")])
+    fake = FakeGh([BODY], pages)
+    result = vs.run_verb("check", PR, REPO, run=fake)
+    assert result["ok"] is True
+    assert result["receipt"] == "https://x/c/1"
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_only_non_advisor_receipt_is_receipt_missing():
+    fake = FakeGh([BODY], _pages([_comment(RECEIPT, login="other")]))
+    result = vs.run_verb("check", PR, REPO, run=fake)
+    assert result["reason"] == "receipt-missing"
+    assert "vet-receipt marker" in result["detail"]
 
 
 # --- read failures -----------------------------------------------------------------------------
@@ -575,7 +606,7 @@ def test_property_every_refusal_is_editless_and_ok_preserves_outside_span(slot_f
         assert fake.edit_calls() == []
     for body in (BODY, NONE_BODY):
         receipt = RECEIPT if body is BODY else NONE_RECEIPT
-        result = vs.evaluate("write", body, [_comment(receipt)], SLOT)
+        result = vs.evaluate("write", body, [_comment(receipt)], SLOT, advisor_login="advisor")
         new = result["newBody"]
         a = body.index("-->\n") + 4
         b = body.index("<!-- superheroes:build-record -->")

@@ -595,12 +595,8 @@ above).
      **The write goes through `vet_slot.py write`**, whose command form and refusals the register
      in `vet-receipt.md` states. Fix a refusal at its source: add the missing disposition to the
      receipt, or have the builder correct its list. Never work around a refusal with a hand edit.
-     Re-stamping a dropped marker or creating the slot on a pre-contract PR (below) stays your own
-     hand edit to your own slot, made before the command runs. A build record that predates keyed
-     follow-ups is keyed in place first: number its items FU1.. in order with a class each and add
-     the followups marker line, change nothing else, record that edit in the receipt, and put the
-     dispositions marker in the receipt before the command runs.
-     **The verdict's form** lives in
+     Hand edits before the command (re-stamping, pre-contract slot creation, legacy follow-up keying)
+     live in the register at `vet-receipt.md`. **The verdict's form** lives in
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` spine field 1 —
      read it there at vet time; a slot not in that form reads NOT-READY by construction.
      Probes, accounting and dispositions are **mechanism**: collapse them inside `<details>` below
