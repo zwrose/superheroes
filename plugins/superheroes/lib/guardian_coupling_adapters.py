@@ -25,6 +25,7 @@ Two invariants the lens enforces with helpers from this module:
 """
 import json
 import os
+import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -176,7 +177,53 @@ def append_repo_operands(argv, operands):
 
 # --- dependency-cruiser -------------------------------------------------------------
 
-def depcruise_argv(targets, bin_path=None):
+def depcruise_tracked_include_only_re(repo, abs_targets):
+    """Regex for ``--include-only``: confine depcruise to the tracked operand set.
+
+    Operand files alone do not stop dependency-cruiser from following imports into
+    untracked siblings; this filter runs at collection time so an untracked import tree
+    cannot be parsed before the post-hoc tracked-path filter.
+    """
+    if not abs_targets:
+        return None
+    repo_real = os.path.realpath(repo)
+    alts = []
+    seen = set()
+    for abs_path in abs_targets:
+        real = os.path.realpath(abs_path)
+        if real in seen:
+            continue
+        seen.add(real)
+        alts.append(re.escape(real))
+        try:
+            rel = os.path.relpath(real, repo_real)
+        except ValueError:
+            continue
+        if rel in (".", os.curdir):
+            continue
+        rel_posix = rel.replace(os.sep, "/")
+        for candidate in (rel_posix, "./" + rel_posix):
+            alts.append(re.escape(candidate))
+    if not alts:
+        return None
+    return "(?:" + "|".join(alts) + ")"
+
+
+def depcruise_recorded_argv(argv, operand_summary, include_only_summary=None):
+    """Digest-sized provenance argv — operands and include-only regex are summarized."""
+    if "--" not in argv:
+        return list(argv)
+    sep = argv.index("--")
+    before = list(argv[:sep])
+    if include_only_summary:
+        for i in range(len(before) - 1):
+            if before[i] == "--include-only":
+                before[i + 1] = include_only_summary
+                break
+    return before + ["--"] + [operand_summary]
+
+
+def depcruise_argv(targets, bin_path=None, include_only_re=None):
     """argv for a JSON graph cruise. Always `--no-config`; never `--cache`.
 
     Repo config reading is owner-deferred (see guardian_lens_coupling). Collectors are
@@ -185,6 +232,9 @@ def depcruise_argv(targets, bin_path=None):
 
     Callers MUST pass absolute repo operands (``run_tool`` / ``guardian_tools.invoke``
     run from a neutral cwd with ``targets=()``, so operands live in argv — mirror deps).
+
+    When ``include_only_re`` is set, dependency-cruiser is confined to those modules at
+    collection time (see ``depcruise_tracked_include_only_re``).
     """
     argv = [
         bin_path or DEPCRUISE_BIN,
@@ -194,6 +244,8 @@ def depcruise_argv(targets, bin_path=None):
         "--do-not-follow", DEPCRUISE_EXCLUDE_RE,
         "--exclude", DEPCRUISE_EXCLUDE_RE,
     ]
+    if include_only_re:
+        argv.extend(["--include-only", include_only_re])
     return append_repo_operands(argv, list(targets))
 
 

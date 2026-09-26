@@ -452,11 +452,25 @@ def test_depcruise_argv_opts_out_of_caching_and_vendored_trees():
     assert "--output-type" in argv and "json" in argv
     assert "--no-config" in argv
     assert "--config" not in argv
+    assert "--include-only" not in argv
     assert "--" in argv
     assert argv[argv.index("--") + 1] == "./src"
     for flag in ("--exclude", "--do-not-follow"):
         assert argv[argv.index(flag) + 1] == adapters.DEPCRUISE_EXCLUDE_RE
     assert "node_modules" in adapters.DEPCRUISE_EXCLUDE_RE
+
+
+def test_depcruise_argv_carries_tracked_include_only_when_requested(tmp_path):
+    repo = str(tmp_path)
+    write(repo, "src/a.ts")
+    write(repo, "vite.config.ts")
+    abs_a = os.path.realpath(os.path.join(repo, "src/a.ts"))
+    abs_b = os.path.realpath(os.path.join(repo, "vite.config.ts"))
+    include_re = adapters.depcruise_tracked_include_only_re(repo, [abs_a, abs_b])
+    assert include_re and "src/a\\.ts" in include_re and "vite\\.config\\.ts" in include_re
+    argv = adapters.depcruise_argv([abs_a], include_only_re=include_re)
+    idx = argv.index("--include-only")
+    assert argv[idx + 1] == include_re
 
 
 @pytest.mark.parametrize("ecosystem", ["js", "py"])
@@ -2539,6 +2553,10 @@ def test_collect_argv_passes_only_tracked_files(tmp_path):
             _argv_operands_realpath(argv, repo))
         assert os.path.realpath(os.path.join(repo, "src")) not in (
             _argv_operands_realpath(argv, repo))
+        assert "--include-only" in argv
+        inc = argv[argv.index("--include-only") + 1]
+        assert "src/app\\.ts" in inc
+        assert "decoy" not in inc
 
 
 def test_operand_budget_exceeded_degrades_without_invoking_depcruise(tmp_path, monkeypatch):
@@ -2618,6 +2636,27 @@ def test_mixed_file_and_dir_operands_run_end_to_end(tmp_path):
     assert js.get("untrackedFiltered", 0) == 0
 
 
+@pytest.mark.skipif(
+    _resolve_collector_bin(adapters.DEPCRUISE_BIN) is None,
+    reason="dependency-cruiser not installed",
+)
+def test_tracked_import_of_untracked_file_confined_before_collection(tmp_path):
+    """Tracked operands must not let depcruise parse untracked import targets (#1452)."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"include-only"}\n')
+    write(repo, "src/app.ts", "import './untracked-helper';\nexport const a = 1;\n")
+    write(repo, "src/untracked-helper.ts", "export const helper = 1;\n")
+    _commit_tracked(repo, "package.json", "src/app.ts")
+    root = store(tmp_path)
+    out = lens().collect({"cwd": repo, "root": root, "prevDigest": None})
+    assert st(out) == "collected", out.get("reason")
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["modulesParsed"] == 1
+    assert js["argv"].index("--include-only") >= 0
+    assert js["argv"][js["argv"].index("--include-only") + 1].startswith(
+        "<1 tracked JS/TS paths>")
+
+
 def test_digest_argv_summarizes_file_operands(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     tracked = ["package.json"]
@@ -2638,6 +2677,8 @@ def test_digest_argv_summarizes_file_operands(tmp_path):
     sep = js_argv.index("--")
     assert len(js_argv[sep + 1:]) == 1
     assert js_argv[sep + 1].startswith("<30 tracked JS/TS files under ")
+    inc_idx = js_argv.index("--include-only")
+    assert js_argv[inc_idx + 1] == "<30 tracked JS/TS paths>"
     assert digest["ecosystems"]["js"]["operandCount"] == 30
     assert captured, "depcruise must run"
     run_argv = captured[0]
