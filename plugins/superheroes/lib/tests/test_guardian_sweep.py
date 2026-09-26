@@ -3244,6 +3244,37 @@ def test_coverage_entry_with_tool_but_no_lens_is_reported(tmp_path):
     }]
 
 
+def test_recorded_coverage_unbound_degrades_lens(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {
+        "coverage": [
+            {"tool": "renovate", "path": "renovate.json"},
+        ],
+    })
+    prior_entry = {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(
+        required_facts=("recorded-coverage",),
+        emit_normal=True,
+        digest={"v": 2},
+        diff_new=["fixture:normal"],
+    )
+    collect_sentinel = lens.last_prev_digest
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["funnel"]["degradedLenses"][0]["lens"] == "fixture"
+    assert "recorded-coverage" in bundle["funnel"]["degradedLenses"][0]["reason"]
+    assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry
+    assert lens.last_prev_digest is collect_sentinel
+
+
 def test_coverage_entries_all_bound_stay_present(tmp_path):
     repo = init_calibrated_repo(tmp_path)
     root = _store(tmp_path)

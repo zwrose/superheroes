@@ -31,6 +31,7 @@ import subprocess
 
 import pytest
 
+import guardian_census
 import guardian_coupling_adapters as adapters
 import guardian_ledger
 import guardian_lens as gl
@@ -2545,7 +2546,8 @@ def test_operand_budget_exceeded_degrades_without_invoking_depcruise(tmp_path, m
     write(repo, "package.json", '{"name":"operand-budget"}\n')
     write(repo, "src/app.ts", "export const x = 1;\n")
     tracked = ["package.json", "src/app.ts"]
-    monkeypatch.setattr(glc, "JS_OPERAND_BYTES_MAX", 1)
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (1, False))
     calls = []
 
     def handler(argv, kwargs):

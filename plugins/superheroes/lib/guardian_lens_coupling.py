@@ -234,7 +234,6 @@ _IDENTITY_TRUNC_MARKER = "~"
 # tripwire a partial census and could manufacture a false collapse (or mask a real one).
 PY_SOURCE_MAX_BYTES = 1 * 1024 * 1024
 PY_CENSUS_MAX_BYTES = 16 * 1024 * 1024
-JS_OPERAND_BYTES_MAX = 512 * 1024
 
 
 # ======================================================================================
@@ -994,12 +993,23 @@ class CouplingLens(object):
             repo, adapters.TYPESCRIPT_SUPPORTED_MAJORS)
         ts_toolchain_provided = toolchain is not None
 
-        operand_bytes = sum(len(t) + 1 for t in abs_targets)
-        if operand_bytes > JS_OPERAND_BYTES_MAX:
+        fixed_argv = adapters.depcruise_argv([])
+        platform_max = guardian_census.platform_arg_max_bytes()
+        budget, env_measurement_failed = guardian_census.argv_operand_budget_detail(
+            repo, fixed_argv)
+        operand_bytes = guardian_census.operand_payload_bytes(repo, targets)
+        if operand_bytes > budget:
+            if env_measurement_failed:
+                reason = (
+                    "%s js: child-env measurement failed — cannot derive operand argv "
+                    "budget for depcruise (fail-closed budget 0 bytes)"
+                    % self.name)
+                return self._eco_fail("js", reason, ts_toolchain_provided)
             reason = (
-                "%s js: %d tracked JS/TS files (%d operand bytes) exceed the "
-                "%d-byte operand budget — not measured"
-                % (self.name, len(abs_targets), operand_bytes, JS_OPERAND_BYTES_MAX))
+                "%s js: tracked-file operand payload is %d bytes across %d files, "
+                "exceeding the derived %d-byte operand budget (platform ARG_MAX %d "
+                "after child env and fixed argv) — not measured"
+                % (self.name, operand_bytes, len(targets), budget, platform_max))
             return self._eco_fail("js", reason, ts_toolchain_provided)
 
         argv = adapters.depcruise_argv(abs_targets)
