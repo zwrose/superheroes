@@ -1002,7 +1002,7 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
                         "git rev-parse for sidecar baseSha %r failed" % pinned_base,
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
-    recomputed_diff = _recompute_diff_sha256(pinned_base, cwd, head_sha)
+    recomputed_diff = _recompute_diff_sha256(verified_base, cwd, head_sha)
     if recomputed_diff is None:
         return _refuse("handback-inspection-failed",
                         "diff recompute for %s...%s failed" % (pinned_base, head_sha),

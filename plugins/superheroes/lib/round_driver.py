@@ -174,6 +174,7 @@ GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP = 200
 _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
 _GATE_GUIDANCE_ROW_CARRIED_CHANNEL = "gateGuidanceRowCarried"
 GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
+RULING_GUIDANCE_OMITTED = "ruling-guidance-omitted"
 
 # --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
@@ -181,7 +182,23 @@ STATE_FILE = session_contract.STATE_FILE
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RE_EMIT_CMD = session_contract.RE_EMIT_CMD
+RULE_CMD = session_contract.RULE_CMD
 ORDERS_SUPERSEDED_OUTCOME = session_contract.ORDERS_SUPERSEDED_OUTCOME
+RULING_KINDS = frozenset(("out-of-scope", "guidance"))
+RULING_FILE_UNREADABLE = "ruling-file-unreadable"
+RULING_FILE_SHAPE = "ruling-file-shape"
+RULING_PROVENANCE_MALFORMED = "ruling-provenance-malformed"
+RULING_UNKNOWN_KIND = "ruling-unknown-kind"
+RULING_TARGET_UNKNOWN = "ruling-target-unknown"
+RULING_TARGET_AMBIGUOUS = "ruling-target-ambiguous"
+RULING_REASON_MISSING = "ruling-reason-missing"
+RULING_SESSION_TERMINAL = "ruling-session-terminal"
+RULING_FOLLOW_UP_MALFORMED = "ruling-follow-up-malformed"
+RULING_GUIDANCE_OVERSIZE = "ruling-guidance-oversize"
+RULING_CRITICAL_OUT_OF_SCOPE = "ruling-critical-out-of-scope"
+RULING_ATTEMPT_PENDING = "ruling-attempt-pending"
+RULINGS_LOG_MALFORMED = "rulings-log-malformed"
+RULING_GUIDANCE_NOT_FIXER = "ruling-guidance-not-fixer"
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
@@ -1531,6 +1548,13 @@ def _stage_findings(state, compiled):
         else:
             seen[key] = len(ledger)
             ledger.append(entry)
+        live_oos = _live_out_of_scope_ruling_for_key(state, key)
+        if live_oos is not None and not _live_out_of_scope_blocks_row(entry):
+            _record_disposition(
+                state, key, "out-of-scope", round_no,
+                outOfScopeReason=live_oos.get("reason"),
+                followUp=live_oos.get("followUp"),
+                rulingSeq=live_oos.get("seq"))
         seeded = True
     state["_toVerify"] = sanitized
     if seeded:
@@ -1545,7 +1569,125 @@ def _next_disposition_seq(state):
     return counter
 
 
-def _record_disposition(state, key, disposition, round_no, **fields):
+def _next_ruling_seq(state):
+    counter = state.get("rulingSeqCounter", 0) + 1
+    state["rulingSeqCounter"] = counter
+    return counter
+
+
+def _read_rulings_log(state):
+    """Pure read of ``rulingsLog`` — never mutates ``state``.
+
+    Returns ``(rows, None)`` or ``([], (token, detail))`` when malformed."""
+    if not isinstance(state, dict):
+        return [], (RULINGS_LOG_MALFORMED, "state must be an object")
+    if "rulingsLog" not in state:
+        return [], None
+    log = state["rulingsLog"]
+    if not isinstance(log, list):
+        return [], (RULINGS_LOG_MALFORMED, "rulingsLog must be a list")
+    rows = []
+    for entry in log:
+        if not isinstance(entry, dict):
+            return [], (RULINGS_LOG_MALFORMED, "rulingsLog row must be an object")
+        key = entry.get("findingKey")
+        if not isinstance(key, str) or not key:
+            return [], (RULINGS_LOG_MALFORMED, "rulingsLog row lacks findingKey")
+        rows.append(dict(entry))
+    return rows, None
+
+
+def _ruling_seq_counter_fault(state):
+    """Return ``(token, detail)`` when ``rulingSeqCounter`` is present but not a non-negative int."""
+    if not isinstance(state, dict) or "rulingSeqCounter" not in state:
+        return None
+    counter = state["rulingSeqCounter"]
+    if not isinstance(counter, int) or counter < 0:
+        return (RULINGS_LOG_MALFORMED, "rulingSeqCounter must be a non-negative integer")
+    return None
+
+
+def _writable_rulings_log(state):
+    """Append target for ``rulingsLog`` — only after precondition reads pass."""
+    log = state.get("rulingsLog")
+    if log is None:
+        log = []
+        state["rulingsLog"] = log
+    return log
+
+
+def _live_ruling_by_key(state):
+    """Latest rulings-log row per finding key."""
+    rows, fault = _read_rulings_log(state)
+    if fault is not None:
+        return {}
+    by_key = {}
+    for entry in rows:
+        key = entry.get("findingKey")
+        if isinstance(key, str) and key:
+            by_key[key] = entry
+    return by_key
+
+
+def _live_out_of_scope_ruling_for_key(state, key):
+    if not isinstance(key, str) or not key:
+        return None
+    live = _live_ruling_by_key(state).get(key)
+    if isinstance(live, dict) and live.get("ruling") == "out-of-scope":
+        return live
+    return None
+
+
+def _live_out_of_scope_blocks_row(row):
+    """True when a live out-of-scope ruling may exclude or restage this row (never Critical)."""
+    if not isinstance(row, dict):
+        return False
+    sev = row.get("severity")
+    return circuit_breaker.is_critical(sev)
+
+
+def _live_out_of_scope_ruling_keys(state):
+    keys = set()
+    for key, entry in _live_ruling_by_key(state).items():
+        if entry.get("ruling") == "out-of-scope":
+            keys.add(key)
+    return keys
+
+
+def _append_round_rulings(state, rows):
+    rec = state["rounds"].setdefault(str(state["round"]), {})
+    prev = rec.get("rulings")
+    if not isinstance(prev, list):
+        prev = []
+    rec["rulings"] = prev + list(rows)
+
+
+def _record_disposition(state, key, disposition, round_no, *, clear_out_of_scope=False, **fields):
+    if clear_out_of_scope:
+        if not isinstance(key, str) or not key:
+            return
+        live = _live_finding_by_key(state, key)
+        if isinstance(live, dict) and live.get("disposition") == "out-of-scope":
+            for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+                live.pop(field, None)
+            live.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+        ledger_by_key, fault = _disposition_ledger_by_key(state)
+        if fault is not None:
+            return
+        entry = ledger_by_key.get(key)
+        if not isinstance(entry, dict) or entry.get("disposition") != "out-of-scope":
+            return
+        ledger = _ensure_disposition_ledger_for_write(state)
+        seen = _ledger_index_by_key(ledger)
+        if key not in seen:
+            return
+        stored = ledger[seen[key]]
+        if not isinstance(stored, dict) or stored.get("disposition") != "out-of-scope":
+            return
+        cleared = _strip_disposition_family(dict(stored))
+        cleared.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+        ledger[seen[key]] = cleared
+        return
     if disposition not in session_contract.DISPOSITIONS:
         raise ValueError("unknown disposition %r" % (disposition,))
     disp_seq = _next_disposition_seq(state)
@@ -1572,6 +1714,11 @@ def _record_disposition(state, key, disposition, round_no, **fields):
     if live is not None:
         _apply_disposition_family(live, family)
         live[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
+
+
+def _clear_out_of_scope_disposition(state, key):
+    """Drop a live out-of-scope disposition family; rulingsLog retains the history."""
+    _record_disposition(state, key, None, 0, clear_out_of_scope=True)
 
 
 def _record_merged_into(state, key, into_key):
@@ -3378,6 +3525,21 @@ def _gate_guidance_entries(state, rnd):
             batch_keys.add(key)
     sliced = bool(state.get("_fixQueue")) or (state.get("_fixBatchIndex") or 0) >= 1
     _validate_gate_guidance_logs(rounds, rnd, batch_keys)
+    ruling_channel = []
+    for key in sorted(batch_keys):
+        live = _live_ruling_by_key(state).get(key)
+        if not isinstance(live, dict) or live.get("ruling") != "guidance":
+            continue
+        guidance = live.get("guidance")
+        if not isinstance(guidance, str) or not guidance.strip():
+            continue
+        entry = {"id": key, "guidance": guidance.strip(), "rulingChannel": True}
+        live_row = _live_finding_by_key(state, key)
+        if isinstance(live_row, dict):
+            for field in ("title", "file", "line"):
+                if live_row.get(field) is not None:
+                    entry[field] = live_row.get(field)
+        ruling_channel.append(entry)
     out = []
     covered_keys = set()
     round_entry = rounds.get(str(rnd))
@@ -3419,7 +3581,7 @@ def _gate_guidance_entries(state, rnd):
         out.append({"id": key, "title": gate_ruling.get("title"),
                     "file": gate_ruling.get("file"), "line": gate_ruling.get("line"),
                     "guidance": guidance.strip(), "round": gate_ruling.get("round")})
-    return out
+    return out + ruling_channel
 
 
 def _gate_guidance_block(entries):
@@ -3451,7 +3613,12 @@ def _gate_guidance_block(entries):
     aggregate_bytes = 0
     omitted = 0
     for idx, ((entry, guidance, fid), identity_line) in enumerate(zip(guided, identity_lines)):
+        from_ruling = bool(entry.get("rulingChannel"))
+        if from_ruling and aggregate_bytes >= GATE_GUIDANCE_AGGREGATE_BYTE_CAP:
+            raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
         if aggregate_bytes >= GATE_GUIDANCE_AGGREGATE_BYTE_CAP:
+            if any(guided[j][0].get("rulingChannel") for j in range(idx, len(guided))):
+                raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
             omitted = len(guided) - idx
             break
         header_lines = [identity_line]
@@ -3464,7 +3631,11 @@ def _gate_guidance_block(entries):
                 "read all guidance blocks before applying any fix."
                 % identity_counts[identity_line])
         header_lines.append(_gate_guidance_record_id_line(fid))
-        text, withheld = _truncate_utf8_bytes(guidance, GATE_GUIDANCE_ROW_BYTE_CAP)
+        if from_ruling:
+            text = guidance
+            withheld = 0
+        else:
+            text, withheld = _truncate_utf8_bytes(guidance, GATE_GUIDANCE_ROW_BYTE_CAP)
         escaped = _escape_guidance_placeholder_syntax(text)
         body_lines = ["BEGIN owner-gate guidance"]
         for line in escaped.splitlines() or [""]:
@@ -3477,6 +3648,10 @@ def _gate_guidance_block(entries):
         entry_bytes = len(entry_text.encode("utf-8"))
         remaining = GATE_GUIDANCE_AGGREGATE_BYTE_CAP - aggregate_bytes
         if entry_bytes > remaining:
+            if from_ruling:
+                raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
+            if any(guided[j][0].get("rulingChannel") for j in range(idx + 1, len(guided))):
+                raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
             omitted = len(guided) - idx
             break
         parts.append(entry_text)
@@ -3734,8 +3909,15 @@ def _filter_excluded_discharged_fixes(state, rows):
     ledger_by_key, fault = _disposition_ledger_by_key(state)
     if fault is not None:
         return rows, fault
-    filtered = [row for row in rows
-                if not _excluded_discharged_fix_row(ledger_by_key, row)]
+    oos_keys = _live_out_of_scope_ruling_keys(state)
+    filtered = []
+    for row in rows:
+        if _excluded_discharged_fix_row(ledger_by_key, row):
+            continue
+        key = _fix_batch_row_key(row)
+        if key and key in oos_keys and not _live_out_of_scope_blocks_row(row):
+            continue
+        filtered.append(row)
     return filtered, None
 
 
@@ -3784,6 +3966,67 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     state["_fixBatchIndex"] = batch_index
     state["step"] = P_FIXER
     return "queued"
+
+
+def _offered_fixer_rows(state, extra_rows=None):
+    """Current fixer slice plus queue, then any extra rows (guidance-lifted) not already present."""
+    offered = []
+    seen = set()
+    for row in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or []):
+        if not isinstance(row, dict):
+            continue
+        key = _fix_batch_row_key(row)
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        offered.append(row)
+    for row in extra_rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = _fix_batch_row_key(row)
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        offered.append(dict(row))
+    return offered
+
+
+def _sync_pending_after_ruling_reconcile(state):
+    """Drop or refresh a stored fixer pending whose payload no longer matches the reconciled slice."""
+    pending = state.get("pending")
+    fixer_pending = isinstance(pending, dict) and pending.get("phase") == P_FIXER
+    if state.get("terminal") or state.get("step") != P_FIXER:
+        if fixer_pending:
+            state["pending"] = None
+        return
+    if not fixer_pending:
+        return
+    payload = dict(pending.get("payload") or {})
+    payload["batch"] = list(state.get("_fixBatch") or [])
+    updated = dict(pending)
+    updated["payload"] = payload
+    state["pending"] = updated
+
+
+def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None):
+    """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling."""
+    if state.get("step") != P_FIXER:
+        return None
+    offered = _offered_fixer_rows(state, extra_rows)
+    if not offered:
+        return None
+    batch_index = state.get("_fixBatchIndex") or 0
+    status = _queue_fix_batch(
+        state, config, offered, reset_accumulator=False, batch_index=batch_index)
+    if status == "excluded" and batch_index >= 1 and not state.get("terminal"):
+        state.pop("_escalatedRung", None)
+        state.pop("_fixQueue", None)
+        state.pop("_fixBatchIndex", None)
+        _enter_post_fix(state, config, session_dir=session_dir)
+    _sync_pending_after_ruling_reconcile(state)
+    return status
 
 
 def _subjects_for_dimension(dimension):
@@ -4372,13 +4615,18 @@ def _derive_panel_diff_at_head(config, head_sha):
         return None, "git rev-parse failed: %s" % exc
     if verify.returncode != 0:
         return None, "baseRef not a commit"
+    verified_base = verify.stdout.decode("utf-8", errors="replace").strip()
+    if not verified_base:
+        return None, "baseRef not a commit"
     try:
         proc = review_diff_bytes.run_git_diff_three_dot(
-            repo_root, base, head_sha, timeout=120)
+            repo_root, verified_base, head_sha, timeout=120)
     except (FileNotFoundError, OSError) as exc:
         return None, "git unavailable: %s" % exc
     except subprocess.SubprocessError as exc:
         return None, "git diff failed: %s" % exc
+    except ValueError as exc:
+        return None, str(exc)
     if proc.returncode != 0:
         err = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
         err = err.strip()
@@ -5331,6 +5579,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "auditProvenance": rec.get("auditProvenance"),
               "scopedFinder": rec.get("scopedFinder"),
               "headDiffSource": rec.get("headDiffSource"),
+              "rulings": rec.get("rulings"),
               "unverified": rec.get("unverified"),
               "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
               "compileDrops": rec.get("compileDrops"),
@@ -6665,6 +6914,38 @@ def _disposition_ledger_owner_refusal(session_dir, state, pending, cmd):
     return None
 
 
+def _ruling_ledger_precondition_refusal(session_dir, state, pending):
+    """Refuse `rule` before mutation when the ledger owner is unrecognized or the ledger is malformed."""
+    pend = pending if isinstance(pending, dict) else {}
+    owner_refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, RULE_CMD)
+    if owner_refusal is not None:
+        return owner_refusal
+    if session_contract.disposition_ledger_owner_classification(state) != (
+            session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED):
+        return None
+    _rows, fault = session_contract.read_disposition_ledger(state, required=True)
+    if fault is not None:
+        return _refuse_cmd(
+            session_dir, RULE_CMD, fault.token,
+            phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+            detail=fault.detail)
+    _log_rows, log_fault = _read_rulings_log(state)
+    if log_fault is not None:
+        token, detail = log_fault
+        return _refuse_cmd(
+            session_dir, RULE_CMD, token,
+            phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+            detail=detail)
+    seq_fault = _ruling_seq_counter_fault(state)
+    if seq_fault is not None:
+        token, detail = seq_fault
+        return _refuse_cmd(
+            session_dir, RULE_CMD, token,
+            phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+            detail=detail)
+    return None
+
+
 def _next_response(session_dir, state, pending, cmd):
     expected_hash = state_hash(state)
     return {
@@ -7174,6 +7455,363 @@ def _re_emit_completed_for_attempt(journal, rnd, phase, attempt):
     return None
 
 
+def _row_matches_ruling_id(row, ruling_id):
+    if not isinstance(row, dict) or not isinstance(ruling_id, str):
+        return False
+    if row.get("id") == ruling_id:
+        return True
+    fkey = row.get(session_contract.FINDING_KEY_FIELD)
+    if fkey == ruling_id:
+        return True
+    derived = _finding_key_of(row)
+    return derived == ruling_id if derived else False
+
+
+def _severity_for_finding_key(state, key, fallback=None):
+    if not isinstance(key, str) or not key:
+        return fallback
+    ordered = []
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict) and _finding_key_of(finding) == key:
+            ordered.append(finding)
+    for row in state.get("_toVerify") or []:
+        if isinstance(row, dict) and _finding_key_of(row) == key:
+            ordered.append(row)
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    if ledger_fault is None:
+        entry = ledger_by_key.get(key)
+        if isinstance(entry, dict):
+            ordered.append(entry)
+    for row in (state.get("_fixBatch") or []) + (state.get("_fixQueue") or []):
+        if isinstance(row, dict) and _fix_batch_row_key(row) == key:
+            ordered.append(row)
+    severities = [row.get("severity") for row in ordered
+                  if isinstance(row, dict) and row.get("severity") is not None]
+    if not severities:
+        return fallback
+    for sev in severities:
+        if circuit_breaker.is_critical(sev):
+            return sev
+    return severities[0]
+
+
+def _row_matches_ruling_finding_key(row, ruling_id):
+    if not isinstance(row, dict) or not isinstance(ruling_id, str):
+        return False
+    fkey = row.get(session_contract.FINDING_KEY_FIELD)
+    if isinstance(fkey, str) and fkey == ruling_id:
+        return True
+    derived = _finding_key_of(row)
+    return derived == ruling_id if derived else False
+
+
+def _resolve_ruling_target(state, ruling_id):
+    if not isinstance(ruling_id, str) or not ruling_id.strip():
+        return None, None, None
+    rid = ruling_id.strip()
+    for finding in state.get("findings") or []:
+        if _row_matches_ruling_finding_key(finding, rid):
+            return _finding_key_of(finding), dict(finding), None
+    combined = ((state.get("_fixBatch") or []) + (state.get("_fixQueue") or [])
+                + (state.get("fixBatch") or []))
+    for row in combined:
+        if _row_matches_ruling_finding_key(row, rid):
+            return _fix_batch_row_key(row), dict(row), None
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    if ledger_fault is not None:
+        return None, None, RULING_FILE_UNREADABLE
+    ledger_entries = list(ledger_by_key.values())
+    for entry in ledger_entries:
+        if isinstance(entry, dict) and _row_matches_ruling_finding_key(entry, rid):
+            return _finding_identity_key(entry), dict(entry), None
+    id_matches = []
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict) and finding.get("id") == rid:
+            id_matches.append((_finding_key_of(finding), dict(finding)))
+    for row in combined:
+        if isinstance(row, dict) and row.get("id") == rid:
+            id_matches.append((_fix_batch_row_key(row), dict(row)))
+    for entry in ledger_entries:
+        if isinstance(entry, dict) and entry.get("id") == rid:
+            id_matches.append((_finding_identity_key(entry), dict(entry)))
+    by_key = {}
+    for key, row in id_matches:
+        if isinstance(key, str) and key:
+            by_key[key] = row
+    if len(by_key) > 1:
+        return None, None, RULING_TARGET_AMBIGUOUS
+    if len(by_key) == 1:
+        key = next(iter(by_key))
+        return key, by_key[key], None
+    return None, None, None
+
+
+def _load_ruling_file(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except OSError:
+        return None, None, RULING_FILE_UNREADABLE
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None, None, RULING_FILE_UNREADABLE
+    if not isinstance(doc, dict):
+        return None, None, RULING_FILE_SHAPE
+    file_sha = round_records.sha256_text(raw)
+    return doc, file_sha, None
+
+
+def _validate_ruling_entries(doc):
+    rulings = doc.get("rulings")
+    if not isinstance(rulings, list) or not rulings:
+        return None, None, RULING_FILE_SHAPE
+    provenance = doc.get("_provenance")
+    if not _owner_artifact_provenance_well_formed({"_provenance": provenance}):
+        return None, None, RULING_PROVENANCE_MALFORMED
+    parsed = []
+    for spec in rulings:
+        if not isinstance(spec, dict):
+            return None, None, RULING_FILE_SHAPE
+        rid = spec.get("id")
+        kind = spec.get("ruling")
+        reason = spec.get("reason")
+        if not isinstance(rid, str) or not rid.strip():
+            return None, None, RULING_FILE_SHAPE
+        if kind not in RULING_KINDS:
+            return None, None, RULING_UNKNOWN_KIND
+        if not isinstance(reason, str) or not reason.strip():
+            return None, None, RULING_REASON_MISSING
+        entry = {"id": rid.strip(), "ruling": kind, "reason": reason.strip()}
+        if kind == "out-of-scope":
+            follow_up = spec.get("followUp")
+            fault = session_contract.follow_up_shape_fault(follow_up)
+            if fault is not None:
+                return None, None, RULING_FOLLOW_UP_MALFORMED
+            entry["followUp"] = dict(follow_up)
+        if kind == "guidance":
+            guidance = spec.get("guidance")
+            if not isinstance(guidance, str) or not guidance.strip():
+                return None, None, RULING_FILE_SHAPE
+            if len(guidance.encode("utf-8")) > GATE_GUIDANCE_ROW_BYTE_CAP:
+                return None, None, RULING_GUIDANCE_OVERSIZE
+            entry["guidance"] = guidance.strip()
+        parsed.append(entry)
+    return parsed, provenance, None
+
+
+def _fix_batch_file_sha256(session_dir, rnd, state):
+    try:
+        path = _ensure_fix_batch_file(session_dir, rnd, state)
+    except ValueError:
+        raise ValueError("order-render-refused:fix-batch-unreadable")
+    try:
+        with open(path, "rb") as fh:
+            return round_records.sha256_text(fh.read().decode("utf-8"))
+    except OSError:
+        raise ValueError("order-render-refused:fix-batch-unreadable")
+
+
+def _supersede_pending_dispatch_attempt(session_dir, state, by, journal_cmd, pending,
+                                        superseded_fields_extra=None):
+    """Caller must refuse when the pending attempt already has recorded seat results."""
+    phase = pending.get("phase")
+    rnd = pending.get("round")
+    old_attempt = pending.get("attempt")
+    old_roster, roster_refusal = _roster_of(session_dir, state, journal_cmd, phase, rnd, old_attempt)
+    if roster_refusal is not None:
+        return roster_refusal
+    anchor = _orders_anchor(state, session_dir, rnd, phase, old_attempt)
+    if anchor is None:
+        return None
+    new_attempt = max(_next_dispatch_attempt(session_dir, rnd, phase, state), old_attempt + 1)
+    state["pending"] = dict(pending, attempt=new_attempt)
+    roster, roster_refusal = _roster_of(session_dir, state, journal_cmd, phase, rnd, new_attempt)
+    if roster_refusal is not None:
+        return roster_refusal
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    superseded_fields = {
+        "phase": phase, "round": rnd, "attempt": old_attempt, "newAttempt": new_attempt,
+        "supersededManifestSha256": anchor.get("manifestSha256"),
+        "supersededOrderSha256": anchor.get("orders"),
+        "by": by, "at": at,
+    }
+    if isinstance(superseded_fields_extra, dict):
+        superseded_fields.update(superseded_fields_extra)
+    superseded_row = _journal_entry_for_commit(
+        session_dir, journal_cmd, ORDERS_SUPERSEDED_OUTCOME, **superseded_fields)
+    try:
+        _emit_orders_manifest(
+            session_dir, state, rnd, phase, new_attempt, roster,
+            journal_cmd=journal_cmd, pending_payload=state["pending"].get("payload"),
+            seat_map=_effective_seat_map(state),
+            extra_journal_entries=[superseded_row])
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, journal_cmd, exc, phase=phase,
+                                        rnd=rnd, attempt=new_attempt)
+    except AuditorUnseatable as exc:
+        return _refuse_cmd(session_dir, journal_cmd, AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                           rnd=rnd, attempt=new_attempt,
+                           liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
+                           detail=exc.detail)
+    except ValueError as exc:
+        return _refuse_cmd(session_dir, journal_cmd, "order-render-refused", phase=phase,
+                           rnd=rnd, attempt=new_attempt, detail=str(exc))
+    return {"superseded": {"attempt": old_attempt, "manifestSha256": anchor.get("manifestSha256")}}
+
+
+def cmd_rule(session_dir, ruling_file, by):
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, RULE_CMD)
+            if refusal is not None:
+                return refusal
+            return _cmd_rule_locked(session_dir, ruling_file, by)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, RULE_CMD, held)
+
+
+def _cmd_rule_locked(session_dir, ruling_file, by):
+    ok, state = load_state(session_dir)
+    if not ok or state is None:
+        detail = state if not ok else "no state"
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE, detail=detail)
+    if state.get("terminal"):
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_SESSION_TERMINAL)
+    doc, file_sha, load_reason = _load_ruling_file(ruling_file)
+    if load_reason is not None:
+        return _refuse_cmd(session_dir, RULE_CMD, load_reason, value=ruling_file)
+    parsed, provenance, shape_reason = _validate_ruling_entries(doc)
+    if shape_reason is not None:
+        return _refuse_cmd(session_dir, RULE_CMD, shape_reason, value=ruling_file)
+    pending = state.get("pending")
+    ledger_refusal = _ruling_ledger_precondition_refusal(session_dir, state, pending)
+    if ledger_refusal is not None:
+        return ledger_refusal
+    phase = pending.get("phase") if isinstance(pending, dict) else None
+    rnd = pending.get("round") if isinstance(pending, dict) else None
+    attempt = pending.get("attempt") if isinstance(pending, dict) else None
+    for entry in parsed:
+        key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
+        if target_fault == RULING_TARGET_AMBIGUOUS:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
+        if target_fault == RULING_FILE_UNREADABLE:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE)
+        if key is None:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
+        if entry["ruling"] == "out-of-scope":
+            sev = _severity_for_finding_key(
+                state, key,
+                candidate.get("severity") if isinstance(candidate, dict) else None)
+            if circuit_breaker.is_critical(sev):
+                return _refuse_cmd(session_dir, RULE_CMD, RULING_CRITICAL_OUT_OF_SCOPE,
+                                   id=entry["id"])
+    if (isinstance(pending, dict) and pending.get("phase") == P_FIXER
+            and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
+                                            pending.get("attempt"))):
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_ATTEMPT_PENDING,
+                           phase=pending.get("phase"), rnd=pending.get("round"),
+                           attempt=pending.get("attempt"))
+    if state.get("step") != P_FIXER:
+        for entry in parsed:
+            if entry["ruling"] == "guidance":
+                return _refuse_cmd(
+                    session_dir, RULE_CMD, RULING_GUIDANCE_NOT_FIXER,
+                    phase=phase, rnd=rnd, attempt=attempt)
+    cfg = state.get("config") or {}
+    round_rulings = []
+    restored_rows = []
+    for entry in parsed:
+        key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
+        if target_fault == RULING_TARGET_AMBIGUOUS:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
+        if target_fault == RULING_FILE_UNREADABLE:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE)
+        if key is None:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
+        prior_live = _live_ruling_by_key(state).get(key)
+        seq = _next_ruling_seq(state)
+        log_row = {
+            "seq": seq,
+            "round": state["round"],
+            "phase": phase,
+            "attempt": attempt,
+            "id": entry["id"],
+            "findingKey": key,
+            "ruling": entry["ruling"],
+            "reason": entry["reason"],
+            "provenance": provenance,
+            "rulingFileSha256": file_sha,
+            "by": by,
+        }
+        session_contract.copy_follow_up_field(entry, log_row)
+        if entry.get("guidance") is not None:
+            log_row["guidance"] = entry["guidance"]
+        _writable_rulings_log(state).append(log_row)
+        round_rulings.append(dict(log_row))
+        if entry["ruling"] == "out-of-scope":
+            _record_disposition(
+                state, key, "out-of-scope", state["round"],
+                outOfScopeReason=entry["reason"], followUp=entry.get("followUp"),
+                rulingSeq=seq)
+        elif entry["ruling"] == "guidance":
+            live_row = _live_finding_by_key(state, key)
+            ledger_oos = isinstance(live_row, dict) and live_row.get("disposition") == "out-of-scope"
+            if not ledger_oos:
+                ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+                if ledger_fault is None:
+                    stored = ledger_by_key.get(key)
+                    ledger_oos = isinstance(stored, dict) and stored.get("disposition") == "out-of-scope"
+            prior_oos = isinstance(prior_live, dict) and prior_live.get("ruling") == "out-of-scope"
+            if prior_oos or ledger_oos:
+                _clear_out_of_scope_disposition(state, key)
+                restore = _live_finding_by_key(state, key) or candidate
+                if isinstance(restore, dict):
+                    restored_rows.append(dict(restore))
+        _decision(state, "ruling-recorded",
+                  "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
+    _append_round_rulings(state, round_rulings)
+    _reconcile_fixer_queue_after_rulings(
+        state, cfg, extra_rows=restored_rows, session_dir=session_dir)
+    if state.get("step") == P_FIXER:
+        pending_render_check = state.get("pending")
+        rnd_render = None
+        if isinstance(pending_render_check, dict):
+            rnd_render = pending_render_check.get("round")
+        if rnd_render is None:
+            rnd_render = state.get("round")
+        try:
+            _gate_guidance_block(_gate_guidance_entries(state, rnd_render))
+        except ValueError as exc:
+            phase_r = (pending_render_check.get("phase")
+                       if isinstance(pending_render_check, dict) else P_FIXER)
+            rnd_r = (pending_render_check.get("round")
+                     if isinstance(pending_render_check, dict) else rnd_render)
+            attempt_r = (pending_render_check.get("attempt")
+                         if isinstance(pending_render_check, dict) else None)
+            return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
+                               phase=phase_r, rnd=rnd_r, attempt=attempt_r, detail=str(exc))
+    journal_entry = _journal_entry_for_commit(
+        session_dir, RULE_CMD, "ruling-recorded", phase=phase, round=rnd, attempt=attempt,
+        rulingFileSha256=file_sha, count=len(parsed))
+    try:
+        c = round_commit.begin(session_dir, "rule-record")
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(state).encode("utf-8"))
+        journal_path = os.path.join(session_dir, JOURNAL_FILE)
+        c.add_journal_append(journal_path, journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, RULE_CMD, exc, phase=phase,
+                                        rnd=rnd, attempt=attempt)
+    response = {"ok": True, "recorded": len(parsed), "rulingFileSha256": file_sha}
+    pending_after = state.get("pending")
+    if (isinstance(pending_after, dict) and pending_after.get("action")
+            and not state.get("terminal")):
+        response.update(_next_response(session_dir, state, pending_after, RULE_CMD))
+    return response
+
+
 def _cmd_re_emit_locked(session_dir, by):
     ok, state = load_state(session_dir)
     if not ok or state is None:
@@ -7261,15 +7899,6 @@ def _cmd_re_emit_locked(session_dir, by):
         return _refuse_cmd(session_dir, "re-emit", "re-emit-attempt-has-results",
                            phase=phase, rnd=rnd, attempt=old_attempt, names=result_names)
 
-    # axis: the new attempt is above the pending one even when nothing was accepted
-    new_attempt = max(_next_dispatch_attempt(session_dir, rnd, phase, state), old_attempt + 1)
-    state["pending"] = dict(pending, attempt=new_attempt)
-
-    roster, roster_refusal = _roster_of(session_dir, state, "re-emit", phase, rnd, new_attempt)
-    if roster_refusal is not None:
-        return roster_refusal
-
-    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     relocation_fields = {
         "oldRoot": relocation.get("oldRoot"),
         "newRoot": relocation.get("newRoot"),
@@ -7278,43 +7907,23 @@ def _cmd_re_emit_locked(session_dir, by):
         "sessionDir": relocation.get("sessionDir"),
         "at": relocation.get("at"),
     }
-    superseded_fields = {
-        "phase": phase, "round": rnd, "attempt": old_attempt, "newAttempt": new_attempt,
-        "supersededManifestSha256": anchor.get("manifestSha256"),
-        "supersededOrderSha256": anchor.get("orders"),
+    superseded_fields_extra = {
         "head": live_head,
         "relocation": relocation_fields,
-        "by": by, "at": at,
     }
     recorded_labels = _re_emit_recorded_seat_labels(journal, rnd, phase, old_attempt)
     if recorded_labels:
-        superseded_fields["supersededRecords"] = recorded_labels
-    superseded_row = _journal_entry_for_commit(
-        session_dir, RE_EMIT_CMD, ORDERS_SUPERSEDED_OUTCOME, **superseded_fields)
-
-    try:
-        _emit_orders_manifest(
-            session_dir, state, rnd, phase, new_attempt, roster,
-            journal_cmd=RE_EMIT_CMD, pending_payload=state["pending"]["payload"],
-            seat_map=_effective_seat_map(state),
-            extra_journal_entries=[superseded_row])
-    except round_commit.CommitRefused as exc:
-        return _commit_refused_response(session_dir, "re-emit", exc, phase=phase,
-                                        rnd=rnd, attempt=new_attempt)
-    except AuditorUnseatable as exc:
-        return _refuse_cmd(session_dir, RE_EMIT_CMD, AUDITOR_UNSEATABLE_CAUSE, phase=phase,
-                           rnd=rnd, attempt=new_attempt,
-                           liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
-                           detail=exc.detail)
-    except ValueError as exc:
-        return _refuse_cmd(session_dir, "re-emit", "order-render-refused", phase=phase,
-                           rnd=rnd, attempt=new_attempt, detail=str(exc))
+        superseded_fields_extra["supersededRecords"] = recorded_labels
+    superseded_out = _supersede_pending_dispatch_attempt(
+        session_dir, state, by, RE_EMIT_CMD, pending, superseded_fields_extra)
+    if isinstance(superseded_out, dict) and not superseded_out.get("ok", True):
+        return superseded_out
 
     save_state(session_dir, state)
     response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
     if not response.get("ok"):
         return response
-    response["superseded"] = {
+    response["superseded"] = superseded_out.get("superseded") or {
         "attempt": old_attempt,
         "manifestSha256": anchor.get("manifestSha256"),
     }
@@ -8648,6 +9257,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "ROUND",
     "TARGET_ID",
     "GATE_GUIDANCE",
+    "FIX_BATCH_SHA256",
     "FIXER_STEP_5_BLOCK",
     "FIXER_ESCALATION_BLOCK",
 })
@@ -8779,13 +9389,7 @@ def _fixer_verify_budget(batch, cfg):
             % (files_str, full))
 
 
-def _ensure_fix_batch_file(session_dir, rnd, state):
-    """Materialize fix-batch.json from state for fixer orders.
-
-    Sibling parity with ``_ensure_round_diff`` and ``_ensure_round_head_diff``: unknown input
-    (absent, ``None``, or wrong type) refuses before any path computation or write. A known
-    batch — including a known-empty list — still materializes.
-    """
+def _materialized_fix_batch_rows(state):
     batch = state.get("_fixBatch")
     if not isinstance(batch, list):
         batch = state.get("fixBatch")
@@ -8818,14 +9422,34 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
                         row_gate["reason"] = gate_ruling.get("reason")
                     row_copy["gateRuling"] = row_gate
         materialized.append(row_copy)
+    return materialized
+
+
+def _fix_batch_path_for_round(session_dir, rnd, state):
     rdir = round_records.round_dir(session_dir, rnd)
     batch_index = state.get("_fixBatchIndex") or 0
     if batch_index >= 1:
-        path = os.path.join(rdir, "fix-batch.%d.json" % batch_index)
-    else:
-        path = os.path.join(rdir, "fix-batch.json")
-    return _ensure_bytes_at_path(session_dir, path,
-                                 round_records.canonical(materialized).encode("utf-8"))
+        return os.path.join(rdir, "fix-batch.%d.json" % batch_index)
+    return os.path.join(rdir, "fix-batch.json")
+
+
+def _fix_batch_canonical_bytes(state):
+    return round_records.canonical(_materialized_fix_batch_rows(state)).encode("utf-8")
+
+
+def _fix_batch_sha256_from_state(state):
+    return round_records.sha256_text(_fix_batch_canonical_bytes(state).decode("utf-8"))
+
+
+def _ensure_fix_batch_file(session_dir, rnd, state):
+    """Materialize fix-batch.json from state for fixer orders.
+
+    Sibling parity with ``_ensure_round_diff`` and ``_ensure_round_head_diff``: unknown input
+    (absent, ``None``, or wrong type) refuses before any path computation or write. A known
+    batch — including a known-empty list — still materializes.
+    """
+    path = _fix_batch_path_for_round(session_dir, rnd, state)
+    return _ensure_bytes_at_path(session_dir, path, _fix_batch_canonical_bytes(state))
 
 
 # Round-relative paths the driver materializes for order templates — production reads this registry.
@@ -8921,7 +9545,8 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
 
 
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
-                        session_dir, rnd, paths, channel, roster=None):
+                        session_dir, rnd, paths, channel, roster=None,
+                        materialize_shared_inputs=True):
     """Phase-specific placeholder dict for `round_orders.render_order`.
 
     Raises `ValueError("order-render-refused:...")` when a slot cannot be filled truthfully
@@ -9048,7 +9673,10 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CHANNEL": channel,
         }
     elif phase == P_FIXER:
-        fix_batch_path = ROUND_MATERIALIZER_REGISTRY["fix_batch"](session_dir, rnd, state)
+        if materialize_shared_inputs:
+            fix_batch_path = ROUND_MATERIALIZER_REGISTRY["fix_batch"](session_dir, rnd, state)
+        else:
+            fix_batch_path = _fix_batch_path_for_round(session_dir, rnd, state)
         # Match _ensure_fix_batch_file: _fixBatch wins over fixBatch so guidance and sidecar agree.
         fix_batch = state.get("_fixBatch")
         if not isinstance(fix_batch, list):
@@ -9073,8 +9701,13 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
                     unaccounted.append({"index": idx, "title": row_title})
             if unaccounted:
                 _record_round(state, _GATE_GUIDANCE_ROW_CARRIED_CHANNEL, unaccounted)
+        if materialize_shared_inputs:
+            batch_sha = _fix_batch_file_sha256(session_dir, rnd, state)
+        else:
+            batch_sha = _fix_batch_sha256_from_state(state)
         ph = {
             "FIX_BATCH_PATH": fix_batch_path,
+            "FIX_BATCH_SHA256": batch_sha,
             "PROFILE_PATH": _profile_path_for_orders(repo_root),
             "RUBRIC_PATH": rubric_path,
             "CWD": repo_root,
@@ -9087,7 +9720,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
-                                pending_payload, row, roster=None):
+                                pending_payload, row, roster=None, materialize_shared_inputs=True):
     """Render the order context for one seat/occurrence, using the CALLER's resolved transport row.
 
     `row` is required — never re-resolved here. `_seat_transport_row` is not pure for the
@@ -9136,7 +9769,8 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "host_seat": host_seat,
         "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
                                               cfg, pending_payload,
-                                              session_dir, rnd, paths, channel, roster=roster),
+                                              session_dir, rnd, paths, channel, roster=roster,
+                                              materialize_shared_inputs=materialize_shared_inputs),
     }, paths
 
 
@@ -11831,6 +12465,12 @@ def build_parser():
     cli_contract.add_argument(pre, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pre, "--by", contract="free-text", required=True)
 
+    pru = sub.add_parser("rule")
+    cli_contract.add_argument(pru, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pru, "--ruling-file", contract="free-text", required=True,
+                              dest="ruling_file")
+    cli_contract.add_argument(pru, "--by", contract="free-text", required=True)
+
     return parser
 
 
@@ -12022,6 +12662,10 @@ def _dispatch(args):
         return 1 if not out.get("ok") else 0
     elif args.cmd == "re-emit":
         out = cmd_re_emit(args.session_dir, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == "rule":
+        out = cmd_rule(args.session_dir, args.ruling_file, args.by)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     else:

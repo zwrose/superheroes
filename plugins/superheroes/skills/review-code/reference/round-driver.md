@@ -674,6 +674,35 @@ attempt if it has not run), then move the late file aside (never delete) — cer
 the slot as superseded. The same move-aside unblocks `re-emit-attempt-has-results` when a hand-landed
 file for the old attempt was never recorded.
 
+## Owner and advisor rulings (`rule`)
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" rule --session-dir "$SESSION_DIR" \
+  --ruling-file /path/to/rulings.json --by "<who>"
+```
+
+The ruling file is JSON: `_provenance` (same shape as owner gate artifacts) plus a non-empty
+`rulings` list. Each entry has `id` (finding id or key), `ruling` (`out-of-scope` or `guidance`),
+`reason`, and for out-of-scope a shaped `followUp`; for guidance a non-empty `guidance` string
+within the gate row byte cap. **Never append a ruling to a seat prompt** — the driver carries
+live guidance in the fixer order's gate block and excludes out-of-scope keys from the fix batch;
+the fix batch sha256 in the order commits to the batch file bytes.
+
+On success the driver appends to `state.rulingsLog` and the round's `rulings`, records
+dispositions for out-of-scope rows, and refreshes gate guidance for a not-yet-emitted fixer batch.
+A guidance ruling that supersedes a live out-of-scope ruling clears that disposition family from
+the ledger and the live finding (history stays in `rulingsLog`) and restores the row to the
+fixer queue. A ruling at `P_FIXER` before the next emission re-slices `_fixBatch`/`_fixQueue`
+through the same exclusion filter; an emptied first slice settles via empty-batch convergence.
+A ruling while a pending fixer attempt already has emitted orders is refused — let that fixer land
+or `re-emit` before ruling. Refusal tokens (each leaves state bytes unchanged):
+`ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
+`ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
+`ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
+`ruling-critical-out-of-scope`,
+`ruling-session-terminal`, `ruling-attempt-pending`,
+`disposition-ledger-owner-unrecognized`, `disposition-ledger-malformed`.
+
 ## Batch concurrency — an independent batch goes out together
 
 Several `dispatch-` phases hand you a **batch**: `dispatch-panel`'s `payload.dimensions`,

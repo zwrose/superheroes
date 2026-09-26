@@ -26,6 +26,7 @@ DECISION_KINDS = (
     "panel-seat-missing",
     "receipt-missing-seat",
     "resume-confirmation",
+    "ruling-recorded",
     "round-ceiling",
     "scoped-finder-skipped",
     "seat-engaged-artifact",

@@ -4,10 +4,13 @@ import subprocess
 
 
 def _require_explicit_commit_sha(sha, label):
-    if not isinstance(sha, str) or not sha.strip():
+    if not isinstance(sha, str):
         raise ValueError("%s must be an explicit commit" % label)
-    if sha.strip().upper() == "HEAD":
+    if len(sha) not in (40, 64):
         raise ValueError("%s must be an explicit commit" % label)
+    for ch in sha:
+        if ch not in "0123456789abcdefABCDEF":
+            raise ValueError("%s must be an explicit commit" % label)
 
 
 def run_git_diff_three_dot(repo_root, base_sha, head_sha, *, timeout):
