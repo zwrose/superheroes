@@ -1,5 +1,23 @@
 # Layer 4d part (ii) bite-proof record — the rulings channel (arm D shadow of #1419)
 
+## Heads `a654971d` / `93dca400` / `3c3ff398`: the round-4 to round-6 fix legs (advisor rulings 13:26Z, 15:3xZ, 17:3xZ)
+
+Re-run by the orchestrator in a detached probe worktree (Q1–Q4, R1–R2 at `93dca400`, S1 at
+`3c3ff398`) that no review session was reading. Each neutralization was a targeted edit to
+`plugins/superheroes/lib/round_driver.py`, reverted by the inverse edit; detectors unedited. After
+each restore `git status --porcelain` printed nothing; green: `test_layer4d_rulings_1419.py` —
+`27 passed` at `93dca400`, `29 passed` at `3c3ff398`.
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| Q1 | `_cmd_rule_locked`: `"receiptFault": str(fault) if fault else None` → `fault.detail if fault else None` | `test_a_terminal_rule_reports_a_receipt_fault_as_its_detail_text` → `AttributeError: 'ReceiptFault' object has no attribute 'detail'` |
+| Q2 | `_cmd_rule_locked`: the post-commit `if state.get("terminal"):` → `if terminal:` (the entry snapshot) | `test_a_live_ruling_that_converges_the_session_runs_the_terminal_receipt_gate` → `AssertionError: terminal-receipt-gate-skipped` |
+| Q3 | `_plan_rulings`: `wave_reach is _WAVE_REACH_ALL or key in wave_reach` → `wave_reach is not _WAVE_REACH_ALL and key in wave_reach` (the literal disjunct drop crashes on the bare sentinel instead) | `test_a_step_with_no_declared_wave_reach_refuses_every_closing_ruling` → `AssertionError: ('run-verify', None, None)` (the ruling planned at `run-verify`) |
+| Q4 | `_finding_history`: `log = _gate_history_rows(round_entry)` → `_guidance_log_rows(round_entry)` | `test_a_later_closing_ruling_supersedes_earlier_guidance_in_fixer_history` → `assert 'fix-with-guidance' == 'refuted'` |
+| R1 | `_merged_gate_rows`: dropped `rows.sort(key=_gate_seq_of)` (fixed channel order) | `test_a_later_owner_judgment_supersedes_an_earlier_same_round_closing_ruling` → `assert 'refuted' == 'fix-with-guidance'` |
+| R2 | `_fold_rulings`: dropped `row[GATE_SEQ_FIELD] = _next_gate_seq(state)` | the same test → `KeyError: 'gateSeq'` |
+| S1 | `_plan_rulings`: `if owner_class == …UNRECOGNIZED:` → `if False and …` | `test_a_live_ruling_on_a_ledgered_finding_refuses_an_unrecognized_ledger_owner` → `{…, 'ok': True, 'ruled': ['src/f00.py::unchecked index@L2'], …}` / `assert True is False`; the terminal twin → `assert 'ruling-target-unknown' == 'disposition-ledger-owner-unrecognized'` |
+
 Guarded-element set (brief + dispositions, declared before code): the in-order guidance render
 (B1), the widened fix-batch exclusion (B2), pending supersession (B3), the attempt allocator (B4),
 required provenance (B5), unique ids (B6), no Critical out of scope (B7), no ruling over an answered
