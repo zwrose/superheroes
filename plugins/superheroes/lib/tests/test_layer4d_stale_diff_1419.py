@@ -1362,7 +1362,8 @@ def test_no_certified_head_is_read_from_live_head():
     reads = sorted({n.args[0].value for n in ast.walk(rec) if isinstance(n, ast.Call)
                     and isinstance(n.func, ast.Attribute) and n.func.attr == "get" and n.args
                     and isinstance(n.args[0], ast.Constant)})
-    assert reads == ["reviewedDiffSha"], reads
+    # `config` is read only to refuse (a config `diffHead` records no head), never to supply one.
+    assert reads == ["config", "reviewedDiffSha"], reads
 
 
 def test_the_state_schema_versions_have_one_home():
@@ -1524,3 +1525,30 @@ def test_a_supplied_diff_head_never_reaches_the_certificate(tmp_path):
     assert state["terminal"] == "cannot-certify", state["certification"]
     assert "reviewed-head-unrecorded" in state["certification"]["reason"]
     assert state["certification"].get("certifiedHead") is None
+
+
+def test_a_resumed_state_carrying_a_config_diff_head_never_certifies(tmp_path):
+    """A session saved by the earlier driver kept a config `diffHead` beside the pair it copied
+    from it; the pair cannot be told from a caller-supplied one. Resumed, its clean finish
+    withholds `reviewed-head-unrecorded` and names no head, even though the pair is well-formed
+    and binds the reviewed bytes (red token: `converged` naming the supplied SHA)."""
+    import json as _json
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    TRD.enter_checkout(checkout)
+    head = _git(checkout, "rev-parse", "HEAD").strip()
+    state = RD.new_state(TRD._cfg(baseRef=base, headSha=head))
+    reviewed = state["reviewedDiff"]
+    assert isinstance(reviewed, str), state
+    pair = {"sha": head, "digest": RD.review_diff_digest(reviewed)}
+    state["config"]["diffHead"] = pair
+    state["reviewedDiffSha"], state["reviewedDiffDigest"] = pair["sha"], pair["digest"]
+    with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        _json.dump(state, fh)
+    with open(os.path.join(d, RR.META_FILE), "w", encoding="utf-8") as fh:
+        _json.dump({"headSha": head, "repoRoot": checkout, "sessionId": "s-config-head"}, fh)
+    payload = _drive_existing(d, TRD._responder())
+    assert payload["verdict"] == "cannot-certify", payload
+    assert "reviewed-head-unrecorded" in payload["certification"]["reason"], payload
+    assert payload["certification"].get("certifiedHead") is None

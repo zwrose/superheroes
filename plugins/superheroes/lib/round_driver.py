@@ -3984,7 +3984,12 @@ def _advance_reviewed_diff(state):
 
 def _recorded_review_head(state):
     """The SHA the reviewed diff was derived at, as `derive_review_diff` recorded it — the only
-    head a certificate may name. None when absent or malformed; there is no fallback."""
+    head a certificate may name. None when absent or malformed; there is no fallback. A state
+    carrying a config `diffHead` (saved by an earlier driver that took the pair from config)
+    records no head: its pair cannot be told from a caller-supplied one, so it withholds and a
+    fresh session recovers."""
+    if "diffHead" in (state.get("config") or {}):
+        return None
     sha = state.get("reviewedDiffSha")
     return sha if isinstance(sha, str) and _FULL_HEX_ID.fullmatch(sha) else None
 
