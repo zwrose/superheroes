@@ -1295,7 +1295,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** The probe-pending registration gate: a new model is dispatchable only on the
   `registration-probe` role while its row is probe-pending; `model_registry.py`'s
   `registration` field, the `ladder()` / `codex_pin_verdict` filters, and
-  `conformance_probe registration-probe` enforce it (`astra-probe` stays a legacy alias).
+  `conformance_probe registration-probe` enforce it (`astra-probe` stays a legacy alias; its retire condition is S23).
 - **Start date.** 2026-09-24.
 - **Condition.** Structural and re-arming: the gate holds whenever a registry row carries
   `registration: "probe-pending"`, and re-arms each time a new model is registered that way; with
@@ -1541,7 +1541,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   2026-09-19 — codex's result is a typed file on its native channel; the salvage tiers and the
   engaged-artifact upgrade never run for a native-channel run. Retired for cursor 2026-09-19 (layer
   3c) — same reason. The `forfeit-with-engaged-artifact` outcome stays in the outcome vocabulary
-  (results persisted before the retirement can carry it) and is not part of this retirement.
+  (results persisted before the retirement can carry it) and is not part of this retirement; its own
+  retire condition is S24.
 
 #### S3 — Dirty-tree probe
 
@@ -1967,6 +1968,46 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — the size rule's whole-deleted-file carve-out is a counting rule; the counter
   makes it mechanical rather than a by-hand reading of numstat.
+
+#### S23 — Legacy `astra-probe` compatibility
+
+- **Component.** Not a census row. The upgrade compatibility kept for stores written before the
+  probe's rename, all in `plugins/superheroes/lib/conformance_probe.py`: the dual read of the
+  pre-rename attempts ledger (`LEGACY_ATTEMPTS_NAME`, the `legacy + new` union in
+  `_read_registration_attempts`), the legacy claim path and its continuation (the legacy claim file,
+  the legacy prompt suffix, the legacy order-id prefix), the legacy claim filename the orphan sweep
+  accepts, and the `astra-probe` CLI alias. Cost: every change to claim handling must account for two
+  claim paths.
+- **Start date.** 2026-09-26.
+- **Condition.** Usage-based, 60 days: whether any project store still holds an
+  `astra-probe-attempts.json` or an open `astra-probe-claim-*` file, or any receipt shows the
+  `astra-probe` verb invoked. When neither is seen across the window, a proposal to the owner at a
+  gardening pass to delete the dual read, the legacy continuation, and the alias.
+- **Last demonstrated benefit.** unknown — no store has been observed reading through it yet.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — upgrade compatibility for stores written before the rename; the refusal
+  tokens themselves have no alias.
+
+#### S24 — `forfeit-with-engaged-artifact` outcome vocabulary and the salvage-valve paragraph
+
+- **Component.** Not a census row. The outcome reason `forfeit-with-engaged-artifact` that stays
+  after the salvage paths retired (see S2), and the "Salvage valve" paragraph in
+  `rubric/review-discipline.md`. Its readers: `lib/dispatch_outcome.py`, `lib/engine_dispatch.py`,
+  `lib/round_driver.py`, `lib/seat_canary.py`, `rubric/review-discipline.md`,
+  `skills/review-code/reference/auto-fix-loop.md`, `skills/review-code/reference/round-driver.md`,
+  `skills/workhorse/SKILL.md`, `skills/workhorse/reference/dispatch-mechanics.md`, and
+  `TRANSITION.md`. Cost: every outcome consumer keeps a branch for a reason no run mints.
+- **Start date.** 2026-09-26.
+- **Condition.** Usage-based, 60 days: whether any stored run result or journal read by a live
+  session still carries the reason. No run mints it, since the salvage paths that minted it are
+  retired, so a clean window yields a proposal to the owner at a gardening pass to delete the
+  vocabulary, its readers' branches, and the salvage-valve paragraph together.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — same reason family as S2; it carries forward from the salvage paths and
+  is not a new mechanism.
 
 
 ## The workaround-marker inventory

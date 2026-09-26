@@ -2877,7 +2877,9 @@ def test_astra_probe_continuation_uses_claimed_seat_after_cell_changes(tmp_path,
 
 # bite-axis: a legacy claim written before the seat-snapshot fix carries no `model` (the
 # field would read None). Continuing that claim keeps today's behavior — the freshly
-# resolved registry seat — because there is no snapshot to honor.
+# resolved registry seat — because there is no snapshot to honor. The claim is planted in
+# the pre-rename format at the legacy claim path, so the continuation keeps the legacy
+# order id and prompt suffix.
 def test_astra_probe_continuation_legacy_claim_without_snapshot_uses_current_seat(
         tmp_path, monkeypatch):
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
@@ -2885,27 +2887,77 @@ def test_astra_probe_continuation_legacy_claim_without_snapshot_uses_current_sea
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
     run_dir_real = os.path.realpath(run_dir)
+    wave = "wave-legacy"
 
-    # Simulate a legacy claim (written before claims recorded model/effort).
-    CP._write_registration_claim(ledger_dir, "wave-legacy", run_dir_real, model=None, effort=None)
+    # A legacy claim: pre-rename path, written before claims recorded model/effort.
+    legacy_claim_path = CP._legacy_claim_path(ledger_dir, wave)
+    claim = {"wave": wave, "runDir": run_dir_real, "claimedAt": "2026-01-01T00:00:00Z"}
+    with open(legacy_claim_path, "w", encoding="utf-8") as fh:
+        json.dump(claim, fh, separators=(",", ":"))
+        fh.write("\n")
 
     def fake_resolve(role, vendor, model, effort):
         return {"ok": True, "model_id": "gpt-6-sol", "effort": "high"}
 
     seats = []
+    calls = []
 
     def dispatch(**kwargs):
         seats.append(kwargs["seat"])
+        calls.append(kwargs)
         return _astra_terminal_findings([_astra_pass_finding()])
 
     monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
 
-    out, code = CP.registration_probe(repo, "wave-legacy", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, wave, run_dir, dispatch=dispatch)
     assert code == 0
     assert seats[0]["model"] == "gpt-6-sol"
     assert seats[0]["effort"] == "high"
     assert out["model"] == "gpt-6-sol"
     assert out["effort"] == "high"
+    order_id = calls[0]["order_id"]
+    prompt_path = calls[0]["prompt_path"]
+    assert order_id == "astra-probe-" + hashlib.sha256(wave.encode("utf-8")).hexdigest()[:12]
+    assert prompt_path.endswith(".astra-probe-prompt.md")
+
+
+# bite-axis: the same no-snapshot continuation for a claim in the current format at the
+# current claim path — the freshly resolved seat, under the current order id and suffix.
+def test_astra_probe_continuation_new_format_claim_without_snapshot_uses_current_seat(
+        tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    run_dir_real = os.path.realpath(run_dir)
+    wave = "wave-new-format"
+
+    CP._write_registration_claim(ledger_dir, wave, run_dir_real, model=None, effort=None)
+
+    def fake_resolve(role, vendor, model, effort):
+        return {"ok": True, "model_id": "gpt-6-sol", "effort": "high"}
+
+    seats = []
+    calls = []
+
+    def dispatch(**kwargs):
+        seats.append(kwargs["seat"])
+        calls.append(kwargs)
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
+
+    out, code = CP.registration_probe(repo, wave, run_dir, dispatch=dispatch)
+    assert code == 0
+    assert seats[0]["model"] == "gpt-6-sol"
+    assert seats[0]["effort"] == "high"
+    assert out["model"] == "gpt-6-sol"
+    assert out["effort"] == "high"
+    order_id = calls[0]["order_id"]
+    prompt_path = calls[0]["prompt_path"]
+    assert order_id == (
+        "registration-probe-" + hashlib.sha256(wave.encode("utf-8")).hexdigest()[:12])
+    assert prompt_path.endswith(".registration-probe-prompt.md")
 
 
 def test_astra_probe_owner_proposal_on_third_miss(tmp_path, monkeypatch):
@@ -3090,7 +3142,8 @@ def test_astra_probe_orphan_claim_keeps_its_own_seat_model(tmp_path, monkeypatch
 
 
 # bite-axis: a legacy claim written before claims carried a model snapshot settles as
-# explicitly unrecorded rather than being attributed to whatever cell resolves at settle time
+# explicitly unrecorded rather than being attributed to whatever cell resolves at settle time.
+# The claim is planted in the pre-rename format at the legacy claim path.
 def test_astra_probe_orphan_legacy_claim_without_model_settles_unrecorded(tmp_path, monkeypatch):
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
     repo = _repo(tmp_path)
@@ -3099,6 +3152,46 @@ def test_astra_probe_orphan_legacy_claim_without_model_settles_unrecorded(tmp_pa
     claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     old_wave = "wave-legacy"
     old_run = str(tmp_path / "legacy-run")
+    os.makedirs(old_run)
+    legacy_claim_path = CP._legacy_claim_path(ledger_dir, old_wave)
+    legacy_claim = {"wave": old_wave, "runDir": old_run, "claimedAt": claimed_iso}
+    with open(legacy_claim_path, "w", encoding="utf-8") as fh:
+        json.dump(legacy_claim, fh, separators=(",", ":"))
+        fh.write("\n")
+    new_run = str(tmp_path / "new-run")
+    os.makedirs(new_run)
+
+    def resolve_current(role, vendor, model, effort):
+        return {"ok": True, "model_id": "model-current", "effort": "effort-current"}
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", resolve_current)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.registration_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
+    assert code == 0
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
+    orphan = next(a for a in attempts if a.get("wave") == old_wave)
+    assert orphan["model"] == CP.REGISTRATION_CLAIM_UNRECORDED_MODEL
+    assert orphan["model"] != "model-current"
+    assert orphan["effort"] is None
+    assert orphan["runDir"] == legacy_claim["runDir"]
+    assert os.path.isfile(CP._legacy_claim_path(ledger_dir, old_wave))
+    assert not os.path.exists(CP._registration_claim_path(ledger_dir, old_wave))
+
+
+# bite-axis: the same no-snapshot orphan, planted in the current format at the current claim
+# path, also settles as explicitly unrecorded.
+def test_astra_probe_orphan_new_format_claim_without_model_settles_unrecorded(
+        tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    claimed_at = now - timedelta(seconds=CP.REGISTRATION_CLAIM_ABANDON_SECONDS + 60)
+    claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    old_wave = "wave-new-format-orphan"
+    old_run = str(tmp_path / "orphan-run")
     os.makedirs(old_run)
     _write_astra_claim_at(ledger_dir, old_wave, old_run, claimed_iso)
     new_run = str(tmp_path / "new-run")
@@ -3119,6 +3212,7 @@ def test_astra_probe_orphan_legacy_claim_without_model_settles_unrecorded(tmp_pa
     assert orphan["model"] == CP.REGISTRATION_CLAIM_UNRECORDED_MODEL
     assert orphan["model"] != "model-current"
     assert orphan["effort"] is None
+    assert orphan["runDir"] == old_run
 
 
 def test_astra_probe_miss_string_line_not_matched(tmp_path, monkeypatch):
@@ -3678,16 +3772,26 @@ def test_registration_probe_legacy_claim_continues_in_same_run_dir(tmp_path, mon
     assert refreshed.get("lastSeenAt")
 
 
+# bite-axis: a fresh wave dispatches under the current order-id prefix and prompt suffix,
+# pinned as spelled-out literals (a prefix constant drifting back to the old name goes red)
 def test_registration_probe_new_writes_use_registration_names(tmp_path, monkeypatch):
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
 
-    def dispatch(**_kwargs):
+    calls = []
+
+    def dispatch(**kwargs):
+        calls.append(kwargs)
         return _astra_terminal_findings([])
 
     CP.registration_probe(repo, "wave-fresh", run_dir, dispatch=dispatch)
+    prompt_path = calls[0]["prompt_path"]
+    order_id = calls[0]["order_id"]
+    assert prompt_path.endswith(".registration-probe-prompt.md")
+    assert order_id == (
+        "registration-probe-" + hashlib.sha256("wave-fresh".encode("utf-8")).hexdigest()[:12])
     assert os.path.isfile(CP._registration_attempts_path(ledger_dir))
     assert not os.path.isfile(os.path.join(ledger_dir, CP.LEGACY_ATTEMPTS_NAME))
     claim_names = [
