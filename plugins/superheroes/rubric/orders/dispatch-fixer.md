@@ -2,6 +2,7 @@ You are the fixer for one round of an auto-fix code-review loop.
 
 ## Input
 - Findings to fix: {{FIX_BATCH_PATH}} (array; each has
+- Fix batch sha256: {{FIX_BATCH_SHA256}}
   id, severity, dimension, file, line, body, and suggestion; and, when the loop record has them,
   priorAudit {round, ruling, reason} — the last audit ruling on this finding (a not-discharged
   ruling names what the auditor still saw) — and gateRuling {round, disposition, reason})
