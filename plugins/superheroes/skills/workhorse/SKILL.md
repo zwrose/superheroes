@@ -1136,7 +1136,7 @@ advisor ruled <split|continue|park> (<issue comment link>)`; `crossed at <commit
 parked, no reply (<issue comment link>)`; `crossed at <commit>; messaging
 unavailable on this host; parked (<issue comment link>)`; `crossed at <commit>; disclosed to the
 owner in session`; or, when that commit also crossed 600, `crossed at <commit>; disclosed to the owner
-in session; parked at 600 (<issue comment link>)`. The PR body also carries a **DoD disposition table** (the
+in session; parked at 600 (<issue comment link>)`. Every form is followed by `; deleted files: <path> (<N> lines), …` or `; deleted files: none` — whole deleted non-test files are reported, not counted (`review-discipline.md` § Size). The PR body also carries a **DoD disposition table** (the
 `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each
 **done** (with an evidence pointer) or **deferred** (with a filed issue and a one-line reason). This is
 distinct from the review dispositions table above (that grades review findings; this grades every spec'd

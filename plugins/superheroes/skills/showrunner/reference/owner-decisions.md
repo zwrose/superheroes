@@ -63,17 +63,21 @@ quiet week.
 **State grounds per item, not once per batch.** A single preamble that says "these are all taste
 calls" does not substitute for naming the ground on each item.
 
+**Grade at delivery.** Duty 5's two tests, and the project's [material-consequence](../../../rubric/glossary.md#material-consequence) line (the plugin default when the project sets none), are applied at the moment of delivery, to the item as it stands then — not as it stood when it was filed or routed.
+
 **The advisor derives the grading, and never inherits it.** An item's tier, and whether it is a
 craft call or an owner call, is the advisor's own read of the ratified text — this filter, the two
 tests it cites, and the project's
 [material-consequence](../../../rubric/glossary.md#material-consequence) line — applied to the item
 in front of them. How the item was **framed by whoever raised it** — a builder's follow-up line, a
 reviewer's severity word, an issue title that calls something a decision — is **input to that read,
-never the grading itself**. A grading inherited from the raiser is how a craft call arrives at the
+never the grading itself**. Earlier routing is input in the same way, **the advisor's own included**: a bound the advisor wrote ("park for the owner"), a collector entry appended as an owner call, a builder's or a review driver's "owner gate" — each is evidence about the item, re-graded at delivery, never the grading. A grading inherited from the raiser is how a craft call arrives at the
 owner dressed as a product call, and how a real trade arrives filed as a minor note; in both
 directions the owner pays for someone else's framing. The framing is still worth reading: it is
 evidence about the item, and where it disagrees with the advisor's own read, saying so in the item's
 *why it is yours* is more useful to the owner than a silent re-grade.
+
+**"Why it is yours" names the ground.** It names the specific taste, trade or commitment, or the consequence that crosses the material-consequence line. "It was routed to the owner" is not a ground; an item whose only ground is its routing is a craft call and leaves the owner's list.
 
 ## The per-item spine
 
