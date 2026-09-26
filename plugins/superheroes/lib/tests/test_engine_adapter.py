@@ -28,7 +28,6 @@ def _seat_json(vendor, model, effort, role="reviewer"):
     return json.dumps({"vendor": vendor, "model": model, "effort": effort, "role": role})
 
 
-
 def _load_rfs():
     spec = importlib.util.spec_from_file_location(
         "review_findings_schema", os.path.join(_HERE, "..", "review_findings_schema.py"))
@@ -2323,8 +2322,6 @@ def test_parse_result_nonceless_callers_unchanged_on_base_example():
     assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
 
 
-
-
 def test_review_payload_shape_echo_nonce_second_path_agrees_with_parse():
     # axis: review_payload_shape bare-array branch carries echo_nonce like parse_result
     nonce = "shape-nonce"
@@ -2670,8 +2667,6 @@ def test_hollow_member_shape_tokens_minted_only_via_constructor():
         if line not in allowed
     ]
     assert stray == []
-
-
 
 
 def test_parse_result_review_rejected_investigated_path_scrubs_secret():
@@ -3214,22 +3209,6 @@ def test_engagement_read_never_returns_inert():
         outcomes.add(EA.engagement_read(res))
     assert outcomes <= {"engaged", "unknown"}
     assert "inert" not in outcomes
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_sanitized_view_receipt_binds_producer_diff_keys(tmp_path):
