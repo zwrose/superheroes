@@ -811,7 +811,7 @@ without a tool call.
   reconciliation is closed for that scope. The **timeout** contract stays the skill's; the **channel**
   duty attaches to what the builder itself launches.
 - **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
-  was launched by the advisor's launcher — stamp the builder liveness heartbeat per CONVENTIONS §15:
+  was launched by the advisor's launcher — stamp the builder heartbeat per CONVENTIONS §15:
   one `working` stamp at intake (it proves the store is writable), `blocked` when blocked on
   something only the owner/advisor can clear, and `parked` / `handback` only after the durable
   issue/PR evidence exists. Stamp with

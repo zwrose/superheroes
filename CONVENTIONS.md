@@ -1402,11 +1402,12 @@ only** (the existing identity rule) — was written within
 transcript, so it would alert `lane-stale` (fail toward alert) where a stamp used to vouch for it;
 today's launcher spawns only `claude -p` builders.
 
-**Fail-closed direction.** A missing, unreadable, corrupt, schema-skewed, non-finite or **future-dated**
-heartbeat classifies `unknown`, never `nonterminal` or `terminal`. A ledger failure makes the sweep
-**refuse at the top level** rather than return an empty, healthy-looking result. The sweep **never
-asserts that a lane is dead** — a heartbeat cannot prove death. An older record that still carries the retired next-stamp promise field loads normally; the field is
-ignored.
+**Fail-closed direction.** A missing, unreadable, corrupt, schema-skewed, non-finite or
+**future-dated** heartbeat classifies `unknown`, never `nonterminal` or `terminal`. A ledger
+failure makes the sweep **refuse at the top level** rather than return an empty,
+healthy-looking result. The sweep **never asserts that a lane is dead** — a heartbeat cannot
+prove death. An older record that still carries the retired next-stamp promise field loads
+normally; the field is ignored.
 
 **Accepted storage bound.** The store keeps **one small JSON file per launch, retained indefinitely**
 — nothing reaps them, and the sweep ignores launches the ledger no longer reports live, so those
