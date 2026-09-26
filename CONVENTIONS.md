@@ -79,13 +79,9 @@ still produced by The Architect.
   launch prompt (command + issue pointer; durable build context lives in the issue), vets every
   PR from its artifacts against the
   issue/spec and the build brief, owns board hygiene and release coordination, keeps
-  durable memory. **Never builds.** The never-delegable act is **approval** — the owner's
-  scoped word in chat after the PRs are talked through. **Merge-command execution** is
-  delegable inside that word: the advisor executes after the lane's review and verification
-  evidence, CI green on the recorded head, and a current branch, and reports each merge in
-  the thread that gave the word. **A force-push proceeds on its own word once the reason is stated. A release or
-  publication never rides inside a merge word; it stays the owner's click unless
-  handed over in the moment with a word for that release.** The seat moves between sessions by
+  durable memory. **Never builds.** Approval stays the owner's — the merge policy (what
+  the owner's word covers and what executing inside it takes) is stated once, in
+  `skills/showrunner/SKILL.md` duty 6. The seat moves between sessions by
   `/superheroes:showrunner-handoff` (deliberate handover before the seat goes dark) and
   `/superheroes:showrunner-resume` (pick up durable state); a new seat runs resume first.
 - **Workhorse** — the builder session: issue-scoped, disposable, parallelizable. Takes a
@@ -755,9 +751,8 @@ not an oversight.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run
 workspace-write, confined to the builder's own worktree, with **no remote authority** —
-the band owns every push / PR / merge, and an external engine never bypasses that. The
-owner-approval rule (`PHILOSOPHY.md` promise 1) governs every merge: approval is the
-owner's scoped word, and executing inside it is the advisor's act. A second
+the band owns every push / PR / merge, and an external engine never bypasses that. Every
+merge follows the merge policy in `skills/showrunner/SKILL.md` duty 6. A second
 Claude Code hook (`LEDGERS.md` §1.1) denies git commands that would irrecoverably
 discard uncommitted worktree content — the checkout-revert wipe class every implementer
 and mutation-probe path can trigger. All external

@@ -8,17 +8,19 @@
 
 # The merge train
 
-What "green" means for a train of parallel lanes, and where a union fix lands. Read this when you
-drive a train. The **showrunner** charter's duty 6 carries the delegation boundary and the
-preconditions that never waive; this file carries the train's own two rules.
+What "green" means for a train of parallel lanes, where a union fix lands, and how a stack merges.
+Read this when you drive a train. The merge policy — what the owner's word covers, who may merge,
+and the rules for force-push and release — is stated once, in duty 6 of
+`skills/showrunner/SKILL.md` ("Coordinate releases and drive the merge train"); this file carries
+only the recipes for executing inside it.
 
 ## A merge train's "green" includes post-merge `main` CI
 
-Per-lane green on the original parallel heads does not test their union — two per-lane-green PRs went
-red on the union at typecheck. Keeping each remaining lane **branch-current** exposes much of that
-before its merge (its own CI then builds current `main` plus its change), and is still not a
-substitute: a tree that is green pre-merge can go red post-merge on the identical content, as the
-next rule's field case shows. The train is green when **`main`'s own post-merge run** is green on the
+Per-lane green on the original parallel heads does not test their union — two PRs that are each
+green alone can go red together, at typecheck or anywhere else. Keeping each remaining lane
+**branch-current** exposes much of that before its merge (its own CI then builds current `main` plus
+its change), and is still not a substitute: a tree that is green pre-merge can go red post-merge on
+the identical content, as the next rule's post-merge-only case shows. The train is green when **`main`'s own post-merge run** is green on the
 merged head — watched the way the vet watches any run, selected by **workflow name plus head sha**,
 never `--limit 1`.
 
@@ -37,17 +39,14 @@ control probe. It does not reclassify the PR. The containing lane keeps its own 
 its advisor vet.
 
 A red on the train is a per-lane green that goes red on the union or on `main`'s post-merge run.
-When the fix is craft with no
-[material consequence](../../../rubric/glossary.md#material-consequence), fix it under the word
-already given: the
-disclosed integration commit on the last open PR, or the disclosed follow-up PR once the last lane
-has merged, rides the scope and is reported in the thread like any merge. That follow-up PR is the
-one exception to the rule that a PR opened after the word asks again, and it holds only while the
-fix is craft with no material consequence. A fix with a material consequence asks.
+Whether its fix rides the word already given is duty 6's red-train exception, which turns on the
+fix being craft with no material consequence (`rubric/glossary.md#material-consequence`); when it
+rides, land it as the disclosed integration commit on the last open PR, or as the disclosed
+follow-up PR once the last lane has merged, and report it in the thread like any merge.
 
-**Field case:** a test green on the identical tree pre-merge went **deterministically** red post-merge
-in CI only (coverage-instrumented runners lose an assertion race); a disclosed integration commit on
-the last open PR's branch is what closed it.
+**The post-merge-only red.** A test green on the identical tree pre-merge can go
+**deterministically** red post-merge in CI only — coverage-instrumented runners, for one, can lose
+an assertion race. Close it with a disclosed integration commit on the last open PR's branch.
 
 ## Merging a stack
 
@@ -99,8 +98,7 @@ saw. Nothing in the tooling closes that gap; this rule does.
    never a click.** The click list names whole stacks with their remaining layers, and an incomplete
    stack is never listed. New scope that a tripwire or a vet discovers **on that feature** joins the
    stack as a layer rather than becoming a follow-on, while a finding outside the feature's
-   owner-ratified scope stays a follow-up under the existing scope rule. The owner's standing rule is
-   "keep stacks stacks". The doctrine home is `rubric/native-stacks.md` § *How a stack merges*.
+   owner-ratified scope stays a follow-up under the existing scope rule. The doctrine home is `rubric/native-stacks.md` § *How a stack merges*.
 
    This rule and items 2 and 3 govern different moments, so do not read one against the other. This
    rule governs what the advisor puts in front of the owner, and an incomplete stack never goes
@@ -166,6 +164,6 @@ saw. Nothing in the tooling closes that gap; this rule does.
 ## Selecting the run to watch
 
 Both rules above turn on watching the right run, so select it by **workflow name plus head sha** —
-never `gh run list --limit 1`, which returns whichever workflow ran latest on that branch and has
-already produced a false green. The canonical statement is field 1 of the vet receipt's spine, in
+never `gh run list --limit 1`, which returns whichever workflow ran latest on that branch, so it can
+report another workflow's green as the one you are watching. The canonical statement is field 1 of the vet receipt's spine, in
 `skills/showrunner/reference/vet-receipt.md`.
