@@ -158,7 +158,15 @@ def _advancing_monotonic(step=0.1):
     return mono
 
 
-_WATCHER_CLOCK_CALL_BUDGET = 10_000
+# Reads allowed between two sleeps that advance the clock. One real tick reads it
+# a handful of times, so a loop that passes this many reads without time moving
+# is spinning on a frozen clock; the bound is small so it fires within seconds
+# even though each tick does real ledger and git work.
+_WATCHER_CLOCK_STALL_READS = 50
+
+
+class WatcherClockStalled(AssertionError):
+    """The watcher kept reading the virtual clock while no sleep advanced it."""
 
 
 class _WatcherClock:
@@ -170,20 +178,26 @@ class _WatcherClock:
 
     def __init__(self):
         self.now = 0.0
-        self.calls = 0
+        self.reads_since_advance = 0
+        self.stall_reads = _WATCHER_CLOCK_STALL_READS
+        self.stalled = False
 
     def monotonic(self):
-        self.calls += 1
-        if self.calls > _WATCHER_CLOCK_CALL_BUDGET:
-            raise AssertionError(
-                f"wave_watch read the virtual clock {_WATCHER_CLOCK_CALL_BUDGET} "
-                "times; a sleep that never advances it hangs the watcher"
+        self.reads_since_advance += 1
+        if self.stalled or self.reads_since_advance > self.stall_reads:
+            # Sticky: an arm that swallows the first raise meets it on every read.
+            self.stalled = True
+            raise WatcherClockStalled(
+                f"wave_watch read the virtual clock {self.stall_reads} "
+                "times without a sleep advancing it; a sleep that never advances "
+                "it hangs the watcher"
             )
         return self.now
 
     def sleep(self, duration):
         if duration > 0:
             self.now += duration
+            self.reads_since_advance = 0
 
 
 class _WatcherTimeModule:
@@ -233,10 +247,32 @@ def test_unclocked_arm_runs_to_its_deadline_on_the_virtual_clock(
     assert watcher_clock.now == 5.0
 
 
-def test_watcher_clock_budget_fails_a_non_advancing_loop(watcher_clock):
-    with pytest.raises(AssertionError, match="never advances"):
-        for _ in range(_WATCHER_CLOCK_CALL_BUDGET + 1):
+def test_watcher_clock_stall_guard_resets_on_each_advancing_sleep(watcher_clock):
+    for _ in range(3):
+        for _ in range(_WATCHER_CLOCK_STALL_READS):
             watcher_clock.monotonic()
+        watcher_clock.sleep(1)
+    watcher_clock.sleep(0)
+    for _ in range(_WATCHER_CLOCK_STALL_READS):
+        watcher_clock.monotonic()
+    with pytest.raises(WatcherClockStalled, match="never advances"):
+        watcher_clock.monotonic()
+
+
+def test_arm_whose_sleep_never_advances_fails_promptly_and_says_why(
+    tmp_path, monkeypatch, watcher_clock,
+):
+    # The authoring slip the guard exists for: a sleep that forgets to move time.
+    monkeypatch.setattr(watcher_clock, "sleep", lambda duration: None)
+    monkeypatch.setattr(ww.time, "sleep", watcher_clock.sleep)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.watch_arm(
+        repo, "batch-982", max_seconds=5, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["reason"] == ww.REFUSAL_INTERNAL_ERROR
+    assert result["detail"] == "WatcherClockStalled"
+    assert watcher_clock.stalled
 
 
 def _fake_gh_cli_env(tmp_path):
@@ -3283,8 +3319,11 @@ def test_equal_batch_ids_different_repos_do_not_share_lock(tmp_path, monkeypatch
     ww._release_loop_lock(fd_b)
 
 
-def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch):
+def test_passed_over_cap_keeps_recent_hundred(tmp_path, monkeypatch, watcher_clock):
     repo = _valid_repo_for_loop(tmp_path, monkeypatch)
+    # The scripted arms return at once and never sleep, so the loop re-arms
+    # PASSED_OVER_CAP + 2 times on a frozen clock by design; allow its reads.
+    watcher_clock.stall_reads = 2 * (ww.PASSED_OVER_CAP + 2)
     benign = {
         "ok": True,
         "event": "stack-state-changed",
