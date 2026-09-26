@@ -59,8 +59,7 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    members only at the top of an existing stack). When that contiguous span is complete, whichever
    lane hands back with it newly satisfied runs `gh stack link` with pull request numbers only,
    bottom to top through that span (`gh stack link <lower PR> <upper PR>` and further PR numbers when
-   the span has more than two layers). Detail: workhorse charter, Building a layer of a
-   stack. Once the stack exists, later layers carry the gated premise.
+   the span has more than two layers). Once the stack exists, later layers carry the gated premise.
 5. **Unchanged.** The stack is still the unit of merge: one `gh stack merge`, only when every
    planned layer is vetted ([How a stack merges](#how-a-stack-merges)). The launcher's refusal of a
    second live launch for one issue stays as it is. It is what lets layers run in parallel, since
