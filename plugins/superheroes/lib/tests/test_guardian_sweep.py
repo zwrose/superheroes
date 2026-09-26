@@ -2,8 +2,10 @@ import ast
 import json
 import os
 import re
+import subprocess
 
 import guardian_lens as gl
+import round_driver as rd
 import guardian_report as gr
 import guardian_store as gs
 import guardian_sweep as gsw
@@ -3130,3 +3132,126 @@ def test_stack_tags_deeply_nested_package_json_no_crash(tmp_path):
     (tmp_path / "package.json").write_text('{"x":' * 1100 + '0' + '}' * 1100)
     fact = _stack_tags_fact(tmp_path, repo)
     assert "react" in fact["receipt"]["unverifiable"]
+
+
+def _git(repo, *args):
+    subprocess.run(["git", "-C", repo] + list(args), check=True, capture_output=True)
+
+
+def _head_sha(repo):
+    return subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+
+
+def _setup_origin_main(repo):
+    head = _head_sha(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/main", head)
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+
+def test_verify_command_binds_base_ref_to_origin_head(tmp_path):
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    head = _head_sha(repo)
+    assert recorded == ["echo --base %s" % head]
+    assert gsw.VERIFY_BASE_TOKEN not in recorded[0]
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "ok"
+
+
+def test_verify_command_binds_base_ref_to_gh_merge_base(tmp_path):
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    main_sha = _head_sha(repo)
+    (tmp_path / "other.txt").write_text("other\n")
+    _git(repo, "add", "other.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "other")
+    other_sha = _head_sha(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/other", other_sha)
+    branch = subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+    _git(repo, "config", "branch.%s.gh-merge-base" % branch, "other")
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    assert main_sha != other_sha
+    assert recorded == ["echo --base %s" % other_sha]
+    assert main_sha not in recorded[0]
+
+
+def test_verify_command_unresolvable_base_ref_is_not_run(tmp_path):
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class R:
+            returncode = 0
+            stdout = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    assert calls == []
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "not-run"
+    assert gsw.VERIFY_BASE_TOKEN in fact["receipt"]
+
+
+def test_verify_base_token_literal_matches_round_driver():
+    assert gsw.VERIFY_BASE_TOKEN == "{baseRef}"
+    assert rd.VERIFY_BASE_TOKEN == "{baseRef}"
+
+
+def test_coverage_entry_with_tool_but_no_lens_is_reported(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {
+        "coverage": [
+            {"tool": "renovate", "path": "renovate.json"},
+            {"lens": "deps", "tool": "dependabot", "path": ".github/dependabot.yml"},
+        ],
+    })
+    out = gsw.verify_config(repo, root=root, needed_facts=set())
+    fact = next(f for f in out["facts"] if f["fact"] == "recorded-coverage")
+    assert fact["status"] == "unbound"
+    assert fact["receipt"]["unbound"] == [{
+        "token": "coverage-entry-no-lens",
+        "tool": "renovate",
+        "path": "renovate.json",
+    }]
+
+
+def test_coverage_entries_all_bound_stay_present(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {
+        "coverage": [
+            {"lens": "deps", "tool": "dependabot", "path": ".github/dependabot.yml"},
+        ],
+    })
+    out = gsw.verify_config(repo, root=root, needed_facts=set())
+    fact = next(f for f in out["facts"] if f["fact"] == "recorded-coverage")
+    assert fact["status"] == "present"

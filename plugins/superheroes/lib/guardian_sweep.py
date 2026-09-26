@@ -41,6 +41,10 @@ _DEFAULT_VERIFY_BUDGET_SECONDS = 300
 # (first-seed lens count × this).
 _DEFAULT_FIRST_BASELINE_VALIDATE_MAX = 10
 _VERIFY_STDOUT_CAP = 8 * 1024
+# Same token contract as round_driver.VERIFY_BASE_TOKEN — bind to a pinned commit only.
+VERIFY_BASE_TOKEN = "{baseRef}"
+_FULL_HEX_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+COVERAGE_NO_LENS_TOKEN = "coverage-entry-no-lens"
 # Aggregate budget across all filed-issue `gh issue view` lookups in one collect.
 # Per-call timeout is capped so one hung call cannot consume the whole budget alone.
 _ISSUE_RESOLVE_BUDGET_SECONDS = 30.0
@@ -270,6 +274,59 @@ def _bound_stdout(text):
     return text[-_VERIFY_STDOUT_CAP:]
 
 
+def _resolve_implicit_pr_base(cwd):
+    """Resolve implicit PR base from local git — mirrors handback_gate._resolve_implicit_pr_base."""
+    branch = store_core.run_git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    if branch and branch != "HEAD":
+        merge_base = store_core.run_git(
+            cwd, "config", "--get", "branch.%s.gh-merge-base" % branch)
+        if merge_base:
+            return merge_base
+    sym = store_core.run_git(cwd, "symbolic-ref", "refs/remotes/origin/HEAD")
+    if sym:
+        ref = sym.strip()
+        prefix = "refs/remotes/origin/"
+        if ref.startswith(prefix):
+            return ref[len(prefix):]
+    return None
+
+
+def _pin_name_to_commit(cwd, name):
+    """Pin a branch name to a full commit id (origin/<name> first, then <name>)."""
+    for candidate in ("origin/%s" % name, name):
+        out = store_core.run_git(
+            cwd, "rev-parse", "--verify", "--quiet", "%s^{commit}" % candidate)
+        if out is None:
+            continue
+        pin = out.strip().lower()
+        if _FULL_HEX_ID.fullmatch(pin):
+            return pin
+    return None
+
+
+def _bind_verify_base_ref(cwd):
+    """Return (pinned_commit, None) or (None, reason) for verify-command binding."""
+    name = _resolve_implicit_pr_base(cwd)
+    if not name:
+        return None, "no branch gh-merge-base and origin/HEAD does not resolve"
+    pin = _pin_name_to_commit(cwd, name)
+    if pin is None:
+        return None, "%s does not resolve to a commit" % name
+    return pin, None
+
+
+def _coverage_entry_unbound(entry):
+    if not isinstance(entry, dict):
+        return False
+    tool = entry.get("tool")
+    if not isinstance(tool, str) or not tool:
+        return False
+    lens = entry.get("lens")
+    if isinstance(lens, str) and lens:
+        return False
+    return True
+
+
 def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
     """Trust-but-verify the four FACTS. `run` is injectable for tests.
 
@@ -320,44 +377,81 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
         else:
             stdout = ""
             duration = None
-            try:
-                t0 = time.monotonic()
-                r = run(vcmd, shell=True, cwd=cwd, capture_output=True, text=True,
-                        timeout=budget)
-                duration = time.monotonic() - t0
-                stdout = _bound_stdout(getattr(r, "stdout", None) or "")
-                if r.returncode == 0:
-                    status, receipt = "ok", "%s → exit 0" % vcmd
+            if VERIFY_BASE_TOKEN in vcmd:
+                # bite-proof axis: {baseRef} is bound to a pinned commit or the command does not run.
+                pin, why = _bind_verify_base_ref(cwd)
+                if pin is None:
+                    receipt = (
+                        "verify command not run: placeholder %s unresolved (%s)"
+                        % (VERIFY_BASE_TOKEN, why))
+                    verify_result = {
+                        "status": "not-run",
+                        "receipt": receipt,
+                        "stdout": "",
+                        "durationSeconds": None,
+                    }
+                    facts.append({
+                        "fact": "verify-command",
+                        "status": "not-run",
+                        "receipt": receipt,
+                    })
                 else:
-                    status, receipt = "failed", "%s → exit %d" % (vcmd, r.returncode)
-            except subprocess.TimeoutExpired as exc:
-                duration = budget
-                stdout = _bound_stdout(
-                    (getattr(exc, "stdout", None) or "")
-                    if isinstance(getattr(exc, "stdout", None), str)
-                    else "")
-                status, receipt = "not-collected", "%s → timeout" % vcmd
-            except (OSError, subprocess.SubprocessError) as exc:
-                status, receipt = "not-collected", "%s → %s" % (vcmd, exc)
+                    vcmd = vcmd.replace(VERIFY_BASE_TOKEN, pin)
+            if not any(f.get("fact") == "verify-command" for f in facts):
+                try:
+                    t0 = time.monotonic()
+                    r = run(vcmd, shell=True, cwd=cwd, capture_output=True, text=True,
+                            timeout=budget)
+                    duration = time.monotonic() - t0
+                    stdout = _bound_stdout(getattr(r, "stdout", None) or "")
+                    if r.returncode == 0:
+                        status, receipt = "ok", "%s → exit 0" % vcmd
+                    else:
+                        status, receipt = "failed", "%s → exit %d" % (vcmd, r.returncode)
+                except subprocess.TimeoutExpired as exc:
+                    duration = budget
+                    stdout = _bound_stdout(
+                        (getattr(exc, "stdout", None) or "")
+                        if isinstance(getattr(exc, "stdout", None), str)
+                        else "")
+                    status, receipt = "not-collected", "%s → timeout" % vcmd
+                except (OSError, subprocess.SubprocessError) as exc:
+                    status, receipt = "not-collected", "%s → %s" % (vcmd, exc)
 
-            verify_result = {
-                "status": status,
-                "receipt": receipt,
-                "stdout": stdout,
-                "durationSeconds": duration,
-            }
-            # Trust boundary: raw verify stdout stays local to verify_result for the
-            # vitals parser. Never leak it into factVerdicts / the model-facing bundle.
-            facts.append({
-                "fact": "verify-command",
-                "status": status,
-                "receipt": receipt,
-                "durationSeconds": duration,
-            })
+                verify_result = {
+                    "status": status,
+                    "receipt": receipt,
+                    "stdout": stdout,
+                    "durationSeconds": duration,
+                }
+                # Trust boundary: raw verify stdout stays local to verify_result for the
+                # vitals parser. Never leak it into factVerdicts / the model-facing bundle.
+                facts.append({
+                    "fact": "verify-command",
+                    "status": status,
+                    "receipt": receipt,
+                    "durationSeconds": duration,
+                })
 
     # 2. recorded-coverage
     cov = config.get("coverage") or []
-    if cov:
+    # bite-proof axis: a tool-named coverage entry with no lens is reported.
+    unbound_cov = []
+    for entry in cov:
+        if _coverage_entry_unbound(entry):
+            unbound_cov.append({
+                "token": COVERAGE_NO_LENS_TOKEN,
+                "tool": entry["tool"],
+                "path": entry.get("path")
+                if isinstance(entry.get("path"), str) else None,
+            })
+    if unbound_cov:
+        facts.append({
+            "fact": "recorded-coverage",
+            "status": "unbound",
+            "receipt": {"entries": cov, "unbound": unbound_cov},
+        })
+    elif cov:
         facts.append({
             "fact": "recorded-coverage",
             "status": "present",
