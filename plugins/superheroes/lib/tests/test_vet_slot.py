@@ -311,7 +311,7 @@ def test_write_refuses_unclosed_fence_in_slot(slot_file):
     assert fake.edit_calls() == []
 
 
-# --- HTML comments open only at the start of a line (#1448, vet 315 probe 6) --------------
+# --- HTML comments open only at the start of a line ---
 
 RECEIPT_MID_LINE_CODE_SPAN = RECEIPT.replace(
     "- FU1: filed #12", "- FU1: filed #12 (see `<!--` in the diff)")
@@ -328,7 +328,7 @@ def test_receipt_mid_line_code_span_opener_above_marker_still_reads(verb, slot_f
     """Edge 1: a `<!--` inside an inline code span in a receipt line above the marker."""
     fake = _ok_fake(receipt=RECEIPT_MID_LINE_CODE_SPAN)
     result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
-    assert result["ok"] is True
+    assert result["ok"] is True, result
     assert result["followups"] == ["FU1", "FU2"]
 
 
@@ -337,7 +337,7 @@ def test_receipt_mid_line_bare_opener_above_marker_still_reads(verb, slot_file):
     """Edge 2: a bare `<!--` in a receipt line above the marker."""
     fake = _ok_fake(receipt=RECEIPT_MID_LINE_BARE)
     result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
-    assert result["ok"] is True
+    assert result["ok"] is True, result
     assert result["followups"] == ["FU1", "FU2"]
 
 
@@ -346,7 +346,7 @@ def test_body_mid_line_code_span_opener_above_marker_still_reads(verb, slot_file
     """Edge 3: a `<!--` inside an inline code span in build-record prose above the marker."""
     fake = _ok_fake(body=BODY_MID_LINE_CODE_SPAN)
     result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
-    assert result["ok"] is True
+    assert result["ok"] is True, result
     assert result["followups"] == ["FU1", "FU2"]
 
 
@@ -355,7 +355,7 @@ def test_body_mid_line_bare_opener_above_marker_still_reads(verb, slot_file):
     """Edge 4: a bare `<!--` in build-record prose above the marker."""
     fake = _ok_fake(body=BODY_MID_LINE_BARE)
     result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
-    assert result["ok"] is True
+    assert result["ok"] is True, result
     assert result["followups"] == ["FU1", "FU2"]
 
 
