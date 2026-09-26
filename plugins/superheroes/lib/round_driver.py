@@ -2232,7 +2232,7 @@ def _record_adapter_provenance(state, artifact, phase):
 
 
 def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None,
-          verified_head_resolution=None):
+          verified_head_resolution=None, head_diff_seam=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
 
@@ -2262,7 +2262,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_VERIFY:
         _fold_verify(state, config, artifact, resolution=verified_head_resolution)
     elif phase == P_FIXER:
-        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir)
+        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
+                    head_diff_seam=head_diff_seam)
     elif phase == P_JUDGMENT:
         _fold_judgment(state, config, artifact)
     elif phase == P_STALL:
@@ -3853,6 +3854,7 @@ def _resolve_head_diff(artifact):
 
 REVIEWED_DIFF_SOURCE_GIT = "git-derived"
 REVIEWED_DIFF_STALE = "reviewed-diff-stale"
+HEAD_DIFF_MISMATCH = "head-diff-mismatch"
 _GIT_DIFF_FORMAT_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
 
 
@@ -3957,7 +3959,8 @@ def _park_reviewed_diff_stale(session_dir, state, cmd):
     return _next_response(session_dir, state, pending, cmd)
 
 
-def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None):
+def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None,
+                head_diff_seam=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
     the driver sequences + records. The post-fix head diff rides the artifact (git, per the
     dispatch-fixer contract) so the next delta round can split_fix_surface against git — INLINE
@@ -3974,17 +3977,25 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state["fixBatch"] = list(slice_)
     else:
         state["fixBatch"] = (state.get("fixBatch") or []) + list(slice_)
-    head, head_source = _resolve_head_diff(artifact)
-    # A capped round folds several fixer slices; the provenance describes the LAST slice's head
-    # diff, so each fold records it afresh and never inherits an earlier slice's value.
+    supplied, head_source = _resolve_head_diff(artifact)
+    # Git is the authority for the diff a panel reviews: the driver derives it at the fold head
+    # (run_loop injects the derivation as a seam); a supplied diff is only a cross-check, and a
+    # session that cannot derive has no head diff at all — its panel parks, never trusting the
+    # supplied one. A capped round folds several slices, so the provenance is recorded afresh.
     _clear_round(state, "reviewedDiffSource")
-    if head is None:
-        head = _derive_head_diff_from_git(session_dir, state)
-        if head is not None:
-            _record_round(state, "reviewedDiffSource", REVIEWED_DIFF_SOURCE_GIT)
+    head = (head_diff_seam(state) if head_diff_seam is not None
+            else _derive_head_diff_from_git(session_dir, state))
+    if head is not None:
+        _record_round(state, "reviewedDiffSource", REVIEWED_DIFF_SOURCE_GIT)
+        if supplied is not None and supplied != head:
+            _record_round(state, "headDiffSource", head_source)
+            _park_cannot_certify(state, "%s: the supplied post-fix head diff (%s) differs from git's "
+                                        "diff at the fold head" % (HEAD_DIFF_MISMATCH, head_source))
+            return
     state["headDiff"] = head
     state["_headDiffSource"] = head_source
-    state["_headDiffUnknown"] = head_source == "unknown"
+    # No trusted head diff (none supplied, or none derivable) is an unknown surface: full panel.
+    state["_headDiffUnknown"] = head_source == "unknown" or head is None
     # The head moved: until `_advance_reviewed_diff` binds a diff at this head, no panel reviews it.
     state["fixFolds"] = (_fix_fold_head(state) or 0) + 1
     _record_round(state, "headDiffSource", head_source)
@@ -6435,6 +6446,7 @@ def run_loop(seams, config=None):
                                          {"fault": fault, "round": state["round"]})
             try:
                 _fold(state, state["config"], action, artifact, seams.get("changed_subjects"),
+                      head_diff_seam=seams.get("head_diff"),
                       verified_head_resolution=_verified_head_at_fold(None, state))
             except DispositionLedgerOwnerRefusal as refusal:
                 _park_cannot_certify(state, refusal.reason)
@@ -11072,6 +11084,9 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
         if not parked.get("ok"):
             return parked
         side = _publish_sidecar(session_dir, state, git=git)
+        if side.get("reason"):
+            return _refuse_cmd(session_dir, "advance", side["reason"], fault=FAULT_INTERNAL,
+                               detail=side.get("detail"))
         return {"ok": True, "folded": None, "nextAction": parked, "sidecar": side.get("path")}
     if owner_artifact_path is not None and phase not in OWNER_GATE_PHASES:
         return _refuse_cmd(session_dir, "advance", "advance-submit-interleaved",

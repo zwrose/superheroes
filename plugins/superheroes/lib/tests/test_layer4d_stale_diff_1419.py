@@ -7,6 +7,8 @@ import ast
 import os
 import sys
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 if _LIB not in sys.path:
@@ -18,13 +20,22 @@ import test_round_driver as TRD  # noqa: E402
 
 RD = TRD.RD
 
+# The derivation, the chokepoint and their bite-proofs run with the test-only git double OFF,
+# against real temporary git repositories.
+pytestmark = pytest.mark.real_git_head_diff
+
 
 def _git(path, *args):
     return session_checkout._git(path, *args).stdout
 
 
+# The contract's literals, spelled out — never read back from the driver (a renamed token or a
+# dropped flag must fail here, not move the oracle with it).
+_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
+
+
 def _expected_diff(checkout, base, head):
-    return _git(checkout, "diff", *RD._GIT_DIFF_FORMAT_FLAGS, "%s...%s" % (base, head))
+    return _git(checkout, "diff", *_FLAGS, "%s...%s" % (base, head))
 
 
 def _respond(checkout, missing, seen):
@@ -94,7 +105,7 @@ def test_unknown_head_diff_is_derived_from_git_for_the_full_panel(tmp_path):
     assert payload["verdict"] == "converged", payload
     rounds = _receipt(d)["rounds"]
     assert any(r.get("headDiffSource") == "unknown" for r in rounds), rounds
-    assert any(r.get("reviewedDiffSource") == RD.REVIEWED_DIFF_SOURCE_GIT for r in rounds), rounds
+    assert any(r.get("reviewedDiffSource") == "git-derived" for r in rounds), rounds
 
 
 def test_underivable_unknown_head_diff_parks_reviewed_diff_stale(tmp_path):
@@ -107,7 +118,7 @@ def test_underivable_unknown_head_diff_parks_reviewed_diff_stale(tmp_path):
     payload = TRD._drive_cli(d, TRD._cfg(), _respond(checkout, str(tmp_path / "missing.txt"), seen))
     assert seen.get("panels") == [1], seen
     assert payload["verdict"] == "cannot-certify", payload
-    assert RD.REVIEWED_DIFF_STALE in (payload["certification"] or {}).get("reason", ""), payload
+    assert "reviewed-diff-stale" in (payload["certification"] or {}).get("reason", ""), payload
 
 
 def test_derivation_admits_only_a_non_empty_utf8_git_diff(tmp_path, monkeypatch):
@@ -229,41 +240,32 @@ def test_non_text_inline_head_diff_via_hand_submit_parks_stale(tmp_path):
     payload = TRD._drive_cli(d, TRD._cfg(), respond)
     assert seen.get("panels") == [1], seen
     assert payload["verdict"] == "cannot-certify", payload
-    assert RD.REVIEWED_DIFF_STALE in payload["certification"]["reason"], payload
+    assert "reviewed-diff-stale" in payload["certification"]["reason"], payload
 
 
-def test_known_empty_head_diff_rearm_panel_reviews_the_empty_diff(tmp_path, monkeypatch):
-    """A fixer that hands back a known-empty head diff (`headDiff: ""`) is not stale; the
-    cross-cutting confirmation re-arm's full panel then reviews that empty diff, never the
-    pre-fix round-1 diff (red token: the re-armed panel's diff.txt equals the round-1 diff)."""
+def test_a_known_empty_post_fix_diff_parks_rather_than_certify_an_empty_surface(tmp_path):
+    """The fixer's commit and revert leave the head's tree equal to the base: git's diff at the fold
+    head is empty, and an empty review surface is never certifiable, so derivation admits nothing
+    and the loop parks `reviewed-diff-stale` — whatever the fixer supplied (here `""`). Red token:
+    a round-2 panel runs."""
     d = str(tmp_path / "session")
     os.makedirs(d)
     checkout, base = _seed_checkout(d)
     seen = {}
-    base_respond = TRD._responder(round1_findings=[
-        {"title": "bug", "severity": "Important", "file": "f.py", "line": 1}])
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
 
     def respond(phase, payload, rnd):
-        if phase == RD.P_PANEL:
-            seen.setdefault("panels", []).append(rnd)
         if phase == RD.P_FIXER:
-            # The head moves, but its tree matches the base: the post-fix diff is known-empty.
             with open(os.path.join(checkout, "f.py"), "w", encoding="utf-8") as fh:
                 fh.write("new\nmore\nfixed\n")
             _git(checkout, "commit", "-qam", "fix")
             _git(checkout, "revert", "--no-edit", "HEAD")
             return {"fixes": [], "headDiff": ""}
-        return base_respond(phase, payload, rnd)
-
-    monkeypatch.setattr(RD, "derive_changed_subjects",
-                        lambda reviewed, head, findings: ["Code", "Security", "Test"])
-    TRD._drive_cli(d, TRD._cfg(baseRef=base), respond)
-    panels = seen.get("panels") or []
-    assert len(panels) >= 2 and panels[0] == 1, seen
-    with open(os.path.join(RR.round_dir(d, 1), "diff.txt"), encoding="utf-8") as fh:
-        assert fh.read() != ""
-    with open(os.path.join(RR.round_dir(d, panels[1]), "diff.txt"), encoding="utf-8") as fh:
-        assert fh.read() == "", "the re-armed panel reviewed the pre-fix diff"
+        return inner(phase, payload, rnd)
+    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base), respond)
+    assert seen.get("panels") == [1], seen
+    assert payload["verdict"] == "cannot-certify", payload
+    assert "reviewed-diff-stale" in payload["certification"]["reason"], payload
 
 
 def _fold_two_slices(monkeypatch, derived, second_artifact):
@@ -276,19 +278,20 @@ def _fold_two_slices(monkeypatch, derived, second_artifact):
              "_fixBatchIndex": 0}
     seam = lambda reviewed, head, findings: ["Code"]  # noqa: E731
     RD._fold_fixer(state, {"fixerVendor": "claude"}, {"fixes": []}, seam)
-    assert state["rounds"]["2"].get("reviewedDiffSource") == RD.REVIEWED_DIFF_SOURCE_GIT
+    assert state["rounds"]["2"].get("reviewedDiffSource") == "git-derived"
     state["_fixBatchIndex"] = 1
     state["_fixBatch"] = [{"id": "b"}]
     RD._fold_fixer(state, {"fixerVendor": "claude"}, second_artifact, seam)
     return state
 
 
-def test_a_later_inline_slice_clears_git_derived_provenance(monkeypatch):
-    """Derived-then-inline: the final head diff is the inline one, so the round carries no
-    `git-derived` provenance (red token: `reviewedDiffSource == "git-derived"` survives)."""
+def test_a_supplied_slice_diff_never_replaces_the_derived_one(monkeypatch):
+    """Git is the authority per slice: slice 2 supplies an inline diff but git cannot derive one,
+    so the head is unknown — the supplied text is never adopted, and no `git-derived` provenance
+    survives from slice 1 (red token: `headDiff` equals the supplied text)."""
     inline = "diff --git a/y b/y\n"
     state = _fold_two_slices(monkeypatch, "diff --git a/x b/x\n", {"fixes": [], "headDiff": inline})
-    assert state["headDiff"] == inline
+    assert state["headDiff"] is None
     assert "reviewedDiffSource" not in state["rounds"]["2"], state["rounds"]["2"]
 
 
@@ -346,7 +349,7 @@ def _stale_session(tmp_path):
 def _assert_parked(answer):
     assert answer["ok"] and answer["action"] == RD.P_TERMINAL, answer
     assert answer["payload"]["verdict"] == "cannot-certify", answer
-    assert RD.REVIEWED_DIFF_STALE in answer["payload"]["certification"]["reason"], answer
+    assert "reviewed-diff-stale" in answer["payload"]["certification"]["reason"], answer
 
 
 def test_persisted_pre_count_state_at_the_panel_parks_stale_via_next(tmp_path):
@@ -372,7 +375,7 @@ def test_persisted_pre_count_state_at_verify_parks_stale(tmp_path):
     _rewrite_state(d, _legacy)
     payload = TRD._drive_cli(d, None, respond)
     assert payload["verdict"] == "cannot-certify", payload
-    assert RD.REVIEWED_DIFF_STALE in payload["certification"]["reason"], payload
+    assert "reviewed-diff-stale" in payload["certification"]["reason"], payload
     assert seen.get("panels") == [1], seen
 
 
@@ -453,7 +456,7 @@ def test_an_already_pending_stale_panel_is_not_folded_via_submit(tmp_path):
     assert out.get("ok") and out.get("nextStep") == RD.P_TERMINAL, out
     after = RD.load_state(d)[1]
     assert after["terminal"] == "cannot-certify"
-    assert RD.REVIEWED_DIFF_STALE in after["certification"]["reason"]
+    assert "reviewed-diff-stale" in after["certification"]["reason"]
 
 
 def test_run_loop_never_runs_a_panel_over_a_stale_reviewed_diff():
@@ -471,5 +474,78 @@ def test_run_loop_never_runs_a_panel_over_a_stale_reviewed_diff():
     _refusal, loop_receipt = TRD._run_loop_with_loop_receipt(seams, TRD._cfg())
     assert calls and set(calls) == {1}, calls
     assert loop_receipt["verdict"] == "cannot-certify", loop_receipt.get("verdict")
-    assert any(RD.REVIEWED_DIFF_STALE in str(dc.get("detail"))
+    assert any("reviewed-diff-stale" in str(dc.get("detail"))
                for dc in loop_receipt.get("decisions") or []), loop_receipt.get("decisions")
+
+
+def test_the_git_double_is_off_in_this_module():
+    """This module's proofs are only proofs if the driver runs its real git derivation."""
+    import head_diff_double
+    assert not head_diff_double.installed(RD) and not head_diff_double.installed(TRD.RD)
+
+
+@pytest.mark.parametrize("supplied", ["", "diff --git a/f.py b/f.py\n@@ -1 +1 @@\n-x\n+y\n"])
+def test_a_supplied_head_diff_that_differs_from_git_parks(tmp_path, supplied):
+    """Git is the authority: a supplied diff — including a wrong `""` — is only a cross-check, and
+    one that differs from git's diff at the fold head parks `head-diff-mismatch` (red token: the
+    loop runs a round-2 panel over the supplied diff)."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    seen = {}
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+
+    def respond(phase, payload, rnd):
+        art = inner(phase, payload, rnd)
+        if phase == RD.P_FIXER:
+            art = {"fixes": [], "headDiff": supplied}
+        return art
+    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base), respond)
+    assert seen.get("panels") == [1], seen
+    assert payload["verdict"] == "cannot-certify", payload
+    assert "head-diff-mismatch" in payload["certification"]["reason"], payload
+
+
+def test_a_supplied_head_diff_equal_to_git_is_accepted(tmp_path):
+    """The cross-check passes when the supplied diff is git's own diff at the fold head."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    seen = {}
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_AUDITS:
+            targets = payload.get("targets", [])
+            return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                for t in targets],
+                    "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}}
+        art = inner(phase, payload, rnd)
+        if phase == RD.P_FIXER:
+            head = _git(checkout, "rev-parse", "HEAD").strip()
+            art = {"fixes": [], "headDiff": _git(checkout, "diff", "--no-color", "--no-ext-diff",
+                                                 "--no-textconv", "%s...%s" % (base, head))}
+        return art
+    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base), respond)
+    assert payload["verdict"] == "converged", payload
+
+
+def test_the_contract_literals_are_pinned():
+    """The derivation's flags and the named tokens are an external contract: pinned as literals."""
+    assert RD._GIT_DIFF_FORMAT_FLAGS == ("--no-color", "--no-ext-diff", "--no-textconv")
+    assert RD.REVIEWED_DIFF_STALE == "reviewed-diff-stale"
+    assert RD.HEAD_DIFF_MISMATCH == "head-diff-mismatch"
+    assert RD.REVIEWED_DIFF_SOURCE_GIT == "git-derived"
+
+
+def test_the_stale_park_via_advance_refuses_a_failed_sidecar_publish(tmp_path, monkeypatch):
+    """The stale-pending-panel park on `advance` never answers ok over a failed sidecar publish
+    (red token: `ok: True` with the sidecar lost)."""
+    d, _seen = _older_driver_pending_panel(tmp_path)
+    _rewrite_state(d, lambda state: state.pop("_submitUsed", None))
+    monkeypatch.setattr(RD, "_publish_sidecar",
+                        lambda session_dir, state, git=None: {"reason": "sidecar-unwritable",
+                                                              "detail": "probe"})
+    out = RD.cmd_advance(d)
+    assert out["ok"] is False and out["reason"] == "sidecar-unwritable", out
