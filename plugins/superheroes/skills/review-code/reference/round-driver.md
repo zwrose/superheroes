@@ -689,13 +689,14 @@ live guidance in the fixer order's gate block and excludes out-of-scope keys fro
 the fix batch sha256 in the order commits to the batch file bytes.
 
 On success the driver appends to `state.rulingsLog` and the round's `rulings`, records
-dispositions for out-of-scope rows, and may supersede a pending fixer attempt when the re-sliced
-order hash changes (`reason: ruling-changed-order`). Refusal tokens (each leaves state bytes
-unchanged): `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
+dispositions for out-of-scope rows, and refreshes gate guidance for a not-yet-emitted fixer batch.
+A ruling while a pending fixer attempt already has emitted orders is refused — let that fixer land
+or `re-emit` before ruling. Refusal tokens (each leaves state bytes unchanged):
+`ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
 `ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
 `ruling-critical-out-of-scope`,
-`ruling-session-terminal`, `ruling-attempt-recorded`.
+`ruling-session-terminal`, `ruling-attempt-pending`.
 
 ## Batch concurrency — an independent batch goes out together
 

@@ -196,7 +196,7 @@ JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 RE_EMIT_CMD = "re-emit"
 RULE_CMD = "rule"
 ORDERS_SUPERSEDED_OUTCOME = "orders-superseded"
-_JOURNAL_ORDERS_SUPERSEDED_CMDS = frozenset((RE_EMIT_CMD, RULE_CMD))
+_JOURNAL_ORDERS_SUPERSEDED_CMDS = frozenset((RE_EMIT_CMD,))
 META_FILE = "meta.json"
 
 

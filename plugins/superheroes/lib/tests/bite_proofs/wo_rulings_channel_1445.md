@@ -68,8 +68,8 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_binding_
         filtered.append(row)
 ```
 
-- **Detector:** `test_edge8_empty_batch_advances` (binding test stayed green under the same neutralization; edge-8 asserts batch emptying / `pendingCleared`).
-- **Failing assertion:** `assert out.get("pendingCleared") is True`
+- **Detector:** `test_edge8_empty_batch_advances` (WO-S: edge-8 now asserts `ruling-attempt-pending` with unchanged state bytes).
+- **Failing assertion:** `assert out.get("reason") == "ruling-attempt-pending"`
 - **Raw red:**
 
 ```
@@ -87,9 +87,8 @@ tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/c
             {"id": id_a, "ruling": "out-of-scope", "reason": "a", "followUp": _follow_up()},
             {"id": id_b, "ruling": "out-of-scope", "reason": "b", "followUp": _follow_up()}]))
         assert out.get("ok"), out
->       assert out.get("pendingCleared") is True
-E       AssertionError: assert None is True
-E        +  where None = <built-in method get of dict object at 0x106419880>('pendingCleared')
+>       assert out.get("reason") == "ruling-attempt-pending"
+E       AssertionError: assert 'order-render-refused' == 'ruling-attempt-pending'
 E        +    where <built-in method get of dict object at 0x106419880> = {'action': 'dispatch-fixer', 'attempt': 0, 'expectedStateHash': '11edd2dbd6acd277c038a1b36a025eb17f1b310dc8d07fbeec6c887c5a17e6fc', 'ok': True, ...}.get
 
 plugins/superheroes/lib/tests/test_rulings_channel_1445.py:324: AssertionError
@@ -269,18 +268,28 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_rule_ref
 
 ## BP-6
 
-- **Guarded element:** `round_driver.py` — `_cmd_rule_locked`, `ruling-attempt-recorded` check (≈7547–7563).
-- **Axis:** Rule refuses when dispatch attempt already has recorded results.
-- **Neutralization:** Deleted the `dispatch-` phase / `_journal_has_orders_emitted` / `RULING_ATTEMPT_RECORDED` refusal block.
+Superseded by **BP-7** (WO-S).
 
-- **Detector:** `test_rule_refusal_tokens[ruling-attempt-recorded-attempt_recorded]`
+---
+
+## BP-7
+
+- **Guarded element:** `round_driver.py` — `_cmd_rule_locked`, `ruling-attempt-pending` check (before mutation).
+- **Axis:** Rule refuses when a pending fixer attempt already has emitted orders.
+- **Neutralization:** Prefixed the guard with `False and` so it never fires.
+
+```python
+    if (False and isinstance(pending, dict) and pending.get("phase") == P_FIXER
+```
+
+- **Detector:** `test_rule_refusal_tokens[ruling-attempt-pending-attempt_recorded]`
 - **Failing assertion:** `assert out.get("ok") is False, out`
 - **Raw red:**
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-______ test_rule_refusal_tokens[ruling-attempt-recorded-attempt_recorded] ______
+______ test_rule_refusal_tokens[ruling-attempt-pending-attempt_recorded] ______
 ...
 >       assert out.get("ok") is False, out
 E       AssertionError: {'action': 'dispatch-fixer', 'attempt': 1, ..., 'ok': True, ...}
@@ -288,38 +297,22 @@ E       assert True is False
 
 plugins/superheroes/lib/tests/test_rulings_channel_1445.py:219: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_rule_refusal_tokens[ruling-attempt-recorded-attempt_recorded]
-1 failed in 9.77s
+FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_rule_refusal_tokens[ruling-attempt-pending-attempt_recorded]
+1 failed in 57.70s
 ```
 
-- **Restore:** Reinserted full `ruling-attempt-recorded` guard block before `cfg = state.get("config")`.
-- **Restore receipt (quoted lines):**
+- **Restore:** Removed the `False and` prefix.
+- **Restore receipt (quoted line):**
 
 ```python
-    if (isinstance(pending, dict) and isinstance(pending.get("phase"), str)
-            and pending["phase"].startswith("dispatch-")
-            and _journal_has_orders_emitted(session_dir, pending.get("round"),
-                                            pending.get("phase"), pending.get("attempt"))):
-        journal = read_journal(session_dir)
-        old_roster, roster_refusal = _roster_of(
-            session_dir, state, RULE_CMD, pending["phase"], pending.get("round"),
-            pending.get("attempt"))
-        if roster_refusal is not None:
-            return roster_refusal
-        result_names = _re_emit_blocking_result_names(
-            session_dir, journal, pending.get("round"), pending.get("phase"),
-            pending.get("attempt"), old_roster)
-        if result_names:
-            return _refuse_cmd(session_dir, RULE_CMD, RULING_ATTEMPT_RECORDED,
-                               phase=pending.get("phase"), rnd=pending.get("round"),
-                               attempt=pending.get("attempt"), names=result_names)
+    if (isinstance(pending, dict) and pending.get("phase") == P_FIXER
 ```
 
 - **Raw green:**
 
 ```
 .                                                                        [100%]
-1 passed in 15.82s
+1 passed in 57.70s
 ```
 
 ---

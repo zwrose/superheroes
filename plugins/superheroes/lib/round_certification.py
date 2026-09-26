@@ -1563,7 +1563,7 @@ def _journal_open_seats(journal, session_dir=None):
         rnd = event.get("round")
         attempt = event.get("attempt")
         seat = event.get("seat")
-        if (cmd in ("next", "advance", session_contract.RE_EMIT_CMD, session_contract.RULE_CMD)
+        if (cmd in ("next", "advance", session_contract.RE_EMIT_CMD)
                 and outcome == "orders-emitted"
                 and session_dir is not None):
             roster, refusal = _orders_emitted_roster_or_refusal(session_dir, event)
