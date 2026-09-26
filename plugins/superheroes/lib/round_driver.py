@@ -1547,6 +1547,17 @@ def _next_disposition_seq(state):
     return counter
 
 
+# One monotonic sequence shared by the two gate-log channels (`judgmentDispositions` and
+# `rulings`): every row either channel records carries it, so history merges them in event order.
+GATE_SEQ_FIELD = "gateSeq"
+
+
+def _next_gate_seq(state):
+    counter = state.get("gateSeqCounter", 0) + 1
+    state["gateSeqCounter"] = counter
+    return counter
+
+
 def _record_disposition(state, key, disposition, round_no, **fields):
     if disposition not in session_contract.DISPOSITIONS:
         raise ValueError("unknown disposition %r" % (disposition,))
@@ -3265,34 +3276,45 @@ def _history_row_key(row):
     return session_contract.finding_identity_key(row)
 
 
-def _guidance_log_rows(round_entry):
-    """The round's guidance-bearing log rows, in record order: the owner-gate
-    ``judgmentDispositions`` followed by the ``fix-with-guidance`` rulings the rulings verb
-    recorded. The reader the fixer order's guidance block uses; fix-batch history reads
-    ``_gate_history_rows`` so a later closing ruling supersedes the guidance."""
+def _gate_seq_of(row):
+    """A gate-log row's shared sequence; -1 for a row recorded before the sequence existed, so
+    such a row sorts ahead of every sequenced row and keeps its record order among its peers."""
+    seq = row.get(GATE_SEQ_FIELD) if isinstance(row, dict) else None
+    if isinstance(seq, int) and not isinstance(seq, bool):
+        return seq
+    return -1
+
+
+def _merged_gate_rows(round_entry, ruling_filter):
+    """The round's owner-gate ``judgmentDispositions`` and the rulings-verb rows ``ruling_filter``
+    admits, merged into actual event order by the shared ``gateSeq`` (a stable sort, so unsequenced
+    rows keep judgment-then-rulings record order)."""
     rows = []
     log = round_entry.get("judgmentDispositions")
     if isinstance(log, list):
         rows.extend(log)
     rulings = round_entry.get("rulings")
     if isinstance(rulings, list):
-        rows.extend(r for r in rulings
-                    if isinstance(r, dict) and r.get("disposition") == RULING_GUIDANCE)
+        rows.extend(r for r in rulings if isinstance(r, dict) and ruling_filter(r))
+    rows.sort(key=_gate_seq_of)
     return rows
+
+
+def _guidance_log_rows(round_entry):
+    """The round's guidance-bearing log rows, in event order: the owner-gate
+    ``judgmentDispositions`` and the ``fix-with-guidance`` rulings the rulings verb recorded. The
+    reader the fixer order's guidance block uses; fix-batch history reads ``_gate_history_rows``
+    so a later closing ruling supersedes the guidance."""
+    return _merged_gate_rows(round_entry,
+                             lambda r: r.get("disposition") == RULING_GUIDANCE)
 
 
 def _gate_history_rows(round_entry):
-    """The round's gate-ruling rows for history, in record order: the owner-gate
-    ``judgmentDispositions`` followed by EVERY rulings-verb row. A closing ruling sits in this
-    stream so it supersedes an earlier ``fix-with-guidance`` for the same finding (last wins)."""
-    rows = []
-    log = round_entry.get("judgmentDispositions")
-    if isinstance(log, list):
-        rows.extend(log)
-    rulings = round_entry.get("rulings")
-    if isinstance(rulings, list):
-        rows.extend(r for r in rulings if isinstance(r, dict))
-    return rows
+    """The round's gate-ruling rows for history, in event order: the owner-gate
+    ``judgmentDispositions`` and EVERY rulings-verb row, merged by the shared ``gateSeq``. A
+    closing ruling supersedes an earlier ``fix-with-guidance`` for the same finding, and a later
+    owner judgment supersedes an earlier closing ruling (last wins)."""
+    return _merged_gate_rows(round_entry, lambda r: True)
 
 
 def _finding_history(state):
@@ -3675,6 +3697,8 @@ def _fold_judgment(state, config, artifact):
     if skipped:
         state["_skippedBlockers"] = (state.get("_skippedBlockers") or []) + skipped
         _record_round(state, "skippedBlockers", skipped)
+    for entry in disposition_log:
+        entry[GATE_SEQ_FIELD] = _next_gate_seq(state)
     _record_round(state, "judgmentDispositions", disposition_log)
     state.pop("_judgmentFindings", None)
     state.pop("_judgmentMechanical", None)
@@ -7615,6 +7639,7 @@ def _fold_rulings(state, plan, provenance, artifact_sha):
             row["dispositionSeq"] = state.get("dispositionSeqCounter")
         else:
             row[GATE_GUIDANCE_RECORD_KEY] = entry["guidance"].strip()
+        row[GATE_SEQ_FIELD] = _next_gate_seq(state)
         _record_round_append(state, "rulings", row)
         rows.append(row)
     return rows

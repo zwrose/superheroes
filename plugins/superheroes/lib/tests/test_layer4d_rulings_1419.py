@@ -150,6 +150,50 @@ def test_a_later_closing_ruling_supersedes_earlier_guidance_in_fixer_history():
     assert [e["guidance"] for e in RD._gate_guidance_entries(guidance_only, 3)] == ["old guidance"]
 
 
+def _judgment_state_with_prior_ruling(ruling_first):
+    """A round-1 state whose one tradeoff finding carries a closing `rulings` row and an owner
+    `fix-with-guidance` judgment, recorded through the real writers in the order named."""
+    f = {"title": "fresh tradeoff", "severity": "Important", "file": "src/g.py", "line": 5,
+         "tradeoff": True}
+    state = RD.new_state({"leg": "code", "vendors": ["claude", "codex"], "diff": "d",
+                          "fixerVendor": "claude"})
+    RD._stage_findings(state, [dict(f)])  # the panel raise the ledger records
+    RD._route_judgment_blockers(state, [dict(f)])
+    key = RD._judgment_row_ids(state["_judgmentFindings"])[0]
+
+    def close():
+        # Lodged through the real rulings writers while a panel is pending (the re-raise to come).
+        step = state["step"]
+        state["step"] = RD.P_PANEL
+        plan, refusal, detail = RD._plan_rulings(
+            state, [{"id": key, "ruling": "refuted", "reason": "older close"}], False)
+        assert refusal is None, (refusal, detail)
+        RD._fold_rulings(state, plan, PROV, "0" * 64)
+        state["step"] = step
+
+    if ruling_first:
+        close()
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": key, "disposition": "fix-with-guidance", "guidance": "new owner guidance"}]})
+    if not ruling_first:
+        close()
+    return state, key
+
+
+def test_a_later_owner_judgment_supersedes_an_earlier_same_round_closing_ruling():
+    """The two gate-log channels merge in event order by their shared sequence: guidance the owner
+    gives after a same-round closing ruling reaches the fixer, and a closing ruling after the
+    guidance still drops it."""
+    state, key = _judgment_state_with_prior_ruling(ruling_first=True)
+    log = state["rounds"]["1"]["judgmentDispositions"]
+    assert log[0][RD.GATE_SEQ_FIELD] > state["rounds"]["1"]["rulings"][0][RD.GATE_SEQ_FIELD]
+    assert RD._finding_history(state)[key]["gateRuling"]["disposition"] == "fix-with-guidance"
+    assert [e["guidance"] for e in RD._gate_guidance_entries(state, 1)] == ["new owner guidance"]
+    state, key = _judgment_state_with_prior_ruling(ruling_first=False)
+    assert RD._finding_history(state)[key]["gateRuling"]["disposition"] == "refuted"
+    assert RD._gate_guidance_entries(state, 1) == []
+
+
 def test_ruling_out_a_continuation_slice_enters_post_fix_and_never_redispatches_it(tmp_path):
     """A cap-sliced round: the first slice folded, the second (index 1) is pending. Ruling its only
     finding closed resolves through the continuation leg (post-fix: the round advances to a delta
