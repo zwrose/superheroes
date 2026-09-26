@@ -3221,8 +3221,8 @@ def test_verify_command_unresolvable_base_ref_is_not_run(tmp_path):
 
 
 def test_verify_base_token_literal_matches_round_driver():
-    assert gsw.VERIFY_BASE_TOKEN == "{baseRef}"
-    assert rd.VERIFY_BASE_TOKEN == "{baseRef}"
+    assert gsw.VERIFY_BASE_TOKEN is sc.VERIFY_BASE_TOKEN
+    assert rd.VERIFY_BASE_TOKEN is sc.VERIFY_BASE_TOKEN
 
 
 def test_coverage_entry_with_tool_but_no_lens_is_reported(tmp_path):

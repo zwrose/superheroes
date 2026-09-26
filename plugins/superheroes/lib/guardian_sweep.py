@@ -41,9 +41,7 @@ _DEFAULT_VERIFY_BUDGET_SECONDS = 300
 # (first-seed lens count × this).
 _DEFAULT_FIRST_BASELINE_VALIDATE_MAX = 10
 _VERIFY_STDOUT_CAP = 8 * 1024
-# Same token contract as round_driver.VERIFY_BASE_TOKEN — bind to a pinned commit only.
-VERIFY_BASE_TOKEN = "{baseRef}"
-_FULL_HEX_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+VERIFY_BASE_TOKEN = store_core.VERIFY_BASE_TOKEN
 COVERAGE_NO_LENS_TOKEN = "coverage-entry-no-lens"
 # Aggregate budget across all filed-issue `gh issue view` lookups in one collect.
 # Per-call timeout is capped so one hung call cannot consume the whole budget alone.
@@ -274,23 +272,6 @@ def _bound_stdout(text):
     return text[-_VERIFY_STDOUT_CAP:]
 
 
-def _resolve_implicit_pr_base(cwd):
-    """Resolve implicit PR base from local git — mirrors handback_gate._resolve_implicit_pr_base."""
-    branch = store_core.run_git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-    if branch and branch != "HEAD":
-        merge_base = store_core.run_git(
-            cwd, "config", "--get", "branch.%s.gh-merge-base" % branch)
-        if merge_base:
-            return merge_base
-    sym = store_core.run_git(cwd, "symbolic-ref", "refs/remotes/origin/HEAD")
-    if sym:
-        ref = sym.strip()
-        prefix = "refs/remotes/origin/"
-        if ref.startswith(prefix):
-            return ref[len(prefix):]
-    return None
-
-
 def _pin_name_to_commit(cwd, name):
     """Pin a branch name to a full commit id (origin/<name> first, then <name>)."""
     for candidate in ("origin/%s" % name, name):
@@ -299,14 +280,14 @@ def _pin_name_to_commit(cwd, name):
         if out is None:
             continue
         pin = out.strip().lower()
-        if _FULL_HEX_ID.fullmatch(pin):
+        if store_core.VERIFY_BASE_PIN_RE.fullmatch(pin):
             return pin
     return None
 
 
 def _bind_verify_base_ref(cwd):
     """Return (pinned_commit, None) or (None, reason) for verify-command binding."""
-    name = _resolve_implicit_pr_base(cwd)
+    name = store_core.resolve_implicit_pr_base(cwd)
     if not name:
         return None, "no branch gh-merge-base and origin/HEAD does not resolve"
     pin = _pin_name_to_commit(cwd, name)

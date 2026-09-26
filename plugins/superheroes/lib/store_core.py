@@ -293,6 +293,28 @@ def run_git(cwd, *args):
     return run_git_result(cwd, *args).out
 
 
+# Calibrated verify commands and ``gh pr create`` implicit ``--base`` share this contract.
+VERIFY_BASE_TOKEN = "{baseRef}"
+VERIFY_BASE_PIN_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def resolve_implicit_pr_base(cwd, run_git_fn=None):
+    """Resolve ``gh pr create`` implicit ``--base`` from local git config — invariant (b)."""
+    git = run_git_fn if run_git_fn is not None else run_git
+    branch = git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    if branch and branch != "HEAD":
+        merge_base = git(cwd, "config", "--get", "branch.%s.gh-merge-base" % branch)
+        if merge_base:
+            return merge_base
+    sym = git(cwd, "symbolic-ref", "refs/remotes/origin/HEAD")
+    if sym:
+        ref = sym.strip()
+        prefix = "refs/remotes/origin/"
+        if ref.startswith(prefix):
+            return ref[len(prefix):]
+    return None
+
+
 def get_remote_result(cwd):
     """``get_remote`` plus WHY there is no remote — (normalized_remote, status).
 

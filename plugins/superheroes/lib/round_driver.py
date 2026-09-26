@@ -1504,8 +1504,7 @@ def _park_cannot_certify(state, detail):
     state["step"] = P_TERMINAL
 
 
-VERIFY_BASE_TOKEN = "{baseRef}"
-_FULL_HEX_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+VERIFY_BASE_TOKEN = store_core.VERIFY_BASE_TOKEN
 
 
 def _verify_command(config):
@@ -1518,7 +1517,7 @@ def _verify_command(config):
     if not isinstance(cmd, str) or VERIFY_BASE_TOKEN not in cmd:
         return cmd
     base = config.get("baseRef")
-    if isinstance(base, str) and _FULL_HEX_ID.fullmatch(base):
+    if isinstance(base, str) and store_core.VERIFY_BASE_PIN_RE.fullmatch(base):
         return cmd.replace(VERIFY_BASE_TOKEN, base)
     return cmd
 
