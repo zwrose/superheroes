@@ -31,10 +31,12 @@ Checked on Claude Code 2.1.281. Three tool facts shape every command:
 2. **Grant Write and Edit.** Some cases write their answer to a file, and some check that no Write
    or Edit happened. That needs the operator grant `--allow-tools Write Edit`. Writes stay inside
    the run's own sandboxed directory.
-3. **Pin the judge.** `--judge-model` is a command-line option only.
+3. **Pin the judge.** `--judge-model` is a command-line option only. The judge is
+   `claude-opus-5-5`, the same model as the agent: the tool's default small judge failed correct
+   long answers.
 
 Set these once. `SUITE` is the commit holding this suite; `TARGET` is the commit under test.
-`CLAUDE_CONFIG_DIR` is the account the runs bill to.
+`CLAUDE_CONFIG_DIR` in the commands below is the account the runs bill to; point it at yours.
 
 ```bash
 REPO=/path/to/superheroes            # any checkout of the repository
@@ -46,13 +48,13 @@ rm -rf "$DIR/plugins/superheroes/evals"   # drop any copy the target carries
 git -C "$REPO" archive "$SUITE" plugins/superheroes/evals | tar -x -C "$DIR"
 cd "$DIR/plugins/superheroes"
 FLAGS=(--trust-plugin --no-publish --allow-tools Write Edit
-       --judge-model claude-haiku-4-5-20251001 --max-cost-usd 60 -j 4)
+       --judge-model claude-opus-5-5 --max-cost-usd 150 -j 4)
 ```
 
 **Full run (the baseline, or the stack head):** version against version, no no-plugin arm.
 
 ```bash
-CLAUDE_CONFIG_DIR=~/.claude-four claude plugin eval . --ablation none --runs 3 \
+CLAUDE_CONFIG_DIR=~/.claude-three claude plugin eval . --ablation none --runs 3 \
   "${FLAGS[@]}" --json run.json
 jq -r -f evals/summary.jq run.json
 ```
@@ -61,7 +63,7 @@ jq -r -f evals/summary.jq run.json
 layer's head as `TARGET` in turn and run only that case.
 
 ```bash
-CLAUDE_CONFIG_DIR=~/.claude-four claude plugin eval . --case w2-size-tripwire --ablation none \
+CLAUDE_CONFIG_DIR=~/.claude-three claude plugin eval . --case w2-size-tripwire --ablation none \
   --runs 3 "${FLAGS[@]}" --json w2.json
 jq -r -f evals/summary.jq w2.json
 ```
