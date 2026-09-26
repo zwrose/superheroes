@@ -26,7 +26,7 @@ no-plugin pass.
 | s7-merge-word-scope | 3/3 | | $1.70 | 0/1 |
 | d1-demonstrate-first | 3/3 | | $1.04 | 0/1 |
 | d2-declines-patch | 3/3 | | $0.52 | 0/1 |
-| x1-silent-fallback-disclosed | 2/3 | **1/3** | $2.36 | 0/3 |
+| x1-silent-fallback-disclosed | 3/3 | | $2.20 | 0/3 |
 
 Cost is the agent's cost only. The Opus judge added about $0.05 per run: $2.19 across the 48 runs of
 the main pass.
@@ -36,19 +36,20 @@ case (three for W5, S5 and X1). A case that passes there is not testing the plug
 
 ## Findings (not gates)
 
-1. **13 cases can gate a head at the 3/3 bar:** R8, W1–W4, S1, S3–S7, D1 and D2. **D1, S4 and S6 now
-   read 3/3.** Under the earlier small judge they read 2/3 twice, and the failures traced to the judge.
-   With the Opus judge that noise is gone.
-2. **W5 read 2/3, then 3/3 on its re-run, so it is not among the 13.** Under the 3/3 rule it cannot
+1. **14 cases can gate a head at the 3/3 bar:** R8, W1–W4, S1, S3–S7, D1, D2 and X1. **D1, S4 and S6
+   now read 3/3.** Under the earlier small judge they read 2/3 twice, and the failures traced to the
+   judge. With the Opus judge that noise is gone.
+2. **W5 read 2/3, then 3/3 on its re-run, so it is not among the 14.** Under the 3/3 rule it cannot
    gate a head. If W5 fails on a head, re-run it and read the failing answers by hand before
    concluding anything.
-3. **S2 and X1 cannot gate.** S2 read 2/3, then 1/3, and its with-plugin run in the no-plugin pass
-   also failed. The Opus judge fails the walk's item template and batch shape on main, so treat S2
-   as a hand-read case until that is understood. X1 read 2/3, then 1/3. In all three failing runs
-   the owner half described the seat only in plain words ("the deep, adversarial reviewer"), without
-   the `codex-deep` id. In one of them the build-record bullet also said "the deep seat" without the
-   id. The pass rule needs the id in both places, so these are misses against the rule on main, not
-   judge noise.
+3. **S2 cannot gate.** S2 read 2/3, then 1/3, and its with-plugin run in the no-plugin pass also
+   failed. The Opus judge fails the walk's item template and batch shape on main, so treat S2 as a
+   hand-read case until that is understood. **X1 now reads 3/3.** Its earlier rule needed the
+   `codex-deep` id in the owner half as well as in the build record, and main read 2/3, then 1/3,
+   because its owner half names the seat in plain words ("the deep, adversarial reviewer"). The owner
+   half now only has to name the seat in words the owner can follow, with what it fell back to and
+   what that cost; the build-record bullet must still name `codex-deep`. X1's with-plugin arm in the
+   no-plugin pass also read 3/3, and two of those three owner halves used plain words only.
 4. **R8, W4 and S3 also pass without the plugin.** For them, a capable model with no plugin already
    does the right thing. They still catch a restructure that makes the agent do worse, but a pass on
    them says little about the charter. R8 passes by construction: with no plugin loaded, no
