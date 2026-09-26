@@ -163,6 +163,9 @@ def _advancing_monotonic(step=0.1):
 # is spinning on a frozen clock; the bound is small so it fires within seconds
 # even though each tick does real ledger and git work.
 _WATCHER_CLOCK_STALL_READS = 50
+# Sleeps must move the clock this far in total before the read count resets, so a
+# sleeper that advances by a negligible amount each nap cannot keep the guard quiet.
+_WATCHER_CLOCK_MIN_PROGRESS = 0.01
 
 
 class WatcherClockStalled(AssertionError):
@@ -179,6 +182,7 @@ class _WatcherClock:
     def __init__(self):
         self.now = 0.0
         self.reads_since_advance = 0
+        self.progress_since_reset = 0.0
         self.stall_reads = _WATCHER_CLOCK_STALL_READS
         self.stalled = False
 
@@ -197,7 +201,10 @@ class _WatcherClock:
     def sleep(self, duration):
         if duration > 0:
             self.now += duration
-            self.reads_since_advance = 0
+            self.progress_since_reset += duration
+            if self.progress_since_reset >= _WATCHER_CLOCK_MIN_PROGRESS:
+                self.progress_since_reset = 0.0
+                self.reads_since_advance = 0
 
 
 class _WatcherTimeModule:
@@ -248,15 +255,23 @@ def test_unclocked_arm_runs_to_its_deadline_on_the_virtual_clock(
 
 
 def test_watcher_clock_stall_guard_resets_on_each_advancing_sleep(watcher_clock):
+    # The bound is spelled as a literal so loosening the guard turns this red.
     for _ in range(3):
-        for _ in range(_WATCHER_CLOCK_STALL_READS):
+        for _ in range(50):
             watcher_clock.monotonic()
         watcher_clock.sleep(1)
     watcher_clock.sleep(0)
-    for _ in range(_WATCHER_CLOCK_STALL_READS):
+    for _ in range(50):
         watcher_clock.monotonic()
     with pytest.raises(WatcherClockStalled, match="never advances"):
         watcher_clock.monotonic()
+
+
+def test_watcher_clock_stall_guard_ignores_negligible_sleeps(watcher_clock):
+    with pytest.raises(WatcherClockStalled, match="never advances"):
+        for _ in range(51):
+            watcher_clock.monotonic()
+            watcher_clock.sleep(1e-9)
 
 
 def test_arm_whose_sleep_never_advances_fails_promptly_and_says_why(
