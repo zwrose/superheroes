@@ -399,11 +399,6 @@ def _find_all_standalone_markers(body, marker, scan=None):
     return offsets
 
 
-def find_standalone_markers(body, marker):
-    """Return offsets of every live (fence-aware, zero-indent, standalone-line) ``marker`` line."""
-    return _find_all_standalone_markers(body, marker)
-
-
 def _find_standalone_marker(body, marker, start=0, scan=None):
     """Return byte offset of the first standalone marker line at or after start."""
     for off in _find_all_standalone_markers(body, marker, scan):

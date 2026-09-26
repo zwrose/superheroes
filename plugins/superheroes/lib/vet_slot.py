@@ -58,21 +58,19 @@ def _refusal(reason, detail):
     return {"ok": False, "reason": reason, "detail": detail}
 
 
-def read_marker_list(text, name, after=0):
-    """Return the ids of the one live ``<!-- superheroes:<name> ... -->`` line, or None for ``none``.
+def _live_lines(text):
+    """Yield ``(offset, line)`` for every line outside code fences and outside an open HTML comment.
 
-    A marker line starts at column zero, outside any code fence and outside any HTML comment left
-    open by an earlier line; it must not start above offset ``after``."""
-    prefix = "<!-- superheroes:%s" % name
+    A line is live when it is not fenced and no comment opened on an earlier non-fenced line is
+    still open at its start; ``line`` carries no line ending."""
     raw = text.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
-    found, offset, in_comment = [], 0, False
+    offset, in_comment = 0, False
     for line, dead, whole in zip(bare, inert, raw):
         if not dead:
-            rest = line[len(prefix):]
-            if not in_comment and line.startswith(prefix) and (rest[:1] == " " or rest[:3] == "-->"):
-                found.append((offset, line))
+            if not in_comment:
+                yield offset, line
             pos = 0
             while True:  # carry the open-comment state to the next line
                 pos = line.find("-->" if in_comment else "<!--", pos)
@@ -80,6 +78,19 @@ def read_marker_list(text, name, after=0):
                     break
                 pos, in_comment = pos + (3 if in_comment else 4), not in_comment
         offset += len(whole)
+
+
+def read_marker_list(text, name, after=0):
+    """Return the ids of the one live ``<!-- superheroes:<name> ... -->`` line, or None for ``none``.
+
+    A marker line starts at column zero, outside any code fence and outside any HTML comment left
+    open by an earlier line; it must not start above offset ``after``."""
+    prefix = "<!-- superheroes:%s" % name
+    found = []
+    for offset, line in _live_lines(text):
+        rest = line[len(prefix):]
+        if line.startswith(prefix) and (rest[:1] == " " or rest[:3] == "-->"):
+            found.append((offset, line))
     # axis: a followups or dispositions marker present other than exactly once refuses markers-invalid
     if len(found) != 1:
         raise _Refusal("markers-invalid", "%s marker appears %d times" % (name, len(found)))
@@ -104,22 +115,11 @@ def read_marker_list(text, name, after=0):
 
 def _find_live_standalone_markers(body, marker):
     """Fence-aware, zero-indent standalone ``marker`` lines outside open HTML comments."""
-    raw = body.splitlines(keepends=True)
-    bare = [line.rstrip("\r\n") for line in raw]
-    inert = md_fence.scan_contexts(bare).inert
-    found, offset, in_comment = [], 0, False
-    for line, dead, whole in zip(bare, inert, raw):
-        if not dead:
-            if md_fence.indent_width(line) == 0 and line.strip() == marker and not in_comment:
-                leading = len(line) - len(line.lstrip())
-                found.append(offset + leading)
-            pos = 0
-            while True:
-                pos = line.find("-->" if in_comment else "<!--", pos)
-                if pos < 0:
-                    break
-                pos, in_comment = pos + (3 if in_comment else 4), not in_comment
-        offset += len(whole)
+    found = []
+    for offset, line in _live_lines(body):
+        if md_fence.indent_width(line) == 0 and line.strip() == marker:
+            leading = len(line) - len(line.lstrip())
+            found.append(offset + leading)
     return found
 
 

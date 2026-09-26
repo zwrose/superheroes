@@ -2188,6 +2188,14 @@ def test_list_markers_are_named_in_conventions_10_7():
         assert "<!-- superheroes:%s " % name in home, (
             "CONVENTIONS §10.7 does not name the list marker %r" % name
         )
+        literals = re.findall(r"<!-- superheroes:%s [^\n`]*?-->" % re.escape(name), home)
+        assert literals, "CONVENTIONS §10.7 shows no full %r marker example" % name
+        for literal in literals:
+            try:
+                vet_slot.read_marker_list(literal, name)
+            except vet_slot._Refusal as exc:
+                pytest.fail("CONVENTIONS §10.7 example %r does not parse: %s (%s)"
+                            % (literal, exc.reason, exc.detail))
 
 
 def test_vet_receipt_markers_match_conventions_10_7():
