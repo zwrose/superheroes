@@ -50,7 +50,8 @@ SEAT_RESULT_SCHEMAS = (SEAT_RESULT_SCHEMA, SEAT_RESULT_SCHEMA_V2)
 SEAT_MISSING_SCHEMA = session_contract.SEAT_MISSING_SCHEMA
 
 SEAT_RESULT_SCHEMA_BY_STATE_VERSION = {2: SEAT_RESULT_SCHEMA, 3: SEAT_RESULT_SCHEMA,
-                                       4: SEAT_RESULT_SCHEMA, 5: SEAT_RESULT_SCHEMA_V2}
+                                       4: SEAT_RESULT_SCHEMA, 5: SEAT_RESULT_SCHEMA_V2,
+                                       6: SEAT_RESULT_SCHEMA_V2}
 
 
 def seat_result_schema_for_state_version(version):

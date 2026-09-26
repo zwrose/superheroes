@@ -475,7 +475,7 @@ The driver materializes them before order emit (see also the inline comment at
 - **`round-<N>/diff.txt`** — `_ensure_round_diff` when absent or its bytes do not match loop state
   (`reviewedDiff`), via `round_commit.atomic_write_bytes` (atomic tmp+rename) **outside** the
   `orders-emit` commit. The orchestrator still owns the real round diff: produce the bytes with
-  `git diff <pinned baseRef>...HEAD` and bind them on the first `next` via `--diff-path` (see
+  `round_driver.py review-diff --base <pinned baseRef>` and bind them on the first `next` via `--diff-path` (see
   `setup.md`'s session-artifact table).
 - **`round-<N>/head.diff`** — `_ensure_round_head_diff` from state `headDiff` when audits or scoped
   orders render (the orchestrator supplies `headDiff` inline or via `headDiffPath` at fixer
@@ -1020,12 +1020,14 @@ silent clean.
 
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
-- `schemaVersion` — `2`, `3`, `4`, or `5` (`validate_receipt` accepts all). It is the **state's** version,
+- `schemaVersion` — `2`, `3`, `4`, `5`, or `6` (`validate_receipt` accepts all). It is the **state's** version,
   not a constant: a session bootstrapped at v2 still terminates to a v2 receipt, while a fresh session
-  (`STATE_SCHEMA_VERSION` = 5) emits 5. State v5 lands `seat-result/2` envelopes carrying `provenance`
+  (`STATE_SCHEMA_VERSION` = 6) emits 6. State v5 and later land `seat-result/2` envelopes carrying `provenance`
   (required) and `executionEvidence` (optional), bound together by `envelopeSha256`; sessions at v2–v4
-  continue to land `seat-result/1`. No stored state field is removed at the bump, so in-flight lanes
-  complete on their recorded version.
+  continue to land `seat-result/1`. State v6 persists the reviewed-diff binding (`reviewedDiffHead`,
+  `reviewedDiffSha`, `fixFolds`), so a driver that predates it refuses a v6 session by version (naming
+  both) rather than resume it without the stale-diff checks. No stored state field is removed at the
+  bump, so in-flight lanes complete on their recorded version.
 - `verdict` — `converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
@@ -1034,7 +1036,7 @@ silent clean.
   `seat-map-violation`, `unproven-liveness`, `seat-pin`, `seat-map-unavailable`))
 - `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `verifiedHead` (the head the verify gate ran against, recorded by the verify fold beside its result — absent means the round's verify credits no head), `audits`, `auditProvenance` (`runner-record` | `hand-landed-evidence` | `mixed-evidence` | `collection-manifest` — derived from the adapter's per-seat `provenanceSource` on the durable-record path; `collection-manifest` on a hand `submit` at any version — visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapUnjudgeable`, `seatMapViolations`, `vacuousSeats`, `engagedArtifactSeats`, `canaryUnverified`, `canaryFailed`, `canaryOutcomeFailed`, `canaryPlantUndetected`, `canaryVerified`, `controlProbe`, `adapterProvenance`, `recordOrphansIgnored`, `orderVendorProvenanceGaps`, `priorCommentsUnavailable`, `verifyPasses`, `judgmentDispositions` (owner per-finding judgment dispositions — including free-text guidance on a `fix-with-guidance` ruling, so a resumed run's receipt still shows what the owner instructed), `gateGuidanceRowCarried` (fix-batch row carried the guidance key while the fold recorded none — never rendered as owner guidance), `unverified`, `authorJustifiedDrops`, `compileDrops` (each drop's `reason` is one of `uncited — no file:line`, `line is not an integer` — a non-integer citation is never reported as out of scope; a numeric string is coerced first — `outside the round diff scope`; gap sweep and scoped finder append their drops to the same channel), `selfRecovery`, `stallChoice` (the disclosure-channel names here are drift-pinned to `round_driver.RESUMABLE_DISCLOSURE_CHANNELS` by a test — a channel added to the registry must be added to this line)
 - `findings` — each row carries `id`; `findingKey` is stamped only when the state's
-  `schemaVersion` is at least `STATE_SCHEMA_VERSION` (5) — receipt schema versions 2–4 omit it
+  `schemaVersion` is at least 5 (`receipt_disclosures.RECORDED_VERSION_BOUNDARY`) — receipt schema versions 2–4 omit it
 - `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
 **Seat-map storage (#681).** The driver stores each round's submitted seat map as an append-only

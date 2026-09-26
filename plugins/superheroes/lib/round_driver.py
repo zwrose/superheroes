@@ -207,8 +207,8 @@ HEAD_CONTENT_BLOBS_SCHEMA = session_contract.HEAD_CONTENT_BLOBS_SCHEMA
 # is SHAPE-AMBIGUOUS after #681 — a genuine pre-#681 v3 state and a post-#681 state carrying the v4
 # shape under the old number are indistinguishable on disk — so a migration would have to guess which
 # one it is holding. The residual is disclosed rather than fixed.
-STATE_SCHEMA_VERSION = 5
-SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5)
+STATE_SCHEMA_VERSION = 6
+SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5, 6)
 
 # The receipt VERSION derives from the STATE's version: a v2 state terminates to
 # `receipt-certified/2` (today's shape, byte-for-byte unchanged — no key added), a v3 state to
@@ -3859,10 +3859,14 @@ def _resolve_head_diff(artifact):
 
 REVIEWED_DIFF_SOURCE_GIT = "git-derived"
 REVIEWED_DIFF_STALE = "reviewed-diff-stale"
-_GIT_DIFF_FORMAT_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
+REVIEW_DIFF_TOO_LARGE = "review-diff-too-large"
+REVIEW_DIFF_UNAVAILABLE = "review-diff-unavailable"
+_GIT_DIFF_FORMAT_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv",
+                          "--src-prefix=a/", "--dst-prefix=b/")
 # The one home of the review-diff command: the same argv SKILL.md's Setup runs for the round diff
 # (pinned equal by test). The config pins keep a user's diff settings (noprefix, mnemonic
-# prefixes, relative paths, quoted paths) from reshaping the bytes a panel reviews.
+# prefixes, relative paths, quoted paths) from reshaping the bytes a panel reviews, and the
+# explicit prefixes beat `diff.srcPrefix`/`diff.dstPrefix` (scope parsing reads `+++ b/` only).
 GIT_REVIEW_DIFF_ARGV = (("git",) + sanitized_view.DIFF_CONFIG_OVERRIDES + ("diff",)
                         + _GIT_DIFF_FORMAT_FLAGS)
 
@@ -3880,28 +3884,36 @@ def _hardened_head(repo_root):
     return head or None
 
 
-def review_diff_text(repo_root, base, head):
-    """THE review diff: `GIT_REVIEW_DIFF_ARGV <base>...<head>` in `repo_root`, byte-mode, under the
-    shared git env hardening. The one home both the driver's post-fix derivation and the Setup
-    round diff (the `review-diff` verb SKILL.md runs) read. Admitted only as strict UTF-8 text that
-    opens with a `diff --git ` header; anything else (a failed run, an empty or undecodable
-    diff) returns None — never a partial diff."""
+def _review_diff(repo_root, base, head):
+    """`(text, refusal)` for THE review diff: `GIT_REVIEW_DIFF_ARGV <base>...<head>` in
+    `repo_root`, streamed under the shared git env hardening and bounded by
+    `sanitized_view.REVIEW_DIFF_MAX_BYTES`. Admitted only as strict UTF-8 text that opens with a
+    `diff --git ` header. Anything else is `(None, refusal)`: `review-diff-too-large` past the cap
+    (git is terminated; a partial diff is never reviewed), `review-diff-unavailable` otherwise."""
     if not (isinstance(base, str) and base and isinstance(head, str) and head and repo_root):
-        return None
+        return None, REVIEW_DIFF_UNAVAILABLE
+    argv = (["git", "-C", repo_root] + list(GIT_REVIEW_DIFF_ARGV[1:])
+            + ["%s...%s" % (base, head)])
     try:
-        proc = subprocess.run(
-            list(GIT_REVIEW_DIFF_ARGV) + ["%s...%s" % (base, head)],
-            cwd=repo_root, env=sanitized_view.git_env(),
-            capture_output=True, text=False, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
+        raw = sanitized_view.bounded_git_diff_output(argv)
+    except sanitized_view.SanitizedViewError as exc:
+        if exc.detail == "sanitized-view-diff-too-large":
+            return None, REVIEW_DIFF_TOO_LARGE
+        return None, REVIEW_DIFF_UNAVAILABLE
     try:
-        text = proc.stdout.decode("utf-8")
+        text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return None
-    return text if text.startswith("diff --git ") else None
+        return None, REVIEW_DIFF_UNAVAILABLE
+    if not text.startswith("diff --git "):
+        return None, REVIEW_DIFF_UNAVAILABLE
+    return text, None
+
+
+def review_diff_text(repo_root, base, head):
+    """THE review diff (`_review_diff`), or None. The one home both the driver's post-fix
+    derivation and the Setup round diff (the `review-diff` verb SKILL.md runs) read; an over-cap
+    diff is None, so the post-fix derivation parks rather than review a partial diff."""
+    return _review_diff(repo_root, base, head)[0]
 
 
 def _derive_head_diff_from_git(session_dir, state):
@@ -5448,7 +5460,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                "title": f.get("title"), "severity": f.get("severity"),
                "verdict": f.get("verdict"), "challenge": f.get("challenge"),
                "unverified": f.get("unverified")}
-        if (_state_version(state) or 0) >= STATE_SCHEMA_VERSION:
+        if (_state_version(state) or 0) >= receipt_disclosures.RECORDED_VERSION_BOUNDARY:
             finding_key = f.get(session_contract.FINDING_KEY_FIELD)
             if isinstance(finding_key, str) and finding_key:
                 row[session_contract.FINDING_KEY_FIELD] = finding_key
@@ -12068,6 +12080,11 @@ def _dispatch(args):
                         overrides[key] = guard[key]
                 overrides["baseGuard"] = BASE_GUARD_CHECKED
                 overrides["diffBinding"] = bind["binding"]
+                # The head the round-1 diff was taken at (Setup's meta): a session no fix moves
+                # certifies this SHA, never the live HEAD at certification.
+                meta_head = _session_meta(args.session_dir).get("headSha")
+                if isinstance(meta_head, str) and _FULL_HEX_ID.fullmatch(meta_head):
+                    overrides["headSha"] = meta_head
             elif args.diff_path:
                 return _refuse_base_guard(args.session_dir, "diff-path-not-fresh-state",
                                           value=args.diff_path)
@@ -12138,9 +12155,10 @@ def _dispatch(args):
         # driver's post-fix derivation calls the same `review_diff_text`.
         repo_root = args.repo_root or os.getcwd()
         head = _hardened_head(repo_root)
-        text = review_diff_text(repo_root, args.base, head) if head else None
+        text, refusal = (_review_diff(repo_root, args.base, head) if head
+                         else (None, REVIEW_DIFF_UNAVAILABLE))
         if text is None:
-            sys.stderr.write(json.dumps({"ok": False, "reason": "review-diff-unavailable",
+            sys.stderr.write(json.dumps({"ok": False, "reason": refusal,
                                          "base": args.base, "head": head}) + "\n")
             return 1
         sys.stdout.write(text)

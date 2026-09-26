@@ -28,8 +28,8 @@ META_FILE = session_contract.META_FILE
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
 SCHEMA_VERSION = 2
-STATE_SCHEMA_VERSION = 5
-SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5)
+STATE_SCHEMA_VERSION = 6
+SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5, 6)
 
 CERTIFIED_VERDICTS = (
     "converged",
@@ -1314,7 +1314,7 @@ def _receipt_version(state):
 
 def _supports_nonblocking_disclosure(state):
     """Non-blocking Minor/Nit survivors ride the state schema v5 bump (C13 recorded-version boundary)."""
-    return _receipt_version(state) >= STATE_SCHEMA_VERSION
+    return _receipt_version(state) >= receipt_disclosures.RECORDED_VERSION_BOUNDARY
 
 
 def _seat_family(seat, cfg):

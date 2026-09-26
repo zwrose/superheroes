@@ -31,7 +31,7 @@ def _git(path, *args):
 
 # The contract's literals, spelled out — never read back from the driver (a renamed token or a
 # dropped flag must fail here, not move the oracle with it).
-_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
+_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/")
 
 
 def _expected_diff(checkout, base, head):
@@ -614,7 +614,11 @@ def test_the_stale_park_names_its_cause():
 
 def test_the_contract_literals_are_pinned():
     """The derivation's flags and the named tokens are an external contract: pinned as literals."""
-    assert RD._GIT_DIFF_FORMAT_FLAGS == ("--no-color", "--no-ext-diff", "--no-textconv")
+    assert RD._GIT_DIFF_FORMAT_FLAGS == ("--no-color", "--no-ext-diff", "--no-textconv",
+                                         "--src-prefix=a/", "--dst-prefix=b/")
+    assert RD.REVIEW_DIFF_TOO_LARGE == "review-diff-too-large"
+    assert RD.REVIEW_DIFF_UNAVAILABLE == "review-diff-unavailable"
+    assert RD.STATE_SCHEMA_VERSION == 6
     assert RD.REVIEWED_DIFF_STALE == "reviewed-diff-stale"
     assert RD.REVIEWED_DIFF_SOURCE_GIT == "git-derived"
 
@@ -826,14 +830,19 @@ def test_a_commit_after_certification_is_refused_at_handback(tmp_path):
     """Currency is checked where the certificate is consumed: after a late commit the published
     sidecar still names the certified SHA, and the handback gate refuses the moved head with
     `handback-head-mismatch` (red token: the gate allows, or the sidecar names the new head)."""
-    import handback_gate as hg
-    import json as _json
     d, checkout, payload = _certified_session(tmp_path)
     certified = payload["certification"]["certifiedHead"]
     with open(os.path.join(checkout, "late.py"), "w", encoding="utf-8") as fh:
         fh.write("late = 1\n")
     _git(checkout, "add", "late.py")
     _git(checkout, "commit", "-qm", "late commit after certification")
+    _assert_handback_refuses_the_moved_head(d, checkout, certified)
+
+
+def _assert_handback_refuses_the_moved_head(d, checkout, certified):
+    """The published sidecar names `certified`, and the handback gate refuses the live head."""
+    import handback_gate as hg
+    import json as _json
     state = RD.load_state(d)[1]
     side = RD._publish_sidecar(d, state)
     assert side.get("ok"), side
@@ -861,3 +870,177 @@ def test_head_resolution_ignores_a_git_dir_decoy(tmp_path, monkeypatch):
     real_head = _git(real, "rev-parse", "HEAD").strip()
     monkeypatch.setenv("GIT_DIR", os.path.join(decoy, ".git"))
     assert RD._hardened_head(real) == real_head
+
+
+def test_a_no_fix_session_certifies_the_head_its_round_one_diff_was_taken_at(tmp_path):
+    """A clean first round through the real CLI `next` certifies the Setup head (meta `headSha`),
+    never the live HEAD: a commit landed after certification is refused at handback (red token:
+    no `certifiedHead`, so the sidecar and the gate take the late commit)."""
+    import test_round_driver_session_mobility as TSM
+    repo = TSM._mobility_repo(tmp_path)
+    session = TSM._mobility_session(tmp_path, repo)
+    d, checkout = session["session_dir"], repo["root_a"]
+    TRD.enter_checkout(checkout)
+    respond = TRD._responder()
+    for _ in range(40):
+        n = RD.cmd_next(d)
+        assert n["ok"], n
+        if n["action"] == RD.P_TERMINAL:
+            break
+        s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                          respond(n["phase"], n["payload"], n["round"]))
+        assert s["ok"], s
+    payload = n["payload"]
+    assert payload["verdict"] == "converged", payload
+    assert RD.load_state(d)[1].get("fixFolds") in (None, 0)
+    assert payload["certification"]["certifiedHead"] == repo["head"], payload
+    with open(os.path.join(checkout, "late.py"), "w", encoding="utf-8") as fh:
+        fh.write("late = 1\n")
+    _git(checkout, "add", "late.py")
+    _git(checkout, "commit", "-qm", "late commit after a no-fix certification")
+    _assert_handback_refuses_the_moved_head(d, checkout, repo["head"])
+
+
+def _prefix_repo(tmp_path):
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    with open(os.path.join(repo, "f.py"), "w", encoding="utf-8") as fh:
+        fh.write("a = 1\n")
+    base = session_checkout.make_checkout(repo)
+    _git(repo, "config", "diff.srcPrefix", "SRC-")
+    _git(repo, "config", "diff.dstPrefix", "DST-")
+    with open(os.path.join(repo, "f.py"), "w", encoding="utf-8") as fh:
+        fh.write("a = 2\n")
+    _git(repo, "commit", "-qam", "change")
+    return repo, base, _git(repo, "rev-parse", "HEAD").strip()
+
+
+def test_configured_diff_prefixes_do_not_reshape_the_review_diff(tmp_path):
+    """`diff.srcPrefix`/`diff.dstPrefix` never reach the review diff: the headers stay `a/`/`b/`
+    and the round's scope still admits a finding cited on the changed file (red token:
+    `+++ DST-f.py`, and the finding dropped as outside the diff scope)."""
+    import diff_scope
+    repo, base, head = _prefix_repo(tmp_path)
+    assert "+++ DST-f.py" in _git(repo, "diff", "%s...%s" % (base, head))
+    text = RD.review_diff_text(repo, base, head)
+    assert text is not None and text.startswith("diff --git a/f.py b/f.py\n"), text
+    assert "\n+++ b/f.py\n" in text, text
+    assert 1 in diff_scope.parse_diff_lines(text).get("f.py", ()), text
+
+
+def test_an_over_cap_review_diff_is_refused_never_truncated(tmp_path, monkeypatch, capsys):
+    """Past `REVIEW_DIFF_MAX_BYTES` the review diff is None — never a partial diff — and the verb
+    refuses with `review-diff-too-large` (red token: a diff returned, or exit 0)."""
+    import json as _json
+    import sanitized_view
+    repo, base, head = _prefix_repo(tmp_path)
+    monkeypatch.setattr(sanitized_view, "REVIEW_DIFF_MAX_BYTES", 16)
+    assert RD.review_diff_text(repo, base, head) is None
+    assert RD._review_diff(repo, base, head) == (None, "review-diff-too-large")
+    rc = RD.main(["review-diff", "--base", base, "--repo-root", repo])
+    err = capsys.readouterr().err.strip().splitlines()[-1]
+    assert rc == 1 and _json.loads(err)["reason"] == "review-diff-too-large", err
+
+
+def test_an_over_cap_post_fix_diff_parks_rather_than_review_a_partial_diff(tmp_path, monkeypatch):
+    """The post-fix derivation over the cap derives nothing, so the loop parks
+    `reviewed-diff-stale` and never dispatches a panel over a partial diff (red token: a
+    `converged` verdict)."""
+    import sanitized_view
+    monkeypatch.setattr(sanitized_view, "REVIEW_DIFF_MAX_BYTES", 16)
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    seen = {}
+    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base),
+                             _discharging(_respond(checkout, str(tmp_path / "missing.txt"), seen)))
+    assert payload["verdict"] == "cannot-certify", payload
+    assert "reviewed-diff-stale" in payload["certification"]["reason"], payload
+
+
+def test_two_real_fix_folds_rebind_the_reviewed_diff_to_each_head(tmp_path):
+    """Two fixer folds against real git, no double: after each fold the head diff, its SHA and
+    the persisted fix-fold head are that fold's HEAD, and the certificate binds the second head
+    (red token: a second fold that reuses the first fold's SHA)."""
+    import json as _json
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    seen = {}
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+    folds = []
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_VERIFY:
+            state = RD.load_state(d)[1]
+            with open(os.path.join(d, RD.round_records.META_FILE), encoding="utf-8") as fh:
+                meta = _json.load(fh)
+            head = _git(checkout, "rev-parse", "HEAD").strip()
+            folds.append({"head": head, "headDiff": state.get("headDiff"),
+                          "headDiffSha": state.get("headDiffSha"),
+                          "cfgFold": (state.get("config") or {}).get(RD.FIX_FOLD_HEAD_KEY),
+                          "metaFold": meta.get(RD.FIX_FOLD_HEAD_KEY),
+                          "expected": _expected_diff(checkout, base, head)})
+        if phase == RD.P_AUDITS:
+            # The first fix is audited not-discharged, so a second fixer fold follows.
+            ruling = "discharged" if seen.get("reopened") else "not-discharged"
+            seen["reopened"] = True
+            targets = payload.get("targets", [])
+            return {"results": [{"id": t["id"], "ruling": ruling, "reason": "r",
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                for t in targets],
+                    "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}}
+        art = inner(phase, payload, rnd)
+        if phase == RD.P_FIXER:
+            art = {"fixes": [], "changedSubjects": ["Code"]}
+        return art
+    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base), respond)
+    assert len(folds) >= 2, folds
+    first, second = folds[0], folds[1]
+    assert first["head"] != second["head"], folds
+    for fold in (first, second):
+        assert fold["headDiffSha"] == fold["head"], fold
+        assert fold["cfgFold"] == fold["head"] and fold["metaFold"] == fold["head"], fold
+        assert fold["headDiff"] == fold["expected"], fold
+    assert payload["verdict"] == "converged", payload
+    assert payload["certification"]["certifiedHead"] == second["head"], payload
+
+
+def test_an_older_driver_refuses_a_session_this_driver_minted(tmp_path, monkeypatch):
+    """Rollback: state carrying the reviewed-diff binding is minted at the bumped version, so a
+    driver that predates it (reads v2–v5) refuses it by version, naming both, before any panel
+    is emitted (red token: the older reader loads it)."""
+    import json as _json
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    minted = RD.new_state(TRD._cfg())
+    assert minted["schemaVersion"] == 6
+    with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:
+        _json.dump(minted, fh)
+    monkeypatch.setattr(RD, "SUPPORTED_STATE_VERSIONS", (2, 3, 4, 5))
+    ok, reason = RD.load_state(d)
+    assert ok is False and "6" in reason and "5" in reason and "not one of" in reason, reason
+    out = RD.cmd_next(d)
+    assert not out.get("ok") and out.get("action") != RD.P_PANEL, out
+
+
+def test_no_operational_reference_spells_a_raw_per_round_diff():
+    """One home, every reader: no review-code instruction runs a raw `git diff` over the round
+    base — the per-round diff is always the driver's `review-diff` verb (red token: a
+    `git diff "$BASE_REF"` or `git diff <pinned baseRef>` directive)."""
+    import re
+    root = os.path.join(os.path.dirname(_LIB), "skills", "review-code")
+    raw = re.compile(r'git diff\s+("?\$\{?BASE_REF|<pinned)')
+    hits = []
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if name.endswith(".md"):
+                path = os.path.join(dirpath, name)
+                with open(path, encoding="utf-8") as fh:
+                    for i, line in enumerate(fh, 1):
+                        if raw.search(line):
+                            hits.append("%s:%d" % (os.path.relpath(path, root), i))
+    assert not hits, hits
+    with open(os.path.join(root, "reference", "auto-fix-loop.md"), encoding="utf-8") as fh:
+        row = next(ln for ln in fh if ln.startswith("| Using `gh pr diff` inside the loop"))
+    assert 'round_driver.py review-diff --base "$BASE_REF"' in row, row

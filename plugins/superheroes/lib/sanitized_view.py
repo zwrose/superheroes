@@ -1566,6 +1566,13 @@ def _git_diff_batch_output(argv, started, total_bytes):
             _terminate_process(proc)
 
 
+def bounded_git_diff_output(argv):
+    """Stream one `git diff` argv under `git_env`, bounded by `REVIEW_DIFF_MAX_BYTES` and the
+    export timeout: the diff bytes, or `SanitizedViewError` (`sanitized-view-diff-too-large` past
+    the cap; git is terminated, never buffered whole)."""
+    return _git_diff_batch_output(argv, time.monotonic(), 0)[0]
+
+
 def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     """Materialize a review patch at the view root (before ``git init``).
 
