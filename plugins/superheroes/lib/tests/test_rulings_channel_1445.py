@@ -163,6 +163,8 @@ def _pending_fixer_two_findings(tmp_path, *, fixer_orders_emitted=False):
     ("ruling-session-terminal", "terminal"),
     ("ruling-attempt-pending", "attempt_recorded"),
     ("ruling-attempt-pending", "attempt_emitted_no_result"),
+    ("disposition-ledger-owner-unrecognized", "unrecognized_owner"),
+    ("disposition-ledger-malformed", "malformed_ledger"),
 ])
 def test_rule_refusal_tokens(tmp_path, token, setup):
     session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(
@@ -232,6 +234,22 @@ def test_rule_refusal_tokens(tmp_path, token, setup):
                                            "reason": "r", "guidance": "g"}])
         before = _state_bytes(session_dir)
         out = _rule(session_dir, str(ruling_path))
+    elif setup == "unrecognized_owner":
+        state = _state(session_dir)
+        state["dispositionLedgerOwner"] = "ledger-v2"
+        RD.save_state(session_dir, state)
+        _write_ruling_file(ruling_path, [{"id": id_a, "ruling": "out-of-scope", "reason": "r",
+                                           "followUp": _follow_up()}])
+        before = _state_bytes(session_dir)
+        out = _rule(session_dir, str(ruling_path))
+    elif setup == "malformed_ledger":
+        state = _state(session_dir)
+        state[session_contract.DISPOSITION_LEDGER_KEY] = {"not": "a-list"}
+        RD.save_state(session_dir, state)
+        _write_ruling_file(ruling_path, [{"id": id_a, "ruling": "out-of-scope", "reason": "r",
+                                           "followUp": _follow_up()}])
+        before = _state_bytes(session_dir)
+        out = _rule(session_dir, str(ruling_path))
     else:
         pytest.fail("unknown setup")
     assert out.get("ok") is False, out
@@ -252,6 +270,10 @@ def test_edge2_ruling_off_batch_logged(tmp_path):
 
 
 def test_edge3_restage_reapplies_out_of_scope(tmp_path):
+    """axis: restaging re-applies a live out-of-scope ruling onto the new ledger row.
+
+    bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_rulings_channel_1445.md (BP-3)
+    """
     session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     path = _write_ruling_file(tmp_path / "r.json", [
@@ -268,8 +290,10 @@ def test_edge3_restage_reapplies_out_of_scope(tmp_path):
 
 
 def test_edge4_guidance_lifts_out_of_scope(tmp_path):
+    """axis: guidance superseding out-of-scope clears the ledger family and restores the fixer row."""
     session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
-    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    key_b = RD._fix_batch_row_key(row_b)
+    id_b = row_b.get("id") or key_b
     p1 = _write_ruling_file(tmp_path / "r1.json", [
         {"id": id_b, "ruling": "out-of-scope", "reason": "skip",
          "followUp": _follow_up()}])
@@ -277,7 +301,22 @@ def test_edge4_guidance_lifts_out_of_scope(tmp_path):
     p2 = _write_ruling_file(tmp_path / "r2.json", [
         {"id": id_b, "ruling": "guidance", "reason": "fix now", "guidance": "use guard X"}])
     assert _rule(session_dir, p2)["ok"]
-    assert id_b not in RD._live_out_of_scope_ruling_keys(_state(session_dir))
+    state = _state(session_dir)
+    assert key_b not in RD._live_out_of_scope_ruling_keys(state)
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY) or []
+    entry = next(e for e in ledger if RD._finding_identity_key(e) == key_b)
+    assert entry.get("disposition") != "out-of-scope"
+    live = RD._live_finding_by_key(state, key_b)
+    if isinstance(live, dict):
+        assert live.get("disposition") != "out-of-scope"
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert refusal is None
+    cert = by_key.get(key_b) or {}
+    assert cert.get("disposition") != "out-of-scope"
+    scheduled = {RD._fix_batch_row_key(row)
+                 for row in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or [])
+                 if isinstance(row, dict)}
+    assert key_b in scheduled
 
 
 def test_critical_restage_not_suppressed_by_stale_out_of_scope(tmp_path):
@@ -314,7 +353,8 @@ def test_ruling_target_ambiguous_when_staged_id_reused():
     assert fault == RD.RULING_TARGET_AMBIGUOUS
 
 
-def test_rule_supersession_closes_prior_fixer_attempt_for_certification(tmp_path):
+def test_rule_refuses_when_fixer_orders_already_emitted(tmp_path):
+    """axis: rule refuses ruling-attempt-pending once the pending fixer attempt has emitted orders."""
     session_dir, _, _, _, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     before = _state_bytes(session_dir)
@@ -411,7 +451,8 @@ def test_edge7_guidance_off_batch_no_supersede(tmp_path):
     assert _state_bytes(session_dir) == before
 
 
-def test_edge8_empty_batch_advances(tmp_path):
+def test_rule_refuses_emitted_fixer_when_ruling_would_empty_batch(tmp_path):
+    """axis: rule refuses ruling-attempt-pending even when the rulings would empty the fixer batch."""
     session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
@@ -422,6 +463,92 @@ def test_edge8_empty_batch_advances(tmp_path):
     assert out.get("ok") is False, out
     assert out.get("reason") == "ruling-attempt-pending", out
     assert _state_bytes(session_dir) == before
+
+
+def test_edge8_empty_batch_advances(tmp_path):
+    """axis: pre-emission out-of-scope on every remaining fixer row settles via empty-batch convergence."""
+    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    state = _state(session_dir)
+    state["pending"] = None
+    RD.save_state(session_dir, state)
+    id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_a, "ruling": "out-of-scope", "reason": "a", "followUp": _follow_up()},
+        {"id": id_b, "ruling": "out-of-scope", "reason": "b", "followUp": _follow_up()}]))
+    assert out.get("ok"), out
+    state = _state(session_dir)
+    assert state.get("terminal") == "converged"
+    assert state.get("step") == RD.P_TERMINAL
+
+
+def test_preemission_out_of_scope_drops_current_fix_batch_row(tmp_path):
+    """axis: a pre-emission out-of-scope ruling drops the target from `_fixBatch` before the next emit."""
+    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    state = _state(session_dir)
+    state["pending"] = None
+    RD.save_state(session_dir, state)
+    key_a = RD._fix_batch_row_key(row_a)
+    id_a = row_a.get("id") or key_a
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_a, "ruling": "out-of-scope", "reason": "defer A",
+         "followUp": _follow_up()}]))
+    assert out.get("ok"), out
+    state = _state(session_dir)
+    batch_keys = {RD._fix_batch_row_key(row) for row in (state.get("_fixBatch") or [])
+                  if isinstance(row, dict)}
+    assert key_a not in batch_keys
+    nxt = RD.cmd_next(session_dir)
+    assert nxt.get("ok"), nxt
+    payload_keys = {
+        RD._fix_batch_row_key(row)
+        for row in ((nxt.get("payload") or {}).get("batch") or [])
+        if isinstance(row, dict)}
+    assert key_a not in payload_keys
+
+
+def test_out_of_scope_queue_row_absent_after_fixer_landing(tmp_path):
+    """axis: live out-of-scope keys are excluded from the post-landing fix-batch re-slice.
+
+    bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_rulings_channel_1445.md (BP-2)
+    """
+    session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    state = _state(session_dir)
+    state["pending"] = None
+    RD.save_state(session_dir, state)
+    key_b = RD._fix_batch_row_key(row_b)
+    id_b = row_b.get("id") or key_b
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
+         "followUp": _follow_up()}]))
+    assert out.get("ok"), out
+    state = _state(session_dir)
+    scheduled = {RD._fix_batch_row_key(row)
+                 for row in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or [])
+                 if isinstance(row, dict)}
+    assert key_b not in scheduled
+    nxt = RD.cmd_next(session_dir)
+    assert nxt.get("ok"), nxt
+    phase, adv = _drive_one_phase(session_dir, gitdir, [], head_path)
+    assert phase == P_FIXER
+    assert adv.get("ok"), adv
+    state = _state(session_dir)
+    later = {RD._fix_batch_row_key(row)
+             for row in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or [])
+             if isinstance(row, dict)}
+    assert key_b not in later
+    for rnd in (1, 2, state.get("round")):
+        if not isinstance(rnd, int):
+            continue
+        batch1 = os.path.join(RR.round_dir(session_dir, rnd), "fix-batch.1.json")
+        if not os.path.isfile(batch1):
+            continue
+        with open(batch1, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        keys = {RD._fix_batch_row_key(row) or row.get("id")
+                for row in (doc if isinstance(doc, list) else [])
+                if isinstance(row, dict)}
+        assert key_b not in keys
 
 
 def test_fix_batch_unreadable_refuses_order_render(tmp_path, monkeypatch):

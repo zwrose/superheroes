@@ -1655,6 +1655,29 @@ def _record_disposition(state, key, disposition, round_no, **fields):
         live[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
 
 
+def _clear_out_of_scope_disposition(state, key):
+    """Drop a live out-of-scope disposition family; rulingsLog retains the history."""
+    if not isinstance(key, str) or not key:
+        return
+    live = _live_finding_by_key(state, key)
+    if isinstance(live, dict) and live.get("disposition") == "out-of-scope":
+        for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+            live.pop(field, None)
+        live.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
+    if not isinstance(ledger, list):
+        return
+    seen = _ledger_index_by_key(ledger)
+    if key not in seen:
+        return
+    entry = ledger[seen[key]]
+    if not isinstance(entry, dict) or entry.get("disposition") != "out-of-scope":
+        return
+    cleared = _strip_disposition_family(dict(entry))
+    cleared.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+    ledger[seen[key]] = cleared
+
+
 def _record_merged_into(state, key, into_key):
     ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
@@ -3900,6 +3923,67 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     state["_fixBatchIndex"] = batch_index
     state["step"] = P_FIXER
     return "queued"
+
+
+def _offered_fixer_rows(state, extra_rows=None):
+    """Current fixer slice plus queue, then any extra rows (guidance-lifted) not already present."""
+    offered = []
+    seen = set()
+    for row in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or []):
+        if not isinstance(row, dict):
+            continue
+        key = _fix_batch_row_key(row)
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        offered.append(row)
+    for row in extra_rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = _fix_batch_row_key(row)
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        offered.append(dict(row))
+    return offered
+
+
+def _sync_pending_after_ruling_reconcile(state):
+    """Drop or refresh a stored fixer pending whose payload no longer matches the reconciled slice."""
+    pending = state.get("pending")
+    fixer_pending = isinstance(pending, dict) and pending.get("phase") == P_FIXER
+    if state.get("terminal") or state.get("step") != P_FIXER:
+        if fixer_pending:
+            state["pending"] = None
+        return
+    if not fixer_pending:
+        return
+    payload = dict(pending.get("payload") or {})
+    payload["batch"] = list(state.get("_fixBatch") or [])
+    updated = dict(pending)
+    updated["payload"] = payload
+    state["pending"] = updated
+
+
+def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None):
+    """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling."""
+    if state.get("step") != P_FIXER:
+        return None
+    offered = _offered_fixer_rows(state, extra_rows)
+    if not offered:
+        return None
+    batch_index = state.get("_fixBatchIndex") or 0
+    status = _queue_fix_batch(
+        state, config, offered, reset_accumulator=False, batch_index=batch_index)
+    if status == "excluded" and batch_index >= 1 and not state.get("terminal"):
+        state.pop("_escalatedRung", None)
+        state.pop("_fixQueue", None)
+        state.pop("_fixBatchIndex", None)
+        _enter_post_fix(state, config, session_dir=session_dir)
+    _sync_pending_after_ruling_reconcile(state)
+    return status
 
 
 def _subjects_for_dimension(dimension):
@@ -6787,6 +6871,24 @@ def _disposition_ledger_owner_refusal(session_dir, state, pending, cmd):
     return None
 
 
+def _ruling_ledger_precondition_refusal(session_dir, state, pending):
+    """Refuse `rule` before mutation when the ledger owner is unrecognized or the ledger is malformed."""
+    pend = pending if isinstance(pending, dict) else {}
+    owner_refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, RULE_CMD)
+    if owner_refusal is not None:
+        return owner_refusal
+    if session_contract.disposition_ledger_owner_classification(state) != (
+            session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED):
+        return None
+    _rows, fault = session_contract.read_disposition_ledger(state, required=True)
+    if fault is None:
+        return None
+    return _refuse_cmd(
+        session_dir, RULE_CMD, fault.token,
+        phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+        detail=fault.detail)
+
+
 def _next_response(session_dir, state, pending, cmd):
     expected_hash = state_hash(state)
     return {
@@ -7526,6 +7628,9 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     if shape_reason is not None:
         return _refuse_cmd(session_dir, RULE_CMD, shape_reason, value=ruling_file)
     pending = state.get("pending")
+    ledger_refusal = _ruling_ledger_precondition_refusal(session_dir, state, pending)
+    if ledger_refusal is not None:
+        return ledger_refusal
     phase = pending.get("phase") if isinstance(pending, dict) else None
     rnd = pending.get("round") if isinstance(pending, dict) else None
     attempt = pending.get("attempt") if isinstance(pending, dict) else None
@@ -7552,6 +7657,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                            attempt=pending.get("attempt"))
     cfg = state.get("config") or {}
     round_rulings = []
+    restored_rows = []
     for entry in parsed:
         key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
         if target_fault == RULING_TARGET_AMBIGUOUS:
@@ -7560,6 +7666,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE)
         if key is None:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
+        prior_live = _live_ruling_by_key(state).get(key)
         seq = _next_ruling_seq(state)
         log_row = {
             "seq": seq,
@@ -7584,21 +7691,44 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                 state, key, "out-of-scope", state["round"],
                 outOfScopeReason=entry["reason"], followUp=entry.get("followUp"),
                 rulingSeq=seq)
+        elif entry["ruling"] == "guidance":
+            live_row = _live_finding_by_key(state, key)
+            ledger_oos = isinstance(live_row, dict) and live_row.get("disposition") == "out-of-scope"
+            if not ledger_oos:
+                ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
+                if isinstance(ledger, list):
+                    seen = _ledger_index_by_key(ledger)
+                    stored = ledger[seen[key]] if key in seen else None
+                    ledger_oos = isinstance(stored, dict) and stored.get("disposition") == "out-of-scope"
+            prior_oos = isinstance(prior_live, dict) and prior_live.get("ruling") == "out-of-scope"
+            if prior_oos or ledger_oos:
+                _clear_out_of_scope_disposition(state, key)
+                restore = _live_finding_by_key(state, key) or candidate
+                if isinstance(restore, dict):
+                    restored_rows.append(dict(restore))
         _decision(state, "ruling-recorded",
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
-    pending_render_check = state.get("pending")
-    if isinstance(pending_render_check, dict) and pending_render_check.get("phase") == P_FIXER:
-        rnd_render = pending_render_check.get("round")
+    _reconcile_fixer_queue_after_rulings(
+        state, cfg, extra_rows=restored_rows, session_dir=session_dir)
+    if state.get("step") == P_FIXER:
+        pending_render_check = state.get("pending")
+        rnd_render = None
+        if isinstance(pending_render_check, dict):
+            rnd_render = pending_render_check.get("round")
         if rnd_render is None:
             rnd_render = state.get("round")
         try:
             _gate_guidance_block(_gate_guidance_entries(state, rnd_render))
         except ValueError as exc:
+            phase_r = (pending_render_check.get("phase")
+                       if isinstance(pending_render_check, dict) else P_FIXER)
+            rnd_r = (pending_render_check.get("round")
+                     if isinstance(pending_render_check, dict) else rnd_render)
+            attempt_r = (pending_render_check.get("attempt")
+                         if isinstance(pending_render_check, dict) else None)
             return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
-                               phase=pending_render_check.get("phase"),
-                               rnd=pending_render_check.get("round"),
-                               attempt=pending_render_check.get("attempt"), detail=str(exc))
+                               phase=phase_r, rnd=rnd_r, attempt=attempt_r, detail=str(exc))
     journal_entry = _journal_entry_for_commit(
         session_dir, RULE_CMD, "ruling-recorded", phase=phase, round=rnd, attempt=attempt,
         rulingFileSha256=file_sha, count=len(parsed))

@@ -690,13 +690,18 @@ the fix batch sha256 in the order commits to the batch file bytes.
 
 On success the driver appends to `state.rulingsLog` and the round's `rulings`, records
 dispositions for out-of-scope rows, and refreshes gate guidance for a not-yet-emitted fixer batch.
+A guidance ruling that supersedes a live out-of-scope ruling clears that disposition family from
+the ledger and the live finding (history stays in `rulingsLog`) and restores the row to the
+fixer queue. A ruling at `P_FIXER` before the next emission re-slices `_fixBatch`/`_fixQueue`
+through the same exclusion filter; an emptied first slice settles via empty-batch convergence.
 A ruling while a pending fixer attempt already has emitted orders is refused — let that fixer land
 or `re-emit` before ruling. Refusal tokens (each leaves state bytes unchanged):
 `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
 `ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
 `ruling-critical-out-of-scope`,
-`ruling-session-terminal`, `ruling-attempt-pending`.
+`ruling-session-terminal`, `ruling-attempt-pending`,
+`disposition-ledger-owner-unrecognized`, `disposition-ledger-malformed`.
 
 ## Batch concurrency — an independent batch goes out together
 
