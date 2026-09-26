@@ -3506,7 +3506,7 @@ def _gate_guidance_entries(state, rnd):
         out.append({"id": key, "title": gate_ruling.get("title"),
                     "file": gate_ruling.get("file"), "line": gate_ruling.get("line"),
                     "guidance": guidance.strip(), "round": gate_ruling.get("round")})
-    return ruling_channel + out
+    return out + ruling_channel
 
 
 def _gate_guidance_block(entries):
@@ -3542,6 +3542,8 @@ def _gate_guidance_block(entries):
         if from_ruling and aggregate_bytes >= GATE_GUIDANCE_AGGREGATE_BYTE_CAP:
             raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
         if aggregate_bytes >= GATE_GUIDANCE_AGGREGATE_BYTE_CAP:
+            if any(guided[j][0].get("rulingChannel") for j in range(idx, len(guided))):
+                raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
             omitted = len(guided) - idx
             break
         header_lines = [identity_line]
@@ -3572,6 +3574,8 @@ def _gate_guidance_block(entries):
         remaining = GATE_GUIDANCE_AGGREGATE_BYTE_CAP - aggregate_bytes
         if entry_bytes > remaining:
             if from_ruling:
+                raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
+            if any(guided[j][0].get("rulingChannel") for j in range(idx + 1, len(guided))):
                 raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
             omitted = len(guided) - idx
             break
@@ -7290,6 +7294,22 @@ def _row_matches_ruling_id(row, ruling_id):
     return derived == ruling_id if derived else False
 
 
+def _severity_for_finding_key(state, key, fallback=None):
+    if not isinstance(key, str) or not key:
+        return fallback
+    for row in (state.get("_fixBatch") or []) + (state.get("_fixQueue") or []):
+        if isinstance(row, dict) and _fix_batch_row_key(row) == key:
+            sev = row.get("severity")
+            if sev is not None:
+                return sev
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict) and _finding_key_of(finding) == key:
+            sev = finding.get("severity")
+            if sev is not None:
+                return sev
+    return fallback
+
+
 def _resolve_ruling_target(state, ruling_id):
     if not isinstance(ruling_id, str) or not ruling_id.strip():
         return None, None
@@ -7391,15 +7411,36 @@ def _dispatch_order_hashes_for_pending(session_dir, state, pending):
         repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")
                      or os.getcwd())
         row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending_payload, repo_root)
-        context, _paths = _build_order_render_context(
-            session_dir, state, rnd, phase, attempt, seat_key, occurrence,
-            pending_payload, row, roster=roster)
+        try:
+            context, _paths = _build_order_render_context(
+                session_dir, state, rnd, phase, attempt, seat_key, occurrence,
+                pending_payload, row, roster=roster)
+        except ValueError:
+            raise
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
         if render_reason is not None or not isinstance(order_text, str):
             return None
         skey = round_records.storage_key(seat_key, occurrence)
         hashes[skey] = round_records.sha256_text(order_text)
     return hashes
+
+
+def _ruling_requires_pending_fixer_batch_refresh(state, parsed):
+    """True when a ruling can change the emitted fixer batch or in-batch order guidance."""
+    batch_keys = set()
+    for row in state.get("_fixBatch") or []:
+        key = _fix_batch_row_key(row)
+        if key:
+            batch_keys.add(key)
+    for entry in parsed:
+        key, _candidate = _resolve_ruling_target(state, entry["id"])
+        if key is None:
+            continue
+        if entry["ruling"] == "out-of-scope":
+            return True
+        if entry["ruling"] == "guidance" and key in batch_keys:
+            return True
+    return False
 
 
 def _pending_dispatch_orders_changed(session_dir, state, pending):
@@ -7497,8 +7538,10 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
         if key is None:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
         if entry["ruling"] == "out-of-scope":
-            sev = candidate.get("severity") if isinstance(candidate, dict) else None
-            if _severity_rank(sev) == _severity_rank("Critical"):
+            sev = _severity_for_finding_key(
+                state, key,
+                candidate.get("severity") if isinstance(candidate, dict) else None)
+            if circuit_breaker.is_critical(sev):
                 return _refuse_cmd(session_dir, RULE_CMD, RULING_CRITICAL_OUT_OF_SCOPE,
                                    id=entry["id"])
     if (isinstance(pending, dict) and isinstance(pending.get("phase"), str)
@@ -7554,8 +7597,9 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     pending_cleared = False
     emptied_batch_journal = None
     if isinstance(pending, dict) and pending.get("phase") == P_FIXER:
-        if _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
-                                       pending.get("attempt")):
+        if (_journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
+                                       pending.get("attempt"))
+                and _ruling_requires_pending_fixer_batch_refresh(state, parsed)):
             pending_dispatch = dict(pending)
             batch_index = state.get("_fixBatchIndex") or 0
             combined = (list(state.get("_fixBatch") or [])
@@ -7576,13 +7620,41 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                     by=by, at=at, reason="ruling-emptied-batch")
                 state["pending"] = None
                 pending_cleared = True
-            elif isinstance(pending, dict) and _pending_dispatch_orders_changed(
-                    session_dir, state, pending):
-                superseded = _supersede_pending_dispatch_attempt(
-                    session_dir, state, by, RULE_CMD, pending,
-                    {"reason": "ruling-changed-order"})
+            elif isinstance(pending, dict):
+                try:
+                    orders_changed = _pending_dispatch_orders_changed(
+                        session_dir, state, pending)
+                except ValueError as exc:
+                    return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
+                                       phase=pending.get("phase"), rnd=pending.get("round"),
+                                       attempt=pending.get("attempt"), detail=str(exc))
+                if orders_changed:
+                    superseded = _supersede_pending_dispatch_attempt(
+                        session_dir, state, by, RULE_CMD, pending,
+                        {"reason": "ruling-changed-order"})
     if isinstance(superseded, dict) and not superseded.get("ok", True):
         return superseded
+    pending_render_check = state.get("pending")
+    if isinstance(pending_render_check, dict) and pending_render_check.get("phase") == P_FIXER:
+        rnd_render = pending_render_check.get("round")
+        if rnd_render is None:
+            rnd_render = state.get("round")
+        try:
+            _gate_guidance_block(_gate_guidance_entries(state, rnd_render))
+        except ValueError as exc:
+            return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
+                               phase=pending_render_check.get("phase"),
+                               rnd=pending_render_check.get("round"),
+                               attempt=pending_render_check.get("attempt"), detail=str(exc))
+        if _journal_has_orders_emitted(session_dir, pending_render_check.get("round"),
+                                       P_FIXER, pending_render_check.get("attempt")):
+            try:
+                _dispatch_order_hashes_for_pending(session_dir, state, pending_render_check)
+            except ValueError as exc:
+                return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
+                                   phase=pending_render_check.get("phase"),
+                                   rnd=pending_render_check.get("round"),
+                                   attempt=pending_render_check.get("attempt"), detail=str(exc))
     save_state(session_dir, state)
     if emptied_batch_journal is not None:
         _journal_append(session_dir, emptied_batch_journal)

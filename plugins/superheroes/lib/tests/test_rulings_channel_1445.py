@@ -124,13 +124,15 @@ def _pending_fixer_two_findings(tmp_path):
     f_a = _blocking_finding("bounds A", 2)
     f_b = _blocking_finding("bounds B", 3)
     f_b["severity"] = "Minor"
-    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="rulings-1445")
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="rulings-1445", fixBatchCap=1)
     _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_FIXER)
     state = _state(session_dir)
     assert state["pending"]["phase"] == P_FIXER
     batch = state.get("_fixBatch") or []
-    assert len(batch) >= 2
-    return session_dir, gitdir, head_path, batch[0], batch[1]
+    queue = state.get("_fixQueue") or []
+    assert batch and (queue or len(batch) >= 2)
+    row_b = queue[0] if queue else batch[1]
+    return session_dir, gitdir, head_path, batch[0], row_b
 
 
 @pytest.mark.parametrize("token,setup", [
@@ -148,9 +150,9 @@ def _pending_fixer_two_findings(tmp_path):
 ])
 def test_rule_refusal_tokens(tmp_path, token, setup):
     session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
-    before = _state_bytes(session_dir)
     ruling_path = tmp_path / "rulings.json"
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    before = _state_bytes(session_dir)
     if setup == "missing_file":
         out = _rule(session_dir, str(tmp_path / "nope.json"))
     elif setup == "bad_shape":
@@ -189,6 +191,7 @@ def test_rule_refusal_tokens(tmp_path, token, setup):
         RD.save_state(session_dir, state)
         _write_ruling_file(ruling_path, [{"id": crit_id, "ruling": "out-of-scope", "reason": "r",
                                            "followUp": _follow_up()}])
+        before = _state_bytes(session_dir)
         out = _rule(session_dir, str(ruling_path))
     elif setup == "terminal":
         state = _state(session_dir)
@@ -196,6 +199,7 @@ def test_rule_refusal_tokens(tmp_path, token, setup):
         RD.save_state(session_dir, state)
         _write_ruling_file(ruling_path, [{"id": id_a, "ruling": "guidance",
                                            "reason": "r", "guidance": "g"}])
+        before = _state_bytes(session_dir)
         out = _rule(session_dir, str(ruling_path))
     elif setup == "attempt_recorded":
         state = _state(session_dir)
@@ -208,6 +212,7 @@ def test_rule_refusal_tokens(tmp_path, token, setup):
         _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
         _write_ruling_file(ruling_path, [{"id": id_a, "ruling": "guidance",
                                            "reason": "r", "guidance": "g"}])
+        before = _state_bytes(session_dir)
         out = _rule(session_dir, str(ruling_path))
     else:
         pytest.fail("unknown setup")
@@ -258,15 +263,24 @@ def test_edge4_guidance_lifts_out_of_scope(tmp_path):
 
 
 def test_edge5_aggregate_cap_refuses_ruling_omitted(tmp_path):
-    session_dir, _, _, row_a, _row_b = _pending_fixer_two_findings(tmp_path)
+    f_a = _blocking_finding("cap A", 2)
+    f_b = _blocking_finding("cap B", 3)
+    f_b["severity"] = "Minor"
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="edge5-cap", fixBatchCap=4)
+    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_FIXER)
     state = _state(session_dir)
+    batch = state.get("_fixBatch") or []
+    assert batch
+    row_a = batch[0]
     rnd = state["round"]
-    huge = "z" * (RD.GATE_GUIDANCE_AGGREGATE_BYTE_CAP + 100)
-    state.setdefault("rounds", {}).setdefault(str(rnd), {})["judgmentDispositions"] = [
-        {"disposition": "fix-with-guidance", "id": "fill", "guidance": huge,
-         "title": "t", "file": "f.py", "line": 1}]
-    RD.save_state(session_dir, state)
+    chunk = "z" * RD.GATE_GUIDANCE_ROW_BYTE_CAP
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    state.setdefault("rounds", {}).setdefault(str(rnd), {})["judgmentDispositions"] = [
+        {"disposition": "fix-with-guidance", "id": "gate-%d" % i,
+         RD.GATE_GUIDANCE_RECORD_KEY: chunk,
+         "title": "t", "file": "f.py", "line": i}
+        for i in range(6)]
+    RD.save_state(session_dir, state)
     path = _write_ruling_file(tmp_path / "r.json", [
         {"id": id_a, "ruling": "guidance", "reason": "cap", "guidance": "must appear whole"}])
     out = _rule(session_dir, path)
@@ -382,17 +396,28 @@ def test_binding_ruling_rides_hashed_order_and_certifies(tmp_path):
     roster, _ = __import__("round_adapters").roster_for(
         pend["phase"], state, state.get("config") or {})
     seat, occurrence = RR.roster_slots(roster)[0]
-    order_path = RR.order_path(session_dir, pend["round"], pend["phase"], seat,
-                               pend["attempt"], occurrence)
-    run_dir = _write_execution_run_dir(tmp_path, order_path, echo_nonce="rulings-bind")
-    with open(os.path.join(run_dir, "prompt.txt"), "w", encoding="utf-8") as fh:
+    skey = RR.storage_key(seat, occurrence)
+    order_path = RR.order_prompt_path(
+        session_dir, pend["round"], pend["phase"], skey, pend["attempt"])
+    with open(order_path, "w", encoding="utf-8") as fh:
         fh.write(prompt)
-    manifest_sha, order_sha = _anchor_hashes(session_dir, state, pend, seat, occurrence)
-    record = {"storePath": RR.store_path(session_dir, pend["round"], pend["phase"],
-                                          RR.storage_key(seat, occurrence), pend["attempt"])}
-    envelope = _fixer_envelope_for_write_run(record, order_sha=order_sha)
+    run_dir = _write_execution_run_dir(tmp_path, order_path, echo_nonce="rulings-bind")
+    payload = _TRI._payload_for(session_dir, state, pend, seat, [], head_path)
+    _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
     rec_out = RD.cmd_record_result(session_dir, seat, occurrence=occurrence,
                                    evidence_run_dir=run_dir)
     assert rec_out.get("ok"), rec_out
-    raise AssertionError(
-        "binding test: fixer record-result accepted but certified terminal not reached in this budget")
+    adv = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert adv.get("ok"), adv
+    while not _state(session_dir).get("terminal"):
+        phase, out = _drive_one_phase(session_dir, gitdir, [], head_path)
+        assert out.get("ok"), (phase, out)
+    terminal = _state(session_dir)
+    assert terminal.get("terminal") == "converged", terminal.get("certification")
+    receipt = RD.build_receipt(terminal, session_dir=session_dir)
+    round_rulings = [v.get("rulings") for v in (terminal.get("rounds") or {}).values()
+                     if v.get("rulings")]
+    assert round_rulings, terminal.get("rounds")
+    receipt_rulings = [r.get("rulings") for r in receipt.get("rounds") or [] if r.get("rulings")]
+    assert receipt_rulings
+    assert receipt_rulings[0] == round_rulings[0]
