@@ -275,8 +275,8 @@ def _bound_stdout(text):
 
 
 def _pin_name_to_commit(cwd, name):
-    """Pin a branch name to a full commit id (origin/<name> first, then <name>)."""
-    for candidate in ("origin/%s" % name, name):
+    """Pin a branch name to a full commit id (remote-tracking ref first, then local)."""
+    for candidate in ("refs/remotes/origin/%s" % name, name):
         out = store_core.run_git(
             cwd, "rev-parse", "--verify", "--quiet", "%s^{commit}" % candidate)
         if out is None:
