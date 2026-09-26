@@ -15,20 +15,22 @@ repository, outside the repository; entries cite it by name rather than by path.
 
 ## How an entry is built
 
-A [keep-or-retire entry](../../plugins/superheroes/rubric/glossary.md#keep-or-retire-entry) has six
+A [keep-or-retire entry](../../plugins/superheroes/rubric/glossary.md#keep-or-retire-entry) has seven
 fields, in this fixed order:
 
 1. **Component** — the census row, by its stable id and name, and the cost or annoyance that makes
    reconsidering it worthwhile.
-2. **Condition** — one of the three shapes, its window in calendar days, and the one action on
+2. **Start date** — the date the entry first landed in this file, from its first commit in git
+   history, so a condition window can be read without reconstruction.
+3. **Condition** — one of the three shapes, its window in calendar days, and the one action on
    firing.
-3. **Last demonstrated benefit** — what the component did, described, with its locator in
+4. **Last demonstrated benefit** — what the component did, described, with its locator in
    parentheses; or `unknown`.
-4. **Consumer evidence** — a consuming project's or external user's report, described, with its
+5. **Consumer evidence** — a consuming project's or external user's report, described, with its
    locator in parentheses; or `unmeasured`.
-5. **Decision** — the owner's latest decision. Every non-foundational entry reads
+6. **Decision** — the owner's latest decision. Every non-foundational entry reads
    `keep-until-condition-fires`.
-6. **Notes** — the tag, its one-line reason, and, where the component guards a model behaviour, the
+7. **Notes** — the tag, its one-line reason, and, where the component guards a model behaviour, the
    engine family the evidence was observed on.
 
 **Condition shapes and default windows.** The three shapes are
