@@ -134,7 +134,15 @@ shape is wrong and the thinking wins.
    sample tells them apart. Record what the rate was and what you did about it. The field flag
    that named this was **12 of 12 CONFIRMED on a ~10,000-line diff**.
 7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
-   this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Then the
+   this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Under
+   `**Dispositions — completed.**`, write one bullet per build-record id, `- FU<n>: <disposition>`.
+   The disposition begins with one of `fixed` (in this PR), `filed #<n>`, `folded into #<n>`,
+   `collector @<pointer>`, `declined` with its revisit trigger, or `info` — e.g. `filed #12`. Then
+   write one marker line with the same ids, `<!-- superheroes:dispositions FU1 FU2 -->`, or
+   `<!-- superheroes:dispositions none -->` only over a `none` build record. Other completed items
+   may follow as prose. The slot writer compares the two markers and refuses the owner-half write
+   when an id has no disposition, when the receipt lists an id the build record lacks, or when
+   `none` sits over a list. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
    close in this session. Every owner call is appended to the collector at vet time,
    unconditionally, so the collector is the complete register by construction; owner attendance
@@ -148,9 +156,10 @@ shape is wrong and the thinking wins.
    front door recorded — and for a product item the classification and the ratification it rides,
    since no evidence bar applied to it; each append also carries its venue recommendation, so the
    owner's batch is one word per item.
-   **Known limit, carried knowingly:** this contract is prose-bound — nothing mechanical checks that
-   a disposition names a door grading and a venue, and a reader who wants to know can only read the
-   receipt. Each pending item carries
+   **Known limit, carried knowingly:** the slot writer checks that the two marker lists agree; it
+   trusts each marker as its author's declaration and reads no prose, so the vet reads the prose
+   against the marker. Nothing mechanical checks that an append names a door grading and a venue. A
+   reader who wants to know that can only read the receipt. Each pending item carries
    **what it is**, **your recommendation** (so the owner's batch pass is one word rather than a
    re-derivation), and **the vet ordinal it was proposed at** — a monotonic integer, one per vet,
    assigned at the vet that proposed the item (the same vet when proposed and appended together; the
@@ -287,13 +296,30 @@ flag belongs **here, in plain language**: what the new behavior is, and that no 
 covers it. It is exactly what the owner is being asked to accept, so it is stated in the owner half
 and not left in the receipt alone.
 
-**Writing the slot is a read-modify-write of a body you did not author — do it safely.** Read the
-body from the repo cwd or with an explicit `-R <owner/repo>`, into a scratch file you will *not*
-push from directly; check the read's exit status and that the file is non-empty and still carries
-the `advisor-vet` and `build-record` markers **before** any `--body-file` push. The failure mode, in
-one clause: a shell redirect truncates the target file *before* `gh` runs, so a `gh` read that fails
-(wrong cwd, no repo context) leaves an empty file that the next `--body-file` pushes as the body —
-observed on PR #1041 (2026-08-16), diagnosed by the detective's first rehearsal.
+**Write the slot through the command, never by hand.** Put the slot text in a file and run:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/vet_slot.py" write --pr <n> --repo <owner/name> --slot-file <path>
+```
+
+The command reads the body and the latest vet receipt and checks the read, a non-empty body, both
+the `advisor-vet` and `build-record` markers, the build record's followups marker, and the
+receipt's dispositions marker. It re-reads the body before the push, writes only between the two
+slot markers, and reads the result back. A refusal names its reason (for example
+`followup-undispositioned`, `disposition-unknown`, `none-over-list`, `markers-invalid`, or
+`read-failed`) with a detail
+that says what was wrong, and writes nothing, except `write-unconfirmed`: the edit call was made (even
+one that failed or timed out) but the readback failed or differed from the pushed body. `check --pr <n> --repo <owner/name>` runs the same
+comparison with no write. The command exists because a hand-rolled write fails silently: a shell
+redirect truncates the target file *before* `gh` runs, so a `gh` read that fails leaves an empty
+file that the next `--body-file` pushes as the body. There is one write path, the command. Re-stamping a dropped
+`advisor-vet` marker, or creating the slot on a pre-contract PR, is the advisor's own hand edit to its
+own slot, made before the command runs. A build record that predates keyed follow-ups is keyed in
+place first: the advisor numbers its existing items FU1.. in order with a class each, adds the
+followups marker line, changes nothing else in the build record, and records that keying edit in
+the receipt; the receipt carries the dispositions marker before the command runs, so the repair can
+reach a successful write.
 
 **Probes, accounting and dispositions are mechanism.** Where they belong in the slot at all they go
 **collapsed inside `<details>`**, below the four elements, never above them; the pointer to the
@@ -360,7 +386,10 @@ Two artifacts, two skeletons. **The receipt comment:**
 **Accounting.** orders <n>, reworks <n>, attribution <…>; parks/refusals <…, each correct?>;
 receipt-integrity catches <…>; panel confirmation rate <rate or `not derivable from the receipt`>,
 inspection <what you did>; window: <…>
-**Dispositions — completed.** <…> | `None`
+**Dispositions — completed.**
+- FU<n>: <disposition: fixed | filed #… | folded into #… | collector @… | declined (trigger) | info> <…>
+<!-- superheroes:dispositions FU<n> … --> | <!-- superheroes:dispositions none -->
+<other completed items, as prose> | `None` (only over a `none` build record)
 <!-- superheroes:pending-proposals -->
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`
 **Open owner calls at merge.** <…> | `None`
