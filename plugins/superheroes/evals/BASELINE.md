@@ -36,11 +36,12 @@ case (three for W5, S5 and X1). A case that passes there is not testing the plug
    failing runs we read, the agent's answer met the pass rule; the judge failed it. S6's plan was
    about 15,000 characters. The likely cause is the small judge on long answers, not the charter.
    Until that is fixed, read these three by hand when they fail on a head.
-2. **S5 read 2/3, then 3/3 on its re-run.** Treat it as noisy.
+2. **S5 read 2/3, then 3/3 on its re-run, and W2 read 3/3 but failed its one with-plugin run in the
+   bite-proof pass (0/1).** Treat both as noisy: re-run once before calling a head failure a regression.
 3. **R8, W2, W4, W5 and S3 also pass without the plugin.** For them, a capable model with no plugin
    already does the right thing. They still catch a restructure that makes the agent do worse, but a
    pass on them says little about the charter. R8 passes by construction: with no plugin loaded, no
    superheroes skill can fire.
-4. **The `diag-*` page-read diagnostics hit 0/3 on W3, W4, S3, D1, D2 and X1.** On main the rules
+4. **The `diag-*` page-read diagnostics hit 0/3 on W3, W4, S3, D1 and D2 (R8 and X1 carry none).** On main the rules
    sit in the charter itself, so no page needs opening. That is expected, and it is why they are not
    scored.
