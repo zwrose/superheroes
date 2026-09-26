@@ -1,35 +1,34 @@
 # Contents
 
 1. [Dispatch mechanics — long dispatches you own](#dispatch-mechanics--long-dispatches-you-own)
-2. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
-3. [Process cleanup — kill by the PID you recorded](#process-cleanup--kill-by-the-pid-you-recorded)
-4. [Mutation probes — own detached worktree](#mutation-probes--own-detached-worktree)
-5. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
-6. [Supervised review dispatch](#supervised-review-dispatch)
+2. [Awaiting a dispatch — the in-turn contract](#awaiting-a-dispatch--the-in-turn-contract)
+3. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
+4. [Process cleanup — kill by the PID you recorded](#process-cleanup--kill-by-the-pid-you-recorded)
+5. [Mutation probes — own detached worktree](#mutation-probes--own-detached-worktree)
+6. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
+7. [Supervised review dispatch](#supervised-review-dispatch)
    - [Result channels](#result-channels)
    - [The conformance probe](#the-conformance-probe)
-7. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
-8. [Supervised write dispatch](#supervised-write-dispatch)
-9. [Declared items](#declared-items)
-10. [Refusal streak — shell health](#refusal-streak--shell-health)
-11. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+8. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
+9. [Supervised write dispatch](#supervised-write-dispatch)
+10. [Declared items](#declared-items)
+11. [Refusal streak — shell health](#refusal-streak--shell-health)
+12. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+13. [Check-runner — a plain shell task](#check-runner--a-plain-shell-task)
 
 ---
 
 # Dispatch mechanics — long dispatches you own
 
-Read this at dispatch time, before you invoke a long dispatch. **Channel and wait are two choices.**
-A long-running external dispatch the builder invokes directly from a headless session is **awaited
-in-turn** through the **authorized entrypoint** (`dispatch-review` / `dispatch-write` with
-`--max-wait`, re-invoked on the same `--run-dir` until its structured result is terminal) — never an
-external `setsid`/`nohup` wrapper or an exit-code sentinel. A dispatch-shell entry point exits **1**
-when it refuses (returns without doing the work it was asked to do), **0** otherwise; exit **0** still
-never means success — the JSON `ok`/`terminal` fields stay authoritative. Harness-tracked background-and-poll is
-**not** the normal path for those dispatches — tracked background work dies when the turn ends. The
-**native-shape contract** (files not pipes, `--max-wait` slices with non-terminal `running`,
-originating-verb continuation, structured terminal result as the only completion signal,
-`dispatch-poll` observational only, mid-slice-kill lock reclaim, durable park) is **only** in the
-workhorse charter §7 — not restated here. Mechanics by dispatch kind:
+Read this at dispatch time, before you invoke a long dispatch. How you wait for a dispatch, and what
+survives the end of your turn, is § Awaiting a dispatch — the in-turn contract. This section covers
+what bounds each dispatch kind and how you tell a live run from a stuck one. Give a long dispatch
+room to finish and a stuck or runaway monitor, never a borderline limit you expect to just barely
+clear.
+
+A dispatch-shell entry point exits **1** when it refuses (returns without doing the work it was
+asked to do), **0** otherwise. Exit **0** still never means success: the JSON `ok` and `terminal`
+fields stay authoritative. Mechanics by dispatch kind:
 
 - **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the host's
   Bash timeout. On the Claude host (harness **2.1.219**) that is **ten minutes (600 s) — a
@@ -37,68 +36,166 @@ workhorse charter §7 — not restated here. Mechanics by dispatch kind:
   `bash_timeout` hook injects 600 s **only when a call omits its own `timeout`** (an explicit one is
   never touched), and the host **converts** a foreground call whose `timeout` exceeds 600 s to
   background — it does **not** clamp-and-kill at 600 s. What kills a converted run is **the turn
-  ending**. Give the dispatch that room by invoking through **`dispatch-review`/`dispatch-write
-  --max-wait`** (≤ 540 s) and **re-invoking the originating verb on the same `--run-dir` until
-  terminal** — never by trying to raise a foreground timeout, by wrapping in `setsid`/`nohup`, or by
-  harness-tracked background-and-poll (tracked background dies when the turn ends). On
-  **`dispatch-write`**, an abbreviated `--base-sha` refuses with nothing opened. Redirect its
-  output to a **file, never a pipe or `| tail`** — pipes die with the reader and make a stall look
-  like progress. Watch that
-  **output/transcript file growing as your primary stall signal**: a growing file is live; use the
-  process's **CPU-time column only as corroboration** (an engine CLI can sit at ~0% CPU for minutes
-  and still be live, so CPU alone can't separate idle-but-live from stuck). Treat **elapsed time as
-  your *runaway* bound, not a liveness signal** — a quiet run may still be live, but one that has far
-  outrun any plausible dispatch time is a runaway to kill even while its file grows. Four 0.18.0-wave
-  sessions died as **turn-end kills of converted runs** mid-dispatch — one mid-review-panel — losing
-  the run (WE review session, WE-510, sh-566, WE-484). **If the in-turn poll genuinely cannot fit
-  the turn:** park durably (charter §7); the output-file stall signals above still apply to the
+  ending**. Give the dispatch that room through the `--max-wait` slice loop in § Awaiting a
+  dispatch, never by trying to raise a foreground timeout. On **`dispatch-write`**, an abbreviated
+  `--base-sha` refuses with nothing opened. Watch the run's **output or transcript file growing as
+  your primary stall signal**: a growing file is live. Use the process's **CPU-time column only as
+  corroboration**. An engine CLI can sit at ~0% CPU for minutes and still be live, so CPU alone
+  can't separate idle-but-live from stuck. Treat **elapsed time as your *runaway* bound, not a
+  liveness signal**. A quiet run may still be live, but one that has far outrun any plausible
+  dispatch time is a runaway to kill even while its file grows. If the in-turn poll cannot fit the
+  turn, park (§ Awaiting a dispatch). The output-file stall signals above still apply to the
   detached child.
-- **A native subagent dispatch** has a **harness-managed lifecycle** — no `bash_timeout` floor and no
-  CPU column of your own to watch — so those shell mechanics don't apply and there is **no caller-set
-  ceiling to invent**; the harness manages the lifecycle and returns when the subagent completes. **No
-  shell-detach** — await in-turn when you dispatch; if it genuinely cannot fit the turn, **do not
-  dispatch** — park durably on the issue or PR **with the work order ready** (charter §7), or split so
-  each dispatch fits one turn.
+- **A native subagent dispatch** has a **harness-managed lifecycle**: no `bash_timeout` floor and no
+  CPU column of your own to watch. The shell mechanics above don't apply, and there is **no
+  caller-set ceiling to invent**. The harness returns when the subagent completes. How to await it,
+  and what to do when it cannot fit the turn, is § Awaiting a dispatch.
+
+## Awaiting a dispatch — the in-turn contract
+
+This section is the home of how you wait for a dispatch you launch, and of what survives the end of
+your turn. The physics behind it, pinned to the harness versions it was observed on, is § Turn
+survival.
+
+### The turn's final act
+
+A headless session (`claude -p`) **exits when its turn ends**. Until the durable handback comment,
+or a durable park, is posted on the issue or the PR, end every turn with a tool call. Narration
+rides alongside a tool call in the same message. A standalone narrative message ends the turn, and
+for a headless session that is a session exit, not a pause. **`Monitor`, harness background-run
+completion, and wakeup scheduling cannot wake a headless session**, so none of them is a turn's
+exit plan. Their tool descriptions and success messages promise a re-wake that does not fire
+headless. The rule is about the turn's final act, not about whether work is in flight: a session
+with nothing running exits the same way.
+
+The rule covers every outcome that resolves outside the turn, not only dispatches. A full-suite
+run, a build, a long script, a CI watch, and a background waiter are each awaited in-turn. Poll
+synchronously until the outcome resolves, or park durably.
+
+### Channel and wait
+
+Channel and wait are two choices. The **channel** is where the dispatch runs and what survives a
+session exit. The **wait** is how you stay in the turn until the dispatch resolves. Detaching a
+dispatch does not license ending a turn without a tool call.
+
+- **Two physics.** Harness-tracked background work dies when the turn ends. A shell-detached child
+  with durable on-disk output survives the exit, keeps working, and is recoverable when the session
+  resumes.
+- **A wake notification is an optimization**, never the mechanism you depend on, so never
+  arm-and-sleep as your only wait. The load-bearing wait is a bounded poll on artifact files: the
+  runner's structured terminal result, progress captures, and heartbeat records.
+
+### The native shape
+
+A long-running external dispatch you invoke directly from a headless session is an engine CLI: the
+implementer, the brief-check reviewer, or any engine CLI you hand-roll. Await it in-turn through the
+authorized entrypoint, `dispatch-review` or `dispatch-write` with `--max-wait`.
+
+- **The slice.** `--max-wait` takes 0 to 540 seconds. The runner refuses a value past the cap and
+  never clamps it. An over-cap or negative value comes back `unrunnable` with detail
+  `max-wait-out-of-range:<value>:allowed=0..540`, with nothing opened and nothing spawned. To wait
+  longer than the cap, re-invoke. Never pass a bigger number.
+- **A zero slice.** On `dispatch-review`, a zero slice opens the run and returns `running` without
+  starting an attempt. On `dispatch-write`, `--max-wait` also bounds git preflight, so a zero or
+  too-short slice can return terminal `git-preflight-timeout` with nothing opened. A continuation
+  cannot recover a run that never opened. § Launch slice vs continuation slice sizes both slices. A
+  `running` result whose attempt count is zero means nothing has launched yet. Re-invoke the same
+  verb on the same `--run-dir` with a positive slice.
+- **No wrapper.** Invoke the entrypoint as itself, never wrapped in `setsid` or `nohup`. The host
+  grant matches a command prefix, and a wrapped command no longer matches it.
+- **Files, never pipes.** Redirect stdout and stderr to files, never to a pipe or `| tail`. A pipe
+  dies with its reader and makes a stall look like progress.
+- **Continuation.** When a slice expires, the call returns non-terminal
+  `{"ok": false, "terminal": false, "reason": "running", …}` and the engine keeps working. The run
+  child is its own session leader (`start_new_session=True`) and survives the caller's death.
+  Re-invoke the originating verb (`dispatch-review` for a review run, `dispatch-write` for a write
+  run) on the same `--run-dir` until the structured result is terminal. That structured result is
+  the only completion signal.
+- **No exit-code sentinels.** A done-sentinel that records a wrapper's exit code is forbidden. A
+  sentinel can read `EXIT=0` while the runner's own result is `ok:false, reason:forfeited`, so it is
+  a false completion signal, not a receipt.
+- **`dispatch-poll` observes.** `dispatch-poll --run-dir` reads the journal and returns the folded
+  result only if a supervisor already folded it. It never spawns, never advances a run, never folds
+  one, and is never the continuation path.
+- **Lock reclaim.** A slice that expired normally has released `run.lock`, so the next
+  originating-verb call re-attaches at once. A caller killed mid-slice leaves `run.lock` held. The
+  next call takes it over as soon as that holder's pid is confirmed dead, with no TTL wait. A live
+  holder is never taken over, so a second caller racing a live one still gets `running` or
+  `run-locked`.
+
+### Concurrent batches
+
+A batch is independent when its members share no result dependency, no writable worktree, and no
+output path. Independent work orders, a review panel's dimensions, a round's verifier clusters, and
+a round's audit targets are such batches. Send an independent batch out concurrently. That is the
+shape, not a permission.
+
+1. Give every member its own `--run-dir`.
+2. Launch each member with a short positive slice. A zero slice launches nothing on
+   `dispatch-review` and risks `git-preflight-timeout` on `dispatch-write`.
+3. Re-invoke the originating verb on every non-terminal run in rotation until each returns
+   terminal, and fold each result as it lands.
+
+The concurrency comes from the engines working while you poll the others, not from issuing the
+calls in one message. Run-action calls serialize, and a launch call blocks for its whole slice
+(§ Launch slice vs continuation slice). A native-subagent batch is the other channel. The harness
+runs subagent dispatches issued in one message concurrently and owns their lifecycle, so send that
+batch out together in one message. A batch then costs its slowest member, not the sum of its
+members.
+
+Concurrency changes a batch's shape, never its invariant. Every run is awaited in-turn, with no
+`&`, `setsid`, or `nohup`, and no run-dir left unwatched at turn end. The one exception is a durable
+park. Anything that fails the independence test stays sequenced: a dependent order, or two
+dispatches that would write the same worktree.
+
+### Native subagents
+
+A native subagent has no detach, because the harness owns its lifecycle. Await it in-turn. If it
+cannot fit the turn, do not dispatch it. Park durably with the work order ready, or split the work
+so each dispatch fits one turn.
+
+### Skill-owned seats
+
+The native shape binds the dispatches you invoke directly. Seats a skill owns and dispatches
+itself, `review-code`'s panel and its fixer, keep that skill's own dispatch contract, and you do not
+wrap or re-channel them. `review-code` owns their bounds: slice size, structural timeout, retry
+ladder, and the rule that the caller composes no per-dispatch watchdog
+(`skills/review-code/reference/auto-fix-loop.md`). Its codex and cursor seats run the native shape,
+and its claude seats are native subagents. A build whose review seats ran either way owes no
+native-shape disclosure for them. The skill's hand-rolled engine fallback does not follow the
+native shape and still owes the disclosure when used. The in-place fixer stays a foreground Bash
+dispatch, because `dispatch-write` refuses a primary checkout (`cwd-primary-checkout`).
+
+### Park when the poll cannot fit
+
+When the in-turn poll cannot fit the turn, end with a durable park on the issue or the PR, where
+the advisor finds it without being told to look. The park says what is running, where its output
+is, and what the advisor must do. A session transcript or a scratch file is not a park. An outcome
+that outruns any plausible resolution time is a park, not an unbounded poll. A need for the owner's
+capability mid-run parks the same way: a running headless session is deaf, so never improvise a
+notification channel.
 
 ## Turn survival — the harness evidence
 
-The evidence base behind the charter's §7 Channel-conditioned rules. The rules and the
-detach-and-park contract live in the charter; this section carries the physics and the field record,
-pinned to the harness versions they were observed on.
+The physics behind § Awaiting a dispatch — the in-turn contract, pinned to the harness versions it
+was observed on. The rules live in that section.
 
 - **Harness-tracked background work dies when the turn ends** (harness 2.1.219, three runs): a probe
   wrote a start marker at t+8s, the session exited at t+15s, and the completion marker never
   appeared — no completion, no orphan process. Treating tracked-background work as durable is how
-  builds orphan: the #574 build background-dispatched its implementer, ended its turn, orphaned
-  mid-flight, and was recovered only via `--resume`.
+  builds orphan.
 - **Shell-detached children with durable on-disk output survive the exit**, keep working, and are
-  recoverable when the advisor resumes — proven twice mid-flight (brief-check builds): session
-  exited, detached child completed to disk, resumed session recovered with zero work lost. Earlier
-  readings that those recoveries were luck or that the engines "were already finished" are
-  **refuted**; this record corrects them.
-- **Wake notifications never fire for a dormant builder.** Sessions that trusted a waiter were
-  believing their tools — background-run, wakeup scheduling, and their success messages all promise
-  a re-wake that never fires headless. On 2.1.219, with the spawning agent dormant, a background
-  task's completion notification reaches the **root session**, not the builder — the builder is
-  never woken and the advisor becomes an accidental message broker. Field record: a six-lane
-  overnight wave stalled for hours on finished soaks and green gates — builders' own review seats
-  woke the advisor instead of the builders, zero handbacks by morning, recovered only when the
-  advisor swept and resumed each lane.
+  recoverable when the session resumes. The session exited, the detached child completed to disk,
+  and the resumed session recovered with zero work lost.
+- **Wake notifications never fire for a dormant builder.** Background-run, wakeup scheduling, and
+  their success messages all promise a re-wake that never fires headless. On 2.1.219, with the
+  spawning agent dormant, a background task's completion notification reaches the **root session**,
+  not the builder. The builder is never woken, and the advisor becomes an accidental message broker.
 - **The induction trap.** Wake-on-completion **does** work early in a session while the parent still
   holds an active task — so a builder that verified a re-wake once has evidence about the
   **active-task regime only**, and **none at all** about the **dormant-parent regime** where it
   fails. Trusting "re-wake proven earlier this session" into the dormant-parent regime is the trap;
   both halves were observed on 2.1.219.
-- The same physics catches **any** outcome that resolves outside the turn, not only dispatches: a
-  harness-tracked background waiter (#600 — fired despite dual warnings) and a post-handback CI
-  watch (#608) died the same way (#526 evidence trail).
-- **Headless turn-end — final act, not work in flight** (2026-08-02, three deaths in two lanes): a
-  headless `claude -p` session **exits when its turn ends** — one builder ended a turn waiting on a
-  `Monitor` (which cannot wake a headless session); two ended turns on standalone narrative messages
-  with nothing in flight at all. All three were recovered by advisor resume with zero work lost, but
-  the exits killed two live codex review seats mid-run — roughly 50 minutes of review, and the vendor
-  diversity of one panel. The prior charter phrasing missed this because it was framed as work in
-  flight; two of the three deaths had none.
 
 ## Process cleanup — kill by the PID you recorded
 
@@ -111,10 +208,7 @@ argument.
 **A command-text match is a cross-session kill, not a cleanup.** Sibling sessions in the same wave run
 *identical* commands — the same dev server, the same test invocation, the same engine CLI — so
 `pkill -f dev-server.js` or a `pkill -f` on a test command matches **their** process as readily as
-yours, and the process that dies is whichever the pattern happens to reach. Field record: exactly that
-pattern reached **two launched builders in one wave** (both self-disclosed; one called it "exactly the
-forbidden move"), and until now the lesson lived in a seat memory — which a launched builder never
-reads.
+yours, and the process that dies is whichever the pattern happens to reach.
 
 **If you did not record the PID, identify the process by something your own run owns** — the **cwd**
 of the worktree you dispatched into, or the **port** your own server bound — and kill *that* PID.
@@ -136,13 +230,6 @@ Review seats, auditors, and any concurrent reader dispatched against that path s
 prohibition: a reader that sees the tree mid-probe grades a state that never shipped, and the symptom
 — a seat reporting an inexplicable revert, or a file that disagrees with the diff — does not name its
 cause.
-
-Field record: on the **#1184** and **#1183** builds, bite-proof mutation probes ran in the **same
-worktree** concurrent read-only review seats were reading. Two auditors saw **transient state**; one
-reported that *"an external actor reverted the file mid-run."* No harm resulted either time — and
-that is exactly why it needs writing down: the failure mode is a seat grading a file that was
-mid-probe, which produces a confident finding about a state that never shipped, with nothing
-anywhere naming the cause.
 
 **This composes with, and does not replace, the charter's two standing rules:** commit the landed
 implementer work before probing (charter §8), and neutralize/restore by **targeted, reversible
@@ -181,17 +268,15 @@ The slice you choose depends on whether the run is a **launch** or a **continuat
   recover a run that never opened. Run-action calls serialize and a launch call blocks for its whole
   slice, so a launch phase over N run-dirs costs about **N × the launch slice** — that estimate
   **omits** this serial preflight work on each `dispatch-write`, so a real launch phase costs
-  somewhat more than the multiplication suggests. Measured on one host in the #930 build: three seats at a
-  **45 s** launch slice spent **150 s** launching and the batch cost **352 s** against a **373 s**
-  serial sum; the same three seats at a **12 s** launch slice cost **427 s** against a **987 s**
-  serial sum and a **419 s** slowest seat — i.e. the batch tracked its slowest member.
+  somewhat more than the multiplication suggests. With a short launch slice a concurrent batch
+  costs about its slowest member. A long launch slice pushes the cost toward the serial sum.
 - **CONTINUATION** — a re-invocation on an already-launched `--run-dir` while `.terminal` is false.
   The engine is already working, so use the **full slice up to 540 s** — a longer slice simply means
   fewer re-invocations.
 
 The `--max-wait 540` values in the recipes below are **continuation** slices and remain correct for
 every re-invocation after launch. On the first call for each `--run-dir`, substitute a short launch
-slice (12–45 s is the measured range above).
+slice (12–45 s is a workable range).
 
 ## Supervised review dispatch
 
@@ -331,11 +416,10 @@ On an engine on its native channel, a second schema or adapter fix after landing
 declared schema or its output or completion adapter — proposes dropping the engine or accepting the
 cost in the record. The fix commits are read by their `fix` type and touched paths; no new
 instrument; the proposal is the owner's judgment at the pass. The readout the pass reads is the
-project's C1 values annex, its result-channel-per-engine rows — the annex is out-of-repo.
+result-channel-per-engine rows of the project's values annex, which lives outside the repository.
 
-Cursor moved to the native channel in layer 3c. The `json`-envelope trial failed on the review half
-(the envelope's `result` string joins every assistant text turn, so it is never the result). The
-typed-file trial passed both halves (R9 as amended 2026-09-19). The stdout capture cap
+Cursor delivers its result as a typed file, never through the `json` envelope: the envelope's
+`result` string joins every assistant text turn, so it is never the result. The stdout capture cap
 (`MAX_STDOUT_CAPTURE`, 8 MiB) stays an operating parameter — it bounds the telemetry capture; the
 `stdout-capped-by-attempt` forfeit no longer runs for any engine.
 
@@ -378,7 +462,7 @@ Without `--wave`, binding is repository path plus age only and the entry records
 `reviewer-deep` matrix cell or the entry refuses `probe-cell-mismatch:<e>`.
 
 It refuses `probe-missing:<e>`, `probe-duplicate:<e>`, `probe-foreign-repo:<e>`,
-`probe-stale:<e>` (default max age 86400 s, one day — owner-ruled 2026-09-19; future `completedAt` timestamps count as stale),
+`probe-stale:<e>` (default max age 86400 s, one day; future `completedAt` timestamps count as stale),
 `probe-result-malformed:<path>`, `probe-channel-mismatch:<e>` (the record's channel is not the channel the engine dispatches on today — a probe taken before a channel move proves nothing about the new channel), `calibration-unreadable`, `author-family-unresolved`,
 `owner-word-missing`, and `seat-map-failed:<type>`. A failed engine with no owner word → `state: fail` (hold;
 the launcher's `walk_preflight` refuses `preflight-failed:engine-auth`, so nothing launches). With the
@@ -457,15 +541,14 @@ names `resultKind` and its payload when that attempt graded `ok`. Re-invoke **`d
 When the result carries an **`engagement`** block with a non-`null` value (present only when the
 attempt produced stdout that was graded), `engagement.read` is `"engaged"` when the seat
 demonstrably acted (a finding or `engagement.toolCalls >= 1`); a seat's `investigated` list is
-**disclosure**, not engagement evidence (register R7); the runner still spot-checks it. Otherwise
+**disclosure**, not engagement evidence; the runner still spot-checks it. Otherwise
 `"unknown"`. On a timeout, refusal, nonzero-exit, or missing-stdout forfeit the
 `engagement` key is **present with the value `null`** (there was no graded stdout to measure), so
 `engagement.read` is unavailable — `result.get("engagement", {})` is **unsafe** because the key may
 carry `null`, not merely be missing; consumers must handle a `null` value. The runner **never**
 asserts `"inert"` — absence of positive evidence is not proof of inaction, and only `seat_canary
-probe` can justify calling a seat inert. Token spend does not measure engagement: through the
-calibrated codex reviewer seat, a 2,449-token dispatch was engaged-clean and a 10,415-token
-dispatch produced a Critical finding.
+probe` can justify calling a seat inert. Token spend does not measure engagement: a small dispatch
+can be engaged and clean while a dispatch several times its size produces a Critical finding.
 
 **`reason: "forfeit-with-engaged-artifact"`** — a marker-channel outcome. No run mints it: it names a
 marker-channel recovery, and no engine is on the marker channel. It stays in the outcome vocabulary
@@ -596,14 +679,13 @@ live smoke against the real endpoint or binary; or **(c)** a stated reason neith
 the risk is accepted knowingly instead of by omission. A brief that describes in detail what we will
 send, and never says how we established the far side takes it, has **not** answered — and the check
 says so. The failure this catches is not a bug in our code: our code is exactly what we designed,
-and the contract we designed against was never real. *Teaching examples.* **#307** — the codex **review** role's
+and the contract we designed against was never real. *Teaching example.* A codex **review** role's
 `codex exec --output-schema` was handed a schema that is valid JSON Schema but invalid under OpenAI
-strict mode; every codex review dispatch 400'd at request time, **32/32 failures, zero successes ever**, and the
-silent fallback to **the host model** made the loss read as a working cross-vendor panel. The same class recurred
-**2026-08-09** in the weekly-eats project: a hand-rolled schema, request-time 400s, and three
-re-dispatches of a review that had already come back clean — the repair landed as **#949**'s
-canonical result contract. In both, one local validation of the foreign contract's rules at brief
-time would have cost minutes.
+strict mode. Every codex review dispatch failed at request time with a 400, and none ever
+succeeded. A silent fallback to **the host model** made the loss read as a working cross-vendor
+panel. The same class returns whenever a hand-rolled schema meets a vendor's rules: request-time
+400s, and re-dispatches of a review that had already come back clean. One local validation of the
+foreign contract's rules at brief time would have cost minutes.
 
 ## Supervised write dispatch
 
@@ -643,8 +725,8 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
 ```
 
 `~/.cursor/cli-config.json` is **one global mutable permission file shared by every cursor
-invocation on the machine** — not per-project and not per-run. Concurrent writers have been observed
-in the field (six stale `.tmp` files, distinct PIDs). A **`-f` write dispatch is immune** to whatever
+invocation on the machine** — not per-project and not per-run. Several sessions can write it at
+once. A **`-f` write dispatch is immune** to whatever
 that file contains; **any invocation without `-f` inherits whatever the last writer left**, which
 may be another session's settings.
 
@@ -707,7 +789,7 @@ evidence could not be collected — causes include `falsy-base-sha`, `diff-timeo
 when a declared run's `--base-sha` does not resolve. Other forfeits, `unrunnable`, and
 `worktree-dirtied-by-attempt` never carry `itemCheck`. On marker-channel runs, when engine stdout
 exceeds the **8 MiB capture cap**, the terminal forfeit carries a **stdout-capture-cap** reason class
-of its own (exact detail token pinned by sibling order WO-B) with an explicit truncation marker in
+of its own (`stdout-capped-by-attempt`) with an explicit truncation marker in
 the captured stdout — it no longer surfaces under `worktree-dirtied-by-attempt`. Every forfeit detail above remains `ok: false`,
 `forfeited: true`.
 
@@ -765,8 +847,7 @@ inferred cause. "One caller's bad script" is the alternative reading that sits b
 
 An external engine can forfeit *after* writing files — characteristically with cursor's
 **`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
-on-disk work already complete and correct. Field evidence: three builds in one wave; in one of them
-four of six dispatches forfeited, every one with correct files on disk.
+on-disk work already complete and correct.
 
 **Long cursor write dispatches.** A long cursor `dispatch-write` run can forfeit after its work lands
 (`worktree-dirtied-by-attempt`): no admissible result is graded — `attemptDetail` names why (for
@@ -780,8 +861,8 @@ decision rule:
 - **What the tree inspection establishes.** Before dispatching, the build worktree must be **clean** —
   `git status --porcelain` empty, with landed work already committed. This reference makes that
   baseline explicit and strengthens it; related charter obligations are §6 (commit before the next
-  order against a worktree) and §8 (commit before a mutation probe). Capture the baseline — same probe
-  as charter §8 `check-runner`: `git rev-parse HEAD`, that empty `git status --porcelain`, and
+  order against a worktree) and §8 (commit before a mutation probe). Capture the baseline with the
+  probe in § Check-runner — a plain shell task: `git rev-parse HEAD`, that empty `git status --porcelain`, and
   `git reflog --date=iso HEAD | wc -l`. If the
   tree cannot be made clean, use a **fresh worktree** or **park** — never dispatch against a dirty
   baseline, and never treat a delta measured from one as authorship evidence. Against a clean baseline,
@@ -817,7 +898,7 @@ decision rule:
   `-ff`), so a nested repo the implementer created survives this step and leaves the worktree dirty —
   use a **fresh worktree** for that case too. It does **not** restore ignored paths,
   which survive both commands and are invisible to `git status --porcelain` (`docs/`, `__pycache__/`,
-  `.pytest_cache/`, `.coverage`, `htmlcov/`, `.venv/`, and the rest of this repo's `.gitignore`), so
+  `.pytest_cache/`, `.coverage`, `htmlcov/`, `.venv/`, and the rest of the repository's `.gitignore`), so
   a re-dispatch on that worktree can inherit leftover ignored state. **Do not** use `-fdx`: it would
   sweep gitignored local-only content such as `docs/` that no baseline SHA restores and that are not
   dispatch output — and `-fd` is not safer for every local file: it protects only **ignored** paths;
@@ -833,7 +914,50 @@ report is **overriding the template against its own purpose**.
 An external engine's shell availability is set **outside your build** — **never assume the
 implementer can run anything**; the engine CLI consults its own permission surface, not your order. It is
 normally available on the sanctioned write path (so a blocked shell is not the expected state). But
-two builds in one wave had **every** implementer shell call rejected, and that is not yet explained
-— so it cannot be inferred from a previous build. Write every external order to be correct when the
+a whole build can have **every** implementer shell call rejected, for a cause not yet known, so
+availability cannot be inferred from a previous build. Write every external order to be correct when the
 implementer can run nothing; the orchestrator's own re-run is the verification either way, and a
 corrective round is worth budgeting.
+
+## Check-runner — a plain shell task
+
+A `check-runner` seat runs commands you author and writes their raw output to disk. It is a plain
+shell task: judgment-free, and it certifies nothing, so what it produces is evidence, never a
+verdict. Use it when a run's volume, noise, or duration is the problem. It buys context relief, not
+trust, so treat its output exactly as you treat an implementer's. The seat's side of the contract
+is `agents/check-runner.md`.
+
+1. **Author the command list.** Write the exact commands, with a byte ceiling per command and an
+   order-wide ceiling. Nothing else bounds the sum. For each command, name the paths outside the
+   repository where the seat writes its stdout, stderr, and exit code.
+2. **Resolve the model.** Run `lib/dispatch_guard.py` with a `--seat` naming role `"mechanical"`,
+   the host's own vendor, and a null `model`. The call is a query that resolves the seat default
+   (`effort_source: "default"`).
+   - Exit 1 with `reason: "allowlist-refused"` and a `seat_detail` naming no sanctioned model for
+     the role on this vendor means the route is unavailable. Run the commands yourself and disclose
+     the fallback.
+   - Exit 1 with any other `reason` or `seat_detail` (a mistyped `--seat`, an off-allowlist model,
+     any other refusal) parks.
+   - Exit 0 dispatches the seat as a host subagent (`Agent` on Claude, `spawn_agent` on Codex),
+     never to an external engine. Record the resolved `model_id` and `effort`. The seat renders no
+     judgment, so no independence or maker-family constraint applies.
+3. **Probe the tree before.** Commit the landed work first, so the baseline is clean. Then capture
+   `git rev-parse HEAD`, the full `git status --porcelain`, and
+   `git reflog --date=iso HEAD | wc -l`. Use the full status, never `-uno` or its long form
+   `--untracked-files=no`: a run's untracked output is exactly what you want to see.
+4. **Dispatch the seat.** Await it in-turn (§ Awaiting a dispatch — the in-turn contract).
+5. **Probe the tree after.** Capture the same three signals. Any delta is a failed verification,
+   not a warning. A dispatch that timed out, or whose child you never joined, is **INDETERMINATE**,
+   never clean. Ignored repository state (bytecode, test caches, coverage artifacts) is outside the
+   probe. Disclose what the probe cannot see as a residual, never as covered.
+6. **Read the captures off disk.** The seat's return prose is never the receipt. For each command
+   you authored, read the first line of the capture at the path you named for that command. That
+   line opens `# ran: <command>`. Compare it with that command. A `# ran:` line anywhere else in a
+   body is output, not a receipt.
+7. **Quote, then remove.** The captures are working artifacts, and the PR record is the durable
+   receipt. Quote what matters into the PR record, redacted of secrets, tokens, private URLs, and
+   personal data. Remove the captures once verification closes. An interrupted order leaves its
+   captures in session scratch until someone clears them.
+
+If the seat needs a stronger model to do its job, your command list was under-enumerated. Rewrite
+the list, or run the commands yourself.
