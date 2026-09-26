@@ -844,7 +844,9 @@ def _resolve_pr_stack_groups(
                 position_pairs = []
                 stack_position_maps[stack_number] = position_pairs
             for member in members:
-                position_pairs.append((member["position"], member["number"]))
+                position_pairs.append(
+                    (member["position"], member["number"], member.get("state")),
+                )
         elif read_result.get("reason") == sc.REASON_NOT_LINKED:
             if pr_num not in covered_prs:
                 ungrouped.append(pr_num)
@@ -858,7 +860,7 @@ def _resolve_pr_stack_groups(
         seen_numbers = set()
         ordered_prs = []
         for position in sorted({pair[0] for pair in position_pairs}):
-            for pair_position, number in sorted(position_pairs):
+            for pair_position, number, _state in sorted(position_pairs):
                 if pair_position == position and number not in seen_numbers:
                     ordered_prs.append(number)
                     seen_numbers.add(number)
@@ -1054,8 +1056,11 @@ def _compute_stack_state_snapshot(
         entry["layersPlanned"] = layers_planned
 
         position_map = {}
-        for position, number in membership_by_stack.get(stack_number, ()):
+        open_member_positions = set()
+        for position, number, state in membership_by_stack.get(stack_number, ()):
             position_map[position] = number
+            if state == "OPEN":
+                open_member_positions.add(position)
         if not position_map or repo_slug is None:
             entry["state"] = STACK_STATE_INCOMPLETE
             entry["reason"] = STACK_REASON_MEMBERSHIP_UNRESOLVED
@@ -1079,9 +1084,10 @@ def _compute_stack_state_snapshot(
             continue
 
         # A position is occupied when this batch has a lane there or the
-        # stack already has a member PR there (launched in another batch).
+        # stack already has an OPEN member PR there (launched in another
+        # batch). A member closed without merging leaves its seat idle.
         occupied = _occupied_layer_positions(batch_lanes, stack_number)
-        occupied |= set(position_map)
+        occupied |= open_member_positions
         for position in sorted(ready_positions):
             next_position = position + 1
             if (
