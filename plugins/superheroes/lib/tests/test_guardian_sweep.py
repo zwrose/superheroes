@@ -3179,15 +3179,20 @@ def test_verify_command_binds_base_ref_to_gh_merge_base(tmp_path):
     repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
     _setup_origin_main(repo)
     main_sha = _head_sha(repo)
-    (tmp_path / "other.txt").write_text("other\n")
-    _git(repo, "add", "other.txt")
+    (tmp_path / "release.txt").write_text("release\n")
+    _git(repo, "add", "release.txt")
     _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
-         "commit", "-q", "-m", "other")
+         "commit", "-q", "-m", "release")
+    release_sha = _head_sha(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/release", release_sha)
+    (tmp_path / "feature.txt").write_text("feature\n")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "feature")
     feature_sha = _head_sha(repo)
-    _git(repo, "update-ref", "refs/remotes/origin/other", feature_sha)
     branch = subprocess.check_output(
         ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
-    _git(repo, "config", "branch.%s.gh-merge-base" % branch, "main")
+    _git(repo, "config", "branch.%s.gh-merge-base" % branch, "release")
     recorded = []
 
     def fake_run(cmd, **kwargs):
@@ -3200,8 +3205,9 @@ def test_verify_command_binds_base_ref_to_gh_merge_base(tmp_path):
 
     out = gsw.verify_config(
         repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
-    assert main_sha != feature_sha
-    assert recorded == ["echo --base %s" % main_sha]
+    assert main_sha != release_sha != feature_sha
+    assert recorded == ["echo --base %s" % release_sha]
+    assert main_sha not in recorded[0]
     assert feature_sha not in recorded[0]
     fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
     assert fact["status"] == "ok"

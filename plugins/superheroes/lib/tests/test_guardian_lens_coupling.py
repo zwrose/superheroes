@@ -2588,8 +2588,12 @@ def test_operand_budget_exceeded_degrades_without_invoking_depcruise(tmp_path, m
     write(repo, "package.json", '{"name":"operand-budget"}\n')
     write(repo, "src/app.ts", "export const x = 1;\n")
     tracked = ["package.json", "src/app.ts"]
+    js_targets = ["src/app.ts"]
+    budget = 1
     monkeypatch.setattr(
-        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (1, False))
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (budget, False))
+    operand_bytes = guardian_census.operand_payload_bytes(repo, js_targets)
+    assert operand_bytes > budget
     calls = []
 
     def handler(argv, kwargs):
@@ -2600,10 +2604,37 @@ def test_operand_budget_exceeded_degrades_without_invoking_depcruise(tmp_path, m
     assert st(out) == "not-collected"
     assert out["digest"] is None
     reason = out.get("reason") or ""
-    assert "operand budget" in reason
+    assert (
+        "tracked-file operand payload is %d bytes across %d files"
+        % (operand_bytes, len(js_targets))) in reason
+    assert "derived %d-byte operand budget" % budget in reason
+    assert "platform ARG_MAX %d" % guardian_census.platform_arg_max_bytes() in reason
+    assert "remedy: batch the depcruise into budget-sized runs" in reason
+    assert "not measured" in reason
     depcruise_calls = [
         a for a in calls if a and a[0] == adapters.DEPCRUISE_BIN]
     assert not depcruise_calls, "depcruise must not run when operand budget exceeded"
+
+
+def test_js_collected_section_records_operand_payload_and_argv_budget(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"budget-fields"}\n')
+    write(repo, "src/app.ts", "export const x = 1;\n")
+    tracked = ["package.json", "src/app.ts"]
+    js_targets = ["src/app.ts"]
+
+    def handler(argv, kwargs):
+        return (0, dc_report(extra_sources=tracked[1:]), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "collected", out.get("reason")
+    js = out["digest"]["ecosystems"]["js"]
+    expected_budget, _env_failed = guardian_census.argv_operand_budget_detail(
+        repo, adapters.depcruise_argv([]))
+    assert not _env_failed
+    assert js["operandPayloadBytes"] == guardian_census.operand_payload_bytes(
+        repo, js_targets)
+    assert js["argvOperandBudgetBytes"] == expected_budget
 
 
 _V8_OOM_STDERR = (
