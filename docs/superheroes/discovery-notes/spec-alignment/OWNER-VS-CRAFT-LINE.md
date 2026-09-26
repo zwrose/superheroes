@@ -131,3 +131,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Craft: bookkeeping (status/label flips when a fact changes, no rule change): kept.
 - Craft: pulling implementation detail out of a requirement: kept (the remaining "what" stays owner).
 - Jargon in owner-facing text (old craft 7): moved to the "errors are not decisions" note; it is a slip against a standing rule, not a decision.
+- Craft: routine size splits: kept as craft.
