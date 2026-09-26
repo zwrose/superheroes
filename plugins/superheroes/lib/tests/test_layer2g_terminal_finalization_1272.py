@@ -636,6 +636,8 @@ def test_head_verified_at_h_does_not_credit_h_prime(tmp_path):
         json.dump(meta, fh, sort_keys=True)
     loaded["config"].pop(SC.FIX_FOLD_HEAD_KEY, None)
     loaded["config"]["headSha"] = head2
+    # A converged certificate binds to the head it names: the certificate certifies H'.
+    loaded["certification"]["certifiedHead"] = head2
     RD.save_state(session_dir, loaded)
     with open(os.path.join(session_dir, RD.STATE_FILE), encoding="utf-8") as fh:
         state = json.load(fh)

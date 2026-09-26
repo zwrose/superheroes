@@ -181,7 +181,16 @@ def test_cleared_disposition_findings_remain_in_certification_view():
     assert "F-fixed" in ids
 
 
-def test_fix_fold_records_post_fix_head_sha(tmp_path):
+@pytest.mark.parametrize("double", [
+    pytest.param("off", marks=pytest.mark.real_git_head_diff),
+    "on",
+])
+def test_fix_fold_records_post_fix_head_sha(tmp_path, double):
+    """The fold head is git's: the post-fix HEAD, never the setup head the fixture declares —
+    with the real derivation (double off) and through the test-only git double alike, whose fold
+    seam records the live checkout head only (red token: the declared setup head)."""
+    import head_diff_double
+    assert head_diff_double.installed(RD) is (double == "on")
     repo, setup_head = _init_repo(tmp_path, {"src/a.py": b"before\n"})
     session_dir = _session_dir(tmp_path, repo, setup_head)
     path = repo / "src" / "a.py"
@@ -232,6 +241,7 @@ def test_fix_fold_records_post_fix_head_sha(tmp_path):
     assert row["contentDigest"] == hashlib.sha256(expected).hexdigest()
 
 
+@pytest.mark.real_git_head_diff  # the fold head is git's: the double OFF
 def test_fix_fold_head_resolution_failure_refuses(tmp_path, monkeypatch):
     repo, setup_head = _init_repo(tmp_path, {"src/a.py": b"data\n"})
     session_dir = _session_dir(tmp_path, repo, setup_head)
@@ -253,7 +263,8 @@ def test_fix_fold_head_resolution_failure_refuses(tmp_path, monkeypatch):
     def _fail_rev_parse(_repo_root, *_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(RD.store_core, "run_git", _fail_rev_parse)
+    # HEAD resolves through the hardened helper (the shared git env), so the failure seats there.
+    monkeypatch.setattr(RD, "_hardened_head", _fail_rev_parse)
     RD._fold_fixer(
         state,
         state["config"],

@@ -39,6 +39,7 @@ not re-implemented.
 import argparse
 import base64
 import binascii
+import contextvars
 import errno
 import hashlib
 import json
@@ -66,6 +67,7 @@ import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import diff_scope  # noqa: E402
 import engine_adapter  # noqa: E402
+import sanitized_view  # noqa: E402
 import payload_contracts  # noqa: E402
 import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
@@ -206,8 +208,8 @@ HEAD_CONTENT_BLOBS_SCHEMA = session_contract.HEAD_CONTENT_BLOBS_SCHEMA
 # is SHAPE-AMBIGUOUS after #681 — a genuine pre-#681 v3 state and a post-#681 state carrying the v4
 # shape under the old number are indistinguishable on disk — so a migration would have to guess which
 # one it is holding. The residual is disclosed rather than fixed.
-STATE_SCHEMA_VERSION = 5
-SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5)
+STATE_SCHEMA_VERSION = receipt_disclosures.STATE_SCHEMA_VERSION
+SUPPORTED_STATE_VERSIONS = receipt_disclosures.SUPPORTED_STATE_VERSIONS
 
 # The receipt VERSION derives from the STATE's version: a v2 state terminates to
 # `receipt-certified/2` (today's shape, byte-for-byte unchanged — no key added), a v3 state to
@@ -1179,6 +1181,7 @@ def _round_ceiling(config):
 
 def new_state(config=None):
     cfg = _default_config(config)
+    cfg.pop("diffHead", None)  # a config head is never the recorded pair (`_DERIVED_DIFF_HEAD`)
     seeded_seat_map = cfg.get("seatMap")
     state = {
         "schemaVersion": STATE_SCHEMA_VERSION,
@@ -1203,6 +1206,12 @@ def new_state(config=None):
         "seatMapReceipts": ([{"round": "0", "map": dict(seeded_seat_map)}]
                             if isinstance(seeded_seat_map, dict) and seeded_seat_map else []),
         "reviewedDiff": cfg.get("diff"),
+        "reviewedDiffHead": 0,
+        # The pair the CLI's fresh `next` derived through `derive_review_diff`, carried only on
+        # `_DERIVED_DIFF_HEAD` — never from config, so no caller can supply its own head.
+        "reviewedDiffSha": (_DERIVED_DIFF_HEAD.get() or {}).get("sha"),
+        "reviewedDiffDigest": (_DERIVED_DIFF_HEAD.get() or {}).get("digest"),
+        "fixFolds": 0,
         "headDiff": None,
         "dispositionSeqCounter": 0,
         "fixBatch": [],
@@ -2230,7 +2239,7 @@ def _record_adapter_provenance(state, artifact, phase):
 
 
 def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None,
-          verified_head_resolution=None):
+          verified_head_resolution=None, head_diff_seam=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
 
@@ -2247,6 +2256,10 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
         _fold_panel(state, config, artifact)
+        # A panel over a stale reviewed diff is recorded (its output is kept), then parked.
+        if not state.get("terminal") and _reviewed_diff_is_stale(state):
+            _park_cannot_certify(state, "%s: this panel reviewed a diff older than the fix-fold "
+                                        "head — run a fresh panel" % REVIEWED_DIFF_STALE)
     elif phase == P_VERIFIERS:
         _fold_verifiers(state, config, artifact)
     elif phase == P_SYNTHESIS:
@@ -2260,7 +2273,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_VERIFY:
         _fold_verify(state, config, artifact, resolution=verified_head_resolution)
     elif phase == P_FIXER:
-        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir)
+        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
+                    head_diff_seam=head_diff_seam)
     elif phase == P_JUDGMENT:
         _fold_judgment(state, config, artifact)
     elif phase == P_STALL:
@@ -3832,9 +3846,10 @@ def _resolve_head_diff(artifact):
     driver reads itself (#507). Inline WINS when present. A missing / non-absolute / unreadable path,
     or empty file content, is NOT an empty diff — it is an UNKNOWN surface, so the caller escalates
     to a full panel (the fail-closed unknown→run-everything rule) rather than silently computing an
-    empty scoped surface. Returns (head_or_None, source) where source is 'inline'|'path'|'unknown'."""
+    empty scoped surface. An inline value that is not text is an UNKNOWN head, the same as absent.
+    Returns (head_or_None, source) where source is 'inline'|'path'|'unknown'."""
     inline = artifact.get("headDiff")
-    if inline is not None:
+    if isinstance(inline, str):
         return inline, "inline"
     path = artifact.get("headDiffPath")
     if isinstance(path, str) and path and os.path.isabs(path):
@@ -3848,7 +3863,228 @@ def _resolve_head_diff(artifact):
     return None, "unknown"
 
 
-def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None):
+REVIEWED_DIFF_SOURCE_GIT = "git-derived"
+# A review-diff digest (`review_diff_digest`): lowercase SHA-256 hex.
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+REVIEWED_DIFF_STALE = "reviewed-diff-stale"
+REVIEW_DIFF_TOO_LARGE = "review-diff-too-large"
+REVIEW_DIFF_UNAVAILABLE = "review-diff-unavailable"
+REVIEWED_HEAD_UNRECORDED = "reviewed-head-unrecorded"
+ROUND_DIFF_HEAD_MISMATCH = "round-diff-head-mismatch"
+# Set only while `run_loop` drives its in-process leg, which has no repository and so no recorded
+# head. It lives in no persisted field, so no loaded session can claim it.
+_IN_PROCESS_LEG = contextvars.ContextVar("round_driver_in_process_leg", default=False)
+# The (sha, digest) pair the CLI's fresh `next` derived and bound (`_bind_round_diff_head`), set
+# only around that `cmd_next` call. It lives in no config key or persisted field, so a caller's
+# `config_overrides` cannot supply a head; `cmd_next` refuses a config `diffHead` outright.
+_DERIVED_DIFF_HEAD = contextvars.ContextVar("round_driver_derived_diff_head", default=None)
+DIFF_HEAD_NOT_DERIVED = "diff-head-not-derived"
+_GIT_DIFF_FORMAT_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv",
+                          "--src-prefix=a/", "--dst-prefix=b/")
+# The one home of the review-diff command: the same argv SKILL.md's Setup runs for the round diff
+# (pinned equal by test). The config pins keep a user's diff settings (noprefix, mnemonic
+# prefixes, relative paths, quoted paths) from reshaping the bytes a panel reviews, and the
+# explicit prefixes beat `diff.srcPrefix`/`diff.dstPrefix` (scope parsing reads `+++ b/` only).
+GIT_REVIEW_DIFF_ARGV = (("git",) + sanitized_view.DIFF_CONFIG_OVERRIDES + ("diff",)
+                        + _GIT_DIFF_FORMAT_FLAGS)
+
+
+def _hardened_head(repo_root):
+    """`git rev-parse HEAD` under the shared git env hardening (sanitized_view.git_env) — the
+    head the review diff is derived at is never resolved through inherited GIT_* routing."""
+    try:
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_root,
+                              env=sanitized_view.git_env(), capture_output=True, text=True,
+                              timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    head = proc.stdout.strip() if proc.returncode == 0 else ""
+    return head or None
+
+
+def _review_diff(repo_root, base, head):
+    """`(text, refusal)` for THE review diff: `GIT_REVIEW_DIFF_ARGV <base>...<head>` in
+    `repo_root`, streamed under the shared git env hardening and bounded by
+    `sanitized_view.REVIEW_DIFF_MAX_BYTES`. Admitted only as strict UTF-8 text that opens with a
+    `diff --git ` header. Anything else is `(None, refusal)`: `review-diff-too-large` past the cap
+    (git is terminated; a partial diff is never reviewed), `review-diff-unavailable` otherwise."""
+    if not (isinstance(base, str) and base and isinstance(head, str) and head and repo_root):
+        return None, REVIEW_DIFF_UNAVAILABLE
+    argv = (["git", "-C", repo_root] + list(GIT_REVIEW_DIFF_ARGV[1:])
+            + ["%s...%s" % (base, head)])
+    try:
+        raw = sanitized_view.bounded_git_diff_output(argv)
+    except sanitized_view.SanitizedViewError as exc:
+        if exc.detail == "sanitized-view-diff-too-large":
+            return None, REVIEW_DIFF_TOO_LARGE
+        return None, REVIEW_DIFF_UNAVAILABLE
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, REVIEW_DIFF_UNAVAILABLE
+    if not text.startswith("diff --git "):
+        return None, REVIEW_DIFF_UNAVAILABLE
+    return text, None
+
+
+def derive_review_diff(repo_root, base):
+    """THE diff-derivation call — the one place the head a review is bound to comes from. It
+    resolves HEAD to a SHA ONCE (`_hardened_head`) and derives the review diff at that explicit
+    SHA (`<base>...<sha>`, never `HEAD`), so the pair can never name two different commits.
+    Returns `(sha, text, refusal)`; `text` is None with the refusal token when no diff is
+    admitted. Callers: the `review-diff` verb, the fresh `next` that binds the round-1 diff, and
+    the post-fix derivation at every fixer fold."""
+    head = _hardened_head(repo_root) if repo_root else None
+    if not head:
+        return None, None, REVIEW_DIFF_UNAVAILABLE
+    text, refusal = _review_diff(repo_root, base, head)
+    return head, text, refusal
+
+
+def review_diff_digest(text):
+    """The digest recorded beside the SHA a review diff was derived at."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _derive_head_diff_from_git(session_dir, state):
+    """The post-fix head diff from `derive_review_diff`, with the pair it returned recorded as
+    `headDiffSha`/`headDiffDigest` and the SHA persisted as the fix-fold head — one resolution of
+    HEAD per fold. A refused derivation records its token (`headDiffRefusal`) so the park names
+    it. A session without a pinned base or a session directory derives nothing (None)."""
+    for key in ("headDiffSha", "headDiffDigest", "headDiffRefusal"):
+        state.pop(key, None)
+    if not session_dir:
+        return None
+    base = (state.get("config") or {}).get("baseRef")
+    if not (isinstance(base, str) and _FULL_HEX_ID.fullmatch(base)):
+        return None
+    head, text, refusal = derive_review_diff(_resolve_repo_root(session_dir, state), base)
+    if text is None:
+        state["headDiffRefusal"] = refusal
+        return None
+    _persist_fix_fold_head_sha(session_dir, state, head)
+    state["headDiffSha"] = head
+    state["headDiffDigest"] = review_diff_digest(text)
+    return text
+
+
+def _advance_reviewed_diff(state):
+    """The one writer that moves ``reviewedDiff`` to the post-fix head diff, binding it to the head
+    it was taken at (``reviewedDiffHead``). It advances on any known head diff — including a
+    known-empty one (``""``); an unknown head (``None``) leaves the reviewed diff, and its binding,
+    as they were."""
+    head = state.get("headDiff")
+    if isinstance(head, str):
+        state["reviewedDiff"] = head
+        state["reviewedDiffHead"] = _fix_fold_head(state)
+        # The pair the derivation call recorded (None on the in-process seam path: no git).
+        state["reviewedDiffSha"] = state.get("headDiffSha")
+        state["reviewedDiffDigest"] = state.get("headDiffDigest")
+
+
+def _recorded_review_head(state):
+    """The SHA the reviewed diff was derived at, as `derive_review_diff` recorded it — the only
+    head a certificate may name. None when absent or malformed; there is no fallback. A state
+    carrying a config `diffHead` (saved by an earlier driver that took the pair from config)
+    records no head: its pair cannot be told from a caller-supplied one, so it withholds and a
+    fresh session recovers."""
+    if "diffHead" in (state.get("config") or {}):
+        return None
+    sha = state.get("reviewedDiffSha")
+    return sha if isinstance(sha, str) and _FULL_HEX_ID.fullmatch(sha) else None
+
+
+def _fix_fold_head(state):
+    """The identity of the head the last fixer fold left: the count of fixer folds (each fold moves
+    the head); 0 — the session's bound head — before any fix. A state persisted before the count
+    existed that has folded a fixer has no knowable head (None)."""
+    folds = state.get("fixFolds")
+    if isinstance(folds, int) and not isinstance(folds, bool):
+        return folds
+    return None if "_headDiffSource" in state else 0
+
+
+class ReviewedDiffStale(ValueError):
+    """Raised at panel-order emission when the reviewed diff is older than the fix-fold head."""
+
+
+def _reviewed_diff_stale_cause(state):
+    """The one staleness rule, naming its cause: the reviewed diff is not bound to the current
+    fix-fold head (an unknown head — a state an older driver saved after a fix — is stale). None
+    when the reviewed diff is current."""
+    head = _fix_fold_head(state)
+    if head is None:
+        return "the fix-fold head is unknown (a state saved by an older driver after a fix)"
+    if state.get("reviewedDiffHead", 0) != head:
+        if state.get("headDiffRefusal") == REVIEW_DIFF_TOO_LARGE:
+            return ("the diff at the post-fix head exceeds the review-diff size cap (%s) — a "
+                    "partial diff is never reviewed" % REVIEW_DIFF_TOO_LARGE)
+        return "the head moved and no diff at the post-fix head is derivable from git"
+    # Bound to a SHA: it must be the head being certified. The fix-fold head is re-read at the
+    # verify fold, so a commit landed after the fold moves it and the reviewed diff goes stale.
+    bound = state.get("reviewedDiffSha")
+    certified = (state.get("config") or {}).get(FIX_FOLD_HEAD_KEY)
+    if bound and certified and bound != certified:
+        return ("a commit landed after the reviewed diff was derived (reviewed %s, head %s)"
+                % (bound, certified))
+    # The reviewed bytes must be the ones derived at the recorded SHA. A recorded SHA without a
+    # well-formed digest binds no bytes at all, so it is stale too — never a SHA-only certificate.
+    # (A malformed SHA records no head at all: certification withholds `reviewed-head-unrecorded`.)
+    digest = state.get("reviewedDiffDigest")
+    reviewed = state.get("reviewedDiff")
+    recorded = isinstance(bound, str) and _FULL_HEX_ID.fullmatch(bound)
+    if (recorded or digest) and not (
+            isinstance(digest, str) and _SHA256_HEX.fullmatch(digest)
+            and isinstance(reviewed, str) and review_diff_digest(reviewed) == digest):
+        return "the reviewed diff is not the diff derived at its recorded head"
+    return None
+
+
+def _reviewed_diff_is_stale(state):
+    """True when `_reviewed_diff_stale_cause` names a cause."""
+    return _reviewed_diff_stale_cause(state) is not None
+
+
+def _refuse_stale_panel_emission(state, phase):
+    """THE emission chokepoint: a panel is never dispatched over a diff older than the head it
+    certifies. Every `dispatch-panel` order is rendered in `_emit_orders_manifest`, which `next`,
+    `advance` (through `next`) and `re-emit` all reach. The callers park `reviewed-diff-stale`."""
+    if phase == P_PANEL and _reviewed_diff_is_stale(state):
+        raise ReviewedDiffStale(REVIEWED_DIFF_STALE)
+
+
+def _stale_pending_panel_park(session_dir, state, cmd):
+    """The consumption side of the same rule: a panel order already pending (emitted, possibly by
+    an older driver) is never replayed or folded over a stale reviewed diff. Parks and answers the
+    terminal when it is; None otherwise."""
+    pending = state.get("pending") if isinstance(state.get("pending"), dict) else {}
+    if state.get("terminal") or pending.get("phase") != P_PANEL:
+        return None
+    if not _reviewed_diff_is_stale(state):
+        return None
+    return _park_reviewed_diff_stale(session_dir, state, cmd)
+
+
+def _park_reviewed_diff_stale(session_dir, state, cmd):
+    """Park `cannot-certify` with the token and answer the terminal, on every emission path."""
+    _park_cannot_certify(
+        state, "%s: %s — a panel would review a diff older than the head"
+        % (REVIEWED_DIFF_STALE, _reviewed_diff_stale_cause(state) or "the reviewed diff is stale"))
+    pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL, "attempt": 0,
+               "payload": {"verdict": state["terminal"],
+                           "certification": state.get("certification")}}
+    state["pending"] = pending
+    save_state(session_dir, state)
+    _journal_append(session_dir, {"cmd": cmd, "phase": P_TERMINAL, "round": state["round"],
+                                  "attempt": 0, "outcome": REVIEWED_DIFF_STALE})
+    fail = _terminal_receipt_gate(session_dir, state)
+    if fail:
+        return _receipt_fault_response(fail)
+    return _next_response(session_dir, state, pending, cmd)
+
+
+def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None,
+                head_diff_seam=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
     the driver sequences + records. The post-fix head diff rides the artifact (git, per the
     dispatch-fixer contract) so the next delta round can split_fix_surface against git — INLINE
@@ -3865,10 +4101,29 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state["fixBatch"] = list(slice_)
     else:
         state["fixBatch"] = (state.get("fixBatch") or []) + list(slice_)
-    head, head_source = _resolve_head_diff(artifact)
+    _supplied, head_source = _resolve_head_diff(artifact)
+    # Git is the authority for the diff a panel reviews: the driver derives it at the fold head
+    # (run_loop injects the derivation as a seam). A supplied diff carries no authority and is not
+    # read for content; a session that cannot derive has no head diff at all, and certification
+    # withholds. A capped round folds several slices, so the provenance is recorded afresh.
+    _clear_round(state, "reviewedDiffSource")
+    for key in ("headDiffSha", "headDiffDigest", "headDiffRefusal"):
+        state.pop(key, None)
+    # Only the real git derivation earns the git-derived provenance; a seam (the eval harness's
+    # scripted replay) performs no git operation, so it records no source at all.
+    if head_diff_seam is not None:
+        head = head_diff_seam(state)
+    else:
+        head = _derive_head_diff_from_git(session_dir, state)
+        if head is not None:
+            _record_round(state, "reviewedDiffSource", REVIEWED_DIFF_SOURCE_GIT)
     state["headDiff"] = head
     state["_headDiffSource"] = head_source
-    state["_headDiffUnknown"] = head_source == "unknown"
+    # No head diff derivable from git is an unknown surface: full panel. A supplied diff carries no
+    # authority, so whether one was supplied does not decide it.
+    state["_headDiffUnknown"] = head is None
+    # The head moved: until `_advance_reviewed_diff` binds a diff at this head, no panel reviews it.
+    state["fixFolds"] = (_fix_fold_head(state) or 0) + 1
     _record_round(state, "headDiffSource", head_source)
     derive = changed_subjects_seam or derive_changed_subjects
     state["_changedSubjects"] = derive(
@@ -3908,7 +4163,13 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
                           "fixes": len(artifact.get("fixes") or [])})
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
     if session_dir:
-        head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+        # The SHA the derivation call resolved is this fold's head; resolve again only when the
+        # fold derived nothing.
+        if state.get("headDiffSha"):
+            head, head_err = state["headDiffSha"], None
+            _persist_fix_fold_head_sha(session_dir, state, head)
+        else:
+            head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
         if head_err:
             _record_round(state, "fixFoldHeadRefused", head_err)
         else:
@@ -4269,7 +4530,7 @@ def _fold_verify(state, config, artifact, *, resolution):
     # is here — at the ceiling it parks `round-ceiling`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
-    state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
+    _advance_reviewed_diff(state)
     _enter_delta_round(state, config)
 
 
@@ -4315,19 +4576,24 @@ def _enter_post_fix(state, config, session_dir=None):
         return
     if not _advance_round(state, config, reason="post-fix-advance"):
         return
-    state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
+    _advance_reviewed_diff(state)
     state["_postFixEntry"] = True
     _enter_delta_round(state, config)
 
 
 # ---- delta rounds (2+) ----------------------------------------------------------------------
 
-def _schedule_full_panel_unknown(state, detail):
+def _schedule_full_panel_unknown(state, detail, post_fix=False):
     """The fail-closed unknown→run-everything rule: an unresolvable delta surface schedules a FULL
-    reviewer-deep panel, never a silently-scoped (or silently-skipped) round."""
+    reviewer-deep panel, never a silently-scoped (or silently-skipped) round. A post-fix entry runs
+    the verify gate first and enters the panel after it."""
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
     state["fullPanelRan"] = False
+    if post_fix:
+        state["_verifyThen"] = VERIFY_THEN_PANEL
+        state["step"] = P_VERIFY
+        return
     state["step"] = P_PANEL
 
 
@@ -4343,18 +4609,12 @@ def _enter_delta_round(state, config):
     if state.pop("_headDiffUnknown", False):
         _schedule_full_panel_unknown(
             state, "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
-            % state.get("_headDiffSource"))
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+            % state.get("_headDiffSource"), post_fix)
         return
     baseline = state.get("deltaBaseline")
     if not isinstance(baseline, dict):
         cause = "no baseline record" if baseline is None else "baseline is not a record"
-        _schedule_full_panel_unknown(state, "%s: %s" % (DELTA_BASELINE_ABSENT, cause))
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+        _schedule_full_panel_unknown(state, "%s: %s" % (DELTA_BASELINE_ABSENT, cause), post_fix)
         return
     stamped_round = baseline.get("round")
     current_round = state["round"]
@@ -4362,26 +4622,18 @@ def _enter_delta_round(state, config):
             or stamped_round != current_round):
         _schedule_full_panel_unknown(
             state, "%s: baseline stamped round %s, current round %s"
-            % (DELTA_BASELINE_ABSENT, stamped_round, current_round))
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+            % (DELTA_BASELINE_ABSENT, stamped_round, current_round), post_fix)
         return
     reviewed = baseline.get("diff")
     if not isinstance(reviewed, str):
         _schedule_full_panel_unknown(
-            state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT)
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+            state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT, post_fix)
         return
     split = delta_surface.split_fix_surface(
         reviewed, state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
-        _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel")
-        if post_fix:
-            state["_verifyThen"] = VERIFY_THEN_PANEL
-            state["step"] = P_VERIFY
+        _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel",
+                                     post_fix)
         return
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
@@ -4733,7 +4985,7 @@ def _settle_delta_converged(state, config):
             return
         state["fullPanelRan"] = False
         _record_round(state, "roundKind", "confirmation")
-        state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
+        _advance_reviewed_diff(state)
         state["step"] = P_PANEL
         return
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
@@ -5147,6 +5399,25 @@ def _terminal_converged(state, config, full_panel, note=None):
     success (the exit_skipped invariant): the certification `reason` leads with
     `clean-except-skipped: N blocker(s) skipped with citable reasons` (shape unchanged) so the
     terminal reads unmistakably non-plain, and the skips also ride the top-level receipt channel."""
+    # THE invariant: never certify a head the panel did not see. This is the one writer of a
+    # converged terminal, so every route to certification — a legacy resume, a hand submit, any
+    # future path — passes here; the emission and consumption checks are only early exits.
+    # Recoverable by a fresh panel over the current head.
+    if _reviewed_diff_is_stale(state):
+        _park_cannot_certify(state, "%s: the reviewed diff is not bound to the head being "
+                                    "certified — run a fresh panel over the current head"
+                             % REVIEWED_DIFF_STALE)
+        return
+    # A certificate names exactly the commit whose diff the panel reviewed, and only the
+    # derivation call records that commit. No recorded head (a state saved by an older driver, or
+    # a malformed record) withholds; nothing else — config, meta, live HEAD — stands in for it.
+    # Only the in-process `run_loop` leg, which has no repository, certifies without one.
+    certified_head = _recorded_review_head(state)
+    if certified_head is None and not _IN_PROCESS_LEG.get():
+        _park_cannot_certify(state, "%s: no head was recorded by the call that derived the "
+                                    "reviewed diff — start a fresh review session"
+                             % REVIEWED_HEAD_UNRECORDED)
+        return
     # An OUTSTANDING incomplete panel (a configured lens never ran, never recovered by a later
     # complete panel) cannot certify clean — a zero-finding finish over a coverage gap is "we did not
     # look", not "audited-chain". Silence never certifies: withhold + park (#507 R2 residual-1).
@@ -5178,6 +5449,11 @@ def _terminal_converged(state, config, full_panel, note=None):
             "independence": "degraded" if _degraded(state) else "independent",
             "base": _certification_base(state),
             "shapeDrivers": sorted(shape_drivers)}
+    # Certify what was seen: the SHA the reviewed diff was derived at — never "HEAD". Whether the
+    # PR is still at that SHA is checked where the certificate is consumed: the handback gate
+    # compares the live head with it.
+    if certified_head is not None:
+        cert["certifiedHead"] = certified_head
     if note:
         cert["note"] = note
     skipped = state.get("_skippedBlockers") or []
@@ -5226,11 +5502,14 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "auditProvenance": rec.get("auditProvenance"),
               "scopedFinder": rec.get("scopedFinder"),
               "headDiffSource": rec.get("headDiffSource"),
+              "reviewedDiffSource": rec.get("reviewedDiffSource"),
               "unverified": rec.get("unverified"),
               "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
               "compileDrops": rec.get("compileDrops"),
               "selfRecovery": rec.get("selfRecovery"),
               "stallChoice": rec.get("stallChoice")}
+        if not receipt_disclosures.reviewed_diff_source_carried(state):
+            del rd["reviewedDiffSource"]
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
         # Fossil-channel census requires a literal per-channel round-record read — not a variable
@@ -5261,7 +5540,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
                "title": f.get("title"), "severity": f.get("severity"),
                "verdict": f.get("verdict"), "challenge": f.get("challenge"),
                "unverified": f.get("unverified")}
-        if (_state_version(state) or 0) >= STATE_SCHEMA_VERSION:
+        if (_state_version(state) or 0) >= receipt_disclosures.RECORDED_VERSION_BOUNDARY:
             finding_key = f.get(session_contract.FINDING_KEY_FIELD)
             if isinstance(finding_key, str) and finding_key:
                 row[session_contract.FINDING_KEY_FIELD] = finding_key
@@ -5773,7 +6052,7 @@ def _resolve_fix_fold_head_sha(session_dir, state):
         repo_root = _resolve_repo_root(session_dir, state)
         if not repo_root:
             return None, "fix-fold head: repo root unresolvable"
-        head = store_core.run_git(repo_root, "rev-parse", "HEAD")
+        head = _hardened_head(repo_root)
         if not head:
             return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
         _persist_fix_fold_head_sha(session_dir, state, head)
@@ -5792,7 +6071,7 @@ def _resolve_fix_fold_head_sha(session_dir, state):
     repo_root = _resolve_repo_root(session_dir, state)
     if not repo_root:
         return None, "fix-fold head: repo root unresolvable"
-    head = store_core.run_git(repo_root, "rev-parse", "HEAD")
+    head = _hardened_head(repo_root)
     if not head:
         return None, "fix-fold head: git rev-parse HEAD failed in %r" % repo_root
     _persist_fix_fold_head_sha(session_dir, state, head)
@@ -5800,7 +6079,11 @@ def _resolve_fix_fold_head_sha(session_dir, state):
 
 
 def _session_certified_head(session_dir, state):
-    """Head SHA the certification writer binds fixed-disposition evidence to."""
+    """Head SHA the certification writer binds fixed-disposition evidence to. A converged
+    terminal binds to the head its certificate names and nothing else."""
+    if isinstance(state, dict) and state.get("terminal") == "converged":
+        head = (state.get("certification") or {}).get("certifiedHead")
+        return head if isinstance(head, str) and head else None
     meta_path = os.path.join(session_dir, round_records.META_FILE)
     if os.path.isfile(meta_path):
         try:
@@ -6294,6 +6577,15 @@ def run_loop(seams, config=None):
     review_panel_shell.reviewPanel. Returns the certification writer's receipt."""
     if not isinstance(seams, dict):
         raise ValueError("run_loop requires a seams dict")
+    # The in-process leg has no repository, so no recorded head (`_terminal_converged`).
+    token = _IN_PROCESS_LEG.set(True)
+    try:
+        return _run_loop_in_process(seams, config)
+    finally:
+        _IN_PROCESS_LEG.reset(token)
+
+
+def _run_loop_in_process(seams, config):
     try:
         state = new_state(config)
     except (RoundCeilingRefusal, FixBatchCapRefusal) as refusal:
@@ -6312,6 +6604,10 @@ def run_loop(seams, config=None):
             action = step["action"]
             if action == P_TERMINAL:
                 break
+            if action == P_PANEL and _reviewed_diff_is_stale(state):
+                _park_cannot_certify(state, "%s: the in-process panel would review a diff older "
+                                            "than the fix-fold head" % REVIEWED_DIFF_STALE)
+                break
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
             artifact = _run_seam(seams, action, step["payload"], state, state["config"])
             if action == P_VERIFIERS and isinstance(artifact, dict):
@@ -6321,6 +6617,7 @@ def run_loop(seams, config=None):
                                          {"fault": fault, "round": state["round"]})
             try:
                 _fold(state, state["config"], action, artifact, seams.get("changed_subjects"),
+                      head_diff_seam=seams.get("head_diff"),
                       verified_head_resolution=_verified_head_at_fold(None, state))
             except DispositionLedgerOwnerRefusal as refusal:
                 _park_cannot_certify(state, refusal.reason)
@@ -6376,6 +6673,14 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                       "attempt": None, "outcome": "refused-v1"})
         return {"ok": False, "reason": loaded}
     if loaded is None:
+        if isinstance(config_overrides, dict) and "diffHead" in config_overrides:
+            # Only the derivation call records the reviewed head; a supplied one is refused.
+            _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
+                                          "attempt": None, "outcome": "refused-diff-head",
+                                          "reason": DIFF_HEAD_NOT_DERIVED})
+            return {"ok": False, "reason": DIFF_HEAD_NOT_DERIVED,
+                    "detail": "the recorded head comes only from the review-diff derivation "
+                              "the CLI's fresh `next` runs; a config `diffHead` is not accepted"}
         session_id, mint_reason = round_records.mint_session_id(session_dir)
         if mint_reason is not None or not session_id:
             _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
@@ -6454,6 +6759,9 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, "next")
         if refusal is not None:
             return refusal
+        parked = _stale_pending_panel_park(session_dir, state, "next")
+        if parked is not None:
+            return parked
         return _next_response(session_dir, state, pend, "next")
     step = _advance(state, state["config"])
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
@@ -6485,6 +6793,8 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
                                   journal_cmd="next", pending_payload=pending.get("payload"),
                                   seat_map=_effective_seat_map(state))
+        except ReviewedDiffStale:
+            return _park_reviewed_diff_stale(session_dir, state, "next")
         except round_commit.CommitRefused as exc:
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
@@ -6542,6 +6852,50 @@ def _refuse_base_guard(session_dir, reason, detail=None, value=None):
         body["value"] = value
     sys.stdout.write(json.dumps(body) + "\n")
     return 1
+
+
+def _hardened_numstat_run(head):
+    """The `run` seam `review_base_guard.check_diff_binding` recomputes its numstat through: the
+    same git env hardening (`sanitized_view.git_env`) and diff config pins
+    (`sanitized_view.DIFF_CONFIG_OVERRIDES`) the review diff is derived under, at the explicit
+    `head` SHA in place of `HEAD` — so the preliminary binding and `derive_review_diff` never read
+    two different git configurations. Returns stdout bytes, or None (no head, or git failed)."""
+    def run(cwd, *args):
+        if not head:
+            return None
+        revs = [("%s...%s" % (a[:-len("...HEAD")], head)) if a.endswith("...HEAD") else a
+                for a in args]
+        argv = ["git", "-C", cwd] + list(sanitized_view.DIFF_CONFIG_OVERRIDES) + revs
+        try:
+            proc = subprocess.run(argv, env=sanitized_view.git_env(), capture_output=True,
+                                  timeout=10)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+        return proc.stdout if proc.returncode == 0 else None
+    return run
+
+
+def _bind_round_diff_head(session_dir, derived, round_diff):
+    """Bind the round-1 diff to the commit it was taken at, through the `derive_review_diff`
+    result the fresh `next` took (`derived`, an admitted `(sha, text, refusal)`) — the same call
+    SKILL.md's Setup runs as the `review-diff` verb. The supplied diff must be exactly the review
+    diff at the resolved SHA (else HEAD moved since Setup), and a head the session recorded in
+    meta (the PR's `headRefOid` in PR mode) must be that SHA (else the checkout is behind or
+    ahead). Returns `(refusal exit, None)` or `(None, pair)`: the pair rides `_DERIVED_DIFF_HEAD`
+    into the fresh `cmd_next`, never config."""
+    head, text, _refusal = derived
+    if text != round_diff:
+        return _refuse_base_guard(
+            session_dir, ROUND_DIFF_HEAD_MISMATCH,
+            "the round diff is not the review diff at HEAD %s — HEAD moved since Setup, or the "
+            "diff did not come from the review-diff verb; regenerate it" % head), None
+    meta_head = _session_meta(session_dir).get("headSha")
+    if meta_head is not None and meta_head != head:
+        return _refuse_base_guard(
+            session_dir, ROUND_DIFF_HEAD_MISMATCH,
+            "the session's recorded head %r is not the checkout's HEAD %s — the checkout is "
+            "behind or ahead of the head under review" % (meta_head, head)), None
+    return None, {"sha": head, "digest": review_diff_digest(text)}
 
 
 def _disposition_ledger_owner_refusal(session_dir, state, pending, cmd):
@@ -7192,6 +7546,8 @@ def _cmd_re_emit_locked(session_dir, by):
             journal_cmd=RE_EMIT_CMD, pending_payload=state["pending"]["payload"],
             seat_map=_effective_seat_map(state),
             extra_journal_entries=[superseded_row])
+    except ReviewedDiffStale:
+        return _park_reviewed_diff_stale(session_dir, state, RE_EMIT_CMD)
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, "re-emit", exc, phase=phase,
                                         rnd=rnd, attempt=new_attempt)
@@ -9147,6 +9503,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     together with the manifest and state anchor. A render refusal for any slot refuses the whole
     emission — a phase that dispatches some seats with orders and others without is worse than one
     that refuses."""
+    _refuse_stale_panel_emission(state, phase)
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
     if phase == P_AUDITS and state.get("_advanceUsed"):
@@ -10940,6 +11297,15 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
     phase, rnd, attempt, refusal = _pending_of(session_dir, state, "advance")
     if refusal is not None:
         return refusal
+    parked = _stale_pending_panel_park(session_dir, state, "advance")
+    if parked is not None:
+        if not parked.get("ok"):
+            return parked
+        side = _publish_sidecar(session_dir, state, git=git)
+        if side.get("reason"):
+            return _refuse_cmd(session_dir, "advance", side["reason"], fault=FAULT_INTERNAL,
+                               detail=side.get("detail"))
+        return {"ok": True, "folded": None, "nextAction": parked, "sidecar": side.get("path")}
     if owner_artifact_path is not None and phase not in OWNER_GATE_PHASES:
         return _refuse_cmd(session_dir, "advance", "advance-submit-interleaved",
                            fault=FAULT_CALLER, phase=phase, rnd=rnd, attempt=attempt,
@@ -11172,10 +11538,20 @@ def _prepare_sidecar(session_dir, state, git=None, journal_cmd="advance", receip
             repo_root, run=_git_result_seam(git) if git is not None else None)
     except store_core.RepoRootUnavailable as exc:
         return {"reason": "sidecar-gitdir-unresolvable", "detail": str(exc)}
+    # The live HEAD proves repo_root is a repository (a plain directory resolves a gitdir identity
+    # but no HEAD), and is the head a terminal that certifies nothing publishes.
     head_sha = run_git(repo_root, "rev-parse", "HEAD")
     if not head_sha:
         return {"reason": "sidecar-gitdir-unresolvable",
                 "detail": "git could not resolve HEAD in %r" % repo_root}
+    if state.get("terminal") == "converged":
+        # A certified terminal publishes the head it certified, never the live one: a commit landed
+        # after the certification then no longer matches, and the handback gate refuses the moved
+        # head. A certificate with no head is refused, not filled in from HEAD.
+        head_sha = (state.get("certification") or {}).get("certifiedHead")
+        if not (isinstance(head_sha, str) and _FULL_HEX_ID.fullmatch(head_sha)):
+            return {"reason": REVIEWED_HEAD_UNRECORDED,
+                    "detail": "the converged certificate names no reviewed head"}
     receipt_path = os.path.join(session_dir, RECEIPT_FILE)
     if receipt_bytes is None:
         try:
@@ -11721,6 +12097,11 @@ def build_parser():
     cli_contract.add_argument(prl, "--repo-root", contract="repo-root", required=True)
     cli_contract.add_argument(prl, "--by", contract="free-text", required=True)
 
+    prd = sub.add_parser("review-diff")
+    cli_contract.add_argument(prd, "--base", contract="free-text", required=True,
+                              help="the pinned base commit")
+    cli_contract.add_argument(prd, "--repo-root", contract="repo-root", default=None)
+
     pre = sub.add_parser("re-emit")
     cli_contract.add_argument(pre, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pre, "--by", contract="free-text", required=True)
@@ -11746,6 +12127,7 @@ def main(argv=None):
 def _dispatch(args):
     if args.cmd == "next":
         overrides = {}
+        derived_pair = None
         if args.leg:
             overrides["leg"] = args.leg
         if args.vendors is not None:
@@ -11838,8 +12220,16 @@ def _dispatch(args):
                     return _refuse_base_guard(args.session_dir, res["reason"], res.get("detail"),
                                               value=args.diff_path if args.diff_path else None)
                 overrides["diff"] = res["text"]
+                # One derivation serves both bindings: the preliminary numstat binding reads the
+                # SHA it resolved, under the same hardening, never a second lookup of HEAD.
+                derived = derive_review_diff(repo_root, guard["baseRef"])
+                if derived[1] is None:
+                    return _refuse_base_guard(
+                        args.session_dir, derived[2],
+                        "the review diff at HEAD %s could not be derived" % derived[0])
                 bind = review_base_guard.check_diff_binding(
-                    res["text"], guard["baseRef"], repo_root)
+                    res["text"], guard["baseRef"], repo_root,
+                    run=_hardened_numstat_run(derived[0]))
                 if not bind["ok"]:
                     return _refuse_base_guard(
                         args.session_dir, bind["reason"], bind.get("detail"))
@@ -11849,6 +12239,10 @@ def _dispatch(args):
                         overrides[key] = guard[key]
                 overrides["baseGuard"] = BASE_GUARD_CHECKED
                 overrides["diffBinding"] = bind["binding"]
+                refusal, derived_pair = _bind_round_diff_head(args.session_dir, derived,
+                                                              res["text"])
+                if refusal is not None:
+                    return refusal
             elif args.diff_path:
                 return _refuse_base_guard(args.session_dir, "diff-path-not-fresh-state",
                                           value=args.diff_path)
@@ -11892,7 +12286,11 @@ def _dispatch(args):
                                              "value": args.records_path}) + "\n")
                 return 1
             overrides["recordsPath"] = os.path.abspath(args.records_path)
-        out = cmd_next(args.session_dir, overrides or None)
+        token = _DERIVED_DIFF_HEAD.set(derived_pair)
+        try:
+            out = cmd_next(args.session_dir, overrides or None)
+        finally:
+            _DERIVED_DIFF_HEAD.reset(token)
     elif args.cmd == "record-result":
         out = cmd_record_result(args.session_dir, args.seat, attempt=args.attempt,
                                 supersede=args.supersede, expect_sha256=args.expect_sha256,
@@ -11914,6 +12312,16 @@ def _dispatch(args):
         out = cmd_relocate(args.session_dir, args.repo_root, args.by)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
+    elif args.cmd == "review-diff":
+        # The one home of the review diff: SKILL.md's Setup round diff runs this verb, and the
+        # driver's own bindings call the same `derive_review_diff`.
+        head, text, refusal = derive_review_diff(args.repo_root or os.getcwd(), args.base)
+        if text is None:
+            sys.stderr.write(json.dumps({"ok": False, "reason": refusal,
+                                         "base": args.base, "head": head}) + "\n")
+            return 1
+        sys.stdout.write(text)
+        return 0
     elif args.cmd == "re-emit":
         out = cmd_re_emit(args.session_dir, args.by)
         sys.stdout.write(json.dumps(out) + "\n")

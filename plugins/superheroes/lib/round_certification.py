@@ -28,8 +28,8 @@ META_FILE = session_contract.META_FILE
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
 SCHEMA_VERSION = 2
-STATE_SCHEMA_VERSION = 5
-SUPPORTED_STATE_VERSIONS = (2, 3, 4, 5)
+STATE_SCHEMA_VERSION = receipt_disclosures.STATE_SCHEMA_VERSION
+SUPPORTED_STATE_VERSIONS = receipt_disclosures.SUPPORTED_STATE_VERSIONS
 
 CERTIFIED_VERDICTS = (
     "converged",
@@ -508,28 +508,6 @@ def _effective_certification_finding(finding, by_key):
         else:
             effective.pop(field, None)
     return effective
-
-
-def _resolve_repo_head_sha(ctx):
-    meta = ctx.get("meta") or {}
-    cfg = (ctx.get("state") or {}).get("config") or {}
-    repo_root = meta.get("repoRoot") or cfg.get("repoRoot")
-    if not isinstance(repo_root, str) or not repo_root:
-        return None
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    head = proc.stdout.strip()
-    return head if head else None
 
 
 _SCOPED_FINDER_PHASE = round_panel_contract.P_SCOPED_FINDER_PHASE
@@ -1314,7 +1292,7 @@ def _receipt_version(state):
 
 def _supports_nonblocking_disclosure(state):
     """Non-blocking Minor/Nit survivors ride the state schema v5 bump (C13 recorded-version boundary)."""
-    return _receipt_version(state) >= STATE_SCHEMA_VERSION
+    return _receipt_version(state) >= receipt_disclosures.RECORDED_VERSION_BOUNDARY
 
 
 def _seat_family(seat, cfg):
@@ -1620,7 +1598,14 @@ def _journal_open_seats(journal, session_dir=None):
 
 def _certified_head_sha(ctx):
     meta = ctx.get("meta") or {}
-    cfg = (ctx.get("state") or {}).get("config") or {}
+    state = ctx.get("state") or {}
+    cfg = state.get("config") or {}
+    # A converged certificate names exactly the head its reviewed diff was derived at, and only
+    # that head binds its evidence. A converged state with none resolves no head (the evidence
+    # binding refuses); nothing else — the fix-fold head, meta, config — stands in for it.
+    if state.get("terminal") == "converged":
+        head = (state.get("certification") or {}).get("certifiedHead")
+        return head if isinstance(head, str) and head else None
     head = meta.get(session_contract.FIX_FOLD_HEAD_KEY)
     if isinstance(head, str) and head:
         return head
@@ -2889,12 +2874,15 @@ def _build_receipt_rounds(state, form):
             "auditProvenance": rec.get("auditProvenance"),
             "scopedFinder": rec.get("scopedFinder"),
             "headDiffSource": rec.get("headDiffSource"),
+            "reviewedDiffSource": rec.get("reviewedDiffSource"),
             "unverified": rec.get("unverified"),
             "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
             "compileDrops": rec.get("compileDrops"),
             "selfRecovery": rec.get("selfRecovery"),
             "stallChoice": rec.get("stallChoice"),
         }
+        if not receipt_disclosures.reviewed_diff_source_carried(state):
+            del rd["reviewedDiffSource"]
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
         if _round_entry_key_allowed("verifyPasses", form, state):

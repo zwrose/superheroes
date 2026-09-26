@@ -378,6 +378,8 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     # the seam right after folding the fixer artifact.
     last_fix = {"changedSubjects": None}
 
+    last_head = {"diff": None}
+
     def _head_diff():
         head_n["n"] += 1
         n = head_n["n"]
@@ -580,15 +582,21 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             run_dir, rnd, kind or "intermediate", dims,
             fix.get("changedSubjects") or [], live_coverage, {"available": True})
 
+        last_head["diff"] = _head_diff()
         return {
             "fixes": ["fixture"],
-            "headDiff": _head_diff(),
+            "headDiff": last_head["diff"],
             "changedSubjects": list(fix.get("changedSubjects") or []),
             "coverageDecisions": cds,
         }
 
     def verify_runner(command, rnd):
         return "pass"
+
+    def head_diff(state):
+        # Scripted replay of the fixture's post-fix head diff: the driver derives it from git on
+        # the live path; this harness has no repository, so "git" answers with the fixture's diff.
+        return last_head["diff"]
 
     def changed_subjects(reviewed_diff_text, head_diff_text, accumulated_findings):
         # Scripted replay of the just-run fix's fixture changedSubjects — same pattern as the
@@ -652,6 +660,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "fix_step": fix_step,
             "verify_runner": verify_runner,
             "changed_subjects": changed_subjects,
+            "head_diff": head_diff,
             "io": io,
         }
         config = {

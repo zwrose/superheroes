@@ -243,8 +243,28 @@ def _record_all_panel_seats(session_dir, seats=None):
         _land_and_record(session_dir, seat)
 
 
+def _fake_git(gitdir, head="a" * 40):
+    """The plain-output `git` seam `cmd_advance` takes: a sidecar lands in a temp gitdir, never
+    in a real repository's."""
+    def run(cwd, *args):
+        if args[:2] == ("rev-parse", "--absolute-git-dir"):
+            return gitdir
+        if args == ("rev-parse", "HEAD"):
+            return head
+        if args[:3] == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return "feature/x"
+        if args[0] == "rev-parse" and "--verify" in args:
+            return "b" * 40
+        if args[:2] == ("remote", "get-url"):
+            return "github.com/o/r"
+        return None
+    return run
+
+
 def _advance(session_dir, tmp_path):
-    return RD.cmd_advance(session_dir, git=str(tmp_path / "git"))
+    gitdir = str(tmp_path / "_gitdir")
+    os.makedirs(gitdir, exist_ok=True)
+    return RD.cmd_advance(session_dir, git=_fake_git(gitdir))
 
 
 def _recorded_rows(session_dir):

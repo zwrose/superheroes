@@ -140,12 +140,15 @@ def test_legacy_refusal_plain_session_names_next_submit(tmp_path):
 
 
 def test_next_and_submit_still_finish_a_v3_session_unchanged(tmp_path):
-    """`next`/`submit` finish a genuine pre-#681 v3 session through a terminal receipt."""
+    """`next`/`submit` finish a genuine pre-#681 v3 session through a terminal receipt — and a v3
+    session recorded no reviewed head, so its clean finish withholds certification
+    (`reviewed-head-unrecorded`) rather than certifying; a fresh session recovers."""
     session_dir = _seed_pre681_v3_session(tmp_path)
     _TRD._drive_cli(session_dir, None, _TRD._responder(round1_findings=None))
     state = _state(session_dir)
     assert state["schemaVersion"] == 3
-    assert state["terminal"] == "converged"
+    assert state["terminal"] == "cannot-certify", state.get("certification")
+    assert "reviewed-head-unrecorded" in state["certification"]["reason"]
     with open(os.path.join(session_dir, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert receipt["schemaVersion"] == 3

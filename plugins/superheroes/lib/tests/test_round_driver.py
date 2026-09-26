@@ -342,7 +342,8 @@ def test_cmd_submit_is_only_fold_caller_besides_run_loop():
                 if child.func.id == "_fold":
                     callers.add(node.name)
                     break
-    assert callers == {"cmd_submit", "run_loop"}
+    # `run_loop` scopes the in-process leg and folds through `_run_loop_in_process`.
+    assert callers == {"cmd_submit", "_run_loop_in_process"}
 
 
 def test_submit_panel_seat_key_custom_dimensions(tmp_path):
@@ -1349,8 +1350,11 @@ def test_fixer_head_diff_path_form_end_to_end(tmp_path):
 
 def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
     """An unreadable `headDiffPath` (no inline diff) is an UNKNOWN surface, not an empty one: the
-    delta round runs a FULL reviewer-deep panel (unknown→run-everything), never a silent scoped skip
-    over nothing. The source is journaled `unknown` and an `unknown-surface` decision is recorded."""
+    delta round schedules a FULL reviewer-deep panel (unknown→run-everything), never a silent scoped
+    skip over nothing. The source is journaled `unknown` and an `unknown-surface` decision is
+    recorded. This session pins no base, so no diff at the post-fix head is derivable: the panel
+    would review the pre-fix diff, and the loop parks `reviewed-diff-stale` instead (#1419; the
+    derivable case is `test_layer4d_stale_diff_1419`)."""
     d = str(tmp_path)
     missing = str(tmp_path / "does-not-exist.txt")
     seen = {"panel_r2": False, "scoped": False}
@@ -1381,13 +1385,14 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
         return {}
 
     payload = _drive_cli(d, _cfg(), respond)
-    assert seen["panel_r2"] is True, "an unreadable head diff must run a full panel, not a scoped scan"
+    assert seen["panel_r2"] is False, "a panel must never review the pre-fix diff"
     assert seen["scoped"] is False
-    assert payload["verdict"] == "converged"
+    assert payload["verdict"] == "cannot-certify"
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert any(r.get("headDiffSource") == "unknown" for r in receipt["rounds"]), receipt["rounds"]
     assert any(dc["kind"] == "unknown-surface" for dc in receipt["decisions"]), receipt["decisions"]
+    assert any(RD.REVIEWED_DIFF_STALE in str(dc.get("detail")) for dc in receipt["decisions"])
 
 
 def test_fixer_inline_head_diff_wins_over_path(tmp_path):
@@ -7618,7 +7623,7 @@ def _legacy_sidecar_setup(tmp_path):
         "schemaVersion": 3,
         "verdict": "converged",
         "certificationShape": "audited-chain",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
         "scriptRan": {"byPhase": {}},
         "seatMap": {},
         "rounds": [],
@@ -7656,7 +7661,7 @@ def _legacy_sidecar_setup(tmp_path):
         "terminal": "converged",
         "config": {"repoRoot": repo, "baseRef": base_sha, "baseBranch": "main"},
         "reviewedDiff": "",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
     }
     return session, state, sidecar_path
 
@@ -7698,7 +7703,7 @@ def test_hex_named_branch_sidecar_not_republished(tmp_path):
         "schemaVersion": 3,
         "verdict": "converged",
         "certificationShape": "audited-chain",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
         "scriptRan": {"byPhase": {}},
         "seatMap": {},
         "rounds": [],
@@ -7736,7 +7741,7 @@ def test_hex_named_branch_sidecar_not_republished(tmp_path):
         "terminal": "converged",
         "config": {"repoRoot": repo, "baseBranch": hex_branch},
         "reviewedDiff": "",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
     }
     prepared = RD._prepare_sidecar(session, state)
     assert prepared["ok"] is True and prepared["needs_write"] is False
@@ -7763,7 +7768,7 @@ def test_legacy_sidecar_sha256_base_ref_is_republished(tmp_path):
         "schemaVersion": 3,
         "verdict": "converged",
         "certificationShape": "audited-chain",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
         "scriptRan": {"byPhase": {}},
         "seatMap": {},
         "rounds": [],
@@ -7801,7 +7806,7 @@ def test_legacy_sidecar_sha256_base_ref_is_republished(tmp_path):
         "terminal": "converged",
         "config": {"repoRoot": repo, "baseRef": base_sha, "baseBranch": "main"},
         "reviewedDiff": "",
-        "certification": {"shape": "audited-chain"},
+        "certification": {"shape": "audited-chain", "certifiedHead": head_sha},
     }
     prepared = RD._prepare_sidecar(session, state)
     assert prepared["ok"] is True and prepared["needs_write"] is True

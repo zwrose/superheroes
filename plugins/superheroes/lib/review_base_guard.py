@@ -166,7 +166,9 @@ def check_round_diff(path):
             "detail": "round diff path is required",
         }
     try:
-        with open(path, encoding="utf-8") as fh:
+        # git's exact bytes (no newline translation): the driver binds this text to the review
+        # diff it derives, byte for byte, so a CRLF line must stay CRLF.
+        with open(path, encoding="utf-8", newline="") as fh:
             content = fh.read()
     except (OSError, UnicodeDecodeError) as e:
         return {

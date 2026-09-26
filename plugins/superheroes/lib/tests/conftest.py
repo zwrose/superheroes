@@ -11,6 +11,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import heartbeat as _heartbeat  # noqa: E402  (needs the sys.path insert above)
+import head_diff_double  # noqa: E402
 import round_driver as _round_driver  # noqa: E402
 
 _TMP_BASE = os.path.realpath(tempfile.gettempdir())
@@ -209,3 +210,13 @@ def _guard_real_review_marker(request):
         pytest.fail("review scope marker of the real checkout (%s) changed while %s ran "
                     "(that test, or a writer overlapping it)"
                     % (_REAL_REVIEW_MARKER, request.node.nodeid))
+
+
+@pytest.fixture(autouse=True)
+def _head_diff_git_double(request, monkeypatch):
+    """Test-only git double (head_diff_double.py): fixtures fold fixers with synthetic head diffs
+    and no pinned base, so "git" answers with the supplied diff. Tests marked
+    `real_git_head_diff` run the driver's real derivation instead."""
+    if request.node.get_closest_marker(head_diff_double.MARKER) is None:
+        head_diff_double.install(monkeypatch, extra=(request.module,))
+    yield

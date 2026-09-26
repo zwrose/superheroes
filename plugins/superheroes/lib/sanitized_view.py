@@ -101,7 +101,17 @@ _GIT_ROUTING_VARS = (
     "GIT_NAMESPACE",
     "GIT_EXTERNAL_DIFF",
     "GIT_REPLACE_REF_BASE",
+    # Ancestry- and config-shaping inputs: a graft or shallow file rewrites history, and the
+    # environment-carried config forms reshape diff output behind every `-c` pin.
+    "GIT_GRAFT_FILE",
+    "GIT_SHALLOW_FILE",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_DIFF_OPTS",
+    "GIT_ATTR_SOURCE",
 )
+# `GIT_CONFIG_COUNT`'s numbered key/value pairs, stripped by prefix.
+_GIT_ROUTING_VAR_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
 
 # Reader-wide security pin carried by every source-repository command that peels
 # a commit (head export, head census, review-diff census, diff-base verify,
@@ -112,7 +122,7 @@ _COMMIT_GRAPH_OFF = ("-c", "core.commitGraph=false")
 # Patch-presentation policy for ``git diff`` only: the commit-graph pin plus
 # quotePath and diff formatting overrides. Do not borrow this bundle for
 # non-patch commands (e.g. diff-base ``rev-parse`` peeling).
-_DIFF_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
+DIFF_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
     "-c",
     "core.quotePath=false",
     "-c",
@@ -124,7 +134,7 @@ _DIFF_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
 )
 
 # Belt-and-braces for _git_ls_tree_export and _git_tree_entries; -z already suppresses
-# quoting. Patch-presentation keys from _DIFF_CONFIG_OVERRIDES deliberately do not
+# quoting. Patch-presentation keys from DIFF_CONFIG_OVERRIDES deliberately do not
 # appear here.
 _CENSUS_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + ("-c", "core.quotePath=false")
 
@@ -143,9 +153,11 @@ _DIFF_PATCH_FLAGS = (
 _DIFF_READ_POLL_SECONDS = 1.0
 
 
-def _git_env():
+def git_env():
     env = os.environ.copy()
     for var in _GIT_ROUTING_VARS:
+        env.pop(var, None)
+    for var in [v for v in env if v.startswith(_GIT_ROUTING_VAR_PREFIXES)]:
         env.pop(var, None)
     env["GIT_LITERAL_PATHSPECS"] = "1"
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
@@ -160,12 +172,12 @@ def _git_env():
 
 
 def _git_run(*args, **kwargs):
-    kwargs["env"] = _git_env()
+    kwargs["env"] = git_env()
     return subprocess.run(*args, **kwargs)
 
 
 def _git_popen(*args, **kwargs):
-    kwargs["env"] = _git_env()
+    kwargs["env"] = git_env()
     return subprocess.Popen(*args, **kwargs)
 
 
@@ -1269,7 +1281,7 @@ def _effective_review_diff_argv_budget():
     except (AttributeError, ValueError, OSError):
         arg_max = None
     if arg_max is not None and arg_max > 0:
-        env = _git_env()
+        env = git_env()
         env_bytes = sum(
             len(k.encode("utf-8", errors="surrogateescape"))
             + len(v.encode("utf-8", errors="surrogateescape"))
@@ -1286,7 +1298,7 @@ def _review_diff_argv_prefix(repo_real, merge_base, head_sha):
         "git",
         "-C",
         repo_real,
-        *_DIFF_CONFIG_OVERRIDES,
+        *DIFF_CONFIG_OVERRIDES,
         *_DIFF_PATCH_FLAGS,
         merge_base,
         head_sha,
@@ -1552,6 +1564,13 @@ def _git_diff_batch_output(argv, started, total_bytes):
     finally:
         if proc is not None:
             _terminate_process(proc)
+
+
+def bounded_git_diff_output(argv):
+    """Stream one `git diff` argv under `git_env`, bounded by `REVIEW_DIFF_MAX_BYTES` and the
+    export timeout: the diff bytes, or `SanitizedViewError` (`sanitized-view-diff-too-large` past
+    the cap; git is terminated, never buffered whole)."""
+    return _git_diff_batch_output(argv, time.monotonic(), 0)[0]
 
 
 def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):

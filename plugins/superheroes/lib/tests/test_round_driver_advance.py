@@ -1962,6 +1962,10 @@ def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(t
     _write_verify_payload(d, {"result": "pass"})
     assert _advance(d, tmp_path)["ok"] is True                       # A/B: the fold itself works
     folded = _state(d)
+    # The fold converged; a re-entry sees the durable record under a state that has not yet
+    # reached its terminal.
+    for key in ("terminal", "certification", "_receiptFinalized"):
+        folded.pop(key, None)
     folded["step"] = RD.P_VERIFY
     folded["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
                          "payload": {"command": "none"}}
@@ -3202,10 +3206,12 @@ def test_terminal_advance_writes_the_receipt_and_publishes_the_sidecar(tmp_path,
     assert err is None
     assert RR.validate_sidecar(sidecar) == (True, None)
     assert sidecar["schema"] == RR.SIDECAR_SCHEMA
-    assert sidecar["headSha"] == "a" * 40
+    # A converged sidecar publishes the head its certificate names, never the live HEAD.
+    certified = _state(d)["certification"]["certifiedHead"]
+    assert sidecar["headSha"] == certified
     assert sidecar["sessionDir"] == d and sidecar["receiptPath"] == receipt_path
     assert sidecar["verdict"] == "converged"
-    stale, _why = RR.sidecar_stale(sidecar, head_sha="a" * 40, receipt_bytes=receipt_bytes,
+    stale, _why = RR.sidecar_stale(sidecar, head_sha=certified, receipt_bytes=receipt_bytes,
                                    session_dir=d)
     assert stale is False
 
@@ -3239,11 +3245,22 @@ def test_advance_on_an_existing_terminal_is_idempotent_and_repairs_the_sidecar(t
     assert repaired["ok"] is True and repaired["sidecarRepaired"] is True
     assert os.path.exists(sidecar_path)
 
-    # a STALE sidecar (the head moved) is republished with the new head
+    # a converged certificate publishes the head it certified, never the live one: a moved HEAD
+    # leaves the sidecar naming the certified head (the handback gate refuses the moved head)
+    certified = _state(d)["certification"]["certifiedHead"]
     moved = RD.cmd_advance(d, git=_fake_git(gitdir, head="f" * 40))
-    assert moved["sidecarRepaired"] is True
+    assert moved["ok"] is True and moved["sidecarRepaired"] is False, moved
     sidecar, _err = RR.read_json(sidecar_path)
-    assert sidecar["headSha"] == "f" * 40
+    assert sidecar["headSha"] == certified != "f" * 40
+
+    # a STALE sidecar (naming another head) is republished with the certified head
+    sidecar["headSha"] = "e" * 40
+    with open(sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(sidecar, fh)
+    stale = RD.cmd_advance(d, git=_fake_git(gitdir, head="f" * 40))
+    assert stale["ok"] is True and stale["sidecarRepaired"] is True, stale
+    sidecar, _err = RR.read_json(sidecar_path)
+    assert sidecar["headSha"] == certified
 
 
 def test_sidecar_refuses_when_the_git_dir_cannot_be_resolved(tmp_path, adapters):
@@ -3282,7 +3299,8 @@ def test_sidecar_refuses_when_the_repo_root_is_not_a_repository(tmp_path, monkey
     d = _session(tmp_path)
     state = _state(d)
     state["terminal"] = "converged"
-    state["certification"] = {"shape": "audited-chain"}
+    state["certification"] = {"shape": "audited-chain", "certifiedHead": subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()}
     state["_receiptFinalized"] = True
     RD.save_state(d, state)
     RD._write_receipt(d, state)          # a PUBLISHABLE session — the refusal is not a side effect
@@ -3332,6 +3350,7 @@ def test_terminal_sidecar_lands_in_a_real_git_dir(tmp_path, adapters):
     head = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     state = _state(d)
     state["config"]["repoRoot"] = repo
+    state["reviewedDiffSha"] = head  # the head this fixture's round diff is bound to
     RD.save_state(d, state)
     _record_all_panel_seats(d)
     assert RD.cmd_advance(d)["ok"] is True
