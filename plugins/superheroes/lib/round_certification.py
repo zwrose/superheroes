@@ -639,7 +639,7 @@ def _superseded_audit_attempts(journal):
     for event in journal:
         if not isinstance(event, dict):
             continue
-        if not session_contract.journal_is_re_emit_orders_superseded(event):
+        if not session_contract.journal_is_orders_superseded(event):
             continue
         phase = event.get("phase")
         rnd = event.get("round")
@@ -1571,7 +1571,7 @@ def _journal_open_seats(journal, session_dir=None):
                 return None, refusal
             for sk, occ in roster:
                 opened[(phase, rnd, attempt, sk, occ)] = event
-        if session_contract.journal_is_re_emit_orders_superseded(event):
+        if session_contract.journal_is_orders_superseded(event):
             if phase is not None and rnd is not None and attempt is not None:
                 superseded.add((phase, rnd, attempt))
         if cmd in ("next", "advance") and outcome in ("emitted", "pending", "opened"):

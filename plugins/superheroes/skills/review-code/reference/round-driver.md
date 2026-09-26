@@ -693,7 +693,8 @@ dispositions for out-of-scope rows, and may supersede a pending fixer attempt wh
 order hash changes (`reason: ruling-changed-order`). Refusal tokens (each leaves state bytes
 unchanged): `ruling-file-unreadable`, `ruling-file-shape`, `ruling-provenance-malformed`,
 `ruling-unknown-kind`, `ruling-reason-missing`, `ruling-follow-up-malformed`,
-`ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-critical-out-of-scope`,
+`ruling-guidance-oversize`, `ruling-target-unknown`, `ruling-target-ambiguous`,
+`ruling-critical-out-of-scope`,
 `ruling-session-terminal`, `ruling-attempt-recorded`.
 
 ## Batch concurrency — an independent batch goes out together

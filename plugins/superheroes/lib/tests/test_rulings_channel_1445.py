@@ -264,6 +264,60 @@ def test_edge4_guidance_lifts_out_of_scope(tmp_path):
     assert id_b not in RD._live_out_of_scope_ruling_keys(_state(session_dir))
 
 
+def test_critical_restage_not_suppressed_by_stale_out_of_scope(tmp_path):
+    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    path = _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_b, "ruling": "out-of-scope", "reason": "later",
+         "followUp": _follow_up()}])
+    assert _rule(session_dir, path)["ok"]
+    state = _state(session_dir)
+    key_b = RD._fix_batch_row_key(row_b)
+    crit = dict(row_b)
+    crit["severity"] = "Critical"
+    state["round"] = state["round"] + 1
+    RD._stage_findings(state, [crit])
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY) or []
+    entry = next(e for e in ledger if RD._finding_identity_key(e) == key_b)
+    assert entry.get("disposition") != "out-of-scope"
+    filtered, fault = RD._filter_excluded_discharged_fixes(state, [crit])
+    assert fault is None
+    assert len(filtered) == 1
+
+
+def test_ruling_target_ambiguous_when_staged_id_reused():
+    state = {
+        session_contract.DISPOSITION_LEDGER_KEY: [
+            {"id": "v0", "file": "a.py", "title": "old", "line": 1, "severity": "Important"},
+            {"id": "v0", "file": "b.py", "title": "new", "line": 2, "severity": "Important"},
+        ],
+        "findings": [],
+    }
+    key, row, fault = RD._resolve_ruling_target(state, "v0")
+    assert key is None and row is None
+    assert fault == RD.RULING_TARGET_AMBIGUOUS
+
+
+def test_rule_supersession_closes_prior_fixer_attempt_for_certification(tmp_path):
+    f_a = _blocking_finding("bounds A", 2)
+    f_b = _blocking_finding("bounds B", 3)
+    f_b["severity"] = "Minor"
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="rule-super", fixBatchCap=2)
+    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_FIXER)
+    row_b = (_state(session_dir).get("_fixBatch") or [None, {}])[1]
+    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
+         "followUp": _follow_up()}]))
+    assert out.get("ok"), out
+    assert out.get("superseded")
+    journal = RD.read_journal(session_dir)
+    unclosed, refusal = RC._journal_open_seats(journal, session_dir)
+    assert refusal is None
+    fixer_open = [k for k, _ in unclosed if k[0] == P_FIXER]
+    assert not fixer_open
+
+
 def test_edge5_aggregate_cap_refuses_ruling_omitted(tmp_path):
     f_a = _blocking_finding("cap A", 2)
     f_b = _blocking_finding("cap B", 3)
@@ -283,12 +337,17 @@ def test_edge5_aggregate_cap_refuses_ruling_omitted(tmp_path):
          "title": "t", "file": "f.py", "line": i}
         for i in range(6)]
     RD.save_state(session_dir, state)
+    batch_path = RD._ensure_fix_batch_file(session_dir, rnd, state)
+    with open(batch_path, "rb") as fh:
+        batch_bytes_before = fh.read()
     path = _write_ruling_file(tmp_path / "r.json", [
         {"id": id_a, "ruling": "guidance", "reason": "cap", "guidance": "must appear whole"}])
     out = _rule(session_dir, path)
     assert out.get("ok") is False
     assert out.get("reason") == "order-render-refused"
     assert "ruling-guidance-omitted" in str(out.get("detail", ""))
+    with open(batch_path, "rb") as fh:
+        assert fh.read() == batch_bytes_before
 
 
 def test_edge6_two_rule_calls_append(tmp_path):

@@ -190,6 +190,7 @@ RULING_FILE_SHAPE = "ruling-file-shape"
 RULING_PROVENANCE_MALFORMED = "ruling-provenance-malformed"
 RULING_UNKNOWN_KIND = "ruling-unknown-kind"
 RULING_TARGET_UNKNOWN = "ruling-target-unknown"
+RULING_TARGET_AMBIGUOUS = "ruling-target-ambiguous"
 RULING_REASON_MISSING = "ruling-reason-missing"
 RULING_SESSION_TERMINAL = "ruling-session-terminal"
 RULING_FOLLOW_UP_MALFORMED = "ruling-follow-up-malformed"
@@ -1546,7 +1547,7 @@ def _stage_findings(state, compiled):
             seen[key] = len(ledger)
             ledger.append(entry)
         live_oos = _live_out_of_scope_ruling_for_key(state, key)
-        if live_oos is not None:
+        if live_oos is not None and not _live_out_of_scope_blocks_row(entry):
             _record_disposition(
                 state, key, "out-of-scope", round_no,
                 outOfScopeReason=live_oos.get("reason"),
@@ -1599,6 +1600,14 @@ def _live_out_of_scope_ruling_for_key(state, key):
     if isinstance(live, dict) and live.get("ruling") == "out-of-scope":
         return live
     return None
+
+
+def _live_out_of_scope_blocks_row(row):
+    """True when a live out-of-scope ruling may exclude or restage this row (never Critical)."""
+    if not isinstance(row, dict):
+        return False
+    sev = row.get("severity")
+    return circuit_breaker.is_critical(sev)
 
 
 def _live_out_of_scope_ruling_keys(state):
@@ -3840,7 +3849,7 @@ def _filter_excluded_discharged_fixes(state, rows):
         if _excluded_discharged_fix_row(ledger_by_key, row):
             continue
         key = _fix_batch_row_key(row)
-        if key and key in oos_keys:
+        if key and key in oos_keys and not _live_out_of_scope_blocks_row(row):
             continue
         filtered.append(row)
     return filtered, None
@@ -7315,23 +7324,52 @@ def _severity_for_finding_key(state, key, fallback=None):
     return fallback
 
 
+def _row_matches_ruling_finding_key(row, ruling_id):
+    if not isinstance(row, dict) or not isinstance(ruling_id, str):
+        return False
+    fkey = row.get(session_contract.FINDING_KEY_FIELD)
+    if isinstance(fkey, str) and fkey == ruling_id:
+        return True
+    derived = _finding_key_of(row)
+    return derived == ruling_id if derived else False
+
+
 def _resolve_ruling_target(state, ruling_id):
     if not isinstance(ruling_id, str) or not ruling_id.strip():
-        return None, None
+        return None, None, None
     rid = ruling_id.strip()
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY) or []
-    for entry in ledger:
-        if isinstance(entry, dict) and _row_matches_ruling_id(entry, rid):
-            return _finding_identity_key(entry), dict(entry)
     for finding in state.get("findings") or []:
-        if _row_matches_ruling_id(finding, rid):
-            return _finding_key_of(finding), dict(finding)
+        if _row_matches_ruling_finding_key(finding, rid):
+            return _finding_key_of(finding), dict(finding), None
     combined = ((state.get("_fixBatch") or []) + (state.get("_fixQueue") or [])
                 + (state.get("fixBatch") or []))
     for row in combined:
-        if _row_matches_ruling_id(row, rid):
-            return _fix_batch_row_key(row), dict(row)
-    return None, None
+        if _row_matches_ruling_finding_key(row, rid):
+            return _fix_batch_row_key(row), dict(row), None
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY) or []
+    for entry in ledger:
+        if isinstance(entry, dict) and _row_matches_ruling_finding_key(entry, rid):
+            return _finding_identity_key(entry), dict(entry), None
+    id_matches = []
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict) and finding.get("id") == rid:
+            id_matches.append((_finding_key_of(finding), dict(finding)))
+    for row in combined:
+        if isinstance(row, dict) and row.get("id") == rid:
+            id_matches.append((_fix_batch_row_key(row), dict(row)))
+    for entry in ledger:
+        if isinstance(entry, dict) and entry.get("id") == rid:
+            id_matches.append((_finding_identity_key(entry), dict(entry)))
+    by_key = {}
+    for key, row in id_matches:
+        if isinstance(key, str) and key:
+            by_key[key] = row
+    if len(by_key) > 1:
+        return None, None, RULING_TARGET_AMBIGUOUS
+    if len(by_key) == 1:
+        key = next(iter(by_key))
+        return key, by_key[key], None
+    return None, None, None
 
 
 def _load_ruling_file(path):
@@ -7419,7 +7457,7 @@ def _dispatch_order_hashes_for_pending(session_dir, state, pending):
         try:
             context, _paths = _build_order_render_context(
                 session_dir, state, rnd, phase, attempt, seat_key, occurrence,
-                pending_payload, row, roster=roster)
+                pending_payload, row, roster=roster, materialize_shared_inputs=False)
         except ValueError:
             raise
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
@@ -7438,7 +7476,7 @@ def _ruling_requires_pending_fixer_batch_refresh(state, parsed):
         if key:
             batch_keys.add(key)
     for entry in parsed:
-        key, _candidate = _resolve_ruling_target(state, entry["id"])
+        key, _candidate, _fault = _resolve_ruling_target(state, entry["id"])
         if key is None:
             continue
         if entry["ruling"] == "out-of-scope":
@@ -7539,7 +7577,9 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     rnd = pending.get("round") if isinstance(pending, dict) else None
     attempt = pending.get("attempt") if isinstance(pending, dict) else None
     for entry in parsed:
-        key, candidate = _resolve_ruling_target(state, entry["id"])
+        key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
+        if target_fault == RULING_TARGET_AMBIGUOUS:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
         if key is None:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
         if entry["ruling"] == "out-of-scope":
@@ -7569,7 +7609,11 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     cfg = state.get("config") or {}
     round_rulings = []
     for entry in parsed:
-        key, candidate = _resolve_ruling_target(state, entry["id"])
+        key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
+        if target_fault == RULING_TARGET_AMBIGUOUS:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
+        if key is None:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
         seq = _next_ruling_seq(state)
         log_row = {
             "seq": seq,
@@ -9257,13 +9301,7 @@ def _fixer_verify_budget(batch, cfg):
             % (files_str, full))
 
 
-def _ensure_fix_batch_file(session_dir, rnd, state):
-    """Materialize fix-batch.json from state for fixer orders.
-
-    Sibling parity with ``_ensure_round_diff`` and ``_ensure_round_head_diff``: unknown input
-    (absent, ``None``, or wrong type) refuses before any path computation or write. A known
-    batch — including a known-empty list — still materializes.
-    """
+def _materialized_fix_batch_rows(state):
     batch = state.get("_fixBatch")
     if not isinstance(batch, list):
         batch = state.get("fixBatch")
@@ -9296,14 +9334,34 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
                         row_gate["reason"] = gate_ruling.get("reason")
                     row_copy["gateRuling"] = row_gate
         materialized.append(row_copy)
+    return materialized
+
+
+def _fix_batch_path_for_round(session_dir, rnd, state):
     rdir = round_records.round_dir(session_dir, rnd)
     batch_index = state.get("_fixBatchIndex") or 0
     if batch_index >= 1:
-        path = os.path.join(rdir, "fix-batch.%d.json" % batch_index)
-    else:
-        path = os.path.join(rdir, "fix-batch.json")
-    return _ensure_bytes_at_path(session_dir, path,
-                                 round_records.canonical(materialized).encode("utf-8"))
+        return os.path.join(rdir, "fix-batch.%d.json" % batch_index)
+    return os.path.join(rdir, "fix-batch.json")
+
+
+def _fix_batch_canonical_bytes(state):
+    return round_records.canonical(_materialized_fix_batch_rows(state)).encode("utf-8")
+
+
+def _fix_batch_sha256_from_state(state):
+    return round_records.sha256_text(_fix_batch_canonical_bytes(state).decode("utf-8"))
+
+
+def _ensure_fix_batch_file(session_dir, rnd, state):
+    """Materialize fix-batch.json from state for fixer orders.
+
+    Sibling parity with ``_ensure_round_diff`` and ``_ensure_round_head_diff``: unknown input
+    (absent, ``None``, or wrong type) refuses before any path computation or write. A known
+    batch — including a known-empty list — still materializes.
+    """
+    path = _fix_batch_path_for_round(session_dir, rnd, state)
+    return _ensure_bytes_at_path(session_dir, path, _fix_batch_canonical_bytes(state))
 
 
 # Round-relative paths the driver materializes for order templates — production reads this registry.
@@ -9399,7 +9457,8 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
 
 
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
-                        session_dir, rnd, paths, channel, roster=None):
+                        session_dir, rnd, paths, channel, roster=None,
+                        materialize_shared_inputs=True):
     """Phase-specific placeholder dict for `round_orders.render_order`.
 
     Raises `ValueError("order-render-refused:...")` when a slot cannot be filled truthfully
@@ -9526,7 +9585,10 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CHANNEL": channel,
         }
     elif phase == P_FIXER:
-        fix_batch_path = ROUND_MATERIALIZER_REGISTRY["fix_batch"](session_dir, rnd, state)
+        if materialize_shared_inputs:
+            fix_batch_path = ROUND_MATERIALIZER_REGISTRY["fix_batch"](session_dir, rnd, state)
+        else:
+            fix_batch_path = _fix_batch_path_for_round(session_dir, rnd, state)
         # Match _ensure_fix_batch_file: _fixBatch wins over fixBatch so guidance and sidecar agree.
         fix_batch = state.get("_fixBatch")
         if not isinstance(fix_batch, list):
@@ -9551,7 +9613,10 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
                     unaccounted.append({"index": idx, "title": row_title})
             if unaccounted:
                 _record_round(state, _GATE_GUIDANCE_ROW_CARRIED_CHANNEL, unaccounted)
-        batch_sha = _fix_batch_file_sha256(session_dir, rnd, state)
+        if materialize_shared_inputs:
+            batch_sha = _fix_batch_file_sha256(session_dir, rnd, state)
+        else:
+            batch_sha = _fix_batch_sha256_from_state(state)
         ph = {
             "FIX_BATCH_PATH": fix_batch_path,
             "FIX_BATCH_SHA256": batch_sha,
@@ -9567,7 +9632,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
-                                pending_payload, row, roster=None):
+                                pending_payload, row, roster=None, materialize_shared_inputs=True):
     """Render the order context for one seat/occurrence, using the CALLER's resolved transport row.
 
     `row` is required — never re-resolved here. `_seat_transport_row` is not pure for the
@@ -9616,7 +9681,8 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "host_seat": host_seat,
         "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
                                               cfg, pending_payload,
-                                              session_dir, rnd, paths, channel, roster=roster),
+                                              session_dir, rnd, paths, channel, roster=roster,
+                                              materialize_shared_inputs=materialize_shared_inputs),
     }, paths
 
 
