@@ -993,8 +993,7 @@ class CouplingLens(object):
             repo, adapters.TYPESCRIPT_SUPPORTED_MAJORS)
         ts_toolchain_provided = toolchain is not None
 
-        include_only_re = adapters.depcruise_tracked_include_only_re(repo, abs_targets)
-        fixed_argv = adapters.depcruise_argv([], include_only_re=include_only_re)
+        fixed_argv = adapters.depcruise_argv([])
         platform_max = guardian_census.platform_arg_max_bytes()
         budget, env_measurement_failed = guardian_census.argv_operand_budget_detail(
             repo, fixed_argv)
@@ -1013,7 +1012,7 @@ class CouplingLens(object):
                 % (self.name, operand_bytes, len(targets), budget, platform_max))
             return self._eco_fail("js", reason, ts_toolchain_provided)
 
-        argv = adapters.depcruise_argv(abs_targets, include_only_re=include_only_re)
+        argv = adapters.depcruise_argv(abs_targets)
         res = gc.run_tool(argv, ctx, timeout=adapters.COLLECT_TIMEOUT, cwd=repo,
                           ok_exits=(0,), extra_node_path=toolchain)
         after_cache = adapters.cache_paths_present(repo)
@@ -1105,12 +1104,10 @@ class CouplingLens(object):
             }
             for ws in src_census["workspaces"]
         }
-        # bite-proof axis: recorded argv is bounded; operands and include-only are summarized.
+        # bite-proof axis: recorded argv is bounded; operands are summarized.
         _operand_summary = "<%d tracked JS/TS files under %s>" % (
             len(abs_targets), os.path.realpath(repo))
-        _include_summary = "<%d tracked JS/TS paths>" % len(abs_targets)
-        _recorded_argv = adapters.depcruise_recorded_argv(
-            argv, _operand_summary, include_only_summary=_include_summary)
+        _recorded_argv = adapters.depcruise_recorded_argv(argv, _operand_summary)
         section = {
             "status": "collected",
             "reason": None,
@@ -1652,6 +1649,7 @@ def _filter_depcruise_to_tracked(repo, payload, tracked_set, collector_cwd=None)
     for edge in edges_in:
         f_abs = _absolutize(collector_cwd, edge.get("from", ""))
         t_abs = _absolutize(collector_cwd, edge.get("to", ""))
+        # bite-proof axis: an edge with an untracked endpoint never counts
         if (_rel_posix(repo, f_abs) in tracked_rel
                 and _rel_posix(repo, t_abs) in tracked_rel):
             kept = dict(edge)
