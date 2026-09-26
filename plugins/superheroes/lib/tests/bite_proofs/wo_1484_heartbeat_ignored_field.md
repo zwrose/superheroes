@@ -97,7 +97,7 @@ if __name__ == "__main__":
 - **Neutralization** (delete from the `record` dict in `stamp()`):
 
 ```
-        "staleAfterSeconds": LEGACY_STALE_AFTER_SECONDS,
+        "staleAfterSeconds": LIVENESS_QUIET_WINDOW_SECONDS,
 ```
 
 - **Node:** `plugins/superheroes/lib/tests/test_heartbeat.py::test_stamp_writes_the_legacy_field_for_older_readers`
@@ -116,7 +116,7 @@ FAILED plugins/superheroes/lib/tests/test_heartbeat.py::test_stamp_writes_the_le
 
 ```
         "note": note,
-        "staleAfterSeconds": LEGACY_STALE_AFTER_SECONDS,
+        "staleAfterSeconds": LIVENESS_QUIET_WINDOW_SECONDS,
     }
 ```
 

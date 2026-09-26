@@ -26,9 +26,9 @@ HEARTBEAT_ROOT_ENV = "SUPERHEROES_HEARTBEAT_ROOT"
 LAUNCH_ID_ENV = "SUPERHEROES_LAUNCH_ID"
 HEARTBEATS_DIR_NAME = "heartbeats"
 SCHEMA = 1
-# Written only so readers from before the promise was retired can still load new stamps;
-# never read here.
-LEGACY_STALE_AFTER_SECONDS = 24000
+# One home for the transcript liveness quiet window; wave_watch binds to this value.
+# Also written as staleAfterSeconds on stamp so pre-change watchers apply the same window.
+LIVENESS_QUIET_WINDOW_SECONDS = 2700
 
 STATES = frozenset({
     "working",
@@ -427,7 +427,7 @@ def stamp(
         "lastDispatch": last_dispatch,
         "ts": float(now),
         "note": note,
-        "staleAfterSeconds": LEGACY_STALE_AFTER_SECONDS,
+        "staleAfterSeconds": LIVENESS_QUIET_WINDOW_SECONDS,
     }
     valid, reason = _validate_record(record, launch_id=launch_id, now=now)
     if not valid:

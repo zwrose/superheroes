@@ -813,7 +813,8 @@ without a tool call.
 - **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
   was launched by the advisor's launcher — stamp the builder heartbeat per CONVENTIONS §15:
   one `working` stamp at intake (it proves the store is writable), `blocked` when blocked on
-  something only the owner/advisor can clear, and `parked` / `handback` only after the durable
+  something only the owner/advisor can clear, **`working` again when the blocker clears and the
+  builder resumes**, and `parked` / `handback` only after the durable
   issue/PR evidence exists. Stamp with
   `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" stamp --repo-root "<repo-root>" --state <state> --phase <phase>`
   (`SUPERHEROES_LAUNCH_ID` supplies `--launch-id` when unset). When `SUPERHEROES_LAUNCH_ID` is

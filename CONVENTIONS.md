@@ -1396,9 +1396,8 @@ non-terminal state and says nothing about liveness.
 
 **Liveness.** One rule for every reader: the lane's recorded leader pid is positively live **and** the
 lane's own session transcript — resolved by the launch record's session id and config root, **stat
-only** (the existing identity rule) — was written within
-`wave_watch.LIVENESS_QUIET_WINDOW_SECONDS` = **2700** seconds (45 minutes). The constant lives in
-`lib/wave_watch.py`. No per-lane promise exists. A Codex-hosted builder has no Claude session
+only** (the existing identity rule) — was written within `LIVENESS_QUIET_WINDOW_SECONDS` in `lib/heartbeat.py` (re-exported by
+`lib/wave_watch.py`). No per-lane promise exists. A Codex-hosted builder has no Claude session
 transcript, so it would alert `lane-stale` (fail toward alert) where a stamp used to vouch for it;
 today's launcher spawns only `claude -p` builders.
 

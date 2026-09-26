@@ -7,6 +7,7 @@ import time
 import pytest
 
 import heartbeat as hb
+import wave_watch as ww
 import launch_ledger as ll
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -462,7 +463,7 @@ def test_stamp_writes_the_legacy_field_for_older_readers(tmp_path, monkeypatch):
     with open(result["path"], encoding="utf-8") as fh:
         on_disk = json.load(fh)
     v = on_disk["staleAfterSeconds"]
-    assert v == hb.LEGACY_STALE_AFTER_SECONDS == 24000
+    assert v == hb.LIVENESS_QUIET_WINDOW_SECONDS == ww.LIVENESS_QUIET_WINDOW_SECONDS
     assert isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 86400
 
 
@@ -726,7 +727,7 @@ def test_cli_stamp_prints_json(tmp_path, monkeypatch, capsys):
     path_result = hb.heartbeat_path(repo, "cli-lane")
     with open(path_result["path"], encoding="utf-8") as fh:
         on_disk = json.load(fh)
-    assert on_disk["staleAfterSeconds"] == 24000
+    assert on_disk["staleAfterSeconds"] == hb.LIVENESS_QUIET_WINDOW_SECONDS
 
 
 def test_cli_read_prints_json(tmp_path, monkeypatch, capsys):

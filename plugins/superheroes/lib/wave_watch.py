@@ -33,8 +33,9 @@ Contract:
   stack-state-changed (E4) > pr-set-changed (E5) > lane-stale (E6) > timer (E7).
 - lane-stale: a started lane whose latest recorded pid is positively live and whose
   own session transcript was not written within LIVENESS_QUIET_WINDOW_SECONDS — a
-  wedged builder alive but frozen past the quiet window. The ending stamp
-  (parked/handback/blocked) is evaluated separately; no heartbeat field decides liveness.
+  wedged builder alive but frozen past the quiet window. Only terminal stamps
+  (parked/handback) are excluded from this check; blocked lanes stay candidates so
+  lane-blocked can win precedence while lane-stale still surfaces in alsoObserved.
 - Transcript liveness (#1023, #1484): lane-stale fires when the lane's session
   transcript is unresolved, ambiguous, future-dated, or older than
   LIVENESS_QUIET_WINDOW_SECONDS. A transcript written within the window (inclusive
@@ -134,7 +135,7 @@ _TRANSCRIPT_SUFFIX = ".jsonl"
 # Field check 2026-09-26: 3,599 builder-worktree transcripts from the prior 30 days,
 # 947,140 inter-entry gaps; 15 exceed 2,700 s and 13 of those exceed 5,400 s (a
 # session that stopped and resumed, not a working step).
-LIVENESS_QUIET_WINDOW_SECONDS = 2700
+LIVENESS_QUIET_WINDOW_SECONDS = hb.LIVENESS_QUIET_WINDOW_SECONDS
 
 RESULT_KEY_PASSED_OVER = "passedOver"
 RESULT_KEY_PASSED_OVER_COUNT = "passedOverCount"
@@ -1567,7 +1568,7 @@ def _evaluate_tick(
             repo_root, live_lanes, env, degraded,
         )
     )
-    exclude_ids = _launch_ids(terminal_launches) + _launch_ids(blocked_launches)
+    exclude_ids = _launch_ids(terminal_launches)
     exited, live_candidates = _evaluate_pid_signals(
         live_lanes, exclude_ids, degraded,
     )

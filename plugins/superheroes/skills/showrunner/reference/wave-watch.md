@@ -236,12 +236,11 @@ recorded session id fail toward alert. The concurrent-foreign-session-in-the-sam
 **closed** by recorded identity: a different session carries a different id and cannot vouch for this
 lane.
 
-## The quiet window, and the number behind it
+## The quiet window
 
-Liveness uses one quiet window for every lane: `LIVENESS_QUIET_WINDOW_SECONDS`, **2700 s** (45
-minutes), in `lib/wave_watch.py`. The field reason: **3,599** builder-worktree session transcripts
-from the prior 30 days, **947,140** inter-entry gaps, **15** over **2,700** s and **13** of those
-over **5,400** s — the stop-and-resume shape, not a working step. No per-lane promise exists;
+Liveness uses one quiet window for every lane: `LIVENESS_QUIET_WINDOW_SECONDS` in
+`lib/heartbeat.py` (bound in `lib/wave_watch.py`). The field-check narrative and measured
+counts live in the module comment beside that constant. No per-lane promise exists;
 `builder-exited` still surfaces a lane whose pid dies regardless of transcript age.
 
 ## Timing flags

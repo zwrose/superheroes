@@ -53,20 +53,16 @@ def test_conventions_section_15_matches_heartbeat_constants():
         + [hb.HEARTBEAT_ROOT_ENV, hb.LAUNCH_ID_ENV, _launch_id_grammar_token()]
     )
     _assert_tokens_present(section, "CONVENTIONS.md §15", tokens)
-    _assert_bound_fragment(
-        section,
-        "CONVENTIONS.md §15",
-        "`wave_watch.LIVENESS_QUIET_WINDOW_SECONDS` = **%d** seconds"
-        % ww.LIVENESS_QUIET_WINDOW_SECONDS,
-    )
+    assert "LIVENESS_QUIET_WINDOW_SECONDS" in section
+    assert "lib/heartbeat.py" in section
 
 
-def test_wave_watch_doc_states_the_quiet_window():
+def test_wave_watch_doc_cites_the_quiet_window_constant():
     doc = _read_plugin("skills/showrunner/reference/wave-watch.md")
-    _assert_bound_fragment(
+    _assert_tokens_present(
         doc,
         "reference/wave-watch.md",
-        "`LIVENESS_QUIET_WINDOW_SECONDS`, **%d s**" % ww.LIVENESS_QUIET_WINDOW_SECONDS,
+        ["LIVENESS_QUIET_WINDOW_SECONDS", "lib/heartbeat.py"],
     )
 
 
@@ -86,6 +82,7 @@ def test_workhorse_charter_matches_heartbeat_constants():
         hb.LAUNCH_ID_ENV,
         "CONVENTIONS §15",
         "blocked",
+        "blocker clears",
     ] + sorted(hb.TERMINAL_STATES)
     _assert_tokens_present(text, "skills/workhorse/SKILL.md", tokens)
 
@@ -124,6 +121,7 @@ def test_resume_row_two_names_the_liveness_rule():
     line_end = text.find("\n", idx)
     row = text[idx:line_end]
     assert "LIVENESS_QUIET_WINDOW_SECONDS" in row
+    assert "terminal" in row or "parked" in row
     assert "`fresh`" not in row
     assert "staleAfterSeconds" not in row
 
