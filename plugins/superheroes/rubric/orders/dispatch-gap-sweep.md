@@ -22,8 +22,9 @@ files are pre-existing — SKIP them, even if they violate conventions.
 
 ## Verification rules
 - `file:line` citation required. No citation → drop your own finding before writing it out. Cite
-  `line` as an integer (a JSON number, e.g. `"line": 291`), never a string — a string line is
-  refused at compile.
+  `line` as an integer (a JSON number, e.g. `"line": 291`). A numeric
+  string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
+  (`line is not an integer`) and the finding is dropped.
 - Before flagging "missing X", grep the verification root for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
 - Judge only from the diff and the repo — never the PR description or author narrative.
