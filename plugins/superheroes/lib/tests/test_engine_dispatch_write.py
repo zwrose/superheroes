@@ -127,12 +127,39 @@ def _resolve_native_result_path(argv, prompt_bytes=None):
     return None
 
 
+def _test_extract_write_report_tail(text):
+    """Test-local strict write-report tail JSON extraction for fake runners."""
+    try:
+        if not isinstance(text, str) or not text:
+            return None
+        lines = text.split("\n")
+        last_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == EA.WRITE_REPORT_SENTINEL:
+                last_idx = i
+        if last_idx is None:
+            return None
+        after = "\n".join(lines[last_idx + 1 :])
+        if not after:
+            return None
+        dec = json.JSONDecoder()
+        obj, end = dec.raw_decode(after.lstrip())
+        if not isinstance(obj, dict):
+            return None
+        tail = after.lstrip()[end:]
+        if tail.strip():
+            return None
+        return obj
+    except Exception:
+        return None
+
+
 def _write_native_write_result(argv, stdout, prompt_bytes=None):
     result_path = _resolve_native_result_path(argv, prompt_bytes)
     if result_path is None:
         return
     text = stdout if isinstance(stdout, str) else ""
-    obj = EA.extract_write_report(text)
+    obj = _test_extract_write_report_tail(text)
     if obj is None:
         return
     lines = text.split("\n")
@@ -792,36 +819,10 @@ def test_worktree_dirtied_refuses_retry(tmp_path):
     assert res["attempts"] == 1
 
 
-# --- WO-B: write report recovery ---------------------------------------------
 
 
-def _install_write_salvage(monkeypatch, recover):
-    monkeypatch.setattr(ED.engine_adapter, "salvage_write_report", recover, raising=False)
 
 
-def _write_report(*, ok=True):
-    return {
-        "report": {
-            "ok": ok,
-            "signal": "ok" if ok else "tests_failed",
-            "evidence": {"testFailed": not ok, "testPassed": ok},
-        },
-        "structured": True,
-        "requiresManualRead": False,
-        "salvaged": True,
-    }
-
-
-def _prose_write_report():
-    return {
-        "report": None,
-        "structured": False,
-        "requiresManualRead": True,
-        "excerpt": "scrubbed prose pointer",
-        "excerptBytes": 22,
-        "salvaged": True,
-        "truncated": False,
-    }
 
 
 def test_write_run_opened_records_fed_prompt(tmp_path):
@@ -843,21 +844,6 @@ def test_write_run_opened_records_fed_prompt(tmp_path):
     assert opened["fedPrompt"] == expected
 
 
-def test_write_salvage_scan_exception_leaves_terminal_forfeit_unchanged(tmp_path, monkeypatch):
-    wt, _main = _linked_worktree(tmp_path)
-
-    def boom(*_args):
-        raise RuntimeError("salvage boom")
-
-    _install_write_salvage(monkeypatch, boom)
-    # Timed-out attempts with a complete native result are admitted (layer 3a); use empty stdout so nothing is admissible.
-    res = _dispatch_write(tmp_path, FakeRunner([
-        ("", True, 0, ""),
-        ("", True, 0, ""),
-    ]), cwd=wt, seat=_cursor_seat())
-
-    assert res["forfeited"] is True
-    assert "salvage" not in res
 
 
 def test_write_success_terminal(tmp_path):
@@ -1764,7 +1750,6 @@ def test_dispatch_mechanics_names_item_check_constants():
     tokens_end = doc.find("\n\n", tokens_start)
     tokens_span = doc[tokens_start:tokens_end]
     assert "`%s`" % ED.ITEM_DETAIL_UNDELIVERED in tokens_span
-    assert "`%s`" % ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED in tokens_span
     assert "`%s:<cause>`" % ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE in tokens_span
 
     causes_start = doc.find("causes include", tokens_start)
@@ -2088,301 +2073,42 @@ def test_write_contracted_report_success_end_to_end(tmp_path):
     assert res["itemCheck"]["missing"] == []
 
 
-def _report_missing_base_state(tmp_path, wt, *, expected_items=None, fed_prompt=None,
-                               deliver_expected_items=True):
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir, exist_ok=True)
-    wt_real = os.path.realpath(wt)
-    baseline = ED._worktree_baseline(wt_real)
-    base_prompt = "Build this.\n"
-    if fed_prompt is None:
-        fed_prompt = _contracted_fed_prompt(base_prompt)
-    opened = {
-        "runKind": ED.RUN_KIND_WRITE,
-        "engine": "codex",
-        "roleKind": "build",
-        "cwd": wt_real,
-        "fedPrompt": fed_prompt,
-        "baseSha": _git(wt, "rev-parse", "HEAD").stdout.strip(),
-        "expectedItems": expected_items,
-        "baselineDirty": {},
-    }
-    if expected_items:
-        opened["baselineDirty"] = ED._baseline_dirty_map(wt_real, expected_items) or {}
-        if deliver_expected_items:
-            for item in expected_items:
-                target = os.path.join(wt_real, item)
-                parent = os.path.dirname(target)
-                if parent:
-                    os.makedirs(parent, exist_ok=True)
-                with open(target, "w", encoding="utf-8") as fh:
-                    fh.write("new\n")
-    state = {
-        "opened": opened,
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0,
-                    "timedOut": False,
-                    "refusal": None,
-                },
-            },
-        },
-    }
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write("prose only, no report tail\n")
-    return run_dir, state
 
 
-def _missing_items_delivered_detail(run_dir, state, attempt):
-    got = ED._write_report_missing_items_delivered_detail(run_dir, state, attempt)
-    if got is None:
-        return None
-    return got[0]
 
 
-def test_report_missing_classifier_clause1_timed_out_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    state["attempts"][1]["ended"]["timedOut"] = True
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 
 
-def test_report_missing_classifier_clause1_refusal_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    state["attempts"][1]["ended"]["refusal"] = "attempt-died-unrecorded"
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 
 
-def test_report_missing_classifier_clause1_exit_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    state["attempts"][1]["ended"]["exit"] = 1
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 
 
-def test_report_missing_classifier_clause2_uncontracted_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-        fed_prompt="Build this.\n",
-    )
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 
 
-def test_report_missing_classifier_clause4_empty_expected_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=[],
-    )
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 
 
-def test_report_missing_classifier_clause4_absent_expected_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=None,
-    )
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 
 
-def test_report_missing_classifier_clause5_missing_path_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["missing.txt"],
-        deliver_expected_items=False,
-    )
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 
 
-def test_report_missing_classifier_clause3_gradeable_report_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(_build_ok_stdout())
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 
 
-def test_report_missing_classifier_bite_proof_clause1_timed_out(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    # green baseline
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    # red: neutralize clause 1
-    state["attempts"][1]["ended"]["timedOut"] = True
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    # restore
-    state["attempts"][1]["ended"]["timedOut"] = False
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
 
 
-def test_report_missing_classifier_bite_proof_clause1_refusal(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["attempts"][1]["ended"]["refusal"] = "attempt-died-unrecorded"
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["attempts"][1]["ended"]["refusal"] = None
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
 
 
-def test_report_missing_classifier_bite_proof_clause1_exit(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["attempts"][1]["ended"]["exit"] = 1
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["attempts"][1]["ended"]["exit"] = 0
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
 
 
-def test_report_missing_classifier_bite_proof_clause2_uncontracted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["opened"]["fedPrompt"] = "Build this.\n"
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["opened"]["fedPrompt"] = _contracted_fed_prompt("Build this.\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
 
 
-def test_report_missing_classifier_bite_proof_clause3_gradeable_report(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(_build_ok_stdout())
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write("prose only, no report tail\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
 
 
-def test_report_missing_classifier_bite_proof_clause4_empty_expected(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["opened"]["expectedItems"] = []
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["opened"]["expectedItems"] = ["item.txt"]
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
 
 
-def test_report_missing_classifier_bite_proof_clause4_absent_expected(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["opened"]["expectedItems"] = None
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["opened"]["expectedItems"] = ["item.txt"]
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
 
 
-def test_report_missing_classifier_bite_proof_clause5_missing_path(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    os.remove(target)
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
 
 
-def test_report_missing_classifier_all_five_emit_token(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    detail = _missing_items_delivered_detail(run_dir, state, 1)
-    assert detail == ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
 
 
 def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
@@ -3208,7 +2934,6 @@ def test_native_write_delivered_items_without_result_is_not_report_missing(tmp_p
     assert res["forfeited"] is True
     assert res["detail"] == "worktree-dirtied-by-attempt"
     assert res["attemptDetail"] == "native-result-missing"
-    assert res["detail"] != ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
 
 
 # axis: terminal_refusal from _admit_native_write_result carries report without forfeit.
