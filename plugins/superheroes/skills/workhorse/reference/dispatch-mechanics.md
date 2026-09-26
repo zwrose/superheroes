@@ -933,8 +933,11 @@ is `agents/check-runner.md`.
 1. **Author the command list.** Write the exact commands, with a byte ceiling per command and an
    order-wide ceiling. Nothing else bounds the sum. For each command, name the paths outside the
    repository where the seat writes its stdout, stderr, and exit code.
-2. **Resolve the model.** Run `lib/dispatch_guard.py` with a `--seat` naming role `"mechanical"`,
-   the host's own vendor, and a null `model`. The call is a query that resolves the seat default
+2. **Resolve the model.** Run `lib/dispatch_guard.py check` with this seat bundle:
+   `--seat '{"vendor":"<claude|codex>","model":null,"effort":null,"role":"mechanical"}'`. The
+   `effort` key is required and may be null; a seat without it is refused (`effort-key-absent`).
+   The vendor is the registry vendor token, `claude` on the Claude host and `codex` on Codex, never
+   a model family name. The call is a query that resolves the seat default
    (`effort_source: "default"`).
    - Exit 1 with `reason: "allowlist-refused"` and a `seat_detail` naming no sanctioned model for
      the role on this vendor means the route is unavailable. Run the commands yourself and disclose
