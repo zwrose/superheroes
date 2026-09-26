@@ -181,6 +181,7 @@ def test_cleared_disposition_findings_remain_in_certification_view():
     assert "F-fixed" in ids
 
 
+@pytest.mark.real_git_head_diff  # the fold head is git's: the double OFF
 def test_fix_fold_records_post_fix_head_sha(tmp_path):
     repo, setup_head = _init_repo(tmp_path, {"src/a.py": b"before\n"})
     session_dir = _session_dir(tmp_path, repo, setup_head)
@@ -232,6 +233,7 @@ def test_fix_fold_records_post_fix_head_sha(tmp_path):
     assert row["contentDigest"] == hashlib.sha256(expected).hexdigest()
 
 
+@pytest.mark.real_git_head_diff  # the fold head is git's: the double OFF
 def test_fix_fold_head_resolution_failure_refuses(tmp_path, monkeypatch):
     repo, setup_head = _init_repo(tmp_path, {"src/a.py": b"data\n"})
     session_dir = _session_dir(tmp_path, repo, setup_head)

@@ -1114,6 +1114,34 @@ def test_a_behind_checkout_refuses_at_setup(tmp_path, capsys, mode):
     assert RD.load_state(d) == (True, None)
 
 
+def test_a_crlf_round_diff_binds_at_setup(tmp_path, capsys):
+    """A diff carrying CRLF lines is read as git's exact bytes, so an unchanged HEAD binds and the
+    recorded digest is the digest of the file Setup wrote (red token: `round-diff-head-mismatch`
+    from a newline-translated read)."""
+    import hashlib
+    import json as _json
+    d = str(tmp_path)
+    argv = TRD._guard_argv(d)
+    repo = argv[1]
+    with open(os.path.join(repo, "w.txt"), "wb") as fh:
+        fh.write(b"one\r\ntwo\r\n")
+    _git(repo, "add", "w.txt")
+    _git(repo, "commit", "-qm", "a CRLF file")
+    with open(os.path.join(d, RR.META_FILE), encoding="utf-8") as fh:
+        pin = _json.load(fh)["baseRef"]
+    _sha, text, _refusal = RD.derive_review_diff(repo, pin)
+    assert text is not None and "+one\r\n" in text, text
+    diffpath = os.path.join(d, "round-1", "diff.txt")
+    with open(diffpath, "wb") as fh:
+        fh.write(text.encode("utf-8"))
+    rc, out = TRD._cli_next_json(d, argv, capsys)
+    assert rc == 0 and out["ok"], out
+    state = RD.load_state(d)[1]
+    assert state["reviewedDiffSha"] == _git(repo, "rev-parse", "HEAD").strip()
+    with open(diffpath, "rb") as fh:
+        assert state["reviewedDiffDigest"] == hashlib.sha256(fh.read()).hexdigest()
+
+
 def test_a_round_diff_taken_before_head_moved_refuses_at_setup(tmp_path, capsys):
     """HEAD moved between Setup's review diff and the fresh `next`: the supplied diff is not the
     review diff at the resolved SHA, so the binding refuses `round-diff-head-mismatch`."""
@@ -1195,6 +1223,41 @@ def test_a_headless_certificate_is_never_published_with_the_live_head(tmp_path):
              "reviewedDiff": ""}
     prepared = RD._prepare_sidecar(d, state)
     assert prepared.get("reason") == "reviewed-head-unrecorded", prepared
+
+
+_CERT = {"shape": "full-panel-confirmed", "fullPanel": True, "independence": "independent",
+         "base": "fetched", "shapeDrivers": []}
+
+
+@pytest.mark.parametrize("source", ["meta-fix-fold", "config-fix-fold", "meta-head",
+                                    "config-head"])
+def test_the_writer_binds_a_converged_state_to_the_certificate_head_only(tmp_path, source):
+    """Run on its own, the certification writer binds a converged state's evidence to the
+    certificate's head and nothing else: with no `certifiedHead`, a fix-fold head, a meta head or
+    a config head present in the session never stands in, and the writer refuses
+    `certified-head-unresolvable` (red token: a receipt, or any other refusal). The same session
+    naming its head certifies, so the head is the only thing withheld."""
+    import round_certification as RC
+    import round_certification_fixtures as F
+    head = F.HEAD_SHA
+    meta = {"headSha": head} if source == "meta-head" else {"headSha": ""}
+    cfg = {"fixerVendor": "claude", "baseGuard": RC.BASE_GUARD_CHECKED,
+           "headSha": head if source == "config-head" else ""}
+    if source == "meta-fix-fold":
+        meta["fixFoldHeadSha"] = head
+    if source == "config-fix-fold":
+        cfg["fixFoldHeadSha"] = head
+    headless = F.write_certifiable_session(
+        tmp_path, name="headless", meta=meta,
+        state={"config": cfg, "certification": dict(_CERT, certifiedHead=None)})
+    receipt, refusal = RC.certify(headless)
+    assert receipt is None, receipt
+    assert refusal.get("bindingFailure") == "certified-head-unresolvable", refusal
+    named = F.write_certifiable_session(
+        tmp_path, name="named", meta=meta,
+        state={"config": cfg, "certification": dict(_CERT, certifiedHead=head)})
+    receipt, refusal = RC.certify(named)
+    assert refusal is None and receipt is not None, refusal
 
 
 def test_only_the_in_process_leg_certifies_without_a_recorded_head():

@@ -4,8 +4,9 @@ In production the driver derives the diff a panel reviews from git at the fold h
 session that cannot derive parks — there is no fallback. The suite's fixtures, though, fold fixers
 with synthetic head-diff strings and usually no pinned base or real repository. This double stands
 in for git in those tests: when a fold runs with no explicit derivation seam, "git" answers with
-the diff the fixture supplied, and a session minted from a config (never through the CLI's Setup
-binding) records the head its meta declares, else the one its checkout is at. It lives in test
+the diff the fixture supplied, recorded at the head the fold's checkout is at (never a declared
+one), and a session minted from a config (never through the CLI's Setup binding) records the head
+its meta declares, else the one its checkout is at. It lives in test
 code only.
 
 Opt out with ``@pytest.mark.real_git_head_diff`` (module-level ``pytestmark`` works too): the
@@ -64,16 +65,38 @@ def _wrap(original, module):
                 artifact if isinstance(artifact, dict) else {})
 
             def head_diff_seam(st):
-                # Like git, record the pair: the head the checkout is at now (none on the
+                # Like git, record the pair: the head the checkout is at now, resolved the way the
+                # driver's derivation resolves it — never the head a fixture declares (none on the
                 # in-process leg, which has no repository).
                 if isinstance(supplied, str) and not module._IN_PROCESS_LEG.get():
-                    st["headDiffSha"] = _checkout_head(st.get("config") or {})
-                    st["headDiffDigest"] = module.review_diff_digest(supplied)
+                    head = _live_fold_head(module, st, session_dir)
+                    if head is not None:
+                        st["headDiffSha"] = head
+                        st["headDiffDigest"] = module.review_diff_digest(supplied)
                 return supplied
         return original(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
                         head_diff_seam=head_diff_seam)
     setattr(fold_fixer, _DOUBLE_ATTR, True)
     return fold_fixer
+
+
+def _live_fold_head(module, state, session_dir):
+    """The head the fold's checkout is at now: the driver's own repository resolution and
+    hardened lookup with a session directory, else the config's `repoRoot` (or the cwd). A
+    declared `headSha` is never read. With a session directory a head git cannot resolve is None
+    (the fold then resolves, and refuses, on its own); without one, a stand-in SHA derived from the
+    fixture's diff when no repository answers."""
+    config = state.get("config") or {}
+    if session_dir:
+        root = module._resolve_repo_root(session_dir, state)
+    else:
+        root = config.get("repoRoot") if isinstance(config.get("repoRoot"), str) else os.getcwd()
+    head = module._hardened_head(root) if root else None
+    if isinstance(head, str) and len(head) in (40, 64):
+        return head
+    if session_dir:
+        return None
+    return hashlib.sha1(str(config.get("diff")).encode("utf-8")).hexdigest()
 
 
 def _checkout_head(config):

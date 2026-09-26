@@ -1600,11 +1600,12 @@ def _certified_head_sha(ctx):
     meta = ctx.get("meta") or {}
     state = ctx.get("state") or {}
     cfg = state.get("config") or {}
-    # A certificate the driver wrote names the head its reviewed diff was derived at; evidence
-    # binds to that head before any other source.
-    head = (state.get("certification") or {}).get("certifiedHead")
-    if state.get("terminal") == "converged" and isinstance(head, str) and head:
-        return head
+    # A converged certificate names exactly the head its reviewed diff was derived at, and only
+    # that head binds its evidence. A converged state with none resolves no head (the evidence
+    # binding refuses); nothing else — the fix-fold head, meta, config — stands in for it.
+    if state.get("terminal") == "converged":
+        head = (state.get("certification") or {}).get("certifiedHead")
+        return head if isinstance(head, str) and head else None
     head = meta.get(session_contract.FIX_FOLD_HEAD_KEY)
     if isinstance(head, str) and head:
         return head

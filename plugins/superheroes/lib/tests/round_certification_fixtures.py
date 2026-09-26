@@ -59,7 +59,40 @@ def _load_generated(name, tmp_path, session_name=None):
     if os.path.exists(session_dir):
         shutil.rmtree(session_dir)
     shutil.copytree(src, session_dir)
+    stamp_certified_head(session_dir)
     return session_dir
+
+
+def stamp_certified_head(session_dir):
+    """Give a converged fixture certificate the head a real driver would have recorded.
+
+    The certification writer binds a converged state's evidence to `certification.certifiedHead`
+    and nothing else. Fixtures written before that field existed name their head in the fix-fold
+    head, meta, or config; this stamps that head as the certificate's, once, at the shared writers.
+    A fixture that sets the key itself (including to None, to model a headless certificate) keeps it."""
+    state_path = os.path.join(session_dir, STATE_FILE)
+    try:
+        with open(state_path, encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        return
+    cert = state.get("certification") if isinstance(state, dict) else None
+    if state.get("terminal") != "converged" or not isinstance(cert, dict) or "certifiedHead" in cert:
+        return
+    try:
+        with open(os.path.join(session_dir, META_FILE), encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except (OSError, ValueError):
+        meta = {}
+    meta = meta if isinstance(meta, dict) else {}
+    cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
+    key = session_contract.FIX_FOLD_HEAD_KEY
+    for head in (meta.get(key), cfg.get(key), meta.get("headSha"), cfg.get("headSha")):
+        if isinstance(head, str) and head:
+            cert["certifiedHead"] = head
+            with open(state_path, "w", encoding="utf-8") as fh:
+                json.dump(state, fh, sort_keys=True)
+            return
 
 
 def _caller_wants_faithful_session(explicit):
@@ -117,6 +150,7 @@ def write_session(
             blobs = _head_content_blobs_for_findings(state_obj.get("findings") or [], head)
             if blobs is not None:
                 _write_head_content_blobs(session_dir, blobs)
+    stamp_certified_head(session_dir)
     return session_dir
 
 
