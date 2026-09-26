@@ -51,7 +51,11 @@ def _provenance():
 
 
 def _follow_up():
-    return {"item": "backlog item", "revisitTrigger": "next milestone"}
+    return {
+        "item": "backlog item",
+        "revisitTrigger": "next milestone",
+        "classClosure": "owner backlog",
+    }
 
 
 def _write_ruling_file(path, entries, *, provenance=None):
@@ -303,8 +307,34 @@ def test_edge8_empty_batch_advances(tmp_path):
         {"id": id_a, "ruling": "out-of-scope", "reason": "a", "followUp": _follow_up()},
         {"id": id_b, "ruling": "out-of-scope", "reason": "b", "followUp": _follow_up()}]))
     assert out.get("ok"), out
+    assert out.get("pendingCleared") is True
     state = _state(session_dir)
-    assert state["pending"]["phase"] != P_FIXER or not (state.get("_fixBatch") or [])
+    assert state.get("pending") is None
+    superseded_rows = [
+        row for row in RD.read_journal(session_dir)
+        if row.get("outcome") == session_contract.ORDERS_SUPERSEDED_OUTCOME
+        and row.get("reason") == "ruling-emptied-batch"]
+    assert len(superseded_rows) == 1
+    assert "newAttempt" not in superseded_rows[0]
+    nxt = RD.cmd_next(session_dir)
+    assert nxt.get("ok"), nxt
+    after = _state(session_dir)
+    pend = after.get("pending") or {}
+    assert pend.get("phase") != P_FIXER or after.get("terminal")
+
+
+def test_fix_batch_unreadable_refuses_order_render(tmp_path, monkeypatch):
+    session_dir, _, _, _, _ = _pending_fixer_two_findings(tmp_path)
+    state = _state(session_dir)
+    rnd = state["round"]
+    missing = str(tmp_path / "no-such-fix-batch.json")
+
+    def _broken_ensure(_session_dir, _rnd, _state):
+        return missing
+
+    monkeypatch.setattr(RD, "_ensure_fix_batch_file", _broken_ensure)
+    with pytest.raises(ValueError, match="order-render-refused:fix-batch-unreadable"):
+        RD._fix_batch_file_sha256(session_dir, rnd, state)
 
 
 def test_edge9_non_fixer_pending_no_supersede(tmp_path):

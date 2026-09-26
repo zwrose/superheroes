@@ -7290,7 +7290,7 @@ def _row_matches_ruling_id(row, ruling_id):
     return derived == ruling_id if derived else False
 
 
-def _resolve_ruling_target(state, ruling_id, session_dir=None):
+def _resolve_ruling_target(state, ruling_id):
     if not isinstance(ruling_id, str) or not ruling_id.strip():
         return None, None
     rid = ruling_id.strip()
@@ -7306,15 +7306,6 @@ def _resolve_ruling_target(state, ruling_id, session_dir=None):
     for row in combined:
         if _row_matches_ruling_id(row, rid):
             return _fix_batch_row_key(row), dict(row)
-    for rec in (state.get("rounds") or {}).values():
-        if not isinstance(rec, dict):
-            continue
-        for audit in rec.get("audits") or []:
-            if not isinstance(audit, dict):
-                continue
-            for issue in audit.get("newIssues") or []:
-                if isinstance(issue, dict) and _row_matches_ruling_id(issue, rid):
-                    return session_contract.minted_identity_key(issue), dict(issue)
     return None, None
 
 
@@ -7376,12 +7367,12 @@ def _fix_batch_file_sha256(session_dir, rnd, state):
     try:
         path = _ensure_fix_batch_file(session_dir, rnd, state)
     except ValueError:
-        return None
+        raise ValueError("order-render-refused:fix-batch-unreadable")
     try:
         with open(path, "rb") as fh:
             return round_records.sha256_text(fh.read().decode("utf-8"))
     except OSError:
-        return None
+        raise ValueError("order-render-refused:fix-batch-unreadable")
 
 
 def _dispatch_order_hashes_for_pending(session_dir, state, pending):
@@ -7427,20 +7418,13 @@ def _pending_dispatch_orders_changed(session_dir, state, pending):
 
 def _supersede_pending_dispatch_attempt(session_dir, state, by, journal_cmd, pending,
                                         superseded_fields_extra=None):
+    """Caller must refuse when the pending attempt already has recorded seat results."""
     phase = pending.get("phase")
     rnd = pending.get("round")
     old_attempt = pending.get("attempt")
-    journal = read_journal(session_dir)
     old_roster, roster_refusal = _roster_of(session_dir, state, journal_cmd, phase, rnd, old_attempt)
     if roster_refusal is not None:
         return roster_refusal
-    result_names = _re_emit_blocking_result_names(
-        session_dir, journal, rnd, phase, old_attempt, old_roster)
-    if result_names:
-        token = (RULING_ATTEMPT_RECORDED if journal_cmd == RULE_CMD
-                 else "re-emit-attempt-has-results")
-        return _refuse_cmd(session_dir, journal_cmd, token, phase=phase, rnd=rnd,
-                           attempt=old_attempt, names=result_names)
     anchor = _orders_anchor(state, session_dir, rnd, phase, old_attempt)
     if anchor is None:
         return None
@@ -7509,7 +7493,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     rnd = pending.get("round") if isinstance(pending, dict) else None
     attempt = pending.get("attempt") if isinstance(pending, dict) else None
     for entry in parsed:
-        key, candidate = _resolve_ruling_target(state, entry["id"], session_dir)
+        key, candidate = _resolve_ruling_target(state, entry["id"])
         if key is None:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
         if entry["ruling"] == "out-of-scope":
@@ -7537,7 +7521,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     cfg = state.get("config") or {}
     round_rulings = []
     for entry in parsed:
-        key, candidate = _resolve_ruling_target(state, entry["id"], session_dir)
+        key, candidate = _resolve_ruling_target(state, entry["id"])
         seq = _next_ruling_seq(state)
         log_row = {
             "seq": seq,
@@ -7567,6 +7551,8 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
     superseded = None
+    pending_cleared = False
+    emptied_batch_journal = None
     if isinstance(pending, dict) and pending.get("phase") == P_FIXER:
         if _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
                                        pending.get("attempt")):
@@ -7578,26 +7564,28 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                                         batch_index=batch_index)
             pending = state.get("pending")
             if status == "excluded":
-                superseded = _supersede_pending_dispatch_attempt(
-                    session_dir, state, by, RULE_CMD, pending_dispatch,
-                    {"reason": "ruling-changed-order"})
+                old_rnd = pending_dispatch.get("round")
+                old_attempt = pending_dispatch.get("attempt")
+                anchor = _orders_anchor(state, session_dir, old_rnd, P_FIXER, old_attempt)
+                at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                emptied_batch_journal = _journal_entry_for_commit(
+                    session_dir, RULE_CMD, ORDERS_SUPERSEDED_OUTCOME,
+                    phase=P_FIXER, round=old_rnd, attempt=old_attempt,
+                    supersededManifestSha256=(anchor or {}).get("manifestSha256"),
+                    supersededOrderSha256=(anchor or {}).get("orders"),
+                    by=by, at=at, reason="ruling-emptied-batch")
+                state["pending"] = None
+                pending_cleared = True
             elif isinstance(pending, dict) and _pending_dispatch_orders_changed(
                     session_dir, state, pending):
                 superseded = _supersede_pending_dispatch_attempt(
                     session_dir, state, by, RULE_CMD, pending,
                     {"reason": "ruling-changed-order"})
-    elif (isinstance(pending, dict) and isinstance(pending.get("phase"), str)
-            and pending["phase"].startswith("dispatch-")
-            and pending.get("phase") != P_FIXER
-            and _journal_has_orders_emitted(session_dir, pending.get("round"),
-                                            pending.get("phase"), pending.get("attempt"))
-            and _pending_dispatch_orders_changed(session_dir, state, pending)):
-        superseded = _supersede_pending_dispatch_attempt(
-            session_dir, state, by, RULE_CMD, pending,
-            {"reason": "ruling-changed-order"})
     if isinstance(superseded, dict) and not superseded.get("ok", True):
         return superseded
     save_state(session_dir, state)
+    if emptied_batch_journal is not None:
+        _journal_append(session_dir, emptied_batch_journal)
     journal_entry = _journal_entry_for_commit(
         session_dir, RULE_CMD, "ruling-recorded", phase=phase, round=rnd, attempt=attempt,
         rulingFileSha256=file_sha, count=len(parsed))
@@ -7605,8 +7593,11 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     response = {"ok": True, "recorded": len(parsed), "rulingFileSha256": file_sha}
     if isinstance(superseded, dict) and superseded.get("superseded"):
         response["superseded"] = superseded["superseded"]
+    if pending_cleared:
+        response["pendingCleared"] = True
     pending_after = state.get("pending")
-    if (isinstance(pending_after, dict) and pending_after.get("action")
+    if (not pending_cleared
+            and isinstance(pending_after, dict) and pending_after.get("action")
             and not state.get("terminal")):
         response.update(_next_response(session_dir, state, pending_after, RULE_CMD))
     return response
@@ -9483,12 +9474,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
                     unaccounted.append({"index": idx, "title": row_title})
             if unaccounted:
                 _record_round(state, _GATE_GUIDANCE_ROW_CARRIED_CHANNEL, unaccounted)
-        batch_sha = ""
-        try:
-            with open(fix_batch_path, "rb") as fh:
-                batch_sha = round_records.sha256_text(fh.read().decode("utf-8"))
-        except OSError:
-            batch_sha = ""
+        batch_sha = _fix_batch_file_sha256(session_dir, rnd, state)
         ph = {
             "FIX_BATCH_PATH": fix_batch_path,
             "FIX_BATCH_SHA256": batch_sha,
