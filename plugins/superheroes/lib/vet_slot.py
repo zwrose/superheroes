@@ -203,6 +203,12 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
     tail = len(body) - b
     if new_body[:a] != body[:a] or new_body[len(new_body) - tail:] != body[b:]:
         return _refusal("write-failed", "span invariant violated")
+    try:
+        new_advisor_at, new_build_at, new_ids = analyze_body(new_body)
+    except _Refusal as exc:
+        return _refusal("write-failed", "composed body broke markers: %s" % exc.detail)
+    if new_ids != ids or new_advisor_at != advisor_at or new_body[new_build_at:] != body[build_at:]:
+        return _refusal("write-failed", "composed body moved or shadowed slot markers")
     result["newBody"] = new_body
     return result
 

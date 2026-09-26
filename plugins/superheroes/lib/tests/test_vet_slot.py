@@ -283,6 +283,28 @@ def test_evaluate_refuses_bad_slot_text(slot_text, detail):
     assert "newBody" not in result
 
 
+@pytest.mark.parametrize("slot_text", [
+    "```bash\ncommand",
+    "Owner half <!--",
+])
+def test_evaluate_refuses_slot_that_shadows_markers(slot_text):
+    result = vs.evaluate("write", BODY, [_comment(RECEIPT)], slot_text, advisor_login="advisor")
+    assert result["reason"] == "write-failed"
+    assert "composed body broke markers" in result["detail"]
+    assert "newBody" not in result
+
+
+def test_write_refuses_unclosed_fence_in_slot(slot_file):
+    path = slot_file
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("```bash\ncommand")
+    fake = _ok_fake()
+    result = _write(fake, path)
+    assert result["reason"] == "write-failed"
+    assert "composed body broke markers" in result["detail"]
+    assert fake.edit_calls() == []
+
+
 RECEIPT_CASES = [
     ("markers-invalid", "dispositions marker appears 0 times", _receipt_marker("")),
     ("markers-invalid", "dispositions marker appears 2 times",
