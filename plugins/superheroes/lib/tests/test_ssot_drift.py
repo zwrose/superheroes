@@ -46,6 +46,7 @@ are gone with them; no lib/*.js copy-holders remain):
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
 """
+import importlib.util
 import json
 import os
 import re
@@ -167,7 +168,6 @@ def test_severity_vocabulary_is_single_sourced(monkeypatch):
 def test_complete_codex_policy_single_sourced():
     """The Python home (engine_pref.py) owns the Codex translation/effort policy; docs cite the
     registry for the tier map (no copied haiku/sonnet/opus pairs) and engine_pref derives from it."""
-    import engine_pref
     import model_registry
 
     expected_ids = set(model_registry.codex_models())
@@ -197,9 +197,28 @@ def test_complete_codex_policy_single_sourced():
         if re.search(r"(haiku|sonnet|opus)=", mapping_text):
             pytest.fail(
                 "%s Codex tier map copied into the document; cite the registry instead" % rel)
-    assert engine_pref.CODEX_MODEL_BY_TIER == {
-        t: model_registry.codex_peer_for_claude_tier(t) for t in ("haiku", "sonnet", "opus")
-    }, "engine_pref.CODEX_MODEL_BY_TIER is not derived from the registry"
+
+
+def test_codex_model_by_tier_derives_from_registry_at_import(monkeypatch):
+    """engine_pref.CODEX_MODEL_BY_TIER must read codex_peer_for_claude_tier at import, not a copy."""
+    import model_registry
+
+    sentinels = {
+        "haiku": "gpt-ssot-drift-haiku-sentinel",
+        "sonnet": "gpt-ssot-drift-sonnet-sentinel",
+        "opus": "gpt-ssot-drift-opus-sentinel",
+    }
+
+    def fake_peer(tier):
+        return sentinels[tier]
+
+    monkeypatch.setattr(model_registry, "codex_peer_for_claude_tier", fake_peer)
+    mod_name = "engine_pref_isolated_ssot_%s" % os.getpid()
+    path = os.path.join(PLUGIN, "lib", "engine_pref.py")
+    spec = importlib.util.spec_from_file_location(mod_name, path)
+    isolated = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(isolated)
+    assert isolated.CODEX_MODEL_BY_TIER == sentinels
 
 
 # --- Cluster: base-guard refusal reasons (review_base_guard → round-driver.md) -

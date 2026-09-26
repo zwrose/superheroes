@@ -206,7 +206,7 @@ action that owns it, leaving the rest of the calibration untouched:
   model IDs are `gpt-6-sol`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for
   `reviewer-deep` at effort `high`; pinning it on any other role is refused
   `pin-role-not-eligible`). A pin to the retired `gpt-5.6-terra` is refused at write time
-  (`model-retired: gpt-5.6-terra is retired; use gpt-6-sol`). A pin must
+  (`model-retired`; `model_registry.retired_model_reason` names the text). A pin must
   also resolve on its role's own codex allowlist, else it is refused `pin-not-on-allowlist`
   (any model on `pilot`, which has no codex cell — it remains a valid role key
   but admits no codex model).

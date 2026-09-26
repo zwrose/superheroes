@@ -47,7 +47,7 @@ tripwire's and the vet's to catch, not the lane line's. Estimates carry both num
 (behaviour + test lines) so the tripwire and the estimate share a basis (owner-ruled
 2026-08-16).
 
-**Whole deleted files are reported, not counted.** A non-test file the diff deletes outright — numstat shows no additions and the file is gone at the head — is left out of the tripwire's count and listed in the build record with its line count. A deletion inside a file that stays still counts, so unplanned scope still shows. The two bars below are unchanged; they already leave pure deletions out. `size_count.py count --base <sha>` (in the plugin's `lib` directory) returns the tripwire count, the bar count and the deleted-file list.
+**Whole deleted files are reported, not counted.** A non-test file the diff deletes outright — numstat shows no additions and the file is gone at the head — is left out of the tripwire's count and listed in the build record with its line count. A deletion inside a file that stays still counts, so unplanned scope still shows. The two bars below are unchanged; they already leave pure deletions out. `size_count.py count --base <sha>` (in the plugin's `lib` directory) returns the tripwire count, the bar count and the deleted-file list. Each regenerated artifact in the diff is passed with `--bar-exclude <path>` so it stays out of the bar count (it still counts toward the tripwire).
 
 **The estimate is fixed when the build starts.** The tripwire compares against the non-test estimate
 on record at the start: the brief's for a full build, the order's for a light build. A light build

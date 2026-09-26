@@ -3606,12 +3606,27 @@ def test_registration_probe_legacy_claim_continues_in_same_run_dir(tmp_path, mon
     with open(legacy_claim_path, "w", encoding="utf-8") as fh:
         json.dump(claim, fh, separators=(",", ":"))
         fh.write("\n")
-    order_id = "%s-%s" % (CP.LEGACY_ORDER_ID_PREFIX, hashlib.sha256(wave.encode()).hexdigest()[:12])
     journal_root = str(tmp_path / "journal-root")
     os.makedirs(journal_root, exist_ok=True)
     monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
-    seat = {"vendor": "codex", "model": seat_model, "effort": seat_effort}
+    order_id = "%s-%s" % (CP.LEGACY_ORDER_ID_PREFIX, hashlib.sha256(wave.encode()).hexdigest()[:12])
+    seat = {
+        "vendor": "codex",
+        "model": seat_model,
+        "effort": seat_effort,
+        "role": CP.REGISTRATION_PROBE_ROLE,
+    }
     built = EA.build_argv_result(seat, "review", {"model": "sonnet", "cwd": repo})
+    resolved_inputs = {
+        "engine": seat["vendor"],
+        "engineSource": "caller",
+        "model": seat["model"],
+        "modelSource": "caller",
+        "effort": seat.get("effort"),
+        "effortSource": "caller",
+        "role": seat["role"],
+        "roleSource": "caller",
+    }
     record = {
         "kind": "run-opened",
         "runKind": ED.RUN_KIND_REVIEW,
@@ -3631,20 +3646,33 @@ def test_registration_probe_legacy_claim_continues_in_same_run_dir(tmp_path, mon
         "repoRoot": os.path.realpath(repo),
         "supervisorPid": os.getpid(),
         "at": time.time(),
-        "resolvedInputs": {"engineModel": seat_model, "engineEffort": seat_effort},
+        "resolvedInputs": resolved_inputs,
+        "expectedResultKind": "findings",
     }
     ED._journal_append(run_dir, record)
-    seen_order_ids = []
+    with open(record["promptPath"], "w", encoding="utf-8") as fh:
+        fh.write("registration probe\n")
+    real_dispatch = ED.dispatch_review
+    fake = FakeRunner([])
+    dispatch_terminal = []
 
     def dispatch(**kwargs):
-        seen_order_ids.append(kwargs.get("order_id"))
-        return {"ok": False, "terminal": False, "findings": None}
+        kwargs["run_engine"] = fake
+        kwargs["build_view"] = _fake_build_view(tmp_path)
+        kwargs.setdefault("max_wait", 0)
+        terminal = real_dispatch(**kwargs)
+        dispatch_terminal.append(terminal)
+        return terminal
 
     out, code = CP.registration_probe(repo, wave, run_dir, dispatch=dispatch)
     assert code == 0
     assert out.get("continue") is True
     assert out.get("outcome") == "pending"
-    assert seen_order_ids == [order_id]
+    assert len(dispatch_terminal) == 1
+    terminal = dispatch_terminal[0]
+    assert terminal.get("terminal") is False
+    assert terminal.get("detail") != ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
+    assert terminal.get("detail") != ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
     with open(legacy_claim_path, encoding="utf-8") as fh:
         refreshed = json.load(fh)
     assert refreshed.get("lastSeenAt")
