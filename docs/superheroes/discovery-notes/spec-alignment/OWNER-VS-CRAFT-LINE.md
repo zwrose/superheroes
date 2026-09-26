@@ -129,3 +129,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Craft: matching an approved design or reusing an existing product pattern: kept, with the boundary that if nothing approved covers the case, it falls back to category 2 (owner).
 - Craft: applying an owner-set rule to a new case: kept (bounded by category 6).
 - Craft: bookkeeping (status/label flips when a fact changes, no rule change): kept.
+- Craft: pulling implementation detail out of a requirement: kept (the remaining "what" stays owner).
