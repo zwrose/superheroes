@@ -93,8 +93,11 @@ authorized entrypoint, `dispatch-review` or `dispatch-write` with `--max-wait`.
 
 - **The slice.** `--max-wait` takes 0 to 540 seconds. The runner refuses a value past the cap and
   never clamps it. An over-cap or negative value comes back `unrunnable` with detail
-  `max-wait-out-of-range:<value>:allowed=0..540`, with nothing opened and nothing spawned. To wait
-  longer than the cap, re-invoke. Never pass a bigger number.
+  `max-wait-out-of-range:<value>:allowed=0..540`, with nothing opened and nothing spawned. Never
+  pass a bigger number. Omitting `--max-wait` sets no slice bound: the call waits until the run is
+  terminal, so one call can outlast the host's 600 s foreground boundary, and a call converted to
+  background dies when the turn ends. To wait longer than the cap, re-invoke the originating verb
+  on the same `--run-dir` with another slice (see Continuation below).
 - **A zero slice.** On `dispatch-review`, a zero slice opens the run and returns `running` without
   starting an attempt. On `dispatch-write`, `--max-wait` also bounds git preflight, so a zero or
   too-short slice can return terminal `git-preflight-timeout` with nothing opened. A continuation
