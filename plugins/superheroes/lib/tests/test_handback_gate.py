@@ -1069,7 +1069,8 @@ def test_bite_branch_bound_marker_staleness(tmp_path):
     assert green["decision"] == "refuse"
 
 
-def test_bite_diff_invocation_matches_production(tmp_path):
+def test_bite_diff_invocation_matches_production(tmp_path, monkeypatch):
+    import review_diff_bytes as rdb
     repo = _init_repo(tmp_path / "repo")
     _commit_file(repo, "base.txt", "base\n", msg="base")
     base_sha = sc.run_git(repo, "rev-parse", "HEAD")
@@ -1079,11 +1080,14 @@ def test_bite_diff_invocation_matches_production(tmp_path):
     _write_sidecar(repo, session, _certified_receipt(), base_ref="main", base_sha=base_sha)
     red = hg.validate_handback("gh pr ready", repo)
     assert red["decision"] == "allow"
-    mod = patched_module(hg, [
-        ('            ["git", "-C", repo_root, "diff", "%s...HEAD" % base_sha],',
-         '            ["git", "-C", repo_root, "-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", "%s...HEAD" % base_sha],'),
+    bad_rdb = patched_module(rdb, [
+        ('        ["git", "-C", repo_root, "diff", "%s...%s" % (base_sha, head_sha)],',
+         '        ["git", "-C", repo_root, "-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", "%s...%s" % (base_sha, head_sha)],'),
     ])
-    green = mod.validate_handback("gh pr ready", repo)
+    monkeypatch.setattr(
+        hg.review_diff_bytes, "run_git_diff_three_dot",
+        bad_rdb.run_git_diff_three_dot)
+    green = hg.validate_handback("gh pr ready", repo)
     assert green["reason"] == "handback-diff-mismatch"
 
 

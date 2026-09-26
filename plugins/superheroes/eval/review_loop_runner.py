@@ -375,8 +375,9 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
     # The changed-subjects seam (#507 finding v2) replays THIS fix's fixture changedSubjects — the
     # same value fix_step returns — so the driver's git-derivation seam is exercised structurally
     # while fixture semantics + goldens stay unchanged. fix_step records it here; the driver calls
-    # the seam right after folding the fixer artifact.
-    last_fix = {"changedSubjects": None}
+    # the seam right after folding the fixer artifact. The panel-diff seam replays the same fix's
+    # synthetic head diff for unknown-surface full panels (no repoRoot/baseRef in harness config).
+    last_fix = {"changedSubjects": None, "headDiff": None}
 
     def _head_diff():
         head_n["n"] += 1
@@ -564,8 +565,10 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         fix = fix_queue.pop(0) if fix_queue else None
         if fix is None:
             fix = {"changedSubjects": [], "coverageDecisions": []}
-        # Record for the changed-subjects seam the driver calls right after folding this artifact.
+        # Record for the changed-subjects / panel-diff seams the driver calls after folding.
         last_fix["changedSubjects"] = list(fix.get("changedSubjects") or [])
+        head_diff = _head_diff()
+        last_fix["headDiff"] = head_diff
         cds = list(fix.get("coverageDecisions") or [])
         ids = [d.get("id") for d in cds if isinstance(d, dict) and d.get("id")]
         fix_results.append({"round": rnd, "coverageDecisionIds": ids})
@@ -582,7 +585,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
 
         return {
             "fixes": ["fixture"],
-            "headDiff": _head_diff(),
+            "headDiff": head_diff,
             "changedSubjects": list(fix.get("changedSubjects") or []),
             "coverageDecisions": cds,
         }
@@ -596,6 +599,15 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
         # synthetic single-file diffs cannot express the fixtures' explicit subjects, so the seam
         # replays them (fixture semantics + goldens unchanged, #507 finding v2).
         return last_fix["changedSubjects"]
+
+    def panel_diff(config, head_sha):
+        # Scripted replay of the just-run fix's synthetic head diff for unknown-surface full panels.
+        # The library default derives ``git diff <baseRef>...<head_sha>``; this harness has no
+        # checkout config, so the seam replays the same head diff fix_step surfaced (ignores head_sha).
+        diff = last_fix.get("headDiff")
+        if not isinstance(diff, str) or not diff:
+            return None, "empty diff"
+        return diff, None
 
     # After each full panel fold, persist round records (panel path may certify with no fix).
     _orig_fold_panel = RD._fold_panel
@@ -652,6 +664,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None, corrupt_records=Fal
             "fix_step": fix_step,
             "verify_runner": verify_runner,
             "changed_subjects": changed_subjects,
+            "panel_diff": panel_diff,
             "io": io,
         }
         config = {

@@ -1947,7 +1947,7 @@ def test_vendor_gap_rows_from_two_phases_do_not_collide(tmp_path, adapters):
     assert len(state["rounds"]["1"]["orderVendorProvenanceGaps"]) == 2
 
 
-def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(tmp_path, adapters):
+def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(tmp_path, adapters, monkeypatch):
     """The refusal does not exempt the record this path itself wrote.
 
     axis: that the invariant is UNCONDITIONAL. An earlier revision carried a `replay` escape hatch
@@ -1957,6 +1957,11 @@ def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(t
     make progress anyway — a duplicate `submit` returns before `pending` is cleared — so the loud
     refusal is both the ratified behaviour and the honest one.
     """
+    monkeypatch.setattr(
+        RD,
+        "_derive_panel_diff_at_head",
+        lambda _config, _head: ("diff --git a/x b/x\n", None),
+    )
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
     _write_verify_payload(d, {"result": "pass"})
