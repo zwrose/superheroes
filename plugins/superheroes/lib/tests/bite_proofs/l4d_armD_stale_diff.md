@@ -1,5 +1,36 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
+## Head `902f6489`: the certified head is recorded by the call that derives the diff (advisor S9 ruling)
+
+The probes ran in a detached probe worktree at `902f6489` that no review session was reading.
+Each neutralization was a targeted edit to `plugins/superheroes/lib/round_driver.py`, reverted
+by the inverse edit; the detectors were left unedited. After the last restore,
+`git status --porcelain` printed nothing, and `test_layer4d_stale_diff_1419.py` gave
+`74 passed`. The ruled set: W1 (a behind-checkout PR-mode session refuses), W2 (a no-recorded-head
+no-fix session refuses), W3 (re-adding a live-HEAD fallback turns the invariant census red). W1b,
+W3b, W3c, W4 and W5 cover the rest of the change's guards.
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| W1 | `_bind_round_diff_head`: `if meta_head is not None and meta_head != head:` → `if False and …` | `test_a_behind_checkout_refuses_at_setup[pr]` and `[branch]` → `AssertionError: {'action': 'dispatch-panel', 'attempt': 0, …, 'ok': True, …}` / `assert (0 == 1)` (the session seeded with its round-1 diff at a commit the recorded PR head is not) |
+| W1b | `_bind_round_diff_head`: `if text != round_diff:` → `if False and …` | `test_a_round_diff_taken_before_head_moved_refuses_at_setup` → `AssertionError: {'action': 'terminal', …, 'ok': True, …}` / `assert (0 == 1)`. **Axis note:** the setup refusal is gone, so the session seeds; the digest check then parks it at panel emission (the terminal), a second layer. Red either way: the fresh `next` no longer refuses `round-diff-head-mismatch`. |
+| W2 | `_terminal_converged`: `if certified_head is None and not _IN_PROCESS_LEG.get():` → `if False and …` | all four `test_a_no_fix_session_without_a_recorded_head_withholds[absent\|symbolic\|short\|not-hex]` and all four `test_a_pre_v6_no_fix_session_withholds[2..5]` → `assert 'converged' == 'cannot-certify'`; `test_only_the_in_process_leg_certifies_without_a_recorded_head` → `AssertionError: {… 'shape': 'full-panel-confirmed-degraded', …}` (9 red) |
+| W3 | `_terminal_converged`: `certified_head = _recorded_review_head(state)` → `… or _hardened_head(os.getcwd())` (a live-HEAD fallback) | `test_no_certified_head_is_read_from_live_head` → `Extra items in the left set: '_terminal_converged'` (a new caller of the hardened lookup) |
+| W3b | the same line → `… or (state.get("config") or {}).get("headSha")` (a config fallback) | `test_no_certified_head_is_read_from_live_head` → `At index 0 diff: "_recorded_review_head(state) or (state.get('config') or {}).get('headSha')" != '_recorded_review_head(state)'` |
+| W3c | `_prepare_sidecar`, converged branch: `head_sha = (…).get("certifiedHead")` → `… or run_git(repo_root, "rev-parse", "HEAD")` | `test_no_certified_head_is_read_from_live_head` → `assert {… '_prepare_sidecar': 2, …} == {… '_prepare_sidecar': 1, …}`; `test_a_headless_certificate_is_never_published_with_the_live_head` → `assert 'sidecar-receipt-unreadable' == 'reviewed-head-unrecorded'` (the live head was taken and publication went on) |
+| W4 | `_reviewed_diff_stale_cause`: the digest check → `if False and digest and …` | `test_reviewed_bytes_that_are_not_the_derived_ones_never_certify` → `assert None == 'the reviewed diff is not the diff derived at its recorded head'` |
+| W5 | `_reviewed_diff_stale_cause`: `if state.get("headDiffRefusal") == REVIEW_DIFF_TOO_LARGE:` → `if False and …` | `test_an_over_cap_post_fix_diff_parks_rather_than_review_a_partial_diff` → `assert 'review-diff-too-large' in 'reviewed-diff-stale: the head moved and no diff at the post-fix head is derivable from git — …'` |
+
+**The census's rung.** `test_no_certified_head_is_read_from_live_head` is a static AST census over
+`round_driver.py` and `round_certification.py`: it sees a new live-HEAD read, an extra read in a
+listed function, a new caller of the hardened lookup or the derivation call, and a second or
+re-sourced `certifiedHead` writer. It does not see a read reached through dynamic dispatch or a
+helper in another module; W1, W2 and W3c's behavioural reds carry those paths.
+
+**The V2 row below is superseded.** The meta-head seed it proved was removed by this change: the
+no-fix head now comes from the derivation call at the fresh `next`, proved by W1 and W2 and by
+`test_a_no_fix_session_certifies_the_head_its_round_one_diff_was_taken_at` (still green).
+
 ## Head `8b021ac3`: prefix pins, the review-diff size cap, the no-fix certified head (advisor S8 ruling)
 
 The probes ran in a detached probe worktree at `8b021ac3` that no review session was reading.
