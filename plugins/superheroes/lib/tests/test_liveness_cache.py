@@ -7,6 +7,9 @@ import liveness_cache as lc
 import mode_registry
 import model_registry as MR
 
+_PIN_ONLY_CODEX = MR.pin_only_models("codex")[0]
+_SECOND_CODEX_MODEL = MR.codex_peer_for_claude_tier("opus")
+
 
 def _good_liveness():
     return {
@@ -14,11 +17,11 @@ def _good_liveness():
             "live": True,
             "models": {
                 "gpt-5.6-sol": {"ok": True, "detail": "READY"},
-                "gpt-5.6-terra": {"ok": True, "detail": "READY"},
+                _SECOND_CODEX_MODEL: {"ok": True, "detail": "READY"},
             },
             "cells": [
                 {"model": "gpt-5.6-sol", "effort": "medium", "ok": True, "detail": "READY"},
-                {"model": "gpt-5.6-terra", "effort": None, "ok": True, "detail": "READY"},
+                {"model": _SECOND_CODEX_MODEL, "effort": None, "ok": True, "detail": "READY"},
             ],
         },
         "claude": {"live": True, "models": {}, "cells": []},
@@ -27,7 +30,7 @@ def _good_liveness():
 
 def _good_needed():
     return {
-        "codex": [["gpt-5.6-sol", "medium"], ["gpt-5.6-terra", None]],
+        "codex": [["gpt-5.6-sol", "medium"], [_SECOND_CODEX_MODEL, None]],
         "claude": [],
     }
 
@@ -135,7 +138,7 @@ def test_read_refuses_cached_failure_at_age_700_under_600_stored_ttl(tmp_path, m
     path = str(tmp_path / "r.json")
     now = 10_000.0
     liv = _good_liveness()
-    liv["codex"]["models"]["gpt-5.6-terra"]["ok"] = False
+    liv["codex"]["models"][_SECOND_CODEX_MODEL]["ok"] = False
     liv["codex"]["cells"][1]["ok"] = False
     lc.write(liv, _good_needed(), path=path, now=now - 700, ttl=600)
     assert lc.read(path, now=now) is None
@@ -176,7 +179,7 @@ def test_write_read_round_trip(tmp_path):
     assert got["schemaVersion"] == lc.SCHEMA_VERSION
     assert got["probedAt"] == now
     assert got["liveness"] == liveness
-    assert got["needed"]["codex"] == [["gpt-5.6-sol", "medium"], ["gpt-5.6-terra", None]]
+    assert got["needed"]["codex"] == [["gpt-5.6-sol", "medium"], [_SECOND_CODEX_MODEL, None]]
 
 
 def test_write_atomic_single_receipt_file(tmp_path):
@@ -237,7 +240,7 @@ def test_read_rejects_v2_receipt_without_cells(tmp_path, monkeypatch):
             "live": True,
             "models": {
                 "gpt-5.6-sol": {"ok": True, "detail": "READY"},
-                "gpt-5.6-terra": {"ok": True, "detail": "READY"},
+                _SECOND_CODEX_MODEL: {"ok": True, "detail": "READY"},
             },
         },
         "claude": {"live": True, "models": {}},
@@ -465,7 +468,7 @@ def test_live_vendors_claude_always_present():
 
 def test_live_vendors_all_ok():
     liv = _good_liveness()
-    need = {"codex": [["gpt-5.6-sol", "medium"], ["gpt-5.6-terra", None]]}
+    need = {"codex": [["gpt-5.6-sol", "medium"], [_SECOND_CODEX_MODEL, None]]}
     live, notes = lc.live_vendors_from(liv, need)
     assert live == ["claude", "codex"]
     assert notes == []
@@ -473,14 +476,14 @@ def test_live_vendors_all_ok():
 
 def test_live_vendors_one_model_not_ok():
     liv = _good_liveness()
-    liv["codex"]["models"]["gpt-5.6-terra"]["ok"] = False
+    liv["codex"]["models"][_SECOND_CODEX_MODEL]["ok"] = False
     liv["codex"]["cells"][1]["ok"] = False
-    need = {"codex": [["gpt-5.6-sol", "medium"], ["gpt-5.6-terra", None]]}
+    need = {"codex": [["gpt-5.6-sol", "medium"], [_SECOND_CODEX_MODEL, None]]}
     live, notes = lc.live_vendors_from(liv, need)
     assert live == ["claude"]
     assert len(notes) == 1
     assert notes[0]["constraint"] == "liveness-cell"
-    assert notes[0]["model"] == "gpt-5.6-terra"
+    assert notes[0]["model"] == _SECOND_CODEX_MODEL
     assert "codex" in notes[0]["reason"]
 
 
@@ -530,7 +533,7 @@ def test_write_returns_false_when_dir_blocked(tmp_path):
 
 def test_live_vendors_from_quorum_matches_composition_liveness_live_flags():
     needed = {
-        "codex": [["gpt-5.6-sol", "medium"], ["gpt-5.6-terra", None]],
+        "codex": [["gpt-5.6-sol", "medium"], [_SECOND_CODEX_MODEL, None]],
         "cursor": [["cursor-grok-4.6", "xhigh"]],
     }
     liveness = {
@@ -538,11 +541,11 @@ def test_live_vendors_from_quorum_matches_composition_liveness_live_flags():
             "live": True,
             "models": {
                 "gpt-5.6-sol": {"ok": True, "detail": ""},
-                "gpt-5.6-terra": {"ok": True, "detail": ""},
+                _SECOND_CODEX_MODEL: {"ok": True, "detail": ""},
             },
             "cells": [
                 {"model": "gpt-5.6-sol", "effort": "medium", "ok": True, "detail": ""},
-                {"model": "gpt-5.6-terra", "effort": None, "ok": True, "detail": ""},
+                {"model": _SECOND_CODEX_MODEL, "effort": None, "ok": True, "detail": ""},
             ],
         },
         "cursor": {
@@ -587,12 +590,12 @@ def _aug15_liveness():
             "live": False,
             "models": {
                 "gpt-5.6-sol": {"ok": True, "detail": "READY"},
-                "gpt-5.6-terra": {"ok": False, "detail": "Command timed out after 120 seconds"},
+                _SECOND_CODEX_MODEL: {"ok": False, "detail": "Command timed out after 120 seconds"},
             },
             "cells": [
                 {"model": "gpt-5.6-sol", "effort": "xhigh", "ok": True, "detail": "READY"},
                 {
-                    "model": "gpt-5.6-terra",
+                    "model": _SECOND_CODEX_MODEL,
                     "effort": "high",
                     "ok": False,
                     "detail": "Command timed out after 120 seconds",
@@ -605,23 +608,23 @@ def _aug15_liveness():
 
 def test_live_from_aug15_sol_cell_live_terra_not():
     needed = {
-        "codex": [["gpt-5.6-sol", "xhigh"], ["gpt-5.6-terra", "high"]],
+        "codex": [["gpt-5.6-sol", "xhigh"], [_SECOND_CODEX_MODEL, "high"]],
     }
     live_vendors, live_cells, dead_notes = lc.live_from(_aug15_liveness(), needed)
     assert live_vendors == ["claude"]
     assert ["codex", "gpt-5.6-sol", "xhigh"] in live_cells
-    assert ["codex", "gpt-5.6-terra", "high"] not in live_cells
+    assert ["codex", _SECOND_CODEX_MODEL, "high"] not in live_cells
     assert len(dead_notes) == 1
-    assert dead_notes[0]["model"] == "gpt-5.6-terra"
+    assert dead_notes[0]["model"] == _SECOND_CODEX_MODEL
     assert "timed out" in dead_notes[0]["reason"]
 
 
 def test_live_from_dead_note_names_model_and_reason():
-    needed = {"codex": [["gpt-5.6-terra", "high"]]}
+    needed = {"codex": [[_SECOND_CODEX_MODEL, "high"]]}
     _, _, dead_notes = lc.live_from(_aug15_liveness(), needed)
     assert dead_notes[0]["constraint"] == "liveness-cell"
     assert dead_notes[0]["vendor"] == "codex"
-    assert dead_notes[0]["model"] == "gpt-5.6-terra"
+    assert dead_notes[0]["model"] == _SECOND_CODEX_MODEL
     assert dead_notes[0]["effort"] == "high"
     assert "120 seconds" in dead_notes[0]["reason"]
 
@@ -655,7 +658,7 @@ def _notes_name_vendor(notes, vendor):
         # dead-cell: cell evidence says not live
         (
             _aug15_liveness(),
-            {"codex": [["gpt-5.6-sol", "xhigh"], ["gpt-5.6-terra", "high"]]},
+            {"codex": [["gpt-5.6-sol", "xhigh"], [_SECOND_CODEX_MODEL, "high"]]},
         ),
         # missing-vendor-evidence: vendor absent from liveness dict
         (
@@ -943,7 +946,7 @@ def test_live_from_normal_path_byte_identical():
     expected_live = ["claude", "codex"]
     expected_cells = [
         ["codex", "gpt-5.6-sol", "medium"],
-        ["codex", "gpt-5.6-terra", None],
+        ["codex", _SECOND_CODEX_MODEL, None],
     ]
     live, live_cells, dead_notes = lc.live_from(_good_liveness(), _good_needed())
     assert (live, live_cells, dead_notes) == (expected_live, expected_cells, [])
@@ -953,7 +956,7 @@ def test_live_from_normal_path_byte_identical():
     "liveness,needed",
     [
         (_good_liveness(), {"codex": [], "cursor": []}),
-        (_aug15_liveness(), {"codex": [["gpt-5.6-sol", "xhigh"], ["gpt-5.6-terra", "high"]]}),
+        (_aug15_liveness(), {"codex": [["gpt-5.6-sol", "xhigh"], [_SECOND_CODEX_MODEL, "high"]]}),
         (_good_liveness(), {"cursor": [["grok", None]]}),
         (_good_liveness(), {"codex": "not-a-list"}),
         (

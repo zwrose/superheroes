@@ -606,15 +606,16 @@ def test_load_engine_prefs_remaps_legacy_fixer_pin_to_code_fixer(tmp_path):
 
 
 def test_load_engine_prefs_canonical_code_fixer_wins_over_legacy_fixer(tmp_path):
-    pin = MR.pin_only_models("codex")[0]
+    pin_a = MR.codex_peer_for_claude_tier("opus")
+    pin_b = MR.pin_only_models("codex")[0]
     for i, codex_models in enumerate((
-        {"fixer": "gpt-nope", "code-fixer": pin},
-        {"code-fixer": pin, "fixer": "gpt-nope"},
+        {"fixer": pin_a, "code-fixer": pin_b},
+        {"code-fixer": pin_b, "fixer": pin_a},
     )):
         repo = str(tmp_path / str(i))
         _write_core_with_prefs(repo, {"codexModels": codex_models})
         got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
-        assert got["codexModels"] == {"code-fixer": pin}
+        assert got["codexModels"] == {"code-fixer": pin_b}
 
 
 def test_dispatch_calibration_rows_fable_tier_on_codex_shows_unsupported_marker():
@@ -1061,7 +1062,9 @@ def test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling():
     # #409/#1435 WO-2: the write-auth probe dispatches the strongest model the codex implementation
     # (build/fix) role will actually run — its pins, else the registry's opus peer floor for any
     # UNPINNED write role.
-    floor = EP.CODEX_MODEL_BY_TIER["opus"]  # gpt-6-sol
+    floor = EP.CODEX_MODEL_BY_TIER["opus"]
+    sol_peer = MR.codex_peer_for_claude_tier("opus")
+    pin_only_sol = MR.pin_only_models("codex")[0]
     # no pins at all -> the opus peer floor (both write roles unpinned)
     assert EP.codex_write_probe_model(None) == floor
     assert EP.codex_write_probe_model({}) == floor
@@ -1076,11 +1079,11 @@ def test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling():
     # a reviewer pin is irrelevant to the WRITE probe — it does not lower or raise the write ceiling
     assert EP.codex_write_probe_model(
         {"codexModels": {"implementer": "gpt-5.5", "code-fixer": "gpt-5.5",
-                         "reviewer": "gpt-6-sol"}}) == floor
+                         "reviewer": sol_peer}}) == floor
     # both write roles pinned ENTIRELY to the pin-only model -> that model (not falsely failed by a
     # hard floor probe)
     assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": "gpt-5.6-sol", "code-fixer": "gpt-5.6-sol"}}) == "gpt-5.6-sol"
+        {"codexModels": {"implementer": pin_only_sol, "code-fixer": pin_only_sol}}) == pin_only_sol
     # code-fixer is unpinned and clamps to the opus peer floor, which is stronger than the
     # implementer's pin-only model -> the probe dispatches the floor, not the pin. Proves the probe
     # covers BOTH write roles, not just implementer (drops-a-write-role mutant dies here).
@@ -1088,9 +1091,14 @@ def test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling():
     assert EP.codex_write_probe_model(
         {"codexModels": {"implementer": pin_only}}) == MR.codex_peer_for_claude_tier("opus")
     # BOTH write roles pinned to different real models -> the STRONGER of the two pins wins (max of
-    # two pins), not either pin alone or the floor.
+    # two pins), not either pin alone or the floor — both orders (implementer=A/fixer=B and swap).
+    stronger = sol_peer
+    weaker = pin_only_sol
+    assert EP.CODEX_MODEL_STRENGTH.index(stronger) > EP.CODEX_MODEL_STRENGTH.index(weaker)
     assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": "gpt-6-astra", "code-fixer": "gpt-5.6-sol"}}) == "gpt-6-astra"
+        {"codexModels": {"implementer": stronger, "code-fixer": weaker}}) == stronger
+    assert EP.codex_write_probe_model(
+        {"codexModels": {"implementer": weaker, "code-fixer": stronger}}) == stronger
 
 
 def test_load_engine_prefs_rejects_unregistered_model_before_dispatch(tmp_path):

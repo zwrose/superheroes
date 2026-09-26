@@ -629,7 +629,7 @@ threads the role's resolved model into the engine argv as a dispatch fact —
 `lib/model_registry.py` (the vendor registry + role×vendor matrix) decides what
 actually runs; the adapter and `engine_pref` re-derive from it.
 
-Codex tier map: haiku=gpt-6-sol, sonnet=gpt-6-sol, opus=gpt-6-sol.
+Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none.
 An optional per-role `enginePreferences.codexModels` pin may select `gpt-6-sol`, the
 pin-only `gpt-5.6-sol` (valid only for a role with a codex cell, at that role's own
 effort), or `gpt-6-astra` for `reviewer-deep` only (at effort `high`); a pinned model runs
@@ -914,6 +914,17 @@ PR-body markers from the retired execution spine survive independently of it:
   separates those two states, because the builder stamps the marker.
   A slot with **no marker at all** is read against the advisor's own receipt: with no receipt comment it is a body predating the contract (*not yet vetted*); with a receipt already posted it is a rewrite that dropped the verdict and marker together.
   Because the receipt is posted before the body write, a standing reminder means the **owner-half write** is owed — the receipt may already exist, so the advisor checks for its own existing receipt comment before posting another.
+- **Keyed follow-ups** — the build record's *Follow-ups for the advisor* section keys each item
+  `- FU<n> [<class>] <text>` and carries one `<!-- superheroes:followups FU1 FU2 -->` marker (or
+  `<!-- superheroes:followups none -->`); the vet receipt's completed dispositions key one bullet
+  per id, `- FU<n>: <disposition>`, and carry one `<!-- superheroes:dispositions FU1 FU2 -->` marker
+  (or `<!-- superheroes:dispositions none -->`). `plugins/superheroes/lib/vet_slot.py`'s `write` is
+  the one home for the `## Advisor vet` slot write and refuses when the two markers disagree. The
+  class and disposition vocabulary is taught, not coded: the build-record list in the **workhorse**
+  charter's §11, the receipt field and the command in
+  `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` field 7. Accepted limit: each
+  marker is its author's declaration, so the writer reads no prose and the vet reads the prose
+  against the markers.
 
 **Omission floor (owner half).** Anything the owner still **carries after merging** appears
 in the PR's owner half, **stated as a consequence**. The checkable floor beneath that

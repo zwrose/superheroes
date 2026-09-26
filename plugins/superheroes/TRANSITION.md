@@ -227,8 +227,14 @@ A consumer meets:
 - the `registration-probe` role the registration probe dispatches under — its cell is now
   `gpt-6-sol` at `high`, which has passed; it stays for any model registered
   probe-pending later;
-- `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
-  wave is re-attempted with a different run dir);
+- `conformance_probe registration-probe` (`astra-probe` still works as a legacy alias of the verb;
+  refusal token `registration-probe-wave-already-attempted` when the same wave is re-attempted with
+  a different run dir). The probe's refusal tokens were renamed from `astra-probe-*` to
+  `registration-probe-*` with no alias: `registration-probe-scale-unreadable`,
+  `registration-probe-ledger-unreadable`, `registration-probe-record-write-failed`,
+  `registration-probe-wave-already-attempted`, `registration-probe-seat-unresolved`, and
+  `registration-probe-claim-unreadable`. A script that matches an old `astra-probe-*` refusal token
+  must be updated;
 - pin refusal tokens `pin-probe-pending` (for a future probe-pending model), `pin-role-not-eligible`,
   and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — every
   codex `pilot` pin is refused);

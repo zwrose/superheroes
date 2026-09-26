@@ -22,6 +22,11 @@ def _load():
 
 SM = _load()
 
+import model_registry as MR
+
+_PIN_ONLY_CODEX = MR.pin_only_models("codex")[0]
+_SECOND_CODEX_MODEL = MR.codex_peer_for_claude_tier("opus")
+
 THREE_VENDORS = ["claude", "codex", "cursor"]
 
 
@@ -101,7 +106,7 @@ def test_pin_unhonorable_model():
     pins = {
         "code-reviewer": {
             "vendor": "cursor",
-            "model": "gpt-5.6-terra",
+            "model": _SECOND_CODEX_MODEL,
             "effort": "high",
         },
     }
@@ -2082,7 +2087,7 @@ def test_normalize_pins_string_shorthand_is_exactly_the_vendor_object():
 
 def test_normalize_pins_passes_object_pins_through_unchanged():
     # axis: the existing object shape is untouched by the new chokepoint
-    pins = {"code-reviewer": {"vendor": "codex", "model": "gpt-5.6-terra", "effort": "high"}}
+    pins = {"code-reviewer": {"vendor": "codex", "model": _SECOND_CODEX_MODEL, "effort": "high"}}
     normalized, errors = SM.normalize_pins(pins)
     assert normalized == pins
     assert errors == []
@@ -2302,7 +2307,7 @@ def test_dod_aug15_partial_codex_cell_live():
         assert cfg["tier"] == "reviewer-deep", seat
     grounding = m["seats"][SM.GROUNDING_SEAT]
     assert grounding["vendor"] != "codex"
-    assert grounding["model"] != "gpt-5.6-terra"
+    assert grounding["model"] != _SECOND_CODEX_MODEL
 
 
 def test_dod_ab3_arm_g_pinned_codex_sol_honored():
@@ -3462,7 +3467,7 @@ def test_codex_role_pin_reviewer_not_live_seats_matrix_with_one_degradation():
 
 def test_codex_role_pin_no_degradation_when_seat_not_on_codex():
     live_cells = [
-        ["codex", "gpt-5.6-terra", "high"],
+        ["codex", _SECOND_CODEX_MODEL, "high"],
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
     m = SM.build(
@@ -3789,7 +3794,7 @@ def test_cli_compose_reads_codex_models_from_repo(tmp_path, capsys):
     repo = str(tmp_path)
     _write_core_with_prefs(
         repo,
-        {"codexModels": {"reviewer-deep": "gpt-5.6-sol", "implementer": "gpt-5.6-terra"}},
+        {"codexModels": {"reviewer-deep": _PIN_ONLY_CODEX, "implementer": _SECOND_CODEX_MODEL}},
     )
     live_cells = [
         ["codex", "gpt-5.6-sol", "xhigh"],
