@@ -3867,19 +3867,13 @@ GIT_REVIEW_DIFF_ARGV = (("git",) + sanitized_view._DIFF_CONFIG_OVERRIDES + ("dif
                         + _GIT_DIFF_FORMAT_FLAGS)
 
 
-def _derive_head_diff_from_git(session_dir, state):
-    """The post-fix head diff derived from git when the fixer supplied none: `git diff
-    <baseRef>...<fix-fold head>` in the session repository, byte-mode. Admitted only as strict UTF-8
-    text that opens with a `diff --git ` header; an empty diff, a failed or undecodable run, or a
-    session without a pinned base or a session directory returns None — never a partial diff."""
-    if not session_dir:
-        return None
-    base = (state.get("config") or {}).get("baseRef")
-    if not (isinstance(base, str) and _FULL_HEX_ID.fullmatch(base)):
-        return None
-    head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
-    repo_root = _resolve_repo_root(session_dir, state)
-    if head_err or not head or not repo_root:
+def review_diff_text(repo_root, base, head):
+    """THE review diff: `GIT_REVIEW_DIFF_ARGV <base>...<head>` in `repo_root`, byte-mode, under the
+    shared git env hardening. The one home both the driver's post-fix derivation and the Setup
+    round diff (the `review-diff` verb SKILL.md runs) read. Admitted only as strict UTF-8 text that
+    opens with a `diff --git ` header; anything else (a failed run, an empty or undecodable
+    diff) returns None — never a partial diff."""
+    if not (isinstance(base, str) and base and isinstance(head, str) and head and repo_root):
         return None
     try:
         proc = subprocess.run(
@@ -3897,6 +3891,26 @@ def _derive_head_diff_from_git(session_dir, state):
     return text if text.startswith("diff --git ") else None
 
 
+def _derive_head_diff_from_git(session_dir, state):
+    """The post-fix head diff derived from git at the fix-fold head (`review_diff_text`), and the
+    SHA it was derived at recorded as `headDiffSha` — the head the reviewed diff binds to. A
+    session without a pinned base or a session directory derives nothing (None)."""
+    state.pop("headDiffSha", None)
+    if not session_dir:
+        return None
+    base = (state.get("config") or {}).get("baseRef")
+    if not (isinstance(base, str) and _FULL_HEX_ID.fullmatch(base)):
+        return None
+    head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+    repo_root = _resolve_repo_root(session_dir, state)
+    if head_err or not head or not repo_root:
+        return None
+    text = review_diff_text(repo_root, base, head)
+    if text is not None:
+        state["headDiffSha"] = head
+    return text
+
+
 def _advance_reviewed_diff(state):
     """The one writer that moves ``reviewedDiff`` to the post-fix head diff, binding it to the head
     it was taken at (``reviewedDiffHead``). It advances on any known head diff — including a
@@ -3906,6 +3920,8 @@ def _advance_reviewed_diff(state):
     if isinstance(head, str):
         state["reviewedDiff"] = head
         state["reviewedDiffHead"] = _fix_fold_head(state)
+        # The SHA the diff was derived at (None on the in-process seam path, which has no git).
+        state["reviewedDiffSha"] = state.get("headDiffSha")
 
 
 def _fix_fold_head(state):
@@ -3926,7 +3942,13 @@ def _reviewed_diff_is_stale(state):
     """The one staleness rule: the reviewed diff is not bound to the current fix-fold head (an
     unknown head — a state an older driver saved after a fix — is stale)."""
     head = _fix_fold_head(state)
-    return head is None or state.get("reviewedDiffHead", 0) != head
+    if head is None or state.get("reviewedDiffHead", 0) != head:
+        return True
+    # Bound to a SHA: it must be the head being certified. The fix-fold head is re-read at the
+    # verify fold, so a commit landed after the fold moves it and the reviewed diff goes stale.
+    bound = state.get("reviewedDiffSha")
+    certified = (state.get("config") or {}).get(FIX_FOLD_HEAD_KEY)
+    return bool(bound and certified and bound != certified)
 
 
 def _refuse_stale_panel_emission(state, phase):
@@ -11876,6 +11898,11 @@ def build_parser():
     cli_contract.add_argument(prl, "--repo-root", contract="repo-root", required=True)
     cli_contract.add_argument(prl, "--by", contract="free-text", required=True)
 
+    prd = sub.add_parser("review-diff")
+    cli_contract.add_argument(prd, "--base", contract="free-text", required=True,
+                              help="the pinned base commit")
+    cli_contract.add_argument(prd, "--repo-root", contract="repo-root", default=None)
+
     pre = sub.add_parser("re-emit")
     cli_contract.add_argument(pre, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pre, "--by", contract="free-text", required=True)
@@ -12069,6 +12096,18 @@ def _dispatch(args):
         out = cmd_relocate(args.session_dir, args.repo_root, args.by)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
+    elif args.cmd == "review-diff":
+        # The one home of the review diff: SKILL.md's Setup round diff runs this verb, and the
+        # driver's post-fix derivation calls the same `review_diff_text`.
+        repo_root = args.repo_root or os.getcwd()
+        head = store_core.run_git(repo_root, "rev-parse", "HEAD")
+        text = review_diff_text(repo_root, args.base, head) if head else None
+        if text is None:
+            sys.stderr.write(json.dumps({"ok": False, "reason": "review-diff-unavailable",
+                                         "base": args.base, "head": head}) + "\n")
+            return 1
+        sys.stdout.write(text)
+        return 0
     elif args.cmd == "re-emit":
         out = cmd_re_emit(args.session_dir, args.by)
         sys.stdout.write(json.dumps(out) + "\n")

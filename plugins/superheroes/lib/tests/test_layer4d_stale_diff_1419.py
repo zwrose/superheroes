@@ -636,20 +636,84 @@ def test_no_path_certifies_a_head_the_panel_did_not_see(tmp_path):
     assert "reviewed-diff-stale" in (payload.get("certification") or {}).get("reason", ""), payload
 
 
-def test_skill_and_driver_run_one_review_diff_command():
-    """One home: SKILL.md's per-round Setup diff and the driver's post-fix derivation are the same
-    argv, pinned here by literal (red token: the SKILL command differs from the driver's)."""
-    import shlex
-    skill = os.path.join(os.path.dirname(_LIB), "skills", "review-code",
-                         "SKILL.md")
+def test_skill_setup_runs_the_drivers_review_diff_verb():
+    """One home: SKILL.md's Setup round diff invokes the driver's `review-diff` verb and spells no
+    git diff of its own (red token: a raw `git ... diff` Setup line)."""
+    skill = os.path.join(os.path.dirname(_LIB), "skills", "review-code", "SKILL.md")
     with open(skill, encoding="utf-8") as fh:
-        line = next(ln for ln in fh if "diff.txt.tmp" in ln and ln.lstrip().startswith("git "))
-    tokens = shlex.split(line.split(">", 1)[0])
-    expected = ["git", "-c", "core.commitGraph=false", "-c", "core.quotePath=false",
-                "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
-                "-c", "diff.relative=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv"]
-    assert tokens == expected + ["$BASE_REF...HEAD"], tokens
-    assert list(RD.GIT_REVIEW_DIFF_ARGV) == expected
+        line = next(ln for ln in fh if "diff.txt.tmp" in ln and ">" in ln and "&&" in ln)
+    assert "round_driver.py\" review-diff --base \"$BASE_REF\"" in line, line
+    command = line.split(">", 1)[0]
+    assert "git " not in command and " diff --no-color" not in command, command
+
+
+def test_the_review_diff_verb_output_is_the_one_review_diff(tmp_path):
+    """The verb's output IS the review diff: pinned by behaviour, not a copied flag list — prefixes
+    survive `diff.noprefix`, a configured textconv is not applied, and the bytes equal the
+    driver's own derivation (red token: `diff --git f.py f.py`, or the textconv marker)."""
+    import subprocess
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    with open(os.path.join(repo, "f.py"), "w", encoding="utf-8") as fh:
+        fh.write("a = 1\n")
+    base = session_checkout.make_checkout(repo)
+    _git(repo, "config", "diff.noprefix", "true")
+    _git(repo, "config", "diff.pyconv.textconv", "sed s/a/TEXTCONV/")
+    with open(os.path.join(repo, ".gitattributes"), "w", encoding="utf-8") as fh:
+        fh.write("*.py diff=pyconv\n")
+    with open(os.path.join(repo, "f.py"), "w", encoding="utf-8") as fh:
+        fh.write("a = 2\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "change")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    out = subprocess.run([sys.executable, "-B", os.path.join(_LIB, "round_driver.py"),
+                          "review-diff", "--base", base, "--repo-root", repo],
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert "diff --git a/f.py b/f.py\n" in out.stdout, out.stdout
+    assert "TEXTCONV" not in out.stdout, out.stdout
+    assert out.stdout == RD.review_diff_text(repo, base, head)
+
+
+@pytest.mark.parametrize("var", ["GIT_DIR", "GIT_WORK_TREE", "GIT_OBJECT_DIRECTORY",
+                                 "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_REPLACE_REF_BASE",
+                                 "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_CONFIG_PARAMETERS",
+                                 "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+                                 "GIT_DIFF_OPTS", "GIT_ATTR_SOURCE", "GIT_EXTERNAL_DIFF"])
+def test_the_git_env_strips_every_ancestry_and_config_shaping_variable(monkeypatch, var):
+    """The shared hardening the review diff runs under drops each routing, ancestry and
+    config-injection variable (red token: the variable survives into the git env)."""
+    import sanitized_view
+    monkeypatch.setenv(var, "/hostile")
+    assert var not in sanitized_view._git_env()
+
+
+def test_a_commit_after_the_fold_is_never_certified_unseen(tmp_path):
+    """The reviewed diff binds to the SHA it was derived at; a commit landed after the fold moves
+    the certified head, so certification withholds `reviewed-diff-stale` (red token: verdict
+    `converged` over a head no panel saw)."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    seen = {}
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+    moved = {}
+
+    def respond(phase, payload, rnd):
+        if phase == RD.P_VERIFY and rnd >= 2 and not moved:
+            with open(os.path.join(checkout, "g.py"), "w", encoding="utf-8") as fh:
+                fh.write("late = 1\n")
+            _git(checkout, "add", "g.py")
+            _git(checkout, "commit", "-qm", "late commit after the fold")
+            moved["yes"] = True
+        art = inner(phase, payload, rnd)
+        if phase == RD.P_FIXER:
+            art = {"fixes": [], "headDiff": "supplied, ignored"}
+        return art
+    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base), _discharging(respond))
+    assert moved, "the late commit never landed"
+    assert payload["verdict"] == "cannot-certify", payload
+    assert "reviewed-diff-stale" in payload["certification"]["reason"], payload
 
 
 def test_a_user_diff_noprefix_setting_does_not_reshape_the_derived_diff(tmp_path, monkeypatch):
