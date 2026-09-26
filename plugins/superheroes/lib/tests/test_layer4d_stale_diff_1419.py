@@ -56,15 +56,19 @@ def _respond(checkout, missing, seen):
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
         if phase == RD.P_FIXER:
+            # Each fix round commits distinct content, so a loop that wrongly runs on into another
+            # fix round fails on the test's own assertion, never on an empty commit here.
             with open(os.path.join(checkout, "f.py"), "w", encoding="utf-8") as fh:
-                fh.write("new\nmore\nfixed\n")
-            _git(checkout, "commit", "-qam", "fix")
+                fh.write("new\nmore\nfixed %d\n" % rnd)
+            _git(checkout, "commit", "-qam", "fix %d" % rnd)
             return {"fixes": [], "headDiffPath": missing, "changedSubjects": ["Code"]}
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
         if phase == RD.P_SCOPED:
             seen["scoped"] = True
             return {"findings": []}
+        if phase == RD.P_STALL:
+            return {"choice": "hold"}
         return {"results": [], "findings": []}
     return respond
 
