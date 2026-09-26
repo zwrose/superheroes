@@ -91,6 +91,9 @@ pair keys are absent, while exactly one pair key present, with or without `layer
 `premise-stack-fields-incomplete`; for `layerPosition >= 2`, launch refuses unless the
 resolved base commit is the current head of the stack member at position `layerPosition - 1`
 (`base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`, `layer-position-occupied`).
+An optional `adopts` names the pull request an adoption takes over at its own position; it requires
+the stack pair and a positive integer (`premise-adopts-without-stack`, `premise-adopts-invalid`) —
+see Recovery for the adoption premise.
 An optional `dependency` names an open pull request whose READY vet the launch must be based on
 (`premise-dependency-invalid`, `dependency-closed-unmerged`, `dependency-open-ready-pr`,
 `dependency-read-unavailable`). **`launch` also refuses a
@@ -162,6 +165,13 @@ Adoption is the other move: a **fresh** session takes the build over from durabl
 from the dead session's head. Across a different instance or account, **adoption is the only path**,
 because sessions do not transfer across config dirs; do not reach for resume there and do not
 quietly relaunch the work on the recovering session's own account.
+
+**An adoption of a stack layer keeps the stack fields.** The adoption premise names the layer's own
+`stack` and `layerPosition` and adds `adopts: <PR number>` — the pull request that already occupies
+that position. The launcher lets it through only when that exact pull request is the member at
+`layerPosition` and sits on the layer below's head branch; any other occupant, or none, still
+refuses (`layer-position-occupied`, `adopts-occupant-missing`). Never drop the stack fields to get
+past the gate: the ledger then loses the lane's stack membership.
 
 **Every claim inherited from the dead session is unverified until re-run.** A commit message
 asserting tests passed, a PR body asserting a panel ran, or a comment asserting a gate was probed

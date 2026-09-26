@@ -1089,6 +1089,15 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
             if layers_planned_val < layer_val:
                 return _fail("premise-stack-layers-planned-under-position")
 
+    if "adopts" in premise:
+        # axis: adopts names the pull request an adoption takes over at its own stack
+        # position, so it means nothing without the stack pair
+        if not has_stack:
+            return _fail("premise-adopts-without-stack")
+        # axis: adopts must be a positive int pull-request number (bool is not an int here)
+        if not ll.is_positive_premise_int(premise["adopts"]):
+            return _fail("premise-adopts-invalid")
+
     if "dependency" in premise:
         dependency_val = premise["dependency"]
         # axis: dependency must be a positive int (bool is not an int here)
@@ -1510,6 +1519,8 @@ def _apply_stack_gate(
         }
     queried = membership["queried"]
     members = membership.get("members", [])
+    adopts = stamped_premise.get("adopts")
+    occupant_adopted = False
     # axis: claimed layer position is already occupied in the stack
     for member in members:
         position = member.get("position")
@@ -1518,23 +1529,35 @@ def _apply_stack_gate(
             and not isinstance(position, bool)
             and position == layer_pos
         ):
-            return {"ok": False, "reason": "layer-position-occupied"}
+            # bite-axis: an adoption re-occupies its own position only when the premise names
+            # that exact occupant and the occupant sits on the layer below's branch; any other
+            # occupant, or no adopts at all, is a new layer landing on a taken position
+            if (
+                adopts is None
+                or member.get("number") != adopts
+                or member.get("baseRefName") != queried.get("headRefName")
+            ):
+                return {"ok": False, "reason": "layer-position-occupied"}
+            occupant_adopted = True
+    # axis: an adoption premise whose position holds no pull request has nothing to adopt
+    if adopts is not None and not occupant_adopted:
+        return {"ok": False, "reason": "adopts-occupant-missing"}
     # axis: queried position must equal layerPosition - 1
     if queried["position"] != layer_pos - 1:
         return {"ok": False, "reason": "base-not-layer-head"}
     # axis: queried headRefOid must equal resolved base commit
     if not stack_check.same_commit(queried["headRefOid"], resolved_base_commit):
         return {"ok": False, "reason": "base-not-layer-head"}
-    return {
-        "ok": True,
-        "stackGate": {
-            "applied": True,
-            "stack": stack_num,
-            "layerPosition": layer_pos,
-            "entryPr": entry_pr,
-            "layerBelowHead": resolved_base_commit,
-        },
+    stack_gate = {
+        "applied": True,
+        "stack": stack_num,
+        "layerPosition": layer_pos,
+        "entryPr": entry_pr,
+        "layerBelowHead": resolved_base_commit,
     }
+    if occupant_adopted:
+        stack_gate["adopts"] = adopts
+    return {"ok": True, "stackGate": stack_gate}
 
 
 def _apply_dependency_gate(
