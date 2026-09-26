@@ -7358,11 +7358,18 @@ def _cmd_re_emit_locked(session_dir, by):
 # record with provenance), retires any emitted-but-unanswered order wave, and lets `next` emit the
 # re-derived step — so the order a seat runs is driver-rendered with the ruling already in it.
 
+# The ruling vocabulary is derived, never restated: a closing ruling is any ledger disposition but
+# the one only the audits fold records, and the guidance ruling is the judgment gate's guidance
+# token. Each closing kind names the ledger field its reason is written to; a ledger disposition
+# added without a reason field here fails the drift test that pins this table to the ledger.
+_AUDIT_ONLY_DISPOSITION = "fixed"
+RULING_CLOSING_KINDS = tuple(d for d in session_contract.DISPOSITIONS
+                             if d != _AUDIT_ONLY_DISPOSITION)
+RULING_GUIDANCE = round_phases.JUDGMENT_FIX_WITH_GUIDANCE
+RULING_KINDS = RULING_CLOSING_KINDS + (RULING_GUIDANCE,)
 RULING_OUT_OF_SCOPE = "out-of-scope"
 RULING_REFUTED = "refuted"
-RULING_GUIDANCE = "fix-with-guidance"
-RULING_KINDS = (RULING_OUT_OF_SCOPE, RULING_REFUTED, RULING_GUIDANCE)
-RULING_CLOSING_KINDS = (RULING_OUT_OF_SCOPE, RULING_REFUTED)
+RULING_REASON_FIELDS = {RULING_OUT_OF_SCOPE: "outOfScopeReason", RULING_REFUTED: "refutedReason"}
 
 RULING_SESSION_UNREADABLE = "ruling-session-unreadable"
 RULING_ARTIFACT_UNREADABLE = "ruling-artifact-unreadable"
@@ -7370,6 +7377,7 @@ RULING_ARTIFACT_SHAPE = "ruling-artifact-shape"
 RULING_PROVENANCE_MISSING = "ruling-provenance-missing"
 RULING_ENTRY_INVALID = "ruling-entry-invalid"
 RULING_TARGET_UNKNOWN = "ruling-target-unknown"
+RULING_TARGET_UNDER_AUDIT = "ruling-target-under-audit"
 RULING_OWNER_GATE_PENDING = "ruling-owner-gate-pending"
 RULING_ATTEMPT_HAS_RESULTS = "ruling-attempt-has-results"
 RULING_SESSION_TERMINAL = "ruling-session-terminal"
@@ -7462,6 +7470,12 @@ def _plan_rulings(state, rulings, terminal):
     round_rec = state.get("rounds", {}).get(str(state.get("round")), {})
     guided_keys = {_history_row_key(r) for r in _guidance_log_rows(round_rec)
                    if isinstance(r, dict) and r.get("disposition") == RULING_GUIDANCE}
+    under_audit = set()
+    if not terminal and state.get("step") == P_AUDITS:
+        for t in state.get("_auditTargets") or []:
+            keys = ((t.get("id"), t.get(session_contract.FINDING_KEY_FIELD))
+                    if isinstance(t, dict) else ())
+            under_audit.update(k for k in keys if isinstance(k, str) and k)
     plan, seen = [], set()
     for i, entry in enumerate(rulings):
         where = "rulings[%d]" % i
@@ -7487,6 +7501,12 @@ def _plan_rulings(state, rulings, terminal):
             # Re-raised after its ledger raise: this fresh ruling re-stamps the raise, so a ruling
             # recorded before the re-raise never answers it.
             seed_round, target = hit
+        if key in under_audit and entry.get("ruling") in RULING_CLOSING_KINDS:
+            # The pending audit's fold records `fixed` over any disposition written now, so the
+            # ruling would be silently lost: it is lodged after the audit folds instead.
+            return None, RULING_TARGET_UNDER_AUDIT, (
+                "%s id %r is a pending audit target; lodge the ruling after the audit folds"
+                % (where, key))
         fault_detail = _ruling_entry_fault(entry, target, terminal, guidance_keys, guided_keys)
         if fault_detail is not None:
             return None, RULING_ENTRY_INVALID, "%s (%r): %s" % (where, key, fault_detail)
@@ -7526,19 +7546,17 @@ def _fold_rulings(state, plan, provenance, artifact_sha):
                "line": target.get("line"), "ruledBy": provenance.get("ruledBy"),
                "ruledAt": provenance.get("ruledAt"), "records": list(provenance.get("records")),
                "artifactSha256": artifact_sha}
-        if kind == RULING_OUT_OF_SCOPE:
-            _record_disposition(state, key, "out-of-scope", state["round"],
-                                outOfScopeReason=entry["reason"].strip(),
-                                followUp=entry["followUp"])
-            row.update(reason=entry["reason"].strip(), followUp=entry["followUp"])
-        elif kind == RULING_REFUTED:
-            _record_disposition(state, key, "refuted", state["round"],
-                                refutedReason=entry["reason"].strip())
-            row["reason"] = entry["reason"].strip()
+        if kind in RULING_CLOSING_KINDS:
+            reason = entry["reason"].strip()
+            fields = {RULING_REASON_FIELDS[kind]: reason}
+            row["reason"] = reason
+            if kind == RULING_OUT_OF_SCOPE:
+                fields.update(followUp=entry["followUp"])
+                row.update(followUp=entry["followUp"])
+            _record_disposition(state, key, kind, state["round"], **fields)
+            row["dispositionSeq"] = state.get("dispositionSeqCounter")
         else:
             row[GATE_GUIDANCE_RECORD_KEY] = entry["guidance"].strip()
-        if kind in RULING_CLOSING_KINDS:
-            row["dispositionSeq"] = state.get("dispositionSeqCounter")
         _record_round_append(state, "rulings", row)
         rows.append(row)
     return rows

@@ -92,6 +92,39 @@ def test_ruling_the_whole_batch_out_never_dispatches_a_fixer(tmp_path):
     assert n["ok"] and n["phase"] != RD.P_FIXER, n
 
 
+def test_ruling_out_a_continuation_slice_enters_post_fix_and_never_redispatches_it(tmp_path):
+    """A cap-sliced round: the first slice folded, the second (index 1) is pending. Ruling its only
+    finding closed resolves through the continuation leg (post-fix: the round advances to a delta
+    round), never the index-0 convergence resolver, and the stale slice is never dispatched."""
+    session_dir, gitdir, head_path = TRI._bootstrap(tmp_path, name="rule-cont", fixBatchCap=1)
+    findings = [TRI._blocking_finding("unchecked index", 2), TRI._blocking_finding("off by one", 3)]
+    TRI._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_FIXER)
+    phase, out = TRI._drive_one_phase(session_dir, gitdir, findings, head_path)
+    assert phase == RD.P_FIXER and out["ok"], out
+    state = TRI._state(session_dir)
+    assert state["_fixBatchIndex"] == 1 and state["step"] == RD.P_FIXER, state.get("step")
+    (remaining,) = _keys(state["_fixBatch"])
+    assert _rule(tmp_path, session_dir, [{"id": remaining, "ruling": "refuted",
+                                          "reason": "the verifier misread the guard"}])["ok"]
+    state = TRI._state(session_dir)
+    assert not state.get("terminal") and state["round"] == 2, (state.get("step"), state["round"])
+    assert "_fixBatchIndex" not in state and "_fixQueue" not in state
+    n = RD.cmd_next(session_dir)
+    assert n["ok"] and n["phase"] != RD.P_FIXER, n
+
+
+def test_the_ruling_vocabulary_is_derived_from_the_ledger_and_judgment_homes():
+    """Drift pin: every ledger disposition but the audit-only `fixed` is a closing ruling kind with
+    a reason field, and the guidance kind is the judgment gate's guidance token."""
+    closing = set(SC.DISPOSITIONS) - {"fixed"}
+    assert set(RD.RULING_CLOSING_KINDS) == closing
+    assert set(RD.RULING_REASON_FIELDS) == closing, (
+        "ruling-reason-field-drift: a ledger disposition has no ruling reason field")
+    assert {RD.RULING_OUT_OF_SCOPE, RD.RULING_REFUTED} <= closing
+    assert RD.RULING_GUIDANCE in RD.JUDGMENT_DISPOSITIONS
+    assert set(RD.RULING_KINDS) == closing | {RD.RULING_GUIDANCE}
+
+
 def test_guidance_ruling_renders_in_the_order_and_the_fixer_evidence_binds(tmp_path):
     """DoD: a fixer acting under a ruling keeps its runner evidence binding. The ruling is in the
     driver-rendered order, so the runner's prompt hash equals the order hash and `record-result`
@@ -204,10 +237,40 @@ def test_owner_gate_and_answered_attempts_refuse(tmp_path):
     _stub_dispatch_observed_land(d, state, state["pending"], "fixer", payload=FIXER_PAYLOAD)
     out = _rule(tmp_path, d, ruling)
     assert out["ok"] is False and out["reason"] == "ruling-attempt-has-results", out
-    state["pending"] = dict(state["pending"], phase=RD.P_JUDGMENT)
-    RD.save_state(d, state)
-    out = _rule(tmp_path, d, ruling, name="gate.json")
-    assert out["ok"] is False and out["reason"] == "ruling-owner-gate-pending", out
+    state_path = os.path.join(d, RD.STATE_FILE)
+    for gate in RD.OWNER_GATE_PHASES:
+        state["pending"] = dict(state["pending"], phase=gate)
+        RD.save_state(d, state)
+        with open(state_path, "rb") as fh:
+            before = fh.read()
+        out = _rule(tmp_path, d, ruling, name="gate-%s.json" % gate)
+        assert out["ok"] is False and out["reason"] == "ruling-owner-gate-pending", (gate, out)
+        with open(state_path, "rb") as fh:
+            assert fh.read() == before, "%s changed state" % gate
+
+
+def test_a_closing_ruling_on_a_pending_audit_target_is_refused_until_the_audit_folds(tmp_path):
+    """The audits fold records `fixed` for every discharged target, so a closing ruling lodged while
+    that audit is pending would be overwritten: it is refused, folds nothing, and lodges once the
+    audit has folded."""
+    findings = [TRI._blocking_finding("unchecked index", 2)]
+    d, gitdir, head_path = _drive_to_audits(tmp_path, findings=findings, name="rule-under-audit")
+    key = TRI._state(d)["_auditTargets"][0]["id"]
+    ruling = [{"id": key, "ruling": "refuted", "reason": "the verifier misread the guard"}]
+    state_path = os.path.join(d, RD.STATE_FILE)
+    with open(state_path, "rb") as fh:
+        before = fh.read()
+    out = _rule(tmp_path, d, ruling)
+    assert out["ok"] is False and out["reason"] == "ruling-target-under-audit", out
+    assert "after the audit folds" in out["detail"], out
+    with open(state_path, "rb") as fh:
+        assert fh.read() == before
+    phase, adv = TRI._drive_one_phase(d, gitdir, findings, head_path)
+    assert phase == RD.P_AUDITS and adv["ok"], adv
+    assert _rule(tmp_path, d, ruling, name="after-audit.json")["ok"] is True
+    row = next(r for r in TRI._state(d)[SC.DISPOSITION_LEDGER_KEY]
+               if r.get(SC.FINDING_KEY_FIELD) == key)
+    assert row["disposition"] == "refuted", row
 
 
 def test_a_superseded_attempt_is_never_reissued(tmp_path):

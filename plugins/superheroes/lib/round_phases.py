@@ -48,7 +48,8 @@ RETIRED_STALL_CHOICE_PREFIX = "stall-choice-retired:"
 # terminates (#507 R2a). The stall menu is the only gate that can terminate — reachable solely
 # from the audit-stall path — via hold → held or an ineligible/unknown choice → stalled; even
 # there one-more-round re-enters the fix leg rather than terminating.
-JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
+JUDGMENT_FIX_WITH_GUIDANCE = "fix-with-guidance"
+JUDGMENT_DISPOSITIONS = ("fix-as-suggested", JUDGMENT_FIX_WITH_GUIDANCE, "skip")
 
 # Per-finding verification verdicts — lives here so the payload-contract layer can cite it
 # without importing `verification`; `verification.VERDICTS` re-exports this tuple.
