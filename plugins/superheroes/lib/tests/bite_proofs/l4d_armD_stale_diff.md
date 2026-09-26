@@ -1,5 +1,17 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
+## Head `76e8b527`: certify what was seen; currency at handback; hardened HEAD (advisor S6 ruling)
+
+The probe worktree was detached at `76e8b527`. Each neutralization was a targeted edit, reverted by
+the inverse edit. After the last restore, `git status --porcelain` printed nothing. Green:
+`test_layer4d_stale_diff_1419.py`, `47 passed`.
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| M1 | `_prepare_sidecar` publishes the live head again (`if False and isinstance(certified_head, str) ...`) | `test_a_commit_after_certification_is_refused_at_handback` → `assert '9dc0d5a1…' == 'e92550c4…'`: the sidecar named the late head, so the gate would allow. The gate's own refusal on HEAD ≠ sidecar `headSha` is `test_handback_gate.py::test_head_mismatch_refuses`, unchanged. Green, the same test asserts the literal `handback-head-mismatch` from `validate_handback`. |
+| M2 | `certifiedHead` not recorded (`pass`) | `test_the_certificate_names_the_verified_sha` → `KeyError: 'certifiedHead'`; `test_a_commit_after_certification_is_refused_at_handback` → `KeyError: 'certifiedHead'` |
+| M3 | `_hardened_head` runs `git rev-parse HEAD` with the inherited env (`env=None`) | `test_head_resolution_ignores_a_git_dir_decoy` → `assert '774f4268…' == 'e736fa16…'`: the `GIT_DIR` decoy's HEAD was returned |
+
 ## Head `62e2662f`: the `review-diff` verb, SHA binding, and a wider env strip (advisor S5 ruling)
 
 The probe worktree was detached at `62e2662f`. Each neutralization was a targeted edit, reverted by
