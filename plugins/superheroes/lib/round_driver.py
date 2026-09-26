@@ -2249,6 +2249,10 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
         _fold_panel(state, config, artifact)
+        # A panel over a stale reviewed diff is recorded (its output is kept), then parked.
+        if not state.get("terminal") and _reviewed_diff_is_stale(state):
+            _park_cannot_certify(state, "%s: this panel reviewed a diff older than the fix-fold "
+                                        "head — run a fresh panel" % REVIEWED_DIFF_STALE)
     elif phase == P_VERIFIERS:
         _fold_verifiers(state, config, artifact)
     elif phase == P_SYNTHESIS:
@@ -3854,7 +3858,6 @@ def _resolve_head_diff(artifact):
 
 REVIEWED_DIFF_SOURCE_GIT = "git-derived"
 REVIEWED_DIFF_STALE = "reviewed-diff-stale"
-HEAD_DIFF_MISMATCH = "head-diff-mismatch"
 _GIT_DIFF_FORMAT_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
 
 
@@ -3943,9 +3946,8 @@ def _stale_pending_panel_park(session_dir, state, cmd):
 def _park_reviewed_diff_stale(session_dir, state, cmd):
     """Park `cannot-certify` with the token and answer the terminal, on every emission path."""
     _park_cannot_certify(
-        state, "%s: the head moved and no diff at the post-fix head is known (none supplied, "
-               "and none derivable from git) — a panel would review the pre-fix diff"
-        % REVIEWED_DIFF_STALE)
+        state, "%s: the head moved and no diff at the post-fix head is derivable from git — a "
+               "panel would review a diff older than the head" % REVIEWED_DIFF_STALE)
     pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL, "attempt": 0,
                "payload": {"verdict": state["terminal"],
                            "certification": state.get("certification")}}
@@ -3977,21 +3979,16 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state["fixBatch"] = list(slice_)
     else:
         state["fixBatch"] = (state.get("fixBatch") or []) + list(slice_)
-    supplied, head_source = _resolve_head_diff(artifact)
+    _supplied, head_source = _resolve_head_diff(artifact)
     # Git is the authority for the diff a panel reviews: the driver derives it at the fold head
-    # (run_loop injects the derivation as a seam); a supplied diff is only a cross-check, and a
-    # session that cannot derive has no head diff at all — its panel parks, never trusting the
-    # supplied one. A capped round folds several slices, so the provenance is recorded afresh.
+    # (run_loop injects the derivation as a seam). A supplied diff carries no authority and is not
+    # read for content; a session that cannot derive has no head diff at all, and certification
+    # withholds. A capped round folds several slices, so the provenance is recorded afresh.
     _clear_round(state, "reviewedDiffSource")
     head = (head_diff_seam(state) if head_diff_seam is not None
             else _derive_head_diff_from_git(session_dir, state))
     if head is not None:
         _record_round(state, "reviewedDiffSource", REVIEWED_DIFF_SOURCE_GIT)
-        if supplied is not None and supplied != head:
-            _record_round(state, "headDiffSource", head_source)
-            _park_cannot_certify(state, "%s: the supplied post-fix head diff (%s) differs from git's "
-                                        "diff at the fold head" % (HEAD_DIFF_MISMATCH, head_source))
-            return
     state["headDiff"] = head
     state["_headDiffSource"] = head_source
     # No trusted head diff (none supplied, or none derivable) is an unknown surface: full panel.
@@ -5267,6 +5264,15 @@ def _terminal_converged(state, config, full_panel, note=None):
     success (the exit_skipped invariant): the certification `reason` leads with
     `clean-except-skipped: N blocker(s) skipped with citable reasons` (shape unchanged) so the
     terminal reads unmistakably non-plain, and the skips also ride the top-level receipt channel."""
+    # THE invariant: never certify a head the panel did not see. This is the one writer of a
+    # converged terminal, so every route to certification — a legacy resume, a hand submit, any
+    # future path — passes here; the emission and consumption checks are only early exits.
+    # Recoverable by a fresh panel over the current head.
+    if _reviewed_diff_is_stale(state):
+        _park_cannot_certify(state, "%s: the reviewed diff is not bound to the head being "
+                                    "certified — run a fresh panel over the current head"
+                             % REVIEWED_DIFF_STALE)
+        return
     # An OUTSTANDING incomplete panel (a configured lens never ran, never recovered by a later
     # complete panel) cannot certify clean — a zero-finding finish over a coverage gap is "we did not
     # look", not "audited-chain". Silence never certifies: withhold + park (#507 R2 residual-1).
@@ -7613,11 +7619,6 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         fault = _terminal_receipt_gate(session_dir, state)
         if fault:
             return _receipt_fault_response(fault)
-        return {"ok": True, "round": state["round"], "phase": phase, "nextStep": P_TERMINAL}
-    parked = _stale_pending_panel_park(session_dir, state, "submit")
-    if parked is not None:
-        if not parked.get("ok"):
-            return parked
         return {"ok": True, "round": state["round"], "phase": phase, "nextStep": P_TERMINAL}
     if not _via_advance and state.get("_advanceUsed"):
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,

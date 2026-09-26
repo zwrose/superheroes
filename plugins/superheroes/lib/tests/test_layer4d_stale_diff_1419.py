@@ -110,6 +110,10 @@ def test_unknown_head_diff_is_derived_from_git_for_the_full_panel(tmp_path):
     rounds = _receipt(d)["rounds"]
     assert any(r.get("headDiffSource") == "unknown" for r in rounds), rounds
     assert any(r.get("reviewedDiffSource") == "git-derived" for r in rounds), rounds
+    # The certification writer's own round projection carries the provenance too.
+    import round_certification as RC
+    cert_rounds = RC._build_receipt_rounds(RD.load_state(d)[1], RC.RECEIPT_FORM_CERTIFIED)
+    assert any(r.get("reviewedDiffSource") == "git-derived" for r in cert_rounds), cert_rounds
 
 
 def test_underivable_unknown_head_diff_parks_reviewed_diff_stale(tmp_path):
@@ -179,11 +183,13 @@ def test_panel_order_emission_is_the_one_stale_refusal_site():
     assert _calls_in(tree, "_park_reviewed_diff_stale") == {
         "_cmd_next_locked", "_cmd_re_emit_locked", "_stale_pending_panel_park"}
     # The consumption side: a panel order already pending is checked where it is replayed or folded.
-    assert _calls_in(tree, "_stale_pending_panel_park") == {
-        "_cmd_next_locked", "_advance_locked", "_cmd_submit_prepare"}
-    # One staleness rule, read by the emission check, the consumption check, and run_loop.
+    assert _calls_in(tree, "_stale_pending_panel_park") == {"_cmd_next_locked", "_advance_locked"}
+    # One staleness rule: the certification chokepoint (`_terminal_converged`, the one writer of a
+    # converged terminal) carries the invariant; emission, consumption, the panel fold and
+    # run_loop are early exits reading the same rule.
     assert _calls_in(tree, "_reviewed_diff_is_stale") == {
-        "_refuse_stale_panel_emission", "_stale_pending_panel_park", "run_loop"}
+        "_terminal_converged", "_refuse_stale_panel_emission", "_stale_pending_panel_park",
+        "_fold", "run_loop"}
     assert "_reviewedDiffStale" not in source
     defined = {fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)}
     assert not defined & {"_enter_panel", "_reviewed_diff_stale", "_stale_panel_blocks_loaded"}
@@ -450,14 +456,21 @@ def test_an_already_pending_stale_panel_is_not_folded_via_advance(tmp_path):
     assert RD.load_state(d)[1]["terminal"] == "cannot-certify"
 
 
-def test_an_already_pending_stale_panel_is_not_folded_via_submit(tmp_path):
-    """Consumption via hand `submit`: the pending panel's artifact is never folded (red token: the
-    submit is accepted and the loop moves on from a panel over the pre-fix diff)."""
+def test_a_stale_panel_submit_keeps_its_output_then_parks(tmp_path):
+    """Consumption via hand `submit`: the panel's artifact is accepted and folded (its output is
+    kept in the durable record), then the session parks `reviewed-diff-stale` (red token: the
+    submit is refused unrecorded, or the loop moves on to verifiers)."""
     d, _seen = _older_driver_pending_panel(tmp_path)
     state = RD.load_state(d)[1]
-    out = RD.cmd_submit(d, RD.P_PANEL, 0, RD.state_hash(state),
-                        {"seats": {dm: {"findings": []} for dm in RD.DIMENSIONS}})
+    seats = {dm: {"findings": []} for dm in RD.DIMENSIONS}
+    seats["code-reviewer"] = {"findings": [
+        {"title": "kept", "severity": "Minor", "file": "f.py", "line": 1}]}
+    out = RD.cmd_submit(d, RD.P_PANEL, 0, RD.state_hash(state), {"seats": seats})
     assert out.get("ok") and out.get("nextStep") == RD.P_TERMINAL, out
+    accepted = [e for e in RD.read_journal(d)
+                if e.get("cmd") == "submit" and e.get("outcome") == "accepted"
+                and e.get("phase") == RD.P_PANEL and e.get("round") == 2]
+    assert accepted, "the stale panel's submit was not recorded"
     after = RD.load_state(d)[1]
     assert after["terminal"] == "cannot-certify"
     assert "reviewed-diff-stale" in after["certification"]["reason"]
@@ -489,25 +502,28 @@ def test_the_git_double_is_off_in_this_module():
 
 
 @pytest.mark.parametrize("supplied", ["", "diff --git a/f.py b/f.py\n@@ -1 +1 @@\n-x\n+y\n"])
-def test_a_supplied_head_diff_that_differs_from_git_parks(tmp_path, supplied):
-    """Git is the authority: a supplied diff — including a wrong `""` — is only a cross-check, and
-    one that differs from git's diff at the fold head parks `head-diff-mismatch` (red token: the
-    loop runs a round-2 panel over the supplied diff)."""
+def test_a_supplied_head_diff_is_ignored_and_git_is_reviewed(tmp_path, supplied):
+    """Git is the authority: a supplied diff — including a wrong `""` — carries no authority. The
+    reviewed diff after the fix is git's diff at the fold head, never the supplied text (red
+    token: the reviewed diff equals the supplied text)."""
     d = str(tmp_path / "session")
     os.makedirs(d)
     checkout, base = _seed_checkout(d)
     seen = {}
     inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+    captured = {}
 
     def respond(phase, payload, rnd):
+        if phase == RD.P_VERIFY and "reviewed" not in captured and rnd >= 2:
+            captured["reviewed"] = RD.load_state(d)[1].get("reviewedDiff")
+            captured["head"] = _git(checkout, "rev-parse", "HEAD").strip()
         art = inner(phase, payload, rnd)
         if phase == RD.P_FIXER:
             art = {"fixes": [], "headDiff": supplied}
         return art
-    payload = TRD._drive_cli(d, TRD._cfg(baseRef=base), respond)
-    assert seen.get("panels") == [1], seen
-    assert payload["verdict"] == "cannot-certify", payload
-    assert "head-diff-mismatch" in payload["certification"]["reason"], payload
+    TRD._drive_cli(d, TRD._cfg(baseRef=base), respond)
+    assert captured.get("reviewed") == _expected_diff(checkout, base, captured["head"]), captured
+    assert captured["reviewed"] != supplied
 
 
 def test_a_supplied_head_diff_equal_to_git_is_accepted(tmp_path):
@@ -539,7 +555,6 @@ def test_the_contract_literals_are_pinned():
     """The derivation's flags and the named tokens are an external contract: pinned as literals."""
     assert RD._GIT_DIFF_FORMAT_FLAGS == ("--no-color", "--no-ext-diff", "--no-textconv")
     assert RD.REVIEWED_DIFF_STALE == "reviewed-diff-stale"
-    assert RD.HEAD_DIFF_MISMATCH == "head-diff-mismatch"
     assert RD.REVIEWED_DIFF_SOURCE_GIT == "git-derived"
 
 
@@ -553,3 +568,68 @@ def test_the_stale_park_via_advance_refuses_a_failed_sidecar_publish(tmp_path, m
                                                               "detail": "probe"})
     out = RD.cmd_advance(d)
     assert out["ok"] is False and out["reason"] == "sidecar-unwritable", out
+
+
+def _drive_until(session_dir, cfg, respond, phase, min_round=1):
+    TRD.enter_checkout(os.path.join(session_dir, "checkout"))
+    first = True
+    for _ in range(80):
+        n = RD.cmd_next(session_dir, cfg if first else None)
+        first = False
+        assert n["ok"] and n["action"] != RD.P_TERMINAL, n
+        if n["phase"] == phase and n["round"] >= min_round:
+            return n
+        art = respond(n["phase"], n["payload"], n["round"])
+        assert RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
+                             art)["ok"]
+    raise AssertionError("never reached %s" % phase)
+
+
+def _discharging(inner):
+    def respond(phase, payload, rnd):
+        if phase == RD.P_AUDITS:
+            targets = payload.get("targets", [])
+            return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                for t in targets],
+                    "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}}
+        return inner(phase, payload, rnd)
+    return respond
+
+
+def test_a_legacy_resume_past_the_panel_never_certifies(tmp_path):
+    """The certification chokepoint: a state an older driver saved after a fix, resumed at the
+    fix audits (no panel ahead of it), converges but never certifies — `_terminal_converged`
+    parks `reviewed-diff-stale` (red token: verdict `converged`)."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout, base = _seed_checkout(d)
+    seen = {}
+    inner = _respond(checkout, str(tmp_path / "missing.txt"), seen)
+
+    def with_inline(phase, payload, rnd):
+        art = inner(phase, payload, rnd)
+        if phase == RD.P_FIXER:
+            art = {"fixes": [], "headDiff": "supplied, ignored"}
+        return art
+    respond = _discharging(with_inline)
+    _drive_until(d, TRD._cfg(baseRef=base), respond, RD.P_AUDITS, min_round=2)
+
+    def legacy(state):
+        state.pop("fixFolds")
+        state.pop("reviewedDiffHead")
+    _rewrite_state(d, legacy)
+    payload = TRD._drive_cli(d, None, respond)
+    assert payload["verdict"] == "cannot-certify", payload
+    assert "reviewed-diff-stale" in payload["certification"]["reason"], payload
+
+
+def test_no_path_certifies_a_head_the_panel_did_not_see(tmp_path):
+    """Whatever route a stale session takes, it ends uncertified with the token — asserted on the
+    terminal alone, so the certification chokepoint carries it even if every early exit were gone
+    (bite-proof: remove emission, consumption and the panel-fold park; this stays green)."""
+    d, respond, _seen = _stale_session(tmp_path)
+    _rewrite_state(d, _legacy)
+    payload = TRD._drive_cli(d, None, _discharging(respond))
+    assert payload["verdict"] != "converged", payload
+    assert "reviewed-diff-stale" in (payload.get("certification") or {}).get("reason", ""), payload
