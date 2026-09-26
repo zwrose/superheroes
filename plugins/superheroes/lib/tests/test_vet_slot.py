@@ -903,8 +903,8 @@ def _one_block(blocks, needle, where):
 
 
 def test_marker_shapes_are_taught_in_the_prose():
-    workhorse = _doc(PLUGIN, "skills", "workhorse", "SKILL.md").split("\n\n")
-    followups = _one_block(workhorse, "`- FU<n> [<class>] <text>`", "workhorse Follow-ups paragraph")
+    workhorse = _doc(PLUGIN, "skills", "workhorse", "reference", "handback.md").split("\n\n")
+    followups = _one_block(workhorse, "`- FU<n> [<class>] <text>`", "workhorse handback Follow-ups list")
     receipt = _doc(PLUGIN, "skills", "showrunner", "reference", "vet-receipt.md")
     field7 = re.search(r"^7\. \*\*Dispositions.*?(?=^\d+\. |\Z)", receipt, re.M | re.S)
     assert field7, "vet-receipt.md field 7 not found"

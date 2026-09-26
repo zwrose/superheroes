@@ -502,7 +502,8 @@ recoverable. Without that evidence, state the wait as owed to the reader.
 workflow already passed on that head.** The calibrated verify command still runs every time this
 charter says it does, and the bite-proof runs are never what this skips. **A full-gate run starts
 only on a clean, settled tree**, ideally a detached pinned worktree. A suite started while edits
-still land measures a tree that no longer exists, so its green is not a receipt. **A handback whose
+still land measures a tree that no longer exists, so its green is not a receipt. The requirement
+attaches to the calibrated verify and any local full-suite run alike. **A handback whose
 suite receipt is still pending says so**, reports that the calibrated verify passed, and makes no
 test-pass claim.
 
@@ -563,8 +564,9 @@ removed.
 
 **You plan and seed test-pilot** (invoke `test-pilot-plan`). **A pilot subagent executes**
 (`agents/pilot.md`): it observes and reports structured results and never fixes. Pass it the
-absolute path to `skills/test-pilot-execute/reference/execution-steps.md` inside the build worktree,
-per the cited-paths rule (§7). A bug it reports becomes an implementer work order in the full lane.
+absolute path to `skills/test-pilot-execute/reference/execution-steps.md`: inside the build
+worktree when that file is part of the change under build, per the cited-paths rule (§7), and
+otherwise under the installed plugin root, `${CLAUDE_PLUGIN_ROOT}`. A bug it reports becomes an implementer work order in the full lane.
 In the light lane the bug first triggers escalation to the full lane.
 
 **A build with no app surface records test-pilot as N/A (no running app)** in the PR, with the

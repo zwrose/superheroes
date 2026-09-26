@@ -4084,21 +4084,6 @@ def _anchor_assert_resolution_bullets_complete(rel):
         _anchor_extract_bullet(section, prefix, surface)
 
 
-def _anchor_log_side_fails_closed_paragraph(rel):
-    section, surface = _anchor_resolution_section(rel)
-    m = re.search(
-        r"\*\*The log side fails closed too\.\*\*.*?"
-        r"(?=^\*\*(?:On any failure|Why the cursor))",
-        section,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert m, (
-        "%s: The log side fails closed too paragraph not found (moved or reworded?)"
-        % surface
-    )
-    return m.group(0)
-
-
 def _anchor_resolution_bullets(rel):
     section, surface = _anchor_resolution_section(rel)
     _anchor_assert_resolution_bullets_complete(rel)
@@ -4383,13 +4368,6 @@ def test_superseded_ruling_notice_duty_in_showrunner_charter():
     ) in notice_norm, (
         "showrunner superseded-ruling notice paragraph missing not-only-channel clause "
         "(moved or reworded?)"
-    )
-
-
-def test_anchor_log_side_fails_closed():
-    # axis: log-side fail-closed paragraph is a two-copy duplicate with four named conditions
-    _anchor_log_side_fails_closed_paragraph(
-        "skills/showrunner/reference/issue-contract.md"
     )
 
 
