@@ -1078,7 +1078,10 @@ def _compute_stack_state_snapshot(
             stacks_out.append(entry)
             continue
 
+        # A position is occupied when this batch has a lane there or the
+        # stack already has a member PR there (launched in another batch).
         occupied = _occupied_layer_positions(batch_lanes, stack_number)
+        occupied |= set(position_map)
         for position in sorted(ready_positions):
             next_position = position + 1
             if (
