@@ -2065,13 +2065,21 @@ def test_write_open_contracts_prompt_once_to_journal_file_and_engine(tmp_path):
     assert fake.calls[0]["prompt_bytes"] == expected.encode("utf-8")
 
 
-@pytest.mark.parametrize("vendor", ["codex", "cursor"])
-def test_write_prompt_carries_no_pattern_kill_rule(tmp_path, vendor):
+@pytest.mark.parametrize("vendor", ["codex", "cursor", "claude"])
+def test_write_prompt_carries_no_pattern_kill_rule(tmp_path, monkeypatch, vendor):
     wt, _main = _linked_worktree(tmp_path)
     base = "Implement exactly the assigned work order.\n"
     prompt_path = _prompt(tmp_path, base)
-    seat = _codex_seat() if vendor == "codex" else _cursor_seat()
-    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    if vendor == "claude":
+        _ensure_claude_config_dir(tmp_path, monkeypatch)
+        seat = _claude_seat()
+        fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    elif vendor == "codex":
+        seat = _codex_seat()
+        fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    else:
+        seat = _cursor_seat()
+        fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path, seat=seat)
     assert res["ok"] is True
     run_dir = str(tmp_path / "run")

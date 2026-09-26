@@ -43,7 +43,7 @@ LEGACY_ORDER_ID_PREFIX = "astra-probe"
 REGISTRATION_ORDER_ID_PREFIX = "registration-probe"
 LEGACY_PROMPT_SUFFIX = ".astra-probe-prompt.md"
 REGISTRATION_PROMPT_SUFFIX = ".registration-probe-prompt.md"
-# Ledgers written before the rename keep reading; new writes use the legacy filenames.
+# Ledgers and claims written before the rename keep reading; new writes use registration names.
 _RUBRIC_PATH = os.path.join(os.path.dirname(_LIB_DIR), "rubric", "review-base.md")
 PLANT_FILE = "app/session_guard.py"
 PLANT_LINES = (24, 25)
@@ -826,14 +826,8 @@ def _registration_claim_path(ledger_dir, wave):
 def _legacy_claim_path(ledger_dir, wave):
     return os.path.join(ledger_dir, LEGACY_CLAIM_PREFIX + "%s.json" % _wave_hash(wave, 16))
 
-def _persisted_claim_path(ledger_dir, wave):
-    return _legacy_claim_path(ledger_dir, wave)
-
 def _registration_attempts_path(ledger_dir):
     return os.path.join(ledger_dir, "registration-probe-attempts.json")
-
-def _persisted_attempts_path(ledger_dir):
-    return os.path.join(ledger_dir, LEGACY_ATTEMPTS_NAME)
 
 def _validate_attempts_list(data):
     if not isinstance(data, list):
@@ -867,13 +861,13 @@ def _read_registration_attempts(ledger_dir):
     return legacy + new, None
 
 def _append_registration_attempt(ledger_dir, record):
-    attempts, err = _read_registration_attempts(ledger_dir)
+    attempts, err = _read_new_registration_attempts(ledger_dir)
     if err:
         return err
     attempts.append(record)
     try:
         store_core.atomic_write(
-            _persisted_attempts_path(ledger_dir),
+            _registration_attempts_path(ledger_dir),
             json.dumps(attempts, separators=(",", ":")) + "\n",
         )
     except OSError:
@@ -954,7 +948,7 @@ def _write_registration_claim(ledger_dir, wave, run_dir_real, model=None, effort
         "model": model,
         "effort": effort,
     }
-    path = _persisted_claim_path(ledger_dir, wave)
+    path = _registration_claim_path(ledger_dir, wave)
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
         fh = os.fdopen(fd, "w", encoding="utf-8")
@@ -1159,15 +1153,15 @@ def registration_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, di
             _write_registration_claim(
                 ledger_dir, wave, run_dir_real,
                 model=seat.get("model"), effort=seat.get("effort"))
-            claim = _read_registration_claim(_persisted_claim_path(ledger_dir, wave))
-            active_claim_path = _persisted_claim_path(ledger_dir, wave)
+            claim = _read_registration_claim(claim_path)
+            active_claim_path = claim_path
             continuing_legacy = False
         except FileExistsError:
-            legacy_claim, legacy_claim_err = _claim_at_path(legacy_claim_path)
-            if legacy_claim_err:
-                return {"ok": False, "reason": "registration-probe-claim-unreadable"}, 1
             new_claim, new_claim_err = _claim_at_path(claim_path)
             if new_claim_err:
+                return {"ok": False, "reason": "registration-probe-claim-unreadable"}, 1
+            legacy_claim, legacy_claim_err = _claim_at_path(legacy_claim_path)
+            if legacy_claim_err:
                 return {"ok": False, "reason": "registration-probe-claim-unreadable"}, 1
             if legacy_claim is not None:
                 claim = legacy_claim

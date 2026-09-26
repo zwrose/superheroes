@@ -3351,7 +3351,8 @@ def test_astra_probe_record_survives_a_fresh_read_in_the_project_store(tmp_path,
     out1, code1 = CP.registration_probe(repo, "wave-store", run1, dispatch=dispatch)
     assert code1 == 1
     assert out1["outcome"] == "miss"
-    attempts_path = os.path.join(entry_dir, "conformance", CP.LEGACY_ATTEMPTS_NAME)
+    conformance_dir = os.path.join(entry_dir, "conformance")
+    attempts_path = CP._registration_attempts_path(conformance_dir)
     assert os.path.isfile(attempts_path)
     out2, code2 = CP.registration_probe(repo, "wave-store", run2, dispatch=dispatch)
     assert code2 == 1
@@ -3531,11 +3532,13 @@ def test_registration_probe_reads_legacy_ledger(tmp_path, monkeypatch):
     out, code = CP.registration_probe(repo, "wave-new", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["misses"] == 3
-    with open(legacy_path, encoding="utf-8") as fh:
-        merged_records = json.load(fh)
-    assert len(merged_records) == 3
-    assert merged_records[-1]["wave"] == "wave-new"
-    assert [r["wave"] for r in merged_records[:2]] == ["wave-legacy-1", "wave-legacy-2"]
+    new_path = CP._registration_attempts_path(ledger_dir)
+    with open(new_path, encoding="utf-8") as fh:
+        new_records = json.load(fh)
+    assert len(new_records) == 1
+    assert new_records[0]["wave"] == "wave-new"
+    with open(legacy_path, "rb") as fh:
+        assert fh.read() == legacy_bytes
 
 
 def test_registration_probe_union_reads_legacy_appended_after_new(tmp_path, monkeypatch):
@@ -3645,6 +3648,27 @@ def test_registration_probe_legacy_claim_continues_in_same_run_dir(tmp_path, mon
     with open(legacy_claim_path, encoding="utf-8") as fh:
         refreshed = json.load(fh)
     assert refreshed.get("lastSeenAt")
+
+
+def test_registration_probe_new_writes_use_registration_names(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([])
+
+    CP.registration_probe(repo, "wave-fresh", run_dir, dispatch=dispatch)
+    assert os.path.isfile(CP._registration_attempts_path(ledger_dir))
+    assert not os.path.isfile(os.path.join(ledger_dir, CP.LEGACY_ATTEMPTS_NAME))
+    claim_names = [
+        n for n in os.listdir(ledger_dir)
+        if n.startswith("registration-probe-claim-") and n.endswith(".json")
+    ]
+    assert len(claim_names) == 1
+    legacy_names = [n for n in os.listdir(ledger_dir) if n.startswith("astra-probe-")]
+    assert legacy_names == []
 
 
 def test_registration_probe_cli_accepts_legacy_alias(tmp_path, monkeypatch):

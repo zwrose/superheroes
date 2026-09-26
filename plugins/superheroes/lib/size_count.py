@@ -11,28 +11,18 @@ def is_test_path(path):
     return "tests" in path.replace("\\", "/").split("/")
 
 
-def _normalized_path(path):
-    return "/" + path.replace("\\", "/").strip("/") + "/"
+def count(numstat_rows, deleted_paths, bar_exclude=()):
+    """Pure size count from parsed numstat rows and deleted path names.
 
-
-def is_bar_exempt_path(path):
-    """True when additions must not count toward the 300/600 bars (review-discipline § Size)."""
-    norm = _normalized_path(path)
-    if "/lib/tests/bite_proofs/" in norm:
-        return True
-    if norm.endswith("/skills/workhorse/reference/dispatch-entry.md/"):
-        return True
-    if "/lib/tests/fixtures/round_certification_generated/" in norm:
-        return True
-    return False
-
-
-def count(numstat_rows, deleted_paths):
-    """Pure size count from parsed numstat rows and deleted path names."""
+    ``bar_exclude`` lists regenerated artifacts (review-discipline Size § bars): paths
+    here still add to ``tripwireCount`` but not ``barCount``, and appear in ``barExcluded``.
+    """
     tripwire = 0
     bar = 0
     deleted_files = []
     binary = []
+    bar_exclude_set = frozenset(bar_exclude or ())
+    bar_excluded = set()
 
     for added, deleted, path in numstat_rows:
         if is_test_path(path):
@@ -44,17 +34,22 @@ def count(numstat_rows, deleted_paths):
             deleted_files.append({"path": path, "lines": deleted})
             continue
         tripwire += added + deleted
-        if not is_bar_exempt_path(path):
+        if path in bar_exclude_set:
+            bar_excluded.add(path)
+        else:
             bar += added
 
     deleted_files.sort(key=lambda item: item["path"])
     binary.sort()
-    return {
+    out = {
         "tripwireCount": tripwire,
         "barCount": bar,
         "deletedFiles": deleted_files,
         "binary": binary,
     }
+    if bar_exclude_set:
+        out["barExcluded"] = sorted(bar_excluded)
+    return out
 
 
 def _parse_numstat_z(raw_bytes):
@@ -118,35 +113,62 @@ def _git_failed(stderr_bytes):
     return {"ok": False, "reason": "git-failed", "detail": line[0] if line else ""}
 
 
-def collect(repo_root, base, head="HEAD"):
+def collect(repo_root, base, head="HEAD", bar_exclude=()):
     """Run git diffs between ``base`` and ``head`` and return size JSON."""
-    numstat = subprocess.run(
-        ["git", "-C", repo_root, "diff", "--numstat", "-z", "-M", base, head],
-        capture_output=True,
-    )
+    git_timeout = 60
+    numstat_argv = [
+        "git",
+        "-C",
+        repo_root,
+        "diff",
+        "--numstat",
+        "-z",
+        "-M",
+        "--end-of-options",
+        base,
+        head,
+    ]
+    try:
+        numstat = subprocess.run(
+            numstat_argv,
+            capture_output=True,
+            timeout=git_timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "reason": "git-timeout"}
+    except FileNotFoundError:
+        return {"ok": False, "reason": "git-unavailable"}
     if numstat.returncode != 0:
         return _git_failed(numstat.stderr)
-    status = subprocess.run(
-        [
-            "git",
-            "-C",
-            repo_root,
-            "diff",
-            "--name-status",
-            "-z",
-            "-M",
-            "--diff-filter=D",
-            base,
-            head,
-        ],
-        capture_output=True,
-    )
+    status_argv = [
+        "git",
+        "-C",
+        repo_root,
+        "diff",
+        "--name-status",
+        "-z",
+        "-M",
+        "--diff-filter=D",
+        "--end-of-options",
+        base,
+        head,
+    ]
+    try:
+        status = subprocess.run(
+            status_argv,
+            capture_output=True,
+            timeout=git_timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "reason": "git-timeout"}
+    except FileNotFoundError:
+        return {"ok": False, "reason": "git-unavailable"}
     if status.returncode != 0:
         return _git_failed(status.stderr)
 
     rows = _parse_numstat_z(numstat.stdout)
     deleted_paths = _parse_deleted_paths(status.stdout)
-    result = count(rows, deleted_paths)
+    result = count(rows, deleted_paths, bar_exclude=bar_exclude)
     result["base"] = base
     result["head"] = head
     result["ok"] = True
@@ -164,9 +186,21 @@ def main(argv):
     cnt.add_argument("--base", required=True)
     cnt.add_argument("--head", default="HEAD")
     cnt.add_argument("--repo-root", default=".")
+    cnt.add_argument(
+        "--bar-exclude",
+        action="append",
+        default=[],
+        dest="bar_exclude",
+        help="path excluded from barCount (repeatable; regenerated artifacts)",
+    )
     args = ap.parse_args(argv[1:])
     if args.cmd == "count":
-        result = collect(args.repo_root, args.base, args.head)
+        result = collect(
+            args.repo_root,
+            args.base,
+            args.head,
+            bar_exclude=tuple(args.bar_exclude),
+        )
         _emit(result)
         return 0 if result.get("ok") else 1
     return 1

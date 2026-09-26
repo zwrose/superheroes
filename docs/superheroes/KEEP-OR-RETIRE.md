@@ -1520,7 +1520,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** Not a census row. The salvage recoveries for **no dispatchable engine** — retired
   for cursor 2026-09-19 (layer 3c); the helpers (`engine_dispatch.py` scan/salvage/upgrade/delivered-items
-  functions and `engine_adapter.py`'s marker parser and salvage family) were deleted by issue #1447:
+  functions and `engine_adapter.py`'s marker parser and salvage family) were deleted by PR #1463 (issue #1461):
   review `forfeit-with-engaged-artifact` salvage, write-report salvage (structured tail and prose
   tier), and `report-missing-items-delivered` work-on-disk doctrine (`engine_dispatch.py`,
   `engine_adapter.py`, `dispatch-mechanics.md`).
@@ -1532,7 +1532,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   transport grading forfeited after files landed (field record in `dispatch-mechanics.md`: three
   builds in one wave, four of six dispatches with correct files on disk).
 - **Consumer evidence.** unmeasured.
-- **Decision.** retired 2026-09-26 — the helpers and their doctrine were deleted (issue #1447); the
+- **Decision.** retired 2026-09-26 — the helpers and their doctrine were deleted (PR #1463 (issue #1461)); the
   owner ruled retire at the 2026-09-25 gardening pass.
 - **Notes.** harness-limit — salvage exists because engine stdout and host turn limits destroy
   gradeable reports while work survives on disk (Cursor `NonRetriableError` class). Retired for codex

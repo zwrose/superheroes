@@ -63,6 +63,7 @@ def test_whole_deleted_file_is_listed_not_counted(tmp_path):
     out = size_count.collect(str(root), base, "HEAD")
     assert out["ok"] is True
     assert out["tripwireCount"] == 3
+    assert out["barCount"] == 3
     assert out["deletedFiles"] == [{"path": "lib/gone.py", "lines": 10}]
 
 
@@ -188,14 +189,41 @@ def test_count_empty_diff():
     assert out["binary"] == []
 
 
-def test_generated_reference_doc_counts_tripwire_not_bar():
-    path = "plugins/superheroes/skills/workhorse/reference/dispatch-entry.md"
-    out = size_count.count([(650, 0, path)], set())
-    assert out["tripwireCount"] == 650
-    assert out["barCount"] == 0
+def test_bar_exclude_counts_tripwire_not_bar():
+    path = "docs/generated/readme.md"
+    out = size_count.count(
+        [(100, 0, path), (5, 0, "lib/a.py")],
+        set(),
+        bar_exclude=(path,),
+    )
+    assert out["tripwireCount"] == 105
+    assert out["barCount"] == 5
+    assert out["barExcluded"] == [path]
 
 
-def test_is_bar_exempt_path_dispatch_entry():
-    path = "plugins/superheroes/skills/workhorse/reference/dispatch-entry.md"
-    assert size_count.is_bar_exempt_path(path)
-    assert not size_count.is_bar_exempt_path("plugins/superheroes/lib/foo.py")
+def test_revision_starting_with_dash_is_not_an_option(tmp_path):
+    root = _init_repo(tmp_path)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    trap = tmp_path / "trap-output.json"
+    trap_str = str(trap)
+    out = size_count.collect(str(root), "--output=%s" % trap_str, "HEAD")
+    assert out["ok"] is False
+    assert out["reason"] == "git-failed"
+    assert not trap.exists()
