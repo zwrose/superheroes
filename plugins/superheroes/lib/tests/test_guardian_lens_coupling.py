@@ -2481,3 +2481,110 @@ def test_coupling_vitals_incomplete_sections_always_emit_nonempty_identity():
         reading = glc.LENS.vitals(digest)["couplingEdges"]
         assert len(reading) == 3, reading
         assert reading[2] == expected_identity
+
+
+# ======================================================================================
+# JS cruise targets + depcruise crash reasons (#1452)
+# ======================================================================================
+
+def _commit_tracked(repo, *relpaths):
+    subprocess.run(["git", "-C", repo, "add"] + list(relpaths), check=True)
+    subprocess.run(
+        ["git", "-C", repo,
+         "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "sources"],
+        check=True)
+
+
+def _argv_operands_realpath(argv, repo):
+    sep = argv.index("--")
+    return sorted(os.path.realpath(p) for p in argv[sep + 1:])
+
+
+def test_js_targets_root_level_file_never_widens_to_repo_root(tmp_path):
+    repo = str(tmp_path)
+    write(repo, "src" + "/" + "app.ts", "export const x = 1;\n")
+    write(repo, "next.config.ts", "export default {};\n")
+    got = glc.census(census_ctx(repo, tracked=["src/app.ts", "next.config.ts"]), repo, "js")[0]
+    targets = glc._js_targets(repo, got)
+    assert targets == ["next.config.ts", "src"]
+    assert "." not in targets
+
+
+def test_collect_argv_never_targets_repo_root_with_root_level_source(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"cruise-targets"}\n')
+    write(repo, "src/app.ts", "export const x = 1;\n")
+    write(repo, "next.config.ts", "export default {};\n")
+    write(repo, "junk/decoy.ts", "export const junk = 1;\n")
+    tracked = ["package.json", "src/app.ts", "next.config.ts"]
+    captured = []
+
+    def handler(argv, kwargs):
+        captured.append(list(argv))
+        return (0, dc_report(extra_sources=tracked), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "collected"
+    assert captured, "depcruise must run"
+    expected = sorted(
+        os.path.realpath(os.path.join(repo, p))
+        for p in ("next.config.ts", "src"))
+    for argv in captured:
+        assert _argv_operands_realpath(argv, repo) == expected
+        assert os.path.realpath(repo) not in _argv_operands_realpath(argv, repo)
+
+
+_V8_OOM_STDERR = (
+    "FATAL ERROR: Ineffective mark-compacts near heap limit "
+    "Allocation failed - JavaScript heap out of memory\n"
+    "12: 0x1076b64fc v8::internal::Runtime_AllocateInYoungGeneration\n"
+    "79: 0x18cf504e4 start [/usr/lib/dyld]\n"
+)
+
+
+def test_depcruise_crash_reason_names_fatal_cause(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"oom-reason"}\n')
+    write(repo, "src/app.ts", "export const x = 1;\n")
+
+    def handler(argv, kwargs):
+        return (-6, "", _V8_OOM_STDERR)
+
+    out = lens().collect(ctx(
+        repo, tmp_path,
+        run=make_run(handler, tracked=["package.json", "src/app.ts"])))
+    assert st(out) == "not-collected"
+    assert out["digest"] is None
+    reason = out.get("reason") or ""
+    assert "heap out of memory" in reason.lower()
+    assert "SIGABRT" in reason
+    assert "start [/usr/lib/dyld]" not in reason
+
+
+@pytest.mark.skipif(
+    _resolve_collector_bin(adapters.DEPCRUISE_BIN) is None,
+    reason="dependency-cruiser not installed",
+)
+def test_mixed_file_and_dir_operands_run_end_to_end(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"mixed-operands"}\n')
+    write(repo, "src/b.ts", "export const b = 1;\n")
+    write(repo, "src/a.ts", "import { b } from './b';\nexport const a = b;\n")
+    write(repo, "vite.config.ts", "import './src/a';\nexport default {};\n")
+    write(repo, "junk/x.ts", "export const x = 1;\n")
+    _commit_tracked(
+        repo, "package.json", "src/a.ts", "src/b.ts", "vite.config.ts")
+    root = store(tmp_path)
+    out = lens().collect({"cwd": repo, "root": root, "prevDigest": None})
+    assert st(out) == "collected"
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["status"] == "collected"
+    assert out["digest"]["counters"]["modulesParsed"] >= 3
+    argv = js["argv"]
+    expected_ops = sorted(
+        os.path.realpath(os.path.join(repo, p))
+        for p in ("vite.config.ts", "src"))
+    assert _argv_operands_realpath(argv, repo) == expected_ops
+    assert os.path.realpath(os.path.join(repo, "junk")) not in _argv_operands_realpath(
+        argv, repo)

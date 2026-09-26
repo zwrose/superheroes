@@ -40,6 +40,7 @@ root-manifest stack-tags check looks only at the repo root and misses nested wor
 import json
 import os
 import re
+import signal
 import stat
 import sys
 
@@ -1003,7 +1004,25 @@ class CouplingLens(object):
         if not res.get("ok"):
             why = res.get("reason") or "dependency-cruiser failed"
             detail = (res.get("stderr") or "").strip().splitlines()
-            tail = (" — " + detail[-1]) if detail else ""
+            # bite-proof axis: a crash reason names the fatal stderr line, not a stack frame.
+            _fatal_markers = (
+                "fatal error", "heap out of memory", "allocation failed", "out of memory")
+            tail_line = None
+            for line in detail:
+                low = line.lower()
+                if any(m in low for m in _fatal_markers):
+                    tail_line = line
+                    break
+            if tail_line is None and detail:
+                tail_line = detail[-1]
+            tail = (" — " + tail_line) if tail_line else ""
+            exit_code = res.get("exit")
+            if tail and isinstance(exit_code, int) and exit_code < 0:
+                try:
+                    signame = signal.Signals(-exit_code).name
+                except ValueError:
+                    signame = "signal %d" % (-exit_code)
+                tail += " (killed by %s)" % signame
             # Evidence-only parse of stdout (never promote a failed run to collected).
             parsed = adapters.parse_depcruise_json(
                 res.get("stdout") or "", returncode=res.get("exit") or 1)
@@ -1575,15 +1594,31 @@ def _collapse_reason(lens_name, src_census, collapse, versions,
 
 
 def _js_targets(repo, src_census):
-    """First-party directories to cruise. Vendored trees are never targets."""
-    tops = set()
+    """First-party cruise operands: first-level directories plus each root-level file.
+
+    Root-level censused sources are passed as their own repo-relative operands; they
+    never widen the cruise to the repo root directory. Vendored trees are never targets.
+    When the census is empty, falls back to ``[\".\"]`` (unchanged).
+    """
+    # bite-proof axis: a root-level source file never widens the cruise to the repo root.
+    top_dirs = set()
+    root_files = []
     for _ws, rel_file, _lang in src_census["files"]:
         segs = _segments(rel_file)
-        tops.add(segs[0] if len(segs) > 1 else ".")
-    if "." in tops:
-        return ["."]  # sources sit at the repo root; --exclude keeps vendored trees out
-    real = sorted(t for t in tops if os.path.isdir(os.path.join(repo, t)))
-    return real or ["."]
+        if len(segs) <= 1:
+            root_files.append(rel_file)
+        else:
+            top_dirs.add(segs[0])
+    operands = []
+    for name in top_dirs:
+        if os.path.isdir(os.path.join(repo, name)):
+            operands.append(name)
+    for name in root_files:
+        if os.path.isfile(os.path.join(repo, name)):
+            operands.append(name)
+    if operands:
+        return sorted(operands)
+    return ["."]
 
 
 def _filter_depcruise_to_tracked(repo, payload, tracked_set, collector_cwd=None):
