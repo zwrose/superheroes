@@ -73,7 +73,7 @@ Read rows **top to bottom**; the **first row whose required evidence holds** dec
 | Row | Evidence required | Action |
 | --- | --- | --- |
 | **1. parked** | A park record on the lane's issue or pull request (read completed) whose stated blocker is **not** cleared, and no owner or advisor ruling to resume it. This row needs no process, heartbeat, or transcript read — which is why a park record outranks a failed transcript read. | Report the lane as parked, awaiting a decision; nothing is relaunched, armed, or recorded. |
-| **2. re-arm** | **All** of: the recorded leader process is **positively live** (the double-confirmed probe in Step 3); the lane's heartbeat classifies **`fresh`** in the heartbeat sweep — the sweep's `fresh` class, the lane's age inside its own `staleAfterSeconds` promise, as CONVENTIONS §15 defines it; and the lane's session transcript **resolved** (Step 3, source 6: exactly one file found by the identity rule, not dated into the future). **A transcript alone never re-arms.** | Nothing is relaunched and no outcome recorded; the lane's batch is a candidate for Step 6 arming. |
+| **2. re-arm** | **All** of: the recorded leader process is **positively live** (the double-confirmed probe in Step 3); the lane's session transcript **resolved** (Step 3, source 6: exactly one file found by the identity rule, not dated into the future) **and** written within `LIVENESS_QUIET_WINDOW_SECONDS` (45 minutes, `lib/wave_watch.py`) of the read. **A transcript alone never re-arms.** | Nothing is relaunched and no outcome recorded; the lane's batch is a candidate for Step 6 arming. |
 | **3. vet** | **All** of: the pull request exists, is **not** a draft, carries a durable review receipt, its **remote** head is the commit that receipt names, and CI concluded success on that exact commit (selected by workflow name plus head commit). | If the ledger carries no terminal outcome, record `handback` first (Step 5); **never relaunched**. |
 | **4. adopt** | **All** of: the recorded leader process is **positively not live** (the probe completed and found it dead); the pull-request read (Step 3, source 5) completed and found the lane's pull request **absent or a draft** — a ready (non-draft) pull request never satisfies this row; the park-record read completed and found either no park record, or a park whose stated blocker is cleared or which the owner or advisor has ruled should resume; and the unpushed-work sweep of `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Sweep for unpushed work before adopting has run for this lane and its residue is durable. | Record the lane's terminal outcome first (Step 5), then adopt by that section's procedure (cite `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Sweep for unpushed work before adopting). |
 | **5. unresolved** | None — the last row, for any lane no earlier row could establish. | The lane is named in the report with the read that failed or the evidence that is missing; nothing is relaunched, armed, or recorded. |
@@ -123,7 +123,7 @@ Exactly three lines:
 
 ```text
 Seat: showrunner advisor, instance ~/.claude. Read resume point, ledger batch wave-a, heartbeat sweep, process probes, PR #220 and #221 CI by workflow+sha, session transcripts (stat only).
-Lanes: vet 1 (#220 — PR exists, non-draft, durable review receipt, remote head = receipt commit, CI success on that sha by workflow name); re-arm 1 (#221 — leader positively live, heartbeat sweep class fresh, transcript resolved one file stat only); adopt 0; parked 0; unresolved 0.
+Lanes: vet 1 (#220 — PR exists, non-draft, durable review receipt, remote head = receipt commit, CI success on that sha by workflow name); re-arm 1 (#221 — leader positively live, transcript resolved and written 6 min ago, inside the 45-minute window); adopt 0; parked 0; unresolved 0.
 Watches: armed loop for wave-a. None skipped. Owner: none.
 ```
 
@@ -131,7 +131,7 @@ Watches: armed loop for wave-a. None skipped. Owner: none.
 
 ```text
 Seat: showrunner advisor, instance ~/.claude-two. Read ledger batch wave-b; heartbeat sweep; process probes, session transcripts (stat only); PR #305 head read failed.
-Lanes: vet 0; re-arm 1 (#306 — leader positively live, heartbeat sweep class fresh, transcript resolved one file stat only); adopt 0; parked 0; unresolved 1 (#305 — row 5: remote head read failed).
+Lanes: vet 0; re-arm 1 (#306 — leader positively live, transcript resolved and written 6 min ago, inside the 45-minute window); adopt 0; parked 0; unresolved 1 (#305 — row 5: remote head read failed).
 Watches: wave-b not armed — process listing ambiguous (two wave_watch.py matches). Owner: re-run resume after clearing duplicate watcher or name which batch is canonical.
 ```
 
@@ -171,7 +171,7 @@ Three instances: the one-off watch verb returns at once and never waits; the ter
 | --- | --- |
 | The ledger is missing or unreadable | Preserve every lane as unresolved. Stop the transition. |
 | The ledger fold fails (a live-launch read that cannot fold returns an empty list) | Never read an empty list as "no live lanes." Preserve as unresolved. Stop. |
-| A per-lane read fails or is ambiguous (heartbeat not-ok/unknown class, uncertain process probe, pull-request/receipt/head/CI read failure, no session identifier on the launch record, session transcript unresolvable, the unpushed-work sweep for a row-4 candidate cannot be completed) | That read satisfies no row; the decision table decides (Step 4). |
+| A per-lane read fails or is ambiguous (heartbeat not-ok/unknown class — blocks only rows that require a heartbeat read; uncertain process probe; pull-request/receipt/head/CI read failure; no session identifier on the launch record; session transcript unresolvable or outside the quiet window; the unpushed-work sweep for a row-4 candidate cannot be completed) | That read satisfies no row; the decision table decides (Step 4). |
 | The process listing for the duplicate check fails or is ambiguous | Do not arm that batch. Name it in the report. |
 | The outcome verb or the amendment verb refuses | Stop the transition for that lane and name it in the report. |
 | Arming fails | Name the batch in the report. Do not claim the watch is running. |
