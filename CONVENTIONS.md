@@ -1406,8 +1406,9 @@ today's launcher spawns only `claude -p` builders.
 **future-dated** heartbeat classifies `unknown`, never `nonterminal` or `terminal`. A ledger
 failure makes the sweep **refuse at the top level** rather than return an empty,
 healthy-looking result. The sweep **never asserts that a lane is dead** — a heartbeat cannot
-prove death. An older record that still carries the retired next-stamp promise field loads
-normally; the field is ignored.
+prove death. The retired next-stamp promise field is still written, with a fixed value, so readers older
+than this contract can load new stamps; every reader here ignores it, and an older record carrying any
+value in it loads normally.
 
 **Accepted storage bound.** The store keeps **one small JSON file per launch, retained indefinitely**
 — nothing reaps them, and the sweep ignores launches the ledger no longer reports live, so those

@@ -447,7 +447,7 @@ def test_old_record_stale_after_field_is_ignored(
     assert "staleAfterSeconds" not in result
 
 
-def test_stamp_writes_record_without_stale_after_seconds(tmp_path, monkeypatch):
+def test_stamp_writes_the_legacy_field_for_older_readers(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     now = 1_000_000.0
@@ -461,7 +461,9 @@ def test_stamp_writes_record_without_stale_after_seconds(tmp_path, monkeypatch):
     assert result["ok"] is True
     with open(result["path"], encoding="utf-8") as fh:
         on_disk = json.load(fh)
-    assert "staleAfterSeconds" not in on_disk
+    v = on_disk["staleAfterSeconds"]
+    assert v == hb.LEGACY_STALE_AFTER_SECONDS == 24000
+    assert isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 86400
 
 
 def test_stamp_and_read_round_trip(tmp_path, monkeypatch):
@@ -724,7 +726,7 @@ def test_cli_stamp_prints_json(tmp_path, monkeypatch, capsys):
     path_result = hb.heartbeat_path(repo, "cli-lane")
     with open(path_result["path"], encoding="utf-8") as fh:
         on_disk = json.load(fh)
-    assert "staleAfterSeconds" not in on_disk
+    assert on_disk["staleAfterSeconds"] == 24000
 
 
 def test_cli_read_prints_json(tmp_path, monkeypatch, capsys):

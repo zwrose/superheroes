@@ -141,6 +141,7 @@ _RETIRED_TOKENS = (
 
 _CENSUS_ALLOWLIST = frozenset({
     ("plugins/superheroes/lib/heartbeat.py", "stale-after"),
+    ("plugins/superheroes/lib/heartbeat.py", "staleAfterSeconds"),
 })
 
 _CENSUS_TEXT_SUFFIXES = (

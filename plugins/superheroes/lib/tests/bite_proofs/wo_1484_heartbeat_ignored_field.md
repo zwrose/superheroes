@@ -1,6 +1,6 @@
 # Bite-proof record — WO-A2 (#1484) heartbeat ignored field + retired-promise census
 
-**Guarded-element set (declared in the work order):** (1) `_validate_record` ignores legacy `staleAfterSeconds` on load — detector `test_old_record_stale_after_field_is_ignored`; (2) the plugin census skips non-text artifacts and does not false-positive on `__pycache__` — detector `test_no_reader_or_builder_keeps_the_retired_promise`.
+**Guarded-element set (declared in the work order):** (1) `_validate_record` ignores legacy `staleAfterSeconds` on load — detector `test_old_record_stale_after_field_is_ignored`; (2) the plugin census skips non-text artifacts and does not false-positive on `__pycache__` — detector `test_no_reader_or_builder_keeps_the_retired_promise`; (3) `stamp()` writes the legacy field for older readers — detector `test_stamp_writes_the_legacy_field_for_older_readers`.
 
 **Command:** each run used the exact node id below, never `-k`:
 
@@ -88,4 +88,41 @@ if __name__ == "__main__":
 ```
 .                                                                        [100%]
 1 passed in 0.40s
+```
+
+## 3 — `stamp()` writes legacy `staleAfterSeconds` for older readers
+
+- **Guarded element:** `plugins/superheroes/lib/heartbeat.py` `stamp()`, axis: every on-disk record
+  from `stamp()` carries `staleAfterSeconds` with the fixed legacy value older readers require.
+- **Neutralization** (delete from the `record` dict in `stamp()`):
+
+```
+        "staleAfterSeconds": LEGACY_STALE_AFTER_SECONDS,
+```
+
+- **Node:** `plugins/superheroes/lib/tests/test_heartbeat.py::test_stamp_writes_the_legacy_field_for_older_readers`
+- **Raw red** (exit 1):
+
+```
+>       v = on_disk["staleAfterSeconds"]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'staleAfterSeconds'
+
+FAILED plugins/superheroes/lib/tests/test_heartbeat.py::test_stamp_writes_the_legacy_field_for_older_readers
+1 failed in 2.66s
+```
+
+- **Restore:** re-add the line to the `record` dict in `stamp()`:
+
+```
+        "note": note,
+        "staleAfterSeconds": LEGACY_STALE_AFTER_SECONDS,
+    }
+```
+
+- **Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 2.94s
 ```
