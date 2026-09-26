@@ -15,6 +15,7 @@ import os
 import shutil
 import uuid
 
+import round_records
 from round_records import _guard_within
 
 # =============================================================================================
@@ -490,6 +491,10 @@ class Commit(object):
     def add_journal_append(self, journal_path, entry):
         if not isinstance(entry, dict):
             raise CommitRefused("journal-entry-not-a-mapping")
+        try:
+            round_records.require_complete_revision(entry)
+        except round_records.IncompleteRevisionIdentity as exc:
+            raise CommitRefused("recorded-row-incomplete", ", ".join(exc.missing))
         try:
             _guard_within(self.session_dir, journal_path)
         except ValueError as exc:

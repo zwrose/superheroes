@@ -492,6 +492,7 @@ def _journal_append(session_dir, entry):
     last-resort fail-loud, propagated here (never swallowed). ts via time.time."""
     entry = dict(entry)
     entry.setdefault("ts", time.time())
+    round_records.require_complete_revision(entry)
     try:
         with open(os.path.join(session_dir, JOURNAL_FILE), "a", encoding="utf-8") as fh:
             fh.write(_canonical(entry) + "\n")
@@ -770,6 +771,7 @@ def mechanical_compile(findings, diff_text=None):
                           "title": f.get("title"), "reason": "outside the round diff scope"})
             continue
         fc = dict(f)
+        fc.pop(session_contract.FINDING_KEY_FIELD, None)
         fc["severity"] = circuit_breaker.effective_severity(fc.get("severity"))
         if "dimension" in fc:
             norm = panel_tally.normalize_dimension(fc["dimension"])
@@ -780,6 +782,7 @@ def mechanical_compile(findings, diff_text=None):
         kept.append(fc)
     compiled = _compile_by_anchor(kept)
     compiled = _nit_cap(compiled)
+    _mint_finding_keys(compiled)
     return compiled, drops
 
 
@@ -1173,6 +1176,30 @@ def _finding_identity_key(finding):
     return session_contract.finding_identity_key(finding)
 
 
+def _mint_finding_keys(findings):
+    """Stamp findingKey on dict findings that lack a non-empty one; ensure list-wide uniqueness."""
+    if not isinstance(findings, list):
+        return findings
+    used = set()
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        key = f.get(session_contract.FINDING_KEY_FIELD)
+        if isinstance(key, str) and key:
+            base = key.rsplit("#", 1)[0] if "#" in key else key
+        else:
+            base = session_contract.location_key(f)
+            key = base
+        if key in used:
+            n = 1
+            while "%s#%d" % (base, n) in used:
+                n += 1
+            key = "%s#%d" % (base, n)
+        used.add(key)
+        f[session_contract.FINDING_KEY_FIELD] = key
+    return findings
+
+
 def _archive_disposition_findings(state, departing):
     """Append findings leaving the live list that carry disposition into dispositionLedger."""
     if not departing:
@@ -1206,6 +1233,7 @@ def _set_findings(state, new_findings):
     if not isinstance(prior, list):
         prior = []
     new_list = list(new_findings) if new_findings is not None else []
+    _mint_finding_keys(new_list)
     new_keys = set()
     for finding in new_list:
         if isinstance(finding, dict):
@@ -2371,7 +2399,7 @@ def _location_id(finding):
     """Per-LOCATION key: line-less `finding_identity` plus line. Two same-title findings at
     DIFFERENT lines get DISTINCT keys (#507 R2 v5); audit target ids reuse this form with an
     occurrence suffix when the same file+title+line repeats in one batch."""
-    return "%s@L%s" % (finding_identity(finding), finding.get("line"))
+    return session_contract.location_key(finding)
 
 
 def _judgment_row_ids(findings):
@@ -4488,10 +4516,6 @@ def _session_certified_head(session_dir, state):
     head = cfg.get("headSha")
     if isinstance(head, str) and head:
         return head
-    if isinstance(state, dict) and state.get("headDiff") is not None:
-        return hashlib.sha256(
-            json.dumps(state.get("headDiff") or "run-loop", sort_keys=True).encode()
-        ).hexdigest()[:40]
     return None
 
 
@@ -6683,7 +6707,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
 
 
 def _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence, row,
-                          manifest_sha, order_sha, state):
+                          manifest_sha, order_sha, state, head_sha=None):
     """Seat-result header fields knowable at emission — NOT `recordedAt` / `payloadSha256`."""
     schema = _seat_result_schema(state)
     if schema is None:
@@ -6705,6 +6729,8 @@ def _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence
         header["occurrence"] = occurrence
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
         header["provenance"] = round_records.PROVENANCE_DISPATCH_OBSERVED
+        if head_sha:
+            header["headSha"] = head_sha
     return header
 
 
@@ -6760,8 +6786,16 @@ def _orders_anchor_from_journal(session_dir, rnd, phase, attempt):
             raw = manifest.get("seats")
             if isinstance(raw, dict):
                 orders = {seat: round_records.NOT_EMITTED for seat in raw}
-        return {"manifestSha256": manifest_sha, "orders": orders, "path": path}
+        anchor = {"manifestSha256": manifest_sha, "orders": orders, "path": path}
+        head_sha = manifest.get("headSha")
+        if isinstance(head_sha, str) and head_sha:
+            anchor["headSha"] = head_sha
+        return anchor
     return None
+
+
+def _anchor_cited_head(state, session_dir, rnd, phase, attempt):
+    return (_orders_anchor(state, session_dir, rnd, phase, attempt) or {}).get("headSha")
 
 
 def _seat_dispatch_row(state, seat_key, seat_map=None):
@@ -6869,12 +6903,17 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     if vendor_gaps:
         _disclose_order_vendor_provenance_gaps(state, vendor_gaps)
 
+    certified_head = _session_certified_head(session_dir, state)
     manifest = {"schema": ORDERS_MANIFEST_SCHEMA, "session": _meta_session_id(session_dir),
                 "round": rnd, "phase": phase, "attempt": attempt,
                 "orders": round_records.NOT_EMITTED, "seats": seats}
+    if certified_head:
+        manifest["headSha"] = certified_head
     path = _orders_manifest_path(session_dir, rnd, phase, attempt)
     manifest_sha = round_records.sha256_text(round_records.canonical(manifest))
     anchor = {"manifestSha256": manifest_sha, "orders": dict(order_hashes), "path": path}
+    if certified_head:
+        anchor["headSha"] = certified_head
     anchors = state.get("_ordersAnchors")
     if not isinstance(anchors, dict):
         anchors = {}
@@ -6895,7 +6934,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             c.add_replace_file(order_path, order_bytes)
             # Projection of the anchor, never the authority — ingestion validates the mirrored hash.
             stub = _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence,
-                                         row, manifest_sha, order_sha, state)
+                                         row, manifest_sha, order_sha, state,
+                                         head_sha=certified_head)
             c.add_replace_file(stub_path, round_records.canonical(stub).encode("utf-8"))
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
@@ -6993,49 +7033,10 @@ def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
 
 
 def _journal_execution_evidence_fields(evidence):
-    """Mandatory execution-evidence members plus each optional field when present — shared by
-    ``_journal_revision_fields`` and ``_assemble_dispatch_evidence`` so the two copies cannot drift."""
-    if not isinstance(evidence, dict):
-        return None
-    if not all(field in evidence for field in round_records.EXECUTION_EVIDENCE_FIELDS):
-        return None
-    out = {field: evidence[field] for field in round_records.EXECUTION_EVIDENCE_FIELDS}
-    for field in round_records.EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
-        val = evidence.get(field)
-        if isinstance(val, str) and val:
-            out[field] = val
-    return out
-
-
-def _journal_revision_fields(envelope):
-    """The revision identity a `recorded` row carries: the payload hash (kept, never removed —
-    FR-D5) and the ENVELOPE's own CAS token, which is what `reconcile` compares. Every site that
-    journals a stored envelope's revision splats this; a site that journals a revision without it
-    is the defect this helper exists to make impossible. Takes an ENVELOPE — a reconcile entry is
-    not an envelope and must not be passed here."""
-    if not isinstance(envelope, dict):
-        return {"payloadSha256": None, "casToken": None, "executionEvidence": None}
-    execution_evidence = _journal_execution_evidence_fields(envelope.get("executionEvidence"))
-    return {"payloadSha256": envelope.get("payloadSha256"),
-            "casToken": round_records.envelope_cas_token(envelope),
-            "executionEvidence": execution_evidence}
-
-
-def _journal_stored_revision(envelope):
-    """Complete revision identity a `recorded` row carries for a stored envelope — the revision
-    triple plus the certification-facing provenance and evidence markers. Every site that
-    journals a stored envelope splats this; reconcile entries are not envelopes."""
-    fields = _journal_revision_fields(envelope)
-    if isinstance(envelope, dict):
-        fields["provenance"] = envelope.get("provenance")
-        fields["envelopeSha256"] = envelope.get("envelopeSha256")
-        fields["executionEvidencePresent"] = "executionEvidence" in envelope
-    else:
-        fields["provenance"] = None
-        fields["envelopeSha256"] = None
-        fields["executionEvidencePresent"] = False
-    fields.update(_journal_transport_fields(envelope))
-    return fields
+    """Mandatory execution-evidence members plus each optional field when present. One home:
+    ``round_records.execution_evidence_fields``, shared with ``recorded_row_fields`` and
+    ``_assemble_dispatch_evidence`` so the copies cannot drift."""
+    return round_records.execution_evidence_fields(evidence)
 
 
 def _journal_record_identities(session_dir, rnd, phase):
@@ -7145,7 +7146,7 @@ def _read_head_diff(path):
 
 
 def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurrence=0,
-                     journal_entry=None):
+                     journal_entry=None, cited_head=None):
     """Copy the fixer's head diff into the STORE beside its envelope and stamp the immutable copy's
     path into the stored payload.
 
@@ -7165,7 +7166,7 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
         c.add_replace_file(diff_path, diff_bytes)
         c.add_replace_file(spath, round_records.canonical(final).encode("utf-8"))
         if journal_entry is not None:
-            journal_entry.update(_journal_revision_fields(final))
+            journal_entry.update(round_records.recorded_row_fields(final, cited_head))
             c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
@@ -7189,7 +7190,7 @@ def _fixer_head_diff_needs_repair(stored):
 
 
 def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurrence, cmd=None,
-                            expect_round=None, expect_phase=None):
+                            expect_round=None, expect_phase=None, cited_head=None):
     """Repair a fixer store record whose head-diff blob was not yet bound.
 
     Returns (payload_sha, detail) where detail is None, a refusal token string, or a
@@ -7217,7 +7218,8 @@ def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurren
             **_journal_identity_fields(phase, seat_key, occurrence, attempt))
     try:
         _path, payload_sha = _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content,
-                                              occurrence, journal_entry=journal_entry)
+                                              occurrence, journal_entry=journal_entry,
+                                              cited_head=cited_head)
     except round_commit.CommitRefused as exc:
         return None, exc
     return payload_sha, None
@@ -7495,9 +7497,12 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     if head_content is not None:
         head_store_path, head_diff_bytes, envelope, payload_sha = _envelope_with_head_diff(
             session_dir, envelope, head_content, rnd, phase, seat, cur_attempt, occurrence)
+    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
     journal_entry = _journal_entry_for_commit(
         session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
-        seat=seat, occurrence=occurrence, **_journal_stored_revision(envelope),
+        seat=seat, occurrence=occurrence,
+        **round_records.recorded_row_fields(envelope, cited_head),
+        **_journal_transport_fields(envelope),
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
@@ -7544,10 +7549,12 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         stored, _lerr = round_records.read_json(spath)
         if not _fixer_head_diff_needs_repair(stored):
             continue
+        cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
         rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt,
                                                    occurrence, cmd=cmd,
                                                    expect_round=expect_round,
-                                                   expect_phase=expect_phase)
+                                                   expect_phase=expect_phase,
+                                                   cited_head=cited_head)
         if detail == "head-diff-unreadable":
             payload = stored.get("payload") if isinstance(stored, dict) else {}
             return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd, attempt=attempt,
@@ -7601,10 +7608,12 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                 if _fixer_head_diff_needs_repair(stored):
                     seat = result.get("seatKey")
                     occurrence = result.get("occurrence") or 0
+                    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
                     rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat,
                                                                attempt, occurrence, cmd=cmd,
                                                                expect_round=expect_round,
-                                                               expect_phase=expect_phase)
+                                                               expect_phase=expect_phase,
+                                                               cited_head=cited_head)
                     if detail == "head-diff-unreadable":
                         payload = stored.get("payload") if isinstance(stored, dict) else {}
                         return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd,
@@ -7635,10 +7644,12 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                     **_journal_transport_fields(stored),
                     **_journal_addressing_fields(expect_round, expect_phase),
                     **_journal_identity_fields(phase, seat, occurrence, attempt))
+                cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
                 try:
                     _unused, rehashed = _store_head_diff(session_dir, rnd, phase, seat, attempt,
                                                          content, occurrence,
-                                                         journal_entry=journal_entry)
+                                                         journal_entry=journal_entry,
+                                                         cited_head=cited_head)
                 except round_commit.CommitRefused as exc:
                     return _commit_refused_response(session_dir, cmd, exc, phase=phase, rnd=rnd,
                                                   attempt=attempt, seat=seat)
@@ -7648,10 +7659,13 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             skey = round_records.storage_key(seat, occurrence)
             spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
             stored_envelope, read_err = round_records.read_json(spath)
-            if read_err is None and isinstance(stored_envelope, dict):
-                revision_fields = _journal_stored_revision(stored_envelope)
-            else:
-                revision_fields = {"payloadSha256": payload_sha}
+            if read_err is not None or not isinstance(stored_envelope, dict):
+                return _refuse_cmd(session_dir, cmd, "recorded-row-store-unreadable",
+                                   fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                                   seat=seat, storePath=spath)
+            cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
+            revision_fields = round_records.recorded_row_fields(stored_envelope, cited_head)
+            revision_fields.update(_journal_transport_fields(stored_envelope))
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
@@ -7778,8 +7792,16 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
         return _refuse_cmd(session_dir, "record-missing", out.get("reason"), phase=phase, rnd=rnd,
                            attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail=out.get("message") or out.get("storePath"))
+    store_path = out.get("storePath")
+    stored_envelope, read_err = round_records.read_json(store_path)
+    if read_err is not None or not isinstance(stored_envelope, dict):
+        return _refuse_cmd(session_dir, "record-missing", "recorded-row-store-unreadable",
+                           fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=cur_attempt,
+                           seat=_slot_label(seat, occurrence), storePath=store_path)
+    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
     _journal_event(session_dir, "record-missing", "recorded", phase=phase, round=rnd,
                    attempt=cur_attempt, seat=seat, occurrence=occurrence, reason=reason,
+                   **round_records.recorded_row_fields(stored_envelope, cited_head),
                    **_journal_addressing_fields(expect_round, expect_phase),
                    **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
@@ -8360,13 +8382,15 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
                                   "seat record that could not carry its session provenance")
     envelope = _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt,
                                                 seat_key, occurrence, payload, session_id)
+    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
     record = {
         "storePath": record_path,
         "envelope": envelope,
         "journal": _journal_entry_for_commit(
             session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence,
-            **_journal_stored_revision(envelope), superseded=False,
+            **round_records.recorded_row_fields(envelope, cited_head), superseded=False,
+            **_journal_transport_fields(envelope),
             **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
     }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
@@ -8476,19 +8500,24 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
         ident = entry.get("recordIdentity")
         if not isinstance(ident, dict) and slot is not None:
             ident = round_records.record_identity(phase, slot[0], slot[1], entry.get("attempt"))
-        revision_fields = {"payloadSha256": entry.get("payloadSha256"),
-                           "casToken": entry.get("casToken")}
-        if slot is not None:
-            seat_key, occurrence = slot
-            entry_attempt = entry.get("attempt")
-            if entry_attempt is not None:
-                skey = round_records.storage_key(seat_key, occurrence)
-                spath = round_records.store_path(session_dir, rnd, phase, skey, entry_attempt)
-                stored_envelope, read_err = round_records.read_json(spath)
-                if read_err is None and isinstance(stored_envelope, dict):
-                    revision_fields = _journal_stored_revision(stored_envelope)
+        storage_key = entry.get("storageKey")
+        entry_attempt = entry.get("attempt")
+        if storage_key is None or entry_attempt is None:
+            return _refuse_cmd(session_dir, "advance", "recorded-row-store-unreadable",
+                               fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                               detail="reappend entry missing storageKey or attempt")
+        spath = round_records.store_path(session_dir, rnd, phase, storage_key, entry_attempt)
+        stored_envelope, read_err = round_records.read_json(spath)
+        if read_err is not None or not isinstance(stored_envelope, dict):
+            seat_key = slot[0] if slot is not None else None
+            return _refuse_cmd(session_dir, "advance", "recorded-row-store-unreadable",
+                               fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                               seat=seat_key, storePath=spath)
+        cited_head = _anchor_cited_head(state, session_dir, rnd, phase, entry_attempt)
+        revision_fields = round_records.recorded_row_fields(stored_envelope, cited_head)
+        revision_fields.update(_journal_transport_fields(stored_envelope))
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
-                       attempt=entry.get("attempt"), seat=slot[0] if slot else None,
+                       attempt=entry_attempt, seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,
                        reappended=True, recordIdentity=ident, **revision_fields)
     orphans = rec.get("journalOrphan") or []

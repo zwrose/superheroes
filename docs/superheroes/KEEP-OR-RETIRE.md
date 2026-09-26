@@ -737,7 +737,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — a single writer for the certified receipt is a load-bearing boundary; no
   engine family applies.
 - **Property.** Hand-landed single-source binding — for a hand-landed seat the binding has one
-  source, the landed envelope: `round_driver._journal_revision_fields` copies `executionEvidence` from
+  source, the landed envelope: `round_records.recorded_row_fields` copies `executionEvidence` from
   that envelope into the `record-result` journal row, so the row the writer reads is derived from the
   same envelope it is compared against, not independent corroboration. The writer resolves evidence by
   provenance — telemetry on the certified head for a dispatch-observed seat, the envelope's
@@ -746,13 +746,28 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   full-panel-confirmed.
 - **Property condition.** Usage-based, 60 days: a hand-landed seat gains an independent record of its
   landing that the journal can cross-check. On firing, a proposal to the owner at a gardening pass.
-- **Property.** A hand-landed envelope carries no cited head at all — neither
-  `round_records.SEAT_RESULT_V2_FIELDS` nor `EXECUTION_EVIDENCE_FIELDS` contains `headSha` — so a
-  hand-landed seat's evidence is bound by the envelope's payload/evidence binding and is never
-  head-bound; the writer's dead read of that absent field has been removed rather than left as a
-  guard that cannot be one.
+- **Property.** The v2 envelope may carry an optional `headSha`, checked against the emission anchor
+  at ingestion; the recorded row's `citedHead` is the anchor head. A hand-landed seat's evidence is
+  bound by the envelope's payload/evidence binding and is never head-bound unless the envelope
+  declares a head.
 - **Property condition.** Usage-based, 60 days: a landed envelope carries a cited head the writer
   can check. On firing, a proposal to the owner at a gardening pass.
+
+#### D32 — The recorded-row revision-identity chokepoint
+
+- **Component.** `round_records.require_complete_revision` at both journal sinks
+  (`round_driver._journal_append` and `round_commit.Commit.add_journal_append`) — refuses a
+  `recorded` row missing any key of `REVISION_IDENTITY_FIELDS` before it reaches disk; refusal
+  tokens `recorded-row-incomplete` / `IncompleteRevisionIdentity`.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `recorded-row-incomplete` or `IncompleteRevisionIdentity` as the thing that blocked a partial
+  recorded row. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one builder (`recorded_row_fields`) and two sink guards so a row missing
+  its revision identity is refused at write time rather than at each call site. No engine family
+  applies.
 
 #### D19 — `check_unrun_review`
 

@@ -1,6 +1,6 @@
 """Producer for round_certification session fixtures — driver test tree only.
 
-Every checked-in fixture journal row is built through ``round_driver._journal_revision_fields``
+Every checked-in fixture journal row is built through ``round_records.recorded_row_fields``
 and every envelope through the production envelope writer helpers in this module.
 """
 import base64
@@ -168,7 +168,7 @@ def production_recorded_journal_row(envelope, *, seat, phase=PANEL_PHASE, attemp
         row["headSha"] = head_sha
     if extra:
         row.update(extra)
-    row.update(RD._journal_revision_fields(envelope))
+    row.update(RR.recorded_row_fields(envelope, head_sha))
     return row
 
 
