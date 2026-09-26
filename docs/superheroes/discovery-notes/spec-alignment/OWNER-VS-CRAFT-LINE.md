@@ -116,3 +116,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Four tests: tests 1, 2 and 4 kept. Test 3 reworded: drop "attention"; it reads "depends on
   how much risk or cost the owner is willing to carry, or on a principle the owner has stated."
   Attention lives only in category 5.
+- Category 1 (what the product means to a person): kept.
