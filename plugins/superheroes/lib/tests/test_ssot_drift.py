@@ -1767,6 +1767,27 @@ _VET_RECEIPT_MARKERS = frozenset({
     "<!-- superheroes:pending-proposals -->",
     "<!-- superheroes:advisor-vet -->",
 })
+# The LIST-MARKER family: payload-carrying markers (the build record's follow-up ids, the vet
+# receipt's disposition ids) read by lib/vet_slot.py. Their payload varies per PR, so they are not
+# exact-byte anchors: they sit outside both literal families above and are never propagated to the
+# copy-holders. test_vet_slot.py binds their taught shapes to the charters and §10.7.
+
+
+def _anchor_markers(text):
+    """Every `<!-- superheroes:... -->` literal in text, minus list-family members.
+
+    A list marker is matched by its name followed by a space, so `followupsX` stays an anchor.
+    """
+    import vet_slot
+
+    list_names = (vet_slot.FOLLOWUPS_MARKER_NAME, vet_slot.DISPOSITIONS_MARKER_NAME)
+    return [
+        m
+        for m in re.findall(r"(<!-- superheroes:[^>]+ -->)", text)
+        if not any(m.startswith("<!-- superheroes:%s " % name) for name in list_names)
+    ]
+
+
 # Closed world over BOTH families: any new marker added to §10.7 fails this test on purpose,
 # forcing a decision about whether it propagates. Never relax this to a subset check.
 _SECTION_10_7_MARKERS = _FLOOR_MARKERS | _VET_RECEIPT_MARKERS
@@ -1819,7 +1840,7 @@ def _omission_floor_expectations_from_home(home):
         terms = [t.strip() for t in re.findall(r"\*\*([^*]+)\*\*", row)]
         assert terms, "no bold load-bearing terms in floor row: %r" % row
         row_terms.append(terms)
-    markers = re.findall(r"(<!-- superheroes:[^>]+ -->)", home)
+    markers = _anchor_markers(home)
     assert set(markers) == set(_SECTION_10_7_MARKERS), (
         "unexpected §10.7 marker set: %r — a new marker must be sorted into "
         "_FLOOR_MARKERS (propagates to every copy-holder) or _VET_RECEIPT_MARKERS "
@@ -2152,6 +2173,31 @@ def test_vet_verdict_form_prose_matches_data_file():
     )
 
 
+def test_list_markers_are_named_in_conventions_10_7():
+    """§10.7 names each list-family marker, and the family is exactly the names vet_slot reads.
+
+    The list family is the one carve-out from the §10.7 closed world, so it is pinned both ways:
+    each name must appear in §10.7 as `<!-- superheroes:<name> `, and the family must equal the
+    names lib/vet_slot.py actually parses — a rename on either side fails here.
+    """
+    import vet_slot
+
+    names = (vet_slot.FOLLOWUPS_MARKER_NAME, vet_slot.DISPOSITIONS_MARKER_NAME)
+    home = _conventions_section_10_7()
+    for name in names:
+        assert "<!-- superheroes:%s " % name in home, (
+            "CONVENTIONS §10.7 does not name the list marker %r" % name
+        )
+        literals = re.findall(r"<!-- superheroes:%s [^\n`]*?-->" % re.escape(name), home)
+        assert literals, "CONVENTIONS §10.7 shows no full %r marker example" % name
+        for literal in literals:
+            try:
+                vet_slot.read_marker_list(literal, name)
+            except vet_slot._Refusal as exc:
+                pytest.fail("CONVENTIONS §10.7 example %r does not parse: %s (%s)"
+                            % (literal, exc.reason, exc.detail))
+
+
 def test_vet_receipt_markers_match_conventions_10_7():
     """§11 + §12.3: the vet-receipt marker literals agree across every hand-maintained copy.
 
@@ -2160,7 +2206,7 @@ def test_vet_receipt_markers_match_conventions_10_7():
     names vet-receipt.md as the authoritative home; this binds the copies to it.
     """
     home = _conventions_section_10_7()
-    in_home = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", home)) - set(_FLOOR_MARKERS)
+    in_home = set(_anchor_markers(home)) - set(_FLOOR_MARKERS)
     assert in_home == set(_VET_RECEIPT_MARKERS), (
         "CONVENTIONS §10.7 names vet-receipt markers %r but _VET_RECEIPT_MARKERS is %r"
         % (sorted(in_home), sorted(_VET_RECEIPT_MARKERS))
@@ -2172,7 +2218,7 @@ def test_vet_receipt_markers_match_conventions_10_7():
     receipt = _read("skills/showrunner/reference/vet-receipt.md")
     section = re.search(r"^## Markers$\n(.*?)(?=^## )", receipt, re.MULTILINE | re.DOTALL)
     assert section, "vet-receipt.md `## Markers` section not found (moved or renamed?)"
-    in_receipt = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", section.group(1)))
+    in_receipt = set(_anchor_markers(section.group(1)))
     assert in_receipt == set(_VET_RECEIPT_MARKERS), (
         "vet-receipt.md `## Markers` lists %r but CONVENTIONS §10.7 names %r — the marker "
         "literals drifted between the home and the section that documents them"
@@ -2186,7 +2232,7 @@ def test_vet_receipt_markers_match_conventions_10_7():
     # be one §10.7 names, and the charter must carry at least one of the vet family it tells the
     # advisor to stamp.
     charter = _read("skills/showrunner/SKILL.md")
-    charter_markers = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", charter))
+    charter_markers = set(_anchor_markers(charter))
     stale = charter_markers - (in_home | set(_FLOOR_MARKERS))
     assert not stale, (
         "showrunner/SKILL.md carries marker literal(s) %r that CONVENTIONS §10.7 does not name — "
@@ -2389,7 +2435,7 @@ def test_stamp_instructions_name_the_body_marker_specifically():
         ("showrunner/SKILL.md duty-4 slot-write bullet", _showrunner_slot_write_bullet()),
         ("workhorse/SKILL.md §11 `## Advisor vet` bullet", _workhorse_advisor_vet_bullet()),
     ):
-        found = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", text))
+        found = set(_anchor_markers(text))
         assert found == {body_marker}, (
             "%s names marker(s) %r; §10.7 says the PR-body marker is %r — a stamp instruction "
             "naming any other marker misdirects the stamp" % (label, sorted(found), body_marker)
