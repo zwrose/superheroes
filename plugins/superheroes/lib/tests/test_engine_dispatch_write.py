@@ -108,9 +108,25 @@ def _legacy_build_ok_stdout():
 
 
 def _contracted_fed_prompt(base):
-    if base and not base.endswith("\n"):
-        return base + "\n" + EA.WRITE_REPORT_CONTRACT
-    return base + EA.WRITE_REPORT_CONTRACT
+    order_part = base
+    if order_part and not order_part.endswith("\n"):
+        order_part = order_part + "\n"
+    prefix = order_part + ("\n" if order_part else "")
+    return prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + EA.WRITE_REPORT_CONTRACT
+
+
+def _expected_staged_write_prompt(base, contract):
+    order_part = base
+    if order_part and not order_part.endswith("\n"):
+        order_part = order_part + "\n"
+    prefix = order_part + ("\n" if order_part else "")
+    return prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + contract
+
+
+_NO_PATTERN_KILL_RULE_LITERAL = (
+    "Never stop processes by name or pattern (`pkill`, `killall`, `kill` on a `pgrep` match); "
+    "other sessions share this machine. Stop only a PID you started yourself."
+)
 
 
 def _finish_codex_write_runner(argv, stdout, prompt_bytes=None, timed_out=False, rc=0, stderr=""):
@@ -840,7 +856,9 @@ def test_write_run_opened_records_fed_prompt(tmp_path):
     records, _ = ED._journal_read(str(tmp_path / "run"))
     opened = next(record for record in records if record.get("kind") == "run-opened")
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
-    expected = prompt_text + ERC.write_result_contract_from_schema(schema)
+    expected = _expected_staged_write_prompt(
+        prompt_text, ERC.write_result_contract_from_schema(schema),
+    )
     assert opened["fedPrompt"] == expected
 
 
@@ -2040,7 +2058,9 @@ def test_write_open_contracts_prompt_once_to_journal_file_and_engine(tmp_path):
     res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path)
     assert res["ok"] is True
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
-    expected = base + ERC.write_result_contract_from_schema(schema)
+    expected = _expected_staged_write_prompt(
+        base, ERC.write_result_contract_from_schema(schema),
+    )
     run_dir = str(tmp_path / "run")
     records, _ = ED._journal_read(run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")
@@ -2051,6 +2071,37 @@ def test_write_open_contracts_prompt_once_to_journal_file_and_engine(tmp_path):
     with open(os.path.join(run_dir, ED.PROMPT_NAME), encoding="utf-8") as fh:
         assert fh.read() == expected
     assert fake.calls[0]["prompt_bytes"] == expected.encode("utf-8")
+
+
+@pytest.mark.parametrize("vendor", ["codex", "cursor"])
+def test_write_prompt_carries_no_pattern_kill_rule(tmp_path, vendor):
+    wt, _main = _linked_worktree(tmp_path)
+    base = "Implement exactly the assigned work order.\n"
+    prompt_path = _prompt(tmp_path, base)
+    seat = _codex_seat() if vendor == "codex" else _cursor_seat()
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path, seat=seat)
+    assert res["ok"] is True
+    run_dir = str(tmp_path / "run")
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    schema = ERC.declared_schema(vendor, ERC.RUN_KIND_WRITE)
+    delivery = ERC.result_delivery(vendor, opened.get("claudeMode") if vendor == "claude" else None)
+    contract = ERC.write_result_contract_from_schema(schema, delivery=delivery)
+    expected = _expected_staged_write_prompt(base, contract)
+    staged_path = os.path.join(run_dir, ED.PROMPT_NAME)
+    with open(staged_path, encoding="utf-8") as fh:
+        staged = fh.read()
+    assert staged == expected
+    assert opened["fedPrompt"] == expected
+    engine_prompt = fake.calls[0]["prompt_bytes"].decode("utf-8")
+    for blob in (staged, opened["fedPrompt"], engine_prompt):
+        assert blob.count(ED.WRITE_DISPATCH_PROCESS_RULE) == 1
+        assert _NO_PATTERN_KILL_RULE_LITERAL in blob
+        assert blob.startswith(base)
+        rule_at = blob.index(ED.WRITE_DISPATCH_PROCESS_RULE)
+        assert rule_at > len(base.rstrip("\n"))
+        assert blob.index(contract) > rule_at
 
 
 def test_write_contracted_report_success_end_to_end(tmp_path):

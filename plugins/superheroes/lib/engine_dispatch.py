@@ -70,6 +70,14 @@ ANTIHIJACK_PREAMBLE = (
     "when the diff alone cannot settle a question. Respond with your review ONLY.\n\n"
 )
 
+# Dispatched write engines never receive the orchestrator's kill-by-PID standing rule in the order
+# body; without an explicit process rule, a field engine used name-pattern kills and took down
+# sibling sessions' processes on a shared machine.
+WRITE_DISPATCH_PROCESS_RULE = (
+    "Never stop processes by name or pattern (`pkill`, `killall`, `kill` on a `pgrep` match); "
+    "other sessions share this machine. Stop only a PID you started yourself."
+)
+
 DEFAULT_SYNC_WAIT = 540          # below the 600 s foreground-conversion boundary (2.1.219)
 MAX_SYNC_WAIT = 540              # hard cap: a caller can ask for less, never more
 MIN_SYNC_WAIT = 0                # a zero slice is legal (open the run, return now); negative is not
@@ -6450,8 +6458,11 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             )
         else:
             contract = engine_adapter.WRITE_REPORT_CONTRACT
-        prompt_sep = "\n" if base and not base.endswith("\n") else ""
-        content = base + prompt_sep + contract
+        order_part = base
+        if order_part and not order_part.endswith("\n"):
+            order_part = order_part + "\n"
+        prefix = order_part + ("\n" if order_part else "")
+        content = prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + contract
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(content)
         staged_prompt_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
