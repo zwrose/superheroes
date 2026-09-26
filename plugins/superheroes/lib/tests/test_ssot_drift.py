@@ -4198,14 +4198,14 @@ def _showrunner_anchor_coverage_bullet():
     return bullet
 
 
-def test_anchor_resolution_bullets_match_between_home_and_workhorse():
+def test_anchor_resolution_bullets_complete_in_home():
     # axis: whitespace-normalized equality of the three resolution bullets across copies
     _anchor_resolution_bullets(
         "skills/showrunner/reference/issue-contract.md"
     )
 
 
-def test_anchor_cursor_rule_clauses_present_in_both_copies():
+def test_anchor_cursor_rule_clauses_present_in_home():
     # axis: synchronized-deletion guard — clauses must appear in the Spec-section bullet
     home_section, home_surface = _anchor_resolution_section(
         "skills/showrunner/reference/issue-contract.md"
@@ -4737,7 +4737,7 @@ def test_pre_doctrine_section_carries_no_register_token():
     )
 
 
-def test_workhorse_intake_repair_template_field_bullets_follow_home_slot_order():
+def test_pre_doctrine_template_slot_order_matches_runtime_slots():
     # axis: copy-holder ORDER — the workhorse field bullets carry the home
     # template's slot sequence, in that order, followed by the separator and
     # original-body fields. The expected sequence is the RUNTIME contract's

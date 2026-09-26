@@ -68,7 +68,8 @@ records the ruling on the issue for the owner's veto; the ruling is the advisor'
 reply within **15 minutes**, or no way on the host to message the advisor, the builder posts the same
 disclosure on the issue and stops, as a park. A build the owner drives, with no advisor named, makes
 the disclosure to the owner in the session. A reply to continue lifts no other size rule. The build
-record's size tripwire row records the outcome; its forms live in the workhorse charter.
+record's size tripwire row records the outcome; its forms live in
+`skills/workhorse/reference/handback.md` § The size tripwire row.
 
 **Two absolute bars stand beside the tripwire**, counted over non-test lines **added or
 modified** — pure deletions, regenerated artifacts (a generated reference doc, a regenerated

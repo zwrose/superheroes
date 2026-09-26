@@ -173,7 +173,8 @@ intake, with two duties before any work resumes. **First, sweep for work the dea
 pushed.** Its worktrees and branches hold commits that no PR list or `gh` query shows. Reconcile
 them against the pushed tip, and adjudicate every piece of residue as **integrated**, **subsumed**,
 or **contested** in your first durable post. Carry the adjudication and its reasoning, not the
-residue itself, and redact anything you quote. **Second, treat every claim you inherit as
+residue itself, and redact anything you quote, and state the redaction, never drop it by
+omission. **Second, treat every claim you inherit as
 unverified until you re-run it yourself** (§8). A receipt that was claimed is not a receipt that
 was earned. **The resume-or-adopt call is the advisor's, not yours.**
 
@@ -552,7 +553,11 @@ and green receipts sit in the build record, and every claim nothing covers is ma
 check-runner** (`agents/check-runner.md`): a plain shell task that runs what you author and writes
 raw output to files you name. It renders no judgment and certifies nothing. So its captures are
 evidence you read off disk, and its prose is never the receipt. **Resolve its model through the
-gate** with role `mechanical`, the host's own vendor, and a null model. An allowlist refusal that
+gate** with the `--seat` bundle
+`{"vendor":"<claude|codex>","model":null,"effort":null,"role":"mechanical"}`: the `effort` key is
+required (null allowed), and the vendor is the registry token (`claude` on the Claude host, `codex`
+on Codex), never a family name; the gate's results are in
+`skills/workhorse/reference/orders.md` § The model gate. An allowlist refusal that
 names no model means you run the commands yourself and disclose it. Any other refusal parks.
 
 **Done when:** the first line of each capture reads `# ran: <command>` for the command you authored, the
