@@ -8,7 +8,7 @@
 - [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)
 - [`--ignore-event` and re-arming](#--ignore-event-and-re-arming)
 - [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-wedge)
-- [The quiet window, and the number behind it](#the-quiet-window-and-the-number-behind-it)
+- [The quiet window, and the number behind it](#the-quiet-window)
 - [Timing flags](#timing-flags)
 - [What it tells you](#what-it-tells-you)
 - [The boundary the owner accepted](#the-boundary-the-owner-accepted)
@@ -192,8 +192,10 @@ not a pattern to keep.
 ## Before treating `lane-stale` as a wedge
 
 `lane-stale` is a **wedged builder**: a started lane whose recorded leader pid is positively live,
-with no terminal heartbeat (`parked` / `handback`) and no `blocked` stamp, whose session transcript
-is colder than the quiet window **or** cannot be resolved. That is the wedge. The one-shot `run`
+with no terminal heartbeat (`parked` / `handback`), whose session transcript is colder than the
+quiet window **or** cannot be resolved. Only a terminal stamp (`parked` / `handback`) takes a
+lane out of this check — a `blocked` lane stays in it, so `lane-blocked` wins precedence and
+`lane-stale` surfaces under `alsoObserved` or fires when `lane-blocked` is ignored. That is the wedge. The one-shot `run`
 verb applies the same rule, so a scheduled `run` reports a wedged lane even when no watch loop is
 armed.
 
@@ -240,8 +242,10 @@ lane.
 
 Liveness uses one quiet window for every lane: `LIVENESS_QUIET_WINDOW_SECONDS` in
 `lib/heartbeat.py` (bound in `lib/wave_watch.py`). The field-check narrative and measured
-counts live in the module comment beside that constant. No per-lane promise exists;
-`builder-exited` still surfaces a lane whose pid dies regardless of transcript age.
+counts live in the module comment beside that constant in `lib/heartbeat.py`. No per-lane
+promise exists; a lane whose transcript file does not exist yet gets the same window measured
+from its recorded start and alerts once that window passes. `builder-exited` still surfaces a
+lane whose pid dies regardless of transcript age.
 
 ## Timing flags
 

@@ -127,3 +127,91 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch.py::test_lane_stale_no_sess
 .                                                                        [100%]
 1 passed in 8.91s
 ```
+
+## 3 — startup grace for absent transcript (inside window is not stale)
+
+- **Guarded element:** `plugins/superheroes/lib/wave_watch.py` `_transcript_cold` (~704), axis: STARTUP GRACE — plain absence before the first transcript line is not stale while the lane is still inside the quiet window from start.
+- **Neutralization:**
+
+```
+-            if not ambiguous and not unresolved:
++            if False and not ambiguous and not unresolved:
+```
+
+- **Node:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_absent_transcript_inside_startup_grace_no_lane_stale`
+- **Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_absent_transcript_inside_startup_grace_no_lane_stale ___________
+
+    def test_absent_transcript_inside_startup_grace_no_lane_stale(tmp_path, monkeypatch):
+        ...
+>       assert result["event"] == "timer"
+E       AssertionError: assert 'lane-stale' == 'timer'
+E         
+E         - timer
+E         + lane-stale
+
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_wave_watch.py::test_absent_transcript_inside_startup_grace_no_lane_stale
+1 failed in 13.77s
+```
+
+- **Restore:** remove `False and ` from the grace guard (inverse of neutralization). Restored line:
+
+```
+            if not ambiguous and not unresolved:
+```
+
+- **Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 9.32s
+```
+
+## 4 — startup grace upper bound (past window is stale)
+
+- **Guarded element:** `plugins/superheroes/lib/wave_watch.py` `_transcript_cold` (~713), axis: STARTUP GRACE — absence suppresses only while `0 <= startup_age <= LIVENESS_QUIET_WINDOW_SECONDS`.
+- **Neutralization:**
+
+```
+-                        if 0 <= startup_age <= LIVENESS_QUIET_WINDOW_SECONDS:
++                        if 0 <= startup_age:
+```
+
+- **Node:** `plugins/superheroes/lib/tests/test_wave_watch.py::test_absent_transcript_past_startup_grace_emits_lane_stale`
+- **Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_absent_transcript_past_startup_grace_emits_lane_stale __________
+
+    def test_absent_transcript_past_startup_grace_emits_lane_stale(tmp_path, monkeypatch):
+        ...
+>       assert result["event"] == "lane-stale"
+E       AssertionError: assert 'timer' == 'lane-stale'
+E         
+E         - lane-stale
+E         + timer
+
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_wave_watch.py::test_absent_transcript_past_startup_grace_emits_lane_stale
+1 failed in 13.60s
+```
+
+- **Restore:** reinstate the `<= LIVENESS_QUIET_WINDOW_SECONDS` upper bound. Restored line:
+
+```
+                        if 0 <= startup_age <= LIVENESS_QUIET_WINDOW_SECONDS:
+```
+
+- **Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 7.11s
+```

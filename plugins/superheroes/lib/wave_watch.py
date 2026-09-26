@@ -33,7 +33,9 @@ Contract:
   stack-state-changed (E4) > pr-set-changed (E5) > lane-stale (E6) > timer (E7).
 - lane-stale: a started lane whose latest recorded pid is positively live and whose
   own session transcript was not written within LIVENESS_QUIET_WINDOW_SECONDS — a
-  wedged builder alive but frozen past the quiet window. Only terminal stamps
+  wedged builder alive but frozen past the quiet window. A lane whose transcript
+  file does not exist yet gets the same window measured from its recorded start.
+  Only terminal stamps
   (parked/handback) are excluded from this check; blocked lanes stay candidates so
   lane-blocked can win precedence while lane-stale still surfaces in alsoObserved.
 - Transcript liveness (#1023, #1484): lane-stale fires when the lane's session
@@ -132,9 +134,7 @@ _TRANSCRIPT_DEFAULT_CONFIG_DIR = "~/.claude"
 _PROJECTS_DIR_NAME = "projects"
 _TRANSCRIPT_SUFFIX = ".jsonl"
 
-# Field check 2026-09-26: 3,599 builder-worktree transcripts from the prior 30 days,
-# 947,140 inter-entry gaps; 15 exceed 2,700 s and 13 of those exceed 5,400 s (a
-# session that stopped and resumed, not a working step).
+# Value and field-check narrative: lib/heartbeat.py LIVENESS_QUIET_WINDOW_SECONDS.
 LIVENESS_QUIET_WINDOW_SECONDS = hb.LIVENESS_QUIET_WINDOW_SECONDS
 
 RESULT_KEY_PASSED_OVER = "passedOver"
@@ -700,6 +700,18 @@ def _transcript_cold(
         # bite-axis: DIRECTION of failure — an unresolvable transcript alerts, never
         # suppresses.
         if mtime is None:
+            # bite-axis: STARTUP GRACE — plain absence before the first transcript line
+            # is not stale while the lane is still inside the quiet window from start.
+            if not ambiguous and not unresolved:
+                session_id = lane_info.get("sessionId")
+                if isinstance(session_id, str) and session_id.strip():
+                    started_ts = lane_info.get("startedTs")
+                    if isinstance(started_ts, (int, float)) and not isinstance(
+                        started_ts, bool,
+                    ) and math.isfinite(started_ts):
+                        startup_age = lane_now - started_ts
+                        if 0 <= startup_age <= LIVENESS_QUIET_WINDOW_SECONDS:
+                            continue
             still_stale.append({
                 "launchId": lid,
                 "state": hb_states.get(lid),

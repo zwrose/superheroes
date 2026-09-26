@@ -75,11 +75,11 @@ def _reserved(launch_id, batch_id, surfaces, repo_root, **extra):
     return rec
 
 
-def _started(launch_id, attempt=1, pid=999999):
+def _started(launch_id, attempt=1, pid=999999, ts=None):
     return {
         "event": "started",
         "launchId": launch_id,
-        "ts": time.time(),
+        "ts": time.time() if ts is None else ts,
         "schema": ll.SCHEMA,
         "attempt": attempt,
         "pid": pid,
@@ -1275,7 +1275,10 @@ def test_precedence_builder_exited_beats_lane_stale(tmp_path, monkeypatch):
             sessionId=_TEST_SESSION_ID,
         ),
     )
-    ll.append(repo, _started("lane-stale", pid=live_pid))
+    ll.append(
+        repo,
+        _started("lane-stale", pid=live_pid, ts=time.time() - 10_000),
+    )
     _point_config_dir_at(tmp_path, monkeypatch)
     hb.stamp(
         repo,
@@ -3822,7 +3825,7 @@ _UNSET = object()   # "caller said nothing", distinct from an explicit None
 def _stale_lane_with_worktree(
     repo, tmp_path, monkeypatch, *, worktree, session_id=_TEST_SESSION_ID,
     launch_id="lane-a", batch_id="batch-982", transcript_age_seconds=_UNSET,
-    config_dir=None,
+    config_dir=None, started_ts=None,
 ):
     """Pid-live lane with session id on the ledger and a cold/absent transcript."""
     store_root = _ledger_env(tmp_path, monkeypatch)
@@ -3839,7 +3842,13 @@ def _stale_lane_with_worktree(
         repo,
         _reserved(launch_id, batch_id, ["plugins/superheroes/lib"], repo, **extra),
     )
-    ll.append(repo, _started(launch_id, pid=os.getpid()))
+    if started_ts is None:
+        started_ts = (
+            time.time() - 10_000
+            if transcript_age_seconds is _UNSET
+            else time.time()
+        )
+    ll.append(repo, _started(launch_id, pid=os.getpid(), ts=started_ts))
     hb.stamp(
         repo,
         state="working",
@@ -4004,7 +4013,9 @@ def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, request
         _write_session_transcript(config_dir, session_id, age_seconds=60, bucket="a")
         _write_session_transcript(config_dir, session_id, age_seconds=60, bucket="b")
     elif shape == "transcript-colder-than-window":
-        _write_session_transcript(config_dir, session_id, age_seconds=2701)
+        _write_session_transcript(
+            config_dir, session_id, age_seconds=ww.LIVENESS_QUIET_WINDOW_SECONDS + 1,
+        )
     elif shape == "transcript-dated-in-the-future":
         _write_session_transcript(config_dir, session_id, age_seconds=-3600)
     elif shape == "transcript-is-a-directory":
@@ -4090,6 +4101,106 @@ def test_transcript_cold_quiet_window_boundary_unit():
         session_transcript_mtime=lambda sid, env, cfg=None: (
             now - window - 1, False, False,
         ),
+    )
+    assert len(still) == 1
+
+
+def test_absent_transcript_inside_startup_grace_no_lane_stale(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(
+        repo,
+        _reserved(
+            "lane-a", "batch-982", ["lib"], repo,
+            worktree=worktree, sessionId=_TEST_SESSION_ID,
+        ),
+    )
+    ll.append(
+        repo, _started("lane-a", pid=os.getpid(), ts=time.time() - 60),
+    )
+    hb.stamp(repo, state="working", phase="watch", launch_id="lane-a")
+    _point_config_dir_at(tmp_path, monkeypatch)
+
+    result = ww.watch_arm(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+
+    assert result["ok"] is True
+    assert result["event"] == "timer"
+    assert result["event"] != "lane-stale"
+
+
+def test_absent_transcript_past_startup_grace_emits_lane_stale(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(
+        repo,
+        _reserved(
+            "lane-a", "batch-982", ["lib"], repo,
+            worktree=worktree, sessionId=_TEST_SESSION_ID,
+        ),
+    )
+    ll.append(
+        repo, _started("lane-a", pid=os.getpid(), ts=time.time() - 10_000),
+    )
+    hb.stamp(repo, state="working", phase="watch", launch_id="lane-a")
+    _point_config_dir_at(tmp_path, monkeypatch)
+
+    result = ww.watch_arm(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+
+    assert result["ok"] is True
+    assert result["event"] == "lane-stale"
+
+
+def test_absent_transcript_without_started_ts_emits_lane_stale():
+    now = 10_000.0
+    live_lanes = {"lane-a": {"sessionId": _TEST_SESSION_ID}}
+    live_candidates = [{"launchId": "lane-a"}]
+    hb_states = {"lane-a": "working"}
+    still = ww._transcript_cold(
+        live_candidates, live_lanes, os.environ,
+        hb_states=hb_states, now=now,
+        session_transcript_mtime=lambda sid, env, cfg=None: (None, False, False),
+    )
+    assert len(still) == 1
+
+
+def test_startup_grace_never_covers_ambiguous_or_unresolved():
+    now = 10_000.0
+    started_ts = now - 60
+    live_lanes = {
+        "lane-a": {"sessionId": _TEST_SESSION_ID, "startedTs": started_ts},
+    }
+    live_candidates = [{"launchId": "lane-a"}]
+    hb_states = {"lane-a": "working"}
+    for mtime_result in ((None, True, False), (None, False, True)):
+        still = ww._transcript_cold(
+            live_candidates, live_lanes, os.environ,
+            hb_states=hb_states, now=now,
+            session_transcript_mtime=lambda sid, env, cfg=None, _r=mtime_result: _r,
+        )
+        assert len(still) == 1
+
+
+def test_startup_grace_future_started_ts_emits_lane_stale():
+    now = 10_000.0
+    live_lanes = {
+        "lane-a": {"sessionId": _TEST_SESSION_ID, "startedTs": now + 5},
+    }
+    live_candidates = [{"launchId": "lane-a"}]
+    hb_states = {"lane-a": "working"}
+    still = ww._transcript_cold(
+        live_candidates, live_lanes, os.environ,
+        hb_states=hb_states, now=now,
+        session_transcript_mtime=lambda sid, env, cfg=None: (None, False, False),
     )
     assert len(still) == 1
 
@@ -4249,7 +4360,12 @@ def test_without_a_recorded_config_dir_only_the_env_root_resolves(
     root_a.mkdir()
     root_b.mkdir()
     _stale_lane_with_worktree(
-        repo, tmp_path, monkeypatch, worktree=worktree, transcript_age_seconds=10_000,
+        repo,
+        tmp_path,
+        monkeypatch,
+        worktree=worktree,
+        transcript_age_seconds=10_000,
+        started_ts=time.time() - 10_000,
     )
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root_b))
     _write_session_transcript(root_a, _TEST_SESSION_ID, age_seconds=120)

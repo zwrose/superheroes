@@ -28,6 +28,9 @@ HEARTBEATS_DIR_NAME = "heartbeats"
 SCHEMA = 1
 # One home for the transcript liveness quiet window; wave_watch binds to this value.
 # Also written as staleAfterSeconds on stamp so pre-change watchers apply the same window.
+# Field check 2026-09-26: 3,599 builder-worktree transcripts from the prior 30 days,
+# 947,140 inter-entry gaps; 15 exceed 2,700 s and 13 of those exceed 5,400 s (a
+# session that stopped and resumed, not a working step).
 LIVENESS_QUIET_WINDOW_SECONDS = 2700
 
 STATES = frozenset({
