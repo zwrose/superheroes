@@ -1363,12 +1363,14 @@ canonical ruling record is `LEDGERS.md` §4.
 
 ## 15. Builder liveness heartbeat
 
-> **Cross-boundary contract** (§11). The builder stamps semantic liveness; the advisor's wave sweep
-> reads it. `plugins/superheroes/lib/heartbeat.py`'s module constants are **authoritative**; prose
-> copies in charters and this section are pinned to them by a drift test.
+> **Cross-boundary contract** (§11). The builder stamps lane endings and blockers; liveness is one
+> shared rule in `lib/wave_watch.py`. `plugins/superheroes/lib/heartbeat.py`'s module constants are
+> **authoritative** for the heartbeat; prose copies in charters and this section are pinned by a drift
+> test.
 
 **Producer:** the workhorse builder (`skills/workhorse/SKILL.md` — stamp duty in §7).
-**Consumer:** the showrunner's scheduled heartbeat sweep (`skills/showrunner/SKILL.md` duty 9).
+**Consumers:** the showrunner's scheduled liveness sweep (`skills/showrunner/SKILL.md` duty 9);
+`lib/wave_watch.py` for `lane-terminal` and `lane-blocked`.
 
 **Path:** `<root>/<repoId>/heartbeats/<launchId>.json`, `0700` directories, `0600` files.
 
@@ -1379,7 +1381,7 @@ canonical ruling record is `LEDGERS.md` §4.
 `^[A-Za-z0-9_-]{1,64}$`.
 
 **Record fields:** `schema` (`1`), `launchId`, `issue`, `state`, `phase`, `lastDispatch`, `ts`,
-`staleAfterSeconds`, `note`.
+`note`.
 
 **`lastDispatch` sub-schema** (optional; `null` when absent): `kind`, `engine`, `model`, `runId`
 (non-empty strings), `startedAt` (non-empty ISO-8601 UTC string, e.g. `2026-08-01T14:00:00Z`).
@@ -1387,25 +1389,26 @@ canonical ruling record is `LEDGERS.md` §4.
 **States:** `working`, `awaiting-dispatch`, `blocked`, `parked`, `handback`. **Terminal:**
 `parked`, `handback`.
 
-**Sweep classes:** `fresh`, `stale`, `terminal`, `unknown`.
+**Sweep classes:** `terminal`, `nonterminal`, `unknown`. `nonterminal` means a valid stamp in a
+non-terminal state and says nothing about liveness.
 
 **Verbs:** `stamp`, `read`, `sweep`.
 
-**Default promise.** A caller that states no `staleAfterSeconds` gets
-`heartbeat.DEFAULT_STALE_AFTER_SECONDS` = **24000** seconds — floored at 2× the worst *benign*
-inter-stamp gap measured on the reference host (11960 s, over 45 gaps across 10 builder lanes, 44 of
-them benign). The prior 300 s default was below every real build's stamping cadence, so an omitting
-caller read `stale` within five minutes. A builder that states its own promise is unaffected.
+**Liveness.** One rule for every reader: the lane's recorded leader pid is positively live **and** the
+lane's own session transcript — resolved by the launch record's session id and config root, **stat
+only** (the existing identity rule) — was written within `LIVENESS_QUIET_WINDOW_SECONDS` in `lib/heartbeat.py` (re-exported by
+`lib/wave_watch.py`). A lane whose transcript file does not exist yet gets the same window from its
+recorded start. No per-lane promise exists. A Codex-hosted builder has no Claude session
+transcript, so it would alert `lane-stale` (fail toward alert) where a stamp used to vouch for it;
+today's launcher spawns only `claude -p` builders.
 
-**Semantic core.** The builder stamps `staleAfterSeconds` — its own promise about when it will next
-stamp. A lane is late only when it has outrun **the promise it made itself** — semantic liveness, not
-another mtime watchdog. A builder inside a nine-minute dispatch is not a false alarm. The corpus holds
-**3 watchdog design failures and 3 false alarms** from mtime and process-table signals.
-
-**Fail-closed direction.** A missing, unreadable, corrupt, schema-skewed, non-finite or **future-dated**
-heartbeat classifies `unknown`, never `fresh`. A ledger failure makes the sweep **refuse at the top
-level** rather than return an empty, healthy-looking result. The sweep **never asserts that a lane is
-dead** — a heartbeat cannot prove death.
+**Fail-closed direction.** A missing, unreadable, corrupt, schema-skewed, non-finite or
+**future-dated** heartbeat classifies `unknown`, never `nonterminal` or `terminal`. A ledger
+failure makes the sweep **refuse at the top level** rather than return an empty,
+healthy-looking result. The sweep **never asserts that a lane is dead** — a heartbeat cannot
+prove death. The retired next-stamp promise field is still written, with a fixed value, so readers older
+than this contract can load new stamps; every reader here ignores it, and an older record carrying any
+value in it loads normally.
 
 **Accepted storage bound.** The store keeps **one small JSON file per launch, retained indefinitely**
 — nothing reaps them, and the sweep ignores launches the ledger no longer reports live, so those

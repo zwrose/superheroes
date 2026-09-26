@@ -7,6 +7,7 @@ import time
 import pytest
 
 import heartbeat as hb
+import wave_watch as ww
 import launch_ledger as ll
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -113,7 +114,6 @@ def _good_stamp_kwargs(**overrides):
         "state": "working",
         "phase": "dispatch",
         "launch_id": "lane-a",
-        "stale_after_seconds": 300,
         "now": 1_000_000.0,
     }
     base.update(overrides)
@@ -138,7 +138,6 @@ def _base_record(launch_id="lane-a", **overrides):
         "phase": "dispatch",
         "lastDispatch": None,
         "ts": 1_000_000.0,
-        "staleAfterSeconds": 300,
         "note": None,
     }
     rec.update(overrides)
@@ -262,34 +261,6 @@ def test_stamp_refuses_non_finite_now(tmp_path, monkeypatch):
     assert not os.path.isfile(hb.heartbeat_path(repo, "nan-lane")["path"])
 
 
-@pytest.mark.parametrize(
-    "bad_stale,expected_reason",
-    [
-        (float("nan"), "heartbeat-corrupt"),
-        (float("inf"), "heartbeat-corrupt"),
-        (True, "heartbeat-stale-after-invalid"),
-        (False, "heartbeat-stale-after-invalid"),
-        ("300", "heartbeat-stale-after-invalid"),
-        (-1, "heartbeat-stale-after-invalid"),
-        (0, "heartbeat-stale-after-invalid"),
-        (86401, "heartbeat-stale-after-invalid"),
-    ],
-)
-def test_edge_05_non_finite_or_invalid_stale_after(
-    tmp_path, monkeypatch, bad_stale, expected_reason,
-):
-    repo = _init_repo(tmp_path / "repo")
-    launch_id = "bad-stale"
-    _declare_and_reserve(repo, launch_id, monkeypatch, tmp_path)
-    _write_heartbeat_file(
-        repo, launch_id, _base_record(launch_id, staleAfterSeconds=bad_stale),
-    )
-    result = hb.read_heartbeat(repo, launch_id, now=1_000_000.0)
-    assert result["class"] == "unknown"
-    assert result["class"] != "fresh"
-    assert result["reason"] == expected_reason
-
-
 def test_edge_06_invalid_state(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     launch_id = "bad-state"
@@ -406,11 +377,11 @@ def test_edge_10_never_reports_dead(tmp_path, monkeypatch):
     now = 1_000_000.0
     _write_heartbeat_file(
         repo, launch_id,
-        _base_record(launch_id, ts=now - 10_000, staleAfterSeconds=60),
+        _base_record(launch_id, ts=now - 10_000),
     )
     result = hb.sweep(repo, now=now)
     entry = next(e for e in result["launches"] if e["launchId"] == launch_id)
-    assert entry["class"] == "stale"
+    assert entry["class"] == "nonterminal"
     assert "dead" not in entry
     assert entry.get("class") != "dead"
 
@@ -418,30 +389,82 @@ def test_edge_10_never_reports_dead(tmp_path, monkeypatch):
 # --- classification boundaries ------------------------------------------------
 
 
-def test_fresh_at_exactly_stale_boundary(tmp_path, monkeypatch):
+def test_nonterminal_record_classifies_nonterminal_without_promise(
+    tmp_path, monkeypatch,
+):
     repo = _init_repo(tmp_path / "repo")
-    launch_id = "boundary"
+    launch_id = "age-lane"
     now = 1_000_000.0
     _declare_and_reserve(repo, launch_id, monkeypatch, tmp_path)
-    _write_heartbeat_file(
-        repo, launch_id,
-        _base_record(launch_id, ts=now - 300, staleAfterSeconds=300),
-    )
-    result = hb.read_heartbeat(repo, launch_id, now=now)
-    assert result["class"] == "fresh"
+    for age_seconds in (1, 864000):
+        _write_heartbeat_file(
+            repo, launch_id,
+            _base_record(launch_id, ts=now - age_seconds),
+        )
+        result = hb.read_heartbeat(repo, launch_id, now=now)
+        assert result["class"] == "nonterminal"
 
 
-def test_stale_one_second_past_boundary(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "stale_after",
+    [
+        "absent",
+        1800,
+        0,
+        -5,
+        "x",
+        None,
+        True,
+        1.5,
+        10**12,
+    ],
+    ids=[
+        "absent",
+        "1800",
+        "0",
+        "-5",
+        "x",
+        "None",
+        "True",
+        "1.5",
+        "1e12",
+    ],
+)
+def test_old_record_stale_after_field_is_ignored(
+    tmp_path, monkeypatch, stale_after,
+):
     repo = _init_repo(tmp_path / "repo")
-    launch_id = "past-boundary"
+    launch_id = "old-promise"
     now = 1_000_000.0
     _declare_and_reserve(repo, launch_id, monkeypatch, tmp_path)
-    _write_heartbeat_file(
-        repo, launch_id,
-        _base_record(launch_id, ts=now - 301, staleAfterSeconds=300),
-    )
+    rec = _base_record(launch_id, ts=now - 100)
+    if stale_after != "absent":
+        rec["staleAfterSeconds"] = stale_after
+    _write_heartbeat_file(repo, launch_id, rec)
     result = hb.read_heartbeat(repo, launch_id, now=now)
-    assert result["class"] == "stale"
+    assert result["class"] == "nonterminal"
+    assert result["state"] == "working"
+    assert result["phase"] == "dispatch"
+    assert "staleAfterSeconds" not in result
+
+
+def test_stamp_writes_the_legacy_field_for_older_readers(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    now = 1_000_000.0
+    result = hb.stamp(
+        repo,
+        state="working",
+        phase="p",
+        launch_id="no-promise",
+        now=now,
+    )
+    assert result["ok"] is True
+    with open(result["path"], encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    v = on_disk["staleAfterSeconds"]
+    assert v == hb.LIVENESS_QUIET_WINDOW_SECONDS == ww.LIVENESS_QUIET_WINDOW_SECONDS
+    assert isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 86400
 
 
 def test_stamp_and_read_round_trip(tmp_path, monkeypatch):
@@ -454,7 +477,6 @@ def test_stamp_and_read_round_trip(tmp_path, monkeypatch):
         phase="implement",
         launch_id="lane-rt",
         issue=657,
-        stale_after_seconds=120,
         now=now,
     )
     assert result["ok"] is True
@@ -464,7 +486,7 @@ def test_stamp_and_read_round_trip(tmp_path, monkeypatch):
     dir_mode = os.stat(beats_dir).st_mode & 0o777
     assert dir_mode == 0o700
     read_back = hb.read_heartbeat(repo, "lane-rt", now=now + 1)
-    assert read_back["class"] == "fresh"
+    assert read_back["class"] == "nonterminal"
     assert read_back["state"] == "working"
 
 
@@ -473,10 +495,9 @@ def test_stamp_rejects_invalid_on_write(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     result = hb.stamp(
         repo,
-        state="working",
+        state="dead",
         phase="x",
         launch_id="lane-bad",
-        stale_after_seconds=0,
         now=1_000_000.0,
     )
     assert result["ok"] is False
@@ -650,7 +671,6 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
         wt,
         state="working",
         phase="child-dispatch",
-        stale_after_seconds=600,
         now=now,
         env=child_env,
     )
@@ -659,7 +679,7 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
     sweep_result = hb.sweep(repo, env=os.environ, now=now + 1)
     assert sweep_result["ok"] is True
     entry = next(e for e in sweep_result["launches"] if e["launchId"] == launch_id)
-    assert entry["class"] == "fresh"
+    assert entry["class"] == "nonterminal"
     assert entry["phase"] == "child-dispatch"
 
 
@@ -704,6 +724,10 @@ def test_cli_stamp_prints_json(tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out.strip())
     assert rc == 0
     assert out["ok"] is True
+    path_result = hb.heartbeat_path(repo, "cli-lane")
+    with open(path_result["path"], encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk["staleAfterSeconds"] == hb.LIVENESS_QUIET_WINDOW_SECONDS
 
 
 def test_cli_read_prints_json(tmp_path, monkeypatch, capsys):
@@ -716,14 +740,13 @@ def test_cli_read_prints_json(tmp_path, monkeypatch, capsys):
         phase="p",
         launch_id="cli-read",
         now=fixed_now,
-        stale_after_seconds=3600,
     )
     monkeypatch.setattr(hb.time, "time", lambda: fixed_now + 1)
     rc = hb.main(["read", "--repo-root", repo, "--launch-id", "cli-read"])
     out = json.loads(capsys.readouterr().out.strip())
     assert rc == 0
     assert out["ok"] is True
-    assert out["class"] == "fresh"
+    assert out["class"] == "nonterminal"
 
 
 # --- F1: sweep always emits in-contract classes --------------------------------
@@ -777,7 +800,7 @@ def test_last_dispatch_iso_started_at_accepted(tmp_path, monkeypatch):
     )
     assert result["ok"] is True
     read_back = hb.read_heartbeat(repo, "iso-lane", now=now)
-    assert read_back["class"] == "fresh"
+    assert read_back["class"] == "nonterminal"
     assert read_back["lastDispatch"]["startedAt"] == "2026-08-01T14:00:00Z"
 
 
@@ -848,55 +871,3 @@ def test_cli_stamp_accepts_iso_last_dispatch_started_at(tmp_path, monkeypatch, c
     out = json.loads(capsys.readouterr().out.strip())
     assert rc == 0
     assert out["ok"] is True
-
-
-# --- floored default promise (#1023) ------------------------------------------
-
-
-def test_default_stale_after_clears_twice_the_worst_measured_benign_gap():
-    # The floor is DERIVED from the measurement's authoritative home, never restated
-    # here — a second hardcoded copy is the cross-boundary drift this avoids.
-    m = hb.STALE_AFTER_MEASUREMENT
-    assert hb.DEFAULT_STALE_AFTER_SECONDS >= m["multiplier"] * m["worstBenignGapSeconds"]
-    assert hb.DEFAULT_STALE_AFTER_SECONDS <= hb._STALE_AFTER_MAX
-    assert m["benignGaps"] <= m["gaps"]
-
-
-def test_stamp_without_a_promise_uses_the_floored_default(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
-    result = hb.stamp(repo, state="working", phase="build", launch_id="lane-a")
-    assert result["ok"] is True
-    assert hb.read_heartbeat(repo, "lane-a")["staleAfterSeconds"] == (
-        hb.DEFAULT_STALE_AFTER_SECONDS
-    )
-
-
-def test_a_long_step_no_longer_classifies_stale_under_the_default(
-    tmp_path, monkeypatch,
-):
-    # A builder an hour into a dispatch, having stated no promise of its own:
-    # `stale` on the old 300 s default, `fresh` on the floored one.
-    repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
-    hb.stamp(
-        repo, state="working", phase="build", launch_id="lane-a",
-        now=time.time() - 3600,
-    )
-    assert hb.read_heartbeat(repo, "lane-a")["class"] == "fresh"
-
-
-def test_cli_stamp_default_promise_matches_the_module_constant(
-    tmp_path, monkeypatch, capsys,
-):
-    repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
-    monkeypatch.setenv(hb.LAUNCH_ID_ENV, "lane-cli")
-    rc = hb.main([
-        "stamp", "--repo-root", repo, "--state", "working", "--phase", "build",
-    ])
-    capsys.readouterr()
-    assert rc == 0
-    assert hb.read_heartbeat(repo, "lane-cli")["staleAfterSeconds"] == (
-        hb.DEFAULT_STALE_AFTER_SECONDS
-    )

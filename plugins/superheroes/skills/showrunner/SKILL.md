@@ -948,16 +948,18 @@ above).
    other, its dispatch record names the **branch and the sha it adopted**, and **record the dead
    builder's terminal outcome** with `record-outcome` before its successor launches — an unrecorded
    death makes the batch `indeterminate` and the successor's own outcome cannot repair it.
-   **Scheduled heartbeat sweep (wave orchestration duty).** An advisor **orchestrating a wave owes a
-   scheduled heartbeat sweep** that resumes stalled lanes — not a one-off rescue when something feels
-   wrong. Run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" sweep --repo-root <repo-root>`,
-   read the classes, and **act**: resume or investigate. `stale`
-   means the lane outran **its own promise** (`staleAfterSeconds` the builder stamped); `unknown`
-   means the signal could not be read and is **actionable, not clean**; `terminal` on a launch the
-   ledger still reports live is **actionable pending `record-outcome`**, never a resolved lane. The
-   sweep **reports; it never asserts a lane is dead** — a heartbeat cannot prove death — and it never
-   resumes anything on its own; **you** act on what it reports. Ground this in the field evidence:
-   six lanes, zero handbacks by morning on harness 2.1.219, recovered only by an advisor sweep.
+   **Scheduled liveness sweep (wave orchestration duty).** An advisor **orchestrating a wave owes a
+   scheduled two-read sweep** — not a one-off rescue when something feels wrong. Run
+   `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/wave_watch.py" run --repo-root <repo-root> --batch <id>`
+   per live batch for **liveness**: `lane-stale` means the pid is live and the session transcript is
+   quiet past `LIVENESS_QUIET_WINDOW_SECONDS` or could not be resolved — investigate or resume. Run
+   `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" sweep --repo-root <repo-root>` for
+   **endings**: `terminal` on a launch the ledger still reports live is **actionable pending
+   `record-outcome`**, never a resolved lane; `unknown` is **actionable, not clean**; `nonterminal`
+   says nothing about liveness. The sweep **reports; never asserts a lane is dead** — a heartbeat
+   cannot prove death — and it never resumes anything on its own; **you** act on what it reports.
+   Ground this in the field evidence: six lanes, zero handbacks by morning on harness 2.1.219,
+   recovered only by an advisor sweep.
    **Wave watch (wave orchestration duty).** Arm one harness **background task per batch** — a
    `loop` invocation that re-arms internally — instead of hand-rolling a per-session watch loop.
    There is no daemon to orphan. The arming pattern lives one hop away in
