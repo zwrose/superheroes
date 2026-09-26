@@ -92,6 +92,64 @@ def test_ruling_the_whole_batch_out_never_dispatches_a_fixer(tmp_path):
     assert n["ok"] and n["phase"] != RD.P_FIXER, n
 
 
+def test_a_live_ruling_that_converges_the_session_runs_the_terminal_receipt_gate(tmp_path):
+    """Ruling a whole first fix slice out converges the session inside `rule`; that terminal
+    passes the terminal receipt gate before `rule` answers, so a certification receipt or the
+    refusal a later ruling recovers from is on disk without a `next`."""
+    d = _session_at_fixer(tmp_path, name="rule-converge")
+    rulings = [{"id": k, "ruling": "refuted", "reason": "the verifier misread the guard"}
+               for k in _keys(TRI._state(d)["_fixBatch"])]
+    out = _rule(tmp_path, d, rulings)
+    assert out["ok"] is True, out
+    state = TRI._state(d)
+    assert state.get("terminal"), state.get("step")
+    certified = os.path.exists(os.path.join(d, RD.CERTIFICATION_RECEIPT_FILE))
+    refused = os.path.isfile(os.path.join(d, RD.CERTIFICATION_REFUSAL_FILE))
+    assert certified or refused, "terminal-receipt-gate-skipped"
+    assert "terminalReceipt" in out and "recertified" not in out, out
+    assert out["terminalReceipt"]["certified"] is certified, out
+    assert state.get("_receiptFinalized") is True or state.get("_receiptFaultClass"), state
+
+
+def test_a_terminal_rule_reports_a_receipt_fault_as_its_detail_text(
+        tmp_path, refused_new_issue_session, monkeypatch):
+    """The recertify gate's fault is a ReceiptFault (the detail string itself); the response
+    carries its text rather than crashing on a missing attribute."""
+    d, key = refused_new_issue_session
+    fault = RD.ReceiptFault("receipt write failed", RD.RECEIPT_FAULT_CERTIFICATION)
+    monkeypatch.setattr(RD, "_terminal_receipt_gate", lambda *a, **k: fault)
+    out = _rule(tmp_path, d, [{"id": key, "ruling": "refuted", "reason": "r"}])
+    assert out["ok"] is True, out
+    assert out["recertified"]["receiptFault"] == "receipt write failed", out
+
+
+def _guided_row(key, finding, rnd_disposition, **extra):
+    return dict(finding, **{SC.FINDING_KEY_FIELD: key, "id": key,
+                            "disposition": rnd_disposition}, **extra)
+
+
+def test_a_later_closing_ruling_supersedes_earlier_guidance_in_fixer_history():
+    """Last wins across the whole ruling stream: guidance recorded on round 1 and a closing ruling
+    on round 2 leave no guidance for the finding's round-3 re-raise; within one round a closing
+    ruling after guidance drops that guidance from the order block too."""
+    finding = {"file": "src/g.py", "line": 5, "title": "stale guidance", "severity": "Important"}
+    key = SC.finding_identity_key(finding)
+    guided = _guided_row(key, finding, RD.RULING_GUIDANCE,
+                         **{RD.GATE_GUIDANCE_RECORD_KEY: "old guidance"})
+    closed = _guided_row(key, finding, "refuted", ruling="refuted", reason="unreachable")
+    state = {"round": 3, "_fixBatch": [dict(finding)],
+             "rounds": {"1": {"judgmentDispositions": [guided]}, "2": {"rulings": [closed]},
+                        "3": {}}}
+    assert RD._finding_history(state)[key]["gateRuling"]["disposition"] == "refuted"
+    assert RD._gate_guidance_entries(state, 3) == []
+    same_round = {"round": 1, "_fixBatch": [dict(finding)],
+                  "rounds": {"1": {"rulings": [dict(guided, ruling=RD.RULING_GUIDANCE), closed]}}}
+    assert RD._gate_guidance_entries(same_round, 1) == []
+    guidance_only = {"round": 3, "_fixBatch": [dict(finding)],
+                     "rounds": {"1": {"judgmentDispositions": [guided]}, "3": {}}}
+    assert [e["guidance"] for e in RD._gate_guidance_entries(guidance_only, 3)] == ["old guidance"]
+
+
 def test_ruling_out_a_continuation_slice_enters_post_fix_and_never_redispatches_it(tmp_path):
     """A cap-sliced round: the first slice folded, the second (index 1) is pending. Ruling its only
     finding closed resolves through the continuation leg (post-fix: the round advances to a delta
@@ -318,12 +376,23 @@ def test_a_closing_ruling_during_a_pending_scoped_finder_wave_is_refused_not_los
 
 
 def test_a_step_with_no_declared_wave_reach_refuses_every_closing_ruling():
-    """Fail closed: a step the reach table does not declare reaches every target."""
+    """Fail closed: a step the reach table does not declare reaches every target, so the rule
+    planner refuses a closing ruling on ANY ledgered finding there and folds nothing; the same
+    ruling at a step with a declared, non-reaching wave plans."""
     assert RD._pending_wave_reach({"step": RD.P_VERIFY}) is RD._WAVE_REACH_ALL
-    assert RD._pending_wave_reach({"step": RD.P_VERIFY, "_verifyThen": RD.VERIFY_THEN_POST_AUDITS,
-                                   "_newIssues": [{"id": "k"}]}) >= {"k"}
     assert RD._pending_wave_reach({"step": "dispatch-some-future-wave"}) is RD._WAVE_REACH_ALL
-    assert RD._pending_wave_reach({"step": RD.P_FIXER, "_newIssues": [{"id": "k"}]}) == set()
+    ruling = [{"id": _FOLD_ONE, "ruling": "refuted", "reason": "x"}]
+    for step in (RD.P_VERIFY, "dispatch-some-future-wave"):
+        state = _ledgered_session(3)
+        state["step"] = step
+        before = json.dumps(state, sort_keys=True)
+        plan, reason, detail = RD._plan_rulings(state, ruling, False)
+        assert plan is None and reason == "ruling-target-in-pending-wave", (step, reason, detail)
+        assert json.dumps(state, sort_keys=True) == before, step
+    state = _ledgered_session(3)
+    state["step"] = RD.P_FIXER
+    plan, reason, detail = RD._plan_rulings(state, ruling, False)
+    assert reason is None and len(plan) == 1, (reason, detail)
 
 
 def test_a_superseded_attempt_is_never_reissued(tmp_path):

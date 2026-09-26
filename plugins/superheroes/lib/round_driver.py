@@ -3268,7 +3268,8 @@ def _history_row_key(row):
 def _guidance_log_rows(round_entry):
     """The round's guidance-bearing log rows, in record order: the owner-gate
     ``judgmentDispositions`` followed by the ``fix-with-guidance`` rulings the rulings verb
-    recorded. The one reader the fixer order's guidance block and the fix-batch history use."""
+    recorded. The reader the fixer order's guidance block uses; fix-batch history reads
+    ``_gate_history_rows`` so a later closing ruling supersedes the guidance."""
     rows = []
     log = round_entry.get("judgmentDispositions")
     if isinstance(log, list):
@@ -3277,6 +3278,20 @@ def _guidance_log_rows(round_entry):
     if isinstance(rulings, list):
         rows.extend(r for r in rulings
                     if isinstance(r, dict) and r.get("disposition") == RULING_GUIDANCE)
+    return rows
+
+
+def _gate_history_rows(round_entry):
+    """The round's gate-ruling rows for history, in record order: the owner-gate
+    ``judgmentDispositions`` followed by EVERY rulings-verb row. A closing ruling sits in this
+    stream so it supersedes an earlier ``fix-with-guidance`` for the same finding (last wins)."""
+    rows = []
+    log = round_entry.get("judgmentDispositions")
+    if isinstance(log, list):
+        rows.extend(log)
+    rulings = round_entry.get("rulings")
+    if isinstance(rulings, list):
+        rows.extend(r for r in rulings if isinstance(r, dict))
     return rows
 
 
@@ -3294,7 +3309,7 @@ def _finding_history(state):
             rnd_num = int(rnd_key)
         except (TypeError, ValueError):
             continue
-        log = _guidance_log_rows(round_entry)
+        log = _gate_history_rows(round_entry)
         if log:
             for item in log:
                 if not isinstance(item, dict):
@@ -3389,6 +3404,7 @@ def _gate_guidance_entries(state, rnd):
     _validate_gate_guidance_logs(rounds, rnd, batch_keys)
     out = []
     covered_keys = set()
+    history = _finding_history(state)
     round_entry = rounds.get(str(rnd))
     if isinstance(round_entry, dict):
         log = _guidance_log_rows(round_entry)
@@ -3406,11 +3422,13 @@ def _gate_guidance_entries(state, rnd):
                     continue
                 if sliced and key not in batch_keys:
                     continue
+                latest = (history.get(key) or {}).get("gateRuling")
+                if isinstance(latest, dict) and latest.get("disposition") != "fix-with-guidance":
+                    continue  # a later closing ruling superseded this guidance
                 covered_keys.add(key)
                 out.append({"id": key, "title": item.get("title"),
                             "file": item.get("file"), "line": item.get("line"),
                             "guidance": guidance.strip()})
-    history = _finding_history(state)
     for key in sorted(batch_keys):
         if key in covered_keys:
             continue
@@ -7735,11 +7753,18 @@ def _cmd_rule_locked(session_dir, rulings_path):
     out = {"ok": True, "ruled": [r["id"] for r in rows], "artifactSha256": artifact_sha,
            "superseded": ({"phase": phase, "round": rnd, "attempt": attempt} if emitted
                           else None)}
-    if terminal:
+    # Every terminal the ruling leaves behind passes the terminal receipt gate: a session terminal
+    # at entry re-certifies, and a live ruling that converged the session (an emptied first fix
+    # slice) or parked it certifies or writes the refusal a later ruling recovers from.
+    if state.get("terminal"):
         fault = _terminal_receipt_gate(session_dir, state)
-        out["recertified"] = {
+        receipt = {
             "certified": os.path.exists(os.path.join(session_dir, CERTIFICATION_RECEIPT_FILE)),
-            "archivedRefusal": archive, "receiptFault": fault.detail if fault else None}
+            "receiptFault": str(fault) if fault else None}
+        if terminal:
+            out["recertified"] = dict(receipt, archivedRefusal=archive)
+        else:
+            out["terminalReceipt"] = receipt
     return out
 
 
