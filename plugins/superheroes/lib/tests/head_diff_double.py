@@ -136,14 +136,21 @@ def _wrap_cmd_next_locked(original, module):
     def cmd_next_locked(session_dir, config_overrides=None):
         # The Setup binding refuses unless meta's recorded head is the derived one, so a fixture
         # that declares `meta.headSha` records exactly that head.
+        # The pair rides the derivation's own channel (`_DERIVED_DIFF_HEAD`), as the CLI's fresh
+        # `next` carries it — never a config `diffHead`, which the driver refuses.
         fresh = not os.path.exists(os.path.join(session_dir, module.STATE_FILE))
-        if fresh and isinstance(config_overrides, dict) and "diffHead" not in config_overrides:
+        if (fresh and isinstance(config_overrides, dict)
+                and module._DERIVED_DIFF_HEAD.get() is None):
             meta_head = module._session_meta(session_dir).get("headSha")
             if isinstance(meta_head, str) and len(meta_head) in (40, 64):
                 diff = config_overrides.get("diff")
-                config_overrides = dict(config_overrides, diffHead={
+                token = module._DERIVED_DIFF_HEAD.set({
                     "sha": meta_head,
                     "digest": module.review_diff_digest(diff) if isinstance(diff, str) else None})
+                try:
+                    return original(session_dir, config_overrides)
+                finally:
+                    module._DERIVED_DIFF_HEAD.reset(token)
         return original(session_dir, config_overrides)
     setattr(cmd_next_locked, _DOUBLE_ATTR, True)
     return cmd_next_locked

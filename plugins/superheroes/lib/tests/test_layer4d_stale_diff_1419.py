@@ -1385,14 +1385,23 @@ def test_the_state_schema_versions_have_one_home():
         assert not literal, (name, literal)
 
 
+def _derived_state(diff, sha):
+    """A fresh state minted with the pair the derivation records, carried the way the CLI's fresh
+    `next` carries it (`_DERIVED_DIFF_HEAD`)."""
+    token = RD._DERIVED_DIFF_HEAD.set({"sha": sha, "digest": RD.review_diff_digest(diff)})
+    try:
+        return RD.new_state(TRD._cfg(diff=diff))
+    finally:
+        RD._DERIVED_DIFF_HEAD.reset(token)
+
+
 def test_reviewed_bytes_that_are_not_the_derived_ones_never_certify():
     """The recorded digest binds the reviewed bytes to the recorded SHA: bytes that are not the
     ones derived there are stale, and the terminal parks `reviewed-diff-stale` (red token:
     `converged` over bytes nobody derived at that head)."""
     sha = "a" * 40
     diff = "diff --git a/f.py b/f.py\n@@ -0,0 +1 @@\n+x\n"
-    state = RD.new_state(TRD._cfg(diff=diff, diffHead={"sha": sha,
-                                                       "digest": RD.review_diff_digest(diff)}))
+    state = _derived_state(diff, sha)
     assert RD._reviewed_diff_stale_cause(state) is None
     state["reviewedDiff"] = diff + "+tampered\n"
     assert RD._reviewed_diff_stale_cause(state) == (
@@ -1411,8 +1420,7 @@ def test_a_recorded_head_without_its_bound_digest_never_certifies(digest):
     current, so only the unbound half is refused (red token: `converged` naming the SHA)."""
     sha = "a" * 40
     diff = "diff --git a/f.py b/f.py\n@@ -0,0 +1 @@\n+x\n"
-    state = RD.new_state(TRD._cfg(diff=diff, diffHead={"sha": sha,
-                                                       "digest": RD.review_diff_digest(diff)}))
+    state = _derived_state(diff, sha)
     assert RD._reviewed_diff_stale_cause(state) is None
     if digest == "absent":
         state.pop("reviewedDiffDigest", None)
@@ -1495,3 +1503,24 @@ def test_the_first_round_binding_reads_the_hardened_git_config(tmp_path, capsys,
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
     rc, out = TRD._cli_next_json(d, argv, capsys)
     assert rc == 0 and out.get("ok"), out
+
+
+def test_a_supplied_diff_head_never_reaches_the_certificate(tmp_path):
+    """Only the derivation call records the reviewed head. The in-process `cmd_next` refuses a
+    config `diffHead` with `diff-head-not-derived` and writes no state; `new_state` given one
+    records no pair and keeps no config copy, so the clean terminal withholds
+    `reviewed-head-unrecorded` and the certificate names no head (red tokens: `ok: True` from
+    `cmd_next`, or `converged` naming the supplied SHA)."""
+    supplied = {"sha": "a" * 40, "digest": RD.review_diff_digest("diff --git a/f b/f\n")}
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    out = RD.cmd_next(d, TRD._cfg(diff="diff --git a/f b/f\n", diffHead=supplied))
+    assert out.get("ok") is False and out.get("reason") == "diff-head-not-derived", out
+    assert not os.path.exists(os.path.join(d, RD.STATE_FILE))
+    state = RD.new_state(TRD._cfg(diff="diff --git a/f b/f\n", diffHead=supplied))
+    assert state["reviewedDiffSha"] is None and state["reviewedDiffDigest"] is None, state
+    assert "diffHead" not in state["config"]
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["terminal"] == "cannot-certify", state["certification"]
+    assert "reviewed-head-unrecorded" in state["certification"]["reason"]
+    assert state["certification"].get("certifiedHead") is None

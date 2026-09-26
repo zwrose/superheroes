@@ -1181,6 +1181,7 @@ def _round_ceiling(config):
 
 def new_state(config=None):
     cfg = _default_config(config)
+    cfg.pop("diffHead", None)  # a config head is never the recorded pair (`_DERIVED_DIFF_HEAD`)
     seeded_seat_map = cfg.get("seatMap")
     state = {
         "schemaVersion": STATE_SCHEMA_VERSION,
@@ -1206,9 +1207,10 @@ def new_state(config=None):
                             if isinstance(seeded_seat_map, dict) and seeded_seat_map else []),
         "reviewedDiff": cfg.get("diff"),
         "reviewedDiffHead": 0,
-        # The pair the fresh `next` recorded through `derive_review_diff` (config `diffHead`).
-        "reviewedDiffSha": (cfg.get("diffHead") or {}).get("sha"),
-        "reviewedDiffDigest": (cfg.get("diffHead") or {}).get("digest"),
+        # The pair the CLI's fresh `next` derived through `derive_review_diff`, carried only on
+        # `_DERIVED_DIFF_HEAD` — never from config, so no caller can supply its own head.
+        "reviewedDiffSha": (_DERIVED_DIFF_HEAD.get() or {}).get("sha"),
+        "reviewedDiffDigest": (_DERIVED_DIFF_HEAD.get() or {}).get("digest"),
         "fixFolds": 0,
         "headDiff": None,
         "dispositionSeqCounter": 0,
@@ -3872,6 +3874,11 @@ ROUND_DIFF_HEAD_MISMATCH = "round-diff-head-mismatch"
 # Set only while `run_loop` drives its in-process leg, which has no repository and so no recorded
 # head. It lives in no persisted field, so no loaded session can claim it.
 _IN_PROCESS_LEG = contextvars.ContextVar("round_driver_in_process_leg", default=False)
+# The (sha, digest) pair the CLI's fresh `next` derived and bound (`_bind_round_diff_head`), set
+# only around that `cmd_next` call. It lives in no config key or persisted field, so a caller's
+# `config_overrides` cannot supply a head; `cmd_next` refuses a config `diffHead` outright.
+_DERIVED_DIFF_HEAD = contextvars.ContextVar("round_driver_derived_diff_head", default=None)
+DIFF_HEAD_NOT_DERIVED = "diff-head-not-derived"
 _GIT_DIFF_FORMAT_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv",
                           "--src-prefix=a/", "--dst-prefix=b/")
 # The one home of the review-diff command: the same argv SKILL.md's Setup runs for the round diff
@@ -6661,6 +6668,14 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                       "attempt": None, "outcome": "refused-v1"})
         return {"ok": False, "reason": loaded}
     if loaded is None:
+        if isinstance(config_overrides, dict) and "diffHead" in config_overrides:
+            # Only the derivation call records the reviewed head; a supplied one is refused.
+            _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
+                                          "attempt": None, "outcome": "refused-diff-head",
+                                          "reason": DIFF_HEAD_NOT_DERIVED})
+            return {"ok": False, "reason": DIFF_HEAD_NOT_DERIVED,
+                    "detail": "the recorded head comes only from the review-diff derivation "
+                              "the CLI's fresh `next` runs; a config `diffHead` is not accepted"}
         session_id, mint_reason = round_records.mint_session_id(session_dir)
         if mint_reason is not None or not session_id:
             _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
@@ -6855,27 +6870,27 @@ def _hardened_numstat_run(head):
     return run
 
 
-def _bind_round_diff_head(session_dir, derived, round_diff, overrides):
+def _bind_round_diff_head(session_dir, derived, round_diff):
     """Bind the round-1 diff to the commit it was taken at, through the `derive_review_diff`
     result the fresh `next` took (`derived`, an admitted `(sha, text, refusal)`) — the same call
     SKILL.md's Setup runs as the `review-diff` verb. The supplied diff must be exactly the review
     diff at the resolved SHA (else HEAD moved since Setup), and a head the session recorded in
     meta (the PR's `headRefOid` in PR mode) must be that SHA (else the checkout is behind or
-    ahead). Records the pair in `overrides["diffHead"]`; returns a refusal exit or None."""
+    ahead). Returns `(refusal exit, None)` or `(None, pair)`: the pair rides `_DERIVED_DIFF_HEAD`
+    into the fresh `cmd_next`, never config."""
     head, text, _refusal = derived
     if text != round_diff:
         return _refuse_base_guard(
             session_dir, ROUND_DIFF_HEAD_MISMATCH,
             "the round diff is not the review diff at HEAD %s — HEAD moved since Setup, or the "
-            "diff did not come from the review-diff verb; regenerate it" % head)
+            "diff did not come from the review-diff verb; regenerate it" % head), None
     meta_head = _session_meta(session_dir).get("headSha")
     if meta_head is not None and meta_head != head:
         return _refuse_base_guard(
             session_dir, ROUND_DIFF_HEAD_MISMATCH,
             "the session's recorded head %r is not the checkout's HEAD %s — the checkout is "
-            "behind or ahead of the head under review" % (meta_head, head))
-    overrides["diffHead"] = {"sha": head, "digest": review_diff_digest(text)}
-    return None
+            "behind or ahead of the head under review" % (meta_head, head)), None
+    return None, {"sha": head, "digest": review_diff_digest(text)}
 
 
 def _disposition_ledger_owner_refusal(session_dir, state, pending, cmd):
@@ -12107,6 +12122,7 @@ def main(argv=None):
 def _dispatch(args):
     if args.cmd == "next":
         overrides = {}
+        derived_pair = None
         if args.leg:
             overrides["leg"] = args.leg
         if args.vendors is not None:
@@ -12218,7 +12234,8 @@ def _dispatch(args):
                         overrides[key] = guard[key]
                 overrides["baseGuard"] = BASE_GUARD_CHECKED
                 overrides["diffBinding"] = bind["binding"]
-                refusal = _bind_round_diff_head(args.session_dir, derived, res["text"], overrides)
+                refusal, derived_pair = _bind_round_diff_head(args.session_dir, derived,
+                                                              res["text"])
                 if refusal is not None:
                     return refusal
             elif args.diff_path:
@@ -12264,7 +12281,11 @@ def _dispatch(args):
                                              "value": args.records_path}) + "\n")
                 return 1
             overrides["recordsPath"] = os.path.abspath(args.records_path)
-        out = cmd_next(args.session_dir, overrides or None)
+        token = _DERIVED_DIFF_HEAD.set(derived_pair)
+        try:
+            out = cmd_next(args.session_dir, overrides or None)
+        finally:
+            _DERIVED_DIFF_HEAD.reset(token)
     elif args.cmd == "record-result":
         out = cmd_record_result(args.session_dir, args.seat, attempt=args.attempt,
                                 supersede=args.supersede, expect_sha256=args.expect_sha256,
