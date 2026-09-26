@@ -119,3 +119,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Category 1 (what the product means to a person): kept.
 - Category 2 (what a person sees or can do at a given moment): kept, separate from category 1. Owner: "this one is definitely owner."
 - Category 3 (whether a thing exists at all): kept.
+- Category 4 (risk tolerance and trust boundaries): kept.
