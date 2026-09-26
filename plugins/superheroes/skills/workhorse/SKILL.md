@@ -811,15 +811,17 @@ without a tool call.
   reconciliation is closed for that scope. The **timeout** contract stays the skill's; the **channel**
   duty attaches to what the builder itself launches.
 - **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
-  was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
-  entering a phase, before and after a dispatch, on park, on handback. The contract lives in
-  CONVENTIONS §15 — path, fields, states, and verbs there; do not restate them here. Stamp with
-  `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" stamp --repo-root "<repo-root>" --state <state> --phase <phase> --stale-after <seconds-until-next-stamp>`
-  (`SUPERHEROES_LAUNCH_ID` supplies `--launch-id` when unset); pick `--stale-after` for the phase you are entering — your own promise about when you will stamp again. When `SUPERHEROES_LAUNCH_ID` is **absent**, the session was
-  **not** launched by the advisor's launcher: **not advisor-managed, no heartbeat coverage** — that
-  is **not** permission to invent an id, and **not** a build failure. A directly-invoked workhorse
-  session is a normal case, not an error. **Ordering:** `parked` and `handback` are stamped **only
-  after** the durable issue/PR evidence exists, never before.
+  was launched by the advisor's launcher — stamp the builder heartbeat per CONVENTIONS §15:
+  one `working` stamp at intake (it proves the store is writable), `blocked` when blocked on
+  something only the owner/advisor can clear, **`working` again when the blocker clears and the
+  builder resumes**, and `parked` / `handback` only after the durable
+  issue/PR evidence exists. Stamp with
+  `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" stamp --repo-root "<repo-root>" --state <state> --phase <phase>`
+  (`SUPERHEROES_LAUNCH_ID` supplies `--launch-id` when unset). When `SUPERHEROES_LAUNCH_ID` is
+  **absent**, the session was **not** launched by the advisor's launcher: **not advisor-managed, not a
+  build failure** — that is **not** permission to invent an id. A directly-invoked workhorse session
+  is a normal case, not an error. **Ordering:** `parked` and `handback` are stamped **only after**
+  the durable issue/PR evidence exists, never before.
 - **Park when the in-turn poll cannot fit.** End with a **durable park** — what is running, where
   output is, what the advisor must do — **on the issue or the PR** (where the advisor will find it
   without being told to look), never a session transcript or scratch file; an outcome that outruns any

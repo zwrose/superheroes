@@ -299,31 +299,28 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### B3 — Heartbeat
 
-- **Component.** Semantic builder heartbeat stamp and advisor sweep classifier; a false `fresh`
-  answer is the dangerous failure mode, and every lane carries periodic stamp overhead.
+- **Component.** Builder heartbeat stamp and advisor sweep classifier for lane **endings** (`terminal`,
+  `nonterminal`, `unknown`); every launcher-issued lane carries stamp overhead at intake and on
+  block/park/handback.
 - **Start date.** 2026-09-15.
-- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
-  heartbeat sweep classifications of `stale` or `terminal` that drove advisor or wave_watch action.
-  On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Citation-based, 45 days — vet, forfeit-dispute, or incident receipts citing a
+  `lane-terminal` / `lane-blocked` event or a sweep `terminal` class that drove advisor action. On
+  firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Classified six stalled lanes in one advisor sweep
   (the assessment record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — fail-closed liveness signal for unattended builders; a low catch count
-  means builders are finishing, not that wedged lanes stopped happening. **Outcome at the
-  orchestration decommission: kept, and it stays the lane's terminal signal.** The catch it adds
-  that the transcript freshness check lacks is the dead-versus-done distinction: a lane that ends
-  with its handback or park posted stamps a terminal state, which the watcher reports as
-  `lane-terminal`, and a lane's own `blocked` stamp becomes `lane-blocked`; a lane that dies with
-  neither surfaces only as `builder-exited`, from its pid. A cold transcript and an exited pid read
-  the same for a handback, a park, and a crash; the trial receipt's heartbeat line
-  (`LEDGERS.md` §5.4) records the same trap for idle signals, which report a wedged lane as idle
-  and so read as completion. Record, read 2026-09-25: 600 lane heartbeat files across the two
-  launch-ledger roots under `~/.claude/superheroes-launch-ledger/`, 539 of them carrying a terminal
-  stamp (329 `handback`, 210 `parked`). On the stale class the record shows no such catch: 25
-  watcher logs under `~/.claude/wave-logs/superheroes/` carry `stale-suppressed-transcript-fresh`
-  and none carries an emitted `lane-stale`, so there the transcript overruled every heartbeat-stale
-  reading.
+- **Notes.** structural — fail-closed **ending** signal for unattended builders. **Split
+  2026-09-26 (owner ruling):** the "still alive" half **retired** — the builder's
+  `--stale-after` promise, heartbeat `fresh`/`stale` classes, and transcript-second-chance
+  suppression. Record: 25 watch logs where the transcript overruled every heartbeat-stale reading and
+  none emitted `lane-stale`; the 2026-09-26 seat-resume specimen where 3 of 4 live, working builders
+  read stale 2.2–4.3 h past their promises with transcripts written within 8 minutes. Liveness is
+  now one rule in `lib/wave_watch.py` (pid live plus transcript quiet window). The **ending** half
+  **kept**: 539 of 600 lanes carry a terminal stamp (329 `handback`, 210 `parked`) — the
+  dead-versus-done distinction a cold transcript and an exited pid cannot make alone; a lane that
+  ends with its handback or park posted stamps a terminal state (`lane-terminal`), and `blocked`
+  becomes `lane-blocked`; a lane that dies with neither surfaces as `builder-exited` from its pid.
 
 #### B4 — Seat canary (planted-defect control probe)
 
