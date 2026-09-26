@@ -206,11 +206,11 @@ action that owns it, leaving the rest of the calibration untouched:
   model IDs are `gpt-6-sol`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for
   `reviewer-deep` at effort `high`; pinning it on any other role is refused
   `pin-role-not-eligible`). A pin to the retired `gpt-5.6-terra` is refused at write time
-  (`model-retired: gpt-5.6-terra is retired; use gpt-6-sol`). A pin must
+  (`model-retired`; `model_registry.retired_model_reason` names the text). A pin must
   also resolve on its role's own codex allowlist, else it is refused `pin-not-on-allowlist`
   (any model on `pilot`, which has no codex cell — it remains a valid role key
   but admits no codex model).
-  Codex tier map: haiku=gpt-6-sol, sonnet=gpt-6-sol, opus=gpt-6-sol; an unpinned project never
+  Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none; an unpinned project never
   dispatches Astra and gpt-6-sol is the default deep cell. A pinned model runs at the effort its role's
   registry allowlist resolves for it — gpt-6-sol and gpt-5.6-sol at `high` on `reviewer`, `code-fixer`
   and `implementer` and `xhigh` on `reviewer-deep`, and Astra at `high` — the

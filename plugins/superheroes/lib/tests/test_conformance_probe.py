@@ -2373,7 +2373,7 @@ def test_astra_probe_pass_matches_plant_and_records_attempt(tmp_path, monkeypatc
         calls.append(kwargs)
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    out, code = CP.astra_probe(
+    out, code = CP.registration_probe(
         repo, "wave-pass", run_dir, dispatch=dispatch,
     )
     assert code == 0
@@ -2382,7 +2382,7 @@ def test_astra_probe_pass_matches_plant_and_records_attempt(tmp_path, monkeypatc
     assert out["matched"]["line"] == 25
     assert out["matched"]["severity"] == "Critical"
     ledger_dir, _ = CP._conformance_record_dir(repo)
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     assert len(attempts) == 1
     assert attempts[0]["wave"] == "wave-pass"
     probe_model, probe_effort = MR.matrix_config("registration-probe", "codex")
@@ -2420,12 +2420,12 @@ def test_astra_probe_refuses_when_registry_cell_unresolvable(tmp_path, monkeypat
         return {"ok": False, "reason": "x"}
 
     monkeypatch.setattr(CP.model_registry, "resolve_dispatch", _fail_resolve)
-    out, code = CP.astra_probe(repo, "wave-seat", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-seat", run_dir, dispatch=dispatch)
     assert code == 1
-    assert out["reason"] == "astra-probe-seat-unresolved"
+    assert out["reason"] == "registration-probe-seat-unresolved"
     assert calls == []
     ledger_dir, _ = CP._conformance_record_dir(repo)
-    assert not os.path.exists(CP._astra_claim_path(ledger_dir, "wave-seat"))
+    assert not os.path.exists(CP._registration_claim_path(ledger_dir, "wave-seat"))
 
 
 def test_astra_probe_miss_wrong_severity(tmp_path, monkeypatch):
@@ -2437,7 +2437,7 @@ def test_astra_probe_miss_wrong_severity(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding(severity="Important")])
 
-    out, code = CP.astra_probe(repo, "wave-sev", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-sev", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["outcome"] == "miss"
     assert out["matched"] is None
@@ -2455,7 +2455,7 @@ def test_astra_probe_miss_unrelated_finding(tmp_path, monkeypatch):
             "title": "x", "body": "y",
         }])
 
-    out, code = CP.astra_probe(repo, "wave-unrel", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-unrel", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["outcome"] == "miss"
     assert out["matched"] is None
@@ -2470,7 +2470,7 @@ def test_astra_probe_miss_refusal(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return {"ok": False, "terminal": True, "reason": "refused", "findings": None}
 
-    out, code = CP.astra_probe(repo, "wave-ref", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-ref", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["outcome"] == "miss"
     assert out["dispatchReason"] == "refused"
@@ -2485,14 +2485,14 @@ def test_astra_probe_miss_empty_findings(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([])
 
-    out, code = CP.astra_probe(repo, "wave-empty", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-empty", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["outcome"] == "miss"
     assert out["returned"] == []
 
 
 def test_astra_probe_fixture_has_no_hint_words():
-    text, err = CP._astra_probe_prompt()
+    text, err = CP._registration_probe_prompt()
     assert err is None
     text = text.lower()
     for word in ("planted", "fail-open", "bypass", "vulnerability"):
@@ -2505,7 +2505,7 @@ def test_astra_probe_fixture_states_the_full_severity_scale():
     rubric_path = os.path.join(plugin_root, "rubric", "review-base.md")
     with open(rubric_path, encoding="utf-8") as fh:
         rows = _parse_rubric_severity_tiers(fh.read())
-    text, err = CP._astra_probe_prompt()
+    text, err = CP._registration_probe_prompt()
     assert err is None
     for level, definition in rows.items():
         assert "`%s` — %s" % (level, definition) in text
@@ -2537,7 +2537,7 @@ def _astra_diff_new_file_line_numbers(diff_text):
 
 # bite-axis: plant-line numbers are derived from the diff hunk headers, not hand-counted
 def test_astra_probe_fixture_plant_lines_are_second_hunk_plus_lines():
-    nums = _astra_diff_new_file_line_numbers(CP.ASTRA_PROBE_DIFF)
+    nums = _astra_diff_new_file_line_numbers(CP.REGISTRATION_PROBE_DIFF)
     assert tuple(nums) == CP.PLANT_LINES == (24, 25)
 
 
@@ -2551,7 +2551,7 @@ def test_astra_probe_pass_on_first_plant_line(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding(line=24)])
 
-    out, code = CP.astra_probe(repo, "wave-line24", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-line24", run_dir, dispatch=dispatch)
     assert code == 0
     assert out["outcome"] == "pass"
     assert out["matched"]["line"] == 24
@@ -2567,7 +2567,7 @@ def test_astra_probe_miss_just_past_the_plant(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding(line=26)])
 
-    out, code = CP.astra_probe(repo, "wave-line26", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-line26", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["matched"] is None
 
@@ -2578,7 +2578,7 @@ def test_astra_probe_scale_is_rendered_from_the_rubric():
     rubric_path = os.path.join(plugin_root, "rubric", "review-base.md")
     with open(rubric_path, encoding="utf-8") as fh:
         rows = _parse_rubric_severity_tiers(fh.read())
-    text, err = CP._astra_probe_prompt()
+    text, err = CP._registration_probe_prompt()
     assert err is None
     for level, definition in rows.items():
         assert "`%s` — %s" % (level, definition) in text
@@ -2601,12 +2601,12 @@ def _astra_scale_refusal_probe(tmp_path, monkeypatch, rubric_text, rubric_path=N
         rubric_path = tmp_path / "bad.md"
         rubric_path.write_text(rubric_text, encoding="utf-8")
     monkeypatch.setattr(CP, "_RUBRIC_PATH", str(rubric_path))
-    out, code = CP.astra_probe(repo, "wave-bad", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-bad", run_dir, dispatch=dispatch)
     assert code == 1
-    assert out["reason"] == "astra-probe-scale-unreadable"
+    assert out["reason"] == "registration-probe-scale-unreadable"
     assert calls == []
     ledger_dir, _ = CP._conformance_record_dir(repo)
-    assert not os.path.exists(CP._astra_claim_path(ledger_dir, "wave-bad"))
+    assert not os.path.exists(CP._registration_claim_path(ledger_dir, "wave-bad"))
 
 
 # bite-axis: rubric tier table without PLANT_SEVERITY refuses before claim or dispatch
@@ -2671,7 +2671,7 @@ def test_astra_probe_scale_reads_only_the_tier_table(tmp_path, monkeypatch):
     rubric_path = tmp_path / "rubric.md"
     rubric_path.write_text(rubric, encoding="utf-8")
     monkeypatch.setattr(CP, "_RUBRIC_PATH", str(rubric_path))
-    text, err = CP._astra_probe_prompt()
+    text, err = CP._registration_probe_prompt()
     assert err is None
     for level in ("Critical", "Important", "Minor", "Nit", "Pre-existing"):
         assert "`%s`" % level in text
@@ -2692,7 +2692,7 @@ def test_astra_probe_scale_stops_at_the_end_of_the_tier_table(tmp_path, monkeypa
     rubric_path = tmp_path / "rubric.md"
     rubric_path.write_text(rubric, encoding="utf-8")
     monkeypatch.setattr(CP, "_RUBRIC_PATH", str(rubric_path))
-    text, err = CP._astra_probe_prompt()
+    text, err = CP._registration_probe_prompt()
     assert err is None
     assert "Critical" in text
     assert "Unrelated" not in text
@@ -2716,7 +2716,7 @@ def test_astra_probe_seat_is_the_registry_cell(tmp_path, monkeypatch):
         return _astra_terminal_findings([_astra_pass_finding()])
 
     monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
-    out, code = CP.astra_probe(repo, "wave-seat", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-seat", run_dir, dispatch=dispatch)
     assert code == 0
     assert resolve_calls == [("registration-probe", "codex", None, None)]
     assert seats[0] == {
@@ -2743,13 +2743,13 @@ def test_astra_probe_dispatches_and_records_the_live_registration_probe_cell(tmp
         seats.append(kwargs["seat"])
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    out, code = CP.astra_probe(repo, "wave-live-cell", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-live-cell", run_dir, dispatch=dispatch)
     assert code == 0
     assert seats[0]["model"] == expected_model
     assert seats[0]["effort"] == expected_effort
     assert out["model"] == expected_model
     ledger_dir, _ = CP._conformance_record_dir(repo)
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     assert attempts[0]["model"] == expected_model
 
 
@@ -2765,14 +2765,14 @@ def test_astra_probe_attempt_records_prompt_hash(tmp_path, monkeypatch):
         prompt_paths.append(kwargs["prompt_path"])
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    out, code = CP.astra_probe(repo, "wave-hash", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-hash", run_dir, dispatch=dispatch)
     assert code == 0
     with open(prompt_paths[0], encoding="utf-8") as fh:
         prompt_text = fh.read()
     expected = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     assert out["promptSha256"] == expected
     ledger_dir, _ = CP._conformance_record_dir(repo)
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     assert attempts[0]["promptSha256"] == expected
 
 
@@ -2789,10 +2789,10 @@ def test_astra_probe_refuses_second_run_dir_same_wave(tmp_path, monkeypatch):
         calls.append(1)
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    CP.astra_probe(repo, "wave-dup", run1, dispatch=dispatch)
-    out, code = CP.astra_probe(repo, "wave-dup", run2, dispatch=dispatch)
+    CP.registration_probe(repo, "wave-dup", run1, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-dup", run2, dispatch=dispatch)
     assert code == 1
-    assert out["reason"] == "astra-probe-wave-already-attempted"
+    assert out["reason"] == "registration-probe-wave-already-attempted"
     assert len(calls) == 1
 
 
@@ -2809,17 +2809,17 @@ def test_astra_probe_continuation_redispatches_without_duplicate_record(tmp_path
             return {"ok": False, "terminal": False, "findings": None}
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    out1, code1 = CP.astra_probe(repo, "wave-cont", run_dir, dispatch=dispatch)
+    out1, code1 = CP.registration_probe(repo, "wave-cont", run_dir, dispatch=dispatch)
     assert code1 == 0
     assert out1.get("continue") is True
-    out2, code2 = CP.astra_probe(repo, "wave-cont", run_dir, dispatch=dispatch)
+    out2, code2 = CP.registration_probe(repo, "wave-cont", run_dir, dispatch=dispatch)
     assert code2 == 0
     assert out2["outcome"] == "pass"
     assert len(calls) == 2
     ledger_dir, _ = CP._conformance_record_dir(repo)
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     assert len(attempts) == 1
-    out3, code3 = CP.astra_probe(repo, "wave-cont", run_dir, dispatch=dispatch)
+    out3, code3 = CP.registration_probe(repo, "wave-cont", run_dir, dispatch=dispatch)
     assert code3 == 0
     assert out3 == out2
     assert len(calls) == 2
@@ -2852,7 +2852,7 @@ def test_astra_probe_continuation_uses_claimed_seat_after_cell_changes(tmp_path,
 
     monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
 
-    out1, code1 = CP.astra_probe(repo, "wave-cell-change", run_dir, dispatch=dispatch)
+    out1, code1 = CP.registration_probe(repo, "wave-cell-change", run_dir, dispatch=dispatch)
     assert code1 == 0
     assert out1.get("continue") is True
     assert seats[0]["model"] == "gpt-6-astra"
@@ -2861,7 +2861,7 @@ def test_astra_probe_continuation_uses_claimed_seat_after_cell_changes(tmp_path,
     resolved["model"] = "gpt-6-sol"
     resolved["effort"] = "high"
 
-    out2, code2 = CP.astra_probe(repo, "wave-cell-change", run_dir, dispatch=dispatch)
+    out2, code2 = CP.registration_probe(repo, "wave-cell-change", run_dir, dispatch=dispatch)
     assert code2 == 0
     assert out2["outcome"] == "pass"
     # Dispatched with — and attributed to — the seat the claim snapshotted, not the
@@ -2871,13 +2871,15 @@ def test_astra_probe_continuation_uses_claimed_seat_after_cell_changes(tmp_path,
     assert out2["model"] == "gpt-6-astra"
     assert out2["effort"] == "medium"
     ledger_dir, _ = CP._conformance_record_dir(repo)
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     assert attempts[0]["model"] == "gpt-6-astra"
 
 
 # bite-axis: a legacy claim written before the seat-snapshot fix carries no `model` (the
 # field would read None). Continuing that claim keeps today's behavior — the freshly
-# resolved registry seat — because there is no snapshot to honor.
+# resolved registry seat — because there is no snapshot to honor. The claim is planted in
+# the pre-rename format at the legacy claim path, so the continuation keeps the legacy
+# order id and prompt suffix.
 def test_astra_probe_continuation_legacy_claim_without_snapshot_uses_current_seat(
         tmp_path, monkeypatch):
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
@@ -2885,27 +2887,77 @@ def test_astra_probe_continuation_legacy_claim_without_snapshot_uses_current_sea
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
     run_dir_real = os.path.realpath(run_dir)
+    wave = "wave-legacy"
 
-    # Simulate a legacy claim (written before claims recorded model/effort).
-    CP._write_astra_claim(ledger_dir, "wave-legacy", run_dir_real, model=None, effort=None)
+    # A legacy claim: pre-rename path, written before claims recorded model/effort.
+    legacy_claim_path = CP._legacy_claim_path(ledger_dir, wave)
+    claim = {"wave": wave, "runDir": run_dir_real, "claimedAt": "2026-01-01T00:00:00Z"}
+    with open(legacy_claim_path, "w", encoding="utf-8") as fh:
+        json.dump(claim, fh, separators=(",", ":"))
+        fh.write("\n")
 
     def fake_resolve(role, vendor, model, effort):
         return {"ok": True, "model_id": "gpt-6-sol", "effort": "high"}
 
     seats = []
+    calls = []
 
     def dispatch(**kwargs):
         seats.append(kwargs["seat"])
+        calls.append(kwargs)
         return _astra_terminal_findings([_astra_pass_finding()])
 
     monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
 
-    out, code = CP.astra_probe(repo, "wave-legacy", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, wave, run_dir, dispatch=dispatch)
     assert code == 0
     assert seats[0]["model"] == "gpt-6-sol"
     assert seats[0]["effort"] == "high"
     assert out["model"] == "gpt-6-sol"
     assert out["effort"] == "high"
+    order_id = calls[0]["order_id"]
+    prompt_path = calls[0]["prompt_path"]
+    assert order_id == "astra-probe-" + hashlib.sha256(wave.encode("utf-8")).hexdigest()[:12]
+    assert prompt_path.endswith(".astra-probe-prompt.md")
+
+
+# bite-axis: the same no-snapshot continuation for a claim in the current format at the
+# current claim path — the freshly resolved seat, under the current order id and suffix.
+def test_astra_probe_continuation_new_format_claim_without_snapshot_uses_current_seat(
+        tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    run_dir_real = os.path.realpath(run_dir)
+    wave = "wave-new-format"
+
+    CP._write_registration_claim(ledger_dir, wave, run_dir_real, model=None, effort=None)
+
+    def fake_resolve(role, vendor, model, effort):
+        return {"ok": True, "model_id": "gpt-6-sol", "effort": "high"}
+
+    seats = []
+    calls = []
+
+    def dispatch(**kwargs):
+        seats.append(kwargs["seat"])
+        calls.append(kwargs)
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", fake_resolve)
+
+    out, code = CP.registration_probe(repo, wave, run_dir, dispatch=dispatch)
+    assert code == 0
+    assert seats[0]["model"] == "gpt-6-sol"
+    assert seats[0]["effort"] == "high"
+    assert out["model"] == "gpt-6-sol"
+    assert out["effort"] == "high"
+    order_id = calls[0]["order_id"]
+    prompt_path = calls[0]["prompt_path"]
+    assert order_id == (
+        "registration-probe-" + hashlib.sha256(wave.encode("utf-8")).hexdigest()[:12])
+    assert prompt_path.endswith(".registration-probe-prompt.md")
 
 
 def test_astra_probe_owner_proposal_on_third_miss(tmp_path, monkeypatch):
@@ -2919,7 +2971,7 @@ def test_astra_probe_owner_proposal_on_third_miss(tmp_path, monkeypatch):
     for wave in waves:
         run_dir = str(tmp_path / wave)
         os.makedirs(run_dir)
-        out, code = CP.astra_probe(repo, wave, run_dir, dispatch=dispatch)
+        out, code = CP.registration_probe(repo, wave, run_dir, dispatch=dispatch)
         assert code == 1
         if wave == "wave-m3":
             assert out["ownerProposal"] is True
@@ -2933,7 +2985,7 @@ def _write_astra_claim_at(ledger_dir, wave, run_dir_real, claimed_at, model=None
     if model is not None:
         claim["model"] = model
         claim["effort"] = effort
-    path = CP._astra_claim_path(ledger_dir, wave)
+    path = CP._registration_claim_path(ledger_dir, wave)
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -2952,22 +3004,22 @@ def test_astra_probe_running_slice_is_pending_not_a_miss(tmp_path, monkeypatch):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
     for wave in ("wave-m1", "wave-m2"):
-        CP._append_astra_attempt(ledger_dir, {
+        CP._append_registration_attempt(ledger_dir, {
             "ok": False, "outcome": "miss", "wave": wave, "misses": 1,
         })
-    attempts_before, _ = CP._read_astra_attempts(ledger_dir)
-    assert CP._count_astra_misses(attempts_before) == 2
+    attempts_before, _ = CP._read_registration_attempts(ledger_dir)
+    assert CP._count_registration_misses(attempts_before) == 2
 
     def dispatch(**_kwargs):
         return {"ok": False, "terminal": False, "findings": None}
 
-    out, code = CP.astra_probe(repo, "wave-pending", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-pending", run_dir, dispatch=dispatch)
     assert code == 0
     assert out["outcome"] == "pending"
     assert out["continue"] is True
     assert out["misses"] == 2
     assert out["ownerProposal"] is False
-    attempts_after, _ = CP._read_astra_attempts(ledger_dir)
+    attempts_after, _ = CP._read_registration_attempts(ledger_dir)
     assert len(attempts_after) == 2
 
 
@@ -2987,9 +3039,9 @@ def test_astra_probe_live_other_wave_claim_not_settled(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    out, code = CP.astra_probe(repo, "wave-b", new_run, dispatch=dispatch, now=now)
+    out, code = CP.registration_probe(repo, "wave-b", new_run, dispatch=dispatch, now=now)
     assert code == 0
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     assert not any(a.get("wave") == "wave-a" for a in attempts)
     assert out["outcome"] == "pass"
 
@@ -3009,12 +3061,12 @@ def test_astra_probe_running_wave_claim_refreshed_is_not_settled(tmp_path, monke
         return {"ok": False, "terminal": False, "findings": None}
 
     now_a = t0 + timedelta(hours=23)
-    out_a, code_a = CP.astra_probe(
+    out_a, code_a = CP.registration_probe(
         repo, wave_a, run_a, dispatch=dispatch_pending, now=now_a,
     )
     assert code_a == 0
     assert out_a["outcome"] == "pending"
-    claim = CP._read_astra_claim(CP._astra_claim_path(ledger_dir, wave_a))
+    claim = CP._read_registration_claim(CP._registration_claim_path(ledger_dir, wave_a))
     assert claim.get("lastSeenAt") is not None
 
     now_b = t0 + timedelta(hours=30)
@@ -3024,9 +3076,9 @@ def test_astra_probe_running_wave_claim_refreshed_is_not_settled(tmp_path, monke
     def dispatch_pass(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    out_b, code_b = CP.astra_probe(repo, "wave-b", run_b, dispatch=dispatch_pass, now=now_b)
+    out_b, code_b = CP.registration_probe(repo, "wave-b", run_b, dispatch=dispatch_pass, now=now_b)
     assert code_b == 0
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     assert not any(a.get("wave") == wave_a for a in attempts)
     assert out_b["outcome"] == "pass"
 
@@ -3035,7 +3087,7 @@ def test_astra_probe_orphan_claim_recorded_as_miss(tmp_path, monkeypatch):
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
     repo = _repo(tmp_path)
     now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
-    claimed_at = (now - timedelta(seconds=CP.ASTRA_CLAIM_ABANDON_SECONDS + 60))
+    claimed_at = (now - timedelta(seconds=CP.REGISTRATION_CLAIM_ABANDON_SECONDS + 60))
     claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     old_wave = "wave-orphan"
     old_run = str(tmp_path / "orphan-run")
@@ -3047,9 +3099,9 @@ def test_astra_probe_orphan_claim_recorded_as_miss(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
+    out, code = CP.registration_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
     assert code == 0
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     orphan = next(a for a in attempts if a.get("wave") == old_wave)
     assert orphan["outcome"] == "incomplete"
     assert orphan["dispatchReason"] == "abandoned-claim"
@@ -3063,7 +3115,7 @@ def test_astra_probe_orphan_claim_keeps_its_own_seat_model(tmp_path, monkeypatch
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
     repo = _repo(tmp_path)
     now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
-    claimed_at = now - timedelta(seconds=CP.ASTRA_CLAIM_ABANDON_SECONDS + 60)
+    claimed_at = now - timedelta(seconds=CP.REGISTRATION_CLAIM_ABANDON_SECONDS + 60)
     claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     old_wave = "wave-a"
     old_run = str(tmp_path / "run-a")
@@ -3081,24 +3133,65 @@ def test_astra_probe_orphan_claim_keeps_its_own_seat_model(tmp_path, monkeypatch
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
+    out, code = CP.registration_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
     assert code == 0
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     orphan = next(a for a in attempts if a.get("wave") == old_wave)
     assert orphan["model"] == "model-a"
     assert orphan["effort"] == "effort-a"
 
 
 # bite-axis: a legacy claim written before claims carried a model snapshot settles as
-# explicitly unrecorded rather than being attributed to whatever cell resolves at settle time
+# explicitly unrecorded rather than being attributed to whatever cell resolves at settle time.
+# The claim is planted in the pre-rename format at the legacy claim path.
 def test_astra_probe_orphan_legacy_claim_without_model_settles_unrecorded(tmp_path, monkeypatch):
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
     repo = _repo(tmp_path)
     now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
-    claimed_at = now - timedelta(seconds=CP.ASTRA_CLAIM_ABANDON_SECONDS + 60)
+    claimed_at = now - timedelta(seconds=CP.REGISTRATION_CLAIM_ABANDON_SECONDS + 60)
     claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     old_wave = "wave-legacy"
     old_run = str(tmp_path / "legacy-run")
+    os.makedirs(old_run)
+    legacy_claim_path = CP._legacy_claim_path(ledger_dir, old_wave)
+    legacy_claim = {"wave": old_wave, "runDir": old_run, "claimedAt": claimed_iso}
+    with open(legacy_claim_path, "w", encoding="utf-8") as fh:
+        json.dump(legacy_claim, fh, separators=(",", ":"))
+        fh.write("\n")
+    new_run = str(tmp_path / "new-run")
+    os.makedirs(new_run)
+
+    def resolve_current(role, vendor, model, effort):
+        return {"ok": True, "model_id": "model-current", "effort": "effort-current"}
+
+    monkeypatch.setattr(CP.model_registry, "resolve_dispatch", resolve_current)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.registration_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
+    assert code == 0
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
+    orphan = next(a for a in attempts if a.get("wave") == old_wave)
+    assert orphan["model"] == CP.REGISTRATION_CLAIM_UNRECORDED_MODEL
+    assert orphan["model"] != "model-current"
+    assert orphan["effort"] is None
+    assert orphan["runDir"] == legacy_claim["runDir"]
+    assert os.path.isfile(CP._legacy_claim_path(ledger_dir, old_wave))
+    assert not os.path.exists(CP._registration_claim_path(ledger_dir, old_wave))
+
+
+# bite-axis: the same no-snapshot orphan, planted in the current format at the current claim
+# path, also settles as explicitly unrecorded.
+def test_astra_probe_orphan_new_format_claim_without_model_settles_unrecorded(
+        tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    claimed_at = now - timedelta(seconds=CP.REGISTRATION_CLAIM_ABANDON_SECONDS + 60)
+    claimed_iso = claimed_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    old_wave = "wave-new-format-orphan"
+    old_run = str(tmp_path / "orphan-run")
     os.makedirs(old_run)
     _write_astra_claim_at(ledger_dir, old_wave, old_run, claimed_iso)
     new_run = str(tmp_path / "new-run")
@@ -3112,13 +3205,14 @@ def test_astra_probe_orphan_legacy_claim_without_model_settles_unrecorded(tmp_pa
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding()])
 
-    out, code = CP.astra_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
+    out, code = CP.registration_probe(repo, "wave-new", new_run, dispatch=dispatch, now=now)
     assert code == 0
-    attempts, _ = CP._read_astra_attempts(ledger_dir)
+    attempts, _ = CP._read_registration_attempts(ledger_dir)
     orphan = next(a for a in attempts if a.get("wave") == old_wave)
-    assert orphan["model"] == CP.ASTRA_CLAIM_UNRECORDED_MODEL
+    assert orphan["model"] == CP.REGISTRATION_CLAIM_UNRECORDED_MODEL
     assert orphan["model"] != "model-current"
     assert orphan["effort"] is None
+    assert orphan["runDir"] == old_run
 
 
 def test_astra_probe_miss_string_line_not_matched(tmp_path, monkeypatch):
@@ -3130,7 +3224,7 @@ def test_astra_probe_miss_string_line_not_matched(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding(line="25")])
 
-    out, code = CP.astra_probe(repo, "wave-str", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-str", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["matched"] is None
 
@@ -3146,7 +3240,7 @@ def test_astra_probe_refuses_unreadable_ledger(tmp_path, monkeypatch, ledger_byt
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
-    attempts_path = CP._astra_attempts_path(ledger_dir)
+    attempts_path = CP._registration_attempts_path(ledger_dir)
     with open(attempts_path, "wb") as fh:
         fh.write(ledger_bytes)
     with open(attempts_path, "rb") as fh:
@@ -3157,11 +3251,11 @@ def test_astra_probe_refuses_unreadable_ledger(tmp_path, monkeypatch, ledger_byt
         calls.append(1)
         return _astra_terminal_findings([])
 
-    out, code = CP.astra_probe(repo, "wave-ledger", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-ledger", run_dir, dispatch=dispatch)
     assert code == 1
-    assert out["reason"] == "astra-probe-ledger-unreadable"
+    assert out["reason"] == "registration-probe-ledger-unreadable"
     assert calls == []
-    assert not os.path.exists(CP._astra_claim_path(ledger_dir, "wave-ledger"))
+    assert not os.path.exists(CP._registration_claim_path(ledger_dir, "wave-ledger"))
     with open(attempts_path, "rb") as fh:
         assert fh.read() == before
 
@@ -3169,13 +3263,13 @@ def test_astra_probe_refuses_unreadable_ledger(tmp_path, monkeypatch, ledger_byt
 # bite-axis: append refuses unreadable ledger without overwriting it
 def test_append_refuses_unreadable_ledger_without_writing(tmp_path, monkeypatch):
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
-    attempts_path = CP._astra_attempts_path(ledger_dir)
+    attempts_path = CP._registration_attempts_path(ledger_dir)
     with open(attempts_path, "wb") as fh:
         fh.write(b"{")
     with open(attempts_path, "rb") as fh:
         before = fh.read()
-    err = CP._append_astra_attempt(ledger_dir, {"wave": "x"})
-    assert err == "astra-probe-ledger-unreadable"
+    err = CP._append_registration_attempt(ledger_dir, {"wave": "x"})
+    assert err == "registration-probe-ledger-unreadable"
     with open(attempts_path, "rb") as fh:
         assert fh.read() == before
 
@@ -3183,14 +3277,14 @@ def test_append_refuses_unreadable_ledger_without_writing(tmp_path, monkeypatch)
 # bite-axis: failed claim write leaves no partial claim file
 def test_astra_claim_write_failure_leaves_no_claim(tmp_path, monkeypatch):
     ledger_dir = _astra_ledger(tmp_path, monkeypatch)
-    claim_path = CP._astra_claim_path(ledger_dir, "wave-claim")
+    claim_path = CP._registration_claim_path(ledger_dir, "wave-claim")
 
     def boom(*_args, **_kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(CP.json, "dump", boom)
     with pytest.raises(RuntimeError, match="boom"):
-        CP._write_astra_claim(ledger_dir, "wave-claim", str(tmp_path / "run"))
+        CP._write_registration_claim(ledger_dir, "wave-claim", str(tmp_path / "run"))
     assert not os.path.exists(claim_path)
 
 
@@ -3218,7 +3312,7 @@ def test_astra_claim_write_failure_does_not_close_fd_twice(tmp_path, monkeypatch
     monkeypatch.setattr(CP.os, "close", track_close)
     monkeypatch.setattr(CP.json, "dump", boom)
     with pytest.raises(RuntimeError, match="boom"):
-        CP._write_astra_claim(ledger_dir, "wave-claim", str(tmp_path / "run"))
+        CP._write_registration_claim(ledger_dir, "wave-claim", str(tmp_path / "run"))
     assert claim_fd is not None
     assert claim_fd not in close_calls
 
@@ -3237,9 +3331,9 @@ def test_astra_probe_record_write_failure_is_a_named_refusal(tmp_path, monkeypat
         raise OSError("disk full")
 
     monkeypatch.setattr(CP.store_core, "atomic_write", boom)
-    out, code = CP.astra_probe(repo, "wave-write", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-write", run_dir, dispatch=dispatch)
     assert code == 1
-    assert out["reason"] == "astra-probe-record-write-failed"
+    assert out["reason"] == "registration-probe-record-write-failed"
     assert out["unrecorded"]["outcome"] == "pass"
 
 
@@ -3255,7 +3349,7 @@ def test_astra_probe_miss_right_line_wrong_file(tmp_path, monkeypatch):
             file="b/app/other_guard.py", line=25,
         )])
 
-    out, code = CP.astra_probe(repo, "wave-wrong-file", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-wrong-file", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["outcome"] == "miss"
     assert out["matched"] is None
@@ -3271,7 +3365,7 @@ def test_astra_probe_pass_with_dot_slash_prefix(tmp_path, monkeypatch):
     def dispatch(**_kwargs):
         return _astra_terminal_findings([_astra_pass_finding(file="./app/session_guard.py")])
 
-    out, code = CP.astra_probe(repo, "wave-dotslash", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-dotslash", run_dir, dispatch=dispatch)
     assert code == 0
     assert out["outcome"] == "pass"
     assert out["matched"]["file"] == "./app/session_guard.py"
@@ -3295,7 +3389,7 @@ def test_astra_probe_pass_with_an_unrelated_finding_beside_the_match(tmp_path, m
             planted,
         ])
 
-    out, code = CP.astra_probe(repo, "wave-extra", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-extra", run_dir, dispatch=dispatch)
     assert code == 0
     assert out["outcome"] == "pass"
     assert out["matched"] == {
@@ -3348,14 +3442,15 @@ def test_astra_probe_record_survives_a_fresh_read_in_the_project_store(tmp_path,
     def dispatch(**_kwargs):
         return _astra_terminal_findings([])
 
-    out1, code1 = CP.astra_probe(repo, "wave-store", run1, dispatch=dispatch)
+    out1, code1 = CP.registration_probe(repo, "wave-store", run1, dispatch=dispatch)
     assert code1 == 1
     assert out1["outcome"] == "miss"
-    attempts_path = os.path.join(entry_dir, "conformance", "astra-probe-attempts.json")
+    conformance_dir = os.path.join(entry_dir, "conformance")
+    attempts_path = CP._registration_attempts_path(conformance_dir)
     assert os.path.isfile(attempts_path)
-    out2, code2 = CP.astra_probe(repo, "wave-store", run2, dispatch=dispatch)
+    out2, code2 = CP.registration_probe(repo, "wave-store", run2, dispatch=dispatch)
     assert code2 == 1
-    assert out2["reason"] == "astra-probe-wave-already-attempted"
+    assert out2["reason"] == "registration-probe-wave-already-attempted"
 
 
 # bite-axis: no project store entry refuses before dispatch
@@ -3372,7 +3467,7 @@ def test_astra_probe_refuses_without_a_project_store_entry(tmp_path, monkeypatch
         calls.append(1)
         return _astra_terminal_findings([])
 
-    out, code = CP.astra_probe(repo, "wave-nostore", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "wave-nostore", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["reason"] == "conformance-record-dir-unresolved"
     assert calls == []
@@ -3505,10 +3600,229 @@ def test_astra_probe_empty_wave_refuses(tmp_path, monkeypatch):
         calls.append(1)
         return _astra_terminal_findings([])
 
-    out, code = CP.astra_probe(repo, "  ", run_dir, dispatch=dispatch)
+    out, code = CP.registration_probe(repo, "  ", run_dir, dispatch=dispatch)
     assert code == 2
     assert out["reason"] == "wave-required"
     assert calls == []
+
+
+def test_registration_probe_reads_legacy_ledger(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    legacy_path = os.path.join(ledger_dir, CP.LEGACY_ATTEMPTS_NAME)
+    legacy_records = [
+        {"wave": "wave-legacy-1", "outcome": "miss", "ok": False},
+        {"wave": "wave-legacy-2", "outcome": "miss", "ok": False},
+    ]
+    legacy_bytes = (json.dumps(legacy_records, separators=(",", ":")) + "\n").encode("utf-8")
+    with open(legacy_path, "wb") as fh:
+        fh.write(legacy_bytes)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+
+    def dispatch(**_kwargs):
+        return _astra_terminal_findings([])
+
+    out, code = CP.registration_probe(repo, "wave-new", run_dir, dispatch=dispatch)
+    assert code == 1
+    assert out["misses"] == 3
+    new_path = CP._registration_attempts_path(ledger_dir)
+    with open(new_path, encoding="utf-8") as fh:
+        new_records = json.load(fh)
+    assert len(new_records) == 1
+    assert new_records[0]["wave"] == "wave-new"
+    with open(legacy_path, "rb") as fh:
+        assert fh.read() == legacy_bytes
+
+
+def test_registration_probe_union_reads_legacy_appended_after_new(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    new_path = CP._registration_attempts_path(ledger_dir)
+    legacy_path = os.path.join(ledger_dir, CP.LEGACY_ATTEMPTS_NAME)
+    with open(new_path, "w", encoding="utf-8") as fh:
+        json.dump([{"wave": "wave-new-file", "outcome": "miss"}], fh, separators=(",", ":"))
+        fh.write("\n")
+    with open(legacy_path, "w", encoding="utf-8") as fh:
+        json.dump([{"wave": "wave-legacy-file", "outcome": "miss"}], fh, separators=(",", ":"))
+        fh.write("\n")
+    attempts, err = CP._read_registration_attempts(ledger_dir)
+    assert err is None
+    assert [a["wave"] for a in attempts] == ["wave-legacy-file", "wave-new-file"]
+
+
+def test_registration_probe_legacy_claim_refuses_same_wave(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    wave = "wave-legacy-claim"
+    run1 = str(tmp_path / "run1")
+    run2 = str(tmp_path / "run2")
+    os.makedirs(run1)
+    os.makedirs(run2)
+    legacy_claim_path = CP._legacy_claim_path(ledger_dir, wave)
+    claim = {
+        "wave": wave,
+        "runDir": os.path.realpath(run1),
+        "claimedAt": "2026-01-01T00:00:00Z",
+        "model": "gpt-test",
+        "effort": None,
+    }
+    with open(legacy_claim_path, "w", encoding="utf-8") as fh:
+        json.dump(claim, fh, separators=(",", ":"))
+        fh.write("\n")
+    calls = []
+
+    def dispatch(**_kwargs):
+        calls.append(1)
+        return _astra_terminal_findings([_astra_pass_finding()])
+
+    out, code = CP.registration_probe(repo, wave, run2, dispatch=dispatch)
+    assert code == 1
+    assert out["reason"] == "registration-probe-wave-already-attempted"
+    assert calls == []
+
+
+def test_registration_probe_legacy_claim_continues_in_same_run_dir(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    wave = "wave-legacy-continue"
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    run_dir_real = os.path.realpath(run_dir)
+    legacy_claim_path = CP._legacy_claim_path(ledger_dir, wave)
+    seat_model, seat_effort = MR.matrix_config("registration-probe", "codex")
+    claim = {
+        "wave": wave,
+        "runDir": run_dir_real,
+        "claimedAt": "2026-01-01T00:00:00Z",
+        "model": seat_model,
+        "effort": seat_effort,
+    }
+    with open(legacy_claim_path, "w", encoding="utf-8") as fh:
+        json.dump(claim, fh, separators=(",", ":"))
+        fh.write("\n")
+    journal_root = str(tmp_path / "journal-root")
+    os.makedirs(journal_root, exist_ok=True)
+    monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
+    order_id = "%s-%s" % (CP.LEGACY_ORDER_ID_PREFIX, hashlib.sha256(wave.encode()).hexdigest()[:12])
+    seat = {
+        "vendor": "codex",
+        "model": seat_model,
+        "effort": seat_effort,
+        "role": CP.REGISTRATION_PROBE_ROLE,
+    }
+    built = EA.build_argv_result(seat, "review", {"model": "sonnet", "cwd": repo})
+    resolved_inputs = {
+        "engine": seat["vendor"],
+        "engineSource": "caller",
+        "model": seat["model"],
+        "modelSource": "caller",
+        "effort": seat.get("effort"),
+        "effortSource": "caller",
+        "role": seat["role"],
+        "roleSource": "caller",
+    }
+    record = {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": "review",
+        "orderId": order_id,
+        "argv": built["argv"],
+        "cwd": repo,
+        "timeout": ED.RETRY_MIN_TIMEOUT,
+        "retryTimeout": ED.RETRY_MIN_TIMEOUT,
+        "promptPath": os.path.join(run_dir, ED.PROMPT_NAME),
+        "progressPath": os.path.join(run_dir, "progress.jsonl"),
+        "viewPath": repo,
+        "viewMeta": {"path": repo, "headSha": "abc"},
+        "baseSha": "abc",
+        "fedPrompt": "review",
+        "repoRoot": os.path.realpath(repo),
+        "supervisorPid": os.getpid(),
+        "at": time.time(),
+        "resolvedInputs": resolved_inputs,
+        "expectedResultKind": "findings",
+    }
+    ED._journal_append(run_dir, record)
+    with open(record["promptPath"], "w", encoding="utf-8") as fh:
+        fh.write("registration probe\n")
+    real_dispatch = ED.dispatch_review
+    fake = FakeRunner([])
+    dispatch_terminal = []
+
+    def dispatch(**kwargs):
+        kwargs["run_engine"] = fake
+        kwargs["build_view"] = _fake_build_view(tmp_path)
+        kwargs.setdefault("max_wait", 0)
+        terminal = real_dispatch(**kwargs)
+        dispatch_terminal.append(terminal)
+        return terminal
+
+    out, code = CP.registration_probe(repo, wave, run_dir, dispatch=dispatch)
+    assert code == 0
+    assert out.get("continue") is True
+    assert out.get("outcome") == "pending"
+    assert len(dispatch_terminal) == 1
+    terminal = dispatch_terminal[0]
+    assert terminal.get("terminal") is False
+    assert terminal.get("detail") != ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
+    assert terminal.get("detail") != ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+    with open(legacy_claim_path, encoding="utf-8") as fh:
+        refreshed = json.load(fh)
+    assert refreshed.get("lastSeenAt")
+
+
+# bite-axis: a fresh wave dispatches under the current order-id prefix and prompt suffix,
+# pinned as spelled-out literals (a prefix constant drifting back to the old name goes red)
+def test_registration_probe_new_writes_use_registration_names(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+
+    calls = []
+
+    def dispatch(**kwargs):
+        calls.append(kwargs)
+        return _astra_terminal_findings([])
+
+    CP.registration_probe(repo, "wave-fresh", run_dir, dispatch=dispatch)
+    prompt_path = calls[0]["prompt_path"]
+    order_id = calls[0]["order_id"]
+    assert prompt_path.endswith(".registration-probe-prompt.md")
+    assert order_id == (
+        "registration-probe-" + hashlib.sha256("wave-fresh".encode("utf-8")).hexdigest()[:12])
+    assert os.path.isfile(CP._registration_attempts_path(ledger_dir))
+    assert not os.path.isfile(os.path.join(ledger_dir, CP.LEGACY_ATTEMPTS_NAME))
+    claim_names = [
+        n for n in os.listdir(ledger_dir)
+        if n.startswith("registration-probe-claim-") and n.endswith(".json")
+    ]
+    assert len(claim_names) == 1
+    legacy_names = [n for n in os.listdir(ledger_dir) if n.startswith("astra-probe-")]
+    assert legacy_names == []
+
+
+def test_registration_probe_cli_accepts_legacy_alias(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    invoked = []
+
+    def stub_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, dispatch=None, now=None):
+        invoked.append((repo_root, wave, run_dir))
+        return {"ok": True, "outcome": "pass", "wave": wave}, 0
+
+    monkeypatch.setattr(CP, "registration_probe", stub_probe)
+    for verb in ("registration-probe", "astra-probe"):
+        code = CP.main([
+            "conformance_probe", verb,
+            "--repo-root", repo,
+            "--wave", "wave-cli-alias",
+            "--run-dir", run_dir,
+        ])
+        assert code == 0
+    assert len(invoked) == 2
 
 
 def test_probe_completion_payload_mismatch_forfeits(tmp_path, monkeypatch):

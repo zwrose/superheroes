@@ -629,7 +629,7 @@ threads the role's resolved model into the engine argv as a dispatch fact —
 `lib/model_registry.py` (the vendor registry + role×vendor matrix) decides what
 actually runs; the adapter and `engine_pref` re-derive from it.
 
-Codex tier map: haiku=gpt-6-sol, sonnet=gpt-6-sol, opus=gpt-6-sol.
+Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none.
 An optional per-role `enginePreferences.codexModels` pin may select `gpt-6-sol`, the
 pin-only `gpt-5.6-sol` (valid only for a role with a codex cell, at that role's own
 effort), or `gpt-6-astra` for `reviewer-deep` only (at effort `high`); a pinned model runs
