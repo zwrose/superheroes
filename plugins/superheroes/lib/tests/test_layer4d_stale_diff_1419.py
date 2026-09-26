@@ -527,7 +527,8 @@ def test_a_supplied_head_diff_is_ignored_and_git_is_reviewed(tmp_path, supplied)
 
 
 def test_a_supplied_head_diff_equal_to_git_is_accepted(tmp_path):
-    """The cross-check passes when the supplied diff is git's own diff at the fold head."""
+    """A supplied diff equal to git's own is simply ignored like any other: the loop converges on
+    git's diff."""
     d = str(tmp_path / "session")
     os.makedirs(d)
     checkout, base = _seed_checkout(d)
@@ -633,3 +634,38 @@ def test_no_path_certifies_a_head_the_panel_did_not_see(tmp_path):
     payload = TRD._drive_cli(d, None, _discharging(respond))
     assert payload["verdict"] != "converged", payload
     assert "reviewed-diff-stale" in (payload.get("certification") or {}).get("reason", ""), payload
+
+
+def test_skill_and_driver_run_one_review_diff_command():
+    """One home: SKILL.md's per-round Setup diff and the driver's post-fix derivation are the same
+    argv, pinned here by literal (red token: the SKILL command differs from the driver's)."""
+    import shlex
+    skill = os.path.join(os.path.dirname(_LIB), "skills", "review-code",
+                         "SKILL.md")
+    with open(skill, encoding="utf-8") as fh:
+        line = next(ln for ln in fh if "diff.txt.tmp" in ln and ln.lstrip().startswith("git "))
+    tokens = shlex.split(line.split(">", 1)[0])
+    expected = ["git", "-c", "core.commitGraph=false", "-c", "core.quotePath=false",
+                "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
+                "-c", "diff.relative=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv"]
+    assert tokens == expected + ["$BASE_REF...HEAD"], tokens
+    assert list(RD.GIT_REVIEW_DIFF_ARGV) == expected
+
+
+def test_a_user_diff_noprefix_setting_does_not_reshape_the_derived_diff(tmp_path, monkeypatch):
+    """The derivation pins the config that reshapes diff bytes: a repository with
+    `diff.noprefix=true` still yields `a/`/`b/` prefixes (red token: `diff --git f.py f.py`)."""
+    checkout = str(tmp_path / "repo")
+    os.makedirs(checkout)
+    with open(os.path.join(checkout, "f.py"), "w", encoding="utf-8") as fh:
+        fh.write("a = 1\n")
+    base = session_checkout.make_checkout(checkout)
+    _git(checkout, "config", "diff.noprefix", "true")
+    with open(os.path.join(checkout, "f.py"), "w", encoding="utf-8") as fh:
+        fh.write("a = 2\n")
+    _git(checkout, "commit", "-qam", "change")
+    monkeypatch.chdir(checkout)
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    got = RD._derive_head_diff_from_git(session_dir, {"config": {"baseRef": base}})
+    assert got is not None and got.startswith("diff --git a/f.py b/f.py\n"), got

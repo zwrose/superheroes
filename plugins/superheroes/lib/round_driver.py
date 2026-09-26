@@ -66,6 +66,7 @@ import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import diff_scope  # noqa: E402
 import engine_adapter  # noqa: E402
+import sanitized_view  # noqa: E402
 import payload_contracts  # noqa: E402
 import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
@@ -3859,6 +3860,11 @@ def _resolve_head_diff(artifact):
 REVIEWED_DIFF_SOURCE_GIT = "git-derived"
 REVIEWED_DIFF_STALE = "reviewed-diff-stale"
 _GIT_DIFF_FORMAT_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv")
+# The one home of the review-diff command: the same argv SKILL.md's Setup runs for the round diff
+# (pinned equal by test). The config pins keep a user's diff settings (noprefix, mnemonic
+# prefixes, relative paths, quoted paths) from reshaping the bytes a panel reviews.
+GIT_REVIEW_DIFF_ARGV = (("git",) + sanitized_view._DIFF_CONFIG_OVERRIDES + ("diff",)
+                        + _GIT_DIFF_FORMAT_FLAGS)
 
 
 def _derive_head_diff_from_git(session_dir, state):
@@ -3877,8 +3883,8 @@ def _derive_head_diff_from_git(session_dir, state):
         return None
     try:
         proc = subprocess.run(
-            ["git", "-C", repo_root, "diff"] + list(_GIT_DIFF_FORMAT_FLAGS)
-            + ["%s...%s" % (base, head)],
+            list(GIT_REVIEW_DIFF_ARGV) + ["%s...%s" % (base, head)],
+            cwd=repo_root, env=sanitized_view._git_env(),
             capture_output=True, text=False, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None

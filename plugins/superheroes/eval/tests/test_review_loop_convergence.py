@@ -9,6 +9,8 @@ panels; a Critical / cross-cutting rework re-arms; a recurring Critical parks at
 """
 import importlib.util
 import json
+
+import pytest
 import sys
 from pathlib import Path
 
@@ -200,3 +202,13 @@ def test_skipped_dimension_regression_uses_shell_runner():
     assert len(confirmation_rounds(observed)) == RP.MAX_CONFIRMATIONS, confirmation_rounds(observed)
     assert any(c["reviewer"] == "security-reviewer" and c["roundKind"] == "confirmation"
                for c in observed["seen"])
+
+
+@pytest.mark.real_git_head_diff
+def test_a_standalone_eval_run_advances_past_a_fix():
+    """With the test-only git double OFF (the standalone shape — a CLI benchmark outside pytest),
+    the runner's own `head_diff` replay seam carries the fixture's post-fix diff, so a fix round
+    never parks `reviewed-diff-stale` (#1419 part i). Red token: terminal `cannot-certify`."""
+    fixture = load("plan_120_replay.json")
+    observed = run_fixture("plan_120_replay.json")
+    assert observed["terminal"] == fixture["expectedTerminal"], observed["terminal"]
