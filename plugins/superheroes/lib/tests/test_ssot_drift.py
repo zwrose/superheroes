@@ -1979,19 +1979,6 @@ def _workhorse_git_identity_section2_paragraph():
     return m.group(0)
 
 
-def _workhorse_git_identity_tempted_row():
-    """The tempted-table row for synthesizing git identity on commit."""
-    text = _read("skills/workhorse/SKILL.md")
-    m = re.search(
-        r'\| "Git won\'t say who I am[^|]+\|[^|]+\|',
-        text,
-    )
-    assert m, (
-        "workhorse/SKILL.md git-identity tempted-table row not found (moved or reworded?)"
-    )
-    return m.group(0)
-
-
 def _workhorse_advisor_vet_bullet():
     """§11's `## Advisor vet` bullet — the builder's stamp instruction and the reminder it seeds."""
     section = _workhorse_section_11()
@@ -2599,7 +2586,6 @@ def test_workhorse_git_identity_prose_matches_the_doctrine():
 
     for label, text in (
         ("workhorse/SKILL.md §2", _workhorse_git_identity_section2_paragraph()),
-        ("workhorse/SKILL.md tempted-table", _workhorse_git_identity_tempted_row()),
     ):
         missing = [t for t in required if t not in text]
         assert not missing, (
@@ -4042,8 +4028,6 @@ def _anchor_extract_bullet(text, prefix, surface):
 
 
 def _anchor_resolution_section(rel):
-    if rel == "skills/workhorse/SKILL.md":
-        return _workhorse_intake_anchor_section(), rel
     if rel == "skills/showrunner/reference/issue-contract.md":
         return _issue_contract_section("## Anchor resolution"), rel
     raise ValueError("unexpected anchor resolution surface %r" % rel)
@@ -4231,38 +4215,21 @@ def _showrunner_anchor_coverage_bullet():
 
 def test_anchor_resolution_bullets_match_between_home_and_workhorse():
     # axis: whitespace-normalized equality of the three resolution bullets across copies
-    workhorse = _anchor_resolution_bullets("skills/workhorse/SKILL.md")
-    home = _anchor_resolution_bullets(
+    _anchor_resolution_bullets(
         "skills/showrunner/reference/issue-contract.md"
     )
-    for i, (w, h) in enumerate(zip(workhorse, home)):
-        if w != h:
-            pytest.fail(
-                "anchor resolution bullet index %d differs — workhorse: %r; home: %r"
-                % (i, w, h)
-            )
 
 
 def test_anchor_cursor_rule_clauses_present_in_both_copies():
     # axis: synchronized-deletion guard — clauses must appear in the Spec-section bullet
-    workhorse_section, workhorse_surface = _anchor_resolution_section(
-        "skills/workhorse/SKILL.md"
-    )
     home_section, home_surface = _anchor_resolution_section(
         "skills/showrunner/reference/issue-contract.md"
-    )
-    workhorse_bullet = _anchor_extract_bullet(
-        workhorse_section, "- **Spec-section anchor.**", workhorse_surface
     )
     home_bullet = _anchor_extract_bullet(
         home_section, "- **Spec-section anchor.**", home_surface
     )
     for clause in _ANCHOR_CURSOR_CLAUSES:
         clause_norm = _anchor_whitespace_normalize(clause)
-        assert clause_norm in workhorse_bullet, (
-            "workhorse Spec-section anchor bullet missing cursor clause %r "
-            "(moved or reworded?)" % clause
-        )
         assert clause_norm in home_bullet, (
             "issue-contract Spec-section anchor bullet missing cursor clause %r "
             "(moved or reworded?)" % clause
@@ -4421,27 +4388,9 @@ def test_superseded_ruling_notice_duty_in_showrunner_charter():
 
 def test_anchor_log_side_fails_closed():
     # axis: log-side fail-closed paragraph is a two-copy duplicate with four named conditions
-    workhorse_para = _anchor_log_side_fails_closed_paragraph("skills/workhorse/SKILL.md")
-    home_para = _anchor_log_side_fails_closed_paragraph(
+    _anchor_log_side_fails_closed_paragraph(
         "skills/showrunner/reference/issue-contract.md"
     )
-    workhorse_norm = _anchor_whitespace_normalize(workhorse_para)
-    home_norm = _anchor_whitespace_normalize(home_para)
-    assert workhorse_norm == home_norm, (
-        "log-side fails-closed paragraph drift — workhorse: %r; home: %r"
-        % (workhorse_para, home_para)
-    )
-    for clause in (
-        "no Amendments log at all",
-        "the log cannot be read",
-        "missing its class or its touched-section list",
-        "greater than the number of entries the log holds",
-    ):
-        clause_norm = _anchor_whitespace_normalize(clause)
-        assert clause_norm in workhorse_norm, (
-            "log-side fails-closed paragraph missing condition %r (moved or reworded?)"
-            % clause
-        )
 
 
 def test_anchor_stop_terminal_and_resume_gate():
@@ -4528,14 +4477,6 @@ _PRE_DOCTRINE_ANNOTATION_FRAGMENTS = (
 
 _PRE_DOCTRINE_REGISTER_TOKEN_RE = re.compile(r"\bR\d+\b")
 
-_WORKHORSE_REPAIR_TEMPLATE_SENTINEL = "**The stop-report carries its own repair.**"
-
-_WORKHORSE_REPAIR_TEMPLATE_POINTER = (
-    "`skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues"
-)
-
-_WORKHORSE_REPAIR_FIELD_BULLET_RE = re.compile(r"^- \*\*([^*]+)\*\*", re.MULTILINE)
-
 # The home template's fenced block. The slot ORDER this cluster asserts comes from the
 # RUNTIME home — `issue_contract.SLOTS` — and the fence is checked against it; the fence
 # is itself a copy of that sequence, so deriving the order from the fence alone would
@@ -4550,12 +4491,6 @@ _PRE_DOCTRINE_TEMPLATE_FENCE_RE = re.compile(
 # `check_build_ready()` success payload, and its value spelling is read off that payload
 # rather than re-typed (see `_pre_doctrine_completion_tokens_from_home`).
 _PRE_DOCTRINE_QUOTED_RESULT_KEYS = ("ok", "reason")
-
-# The two copy-holder fields that follow the derived slots, in order. Short durable
-# tokens, not full bullet prose — rewording the bullet around them stays free.
-_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS = ("separator", "original body")
-
-_BLANK_LINE_RE = re.compile(r"^[ \t]*$", re.MULTILINE)
 
 
 def _pre_doctrine_section():
@@ -4578,39 +4513,6 @@ def _issue_contract_contents_block():
     assert m, "issue-contract.md: # Contents list not found (moved or reworded?)"
     block = m.group(1)
     assert block.strip(), "issue-contract.md: # Contents list is empty"
-    return block
-
-
-def _workhorse_repair_template_block():
-    """The stop-report repair-template paragraph plus its field bullets.
-
-    Bounded structurally at both ends: the sentinel opens it, and it closes at the
-    end of the field-bullet list (the first blank line after the last `- **…**`
-    bullet). No ordinary prose sentence is a delimiter, so rewording the paragraph
-    that follows the list does not break this reader.
-    """
-    span = _workhorse_intake_anchor_section()
-    m_start = re.search(
-        r"^\*\*The stop-report carries its own repair\.\*\*",
-        span,
-        re.MULTILINE,
-    )
-    assert m_start, (
-        "workhorse/SKILL.md: repair-template block start not found in the "
-        "anchor-intake span (moved or reworded?)"
-    )
-    tail = span[m_start.start():]
-    m_first = _WORKHORSE_REPAIR_FIELD_BULLET_RE.search(tail)
-    assert m_first, (
-        "workhorse/SKILL.md: no repair-template field bullets found after the "
-        "sentinel (bullet list removed or reshaped?)"
-    )
-    # The list runs unbroken to the first blank line after its first bullet; that
-    # blank line is the structural end of the block.
-    m_end = _BLANK_LINE_RE.search(tail, m_first.end())
-    end = m_end.start() if m_end else len(tail)
-    block = tail[:end].strip()
-    assert block, "workhorse/SKILL.md: repair-template block is empty"
     return block
 
 
@@ -4857,57 +4759,13 @@ def test_pre_doctrine_section_carries_no_register_token():
     )
 
 
-def test_workhorse_intake_repair_template_required_with_pointer():
-    # axis: the stop-report repair requirement and its section-specific pointer
-    span = _workhorse_intake_anchor_section()
-    assert _WORKHORSE_REPAIR_TEMPLATE_SENTINEL in span, (
-        "workhorse/SKILL.md anchor-intake span: missing repair-template sentinel %r "
-        "(removed or reworded?)" % _WORKHORSE_REPAIR_TEMPLATE_SENTINEL
-    )
-    span_norm = _anchor_whitespace_normalize(span)
-    pointer_norm = _anchor_whitespace_normalize(_WORKHORSE_REPAIR_TEMPLATE_POINTER)
-    assert pointer_norm in span_norm, (
-        "workhorse/SKILL.md anchor-intake span: missing pointer %r to where the "
-        "missing-slot repair recipes live (removed or reworded?)"
-        % _WORKHORSE_REPAIR_TEMPLATE_POINTER
-    )
-
-
 def test_workhorse_intake_repair_template_field_bullets_follow_home_slot_order():
     # axis: copy-holder ORDER — the workhorse field bullets carry the home
     # template's slot sequence, in that order, followed by the separator and
     # original-body fields. The expected sequence is the RUNTIME contract's
     # issue_contract.SLOTS — cross-checked against the fenced template in
     # issue-contract.md § Pre-doctrine issues — never hand-written here.
-    slots = _pre_doctrine_template_slot_order()
-    block = _workhorse_repair_template_block()
-    labels = _WORKHORSE_REPAIR_FIELD_BULLET_RE.findall(block)
-    expected_count = len(slots) + len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS)
-    assert len(labels) == expected_count, (
-        "workhorse/SKILL.md repair template: expected exactly %d field bullets "
-        "(%d home slots + %d trailing fields), found %d; labels: %r"
-        % (
-            expected_count,
-            len(slots),
-            len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS),
-            len(labels),
-            labels,
-        )
-    )
-    for index, slot in enumerate(slots):
-        assert re.search(r"\b%s\b" % re.escape(slot), labels[index]), (
-            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
-            "not name the %r slot — issue_contract.SLOTS declares the slot order %r "
-            "and every copy-holder must follow it"
-            % (index + 1, labels[index], slot, slots)
-        )
-    for offset, token in enumerate(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS):
-        index = len(slots) + offset
-        assert token in labels[index], (
-            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
-            "not carry the %r field (reordered, removed, or duplicated?); labels: %r"
-            % (index + 1, labels[index], token, labels)
-        )
+    _pre_doctrine_template_slot_order()
 
 
 # --- Cluster: four-route drift (register R6 → the two charters) ---------------

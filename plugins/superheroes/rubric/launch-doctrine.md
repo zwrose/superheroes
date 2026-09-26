@@ -135,10 +135,11 @@ detaching buys survivability; the in-turn poll is still the duty; skill-owned se
 panel and fixer) keep that skill's own dispatch contract. Park is what happens when the in-turn poll genuinely cannot fit the
 turn; it is not the automatic consequence of detaching.
 
-This section is the doctrine artifact's home for those rules. The operative copy a builder session
-loads — the full mechanism, the detached-shape contract, and the field evidence — is workhorse charter
-§7 (`skills/workhorse/SKILL.md`) — do not consolidate the mechanism back into the machine-parsed
-blocks above. The `await-dispatches` ruling in the machine-parsed block above carries the turn-end rule,
+This section is the doctrine artifact's home for those rules. A builder session loads the rule
+from workhorse charter §7 (`skills/workhorse/SKILL.md`); the full mechanism, the detached-shape
+contract, and the field evidence are in `skills/workhorse/reference/dispatch-mechanics.md` §
+Awaiting a dispatch — the in-turn contract — do not consolidate the mechanism back into the
+machine-parsed blocks above. The `await-dispatches` ruling in the machine-parsed block above carries the turn-end rule,
 the poll contract for external engine dispatches the builder invokes directly (skill-owned seats
 and native subagents keep their own lifecycle), the park escape, the concurrent-batch shape, and
 the invariant it preserves, so a launched builder receives them in its composed prompt.

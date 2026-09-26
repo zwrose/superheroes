@@ -129,8 +129,9 @@ standing in for one. Run the check whether or not the body quotes a block: a bod
 blocks is the case the check exists to fail. For a stack layer, use the [stack layer
 inputs](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md#stack-layer-inputs).
 When the route names the register and child token, or they are derivable, run the check. On
-`pass`, record the check's own output in the intake note: the `result` line, or `pass` with
-`requiredEntries` and `registerCopy` or `registerRef`. **A non-zero exit parks the build**, and
+`pass`, record the check's own output in the intake note — the `result` line, or `pass` together
+with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. **A
+non-zero exit parks the build**, and
 `undecided` parks exactly like `fail`. When applicability cannot be derived and the route names
 nothing, that is a routing gap and it parks. Raise it with the advisor rather than treating the
 check as inapplicable.
@@ -529,8 +530,9 @@ consistent with a detector that cannot fail.
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/bite-proof.md` when a build adds or changes a detector.**
 
 **Proof a review seat may not produce has three destinations, and a review seat is never one of
-them.** A review seat never changes the repository and never claims a run it did not make
-(`rubric/review-base.md`). That is an obligation, not something a tool grant enforces. So never ask
+them.** The base rubric's rule 7, *A review seat never changes the repository, and never claims
+a run it did not make.* (`rubric/review-base.md`), is an obligation, not something a tool grant
+enforces. So never ask
 a seat for a mutation probe, a planted defect, or a throwaway test, and never assert a capability in
 a seat's dispatch prompt. When a claim needs a run no review seat may make, send it to one of these:
 
@@ -609,10 +611,7 @@ answers *did the process hold, and what must I route?* with mechanism. The owner
 summary of the build record.
 
 **The body's first line is the close link — `Closes #<issue>.` on its own, above every heading.** A
-close-state sweep of the last 20 merged PRs found **five shipped issues left open** because their
-bodies opened straight into `## What's changing` and carried no functional closing keyword, while
-the builds that opened with `Closes #<issue>.` auto-closed cleanly. A 25% escape rate on one
-mechanical line is the template's job, not the builder's memory. When this PR genuinely must **not**
+body without a closing keyword leaves a shipped issue open. When this PR genuinely must **not**
 close the issue it references — a parent epic, a tracking issue — the first line still names the
 link, with a **non-closing** verb per the issue-linking discipline below. What it is never is
 **absent**.
