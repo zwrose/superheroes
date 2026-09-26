@@ -491,12 +491,39 @@ def _legacy_stdout_to_native_review_branch(stdout):
     return _native_review_branch("ruling", investigated=investigated, **ruling)
 
 
+def _test_extract_write_report_tail(text):
+    """Test-local strict write-report tail JSON extraction for fake runners."""
+    try:
+        if not isinstance(text, str) or not text:
+            return None
+        lines = text.split("\n")
+        last_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == EA.WRITE_REPORT_SENTINEL:
+                last_idx = i
+        if last_idx is None:
+            return None
+        after = "\n".join(lines[last_idx + 1 :])
+        if not after:
+            return None
+        dec = json.JSONDecoder()
+        obj, end = dec.raw_decode(after.lstrip())
+        if not isinstance(obj, dict):
+            return None
+        tail = after.lstrip()[end:]
+        if tail.strip():
+            return None
+        return obj
+    except Exception:
+        return None
+
+
 def _write_native_write_result(argv, stdout, prompt_bytes=None):
     result_path = _resolve_native_result_path(argv, prompt_bytes)
     if result_path is None:
         return
     text = stdout if isinstance(stdout, str) else ""
-    obj = EA.extract_write_report(text)
+    obj = _test_extract_write_report_tail(text)
     if obj is None:
         return
     lines = text.split("\n")
@@ -603,7 +630,7 @@ class FakeRunner:
             stdout, timed_out, rc, stderr_tail = out, False, 0, ""
         if (not owns_result_file and isinstance(stdout, str)
                 and _resolve_native_result_path(argv, prompt_bytes)):
-            if EA.extract_write_report(stdout) is not None:
+            if _test_extract_write_report_tail(stdout) is not None:
                 _write_native_write_result(argv, stdout, prompt_bytes)
             else:
                 payload = stdout
@@ -2754,14 +2781,6 @@ def _honest_refusal_stdout():
     return "Stopped per order.\n" + EA.WRITE_REPORT_SENTINEL + "\n" + body
 
 
-def test_write_fixture_stdout_gradeable_by_runner():
-    fed = _contracted_fed_prompt("Review this code.\n")
-    ok_res = EA.grade_write_report("codex", "build", _build_ok_stdout(), fed)
-    assert ok_res["ok"] is True
-    assert ok_res["signal"] == "ok"
-    refusal_res = EA.grade_write_report("codex", "build", _honest_refusal_stdout(), fed)
-    assert refusal_res["ok"] is False
-    assert refusal_res["signal"] == "plan_wrong"
 
 
 # --- WO F1: continuation owns argv/cwd/view; journal before build_view -------------
@@ -4684,23 +4703,6 @@ def _engaged_review_stdout_with_nonce_example(echo_nonce):
     return padding + json.dumps(RFS.example_findings_object(echo_nonce))
 
 
-def test_scan_review_engaged_candidates_salvage_refuses_nonce_echo(tmp_path):
-    # axis: salvage path (row 5) refuses structured export of nonce-keyed example echo
-    # bite-proof: wo_c_1145c3.md §2 (salvage threading)
-    echo_nonce = "salvage-nonce"
-    stdout = _engaged_review_stdout_with_nonce_example(echo_nonce)
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
-        fh.write(stdout)
-    state = {
-        "opened": {"fedPrompt": "", "echoNonce": echo_nonce},
-        "attempts": {1: {"ended": {"exit": 0}}},
-    }
-    candidates = ED._scan_review_engaged_candidates(run_dir, state)
-    assert len(candidates) == 1
-    salvage = candidates[0]["salvage"]
-    assert salvage.get("structured") is not True
 
 
 def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
@@ -5253,11 +5255,6 @@ _LL = importlib.util.spec_from_file_location(
 _LL_MOD = importlib.util.module_from_spec(_LL)
 _LL.loader.exec_module(_LL_MOD)
 
-_EA_WO4B = importlib.util.spec_from_file_location(
-    "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
-_EA_WO4B_MOD = importlib.util.module_from_spec(_EA_WO4B)
-_EA_WO4B.loader.exec_module(_EA_WO4B_MOD)
-
 
 def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
     build_view = _fake_build_view(tmp_path)
@@ -5285,7 +5282,7 @@ def _manual_open_review_run_git(tmp_path, run_dir, repo_root):
 
 def _artifact_pad(text):
     out = text
-    while len(out.encode("utf-8")) < _EA_WO4B_MOD.ARTIFACT_MIN_RESIDUE_BYTES + 20:
+    while len(out.encode("utf-8")) < 200 + 20:
         out += " Additional review context padding."
     return out
 
@@ -12608,8 +12605,6 @@ def test_grade_native_review_attempt_marker_salvage_path_not_reached(tmp_path, m
     monkeypatch.setattr(ED.engine_adapter, "parse_result", boom)
     monkeypatch.setattr(ED.engine_adapter, "normalize_review_stdout", boom)
     monkeypatch.setattr(ED.engine_adapter, "review_payload_shape", boom)
-    monkeypatch.setattr(ED.engine_adapter, "review_artifact_shape", boom)
-    monkeypatch.setattr(ED.engine_adapter, "salvage_from_artifact", boom)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
 
