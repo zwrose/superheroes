@@ -92,7 +92,8 @@ pair keys are absent, while exactly one pair key present, with or without `layer
 resolved base commit is the current head of the stack member at position `layerPosition - 1`
 (`base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`, `layer-position-occupied`).
 An optional `adopts` names the pull request an adoption takes over at its own position; it requires
-the stack pair and a positive integer (`premise-adopts-without-stack`, `premise-adopts-invalid`) —
+the stack pair, a positive integer, and a layer above the bottom (`premise-adopts-without-stack`,
+`premise-adopts-invalid`, `premise-adopts-bottom-layer`) —
 see Recovery for the adoption premise.
 An optional `dependency` names an open pull request whose READY vet the launch must be based on
 (`premise-dependency-invalid`, `dependency-closed-unmerged`, `dependency-open-ready-pr`,
@@ -167,11 +168,13 @@ because sessions do not transfer across config dirs; do not reach for resume the
 quietly relaunch the work on the recovering session's own account.
 
 **An adoption of a stack layer keeps the stack fields.** The adoption premise names the layer's own
-`stack` and `layerPosition` and adds `adopts: <PR number>` — the pull request that already occupies
-that position. The launcher lets it through only when that exact pull request is the member at
-`layerPosition` and sits on the layer below's head branch; any other occupant, or none, still
-refuses (`layer-position-occupied`, `adopts-occupant-missing`). Never drop the stack fields to get
-past the gate: the ledger then loses the lane's stack membership.
+`stack` and `layerPosition`. When a pull request already occupies that position (layer 2 and up),
+it adds `adopts: <PR number>` naming it; the launcher lets it through only when that exact pull
+request is the member at `layerPosition` and sits on the layer below's head branch — any other
+occupant, or none, refuses (`layer-position-occupied`, `adopts-occupant-missing`). When no pull
+request holds the position yet, or the lane is the bottom layer, omit `adopts`
+(`premise-adopts-bottom-layer`). Never drop the stack fields to get past the gate: the ledger then
+loses the lane's stack membership.
 
 **Every claim inherited from the dead session is unverified until re-run.** A commit message
 asserting tests passed, a PR body asserting a panel ran, or a comment asserting a gate was probed

@@ -8047,6 +8047,7 @@ def test_stack_gate_adopts_with_empty_position_refuses(tmp_path, monkeypatch):
     ({"stack": 1, "layerPosition": 2, "adopts": 0}, "premise-adopts-invalid"),
     ({"stack": 1, "layerPosition": 2, "adopts": True}, "premise-adopts-invalid"),
     ({"stack": 1, "layerPosition": 2, "adopts": "4242"}, "premise-adopts-invalid"),
+    ({"stack": 1, "layerPosition": 1, "adopts": 4242}, "premise-adopts-bottom-layer"),
 ])
 def test_premise_adopts_shape_refuses(tmp_path, overrides, reason):
   # axis: adopts requires the stack pair and a positive int

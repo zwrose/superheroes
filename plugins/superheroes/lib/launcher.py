@@ -1097,6 +1097,10 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         # axis: adopts must be a positive int pull-request number (bool is not an int here)
         if not ll.is_positive_premise_int(premise["adopts"]):
             return _fail("premise-adopts-invalid")
+        # axis: the bottom layer is never gated, so an adopts there would be checked by
+        # nothing; a bottom-layer adoption needs no adopts at all
+        if premise["layerPosition"] == 1:
+            return _fail("premise-adopts-bottom-layer")
 
     if "dependency" in premise:
         dependency_val = premise["dependency"]
