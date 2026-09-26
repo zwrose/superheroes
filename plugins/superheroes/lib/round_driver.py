@@ -3855,6 +3855,79 @@ def _filter_excluded_discharged_fixes(state, rows):
     return filtered, None
 
 
+def _rows_oos_excluded_from_batch(state, offered, filtered):
+    """Rows dropped from a fix-batch slice solely by a live out-of-scope ruling."""
+    if not offered:
+        return []
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return []
+    kept_keys = {_fix_batch_row_key(row) for row in filtered if _fix_batch_row_key(row)}
+    oos_keys = _live_out_of_scope_ruling_keys(state)
+    out = []
+    for row in offered:
+        key = _fix_batch_row_key(row)
+        if not key or key in kept_keys:
+            continue
+        if _excluded_discharged_fix_row(ledger_by_key, row):
+            continue
+        if key in oos_keys and not _live_out_of_scope_blocks_row(row):
+            out.append(row)
+    return out
+
+
+def _fix_ruled_out_rows(state):
+    rows = state.get("_fixRuledOut")
+    if not isinstance(rows, list):
+        rows = []
+        state["_fixRuledOut"] = rows
+    return rows
+
+
+def _stash_fix_ruled_out_row(state, row):
+    key = _fix_batch_row_key(row)
+    if not key:
+        return
+    stash = _fix_ruled_out_rows(state)
+    for i, existing in enumerate(stash):
+        if _fix_batch_row_key(existing) == key:
+            stash[i] = dict(row)
+            return
+    stash.append(dict(row))
+
+
+def _unstash_fix_ruled_out_key(state, key):
+    if not isinstance(key, str) or not key:
+        return
+    stash = _fix_ruled_out_rows(state)
+    state["_fixRuledOut"] = [row for row in stash if _fix_batch_row_key(row) != key]
+
+
+def _fix_ruled_out_keys(state):
+    keys = set()
+    for row in _fix_ruled_out_rows(state):
+        key = _fix_batch_row_key(row)
+        if key:
+            keys.add(key)
+    return keys
+
+
+def _clear_out_of_scope_disposition_for_guidance(state, key):
+    """Drop a superseded out-of-scope ledger disposition when guidance reopens the finding."""
+    if not isinstance(key, str) or not key:
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    if key in seen and isinstance(ledger[seen[key]], dict):
+        entry = ledger[seen[key]]
+        if entry.get("disposition") == "out-of-scope":
+            ledger[seen[key]] = _strip_disposition_family(entry)
+    live = _live_finding_by_key(state, key)
+    if live is not None:
+        for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+            live.pop(field, None)
+
+
 def _resolve_empty_fix_batch_convergence(state, config):
     """Route an exclusion-emptied batch through the path's own resolver (A2)."""
     round_rec = state.get("rounds", {}).get(str(state["round"]), {})
@@ -3895,8 +3968,14 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
                       "fix batch emptied by discharged-finding exclusion — "
                       "remaining queue exhausted, the round proceeds to post-fix")
         return "excluded"
+    for row in _rows_oos_excluded_from_batch(state, rows, filtered):
+        _stash_fix_ruled_out_row(state, row)
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
+    for row in state["_fixBatch"]:
+        key = _fix_batch_row_key(row)
+        if key:
+            _unstash_fix_ruled_out_key(state, key)
     state["_fixBatchIndex"] = batch_index
     state["step"] = P_FIXER
     return "queued"
@@ -7490,13 +7569,14 @@ def _ruling_requires_pending_fixer_batch_refresh(state, parsed):
         key = _fix_batch_row_key(row)
         if key:
             batch_keys.add(key)
+    ruled_out_keys = _fix_ruled_out_keys(state)
     for entry in parsed:
         key, _candidate, _fault = _resolve_ruling_target(state, entry["id"])
         if key is None:
             continue
         if entry["ruling"] == "out-of-scope":
             return True
-        if entry["ruling"] == "guidance" and key in batch_keys:
+        if entry["ruling"] == "guidance" and (key in batch_keys or key in ruled_out_keys):
             return True
     return False
 
@@ -7528,7 +7608,14 @@ def _supersede_pending_dispatch_attempt(session_dir, state, by, journal_cmd, pen
     if anchor is None:
         return None
     new_attempt = max(_next_dispatch_attempt(session_dir, rnd, phase, state), old_attempt + 1)
-    state["pending"] = dict(pending, attempt=new_attempt)
+    new_pending = dict(pending, attempt=new_attempt)
+    if phase == P_FIXER:
+        payload = dict(pending.get("payload") or {}) if isinstance(pending.get("payload"), dict) else {}
+        payload["batch"] = list(state.get("_fixBatch") or [])
+        if state.get("_escalatedRung"):
+            payload["escalatedRung"] = state["_escalatedRung"]
+        new_pending["payload"] = payload
+    state["pending"] = new_pending
     roster, roster_refusal = _roster_of(session_dir, state, journal_cmd, phase, rnd, new_attempt)
     if roster_refusal is not None:
         return roster_refusal
@@ -7616,6 +7703,14 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             pending.get("attempt"))
         if roster_refusal is not None:
             return roster_refusal
+        recorded_slots = _re_emit_recorded_slots(
+            journal, pending.get("round"), pending.get("phase"), pending.get("attempt"))
+        if recorded_slots:
+            recorded_names = _re_emit_recorded_seat_labels(
+                journal, pending.get("round"), pending.get("phase"), pending.get("attempt"))
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_ATTEMPT_RECORDED,
+                               phase=pending.get("phase"), rnd=pending.get("round"),
+                               attempt=pending.get("attempt"), names=recorded_names)
         result_names = _re_emit_blocking_result_names(
             session_dir, journal, pending.get("round"), pending.get("phase"),
             pending.get("attempt"), old_roster)
@@ -7657,6 +7752,8 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                 state, key, "out-of-scope", state["round"],
                 outOfScopeReason=entry["reason"], followUp=entry.get("followUp"),
                 rulingSeq=seq)
+        elif entry["ruling"] == "guidance":
+            _clear_out_of_scope_disposition_for_guidance(state, key)
         _decision(state, "ruling-recorded",
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
@@ -7670,7 +7767,8 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
             pending_dispatch = dict(pending)
             batch_index = state.get("_fixBatchIndex") or 0
             combined = (list(state.get("_fixBatch") or [])
-                        + list(state.get("_fixQueue") or []))
+                        + list(state.get("_fixQueue") or [])
+                        + list(state.get("_fixRuledOut") or []))
             status = _queue_fix_batch(state, cfg, combined, reset_accumulator=False,
                                         batch_index=batch_index)
             pending = state.get("pending")
@@ -7685,6 +7783,16 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                     supersededManifestSha256=(anchor or {}).get("manifestSha256"),
                     supersededOrderSha256=(anchor or {}).get("orders"),
                     by=by, at=at, reason="ruling-emptied-batch")
+                if batch_index >= 1:
+                    state.pop("_fixBatch", None)
+                    state.pop("_fixQueue", None)
+                    state.pop("_fixBatchIndex", None)
+                    state.pop("_escalatedRung", None)
+                    state.pop("_fixRuledOut", None)
+                    _enter_post_fix(state, cfg, session_dir=session_dir)
+                state["pending"] = None
+                pending_cleared = True
+            elif status == "faulted":
                 state["pending"] = None
                 pending_cleared = True
             elif isinstance(pending, dict):
