@@ -43,6 +43,7 @@ _DEFAULT_FIRST_BASELINE_VALIDATE_MAX = 10
 _VERIFY_STDOUT_CAP = 8 * 1024
 VERIFY_BASE_TOKEN = store_core.VERIFY_BASE_TOKEN
 VERIFY_BASE_EQUALS_HEAD_NOTE = store_core.VERIFY_BASE_EQUALS_HEAD_NOTE
+VERIFY_DIFF_SCOPED_NOTE = store_core.VERIFY_DIFF_SCOPED_NOTE
 COVERAGE_NO_LENS_TOKEN = "coverage-entry-no-lens"
 # Aggregate budget across all filed-issue `gh issue view` lookups in one collect.
 # Per-call timeout is capped so one hung call cannot consume the whole budget alone.
@@ -324,6 +325,11 @@ def _verify_base_equals_head_extra(stdout):
     return {"testsSelected": 0, "note": VERIFY_BASE_EQUALS_HEAD_NOTE}
 
 
+def _verify_diff_scoped_extra():
+    """Extra verify-command fields when {baseRef} was bound and HEAD is ahead of that base."""
+    return {"diffScoped": True, "note": VERIFY_DIFF_SCOPED_NOTE}
+
+
 def _coverage_entry_unbound(entry):
     if not isinstance(entry, dict):
         return False
@@ -387,6 +393,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
             stdout = ""
             duration = None
             base_equals_head = False
+            verify_base_bound = False
             if VERIFY_BASE_TOKEN in vcmd:
                 # bite-proof axis: {baseRef} is bound to a pinned commit or the command does not run.
                 pin, why = _bind_verify_base_ref(cwd)
@@ -407,6 +414,7 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                     })
                 else:
                     base_equals_head = _pinned_base_equals_head(cwd, pin)
+                    verify_base_bound = True
                     vcmd = vcmd.replace(VERIFY_BASE_TOKEN, pin)
             if not any(f.get("fact") == "verify-command" for f in facts):
                 try:
@@ -435,7 +443,9 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                     "stdout": stdout,
                     "durationSeconds": duration,
                 }
-                if status == "ok" and base_equals_head:
+                if verify_base_bound and not base_equals_head:
+                    verify_result.update(_verify_diff_scoped_extra())
+                elif status == "ok" and base_equals_head:
                     verify_result.update(_verify_base_equals_head_extra(stdout))
                 # Trust boundary: raw verify stdout stays local to verify_result for the
                 # vitals parser. Never leak it into factVerdicts / the model-facing bundle.
@@ -445,7 +455,9 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
                     "receipt": receipt,
                     "durationSeconds": duration,
                 }
-                if status == "ok" and base_equals_head:
+                if verify_base_bound and not base_equals_head:
+                    fact_row.update(_verify_diff_scoped_extra())
+                elif status == "ok" and base_equals_head:
                     fact_row.update(_verify_base_equals_head_extra(stdout))
                 facts.append(fact_row)
 

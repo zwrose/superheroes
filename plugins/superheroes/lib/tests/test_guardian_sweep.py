@@ -5,6 +5,7 @@ import re
 import subprocess
 
 import guardian_lens as gl
+import guardian_vitals as gv
 import round_driver as rd
 import guardian_report as gr
 import guardian_store as gs
@@ -3211,8 +3212,48 @@ def test_verify_command_binds_base_ref_to_gh_merge_base(tmp_path):
     assert feature_sha not in recorded[0]
     fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
     assert fact["status"] == "ok"
-    assert "testsSelected" not in fact
-    assert "note" not in fact
+    assert fact["diffScoped"] is True
+    assert fact["note"] == sc.VERIFY_DIFF_SCOPED_NOTE
+    assert out["verifyResult"]["diffScoped"] is True
+    assert out["verifyResult"]["note"] == sc.VERIFY_DIFF_SCOPED_NOTE
+
+
+def test_verify_diff_scoped_head_ahead_of_base_pytest_summary_not_suite_vitals(tmp_path):
+    """HEAD ahead of bound base: subset pytest summary must not publish as whole-suite vitals."""
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    main_sha = _head_sha(repo)
+    (tmp_path / "release.txt").write_text("release\n")
+    _git(repo, "add", "release.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "release")
+    release_sha = _head_sha(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/release", release_sha)
+    (tmp_path / "feature.txt").write_text("feature\n")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "feature")
+    branch = subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+    _git(repo, "config", "branch.%s.gh-merge-base" % branch, "release")
+    summary = "=== 3 passed, 1 skipped in 0.42s ==="
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = summary
+            stderr = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    assert main_sha != release_sha
+    vitals_out = gv.collect(repo, verify_result=out["verifyResult"])
+    note = sc.VERIFY_DIFF_SCOPED_NOTE
+    for name in ("suiteTestCount", "suiteSkipped", "suiteRuntimeSeconds"):
+        assert vitals_out["vitals"][name] is None
+        assert vitals_out["notCollected"][name] == note
+        assert "diff-scoped" in vitals_out["notCollected"][name]
 
 
 def test_verify_command_unresolvable_base_ref_is_not_run(tmp_path):
@@ -3237,6 +3278,23 @@ def test_verify_command_unresolvable_base_ref_is_not_run(tmp_path):
 def test_verify_base_token_literal_matches_round_driver():
     assert gsw.VERIFY_BASE_TOKEN is sc.VERIFY_BASE_TOKEN
     assert rd.VERIFY_BASE_TOKEN is sc.VERIFY_BASE_TOKEN
+
+
+def test_verify_diff_scoped_note_literal():
+    # bite-proof axis: the named note carries the exact token diff-scoped.
+    assert sc.VERIFY_DIFF_SCOPED_NOTE == (
+        "diff-scoped: calibrated verify command selects touched tests only")
+    assert gsw.VERIFY_DIFF_SCOPED_NOTE is sc.VERIFY_DIFF_SCOPED_NOTE
+
+
+def test_verify_diff_scoped_note_bite_proof_red_on_token(monkeypatch):
+    monkeypatch.setattr(sc, "VERIFY_DIFF_SCOPED_NOTE", "diff-scoped: drift")
+
+    def _check():
+        assert sc.VERIFY_DIFF_SCOPED_NOTE == (
+            "diff-scoped: calibrated verify command selects touched tests only")
+
+    _expect_assertion_error(_check, match=r"selects touched tests only")
 
 
 def test_verify_base_equals_head_note_literal():

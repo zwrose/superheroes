@@ -493,6 +493,10 @@ def _collect_suite_vitals(verify_result, budget_seconds):
     if reason:
         return ({}, {n: reason for n in SUITE_VITALS}, {})
 
+    if verify_result.get("diffScoped") is True:
+        note = verify_result.get("note") or store_core.VERIFY_DIFF_SCOPED_NOTE
+        return ({}, {n: note for n in SUITE_VITALS}, {})
+
     parsed = parse_verify_output(verify_result.get("stdout"))
     vitals, missing, sources = {}, {}, {}
     for name in ("suiteTestCount", "suiteSkipped"):

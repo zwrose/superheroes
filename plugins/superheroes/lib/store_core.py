@@ -297,6 +297,9 @@ def run_git(cwd, *args):
 VERIFY_BASE_TOKEN = "{baseRef}"
 # Named on verify-command facts when the bound base tip equals HEAD (no diff-scoped tests).
 VERIFY_BASE_EQUALS_HEAD_NOTE = "base-equals-head: no touched tests to select"
+# Named when a calibrated verify command bound {baseRef} and ran with HEAD ahead of that base.
+VERIFY_DIFF_SCOPED_NOTE = (
+    "diff-scoped: calibrated verify command selects touched tests only")
 VERIFY_BASE_PIN_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 

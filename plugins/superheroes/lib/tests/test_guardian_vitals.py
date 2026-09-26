@@ -276,6 +276,22 @@ def test_wall_clock_fallback_when_summary_has_no_duration(tmp_path):
     assert "wall clock" in out["sources"]["suiteRuntimeSeconds"]
 
 
+def test_diff_scoped_verify_skips_suite_vitals_despite_pytest_summary(tmp_path):
+    repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
+    note = sc.VERIFY_DIFF_SCOPED_NOTE
+    out = gv.collect(repo, verify_result={
+        "status": "ok",
+        "receipt": "pytest -q → exit 0",
+        "stdout": "=== 5 passed in 1.23s ===",
+        "durationSeconds": 2.0,
+        "diffScoped": True,
+        "note": note,
+    })
+    _assert_not_collected(out, _SUITE)
+    assert out["notCollected"]["suiteTestCount"] == note
+    assert "diff-scoped" in out["notCollected"]["suiteTestCount"]
+
+
 def test_base_equals_head_verify_skips_suite_runtime_wall_clock(tmp_path):
     repo = _plain_repo(tmp_path, {"a.py": "x = 1\n"})
     note = sc.VERIFY_BASE_EQUALS_HEAD_NOTE
