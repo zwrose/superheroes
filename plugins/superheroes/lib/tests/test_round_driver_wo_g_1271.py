@@ -253,7 +253,8 @@ def test_fix_fold_head_resolution_failure_refuses(tmp_path, monkeypatch):
     def _fail_rev_parse(_repo_root, *_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(RD.store_core, "run_git", _fail_rev_parse)
+    # HEAD resolves through the hardened helper (the shared git env), so the failure seats there.
+    monkeypatch.setattr(RD, "_hardened_head", _fail_rev_parse)
     RD._fold_fixer(
         state,
         state["config"],
