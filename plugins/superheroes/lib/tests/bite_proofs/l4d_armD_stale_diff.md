@@ -1,5 +1,18 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
+## Heads `446fcb52` / `4d16b0d4`: only the derivation call records the reviewed head (advisor vet 320)
+
+The probes ran in a detached probe worktree (Z1–Z2 at `446fcb52`, Z3 at `4d16b0d4`) that no review
+session was reading. Each neutralization was a targeted edit, reverted by the inverse edit; the
+detectors were left unedited. After each restore, `git status --porcelain` printed nothing, and
+`test_layer4d_stale_diff_1419.py` gave `93 passed` (at `446fcb52`) and `94 passed` (at `4d16b0d4`).
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| Z1 | `new_state`: the pair reads `_DERIVED_DIFF_HEAD.get() or cfg.get("diffHead")` again, and `cfg.pop("diffHead", None)` → `pass` | `test_a_supplied_diff_head_never_reaches_the_certificate` → `assert ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' is None)` (the supplied SHA recorded). The same state through `_terminal_converged` → `terminal= converged`, `certifiedHead= aaaa…`; restored → `terminal= cannot-certify`, `reason= reviewed-head-unrecorded: …` |
+| Z2 | `_cmd_next_locked`: `if isinstance(config_overrides, dict) and "diffHead" in config_overrides:` → `if False and …` | the same test → `{'action': 'dispatch-panel', 'attempt': 0, …, 'ok': True, …}` / `assert (True is False)` (a supplied head accepted in-process) |
+| Z3 | `_recorded_review_head`: `if "diffHead" in (state.get("config") or {}):` → `if False and …` | `test_a_resumed_state_carrying_a_config_diff_head_never_certifies` → `{'certification': {… 'certifiedHead': 'b53808be…', …}, 'verdict': 'converged'}` / `assert 'converged' == 'cannot-certify'` |
+
 ## Head `e9554246`: the recorded pair or nothing; one derivation feeds both setup bindings (S11 fix leg, advisor ruling (b))
 
 The probes ran in a detached probe worktree at `e9554246` that no review session was reading.
