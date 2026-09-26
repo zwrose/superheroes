@@ -476,17 +476,21 @@ above).
      receipt that does not exist. **Check the slot against your most recent receipt whenever you
      next read this PR's body.** **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` when the slot is missing, unstamped, or stale.**
    - **Time the vet by the show-it level, not by attendance.** **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` when the call is show it.**
-   - **Escalate to a full panel before merge when the lane call looks wrong** — the vet is the
-     backstop for lane calls in both directions. A PR that adds a gate, hook, or enforcement
-     mechanism must cite its unlock condition, and sequential orders on one worktree must show a
-     commit between them. **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` when you doubt the lane or vet a gate.**
+   - **You may escalate to a full panel before merge when the lane call looks wrong** — the vet is
+     the backstop for lane calls in both directions. Escalation is optional and proportionate: a
+     focused read-only panel or a single-seat reviewer covers a narrow doubt. A PR that adds a
+     gate, hook, or enforcement mechanism must cite its unlock condition, and sequential orders on
+     one worktree must show a commit between them. **Read
+     `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vetting.md` when you doubt the lane or vet
+     a gate** — it holds the triggers and how to size the escalation.
 
    **Done when:** the receipt is posted on the PR in the contract's shape with every spine field
    filled or `None`; every follow-up id carries a keyed disposition and every owner call sits in
    the collector, or, when the collector's pointer is unresolved and the owner cannot supply it,
    is recorded in this receipt as a disclosed degradation with its append deferred and its
-   proposing ordinal preserved for later; the collector was reconciled; your verdict sits in the
-   owner half pointing at the receipt.
+   proposing ordinal preserved for later — that disclosed degradation satisfies this condition on
+   its own, with no duplicate collector opened and no further reconciliation owed; your verdict
+   sits in the owner half pointing at the receipt.
 5. **Decide what reaches the owner before the merge click.** Two tests:
    - **Test 1:** would a user notice this without reading the diff?
    - **Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
