@@ -64,6 +64,13 @@ def _panel_git_cfg(tmp_path, **over):
     return _cfg(repoRoot=str(repo), baseRef=base_sha, **over)
 
 
+def _panel_head(config):
+    return subprocess.check_output(
+        ["git", "-C", config["repoRoot"], "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+
+
 def _finding():
     return {"file": "f.py", "line": 1, "title": "bug", "severity": "Important"}
 
@@ -522,7 +529,7 @@ def test_l3_a3_absent_baseline_refuses_to_scope_with_named_reason(tmp_path, monk
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
-    RD._enter_delta_round(state, config)
+    RD._enter_delta_round(state, config, panel_head=_panel_head(config))
     _assert_delta_baseline_refusal(state)
 
 
@@ -538,7 +545,7 @@ def test_l3_a3_stale_round_baseline_refuses(tmp_path, monkeypatch):
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
-    RD._enter_delta_round(state, config)
+    RD._enter_delta_round(state, config, panel_head=_panel_head(config))
     _assert_delta_baseline_refusal(state)
 
 
@@ -554,7 +561,7 @@ def test_l3_a3_non_record_baseline_refuses(tmp_path, monkeypatch):
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
-    RD._enter_delta_round(state, config)
+    RD._enter_delta_round(state, config, panel_head=_panel_head(config))
     _assert_delta_baseline_refusal(state)
 
 
@@ -590,7 +597,7 @@ def test_l3_a3_non_text_baseline_refuses(tmp_path, monkeypatch):
     state["reviewedDiff"] = _HEAD_DIFF
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
-    RD._enter_delta_round(state, config)
+    RD._enter_delta_round(state, config, panel_head=_panel_head(config))
     _assert_delta_baseline_refusal(state)
 
 
@@ -606,7 +613,7 @@ def test_l3_a3_post_fix_absent_baseline_runs_verify_then_panel(tmp_path, monkeyp
     state["headDiff"] = _HEAD_DIFF
     state["fixBatch"] = _fix_batch()
     state["_postFixEntry"] = True
-    RD._enter_delta_round(state, config)
+    RD._enter_delta_round(state, config, panel_head=_panel_head(config))
     assert state["step"] == RD.P_VERIFY
     assert state["_verifyThen"] == RD.VERIFY_THEN_PANEL
 

@@ -11,8 +11,12 @@ import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
+
+from session_checkout import seed_session_meta  # noqa: E402
 
 import handback_gate as hg  # noqa: E402
 import review_diff_bytes as rdb  # noqa: E402
@@ -66,14 +70,6 @@ def _init_two_commit_repo(tmp_path, first_body="old\n", second_body="new\n", pat
     return str(repo), base_sha, _git_diff(str(repo), base_sha)
 
 
-def _seed_session_meta(session_dir, repo):
-    """Mirror review-code setup: record repoRoot in meta.json for session checkout resolution."""
-    os.makedirs(session_dir, exist_ok=True)
-    meta_path = os.path.join(session_dir, "meta.json")
-    with open(meta_path, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps({"repoRoot": repo}) + "\n")
-
-
 def _commit_file(repo, path, body, message="fix"):
     full = os.path.join(repo, path)
     os.makedirs(os.path.dirname(full) or repo, exist_ok=True)
@@ -103,7 +99,7 @@ _A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 
 def test_b1_panel_diff_at_head_after_fixer_without_head_diff(tmp_path):
     repo, base_sha, diff_commit1 = _init_two_commit_repo(tmp_path)
     d = str(tmp_path / "session")
-    _seed_session_meta(d, repo)
+    seed_session_meta(d, repo)
     cfg = _cfg(verifyCommand="pytest -q", diff=diff_commit1, repoRoot=repo, baseRef=base_sha)
     diff_round1 = diff_commit1
 
@@ -138,7 +134,7 @@ def test_b1_panel_diff_at_head_after_fixer_without_head_diff(tmp_path):
 def test_b1_panel_diff_follows_head_moved_between_fixer_and_verify(tmp_path):
     repo, base_sha, diff_round1 = _init_two_commit_repo(tmp_path)
     d = str(tmp_path / "session")
-    _seed_session_meta(d, repo)
+    seed_session_meta(d, repo)
     cfg = _cfg(verifyCommand="pytest -q", diff=diff_round1, repoRoot=repo, baseRef=base_sha)
 
     def respond(phase, payload, rnd):

@@ -27,6 +27,7 @@ _SPEC = importlib.util.spec_from_file_location(
 _TDI = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_TDI)
 
+from session_checkout import seed_session_meta  # noqa: E402
 from test_round_driver import (  # noqa: E402
     DIFF, HEAD, HEAD_NEW_SURFACE, _cfg, _drive_cli, _drive_to_phase, _responder,
 )
@@ -393,6 +394,7 @@ def test_t4_unknown_surface_verify_then_panel(tmp_path):
     repo, init_head = _init_ceiling_git_repo(tmp_path)
     _commit_in_repo(repo, "t4-head")
     d = str(tmp_path)
+    seed_session_meta(d, repo)
     bad_head = 'diff --git "a/x y.py" "b/x y.py"\n@@ -1 +1 @@\n-a\n+b\n'
     cfg = _cfg(verifyCommand="pytest -q", repoRoot=repo, baseRef=init_head)
 

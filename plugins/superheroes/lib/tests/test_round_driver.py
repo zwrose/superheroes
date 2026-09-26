@@ -32,7 +32,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
-from session_checkout import enter_checkout  # noqa: E402
+from session_checkout import enter_checkout, seed_session_meta  # noqa: E402
 
 
 def _load(name):
@@ -1171,6 +1171,7 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
     repo, init_head = _init_ceiling_git_repo(tmp_path)
     _commit_in_repo(repo, "unknown-surface-head")
     d = str(tmp_path)
+    seed_session_meta(d, repo)
     bad_head = 'diff --git "a/x y.py" "b/x y.py"\n@@ -1 +1 @@\n-a\n+b\n'
     seen = {"panel_r2": False}
 
@@ -1360,6 +1361,7 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
     repo, init_head = _init_ceiling_git_repo(tmp_path)
     _commit_in_repo(repo, "panel-head")
     d = str(tmp_path)
+    seed_session_meta(d, repo)
     missing = str(tmp_path / "does-not-exist.txt")
     seen = {"panel_r2": False, "scoped": False}
 
