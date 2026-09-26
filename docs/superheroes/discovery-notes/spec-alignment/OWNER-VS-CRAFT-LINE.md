@@ -132,3 +132,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Craft: pulling implementation detail out of a requirement: kept (the remaining "what" stays owner).
 - Jargon in owner-facing text (old craft 7): moved to the "errors are not decisions" note; it is a slip against a standing rule, not a decision.
 - Craft: routine size splits: kept as craft.
+- Craft calls with visible consequences (e.g. a size threshold): advisor decides, owner is shown, not asked; owner disagreement on seeing it is a new ruling, not a defect. Kept, tentatively ("probably fine"); revisit at the final read.
