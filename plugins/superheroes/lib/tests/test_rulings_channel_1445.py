@@ -315,7 +315,11 @@ def test_rule_supersession_closes_prior_fixer_attempt_for_certification(tmp_path
     unclosed, refusal = RC._journal_open_seats(journal, session_dir)
     assert refusal is None
     fixer_open = [k for k, _ in unclosed if k[0] == P_FIXER]
-    assert not fixer_open
+    state = _state(session_dir)
+    new_attempt = state["pending"]["attempt"]
+    old_attempt = out["superseded"]["attempt"]
+    assert not [k for k in fixer_open if k[2] == old_attempt]
+    assert [k for k in fixer_open if k[2] == new_attempt]
 
 
 def test_edge5_aggregate_cap_refuses_ruling_omitted(tmp_path):

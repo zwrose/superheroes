@@ -93,6 +93,7 @@ __all__ = (
     "verify_result_for_head",
     "runner_channel_vendor",
     "RE_EMIT_CMD",
+    "RULE_CMD",
     "ORDERS_SUPERSEDED_OUTCOME",
     "journal_is_orders_superseded",
     "journal_is_re_emit_orders_superseded",

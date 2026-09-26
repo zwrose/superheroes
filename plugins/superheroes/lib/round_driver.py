@@ -182,7 +182,7 @@ STATE_FILE = session_contract.STATE_FILE
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RE_EMIT_CMD = session_contract.RE_EMIT_CMD
-RULE_CMD = "rule"
+RULE_CMD = session_contract.RULE_CMD
 ORDERS_SUPERSEDED_OUTCOME = session_contract.ORDERS_SUPERSEDED_OUTCOME
 RULING_KINDS = frozenset(("out-of-scope", "guidance"))
 RULING_FILE_UNREADABLE = "ruling-file-unreadable"
@@ -7311,17 +7311,29 @@ def _row_matches_ruling_id(row, ruling_id):
 def _severity_for_finding_key(state, key, fallback=None):
     if not isinstance(key, str) or not key:
         return fallback
-    for row in (state.get("_fixBatch") or []) + (state.get("_fixQueue") or []):
-        if isinstance(row, dict) and _fix_batch_row_key(row) == key:
-            sev = row.get("severity")
-            if sev is not None:
-                return sev
+    ordered = []
     for finding in state.get("findings") or []:
         if isinstance(finding, dict) and _finding_key_of(finding) == key:
-            sev = finding.get("severity")
-            if sev is not None:
-                return sev
-    return fallback
+            ordered.append(finding)
+    for row in state.get("_toVerify") or []:
+        if isinstance(row, dict) and _finding_key_of(row) == key:
+            ordered.append(row)
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    if ledger_fault is None:
+        entry = ledger_by_key.get(key)
+        if isinstance(entry, dict):
+            ordered.append(entry)
+    for row in (state.get("_fixBatch") or []) + (state.get("_fixQueue") or []):
+        if isinstance(row, dict) and _fix_batch_row_key(row) == key:
+            ordered.append(row)
+    severities = [row.get("severity") for row in ordered
+                  if isinstance(row, dict) and row.get("severity") is not None]
+    if not severities:
+        return fallback
+    for sev in severities:
+        if circuit_breaker.is_critical(sev):
+            return sev
+    return severities[0]
 
 
 def _row_matches_ruling_finding_key(row, ruling_id):
@@ -7710,13 +7722,21 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
                                    phase=pending_render_check.get("phase"),
                                    rnd=pending_render_check.get("round"),
                                    attempt=pending_render_check.get("attempt"), detail=str(exc))
-    save_state(session_dir, state)
-    if emptied_batch_journal is not None:
-        _journal_append(session_dir, emptied_batch_journal)
     journal_entry = _journal_entry_for_commit(
         session_dir, RULE_CMD, "ruling-recorded", phase=phase, round=rnd, attempt=attempt,
         rulingFileSha256=file_sha, count=len(parsed))
-    _journal_append(session_dir, journal_entry)
+    try:
+        c = round_commit.begin(session_dir, "rule-record")
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(state).encode("utf-8"))
+        journal_path = os.path.join(session_dir, JOURNAL_FILE)
+        if emptied_batch_journal is not None:
+            c.add_journal_append(journal_path, emptied_batch_journal)
+        c.add_journal_append(journal_path, journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, RULE_CMD, exc, phase=phase,
+                                        rnd=rnd, attempt=attempt)
     response = {"ok": True, "recorded": len(parsed), "rulingFileSha256": file_sha}
     if isinstance(superseded, dict) and superseded.get("superseded"):
         response["superseded"] = superseded["superseded"]
