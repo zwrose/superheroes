@@ -1,5 +1,17 @@
 # Layer 4d part (i) bite-proof record — stale-diff fail-open (arm D shadow of #1419)
 
+## Head `237f8841`: one hardened review-diff home; the eval replay seam (advisor S4 ruling)
+
+The probe worktree was detached at `237f8841`. Each neutralization was a targeted edit, reverted by
+the inverse edit. After the last restore, `git status --porcelain` printed nothing. Green: the
+stale-diff module plus the standalone eval test, `29 passed`.
+
+| # | Neutralization | Red (test → raw) |
+|---|---|---|
+| K1 | SKILL.md Setup command drops `--no-textconv` | `test_skill_and_driver_run_one_review_diff_command` → `assert ['git', '-c', 'core.commitGraph=false', ...] == [...]` (the two homes diverge) |
+| K2 | derivation argv without the config pins (`["git", "diff", *flags]`) | `test_a_user_diff_noprefix_setting_does_not_reshape_the_derived_diff` → `AssertionError: diff --git f.py f.py` |
+| K3 | eval runner seams without `"head_diff"` | `test_a_standalone_eval_run_advances_past_a_fix` (double OFF) → `assert 'halted' == 'clean'` |
+
 ## Final head `b475849d`: the invariant lives at certification (advisor ruling A3/B1/C1/D)
 
 Probe worktree detached at `b475849d`. Each neutralization was a targeted edit, reverted by the
