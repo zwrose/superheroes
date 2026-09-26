@@ -39,7 +39,11 @@ REGISTRATION_CLAIM_ABANDON_SECONDS = 86400
 REGISTRATION_CLAIM_UNRECORDED_MODEL = "unrecorded"
 LEGACY_ATTEMPTS_NAME = "astra-probe-attempts.json"
 LEGACY_CLAIM_PREFIX = "astra-probe-claim-"
-# Ledgers written before the rename keep reading.
+LEGACY_ORDER_ID_PREFIX = "astra-probe"
+REGISTRATION_ORDER_ID_PREFIX = "registration-probe"
+LEGACY_PROMPT_SUFFIX = ".astra-probe-prompt.md"
+REGISTRATION_PROMPT_SUFFIX = ".registration-probe-prompt.md"
+# Ledgers written before the rename keep reading; new writes use the legacy filenames.
 _RUBRIC_PATH = os.path.join(os.path.dirname(_LIB_DIR), "rubric", "review-base.md")
 PLANT_FILE = "app/session_guard.py"
 PLANT_LINES = (24, 25)
@@ -822,8 +826,14 @@ def _registration_claim_path(ledger_dir, wave):
 def _legacy_claim_path(ledger_dir, wave):
     return os.path.join(ledger_dir, LEGACY_CLAIM_PREFIX + "%s.json" % _wave_hash(wave, 16))
 
+def _persisted_claim_path(ledger_dir, wave):
+    return _legacy_claim_path(ledger_dir, wave)
+
 def _registration_attempts_path(ledger_dir):
     return os.path.join(ledger_dir, "registration-probe-attempts.json")
+
+def _persisted_attempts_path(ledger_dir):
+    return os.path.join(ledger_dir, LEGACY_ATTEMPTS_NAME)
 
 def _validate_attempts_list(data):
     if not isinstance(data, list):
@@ -857,13 +867,13 @@ def _read_registration_attempts(ledger_dir):
     return legacy + new, None
 
 def _append_registration_attempt(ledger_dir, record):
-    attempts, err = _read_new_registration_attempts(ledger_dir)
+    attempts, err = _read_registration_attempts(ledger_dir)
     if err:
         return err
     attempts.append(record)
     try:
         store_core.atomic_write(
-            _registration_attempts_path(ledger_dir),
+            _persisted_attempts_path(ledger_dir),
             json.dumps(attempts, separators=(",", ":")) + "\n",
         )
     except OSError:
@@ -944,7 +954,7 @@ def _write_registration_claim(ledger_dir, wave, run_dir_real, model=None, effort
         "model": model,
         "effort": effort,
     }
-    path = _registration_claim_path(ledger_dir, wave)
+    path = _persisted_claim_path(ledger_dir, wave)
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
         fh = os.fdopen(fd, "w", encoding="utf-8")
@@ -1142,21 +1152,33 @@ def registration_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, di
     if new_claim_err:
         return {"ok": False, "reason": "registration-probe-claim-unreadable"}, 1
     claim = legacy_claim if legacy_claim is not None else new_claim
+    continuing_legacy = legacy_claim is not None
+    active_claim_path = legacy_claim_path if continuing_legacy else claim_path
     if claim is None:
         try:
             _write_registration_claim(
                 ledger_dir, wave, run_dir_real,
                 model=seat.get("model"), effort=seat.get("effort"))
-            claim = _read_registration_claim(claim_path)
+            claim = _read_registration_claim(_persisted_claim_path(ledger_dir, wave))
+            active_claim_path = _persisted_claim_path(ledger_dir, wave)
+            continuing_legacy = False
         except FileExistsError:
-            claim, claim_err = _claim_at_path(claim_path)
-            if claim_err:
+            legacy_claim, legacy_claim_err = _claim_at_path(legacy_claim_path)
+            if legacy_claim_err:
                 return {"ok": False, "reason": "registration-probe-claim-unreadable"}, 1
-            if claim is None:
-                legacy_claim, legacy_claim_err = _claim_at_path(legacy_claim_path)
-                if legacy_claim_err:
-                    return {"ok": False, "reason": "registration-probe-claim-unreadable"}, 1
+            new_claim, new_claim_err = _claim_at_path(claim_path)
+            if new_claim_err:
+                return {"ok": False, "reason": "registration-probe-claim-unreadable"}, 1
+            if legacy_claim is not None:
                 claim = legacy_claim
+                continuing_legacy = True
+                active_claim_path = legacy_claim_path
+            elif new_claim is not None:
+                claim = new_claim
+                continuing_legacy = False
+                active_claim_path = claim_path
+            else:
+                return {"ok": False, "reason": "registration-probe-claim-unreadable"}, 1
         except OSError:
             return {"ok": False, "reason": "registration-probe-record-write-failed"}, 1
     if claim is not None:
@@ -1184,16 +1206,20 @@ def registration_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, di
     recorded = _attempt_for_wave(attempts, wave)
     if recorded is not None:
         return recorded, (0 if recorded.get("ok") else 1)
+    prompt_suffix = (
+        LEGACY_PROMPT_SUFFIX if continuing_legacy else REGISTRATION_PROMPT_SUFFIX)
     prompt_path = os.path.join(
         os.path.dirname(run_dir_real),
-        os.path.basename(run_dir_real) + ".registration-probe-prompt.md",
+        os.path.basename(run_dir_real) + prompt_suffix,
     )
     try:
         with open(prompt_path, "w", encoding="utf-8") as fh:
             fh.write(prompt_text)
     except OSError:
         return {"ok": False, "reason": "prompt-write-failed"}, 1
-    order_id = "registration-probe-%s" % _wave_hash(wave, 12)
+    order_prefix = (
+        LEGACY_ORDER_ID_PREFIX if continuing_legacy else REGISTRATION_ORDER_ID_PREFIX)
+    order_id = "%s-%s" % (order_prefix, _wave_hash(wave, 12))
     dispatch_kw = {
         "seat": dict(seat),
         "prompt_path": prompt_path,
@@ -1221,7 +1247,7 @@ def registration_probe(repo_root, wave, run_dir, max_wait=None, timeout=None, di
             refreshed["lastSeenAt"] = _iso_from_utc(now)
             try:
                 store_core.atomic_write(
-                    claim_path,
+                    active_claim_path,
                     json.dumps(refreshed, separators=(",", ":")) + "\n",
                 )
             except OSError:

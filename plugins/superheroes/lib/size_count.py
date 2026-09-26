@@ -11,6 +11,22 @@ def is_test_path(path):
     return "tests" in path.replace("\\", "/").split("/")
 
 
+def _normalized_path(path):
+    return "/" + path.replace("\\", "/").strip("/") + "/"
+
+
+def is_bar_exempt_path(path):
+    """True when additions must not count toward the 300/600 bars (review-discipline § Size)."""
+    norm = _normalized_path(path)
+    if "/lib/tests/bite_proofs/" in norm:
+        return True
+    if norm.endswith("/skills/workhorse/reference/dispatch-entry.md/"):
+        return True
+    if "/lib/tests/fixtures/round_certification_generated/" in norm:
+        return True
+    return False
+
+
 def count(numstat_rows, deleted_paths):
     """Pure size count from parsed numstat rows and deleted path names."""
     tripwire = 0
@@ -28,7 +44,8 @@ def count(numstat_rows, deleted_paths):
             deleted_files.append({"path": path, "lines": deleted})
             continue
         tripwire += added + deleted
-        bar += added
+        if not is_bar_exempt_path(path):
+            bar += added
 
     deleted_files.sort(key=lambda item: item["path"])
     binary.sort()

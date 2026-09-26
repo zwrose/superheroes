@@ -3351,7 +3351,7 @@ def test_astra_probe_record_survives_a_fresh_read_in_the_project_store(tmp_path,
     out1, code1 = CP.registration_probe(repo, "wave-store", run1, dispatch=dispatch)
     assert code1 == 1
     assert out1["outcome"] == "miss"
-    attempts_path = os.path.join(entry_dir, "conformance", "registration-probe-attempts.json")
+    attempts_path = os.path.join(entry_dir, "conformance", CP.LEGACY_ATTEMPTS_NAME)
     assert os.path.isfile(attempts_path)
     out2, code2 = CP.registration_probe(repo, "wave-store", run2, dispatch=dispatch)
     assert code2 == 1
@@ -3531,13 +3531,11 @@ def test_registration_probe_reads_legacy_ledger(tmp_path, monkeypatch):
     out, code = CP.registration_probe(repo, "wave-new", run_dir, dispatch=dispatch)
     assert code == 1
     assert out["misses"] == 3
-    new_path = CP._registration_attempts_path(ledger_dir)
-    with open(new_path, encoding="utf-8") as fh:
-        new_records = json.load(fh)
-    assert len(new_records) == 1
-    assert new_records[0]["wave"] == "wave-new"
-    with open(legacy_path, "rb") as fh:
-        assert fh.read() == legacy_bytes
+    with open(legacy_path, encoding="utf-8") as fh:
+        merged_records = json.load(fh)
+    assert len(merged_records) == 3
+    assert merged_records[-1]["wave"] == "wave-new"
+    assert [r["wave"] for r in merged_records[:2]] == ["wave-legacy-1", "wave-legacy-2"]
 
 
 def test_registration_probe_union_reads_legacy_appended_after_new(tmp_path, monkeypatch):
@@ -3584,6 +3582,69 @@ def test_registration_probe_legacy_claim_refuses_same_wave(tmp_path, monkeypatch
     assert code == 1
     assert out["reason"] == "registration-probe-wave-already-attempted"
     assert calls == []
+
+
+def test_registration_probe_legacy_claim_continues_in_same_run_dir(tmp_path, monkeypatch):
+    ledger_dir = _astra_ledger(tmp_path, monkeypatch)
+    repo = _repo(tmp_path)
+    wave = "wave-legacy-continue"
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    run_dir_real = os.path.realpath(run_dir)
+    legacy_claim_path = CP._legacy_claim_path(ledger_dir, wave)
+    seat_model, seat_effort = MR.matrix_config("registration-probe", "codex")
+    claim = {
+        "wave": wave,
+        "runDir": run_dir_real,
+        "claimedAt": "2026-01-01T00:00:00Z",
+        "model": seat_model,
+        "effort": seat_effort,
+    }
+    with open(legacy_claim_path, "w", encoding="utf-8") as fh:
+        json.dump(claim, fh, separators=(",", ":"))
+        fh.write("\n")
+    order_id = "%s-%s" % (CP.LEGACY_ORDER_ID_PREFIX, hashlib.sha256(wave.encode()).hexdigest()[:12])
+    journal_root = str(tmp_path / "journal-root")
+    os.makedirs(journal_root, exist_ok=True)
+    monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
+    seat = {"vendor": "codex", "model": seat_model, "effort": seat_effort}
+    built = EA.build_argv_result(seat, "review", {"model": "sonnet", "cwd": repo})
+    record = {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": "review",
+        "orderId": order_id,
+        "argv": built["argv"],
+        "cwd": repo,
+        "timeout": ED.RETRY_MIN_TIMEOUT,
+        "retryTimeout": ED.RETRY_MIN_TIMEOUT,
+        "promptPath": os.path.join(run_dir, ED.PROMPT_NAME),
+        "progressPath": os.path.join(run_dir, "progress.jsonl"),
+        "viewPath": repo,
+        "viewMeta": {"path": repo, "headSha": "abc"},
+        "baseSha": "abc",
+        "fedPrompt": "review",
+        "repoRoot": os.path.realpath(repo),
+        "supervisorPid": os.getpid(),
+        "at": time.time(),
+        "resolvedInputs": {"engineModel": seat_model, "engineEffort": seat_effort},
+    }
+    ED._journal_append(run_dir, record)
+    seen_order_ids = []
+
+    def dispatch(**kwargs):
+        seen_order_ids.append(kwargs.get("order_id"))
+        return {"ok": False, "terminal": False, "findings": None}
+
+    out, code = CP.registration_probe(repo, wave, run_dir, dispatch=dispatch)
+    assert code == 0
+    assert out.get("continue") is True
+    assert out.get("outcome") == "pending"
+    assert seen_order_ids == [order_id]
+    with open(legacy_claim_path, encoding="utf-8") as fh:
+        refreshed = json.load(fh)
+    assert refreshed.get("lastSeenAt")
 
 
 def test_registration_probe_cli_accepts_legacy_alias(tmp_path, monkeypatch):

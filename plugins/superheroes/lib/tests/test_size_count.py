@@ -186,3 +186,16 @@ def test_count_empty_diff():
     assert out["barCount"] == 0
     assert out["deletedFiles"] == []
     assert out["binary"] == []
+
+
+def test_generated_reference_doc_counts_tripwire_not_bar():
+    path = "plugins/superheroes/skills/workhorse/reference/dispatch-entry.md"
+    out = size_count.count([(650, 0, path)], set())
+    assert out["tripwireCount"] == 650
+    assert out["barCount"] == 0
+
+
+def test_is_bar_exempt_path_dispatch_entry():
+    path = "plugins/superheroes/skills/workhorse/reference/dispatch-entry.md"
+    assert size_count.is_bar_exempt_path(path)
+    assert not size_count.is_bar_exempt_path("plugins/superheroes/lib/foo.py")
