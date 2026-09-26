@@ -128,3 +128,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Craft list split: mistakes are not decisions and leave the line. Misreads (old craft 1), self-inconsistency and factual errors (old craft 2), and process gaps a review should have caught (old craft 8) move to a one-line note: "errors are not decisions; review catches them." The craft list keeps only real decisions the agents make themselves.
 - Craft: matching an approved design or reusing an existing product pattern: kept, with the boundary that if nothing approved covers the case, it falls back to category 2 (owner).
 - Craft: applying an owner-set rule to a new case: kept (bounded by category 6).
+- Craft: bookkeeping (status/label flips when a fact changes, no rule change): kept.
