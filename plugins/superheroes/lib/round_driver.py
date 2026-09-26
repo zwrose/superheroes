@@ -197,6 +197,8 @@ RULING_FOLLOW_UP_MALFORMED = "ruling-follow-up-malformed"
 RULING_GUIDANCE_OVERSIZE = "ruling-guidance-oversize"
 RULING_CRITICAL_OUT_OF_SCOPE = "ruling-critical-out-of-scope"
 RULING_ATTEMPT_PENDING = "ruling-attempt-pending"
+RULINGS_LOG_MALFORMED = "rulings-log-malformed"
+RULING_GUIDANCE_NOT_FIXER = "ruling-guidance-not-fixer"
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
@@ -1573,9 +1575,42 @@ def _next_ruling_seq(state):
     return counter
 
 
-def _rulings_log(state):
-    log = state.get("rulingsLog")
+def _read_rulings_log(state):
+    """Pure read of ``rulingsLog`` — never mutates ``state``.
+
+    Returns ``(rows, None)`` or ``([], (token, detail))`` when malformed."""
+    if not isinstance(state, dict):
+        return [], (RULINGS_LOG_MALFORMED, "state must be an object")
+    if "rulingsLog" not in state:
+        return [], None
+    log = state["rulingsLog"]
     if not isinstance(log, list):
+        return [], (RULINGS_LOG_MALFORMED, "rulingsLog must be a list")
+    rows = []
+    for entry in log:
+        if not isinstance(entry, dict):
+            return [], (RULINGS_LOG_MALFORMED, "rulingsLog row must be an object")
+        key = entry.get("findingKey")
+        if not isinstance(key, str) or not key:
+            return [], (RULINGS_LOG_MALFORMED, "rulingsLog row lacks findingKey")
+        rows.append(dict(entry))
+    return rows, None
+
+
+def _ruling_seq_counter_fault(state):
+    """Return ``(token, detail)`` when ``rulingSeqCounter`` is present but not a non-negative int."""
+    if not isinstance(state, dict) or "rulingSeqCounter" not in state:
+        return None
+    counter = state["rulingSeqCounter"]
+    if not isinstance(counter, int) or counter < 0:
+        return (RULINGS_LOG_MALFORMED, "rulingSeqCounter must be a non-negative integer")
+    return None
+
+
+def _writable_rulings_log(state):
+    """Append target for ``rulingsLog`` — only after precondition reads pass."""
+    log = state.get("rulingsLog")
+    if log is None:
         log = []
         state["rulingsLog"] = log
     return log
@@ -1583,10 +1618,11 @@ def _rulings_log(state):
 
 def _live_ruling_by_key(state):
     """Latest rulings-log row per finding key."""
+    rows, fault = _read_rulings_log(state)
+    if fault is not None:
+        return {}
     by_key = {}
-    for entry in _rulings_log(state):
-        if not isinstance(entry, dict):
-            continue
+    for entry in rows:
         key = entry.get("findingKey")
         if isinstance(key, str) and key:
             by_key[key] = entry
@@ -6888,12 +6924,26 @@ def _ruling_ledger_precondition_refusal(session_dir, state, pending):
             session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED):
         return None
     _rows, fault = session_contract.read_disposition_ledger(state, required=True)
-    if fault is None:
-        return None
-    return _refuse_cmd(
-        session_dir, RULE_CMD, fault.token,
-        phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
-        detail=fault.detail)
+    if fault is not None:
+        return _refuse_cmd(
+            session_dir, RULE_CMD, fault.token,
+            phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+            detail=fault.detail)
+    _log_rows, log_fault = _read_rulings_log(state)
+    if log_fault is not None:
+        token, detail = log_fault
+        return _refuse_cmd(
+            session_dir, RULE_CMD, token,
+            phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+            detail=detail)
+    seq_fault = _ruling_seq_counter_fault(state)
+    if seq_fault is not None:
+        token, detail = seq_fault
+        return _refuse_cmd(
+            session_dir, RULE_CMD, token,
+            phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+            detail=detail)
+    return None
 
 
 def _next_response(session_dir, state, pending, cmd):
@@ -7662,6 +7712,12 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
         return _refuse_cmd(session_dir, RULE_CMD, RULING_ATTEMPT_PENDING,
                            phase=pending.get("phase"), rnd=pending.get("round"),
                            attempt=pending.get("attempt"))
+    if state.get("step") != P_FIXER:
+        for entry in parsed:
+            if entry["ruling"] == "guidance":
+                return _refuse_cmd(
+                    session_dir, RULE_CMD, RULING_GUIDANCE_NOT_FIXER,
+                    phase=phase, rnd=rnd, attempt=attempt)
     cfg = state.get("config") or {}
     round_rulings = []
     restored_rows = []
@@ -7691,7 +7747,7 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
         session_contract.copy_follow_up_field(entry, log_row)
         if entry.get("guidance") is not None:
             log_row["guidance"] = entry["guidance"]
-        _rulings_log(state).append(log_row)
+        _writable_rulings_log(state).append(log_row)
         round_rulings.append(dict(log_row))
         if entry["ruling"] == "out-of-scope":
             _record_disposition(

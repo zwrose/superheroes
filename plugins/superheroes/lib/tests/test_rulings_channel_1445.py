@@ -565,26 +565,53 @@ def test_fix_batch_unreadable_refuses_order_render(tmp_path, monkeypatch):
         RD._fix_batch_file_sha256(session_dir, rnd, state)
 
 
-def test_edge9_non_fixer_pending_no_supersede(tmp_path):
+def test_edge9_non_fixer_step_refuses_guidance(tmp_path):
     session_dir, gitdir, head_path, row_a, _ = _pending_fixer_two_findings(tmp_path)
     state = _state(session_dir)
     rnd = state["round"]
     pend = {"action": RD.P_AUDITS, "round": rnd, "phase": RD.P_AUDITS, "attempt": 0,
             "payload": {"targets": state.get("_auditTargets") or []}}
     state["pending"] = pend
+    state["step"] = RD.P_AUDITS
     RD.save_state(session_dir, state)
     roster, _ = __import__("round_adapters").roster_for(
         RD.P_AUDITS, state, state.get("config") or {})
     _write_dispatch_manifest(session_dir, pend, _slots_of(roster), _auditor_vendor_for(state))
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    before = _state_bytes(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_a, "ruling": "guidance", "reason": "r", "guidance": "g"}]))
-    assert out.get("ok"), out
-    assert "superseded" not in out
-    superseded_rows = [
-        row for row in RD.read_journal(session_dir)
-        if row.get("outcome") == session_contract.ORDERS_SUPERSEDED_OUTCOME]
-    assert not superseded_rows
+    assert out.get("ok") is False, out
+    assert out.get("reason") == RD.RULING_GUIDANCE_NOT_FIXER, out
+    assert _state_bytes(session_dir) == before
+
+
+def test_rule_refuses_malformed_rulings_log(tmp_path):
+    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    state = _state(session_dir)
+    state["rulingsLog"] = {"not": "a-list"}
+    RD.save_state(session_dir, state)
+    id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    before = _state_bytes(session_dir)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_a, "ruling": "guidance", "reason": "r", "guidance": "g"}]))
+    assert out.get("ok") is False, out
+    assert out.get("reason") == RD.RULINGS_LOG_MALFORMED, out
+    assert _state_bytes(session_dir) == before
+
+
+def test_rule_refuses_malformed_ruling_seq_counter(tmp_path):
+    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    state = _state(session_dir)
+    state["rulingSeqCounter"] = "not-an-int"
+    RD.save_state(session_dir, state)
+    id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    before = _state_bytes(session_dir)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_a, "ruling": "guidance", "reason": "r", "guidance": "g"}]))
+    assert out.get("ok") is False, out
+    assert out.get("reason") == RD.RULINGS_LOG_MALFORMED, out
+    assert _state_bytes(session_dir) == before
 
 
 def test_receipt_parity_rulings_field(tmp_path):
