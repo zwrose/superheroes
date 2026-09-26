@@ -2716,11 +2716,12 @@ def test_loop_no_idle_seat_when_next_layer_is_member_from_another_batch(
         sleep=sleep,
         max_total_seconds=5,
     )
+    idle_flags = [
+        entry for entry in result.get("flags") or ()
+        if entry.get("flag") == "idle-seat-launchable-child"
+    ]
+    assert idle_flags == []
     assert result["event"] == ww.EVENT_TIMER
-    assert not any(
-        entry.get("flag") == "idle-seat-launchable-child"
-        for entry in result.get("flags") or ()
-    )
 
 
 def test_loop_idle_seat_still_exits_when_next_position_has_no_member_or_lane(
