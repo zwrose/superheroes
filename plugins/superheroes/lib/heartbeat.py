@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Semantic builder heartbeat — builder stamps state; advisor sweeps.
 
-Fail-closed: a false \"fresh\" is the dangerous answer. Never raises to callers.
+Fail-closed: a false terminal is the dangerous answer. Never raises to callers.
 """
 from __future__ import annotations
 
@@ -35,7 +35,8 @@ STATES = frozenset({
     "handback",
 })
 TERMINAL_STATES = frozenset({"parked", "handback"})
-SWEEP_CLASSES = frozenset({"fresh", "stale", "terminal", "unknown"})
+# nonterminal: a valid record whose state is not terminal; says nothing about liveness.
+SWEEP_CLASSES = frozenset({"terminal", "nonterminal", "unknown"})
 
 REASON_LAUNCH_ID_UNAVAILABLE = "heartbeat-launch-id-unavailable"
 REASON_LAUNCH_ID_INVALID = "heartbeat-launch-id-invalid"
@@ -46,36 +47,6 @@ REASON_LEDGER_UNREADABLE = "heartbeat-ledger-unreadable"
 REASON_HEARTBEAT_MISSING = "heartbeat-missing"
 
 _LAUNCH_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_STALE_AFTER_MIN = 1
-_STALE_AFTER_MAX = 86400
-
-# The measurement the default promise is derived from (#1023) — the authoritative
-# home for these numbers. Every prose copy (CONVENTIONS §15, reference/wave-watch.md)
-# and the contract test read or drift-check THIS, so correcting the measurement in one
-# place cannot leave the others silently disagreeing.
-#
-# Read from 10 builder-lane session transcripts on the reference host: 45 inter-stamp
-# gaps, 44 of them benign, where benign means the transcript never went colder than
-# 600 s (the host's foreground-Bash ceiling) anywhere inside the gap — so the lane was
-# demonstrably working the whole way through.
-STALE_AFTER_MEASUREMENT = {
-    "worstBenignGapSeconds": 11960,
-    "lanes": 10,
-    "gaps": 45,
-    "benignGaps": 44,
-    "coldThresholdSeconds": 600,
-    "multiplier": 2,
-}
-
-# The promise a caller gets when it does not state one. The old default was 300 s,
-# which no real build has ever met — an omitting caller was guaranteed to classify
-# `stale` within five minutes. A builder that states its own `--stale-after` is
-# unaffected; this only moves the fallback.
-#
-# bite-axis: the default promise CLEARS the multiplier times the measured worst benign
-# gap — lowering it below that reddens
-# test_default_stale_after_clears_twice_the_worst_measured_benign_gap.
-DEFAULT_STALE_AFTER_SECONDS = 24000
 _NOTE_MAX_LEN = 500
 _PHASE_MIN_LEN = 1
 _PHASE_MAX_LEN = 64
@@ -294,9 +265,6 @@ def _validate_record(record, *, launch_id, now):
         return False, "heartbeat-ts-invalid"
     if ts > now:
         return False, "heartbeat-ts-future"
-    stale_after = record.get("staleAfterSeconds")
-    if not _is_positive_int(stale_after, min_val=_STALE_AFTER_MIN, max_val=_STALE_AFTER_MAX):
-        return False, "heartbeat-stale-after-invalid"
     note = record.get("note")
     if note is not None:
         if not isinstance(note, str) or len(note) > _NOTE_MAX_LEN:
@@ -338,21 +306,17 @@ def _classify_record(record, *, launch_id, now):
             "state": record.get("state") if isinstance(record, dict) else None,
             "phase": record.get("phase") if isinstance(record, dict) else None,
             "lastDispatch": record.get("lastDispatch") if isinstance(record, dict) else None,
-            "staleAfterSeconds": record.get("staleAfterSeconds") if isinstance(record, dict) else None,
             "note": record.get("note") if isinstance(record, dict) else None,
             "ageSeconds": None,
         }
 
     ts = float(record["ts"])
-    stale_after = int(record["staleAfterSeconds"])
     age = now - ts
     state = record["state"]
     if state in TERMINAL_STATES:
         sweep_class = "terminal"
-    elif age > stale_after:
-        sweep_class = "stale"
     else:
-        sweep_class = "fresh"
+        sweep_class = "nonterminal"
 
     return {
         "class": sweep_class,
@@ -360,7 +324,6 @@ def _classify_record(record, *, launch_id, now):
         "state": state,
         "phase": record["phase"],
         "lastDispatch": record.get("lastDispatch"),
-        "staleAfterSeconds": stale_after,
         "note": record.get("note"),
         "ageSeconds": age,
     }
@@ -374,7 +337,6 @@ def _unknown_classification(launch_id, reason):
         phase=None,
         lastDispatch=None,
         ageSeconds=None,
-        staleAfterSeconds=None,
         note=None,
         reason=reason,
     )
@@ -397,7 +359,6 @@ def _read_file_classification(repo_root, launch_id, *, env=None, now=None):
             phase=None,
             lastDispatch=None,
             ageSeconds=None,
-            staleAfterSeconds=None,
             note=None,
             reason=REASON_HEARTBEAT_MISSING,
         )
@@ -410,7 +371,6 @@ def _read_file_classification(repo_root, launch_id, *, env=None, now=None):
             phase=None,
             lastDispatch=None,
             ageSeconds=None,
-            staleAfterSeconds=None,
             note=None,
             reason=load_reason,
         )
@@ -422,7 +382,6 @@ def _read_file_classification(repo_root, launch_id, *, env=None, now=None):
         phase=classified["phase"],
         lastDispatch=classified["lastDispatch"],
         ageSeconds=classified["ageSeconds"],
-        staleAfterSeconds=classified["staleAfterSeconds"],
         note=classified["note"],
         reason=classified["reason"],
     )
@@ -447,7 +406,6 @@ def stamp(
     phase,
     launch_id=None,
     issue=None,
-    stale_after_seconds=DEFAULT_STALE_AFTER_SECONDS,
     last_dispatch=None,
     note=None,
     env=None,
@@ -473,7 +431,6 @@ def stamp(
         "phase": phase,
         "lastDispatch": last_dispatch,
         "ts": float(now),
-        "staleAfterSeconds": int(stale_after_seconds),
         "note": note,
     }
     valid, reason = _validate_record(record, launch_id=launch_id, now=now)
@@ -555,7 +512,6 @@ def sweep(repo_root, *, env=None, now=None):
             "phase": classified.get("phase"),
             "lastDispatch": classified.get("lastDispatch"),
             "ageSeconds": classified.get("ageSeconds"),
-            "staleAfterSeconds": classified.get("staleAfterSeconds"),
             "note": classified.get("note"),
             "reason": classified.get("reason"),
         }
@@ -580,7 +536,6 @@ def _cli_stamp(args):
         phase=args.phase,
         launch_id=args.launch_id,
         issue=args.issue,
-        stale_after_seconds=args.stale_after,
         last_dispatch=last_dispatch,
         note=args.note,
         env=os.environ,
@@ -604,8 +559,9 @@ def main(argv=None):
     st.add_argument("--state", required=True)
     st.add_argument("--phase", required=True)
     st.add_argument("--issue", type=int, default=None)
+    # Accepted and ignored for older callers that still pass --stale-after.
     st.add_argument(
-        "--stale-after", type=int, default=DEFAULT_STALE_AFTER_SECONDS,
+        "--stale-after", type=int, help=argparse.SUPPRESS, default=None,
         dest="stale_after",
     )
     st.add_argument("--last-dispatch", default=None, dest="last_dispatch")
