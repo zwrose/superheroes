@@ -327,12 +327,7 @@ The journal writes two `engine-launching` records per attempt: the first (from t
 entry) carries `argv`, the opened argv; the second carries `spawnArgv`, the argv the engine actually
 received. A reader trusts `spawnArgv`.
 
-A second grader or salvage fix — a `fix` commit touching the marker grader or
-the salvage modules — on an engine still on the marker channel proposes, at the next gardening pass,
-one of two things: move that engine to a native channel, or drop the engine; no dispatchable engine
-is on the marker channel since layer 3c, so today only the native-channel half can fire. Patching
-the marker channel a third time is not an option the proposal offers. On an engine on its native
-channel, a second schema or adapter fix after landing — a `fix` commit touching that engine's
+On an engine on its native channel, a second schema or adapter fix after landing — a `fix` commit touching that engine's
 declared schema or its output or completion adapter — proposes dropping the engine or accepting the
 cost in the record. The fix commits are read by their `fix` type and touched paths; no new
 instrument; the proposal is the owner's judgment at the pass. The readout the pass reads is the
@@ -472,22 +467,10 @@ probe` can justify calling a seat inert. Token spend does not measure engagement
 calibrated codex reviewer seat, a 2,449-token dispatch was engaged-clean and a 10,415-token
 dispatch produced a Critical finding.
 
-**`reason: "forfeit-with-engaged-artifact"`** — the seat produced a review our transport could not
-carry. It **is a forfeit** (`ok: false`, `forfeited: true`, `terminal: true`) and every existing
-rule about a terminal forfeit applies unchanged — including the three-case reviewer-loss rule in
-`rubric/review-discipline.md` (a `forfeit-with-engaged-artifact` is one of those terminal forfeits,
-not an exception to them). This outcome and its `salvage` block exist for marker-channel seats only;
-a native-channel seat's forfeit carries its `native-result-*` detail and no salvage. What is
-different is what you know: the result carries **`salvage`** with the artifact's location and shape
-(`stdoutPath`, `shape`, and when structured, `findings`).
-
-**Salvage rule — findings only, never the seat.** The seat is not credited, not counted toward panel
-composition, and not a substitute for a re-dispatch. Each claim you take from the artifact is
-**independently verified before use**, and the degradation is disclosed in the PR — because a timeout
-can truncate stdout, you can verify what an artifact contains but never what it never reached, and a
-seat-count vouches for the latter. **`salvage.structured: false`** means the artifact is prose: the
-runner deliberately does **not** parse prose into findings (that would manufacture claims); you read
-the artifact yourself (`requiresManualRead: true`, `excerpt` is a scrubbed pointer).
+**`reason: "forfeit-with-engaged-artifact"`** — a marker-channel outcome. No run mints it: it names a
+marker-channel recovery, and no engine is on the marker channel. It stays in the outcome vocabulary
+because a persisted result can carry it. Read one as a terminal forfeit: every rule about a terminal
+forfeit applies, including the three-case reviewer-loss rule in `rubric/review-discipline.md`.
 
 **Per-attempt telemetry** (each ledger row's `attempts[]` entry, one per spawned attempt):
 
@@ -717,23 +700,16 @@ membership check compares the declared set against the final diff; it can **down
 a forfeit but never upgrade or relabel a failure. When nothing was declared, behaviour is unchanged:
 no `baselineDirty` capture, no `itemCheck` key. When declared, a passing result includes
 `itemCheck` (`declared`, `expected`, `delivered`, `missing`). Terminal detail tokens:
-`items-undelivered` (one or more paths missing; this forfeit **does** carry `itemCheck`);
-`report-missing-items-delivered` on marker-channel runs (the attempt ended cleanly — exit 0, not
-timed out, not refused — on a contracted prompt with no readable report, a **non-empty** declared
-set via `--expect-item` / `--expect-items-file`, and **every** declared path present in the delivery
-evidence; this forfeit **does** carry `itemCheck` with all paths delivered); and
+`items-undelivered` (one or more paths missing; this forfeit **does** carry `itemCheck`); and
 `item-evidence-unavailable:<cause>` (git
 evidence could not be collected — causes include `falsy-base-sha`, `diff-timeout`, `diff-failed`,
 `status-timeout`, `status-failed`). Open-time `unrunnable` detail `base-sha-unresolvable` refuses
-when a declared run's `--base-sha` does not resolve. A dispatch that declares nothing cannot earn
-`report-missing-items-delivered` and keeps the ordinary fail-closed details (`worktree-dirtied-by-attempt`
-and the rest) — declaring items is what buys the distinction. Other forfeits, `unrunnable`, and
+when a declared run's `--base-sha` does not resolve. Other forfeits, `unrunnable`, and
 `worktree-dirtied-by-attempt` never carry `itemCheck`. On marker-channel runs, when engine stdout
 exceeds the **8 MiB capture cap**, the terminal forfeit carries a **stdout-capture-cap** reason class
 of its own (exact detail token pinned by sibling order WO-B) with an explicit truncation marker in
 the captured stdout — it no longer surfaces under `worktree-dirtied-by-attempt`. Every forfeit detail above remains `ok: false`,
-`forfeited: true` — `report-missing-items-delivered` renames a condition; it never converts a forfeit
-into a success.
+`forfeited: true`.
 
 Evidence is the union of `git diff --name-status -z -M <baseSha>` against the **working tree**
 (not `HEAD`, so a path committed and then reverted is not credited) plus on-disk paths from
@@ -743,20 +719,7 @@ Rename/copy records contribute both the old and new paths.
 This is **final-diff membership, not proof of engine authorship**: it cannot distinguish created from
 modified; a create-then-delete leaves no evidence and reads as missing; a concurrent writer could
 supply a path. A file that was already dirty before the run and unchanged afterward is not credited
-as delivered. `report-missing-items-delivered` rides this same evidence and inherits **exactly** its
-limits: it proves declared paths **changed** (membership in the final diff), not authorship,
-completeness, or that the order's intent was met. Its purpose is to tell an orchestrator **not to
-re-run work that already landed** — reconstruct the change from the diff and re-verify it, never
-assume the order is done.
-
-On marker-channel runs, when a terminal write result includes `salvage`, it carries a recoverable
-implementer report from an ended attempt's stdout — the contracted final tail when the runner
-appended the write-report contract, or a prose tier when strict tail grading could not extract
-structured JSON. The outcome remains a
-forfeit; its contents are the implementer's claims and must be independently re-verified before use.
-Write salvage has two tiers: a structured report is gradeable only after that independent
-verification, while a prose-tier block has `requiresManualRead: true` and a scrubbed `excerpt` for a
-human or orchestrator to read. Prose is a pointer, never a gradeable report.
+as delivered.
 
 ### Sibling worktree observation (`siblingWorktrees`)
 
@@ -803,9 +766,12 @@ inferred cause. "One caller's bad script" is the alternative reading that sits b
 An external engine can forfeit *after* writing files — characteristically with cursor's
 **`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
 on-disk work already complete and correct. Field evidence: three builds in one wave; in one of them
-four of six dispatches forfeited, every one with correct files on disk. A
-`report-missing-items-delivered` forfeit is the same class: work landed, the contracted report did
-not. **Inspect the worktree before discarding or re-dispatching** — "inspect the diff" alone is not a
+four of six dispatches forfeited, every one with correct files on disk. **Long cursor write
+dispatches.** A long cursor `dispatch-write` run can forfeit after its work lands
+(`worktree-dirtied-by-attempt`): the grading never runs, and a partial landing can lack its tests.
+Split long write orders into smaller ones. After any write forfeit, verify the declared paths
+yourself — that each is present and that its tests exist and run — before you re-order. Never retry
+a forfeit blind. **Inspect the worktree before discarding or re-dispatching** — "inspect the diff" alone is not a
 decision rule:
 
 - **What the tree inspection establishes.** Before dispatching, the build worktree must be **clean** —

@@ -47,6 +47,8 @@ tripwire's and the vet's to catch, not the lane line's. Estimates carry both num
 (behaviour + test lines) so the tripwire and the estimate share a basis (owner-ruled
 2026-08-16).
 
+**Whole deleted files are reported, not counted.** A non-test file the diff deletes outright — numstat shows no additions and the file is gone at the head — is left out of the tripwire's count and listed in the build record with its line count. A deletion inside a file that stays still counts, so unplanned scope still shows. The two bars below are unchanged; they already leave pure deletions out. `size_count.py count --base <sha>` (in the plugin's `lib` directory) returns the tripwire count, the bar count and the deleted-file list.
+
 **The estimate is fixed when the build starts.** The tripwire compares against the non-test estimate
 on record at the start: the brief's for a full build, the order's for a light build. A light build
 that escalates to the full lane keeps its starting estimate; the late brief does not replace it. A
@@ -372,7 +374,7 @@ tripwire fired** and name the seam problem, so the advisor is grading a declared
 inferring it from provenance. Where the builder cannot say with confidence that the lane has
 converged, the park branch binds — the permissive branch is available only on a lane the builder can
 affirmatively call converged. Where the build cannot truthfully hand back, **a formal park binds when the lane has not converged** — stop with receipts; lifting the park is owner- or advisor-ruled
-rather than the builder's own call. Two field specimens deviated from the letter while honouring
+rather than the builder's own call. When the advisor lifts a tripwire or a park and sets a bound, a hit on that bound parks back to the advisor, who applies the owner-decisions filter; the owner gets the question only when a real taste, trade or commitment, or a material consequence, arises. Two field specimens deviated from the letter while honouring
 the substance, which is what prompted the ruling.
 
 ### Continuation and the advisor-resolution valve
@@ -637,7 +639,7 @@ catches or kills to consult and none to build. At contact you check one list for
 project names its keep list as a [project configuration](rubric/glossary.md#project-configuration) item.
 
 This rule activates only once the owner has stamped the project's keep list. Before that, nothing
-is deleted and expectations are not rewritten.
+is deleted under this rule, and an obsolete expectation is rewritten as before, with the classification and its reason in the pull request body.
 
 ## Prose-driven review (`--review-only`)
 
