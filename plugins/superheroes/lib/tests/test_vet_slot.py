@@ -285,13 +285,19 @@ def test_evaluate_refuses_bad_slot_text(slot_text, detail):
 
 @pytest.mark.parametrize("slot_text", [
     "```bash\ncommand",
-    "Owner half <!--",
+    "Owner half\n<!-- draft",
 ])
 def test_evaluate_refuses_slot_that_shadows_markers(slot_text):
     result = vs.evaluate("write", BODY, [_comment(RECEIPT)], slot_text, advisor_login="advisor")
     assert result["reason"] == "write-failed"
     assert "composed body broke markers" in result["detail"]
     assert "newBody" not in result
+
+
+def test_evaluate_slot_with_mid_line_opener_does_not_shadow_markers():
+    result = vs.evaluate("write", BODY, [_comment(RECEIPT)], "Owner half <!--", advisor_login="advisor")
+    assert result["ok"] is True
+    assert "Owner half <!--" in result["newBody"]
 
 
 def test_write_refuses_unclosed_fence_in_slot(slot_file):
@@ -303,6 +309,82 @@ def test_write_refuses_unclosed_fence_in_slot(slot_file):
     assert result["reason"] == "write-failed"
     assert "composed body broke markers" in result["detail"]
     assert fake.edit_calls() == []
+
+
+# --- HTML comments open only at the start of a line (#1448, vet 315 probe 6) --------------
+
+RECEIPT_MID_LINE_CODE_SPAN = RECEIPT.replace(
+    "- FU1: filed #12", "- FU1: filed #12 (see `<!--` in the diff)")
+RECEIPT_MID_LINE_BARE = RECEIPT.replace(
+    "- FU1: filed #12", "- FU1: filed #12 (see <!-- in the diff)")
+BODY_MID_LINE_CODE_SPAN = BODY.replace(
+    "Follow-ups: 2 (1 owner-call)", "Follow-ups: 2 (1 owner-call, see `<!--` in the diff)")
+BODY_MID_LINE_BARE = BODY.replace(
+    "Follow-ups: 2 (1 owner-call)", "Follow-ups: 2 (1 owner-call, see <!-- in the diff)")
+
+
+@pytest.mark.parametrize("verb", ["write", "check"])
+def test_receipt_mid_line_code_span_opener_above_marker_still_reads(verb, slot_file):
+    """Edge 1: a `<!--` inside an inline code span in a receipt line above the marker."""
+    fake = _ok_fake(receipt=RECEIPT_MID_LINE_CODE_SPAN)
+    result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+@pytest.mark.parametrize("verb", ["write", "check"])
+def test_receipt_mid_line_bare_opener_above_marker_still_reads(verb, slot_file):
+    """Edge 2: a bare `<!--` in a receipt line above the marker."""
+    fake = _ok_fake(receipt=RECEIPT_MID_LINE_BARE)
+    result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+@pytest.mark.parametrize("verb", ["write", "check"])
+def test_body_mid_line_code_span_opener_above_marker_still_reads(verb, slot_file):
+    """Edge 3: a `<!--` inside an inline code span in build-record prose above the marker."""
+    fake = _ok_fake(body=BODY_MID_LINE_CODE_SPAN)
+    result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+@pytest.mark.parametrize("verb", ["write", "check"])
+def test_body_mid_line_bare_opener_above_marker_still_reads(verb, slot_file):
+    """Edge 4: a bare `<!--` in build-record prose above the marker."""
+    fake = _ok_fake(body=BODY_MID_LINE_BARE)
+    result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_three_space_indented_opener_still_hides_marker_below(slot_file):
+    """Edge 6 (three spaces): a line-start opener within the three-column allowance still opens."""
+    body = _body_marker("   <!-- draft\n" + FU_MARKER + "\n")
+    fake = _ok_fake(body=body)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is False
+    assert result["reason"] == "markers-invalid"
+    assert "followups marker appears 0 times" in result["detail"]
+
+
+def test_four_space_indented_opener_does_not_hide_marker_below(slot_file):
+    """Edge 6 (four spaces): four columns of indentation is too much to open a comment."""
+    body = _body_marker("    <!-- draft\n" + FU_MARKER + "\n")
+    fake = _ok_fake(body=body)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
+
+
+def test_closer_followed_by_bare_opener_does_not_reopen_comment(slot_file):
+    """Edge 7: `-->` followed later on the same line by `<!--` does not reopen the state."""
+    body = _body_marker("<!-- draft\nclosed --> trailing <!--\n" + FU_MARKER + "\n")
+    fake = _ok_fake(body=body)
+    result = vs.run_verb("write", PR, REPO, slot_file=slot_file, run=fake)
+    assert result["ok"] is True
+    assert result["followups"] == ["FU1", "FU2"]
 
 
 RECEIPT_CASES = [

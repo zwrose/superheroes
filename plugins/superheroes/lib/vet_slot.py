@@ -61,8 +61,10 @@ def _refusal(reason, detail):
 def _live_lines(text):
     """Yield ``(offset, line)`` for every line outside code fences and outside an open HTML comment.
 
-    A line is live when it is not fenced and no comment opened on an earlier non-fenced line is
-    still open at its start; ``line`` carries no line ending."""
+    A line opens a comment only when, outside any fence, its first non-whitespace characters —
+    after at most three columns of indentation — are ``<!--``; that comment stays open through
+    later lines until one contains ``-->`` at or after the opener, and a ``<!--`` anywhere else in
+    a line never changes the comment state."""
     raw = text.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
@@ -71,12 +73,15 @@ def _live_lines(text):
         if not dead:
             if not in_comment:
                 yield offset, line
-            pos = 0
-            while True:  # carry the open-comment state to the next line
-                pos = line.find("-->" if in_comment else "<!--", pos)
-                if pos < 0:
-                    break
-                pos, in_comment = pos + (3 if in_comment else 4), not in_comment
+            if in_comment:
+                if "-->" in line:
+                    in_comment = False
+            else:
+                stripped = line.lstrip(" \t")
+                lead = len(line) - len(stripped)
+                if md_fence.indent_width(line) <= 3 and stripped.startswith("<!--"):
+                    if "-->" not in line[lead + 4:]:
+                        in_comment = True
         offset += len(whole)
 
 
