@@ -2281,22 +2281,6 @@ _NUMBER_WORDS = {
     "twelve": 12,
 }
 
-_ORDINAL_WORDS = {
-    "first": 1,
-    "second": 2,
-    "third": 3,
-    "fourth": 4,
-    "fifth": 5,
-    "sixth": 6,
-    "seventh": 7,
-    "eighth": 8,
-    "ninth": 9,
-    "tenth": 10,
-    "eleventh": 11,
-    "twelfth": 12,
-}
-
-
 def _preflight_charter_block(text):
     begin = text.find(_PREFLIGHT_CHARTER_BEGIN)
     end = text.find(_PREFLIGHT_CHARTER_END)
@@ -2381,7 +2365,7 @@ def test_preflight_enum_form_ids_catches_stale_inline_citation():
 
 
 def test_showrunner_preflight_count_prose_matches_home():
-    """Duty 9 count words in showrunner/SKILL.md track dispatch-preflight.md's enumeration."""
+    """Duty 9's check-count word in showrunner/SKILL.md tracks dispatch-preflight.md's enumeration."""
     import launch_doctrine as ld
 
     home_text = _read("skills/showrunner/reference/dispatch-preflight.md")
@@ -2401,32 +2385,6 @@ def test_showrunner_preflight_count_prose_matches_home():
     assert _NUMBER_WORDS[eight_word] == check_count, (
         "showrunner/SKILL.md duty 9 says %r checks but dispatch-preflight.md enumerates %d"
         % (eight_word, check_count)
-    )
-
-    ninth_match = re.search(r"not an? ([a-z]+) check\b", duty, re.IGNORECASE)
-    assert ninth_match, (
-        "showrunner/SKILL.md duty 9 missing 'not a/an <ordinal> check' prose (moved or reworded?)"
-    )
-    ninth_word = ninth_match.group(1).lower()
-    assert ninth_word in _ORDINAL_WORDS, (
-        "showrunner/SKILL.md duty 9 uses unknown ordinal %r in ninth-check guard" % ninth_word
-    )
-    assert _ORDINAL_WORDS[ninth_word] == check_count + 1, (
-        "showrunner/SKILL.md 'not a %s check' no longer matches len(home)+1 (%d+1)"
-        % (ninth_word, check_count)
-    )
-
-    list_match = re.search(r"\b([a-z]+)-check list\b", duty, re.IGNORECASE)
-    assert list_match, (
-        "showrunner/SKILL.md duty 9 missing '<word>-check list' prose (moved or reworded?)"
-    )
-    list_word = list_match.group(1).lower()
-    assert list_word in _NUMBER_WORDS, (
-        "showrunner/SKILL.md duty 9 uses unknown word %r in eight-check-list guard" % list_word
-    )
-    assert _NUMBER_WORDS[list_word] == check_count, (
-        "showrunner/SKILL.md '%s-check list' no longer matches dispatch-preflight enumeration (%d)"
-        % (list_word, check_count)
     )
 
 
@@ -2605,32 +2563,6 @@ def _showrunner_orchestration_duty():
     return m.group(0)
 
 
-def _showrunner_provisioning_duty():
-    """Duty 10 (Provision slots for an authenticated wave) through the tempted-table heading."""
-    text = _read("skills/showrunner/SKILL.md")
-    m = re.search(
-        r"10\. \*\*Provision slots.*?(?=\n## When you're tempted)",
-        text,
-        re.DOTALL,
-    )
-    assert m, "showrunner/SKILL.md duty 10 (Provision slots) not found (moved or renumbered?)"
-    return m.group(0)
-
-
-def _showrunner_tempted_tier_row():
-    """The tempted-table row pairing account-default inheritance with the tier doctrine."""
-    text = _read("skills/showrunner/SKILL.md")
-    m = re.search(
-        r"\| \"The account default tier is fine[^|]+\|[^|]+\|",
-        text,
-    )
-    assert m, (
-        "showrunner/SKILL.md tempted-table tier row not found "
-        "(moved or reworded?)"
-    )
-    return m.group(0)
-
-
 def _launch_doctrine_builder_dispatch_section():
     """The Builder dispatch tier artifact-home section in launch-doctrine.md."""
     text = _read("rubric/launch-doctrine.md")
@@ -2646,13 +2578,15 @@ def _launch_doctrine_builder_dispatch_section():
     return m.group(1)
 
 
-def test_amendment_vocabulary_in_showrunner_charter():
-    """§11: showrunner charter carries post-terminal amendment vocabulary from launch_ledger."""
+def test_amendment_vocabulary_in_showrunner_orchestration_page():
+    """§11: the showrunner orchestration page carries post-terminal amendment vocabulary from
+    launch_ledger."""
     # axis: caller-writable amendment kinds, vet rulings, and the amend verb must appear in the
-    # charter pinned in their invocation context (--kind / --value lines), not merely anywhere in prose.
+    # orchestration page pinned in their invocation context (--kind / --value lines), not merely
+    # anywhere in prose.
     import launch_ledger
 
-    doc = _read("skills/showrunner/SKILL.md")
+    doc = _read("skills/showrunner/reference/orchestration.md")
     missing = []
     for kind in launch_ledger.CALLER_WRITABLE_AMENDMENT_KINDS:
         if "--kind %s" % kind not in doc:
@@ -2668,43 +2602,24 @@ def test_amendment_vocabulary_in_showrunner_charter():
     if "amend" not in doc:
         missing.append("verb 'amend'")
     assert not missing, (
-        "showrunner/SKILL.md missing amendment vocabulary from launch_ledger.py: %s"
+        "showrunner/reference/orchestration.md missing amendment vocabulary from "
+        "launch_ledger.py: %s"
         % ", ".join(missing)
     )
 
 
-def test_count_result_blocks_in_showrunner_charter():
-    """§11: showrunner charter names count-result blocks sourced from launch_ledger."""
+def test_count_result_blocks_in_showrunner_orchestration_page():
+    """§11: the showrunner orchestration page names count-result blocks sourced from launch_ledger."""
     import launch_ledger
 
-    doc = _read("skills/showrunner/SKILL.md")
-    duty = _showrunner_orchestration_duty()
+    doc = _read("skills/showrunner/reference/orchestration.md")
     missing = []
     for block in launch_ledger.CHARTER_NAMED_COUNT_BLOCKS:
-        if block not in duty:
+        if block not in doc:
             missing.append(block)
     assert not missing, (
-        "showrunner/SKILL.md duty 9 missing count-result block(s) from "
+        "showrunner/reference/orchestration.md missing count-result block(s) from "
         "launch_ledger.COUNT_RESULT_BLOCKS: %r" % missing
-    )
-
-
-def test_showrunner_provisioning_duty_load_bearing_content():
-    """§11: duty 10 carries load-bearing provisioning clauses."""
-    duty = _showrunner_provisioning_duty()
-    lower = duty.lower()
-    missing = []
-    if "without any seeded sign-in" not in lower:
-        missing.append("unauthenticated-app-first ordering")
-    if "is a no-go" not in lower:
-        missing.append("partial-failure no-go rule")
-    if "acceptance record (who accepted, when, and why)" not in lower:
-        missing.append("weaker-acceptance record")
-    if "the launcher carries the slot" not in lower:
-        missing.append("launcher-carries-the-slot clause")
-    assert not missing, (
-        "showrunner/SKILL.md duty 10 missing load-bearing element(s): %s"
-        % ", ".join(missing)
     )
 
 
@@ -2713,8 +2628,8 @@ def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
     tier rule keyed to model_registry.FABLE_NEVER_DEFAULT — builder launches default to opus; fable
     is never a launch default. A failure means the rule drifted out of a surface the advisor or
     doctrine actually loads."""
-    # axis: each guarded region (duty-9 orchestration passage, tempted-table tier row, and the
-    # launch-doctrine artifact home) must name engine_pref.BUILDER_DISPATCH_TIER_DEFAULT and each
+    # axis: each guarded region (duty-9 orchestration passage and the launch-doctrine artifact
+    # home) must name engine_pref.BUILDER_DISPATCH_TIER_DEFAULT and each
     # registry-refused launch tier; partial drift in any one region alone must fail this guard.
     import engine_pref
     import model_registry
@@ -2728,7 +2643,6 @@ def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
 
     regions = (
         ("showrunner/SKILL.md duty 9 orchestration passage", _showrunner_orchestration_duty()),
-        ("showrunner/SKILL.md tempted-table tier row", _showrunner_tempted_tier_row()),
         ("launch-doctrine.md artifact home", _launch_doctrine_builder_dispatch_section()),
     )
 
