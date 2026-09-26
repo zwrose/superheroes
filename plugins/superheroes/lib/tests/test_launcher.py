@@ -7947,3 +7947,113 @@ def test_cli_canary_lane_unknown(tmp_path, monkeypatch):
     assert exit_code == 1
     payload = json.loads(buf.getvalue())
     assert payload["reason"] == "canary-lane-unknown"
+
+
+# --- stack gate: adoption of an occupied layer position (#1486) --------------
+
+
+def _adoption_members(head, occupant_number=4242, occupant_base="branch"):
+    # The layer below is queried as headRefName "branch" (see _membership_ok); the occupant
+    # at position 2 sits on that branch unless a test says otherwise.
+    return [
+        {"position": 1, "number": 1352, "headRefOid": head, "headRefName": "branch", "baseRefName": "main"},
+        {"position": 2, "number": occupant_number, "headRefOid": "a" * 40, "headRefName": "b2", "baseRefName": occupant_base},
+    ]
+
+
+def _launch_adoption(tmp_path, monkeypatch, members, **premise_overrides):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    members = members(head)
+
+    def reader(**kwargs):
+        return _membership_ok(1, head, members=members)
+
+    premise = _stack_premise(repo, stack=7, layerPosition=2, **premise_overrides)
+    result = L.launch_build(
+        repo,
+        656,
+        premise,
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    if result.get("ok"):
+        try:
+            os.kill(result["pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    return repo, result
+
+
+def test_stack_gate_adoption_of_own_position_passes_and_records_stack_fields(tmp_path, monkeypatch):
+  # bite-axis: adopts naming the occupant at layerPosition, on the layer below's branch, passes
+    repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head), adopts=4242,
+    )
+    assert result["ok"] is True, result.get("reason")
+    assert result["stackGate"]["applied"] is True
+    assert result["stackGate"]["adopts"] == 4242
+    reserved = [r for r in ll.read(repo)["records"] if r.get("event") == "reserved"][0]
+    assert reserved["premise"]["stack"] == 7
+    assert reserved["premise"]["layerPosition"] == 2
+    assert reserved["premise"]["adopts"] == 4242
+
+
+def test_stack_gate_new_layer_at_occupied_position_still_refuses(tmp_path, monkeypatch):
+  # axis: no adopts at an occupied position is a new layer on a taken position
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "layer-position-occupied"
+
+
+def test_stack_gate_adopts_naming_another_pr_refuses(tmp_path, monkeypatch):
+  # axis: adopts that is not the member at layerPosition refuses layer-position-occupied
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head), adopts=5555,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "layer-position-occupied"
+
+
+def test_stack_gate_adopted_occupant_off_the_layer_below_refuses(tmp_path, monkeypatch):
+  # axis: the named occupant must sit on the layer below's head branch
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch,
+        lambda head: _adoption_members(head, occupant_base="main"), adopts=4242,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "layer-position-occupied"
+
+
+def test_stack_gate_adopts_with_empty_position_refuses(tmp_path, monkeypatch):
+  # axis: an adoption premise whose position holds no pull request has nothing to adopt
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head)[:1], adopts=4242,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "adopts-occupant-missing"
+
+
+@pytest.mark.parametrize("overrides,reason", [
+    ({"adopts": 4242}, "premise-adopts-without-stack"),
+    ({"stack": 1, "layerPosition": 2, "adopts": 0}, "premise-adopts-invalid"),
+    ({"stack": 1, "layerPosition": 2, "adopts": True}, "premise-adopts-invalid"),
+    ({"stack": 1, "layerPosition": 2, "adopts": "4242"}, "premise-adopts-invalid"),
+    ({"stack": 1, "layerPosition": 1, "adopts": 4242}, "premise-adopts-bottom-layer"),
+])
+def test_premise_adopts_shape_refuses(tmp_path, overrides, reason):
+  # axis: adopts requires the stack pair and a positive int
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    premise.update(overrides)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == reason

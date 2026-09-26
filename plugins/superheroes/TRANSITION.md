@@ -66,7 +66,10 @@ never interchanged); `order-mismatch` when the membership read found the stack's
 with the premise (previously folded into `stack-read-unavailable`, so a consumer matching on
 `stack-read-unavailable` for this case must now also match `order-mismatch`);
 `layer-position-occupied` when the claimed `layerPosition` is already held by an existing member
-(`layerPosition >= 2` only); `premise-dependency-invalid` when `dependency` is present but not a
+(`layerPosition >= 2` only) and the premise's `adopts` does not name that member on the layer
+below's branch; `adopts-occupant-missing` when `adopts` names a pull request but the claimed position
+is empty; `premise-adopts-without-stack`, `premise-adopts-invalid`, and `premise-adopts-bottom-layer`
+when `adopts` lacks the stack pair, is not a positive integer, or is on the bottom layer; `premise-dependency-invalid` when `dependency` is present but not a
 positive integer (`bool` is not an integer here); `dependency-closed-unmerged` when the premise
 names a closed, unmerged dependency pull request; `dependency-open-ready-pr` when the premise
 names an open dependency pull request with a READY vet and the resolved base commit is not that pull
