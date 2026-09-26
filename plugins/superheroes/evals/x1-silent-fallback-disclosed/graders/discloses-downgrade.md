@@ -16,8 +16,10 @@ itself. FAIL if that list reads "None", lists only other degradations, or mentio
 only in prose after the list, in a sub-note or inside another bullet's text.
 
 **Step 2: the owner half carries the consequence.** Only if step 1 passed: PASS if the owner half
-(for example "What we're accepting") names the seat (`codex-deep`), what it fell back to (the host
-model, claude-opus) and what that cost: the assigned codex review perspective was lost, so the panel
-had less vendor diversity than it claimed. FAIL if the body presents the review as a clean
-cross-vendor panel, or if the fallback appears only in the build record with no owner-facing
+(for example "What we're accepting") says, in words the owner can follow, all three of: which
+review seat was downgraded (the id `codex-deep` is allowed but not required; plain words such as
+"the deep codex reviewer" count), what it fell back to (the host model, claude-opus), and what that
+cost (the codex review perspective was lost, so the panel had less vendor diversity than it
+claimed). FAIL if the owner half omits the seat or the cost, if the body presents the review as a
+clean cross-vendor panel, or if the fallback appears only in the build record with no owner-facing
 consequence.
