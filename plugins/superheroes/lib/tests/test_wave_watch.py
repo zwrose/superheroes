@@ -2673,6 +2673,133 @@ def test_loop_stack_state_idle_seat_exits_otherwise_passes_over(tmp_path, monkey
     assert violations == []
 
 
+def _stack_loop_clock():
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def sleep(duration):
+        clock[0] += duration
+
+    return mono, sleep
+
+
+def test_loop_no_idle_seat_when_next_layer_is_member_from_another_batch(
+    tmp_path, monkeypatch,
+):
+    # axis: field case - layer N+1 is a member PR launched in another batch and
+    # this batch holds only layer N+2; loop does not exit on idle-seat at N
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[{
+            "launch_id": "lane-pos6",
+            "stack": _STACK_NUM,
+            "layer_position": 6,
+            "layers_planned": 6,
+        }],
+    )
+    prs = [50, 51, 52, 53, 54, 55]
+    vet = {n: {"state": _pr_vet_state()} for n in prs[:5]}
+    vet[55] = {"state": _pr_vet_state(_vet_not_ready_body())}
+    _patch_pr_vet(monkeypatch, vet)
+    mono, sleep = _stack_loop_clock()
+    result = ww.loop(
+        repo,
+        "batch-982",
+        max_seconds=2,
+        interval_seconds=1,
+        gh_run=_gh_open_prs(prs),
+        membership_reader=_membership_for_stack(prs),
+        monotonic=mono,
+        sleep=sleep,
+        max_total_seconds=5,
+    )
+    idle_flags = [
+        entry for entry in result.get("flags") or ()
+        if entry.get("flag") == "idle-seat-launchable-child"
+    ]
+    assert idle_flags == []
+    assert result["event"] == ww.EVENT_TIMER
+
+
+def test_loop_idle_seat_still_exits_when_next_position_has_no_member_or_lane(
+    tmp_path, monkeypatch,
+):
+    # axis: true case - position N READY, N+1 has no member PR and no batch lane
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[{
+            "launch_id": "lane-pos1",
+            "stack": _STACK_NUM,
+            "layer_position": 1,
+            "layers_planned": 3,
+        }],
+    )
+    _patch_pr_vet(monkeypatch, {50: {"state": _pr_vet_state()}})
+    mono, sleep = _stack_loop_clock()
+    result = ww.loop(
+        repo,
+        "batch-982",
+        max_seconds=2,
+        interval_seconds=1,
+        gh_run=_gh_open_prs([50]),
+        membership_reader=_membership_for_stack([50]),
+        monotonic=mono,
+        sleep=sleep,
+        max_total_seconds=5,
+    )
+    assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
+    assert result["arms"] == 1
+    assert {
+        "flag": "idle-seat-launchable-child",
+        "stack": _STACK_NUM,
+        "position": 1,
+    } in result["flags"]
+
+
+def test_loop_idle_seat_exits_when_next_member_closed_unmerged(
+    tmp_path, monkeypatch,
+):
+    # axis: a member PR at N+1 closed without merging leaves the seat idle -
+    # N READY, N+1 CLOSED, no batch lane at N+1 still raises the flag at N
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stack_batch(
+        repo, tmp_path, monkeypatch,
+        launch_specs=[{
+            "launch_id": "lane-pos1",
+            "stack": _STACK_NUM,
+            "layer_position": 1,
+            "layers_planned": 3,
+        }],
+    )
+    _patch_pr_vet(monkeypatch, {
+        50: {"state": _pr_vet_state()},
+        51: {"state": _pr_vet_state(state="CLOSED")},
+    })
+    mono, sleep = _stack_loop_clock()
+    result = ww.loop(
+        repo,
+        "batch-982",
+        max_seconds=2,
+        interval_seconds=1,
+        gh_run=_gh_open_prs([50]),
+        membership_reader=_membership_for_stack([50, 51], {51: "CLOSED"}),
+        monotonic=mono,
+        sleep=sleep,
+        max_total_seconds=5,
+    )
+    assert {
+        "flag": "idle-seat-launchable-child",
+        "stack": _STACK_NUM,
+        "position": 1,
+    } in (result.get("flags") or [])
+    assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
+    assert result["arms"] == 1
+
+
 def test_run_is_one_shot_against_quiet_live_lane(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(
@@ -4167,7 +4294,8 @@ def test_loop_log_line_carries_the_suppression_note(tmp_path, monkeypatch):
 _TEST_REPO_SLUG = "owner/repo"
 
 
-def _stack_membership(stack_number, pr_numbers_in_order):
+def _stack_membership(stack_number, pr_numbers_in_order, states=None):
+    states = states or {}
     return {
         "ok": True,
         "reason": None,
@@ -4177,7 +4305,11 @@ def _stack_membership(stack_number, pr_numbers_in_order):
             "baseRefName": "main",
         },
         "members": [
-            {"position": index + 1, "number": number}
+            {
+                "position": index + 1,
+                "number": number,
+                "state": states.get(number, "OPEN"),
+            }
             for index, number in enumerate(pr_numbers_in_order)
         ],
     }
@@ -4877,11 +5009,11 @@ def _patch_pr_vet(monkeypatch, vet_by_pr):
     monkeypatch.setattr(sc, "read_pr_vet_state", read_pr_vet_state)
 
 
-def _membership_for_stack(pr_numbers):
+def _membership_for_stack(pr_numbers, states=None):
     def membership_reader(*, pr, repo, **kwargs):
         for number in pr_numbers:
             if pr == number:
-                return _stack_membership(_STACK_NUM, pr_numbers)
+                return _stack_membership(_STACK_NUM, pr_numbers, states)
         raise AssertionError("unexpected pr %r" % pr)
 
     return membership_reader
@@ -5873,6 +6005,7 @@ def test_repo_slug_resolved_once_per_run_tick(tmp_path, monkeypatch):
             )
         raise AssertionError("unexpected gh argv: %r" % argv)
 
+    mono, sleep = _stack_loop_clock()
     result = ww.watch_arm(
         repo,
         "batch-982",
@@ -5880,7 +6013,8 @@ def test_repo_slug_resolved_once_per_run_tick(tmp_path, monkeypatch):
         interval_seconds=1,
         gh_run=gh_run,
         membership_reader=_membership_for_stack([50, 51, 52]),
-        sleep=lambda _d: None,
+        monotonic=mono,
+        sleep=sleep,
         stack_state=[complete_snapshot],
         pr_state=[{50, 51}],
     )
@@ -6161,6 +6295,7 @@ def test_stack_state_changed_emits_flags_on_first_arm_with_idle_seat(
         50: {"state": _pr_vet_state()},
         51: {"state": _pr_vet_state()},
     })
+    mono, sleep = _stack_loop_clock()
     result = ww.watch_arm(
         repo,
         "batch-982",
@@ -6168,6 +6303,8 @@ def test_stack_state_changed_emits_flags_on_first_arm_with_idle_seat(
         interval_seconds=1,
         gh_run=_gh_open_prs([50, 51]),
         membership_reader=_membership_for_stack([50, 51]),
+        monotonic=mono,
+        sleep=sleep,
     )
     assert result["event"] == ww.EVENT_STACK_STATE_CHANGED
     assert {
@@ -6178,7 +6315,8 @@ def test_stack_state_changed_emits_flags_on_first_arm_with_idle_seat(
 
 
 def test_idle_seat_launchable_child_flag_present_and_absent(tmp_path, monkeypatch):
-    # axis: idle-seat-launchable-child when next position unoccupied; absent when occupied or at top
+    # axis: idle-seat-launchable-child when next position has no lane and no member PR;
+    # absent when a lane or a member PR occupies it, or at top
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
         repo, tmp_path, monkeypatch,
@@ -6199,6 +6337,22 @@ def test_idle_seat_launchable_child_flag_present_and_absent(tmp_path, monkeypatc
     )
     batch_lanes = _fold_batch_lanes(repo, "batch-982")
     snapshot, _ = _snapshot_stack_state(
+        repo, batch_lanes, [50, 51],
+        monkeypatch,
+        _membership_for_stack([50, 51]),
+        _position_ready_reader(
+            {1: 50, 2: 51},
+            {50: {"state": _pr_vet_state()}, 51: {"state": _pr_vet_state()}},
+        ),
+    )
+    flags = snapshot["flags"]
+    assert {"flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD, "stack": _STACK_NUM, "position": 2} in flags
+    assert not any(
+        entry["position"] == 1 for entry in flags
+        if entry["flag"] == ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD
+    )
+
+    snapshot, _ = _snapshot_stack_state(
         repo, batch_lanes, [50, 51, 52],
         monkeypatch,
         _membership_for_stack([50, 51, 52]),
@@ -6211,16 +6365,7 @@ def test_idle_seat_launchable_child_flag_present_and_absent(tmp_path, monkeypatc
             },
         ),
     )
-    flags = snapshot["flags"]
-    assert {"flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD, "stack": _STACK_NUM, "position": 2} in flags
-    assert not any(
-        entry["position"] == 1 for entry in flags
-        if entry["flag"] == ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD
-    )
-    assert not any(
-        entry["position"] == 3 for entry in flags
-        if entry["flag"] == ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD
-    )
+    assert snapshot["flags"] == []
 
 
 def test_idle_seat_launchable_child_incomplete_unlaunched_position(
@@ -6265,10 +6410,10 @@ def test_idle_seat_launchable_child_incomplete_unlaunched_position(
     } in snapshot["flags"]
 
 
-def test_idle_seat_launchable_child_incomplete_not_ready_next_position(
+def test_idle_seat_not_flagged_when_next_position_has_not_ready_member(
     tmp_path, monkeypatch,
 ):
-    # axis: incomplete stack with not-READY next member still reports idle-seat flag
+    # axis: a not-READY member PR at the next position occupies it; no idle-seat flag
     repo = _init_repo(tmp_path / "repo")
     _setup_stack_batch(
         repo, tmp_path, monkeypatch,
@@ -6304,11 +6449,7 @@ def test_idle_seat_launchable_child_incomplete_not_ready_next_position(
     entry = snapshot["stacks"][0]
     assert entry["state"] == ww.STACK_STATE_INCOMPLETE
     assert entry["missingPositions"] == [3]
-    assert {
-        "flag": ww.FLAG_IDLE_SEAT_LAUNCHABLE_CHILD,
-        "stack": _STACK_NUM,
-        "position": 2,
-    } in snapshot["flags"]
+    assert snapshot["flags"] == []
 
 
 def test_idle_seat_no_flags_layers_planned_unknown(tmp_path, monkeypatch):
