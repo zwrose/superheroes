@@ -324,7 +324,7 @@ _CLAUSE_ENTRIES = [
         "architect-spec-spec-content-pointer",
         _ARCHITECT_SPEC_CHARTER,
         "",
-        "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-spec/reference/spec-content.md",
+        "${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md",
         "pointer_literal",
     ),
     # D. showrunner/SKILL.md
@@ -332,7 +332,7 @@ _CLAUSE_ENTRIES = [
         "showrunner-spec-content-pointer",
         _SHOWRUNNER_CHARTER,
         "",
-        "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-spec/reference/spec-content.md",
+        "${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md",
         "pointer_literal",
     ),
     (
@@ -945,7 +945,7 @@ def _assert_register_r4(read_text=None, isfile=None, is_source_repo=None):
         )
 
 
-_POINTER_ROOT_PREFIX = "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/"
+_POINTER_ROOT_PREFIX = "${CLAUDE_PLUGIN_ROOT}/"
 
 
 def _pointer_suffix(pointer):
@@ -1275,7 +1275,7 @@ def test_negative_pointer_literal_missing_fails():
     _expect_assertion_error(
         lambda: _assert_pointer_literal(
             _ARCHITECT_SPEC_CHARTER,
-            "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/missing/spec-content.md",
+            "${CLAUDE_PLUGIN_ROOT}/skills/missing/spec-content.md",
         ),
         match="plugin-relative pointer missing",
     )
@@ -1283,7 +1283,7 @@ def test_negative_pointer_literal_missing_fails():
 
 def test_negative_pointer_literal_unresolvable_path_fails():
     pointer = (
-        "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/missing/spec-content.md"
+        "${CLAUDE_PLUGIN_ROOT}/skills/missing/spec-content.md"
     )
     charter_text = _read_plugin(_ARCHITECT_SPEC_CHARTER)
     synthetic = charter_text + f"\n`{pointer}`\n"

@@ -11,7 +11,7 @@ Per-finding verification for standalone review-code compile (#506).
 - [Surfacing](#surfacing)
 - [Cross-surface note](#cross-surface-note)
 
-`$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`. `$VERIFIER_MODEL`, `$SYNTH_MODEL`,
+`$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`. `$VERIFIER_MODEL`, `$SYNTH_MODEL`,
 and `$RUBRIC` are resolved in Setup. The fail-closed rules live in `lib/verification.py` —
 do not judge realness yourself and do not reimplement them here or in a second script.
 

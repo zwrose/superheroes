@@ -14,6 +14,8 @@ import time
 
 import pytest
 
+import model_registry as MR
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -40,7 +42,10 @@ def _seat_json(vendor, model, effort, role=_REVIEW_ROLE):
     return json.dumps({"vendor": vendor, "model": model, "effort": effort, "role": role})
 
 
-def _codex_seat(model="gpt-5.6-terra", effort="high"):
+_REVIEWER_CODEX_MODEL, _REVIEWER_CODEX_EFFORT = MR.matrix_config(_REVIEW_ROLE, "codex")
+
+
+def _codex_seat(model=_REVIEWER_CODEX_MODEL, effort=_REVIEWER_CODEX_EFFORT):
     return _seat("codex", model, effort, _REVIEW_ROLE)
 
 
@@ -864,7 +869,9 @@ def test_e2e_caller_exit_pgroup_kill_engine_survives_reattaches(tmp_path, monkey
             native_review_result=_e2e_native_findings_result_json(), sleep_s=engine_sleep_s,
         )
         cli_args = [
-            "--seat", _seat_json("codex", "gpt-5.6-terra", "high", _REVIEW_ROLE),
+            "--seat", _seat_json(
+                "codex", _REVIEWER_CODEX_MODEL, _REVIEWER_CODEX_EFFORT, _REVIEW_ROLE
+            ),
             "--prompt-path", prompt_path, "--repo-root", repo,
             "--run-dir", run_dir, "--max-wait", max_wait_s,
             *timeout_args,
