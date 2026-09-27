@@ -11,7 +11,7 @@ points here rather than restating it, and a dispatched consumer that cannot
 reach the skill (the `pilot` build subagent, which has no Skill tool) **cites
 this path** instead of keeping its own copy — CONVENTIONS §11.4.
 
-`ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash
 block below.
 
 ## Framing — provisioning vs. execution
@@ -26,7 +26,7 @@ frozen: any problem you hit is a finding, never a re-provisioning.
 1. **Resolve.** `store.py resolve`; read the profile and its config block.
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
    NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
    [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
@@ -38,7 +38,7 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    Validate each before executing:
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/engine.py" validate-plan --branch B [--slot S] --json
    ```
 
