@@ -729,6 +729,7 @@ def _panel_hand_landed_plus_host_uncertified_session(tmp_path):
     host_seat = "code-reviewer"
     evidence = {
         **_binding_fields("hand-nonce", result_digest=DEFAULT_FINDINGS_RESULT_SHA),
+        "runKind": SC.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",

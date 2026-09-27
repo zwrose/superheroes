@@ -53,13 +53,7 @@ RECEIPT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
 
 EXECUTION_EVIDENCE_READ_VALUES = frozenset(("engaged", "unknown"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
-EXECUTION_EVIDENCE_BINDING_FIELDS = (
-    "source",
-    "runnerNonce",
-    "recordDigest",
-    "resultDigest",
-    "resultKind",
-)
+EXECUTION_EVIDENCE_BINDING_FIELDS = session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry")
 )
@@ -525,6 +519,26 @@ def _resolve_repo_head_sha(ctx):
     return head if head else None
 
 
+def _run_kind_refusal_detail(phase, found_kind):
+    expected = session_contract.run_kind_for_phase(phase)
+    if expected is None:
+        return "phase %r has no admissible runKind (found %r)" % (phase, found_kind)
+    return "phase %r requires runKind %r (found %r)" % (phase, expected, found_kind)
+
+
+def _dispatch_run_kind_qualifies(obs, phase):
+    if not isinstance(obs, dict):
+        return False, None, "evidence-run-kind-mismatch"
+    run_kind_field = session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD
+    expected = session_contract.run_kind_for_phase(phase)
+    found = obs.get(run_kind_field)
+    if expected is None:
+        return False, found, "evidence-run-kind-phase-unknown"
+    if not isinstance(found, str) or found != expected:
+        return False, found, "evidence-run-kind-mismatch"
+    return True, found, None
+
+
 def _journal_event_slot(event):
     ident = event.get("recordIdentity")
     if not isinstance(ident, dict):
@@ -966,15 +980,31 @@ def _journal_execution_binding(journal, seat, phase, attempt, occurrence=0, rnd=
     return None
 
 
-def _execution_binding_matches_journal(evidence, journal_binding, recorded_nonces):
+def _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field):
+    if field != session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD:
+        return evidence.get(field)
+    if not isinstance(envelope_run_kind_evidence, dict):
+        return None
+    return envelope_run_kind_evidence.get(field)
+
+
+def _execution_binding_matches_journal(
+    evidence,
+    journal_binding,
+    recorded_nonces,
+    *,
+    envelope_run_kind_evidence,
+):
     if not isinstance(evidence, dict):
         return False, "execution-evidence-absent"
     source = evidence.get("source")
     if _execution_evidence_source_is_caller_supplied(source):
         return False, "execution-evidence-caller-supplied"
     for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
-        val = evidence.get(field)
+        val = _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field)
         if not isinstance(val, str) or not val:
+            if field == session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD:
+                return False, "evidence-run-kind-mismatch"
             return False, "execution-evidence-binding-incomplete"
     if journal_binding is None:
         return False, "execution-evidence-dispatch-unrecorded"
@@ -982,7 +1012,10 @@ def _execution_binding_matches_journal(evidence, journal_binding, recorded_nonce
     if runner_nonce not in recorded_nonces:
         return False, "execution-evidence-dispatch-unrecorded"
     for field in EXECUTION_EVIDENCE_BINDING_FIELDS:
-        if evidence.get(field) != journal_binding.get(field):
+        bound_val = _envelope_run_kind_field(envelope_run_kind_evidence, evidence, field)
+        if bound_val != journal_binding.get(field):
+            if field == session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD:
+                return False, "evidence-run-kind-mismatch"
             return False, "execution-evidence-binding-mismatch"
     return True, None
 
@@ -1012,6 +1045,7 @@ def _observation_qualifies(
     journal_binding=None,
     recorded_nonces=None,
     *,
+    envelope_run_kind_evidence,
     require_runner_action=False,
 ):
     if not isinstance(obs, dict):
@@ -1035,7 +1069,10 @@ def _observation_qualifies(
     if cited_head and certified_head and cited_head != certified_head:
         return False, "execution-evidence-stale-head"
     ok, binding_failure = _execution_binding_matches_journal(
-        obs, journal_binding, recorded_nonces or set()
+        obs,
+        journal_binding,
+        recorded_nonces or set(),
+        envelope_run_kind_evidence=envelope_run_kind_evidence,
     )
     if not ok:
         return False, binding_failure
@@ -1052,7 +1089,10 @@ def _hand_landed_evidence_qualifies(
     if not isinstance(order_sha, str) or not order_sha:
         return False, "execution-evidence-order-unbound"
     ok, binding_failure = _execution_binding_matches_journal(
-        evidence, journal_binding, recorded_nonces or set()
+        evidence,
+        journal_binding,
+        recorded_nonces or set(),
+        envelope_run_kind_evidence=evidence,
     )
     if not ok:
         return False, binding_failure
@@ -1162,6 +1202,28 @@ def check_unrun_review(ctx):
             obs = _journal_observation_for_seat(
                 journal, seat, phase, attempt, occurrence, rnd
             )
+            env, env_path = _load_envelope(
+                session_dir,
+                rnd,
+                phase,
+                seat,
+                attempt,
+                occurrence,
+            )
+            if env is None:
+                return _refusal(
+                    "unfetched-findings",
+                    env_path,
+                    "dispatch-observed envelope missing or unreadable",
+                )
+            envelope_evidence = env.get("executionEvidence")
+            if not isinstance(envelope_evidence, dict):
+                return _refusal(
+                    "unrun-review",
+                    seat,
+                    "dispatch-observed seat lacks CAS-bound executionEvidence",
+                    binding_failure="execution-evidence-absent",
+                )
             journal_binding = _journal_execution_binding(
                 journal,
                 seat,
@@ -1177,6 +1239,7 @@ def check_unrun_review(ctx):
                 journal_binding=journal_binding,
                 recorded_nonces=slot_nonces,
                 require_runner_action=True,
+                envelope_run_kind_evidence=envelope_evidence,
             )
             if not ok:
                 return _refusal(
@@ -1184,6 +1247,16 @@ def check_unrun_review(ctx):
                     seat,
                     "dispatch-observed seat lacks qualifying execution telemetry",
                     binding_failure=binding,
+                )
+            rk_ok, found_kind, rk_binding = _dispatch_run_kind_qualifies(
+                envelope_evidence, phase
+            )
+            if not rk_ok:
+                return _refusal(
+                    "unrun-review",
+                    seat,
+                    _run_kind_refusal_detail(phase, found_kind),
+                    binding_failure=rk_binding,
                 )
         elif provenance == PROVENANCE_HAND_LANDED:
             env, path = _load_envelope(
@@ -1221,6 +1294,15 @@ def check_unrun_review(ctx):
                     path,
                     "hand-landed seat lacks qualifying execution-evidence binding",
                     binding_failure=binding,
+                )
+            evidence = env.get("executionEvidence") if isinstance(env, dict) else None
+            rk_ok, found_kind, rk_binding = _dispatch_run_kind_qualifies(evidence, phase)
+            if not rk_ok:
+                return _refusal(
+                    "unrun-review",
+                    seat,
+                    _run_kind_refusal_detail(phase, found_kind),
+                    binding_failure=rk_binding,
                 )
     return None
 
@@ -1378,7 +1460,7 @@ def check_seat_independence(ctx):
                 binding_failure="auditor-vendor-underivable",
             )
         vendor = vendor_status
-        fam = model_registry.family_for("verifier", vendor)
+        fam = model_registry.family_for("auditor", vendor)
         if fam is None:
             return _refusal(
                 "unfetched-findings",
@@ -1413,7 +1495,7 @@ def _independence_block(ctx):
         if vendor_status == "missing":
             continue
         vendor = vendor_status
-        fam = model_registry.family_for("verifier", vendor)
+        fam = model_registry.family_for("auditor", vendor)
         model = _runner_recorded_model(obs, ctx["session_dir"], seat_entry)
         audit_seats.append(
             {

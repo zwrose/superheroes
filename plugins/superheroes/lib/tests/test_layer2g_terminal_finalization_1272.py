@@ -82,6 +82,7 @@ def _dispatch_journal(certified_head):
         "headSha": certified_head,
         "executionEvidence": {
             "read": "engaged",
+            "runKind": "review",
             "source": "runner",
             "telemetry": "tool-calls",
             "stdoutBytes": 10,

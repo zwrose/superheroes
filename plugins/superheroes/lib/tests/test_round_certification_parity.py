@@ -6,6 +6,7 @@ import shutil
 import pytest
 import round_certification as RC
 import round_driver as RD
+import session_contract
 
 from round_certification_fixtures import (
     DEFAULT_PANEL_PAYLOAD_SHA,
@@ -98,6 +99,7 @@ def parity_hand_landed_shape(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.run_kind_for_phase(RC.PANEL_PHASE),
         "observation": {
             "read": "engaged",
             "source": "runner",

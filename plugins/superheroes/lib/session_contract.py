@@ -80,6 +80,14 @@ __all__ = (
     "PAYLOAD_BOUND_BINDING",
     "evidence_binding",
     "execution_only_admissible_for_phase",
+    "RUN_KIND_REVIEW",
+    "RUN_KIND_WRITE",
+    "RUN_KIND_VALUES",
+    "run_kind_value_ok",
+    "run_kind_for_phase",
+    "RUN_KIND_BY_PHASE",
+    "EXECUTION_EVIDENCE_RUN_KIND_FIELD",
+    "EXECUTION_EVIDENCE_BINDING_FIELDS",
     "verify_result_for_head",
     "runner_channel_vendor",
     "RE_EMIT_CMD",
@@ -132,6 +140,49 @@ def execution_only_admissible_for_phase(phase):
     if phase not in (PANEL_PHASE, FIXER_PHASE, AUDITS_PHASE):
         return False
     return phase == FIXER_PHASE
+
+PANEL_PHASE = "dispatch-panel"
+FIXER_PHASE = "dispatch-fixer"
+AUDITS_PHASE = "dispatch-audits"
+
+RUN_KIND_REVIEW = "review"
+RUN_KIND_WRITE = "write"
+RUN_KIND_VALUES = frozenset((RUN_KIND_REVIEW, RUN_KIND_WRITE))
+
+
+def run_kind_value_ok(value):
+    return isinstance(value, str) and value in RUN_KIND_VALUES
+
+
+# Immutable by convention — the closed phase→runKind map; never mutate after definition.
+RUN_KIND_BY_PHASE = {
+    PANEL_PHASE: RUN_KIND_REVIEW,
+    "dispatch-verifiers": RUN_KIND_REVIEW,
+    "dispatch-synthesis": RUN_KIND_REVIEW,
+    AUDITS_PHASE: RUN_KIND_REVIEW,
+    "dispatch-scoped-finder": RUN_KIND_REVIEW,
+    "dispatch-gap-sweep": RUN_KIND_REVIEW,
+    FIXER_PHASE: RUN_KIND_WRITE,
+}
+
+EXECUTION_EVIDENCE_RUN_KIND_FIELD = "runKind"
+
+EXECUTION_EVIDENCE_BINDING_FIELDS = (
+    "source",
+    "runnerNonce",
+    "recordDigest",
+    "resultDigest",
+    "resultKind",
+    EXECUTION_EVIDENCE_RUN_KIND_FIELD,
+)
+
+
+def run_kind_for_phase(phase):
+    """Expected executionEvidence.runKind for a dispatch phase, or None when phase is unknown."""
+    if isinstance(phase, str):
+        return RUN_KIND_BY_PHASE.get(phase)
+    return None
+
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 
@@ -149,9 +200,6 @@ def journal_is_re_emit_orders_superseded(event):
         return False
     return (event.get("cmd") == RE_EMIT_CMD
             and event.get("outcome") == ORDERS_SUPERSEDED_OUTCOME)
-PANEL_PHASE = "dispatch-panel"
-FIXER_PHASE = "dispatch-fixer"
-AUDITS_PHASE = "dispatch-audits"
 CHANNEL_FILE = "file"
 CHANNEL_STDOUT = "stdout"
 HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
