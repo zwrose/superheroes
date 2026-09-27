@@ -46,7 +46,7 @@ The `severity × inverse-effort` sort means an `Important + Quick` finding ranks
 audit-debt writes one `decisions.py` `fix` record per finding auto-filed as an issue (auto-included `Fix`/`Defer`). Undecided findings get no record — the audit report carries them. Append each `fix` record to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/decisions.py" \
   append "$DECISIONS" '<record-json>'
 ```
