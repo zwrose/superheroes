@@ -293,7 +293,7 @@ def test_e6_judgment_fix_stray_follow_up_not_checked(tmp_path):
     # axis: e6 — non-skip disposition ignores stray followUp
     session_dir = _parked_judgment_session(tmp_path)
     artifact = {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested",
+        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested", "reason": "fix it",
          "followUp": {"item": "ignored"}}]}
     out = _pending_submit(session_dir, artifact)
     assert out["ok"] is True, out
@@ -316,7 +316,7 @@ def test_e8_stall_hold_with_follow_up_not_checked(tmp_path):
     # axis: e8 — hold choice ignores followUp
     session_dir = _parked_stall_session(tmp_path, accept_risk=False)
     artifact = {"choice": RD.HOLD_CHOICE,
-                "followUp": {"item": "ignored", "revisitTrigger": "x", "classClosure": "y"}}
+                "followUp": {"item": "ignored"}}
     out = _pending_submit(session_dir, artifact)
     assert out["ok"] is True, out
     assert _load_state(session_dir)["terminal"] == "held"

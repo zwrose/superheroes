@@ -200,6 +200,111 @@ def test_e8_non_dict_rows_skipped_by_helper():
     assert refusal["bindingFailure"] == SC.DISPOSITION_LEDGER_MALFORMED_TOKEN
 
 
+def test_e9_clamp_exact_long_short_pair_refuses_certification():
+    """axis: clamp-exact short finding colliding with legacy bare long finding refuses certification."""
+    from finding_identity import clamp_title, finding_label
+
+    long = _long_finding()
+    bare, minted = _bare_minted(long)
+    short_title = clamp_title(finding_label(long))
+    short = dict(long, title=short_title)
+    assert SC.location_key(short) == bare
+    assert SC.minted_identity_key(short) == bare
+    state = _ledger_owned_state(
+        dispositionLedger=[dict(long, **{
+            SC.FINDING_KEY_FIELD: bare,
+            "disposition": "fixed",
+            "dispositionRound": 1,
+        })],
+        findings=[dict(short, **{SC.FINDING_KEY_FIELD: bare})],
+    )
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert by_key == {}
+    _assert_legacy_collision_refusal(refusal, bare, bare)
+
+
+def test_e10_clamp_exact_long_short_pair_helper_refuses():
+    """axis: clamp-exact short finding colliding with legacy bare long finding refuses at helper."""
+    from finding_identity import clamp_title, finding_label
+
+    long = _long_finding()
+    bare, _minted = _bare_minted(long)
+    short_title = clamp_title(finding_label(long))
+    short = dict(long, title=short_title)
+    assert SC.location_key(short) == bare
+    assert SC.minted_identity_key(short) == bare
+    rows = [
+        dict(long, **{SC.FINDING_KEY_FIELD: bare}),
+        dict(short, **{SC.FINDING_KEY_FIELD: bare}),
+    ]
+    collision = SC.legacy_key_collision(rows)
+    assert collision is not None
+    assert collision[0] == bare
+
+
+def test_e11_same_bare_and_minted_different_content_not_collision():
+    """axis: content alone does not discriminate identity — ledger/live body drift is expected."""
+    from finding_identity import clamp_title, finding_label
+
+    long = _long_finding()
+    bare, _minted = _bare_minted(long)
+    short_title = clamp_title(finding_label(long))
+    base = dict(long, title=short_title)
+    assert SC.location_key(base) == bare
+    assert SC.minted_identity_key(base) == bare
+    row_a = dict(base, **{SC.FINDING_KEY_FIELD: bare, "body": "body A", "severity": "Important"})
+    row_b = dict(base, **{
+        SC.FINDING_KEY_FIELD: bare,
+        "body": "body A\n\n---\n\nbody B",
+        "severity": "Critical",
+    })
+    rows = [row_a, row_b]
+    assert SC.legacy_key_collision(rows) is None
+    state = _ledger_owned_state(
+        dispositionLedger=[dict(row_a, disposition="fixed", dispositionRound=1)],
+        findings=[row_b],
+    )
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert refusal is None
+    assert bare in by_key
+
+
+def test_e11b_cross_location_minted_key_claimant_refuses():
+    """axis: global minted-key collision guard refuses when minted twin is at another location."""
+    long = _long_finding(" alpha")
+    bare, minted = _bare_minted(long)
+    foreign = dict(long, file="g.py", line=2, **{SC.FINDING_KEY_FIELD: minted})
+    state = _ledger_owned_state(
+        dispositionLedger=[dict(long, **{
+            SC.FINDING_KEY_FIELD: bare,
+            "disposition": "fixed",
+            "dispositionRound": 1,
+        })],
+        findings=[foreign],
+    )
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert by_key == {}
+    _assert_legacy_collision_refusal(refusal, bare, minted)
+
+
+def test_e12_same_finding_duplicate_no_collision():
+    """axis: legacy bare-keyed row and live same-finding twin still resolve without refusal."""
+    short = {"file": "a.py", "line": 1, "title": "bug", "severity": "Minor"}
+    bare = SC.location_key(short)
+    assert bare == SC.minted_identity_key(short)
+    ledger = dict(short, **{
+        SC.FINDING_KEY_FIELD: bare,
+        "disposition": "fixed",
+        "dispositionRound": 1,
+    })
+    live = dict(short, **{SC.FINDING_KEY_FIELD: bare})
+    state = _ledger_owned_state(dispositionLedger=[ledger], findings=[live])
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert refusal is None
+    assert bare in by_key
+    assert SC.legacy_key_collision([ledger, live]) is None
+
+
 # --- Part 2: receipt findingKey projection ----------------------------------------------
 
 def test_driver_receipt_finding_key_matches_state_row():

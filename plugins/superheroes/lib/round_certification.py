@@ -384,10 +384,14 @@ def _certification_findings_by_key(state):
         collision = session_contract.legacy_key_collision(branch_rows)
         if collision is not None:
             bare_key, minted_key = collision
+            if bare_key == minted_key:
+                detail = "legacy identity collision at %r" % (bare_key,)
+            else:
+                detail = "legacy bare key %r collides with minted key %r" % (bare_key, minted_key)
             return {}, _refusal(
                 "disposition-without-receipt",
                 STATE_FILE,
-                "legacy bare key %r collides with minted key %r" % (bare_key, minted_key),
+                detail,
                 binding_failure=session_contract.DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN,
             )
         for finding in ledger_rows:
@@ -443,10 +447,14 @@ def _certification_findings_by_key(state):
     collision = session_contract.legacy_key_collision(branch_rows)
     if collision is not None:
         bare_key, minted_key = collision
+        if bare_key == minted_key:
+            detail = "legacy identity collision at %r" % (bare_key,)
+        else:
+            detail = "legacy bare key %r collides with minted key %r" % (bare_key, minted_key)
         return {}, _refusal(
             "disposition-without-receipt",
             STATE_FILE,
-            "legacy bare key %r collides with minted key %r" % (bare_key, minted_key),
+            detail,
             binding_failure=session_contract.DISPOSITION_LEDGER_LEGACY_KEY_COLLISION_TOKEN,
         )
     for key, finding in session_contract.legacy_disposition_ledger_rows(state):
