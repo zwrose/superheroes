@@ -11,6 +11,7 @@ The rest pin the fail-closed edges (each names its exact reason string), the thr
 out-of-band dispatch record, never from a seat's own vendor echo.
 """
 import os
+import sys
 
 import pytest
 
@@ -20,6 +21,11 @@ import round_adapters as RA
 import round_driver as RD
 import round_records as RR
 import verification
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from session_checkout import enter_checkout  # noqa: E402
 
 # --- diffs (same shapes test_round_driver.py drives with) ---------------------
 
@@ -128,9 +134,13 @@ def _missing_env(seat, reason=None, vendor="claude", occurrence=None):
 
 
 def _at(tmp_path, phase, cfg=None, respond=None, name="s"):
-    """A fresh session driven to `phase`; returns (session_dir, next, pre-fold state)."""
+    """A fresh session driven to `phase`; returns (session_dir, next, pre-fold state).
+
+    The session runs inside a real checkout (`tmp_path/checkout`, shared by every session of the
+    test), as it does in production, so the driver's cwd-discovered repository resolves a HEAD."""
     d = str(tmp_path / name)
     os.makedirs(d)
+    enter_checkout(os.path.join(str(tmp_path), "checkout"))
     n = _drive_to_phase(d, cfg or _cfg(), respond or _responder(round1_findings=_A_FINDING), phase)
     ok, state = RD.load_state(d)
     assert ok and state is not None
@@ -629,14 +639,14 @@ def test_edge_dispatch_manifest_present_but_not_a_dict(tmp_path):
 
 
 def test_edge_canary_entry_with_no_engine(tmp_path):
-    """A probe with no `engine` matches NO vendor in `canary_liveness` — it is silently inert while
-    reading as 'a control probe was supplied'."""
+    """Malformed probes pass through assembly; fold records them as malformed in controlProbe."""
     _d, _n, state = _at(tmp_path, RD.P_PANEL)
     envelopes = [_result_env(dim, {"findings": []}) for dim in RD.DIMENSIONS]
     artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"],
                                    canary=[{"engine": "codex", "engaged": True},
                                            {"engaged": True}])
-    assert artifact is None and reason == "canary-entry-has-no-engine:index-1"
+    assert reason is None and artifact is not None
+    assert artifact["canaryResult"][1] == {"engaged": True}
 
 
 def test_edge_envelope_with_no_seat():

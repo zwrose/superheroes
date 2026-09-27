@@ -16,6 +16,7 @@ from round_certification_fixtures import (
     DEFAULT_PANEL_PAYLOAD_SHA,
     HEAD_SHA,
     MUST_REFUSE_FIXTURES,
+    case07_audited_chain_skipped_scoped,
     write_session,
     write_certifiable_session,
     _binding_fields,
@@ -478,6 +479,7 @@ def test_check_evidence_head_bound_unresolvable_certified_head_refuses(tmp_path)
 def test_check_unrun_review_hand_landed_clean_passes(tmp_path):
     evidence = {
         **_binding_fields("hand-nonce", result_digest=DEFAULT_FINDINGS_RESULT_SHA),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -811,6 +813,7 @@ def test_check_disposition_without_receipt_critical_out_of_scope_refuses(tmp_pat
                     "id": "C1",
                     "severity": "Critical",
                     "disposition": "out-of-scope",
+                    "outOfScopeReason": "accepted risk",
                     "followUp": {
                         "revisitTrigger": "milestone M",
                         "classClosure": "none",
@@ -834,7 +837,8 @@ def test_check_disposition_without_receipt_missing_revisit_trigger_refuses(tmp_p
                     "id": "I1",
                     "severity": "Important",
                     "disposition": "out-of-scope",
-                    "followUp": {"classClosure": "tracked in issue-99"},
+                    "outOfScopeReason": "deferred",
+                    "followUp": {"item": "deferred work", "classClosure": "tracked in issue-99"},
                 }
             ]
         },
@@ -853,7 +857,8 @@ def test_check_disposition_without_receipt_missing_class_closure_refuses(tmp_pat
                     "id": "I1",
                     "severity": "Important",
                     "disposition": "out-of-scope",
-                    "followUp": {"revisitTrigger": "2026-12-01"},
+                    "outOfScopeReason": "deferred",
+                    "followUp": {"item": "deferred work", "revisitTrigger": "2026-12-01"},
                 }
             ]
         },
@@ -1044,7 +1049,7 @@ def test_journal_evidence_scoped_by_round_refuses_cross_round_substitution(tmp_p
     assert "journal payload hash disagrees" in refusal["detail"]
 
 
-def test_important_out_of_scope_disclosure_is_case_insensitive(tmp_path):
+def test_important_out_of_scope_miscased_severity_refuses(tmp_path):
     session_dir = write_certifiable_session(
         tmp_path,
         state={
@@ -1055,6 +1060,7 @@ def test_important_out_of_scope_disclosure_is_case_insensitive(tmp_path):
                     "disposition": "out-of-scope",
                     "outOfScopeReason": "follow-on work",
                     "followUp": {
+                        "item": "platform follow-on",
                         "revisitTrigger": "next release",
                         "classClosure": "deferred to platform team",
                     },
@@ -1064,15 +1070,10 @@ def test_important_out_of_scope_disclosure_is_case_insensitive(tmp_path):
         envelopes=[{"seat": "code-reviewer", "payloadSha256": DEFAULT_PANEL_PAYLOAD_SHA}],
     )
     receipt, refusal = RC.certify(session_dir)
-    assert refusal is None
-    assert receipt["disclosures"]["importantOutOfScope"] == [
-        {
-            "id": "I1",
-            "title": None,
-            "severity": "important",
-            "reason": "follow-on work",
-        }
-    ]
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "disposition-without-receipt"
+    assert "not in the closed severity contract" in refusal["detail"]
 
 
 def test_fixed_disposition_missing_fix_commit_row_uses_missing_token(tmp_path):
@@ -1150,10 +1151,25 @@ def test_certification_shape_matrix():
     state_other = {"certification": {"shape": "custom-shape"}}
     assert RC._certification_shape(state_other, seats_hand) == "custom-shape"
 
+    state_degraded = {"certification": {"shape": "full-panel-confirmed-degraded"}}
+    assert (
+        RC._certification_shape(state_degraded, seats_dispatch, chain_used=True)
+        == "audited-chain-degraded"
+    )
+
+
+def test_audited_chain_skipped_empty_surface_certifies(tmp_path):
+    session_dir = case07_audited_chain_skipped_scoped(tmp_path)
+    receipt, refusal = RC.certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+    assert receipt["certificationShape"] == "audited-chain"
+
 
 def test_hand_landed_forces_audited_chain_shape(tmp_path):
     evidence = {
         **_binding_fields("hand-shape-nonce"),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1653,6 +1669,7 @@ def test_hand_landed_journal_recorded_runner_nonce_certifies(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1688,6 +1705,7 @@ def test_hand_landed_unrecorded_runner_nonce_refuses(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1726,6 +1744,7 @@ def _hand_landed_evidence_binding(**overrides):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -1749,6 +1768,7 @@ def _hand_landed_envelope(evidence, payload, *, order_sha="f" * 64):
 def test_hand_landed_write_run_kind_qualifies_without_payload_key():
     evidence = _hand_landed_evidence_binding(
         resultKind=session_contract.WRITE_RESULT_KIND,
+        runKind=session_contract.RUN_KIND_WRITE,
         resultDigest=session_contract.payload_sha256(
             {"testFailed": False, "testPassed": True}),
     )
@@ -1758,9 +1778,10 @@ def test_hand_landed_write_run_kind_qualifies_without_payload_key():
     ok, failure = RC._hand_landed_evidence_qualifies(
         envelope, HEAD, journal_binding=journal_binding,
         recorded_nonces={"hand-landed-nonce"},
+        phase=RC.FIXER_PHASE,
     )
     assert ok is True
-    assert failure is None
+    assert failure == RC.EXECUTION_ONLY_BINDING
 
 
 def test_hand_landed_review_kind_absent_from_payload_refuses():
@@ -1800,6 +1821,7 @@ def test_hand_landed_journal_digest_mismatch_refuses(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -2230,6 +2252,7 @@ def test_dispatch_observed_matching_runner_nonce_certifies(tmp_path):
 def test_dispatch_observed_unrecorded_journal_binding_refuses(tmp_path):
     envelope_evidence = {
         **_binding_fields("orphan-nonce"),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -2279,6 +2302,7 @@ def test_slot_scoped_nonce_same_slot_certifies(tmp_path):
     nonce = "slot-nonce"
     evidence = {
         **_binding_fields(nonce),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -2330,6 +2354,7 @@ def test_slot_scoped_nonce_different_slot_refuses(tmp_path):
     borrowed_nonce = "shared-nonce"
     evidence_a = {
         **_binding_fields(borrowed_nonce),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -2373,17 +2398,25 @@ def test_slot_scoped_nonce_different_slot_refuses(tmp_path):
 @pytest.mark.parametrize("helper_name", QUALIFICATION_HELPER_CENSUS)
 def test_qualification_helpers_refuse_empty_or_absent_evidence(tmp_path, helper_name):
     if helper_name == "_execution_binding_matches_journal":
-        ok, failure = RC._execution_binding_matches_journal(None, None, set())
+        ok, failure = RC._execution_binding_matches_journal(
+            None, None, set(), envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
-        ok, failure = RC._execution_binding_matches_journal({}, None, set())
+        ok, failure = RC._execution_binding_matches_journal(
+            {}, None, set(), envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
     elif helper_name == "_observation_qualifies":
-        ok, failure = RC._observation_qualifies(None, HEAD, None)
+        ok, failure = RC._observation_qualifies(
+            None, HEAD, None, envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
-        ok, failure = RC._observation_qualifies({}, HEAD, None)
+        ok, failure = RC._observation_qualifies(
+            {}, HEAD, None, envelope_run_kind_evidence=None
+        )
         assert not ok
         assert failure
     elif helper_name == "_hand_landed_evidence_qualifies":
@@ -2474,6 +2507,7 @@ def test_bite_slot_scoped_nonce_refuses_cross_slot(tmp_path):
     borrowed_nonce = "cross-slot-nonce"
     evidence_a = {
         **_binding_fields(borrowed_nonce),
+        "runKind": session_contract.RUN_KIND_REVIEW,
         "observation": {
             "read": "engaged",
             "source": "runner",

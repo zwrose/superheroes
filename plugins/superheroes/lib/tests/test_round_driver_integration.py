@@ -18,6 +18,7 @@ completeness, assemble, fold, emit. No `cmd_submit` is ever called by hand.
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -45,6 +46,10 @@ import round_driver  # noqa: E402
 import round_records  # noqa: E402
 import sanitized_view  # noqa: E402
 import session_contract  # noqa: E402
+
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from session_checkout import enter_checkout, make_checkout  # noqa: E402
 
 _CODEX_IMPLEMENTER_MODEL = model_registry.matrix_config("implementer", "codex")[0]
 
@@ -95,7 +100,7 @@ def _blocking_finding(title, line):
 # =============================================================================================
 
 def _cfg(**over):
-    base = {"leg": "code", "vendors": ["claude"], "diff": REVIEWED_DIFF, "fixerVendor": "claude",
+    base = {"leg": "code", "vendors": ["claude", "codex"], "diff": REVIEWED_DIFF, "fixerVendor": "claude",
             "verifyCommand": "none", "seatMap": SEAT_MAP}
     base.update(over)
     return base
@@ -162,27 +167,38 @@ def _execution_evidence(**over):
     return evidence
 
 
-def _execution_evidence_for_payload(payload):
+def _execution_evidence_for_payload(payload, source="runner", read="unknown", phase=None):
     observation = {
         "tokens": None,
-        "toolCalls": None,
+        "toolCalls": 1,
         "stdoutBytes": 0,
         "wallSeconds": 0.0,
-        "source": "none",
-        "read": "unknown",
-        "telemetry": "none",
+        "source": "codex-events",
+        "read": read,
+        "telemetry": "tool-calls",
     }
     for kind in engine_adapter.REVIEW_RESULT_KINDS + ("fixes", "result"):
         if kind in payload:
-            return _execution_evidence(
+            carried, subject = session_contract.evidence_digest_subject(payload, kind)
+            result_digest = (round_records.payload_sha256(subject)
+                             if carried else round_records.payload_sha256(payload[kind]))
+            evidence = _execution_evidence(
                 resultKind=kind,
-                resultDigest=round_records.payload_sha256(payload[kind]),
+                resultDigest=result_digest,
                 observation=observation,
+                source=source,
             )
-    return _execution_evidence(observation=observation)
+            break
+    else:
+        evidence = _execution_evidence(observation=observation, source=source)
+    if phase is not None:
+        run_kind = session_contract.run_kind_for_phase(phase)
+        if run_kind is not None:
+            evidence["runKind"] = run_kind
+    return evidence
 
 
-def _land(session_dir, state, pend, seat, payload, occurrence=0):
+def _land(session_dir, state, pend, seat, payload, occurrence=0, evidence_read="unknown"):
     """Write ONE seat's envelope into the LANDING area (what the host does)."""
     manifest_sha, order_sha = _anchor_hashes(session_dir, state, pend, seat)
     schema = round_records.seat_result_schema_for_state_version(state.get("schemaVersion"))
@@ -205,7 +221,9 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0):
         "payload": payload,
     }
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
-        evidence = _execution_evidence_for_payload(payload)
+        evidence_source = _auditor_vendor_for(state)(seat)
+        evidence = _execution_evidence_for_payload(
+            payload, source=evidence_source, read=evidence_read, phase=pend["phase"])
         envelope["executionEvidence"] = evidence
         envelope["provenance"] = round_records.PROVENANCE_HAND_LANDED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, evidence)
@@ -325,6 +343,29 @@ def _drive_one_phase(session_dir, gitdir, panel_findings, head_diff_path):
     return phase, out
 
 
+_DIFF_PATH_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
+
+
+def _fixture_repo(tmp_path, name):
+    """The session's repo root, holding every path the fixture's diffs name.
+
+    INVARIANT: every repo-relative path the fixture's diffs cite exists under this root.
+    The driver lints the rendered fixer order against the session's `repoRoot` (#1339), and a
+    fixer order cites the files its batch names; a root that does not hold them refuses the
+    emission `order-lint:order-path-unresolved`. Deriving the set from the diffs rather than
+    listing it keeps a path added to a diff from silently escaping the root.
+    """
+    repo_root = tmp_path / (name + "-repo")
+    for rel in sorted(set(_DIFF_PATH_RE.findall(REVIEWED_DIFF + HEAD_DIFF))):
+        target = repo_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            target.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8")
+    repo_root.mkdir(parents=True, exist_ok=True)
+    make_checkout(repo_root)
+    return str(repo_root)
+
+
 def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     session_dir = str(tmp_path / name)
     os.makedirs(session_dir, exist_ok=True)
@@ -333,8 +374,6 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     head_diff_path = str(tmp_path / (name + "-head.diff"))
     with open(head_diff_path, "w", encoding="utf-8") as fh:
         fh.write(HEAD_DIFF)
-    out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
-    assert out["ok"], out
     if head_sha is not None:
         if head_sha is _WRITE_META_HEAD:
             head_sha = _fake_git(gitdir)(session_dir, "rev-parse", "HEAD")
@@ -347,6 +386,11 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
         with open(meta_path, "w", encoding="utf-8") as fh:
             json.dump(meta, fh, sort_keys=True)
             fh.write("\n")
+    repo_root = _fixture_repo(tmp_path, name)
+    cfg_over.setdefault("repoRoot", repo_root)
+    enter_checkout(repo_root)
+    out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
+    assert out["ok"], out
     return session_dir, gitdir, head_diff_path
 
 
@@ -564,13 +608,18 @@ def test_two_same_titled_targets_at_different_lines_one_discharged_sibling_not(t
 
 
 def test_a_missing_second_occurrence_is_named_by_slot_not_by_seat(tmp_path):
-    """Two same-location findings in fixBatch yield occurrence-suffixed ids; advance names the
-    absent second target when only the first is recorded."""
+    """Two same-location findings whose titles agree past the clamp yield distinct content-keyed ids; advance names the absent second target when only the first is recorded."""
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="collide-short")
-    findings = [_blocking_finding("unchecked index", 2)]
+    prefix = "unchecked index " + "x" * 160
+    alpha_title = prefix + " alpha"
+    beta_title = prefix + " beta"
+    findings = [_blocking_finding(alpha_title, 2)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, round_driver.P_AUDITS)
     state = _state(session_dir)
-    dup = [_blocking_finding("unchecked index", 2), _blocking_finding("unchecked index", 2)]
+    alpha = _blocking_finding(alpha_title, 2)
+    beta = _blocking_finding(beta_title, 2)
+    assert session_contract.location_key(alpha) == session_contract.location_key(beta)
+    dup = [alpha, beta]
     state["fixBatch"] = dup
     state["_auditTargets"] = round_driver._audit_targets(state, state.get("config") or {}, {})
     round_driver.save_state(session_dir, state)
@@ -787,7 +836,8 @@ def _write_native_review_result(run_dir, repo_root, *, findings=None, panel_find
 
 
 def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-panel-e2e",
-                       telemetry_shape="dispatch-observed", resolved_inputs=None):
+                       telemetry_shape="dispatch-observed", view_head_sha="abc123fake",
+                       resolved_inputs=None):
     """Build a runner run directory for dispatch-observed evidence tests.
 
     This run directory is a test double for the runner's own record of a real dispatch; the
@@ -811,7 +861,7 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
         fh.write("gitdir: /fake/worktree\n")
     view_path = str(tmp_path / "dispatch-evidence-view")
     os.makedirs(view_path, exist_ok=True)
-    view_meta = {"headSha": "abc123fake", "stripped": [], "path": view_path}
+    view_meta = {"headSha": view_head_sha, "stripped": [], "path": view_path}
     with open(order_path, encoding="utf-8") as fh:
         base_prompt = fh.read()
     notice = sanitized_view.sanitized_view_notice(view_meta, mode="review")
@@ -854,7 +904,8 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
 
 def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
                                                   panel_findings, head_diff_path,
-                                                  telemetry_shape="dispatch-observed"):
+                                                  telemetry_shape="dispatch-observed",
+                                                  evidence_read="unknown"):
     _assert_adapters_are_real()
     state = _state(session_dir)
     pend = state["pending"]
@@ -863,14 +914,19 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
     assert reason is None, (phase, reason)
     slots = _slots_of(roster)
     _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    anchor = round_driver._orders_anchor(state, session_dir, pend["round"], pend["phase"],
+                                         pend["attempt"])
+    anchor_head = (anchor or {}).get("headSha")
     for seat, occurrence in slots:
         payload = _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
         if phase == round_driver.P_PANEL and seat == FINDING_SEAT and state["round"] == 1:
             order_path = round_records.order_prompt_path(
                 session_dir, pend["round"], pend["phase"],
                 round_records.storage_key(seat, occurrence), pend["attempt"])
+            view_head = anchor_head or "abc123fake"
             run_dir = _execution_run_dir(
-                tmp_path, order_path, panel_findings, telemetry_shape=telemetry_shape)
+                tmp_path, order_path, panel_findings, telemetry_shape=telemetry_shape,
+                view_head_sha=view_head)
             records, _ = engine_dispatch._journal_read(run_dir)
             journal_state = engine_dispatch._journal_state(records)
             grade = engine_dispatch._grade_review_attempt(run_dir, journal_state, 1)
@@ -880,9 +936,18 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
             out = round_driver.cmd_record_result(
                 session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
         else:
-            _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+            _land(session_dir, state, pend, seat, payload, occurrence=occurrence,
+                  evidence_read=evidence_read)
             out = _record(session_dir, seat, occurrence=occurrence)
         assert out["ok"], (phase, seat, occurrence, out)
+    if phase == round_driver.P_PANEL and telemetry_shape != "no-telemetry":
+        # The runner record names the seat's real vendor (codex), so the harness owes
+        # the control probe a real codex seat would have landed before advance.
+        probe = {"engine": "codex", "outcome": "ok", "engaged": True, "detectedPlant": True,
+                 "evidence": {"probe": "seat_canary"}}
+        round_records.atomic_write_json(
+            round_records.canary_path(session_dir, pend["round"], "codex", pend["attempt"]),
+            probe)
     out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
     return phase, out
 
@@ -890,7 +955,8 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
 def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
                                                       panel_findings, head_diff_path,
                                                       max_steps=24,
-                                                      telemetry_shape="dispatch-observed"):
+                                                      telemetry_shape="dispatch-observed",
+                                                      evidence_read="unknown"):
     folded = []
     for _ in range(max_steps):
         if _state(session_dir).get("terminal"):
@@ -898,7 +964,7 @@ def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdi
         before = _state(session_dir)["pending"]["phase"]
         phase, out = _drive_one_phase_with_panel_dispatch_evidence(
             session_dir, tmp_path, gitdir, panel_findings, head_diff_path,
-            telemetry_shape=telemetry_shape)
+            telemetry_shape=telemetry_shape, evidence_read=evidence_read)
         assert out["ok"], (phase, out)
         assert out["folded"]["phase"] == phase, out
         assert _state(session_dir)["step"] != before, (phase, _state(session_dir)["step"])
@@ -906,14 +972,16 @@ def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdi
     raise AssertionError("did not reach a terminal in %d steps: %s" % (max_steps, folded))
 
 
-def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_records_head(
-        tmp_path):
-    """Seam between dispatch-observed telemetry and cited-head binding on the writer.
+def test_real_loop_dispatch_observed_row_cites_the_runner_observed_head(tmp_path):
+    """R28 re-pin: C13 layer 1c produces the cited head on dispatch-observed journal rows.
 
-    The telemetry half is proven here: before certification the journal row's execution evidence
-    shows read engaged, at least one tool call, and source codex-events. The head half waits for
-    C13's producer — when the loop records the cited head on journal rows, this test flips to a
-    certifying assertion under R28's classification.
+    The telemetry half is unchanged: execution evidence shows read engaged, at least one tool
+    call, and source codex-events. The head half is now produced by layer 1c — the recorded row
+    cites the runner-observed view head with citedHeadSource runner-view, and the stored envelope
+    carries the same headSha. Certification may still refuse for other reasons (the shared harness
+    hand-lands seats with evidence_read unknown); the residual execution-evidence-not-engaged
+    refusal belongs to layer 4, not this layer. This test pins only that head binding no longer
+    refuses BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND.
 
     A review that raised findings is ``test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions``.
     """
@@ -942,7 +1010,8 @@ def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_recor
                 and row.get("phase") == round_driver.P_PANEL
                 and row.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED]
     assert recorded, journal
-    evidence = recorded[0].get("executionEvidence")
+    row = recorded[0]
+    evidence = row.get("executionEvidence")
     assert isinstance(evidence, dict)
     assert evidence.get("runnerNonce")
     observation = evidence["observation"]
@@ -954,19 +1023,33 @@ def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_recor
     assert load_refusal is None, load_refusal
     certified_head = round_certification._certified_head_sha(ctx)
     assert isinstance(certified_head, str) and certified_head
+    assert row["citedHeadSource"] == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW
+    assert isinstance(row["citedHead"], str) and row["citedHead"]
+    assert row["citedHead"] == certified_head
+    store_path = round_records.store_path(
+        session_dir, row["round"], row["phase"],
+        round_records.storage_key(FINDING_SEAT), row["attempt"])
+    stored, read_err = round_records.read_json(store_path)
+    assert read_err is None, read_err
+    assert stored["headSha"] == row["citedHead"]
     receipt, refusal = round_certification.certify(session_dir)
     assert receipt is None
     assert refusal is not None
-    assert refusal["class"] == "unrun-review"
     assert (
-        refusal["bindingFailure"]
-        == round_certification.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
+        refusal.get("bindingFailure")
+        != round_certification.BINDING_FAILURE_EXECUTION_EVIDENCE_HEAD_UNBOUND
     )
-    assert refusal["artifact"] == FINDING_SEAT
 
 
-def test_real_loop_refuses_when_certified_head_unresolvable(tmp_path):
-    """Proves a session with no resolvable certified head does not certify."""
+def test_real_loop_refuses_record_when_no_head_is_resolvable_anywhere(tmp_path):
+    """R28 re-pin: record-time refuses view-head-underivable when no anchor head exists anywhere.
+
+    Bootstrapping with head_sha=None leaves the orders anchor without a head; layer 1c refuses at
+    record-result before certification can run. Certification's own
+    BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE branch stays directly covered by
+    ``test_round_certification.py`` (the assertion at roughly line 428), so moving this test to
+    the earlier refusal loses no coverage.
+    """
     seat_map = {
         "seats": {
             dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
@@ -981,17 +1064,38 @@ def test_real_loop_refuses_when_certified_head_unresolvable(tmp_path):
         vendors=["codex"],
         baseGuard=round_certification.BASE_GUARD_CHECKED,
     )
-    _drive_to_terminal_with_panel_dispatch_evidence(
-        session_dir, tmp_path, gitdir, [], head_path)
-    receipt, refusal = round_certification.certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "unrun-review"
-    assert (
-        refusal["bindingFailure"]
-        == round_certification.BINDING_FAILURE_CERTIFIED_HEAD_UNRESOLVABLE
-    )
-    assert refusal["artifact"] == round_certification.META_FILE
+    _drive_to_phase(session_dir, gitdir, [], head_path, round_driver.P_PANEL)
+    state = _state(session_dir)
+    pend = state["pending"]
+    phase = pend["phase"]
+    assert phase == round_driver.P_PANEL
+    roster, roster_reason = round_adapters.roster_for(phase, state, state.get("config") or {})
+    assert roster_reason is None, (phase, roster_reason)
+    slots = _slots_of(roster)
+    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    anchor = round_driver._orders_anchor(state, session_dir, pend["round"], pend["phase"],
+                                         pend["attempt"])
+    anchor_head = (anchor or {}).get("headSha")
+    assert anchor_head is None
+    for seat, occurrence in slots:
+        payload = _payload_for(session_dir, state, pend, seat, [], head_path)
+        if phase == round_driver.P_PANEL and seat == FINDING_SEAT and state["round"] == 1:
+            _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
+            order_path = round_records.order_prompt_path(
+                session_dir, pend["round"], pend["phase"],
+                round_records.storage_key(seat, occurrence), pend["attempt"])
+            run_dir = _execution_run_dir(
+                tmp_path, order_path, [], view_head_sha=anchor_head or "abc123fake")
+            out = round_driver.cmd_record_result(
+                session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
+            assert out["ok"] is False
+            assert out["reason"] == "view-head-underivable"
+            assert out["anchorCitedHead"] is None
+            assert out["runKind"] == engine_dispatch.RUN_KIND_REVIEW
+        else:
+            _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+            rec_out = _record(session_dir, seat, occurrence=occurrence)
+            assert rec_out["ok"], (phase, seat, occurrence, rec_out)
 
 
 def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_path):
@@ -1025,14 +1129,7 @@ def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_
 
 def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions(
         tmp_path):
-    """Seam between this child (the writer's disposition-without-receipt check) and C13.
-
-    C13 lands the loop's disposition recording at ``round_driver.py`` :2349, :2720, and :3318,
-    all routed through ``_set_findings``. When that producer lands, this test flips to a certifying
-    assertion in C13 under R28's first clause (the behavior is fixed and the test is kept). This
-    is not a statement that refusing is desirable — only that refusing is what the code correctly
-    does while no producer exists.
-    """
+    """End-to-end: a converged loop records fixed disposition on the ledger for raised findings."""
     seat_map = {
         "seats": {
             dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
@@ -1052,12 +1149,22 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
     assert round_driver.P_PANEL in folded
     state = _state(session_dir)
     assert state["terminal"] == "converged", state.get("certification")
-    receipt, refusal = round_certification.certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["artifact"] == finding["title"]
-    assert refusal["detail"] == "finding has no disposition recorded"
+    compiled, _ = round_driver.mechanical_compile([finding], None)
+    key = session_contract.finding_identity_key(compiled[0])
+    ledger = {session_contract.finding_identity_key(e): e
+              for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
+    assert key in ledger
+    entry = ledger[key]
+    assert entry["disposition"] == "fixed"
+    assert entry["dispositionRound"] == 2
+    receipt = entry["dispositionReceipt"]
+    assert isinstance(receipt.get("headSha"), str) and receipt["headSha"]
+    assert receipt["verifyResult"] == "pass"
+    cert_receipt, refusal = round_certification.certify(session_dir)
+    if refusal is not None:
+        assert (refusal["class"] != "disposition-without-receipt"
+                or refusal["detail"] != "finding has no disposition recorded"), (
+            "unexpected disposition-without-receipt: %r" % refusal)
 
 
 def _git(cwd, *args, check=True):
@@ -1170,10 +1277,11 @@ def test_assemble_dispatch_evidence_write_run_fixer_envelope(tmp_path):
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record)
-    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir)
+    assembled, refusal, extra, cited_head_source = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
     assert refusal is None, extra
     assert assembled is not None
+    assert cited_head_source == round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
     assert assembled["executionEvidence"]["resultKind"] == session_contract.WRITE_RESULT_KIND
     assert assembled["envelopeSha256"] == round_records.envelope_sha256(
         envelope["payload"], assembled["executionEvidence"])
@@ -1187,8 +1295,8 @@ def test_assemble_dispatch_evidence_write_run_order_mismatch_refuses(tmp_path):
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record, order_sha="0" * 64)
-    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir)
+    assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
     assert assembled is None
     assert refusal == "evidence-order-mismatch"
 
@@ -1210,8 +1318,8 @@ def test_assemble_dispatch_evidence_write_run_binding_incomplete_refuses(tmp_pat
     assert err is None, err
     assert "resultDigest" not in record
     envelope = _fixer_envelope_for_write_run(record)
-    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir)
+    assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
     assert assembled is None
     assert refusal == "evidence-run-dir-unreadable"
     assert extra.get("detail") == "result-binding-incomplete"
@@ -1236,8 +1344,8 @@ def test_assemble_dispatch_evidence_kind_not_in_payload_refuses(tmp_path):
     engine_dispatch.run_execution_record = _patched
     try:
         envelope = _fixer_envelope_for_write_run(record)
-        assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-            str(tmp_path / "session"), envelope, run_dir)
+        assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+            str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
     finally:
         engine_dispatch.run_execution_record = real_record
     assert assembled is None
@@ -1256,8 +1364,8 @@ def test_assemble_dispatch_evidence_review_kind_absent_from_payload_refuses(tmp_
         "orderSha256": record["orderPromptSha256"],
         "payload": {"fixes": []},
     }
-    assembled, refusal, extra = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir)
+    assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir, "abc123fake", round_driver.P_PANEL)
     assert assembled is None
     assert refusal == "evidence-result-mismatch"
     assert extra.get("resultKind") == "findings"

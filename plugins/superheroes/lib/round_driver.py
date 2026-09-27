@@ -9,10 +9,12 @@ layers over one core:
 
   - Layer 1 (`run_loop`): the ported control-flow of `review_panel_shell.js::reviewPanel` with
     every effectful step behind an injectable seam (`reviewer`, `synthesis`, `verifier`,
-    `auditor`, `fix_step`, `verify_runner`, `changed_subjects`, `io`). Same run-SHAPE, not the JS
+    `auditor`, `fix_step`, `verify_runner`, `changed_subjects`, `panel_diff`, `io`). Same run-SHAPE, not the JS
     idioms. `changed_subjects` derives the fix's changed policy subjects from git (the reviewed vs
     head diff), NEVER the fixer's self-report (#157/#158) — the library default + the CLI path wire
-    the real derivation; the eval harness injects a scripted replay.
+    the real derivation; the eval harness injects a scripted replay. `panel_diff` derives the
+    git head diff for unknown-surface full panels — the library default + the CLI path wire the
+    real git helper; run_loop may inject a scripted replay.
   - Layer 2 (`next`/`submit` CLI): the state machine BETWEEN orchestrator dispatches — `next`
     emits the one action to run, `submit` folds its artifact and advances.
 
@@ -38,6 +40,7 @@ not re-implemented.
 """
 import argparse
 import base64
+import binascii
 import errno
 import hashlib
 import json
@@ -60,10 +63,12 @@ import canary_outcome  # noqa: E402
 import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
 import mode_registry  # noqa: E402
+import decision_kinds  # noqa: E402
 import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import diff_scope  # noqa: E402
 import engine_adapter  # noqa: E402
+import payload_contracts  # noqa: E402
 import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
@@ -72,6 +77,7 @@ import order_lint  # noqa: E402
 import panel_tally  # noqa: E402
 import payload_contracts  # noqa: E402
 import review_base_guard  # noqa: E402
+import review_diff_bytes  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_gate_policy  # noqa: E402
@@ -88,7 +94,7 @@ import session_contract  # noqa: E402
 import session_mode  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
-from finding_identity import finding_identity, normalize_title  # noqa: E402
+from finding_identity import finding_identity, finding_label, normalize_title  # noqa: E402
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
@@ -120,12 +126,42 @@ QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
 
 
 def _order_lint_text(order_text, context):
-    """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's."""
+    """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's.
+
+    The owner's verify command is quoted data wherever it rides. The round economy (C13 layer 2d)
+    retired the fixer template's bare ``VERIFY_COMMAND`` placeholder in favour of the scoped
+    ``VERIFY_BUDGET``, which quotes the owner's command INSIDE driver-authored prose — so the
+    command is sourced from the session config (``verify_command``), never from a placeholder no
+    template fills any more, and the elision is NARROW: only the command itself is replaced, and
+    only where it rides inside the budget block, so the budget's own target-file list, its
+    instructions, and every path in them stay graded by the lint.
+    """
     ph = context.get("placeholders") if isinstance(context.get("placeholders"), dict) else {}
     # Mask an inlined implementer template first: an elision landing inside it would break the
     # verbatim match the lint's own mask needs, and the two doors would grade differently.
     text, _ = order_lint.mask_template(order_text)
-    for quoted in (ph.get("GATE_GUIDANCE"), ph.get("VERIFY_COMMAND"), context.get("ratified_residuals")):
+    # Every quoted string shares the mask's newline policy, so a CR in owner data cannot defeat
+    # the elision against the already-folded text.
+    budget = ph.get("VERIFY_BUDGET")
+    verify = context.get("verify_command")
+    if isinstance(budget, str):
+        budget = order_lint.normalize_newlines(budget)
+    if isinstance(verify, str):
+        verify = order_lint.normalize_newlines(verify)
+    # The budget QUOTES the owner's command as its TAIL (`_fixer_verify_budget` appends it last),
+    # so the elision is anchored to that tail. A first-occurrence replace would search from the
+    # front and could rewrite a driver-authored target path the owner's command is a substring of
+    # (target `prefix/foo/bar.py`, command `foo/bar.py`) — hiding a path the lint must grade and
+    # leaving the owner's command in the text. Anchoring makes that impossible: nothing but the
+    # quoted tail is ever removed, and a budget that does not end in the command is left whole
+    # (the lint then grades it — fail-closed, never fail-open).
+    if (isinstance(budget, str) and budget.strip()
+            and isinstance(verify, str) and verify.strip() and budget.endswith(verify)):
+        elided = budget[:-len(verify)] + QUOTED_DATA_LINT_ELISION
+        text = text.replace(budget, elided, 1)
+    for quoted in (ph.get("GATE_GUIDANCE"), context.get("ratified_residuals")):
+        if isinstance(quoted, str):
+            quoted = order_lint.normalize_newlines(quoted)
         if isinstance(quoted, str) and quoted.strip():
             text = text.replace(quoted, QUOTED_DATA_LINT_ELISION, 1)
     return text
@@ -138,12 +174,31 @@ GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP = 200
 _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
 _GATE_GUIDANCE_ROW_CARRIED_CHANNEL = "gateGuidanceRowCarried"
 GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
+RULING_GUIDANCE_OMITTED = "ruling-guidance-omitted"
 
 # --- version spelling: pinned declaration block (BEGIN) ---
 SCHEMA_VERSION = 2
 STATE_FILE = session_contract.STATE_FILE
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
+RE_EMIT_CMD = session_contract.RE_EMIT_CMD
+RULE_CMD = session_contract.RULE_CMD
+ORDERS_SUPERSEDED_OUTCOME = session_contract.ORDERS_SUPERSEDED_OUTCOME
+RULING_KINDS = frozenset(("out-of-scope", "guidance"))
+RULING_FILE_UNREADABLE = "ruling-file-unreadable"
+RULING_FILE_SHAPE = "ruling-file-shape"
+RULING_PROVENANCE_MALFORMED = "ruling-provenance-malformed"
+RULING_UNKNOWN_KIND = "ruling-unknown-kind"
+RULING_TARGET_UNKNOWN = "ruling-target-unknown"
+RULING_TARGET_AMBIGUOUS = "ruling-target-ambiguous"
+RULING_REASON_MISSING = "ruling-reason-missing"
+RULING_SESSION_TERMINAL = "ruling-session-terminal"
+RULING_FOLLOW_UP_MALFORMED = "ruling-follow-up-malformed"
+RULING_GUIDANCE_OVERSIZE = "ruling-guidance-oversize"
+RULING_CRITICAL_OUT_OF_SCOPE = "ruling-critical-out-of-scope"
+RULING_ATTEMPT_PENDING = "ruling-attempt-pending"
+RULINGS_LOG_MALFORMED = "rulings-log-malformed"
+RULING_GUIDANCE_NOT_FIXER = "ruling-guidance-not-fixer"
 RECEIPT_FILE = "round-receipt.json"
 RECEIPT_INTERIM_FILE = "round-receipt-interim.json"
 CERTIFICATION_RECEIPT_FILE = "certification-receipt.json"
@@ -264,12 +319,14 @@ _declared_disclosures = receipt_disclosures.declared_disclosures
 _receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 _normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
 RESUMABLE_DISCLOSURE_CHANNELS = receipt_disclosures.RESUMABLE_DISCLOSURE_CHANNELS
+RECORD_ONLY_DISCLOSURE_CHANNELS = receipt_disclosures.RECORD_ONLY_DISCLOSURE_CHANNELS
 _DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
 _str_list = receipt_disclosures.str_list
 _dict_list = receipt_disclosures.dict_list
 _bool_value = receipt_disclosures.bool_value
 _canary_failed_shape = receipt_disclosures.canary_failed_shape
 _canary_verified_shape = receipt_disclosures.canary_verified_shape
+_control_probe_shape = receipt_disclosures.control_probe_shape
 _adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 _order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
 build_degraded_prose = receipt_disclosures.build_degraded_prose
@@ -290,11 +347,16 @@ round_entry_key_declared = receipt_disclosures.round_entry_key_declared
 round_entry_key_allowed = receipt_disclosures.round_entry_key_allowed
 receipt_round_disclosures = receipt_disclosures.receipt_round_disclosures
 normalize_adapter_provenance = receipt_disclosures.normalize_adapter_provenance
+live_vendors = receipt_disclosures.live_vendors
+independent_auditor = receipt_disclosures.independent_auditor
+independent_auditor_available = receipt_disclosures.independent_auditor_available
+_live_vendors = receipt_disclosures.live_vendors
 str_list = receipt_disclosures.str_list
 dict_list = receipt_disclosures.dict_list
 bool_value = receipt_disclosures.bool_value
 canary_failed_shape = receipt_disclosures.canary_failed_shape
 canary_verified_shape = receipt_disclosures.canary_verified_shape
+control_probe_shape = receipt_disclosures.control_probe_shape
 adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
 DISCLOSE_ON_PRESENCE = receipt_disclosures.DISCLOSE_ON_PRESENCE
@@ -369,6 +431,20 @@ _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 
 # Named refusal when a submit artifact lists the same judgment id with conflicting dispositions.
 JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
+FOLLOWUP_MALFORMED_CAUSE = "follow-up-malformed"
+STAGED_ID_UNRESOLVABLE_CAUSE = "staged-id-unresolvable"
+
+# Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
+DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE = "disposition-ledger-owner-unrecognized"
+VERIFIED_HEAD_UNRESOLVED_CAUSE = "verified-head-unresolved"
+RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE
+RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = round_records.RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL
+RELOCATION_EVIDENCE_INDETERMINATE_CAUSE = "relocation-evidence-indeterminate"
+AUDITOR_UNSEATABLE_CAUSE = "auditor-unseatable"
+RELOCATION_EVIDENCE_INDETERMINATE_DETAIL = (
+    "relocation evidence in the journal is unreadable or malformed; "
+    "cannot determine whether this attempt predates a checkout move"
+)
 
 POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
 POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
@@ -469,6 +545,61 @@ class RoundCeilingRefusal(ValueError):
         self.value = value
 
 
+class FixBatchCapRefusal(ValueError):
+    """Load-time refusal for an invalid ``fixBatchCap`` — sibling of ``RoundCeilingRefusal``.
+
+    Raised only from ``_default_config`` when ``fixBatchCap`` is present, not ``None``, and not a
+    positive non-bool ``int``."""
+    def __init__(self, reason, value=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.value = value
+
+
+class DispositionLedgerOwnerRefusal(ValueError):
+    """Fold-time refusal for an unrecognized ``dispositionLedgerOwner`` marker — sibling of
+    ``RoundCeilingRefusal``.
+
+    Raised only from ``_fold`` — the single chokepoint every fold passes through."""
+    def __init__(self, reason, value=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.value = value
+
+
+class AuditorUnseatable(ValueError):
+    """Refusal when a durable-path audit target seats a non-runner-channel auditor."""
+
+    def __init__(self, detail, live_vendors, fixer_vendor):
+        super().__init__(detail)
+        self.detail = detail
+        self.live_vendors = live_vendors
+        self.fixer_vendor = fixer_vendor
+
+
+RECEIPT_FAULT_WRITE = "receipt-write"                 # round-receipt.json could not be written
+RECEIPT_FAULT_CERTIFICATION = "certification-artifact"  # certification receipt/refusal artifact could not be written
+RECEIPT_FAULT_VERIFY = "receipt-verify"               # the on-disk receipt failed re-verification
+RECEIPT_FAULT_KINDS = (RECEIPT_FAULT_WRITE, RECEIPT_FAULT_CERTIFICATION, RECEIPT_FAULT_VERIFY)
+
+
+class ReceiptFault(str):
+    """A terminal-receipt fault detail that carries its class as data. It IS the detail string
+    (every consumer — CLI responses, `_receiptFault` in state, the tests that read it — keeps
+    reading a str); `kind` is the classification minted at the raise site."""
+    def __new__(cls, detail, kind):
+        if kind not in RECEIPT_FAULT_KINDS:
+            raise ValueError("unknown receipt fault kind %r" % (kind,))
+        obj = str.__new__(cls, detail)
+        obj.kind = kind
+        return obj
+
+
+class ReceiptWriteError(Exception):
+    """Raised by `_write_receipt` around the OSError: the raise site names the class."""
+    kind = RECEIPT_FAULT_WRITE
+
+
 class JournalFaultUnrecordable(Exception):
     """Last-resort fail-loud (#507 WO-FIX-RECOVERY): the journal append failed AND the durable fault
     marker that would have made finalization park ALSO could not be written. There is NO silent tier
@@ -492,6 +623,7 @@ def _journal_append(session_dir, entry):
     last-resort fail-loud, propagated here (never swallowed). ts via time.time."""
     entry = dict(entry)
     entry.setdefault("ts", time.time())
+    round_records.require_complete_revision(entry)
     try:
         with open(os.path.join(session_dir, JOURNAL_FILE), "a", encoding="utf-8") as fh:
             fh.write(_canonical(entry) + "\n")
@@ -531,8 +663,9 @@ def _journal_faulted(session_dir):
     return os.path.exists(os.path.join(session_dir, JOURNAL_FAULT_FILE))
 
 
-def read_journal(session_dir):
+def read_journal(session_dir, *, report_lossy=False):
     out = []
+    lossy = False
     path = os.path.join(session_dir, JOURNAL_FILE)
     try:
         with open(path, encoding="utf-8") as fh:
@@ -543,10 +676,24 @@ def read_journal(session_dir):
                 try:
                     out.append(json.loads(line))
                 except ValueError:
+                    # axis: a lossy journal read flags unparseable lines for relocation evidence
+                    if report_lossy:
+                        lossy = True
                     continue
     except OSError:
-        pass
+        if report_lossy:
+            lossy = True
+    except UnicodeError:
+        if report_lossy:
+            lossy = True
+        else:
+            raise
+    if report_lossy:
+        return out, lossy
     return out
+
+
+_RELOCATION_EVIDENCE_INDETERMINATE = object()
 
 
 def read_fault_markers(session_dir):
@@ -591,6 +738,10 @@ def _journal_bootstrap_marker_failure(session_dir, reason):
         pass
 
 
+def _review_session_marker_path(gitdir):
+    return os.path.join(gitdir, SIDECAR_DIRNAME, _REVIEW_SESSION_MARKER)
+
+
 def _bootstrap_review_session_marker(session_dir):
     """Write review-session.json scope marker; failures are swallowed (#624 §4)."""
     try:
@@ -616,7 +767,7 @@ def _bootstrap_review_session_marker(session_dir):
             "repoRoot": repo_root,
             "branch": branch,
         }
-        marker_path = os.path.join(super_dir, _REVIEW_SESSION_MARKER)
+        marker_path = _review_session_marker_path(gitdir)
         round_commit.atomic_write_bytes(marker_path, _canonical(marker).encode("utf-8"))
     except Exception as exc:
         _journal_bootstrap_marker_failure(session_dir, str(exc))
@@ -692,6 +843,13 @@ def _diff_scope_ok(finding, valid):
     return finding.get("line") in file_lines
 
 
+COMPILE_DROP_LINE_NOT_INTEGER = "line is not an integer"
+
+
+def _coerce_line(value):
+    return session_contract.coerce_line(value)
+
+
 def _nit_cap(findings):
     """After dedupe, keep at most 5 Nits; the overflow collapses to ONE summary entry so the
     readout isn't buried (the base rubric's severity cap)."""
@@ -714,6 +872,20 @@ def _nit_cap(findings):
     return kept
 
 
+def _merge_same_finding(existing, incoming):
+    """Higher severity wins the base dict, dimension unioned, tradeoff OR-ed."""
+    dims = panel_tally._merge_dims(existing, incoming)
+    if circuit_breaker.severity_rank(incoming.get("severity")) \
+            < circuit_breaker.severity_rank(existing.get("severity")):
+        merged = dict(incoming)
+    else:
+        merged = dict(existing)
+    merged["dimension"] = dims
+    merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
+    merged["classification"] = "judgment" if merged["tradeoff"] else "mechanical"
+    return merged
+
+
 def _compile_by_anchor(findings):
     """Dedupe by the binding review workflow's per-LOCATION anchor — (file, line, normalized-title)
     — NOT panel_tally's line-less `file::normalized-title` identity. The line was the DROPPED key:
@@ -726,16 +898,7 @@ def _compile_by_anchor(findings):
     for f in findings:
         key = (f.get("file"), f.get("line"), normalize_title(str(f.get("title") or "")))
         if key in by_anchor:
-            ex = by_anchor[key]
-            dims = panel_tally._merge_dims(ex, f)
-            if circuit_breaker.severity_rank(f.get("severity")) \
-                    < circuit_breaker.severity_rank(ex.get("severity")):
-                merged = dict(f)
-            else:
-                merged = dict(ex)
-            merged["dimension"] = dims
-            merged["tradeoff"] = bool(ex.get("tradeoff") or f.get("tradeoff"))
-            by_anchor[key] = merged
+            by_anchor[key] = _merge_same_finding(by_anchor[key], f)
         else:
             by_anchor[key] = dict(f)
             order.append(key)
@@ -765,11 +928,18 @@ def mechanical_compile(findings, diff_text=None):
             drops.append({"file": f.get("file"), "title": f.get("title"),
                           "reason": "uncited — no file:line"})
             continue
-        if not _diff_scope_ok(f, valid):
+        ok, line = _coerce_line(f.get("line"))
+        if not ok:
             drops.append({"file": f.get("file"), "line": f.get("line"),
-                          "title": f.get("title"), "reason": "outside the round diff scope"})
+                          "title": f.get("title"), "reason": COMPILE_DROP_LINE_NOT_INTEGER})
             continue
         fc = dict(f)
+        fc["line"] = line
+        if not _diff_scope_ok(fc, valid):
+            drops.append({"file": fc.get("file"), "line": fc.get("line"),
+                          "title": fc.get("title"), "reason": "outside the round diff scope"})
+            continue
+        fc.pop(session_contract.FINDING_KEY_FIELD, None)
         fc["severity"] = circuit_breaker.effective_severity(fc.get("severity"))
         if "dimension" in fc:
             norm = panel_tally.normalize_dimension(fc["dimension"])
@@ -780,6 +950,7 @@ def mechanical_compile(findings, diff_text=None):
         kept.append(fc)
     compiled = _compile_by_anchor(kept)
     compiled = _nit_cap(compiled)
+    _mint_finding_keys(compiled)
     return compiled, drops
 
 
@@ -844,14 +1015,7 @@ def author_justification_filter(findings, prior_comments):
 # independence + certification shape
 # =============================================================================================
 
-def _live_vendors(config):
-    vendors = config.get("vendors") if isinstance(config, dict) else None
-    if not isinstance(vendors, list) or not vendors:
-        return ["claude"]
-    return [v for v in vendors if isinstance(v, str) and v]
-
-
-def _auditor_vendor(config, fixer_vendor):
+def _auditor_vendor(config, fixer_vendor, runner_only=False):
     """The auditor of a fix is never the fixer's model FAMILY (CONVENTIONS §7.5 — independence keys
     on family, not the dispatch CLI). Independence is NEVER satisfied between two cursor first-party
     models (#651, owner-ratified 2026-07-26): composer and grok share the `xai` family, so a
@@ -859,15 +1023,20 @@ def _auditor_vendor(config, fixer_vendor):
     vendor is live the audit still RUNS but is stamped degraded — never silently counted as
     independent. The same-vendor fallback loop was removed as unreachable post-#651 (issue #652
     rider 4a); see test_auditor_and_code_fixer_families_match_per_vendor in test_model_registry."""
+    vendor, _fam = receipt_disclosures.independent_auditor(
+        config, fixer_vendor, runner_only=runner_only)
+    if vendor is not None:
+        return vendor, "independent"
     live = _live_vendors(config)
-    fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
-    if fixer_fam is None:
-        return (live[0] if live else fixer_vendor), "degraded"
-    for v in live:
-        if v != fixer_vendor:
-            cand_fam = model_registry.family_for("auditor", v)
-            if cand_fam is not None and cand_fam != fixer_fam:
-                return v, "independent"
+    if runner_only:
+        host_independent, _fam = receipt_disclosures.independent_auditor(
+            config, fixer_vendor, runner_only=False)
+        if host_independent is not None:
+            return None, "unseatable"
+        for v in live:
+            if session_contract.runner_channel_vendor(v):
+                return v, "degraded"
+        return None, "unseatable"
     return (live[0] if live else fixer_vendor), "degraded"
 
 
@@ -981,6 +1150,7 @@ def _default_config(overrides=None):
         # was populated ONLY by `_fold_panel` off the panel artifact; receipt list (#681) stores
         # each round's submission in `seatMapReceipts` instead.
         "seatMap": None,
+        "fixBatchCap": None,
     }
     if isinstance(overrides, dict):
         cfg.update({k: v for k, v in overrides.items() if v is not None})
@@ -988,12 +1158,31 @@ def _default_config(overrides=None):
     cfg["code"] = cfg.get("leg") != "panel"
     if not isinstance(cfg.get("dimensions"), list) or not cfg["dimensions"]:
         cfg["dimensions"] = list(DIMENSIONS)
+    cap_val = cfg.get("fixBatchCap")
+    if cap_val is not None:
+        if not isinstance(cap_val, int) or isinstance(cap_val, bool) or cap_val < 1:
+            raise FixBatchCapRefusal("fix-batch-cap-invalid", cap_val)
     ceiling, refusal = circuit_breaker.resolve_round_ceiling(
         cfg["maxRounds"], cfg.get("maxRoundsAbsolute"))
     if refusal is not None:
         raise RoundCeilingRefusal(refusal, cfg.get("maxRoundsAbsolute"))
     cfg["maxRoundsAbsolute"] = ceiling
     return cfg
+
+
+def _fix_batch_cap(config):
+    """Return the configured fix-batch cap, or ``FIX_BATCH_CAP_DEFAULT`` when unset/invalid."""
+    val = config.get("fixBatchCap") if isinstance(config, dict) else None
+    if isinstance(val, int) and not isinstance(val, bool) and val >= 1:
+        return val
+    return round_phases.FIX_BATCH_CAP_DEFAULT
+
+
+VERIFY_THEN_CEILING = "ceiling"
+VERIFY_THEN_PANEL = "full-panel"
+VERIFY_THEN_POST_AUDITS = "post-audits"
+DELTA_BASELINE_ABSENT = "delta-baseline-absent"
+PANEL_DIFF_UNDERIVABLE_CAUSE = "panel-diff-underivable"
 
 
 def _round_ceiling(config):
@@ -1025,12 +1214,18 @@ def new_state(config=None):
         "auditRounds": [],
         "confirmations": 0,
         "selfRecovered": False,
-        "independenceDegraded": len(_live_vendors(cfg)) < 2,
+        # A single live vendor is degraded only when no live vendor is family-independent of the
+        # declared fixer; duplicate vendor entries never count twice toward the two-vendor pool.
+        "independenceDegraded": (
+            len(_live_vendors(cfg)) < 2
+            and not receipt_disclosures.independent_auditor_available(cfg)[0]
+        ),
         # Seeded from `--seat-map` when one was supplied (#723) as receipt round "0".
         "seatMapReceipts": ([{"round": "0", "map": dict(seeded_seat_map)}]
                             if isinstance(seeded_seat_map, dict) and seeded_seat_map else []),
         "reviewedDiff": cfg.get("diff"),
         "headDiff": None,
+        "dispositionSeqCounter": 0,
         "fixBatch": [],
         "fullPanelRan": False,
         # A configured lens that never ran is an OUTSTANDING coverage gap: set when a panel is
@@ -1173,31 +1368,519 @@ def _finding_identity_key(finding):
     return session_contract.finding_identity_key(finding)
 
 
-def _archive_disposition_findings(state, departing):
-    """Append findings leaving the live list that carry disposition into dispositionLedger."""
-    if not departing:
-        return
-    ledger = state.get("dispositionLedger")
+def _mint_finding_keys(findings):
+    """Stamp findingKey on dict findings that lack a non-empty one; ensure list-wide uniqueness."""
+    if not isinstance(findings, list):
+        return findings
+    entries = []
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        minted = session_contract.minted_identity_key(f)
+        bare = session_contract.location_key(f)
+        preset_raw = f.get(session_contract.FINDING_KEY_FIELD)
+        preset = preset_raw if isinstance(preset_raw, str) and preset_raw else None
+        if preset is None:
+            kind = "unkeyed"
+            identity = minted
+            legacy_key = None
+        elif preset == minted:
+            kind = "loop-owned"
+            identity = minted
+            legacy_key = None
+        elif preset == bare and minted != bare:
+            kind = "legacy-owned"
+            identity = minted
+            legacy_key = preset
+        else:
+            kind = "foreign"
+            identity = preset
+            legacy_key = None
+        entries.append((f, kind, identity, legacy_key))
+    by_identity = {}
+    for idx, (f, kind, identity, legacy_key) in enumerate(entries):
+        by_identity.setdefault(identity, []).append((idx, f, kind, legacy_key))
+    claimants = {}
+    for identity, group in by_identity.items():
+        for _, f, kind, legacy_key in group:
+            bare = session_contract.location_key(f)
+            if kind in ("unkeyed", "loop-owned") and identity == bare:
+                claimants.setdefault(bare, set()).add(identity)
+            elif kind == "foreign":
+                claimants.setdefault(identity, set()).add(identity)
+            elif kind == "legacy-owned" and legacy_key:
+                claimants.setdefault(legacy_key, set()).add(identity)
+    for identity, group in by_identity.items():
+        has_foreign = any(kind == "foreign" for _, _, kind, _ in group)
+        if not has_foreign:
+            legacy_keys = [lk for _, _, kind, lk in group if kind == "legacy-owned" and lk]
+            # Parent build minted list-wide-unique keys; two bare legacy rows cannot come from
+            # stored state — this branch is fail-closed hardening when claims collide.
+            if legacy_keys and len(claimants.get(legacy_keys[0], set())) == 1:
+                chosen_key = legacy_keys[0]
+            else:
+                chosen_key = identity
+            for _, f, _, _ in group:
+                f[session_contract.FINDING_KEY_FIELD] = chosen_key
+        else:
+            contents = {session_contract.finding_content_canonical(f) for _, f, _, _ in group}
+            if len(group) == 1 or len(contents) == 1:
+                for _, f, _, _ in group:
+                    f[session_contract.FINDING_KEY_FIELD] = identity
+            else:
+                for _, f, _, _ in group:
+                    f[session_contract.FINDING_KEY_FIELD] = (
+                        identity + "#" + session_contract.content_hash_suffix(f))
+    return findings
+
+
+def _finding_key_of(finding):
+    """Pure read of a finding's identity — the leaf's one derivation."""
+    return session_contract.finding_identity_key(finding)
+
+
+def _ensure_disposition_ledger_for_write(state):
+    """Fold-time writer for ``dispositionLedger`` — not for terminal or certification reads."""
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
     if not isinstance(ledger, list):
         ledger = []
-        state["dispositionLedger"] = ledger
+        state[session_contract.DISPOSITION_LEDGER_KEY] = ledger
+    return ledger
+
+
+def _ledger_index_by_key(ledger):
     seen = {}
     for i, entry in enumerate(ledger):
         if isinstance(entry, dict):
             key = _finding_identity_key(entry)
             if key:
                 seen[key] = i
+    return seen
+
+
+def _live_finding_by_key(state, key):
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict) and _finding_identity_key(finding) == key:
+            return finding
+    return None
+
+
+def _strip_disposition_family(entry):
+    return session_contract.strip_disposition_family(entry)
+
+
+def _apply_disposition_family(target, family):
+    session_contract.apply_disposition_family(target, family)
+
+
+def _backfill_ledger_from_records(state, ledger, seen):
+    """On first ledger-owner activation, seed missing keys from review-record history."""
+    preexisting = set(seen)
+    family_snapshots = {}
+    for key in preexisting:
+        idx = seen[key]
+        entry = ledger[idx]
+        if isinstance(entry, dict):
+            family_snapshots[key] = session_contract.disposition_family_snapshot(entry)
+    for rec in state.get("_records") or []:
+        if not isinstance(rec, dict):
+            continue
+        for finding in rec.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            key = _finding_identity_key(finding)
+            if not key:
+                continue
+            entry = _strip_disposition_family(dict(finding))
+            entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+            entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+            if key in preexisting:
+                entry.update(family_snapshots.get(key, {}))
+            if key in seen:
+                ledger[seen[key]] = entry
+            else:
+                seen[key] = len(ledger)
+                ledger.append(entry)
+
+
+def _stage_findings(state, compiled):
+    """The only writer of ``_toVerify`` — seeds one ledger entry per compiled candidate."""
+    if not isinstance(compiled, list):
+        state["_toVerify"] = compiled
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    owner_class = session_contract.disposition_ledger_owner_classification(state)
+    first_ledger_owner = owner_class == session_contract.DISPOSITION_LEDGER_OWNER_ABSENT
+    if first_ledger_owner:
+        _backfill_ledger_from_records(state, ledger, seen)
+    round_no = state["round"]
+    seeded = False
+    sanitized = []
+    for finding in compiled:
+        if not isinstance(finding, dict):
+            sanitized.append(finding)
+            continue
+        key = _finding_identity_key(finding)
+        if not key:
+            sanitized.append(finding)
+            continue
+        existing = ledger[seen[key]] if key in seen else None
+        entry = _strip_disposition_family(dict(finding))
+        entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+        entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+        entry[session_contract.RAISED_ROUND_FIELD] = round_no
+        if (isinstance(existing, dict)
+                and session_contract.has_disposition_family(existing)
+                and existing.get("dispositionRound") == round_no):
+            for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+                if field in existing:
+                    entry[field] = existing[field]
+        else:
+            entry = _strip_disposition_family(entry)
+            entry.pop(session_contract.RAISED_SEQ_FIELD, None)
+            entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+            entry[session_contract.RAISED_ROUND_FIELD] = round_no
+        entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
+        sanitized.append(entry)
+        if key in seen:
+            ledger[seen[key]] = entry
+        else:
+            seen[key] = len(ledger)
+            ledger.append(entry)
+        live_oos = _live_out_of_scope_ruling_for_key(state, key)
+        if live_oos is not None and not _live_out_of_scope_blocks_row(entry):
+            _record_disposition(
+                state, key, "out-of-scope", round_no,
+                outOfScopeReason=live_oos.get("reason"),
+                followUp=live_oos.get("followUp"),
+                rulingSeq=live_oos.get("seq"))
+        seeded = True
+    state["_toVerify"] = sanitized
+    if seeded:
+        state[session_contract.DISPOSITION_LEDGER_OWNER_FIELD] = (
+            session_contract.DISPOSITION_LEDGER_OWNER_VALUE
+        )
+
+
+def _next_disposition_seq(state):
+    counter = state.get("dispositionSeqCounter", 0) + 1
+    state["dispositionSeqCounter"] = counter
+    return counter
+
+
+def _next_ruling_seq(state):
+    counter = state.get("rulingSeqCounter", 0) + 1
+    state["rulingSeqCounter"] = counter
+    return counter
+
+
+def _read_rulings_log(state):
+    """Pure read of ``rulingsLog`` — never mutates ``state``.
+
+    Returns ``(rows, None)`` or ``([], (token, detail))`` when malformed."""
+    if not isinstance(state, dict):
+        return [], (RULINGS_LOG_MALFORMED, "state must be an object")
+    if "rulingsLog" not in state:
+        return [], None
+    log = state["rulingsLog"]
+    if not isinstance(log, list):
+        return [], (RULINGS_LOG_MALFORMED, "rulingsLog must be a list")
+    rows = []
+    for entry in log:
+        if not isinstance(entry, dict):
+            return [], (RULINGS_LOG_MALFORMED, "rulingsLog row must be an object")
+        key = entry.get("findingKey")
+        if not isinstance(key, str) or not key:
+            return [], (RULINGS_LOG_MALFORMED, "rulingsLog row lacks findingKey")
+        rows.append(dict(entry))
+    return rows, None
+
+
+def _ruling_seq_counter_fault(state):
+    """Return ``(token, detail)`` when ``rulingSeqCounter`` is present but not a non-negative int."""
+    if not isinstance(state, dict) or "rulingSeqCounter" not in state:
+        return None
+    counter = state["rulingSeqCounter"]
+    if not isinstance(counter, int) or counter < 0:
+        return (RULINGS_LOG_MALFORMED, "rulingSeqCounter must be a non-negative integer")
+    return None
+
+
+def _writable_rulings_log(state):
+    """Append target for ``rulingsLog`` — only after precondition reads pass."""
+    log = state.get("rulingsLog")
+    if log is None:
+        log = []
+        state["rulingsLog"] = log
+    return log
+
+
+def _live_ruling_by_key(state):
+    """Latest rulings-log row per finding key."""
+    rows, fault = _read_rulings_log(state)
+    if fault is not None:
+        return {}
+    by_key = {}
+    for entry in rows:
+        key = entry.get("findingKey")
+        if isinstance(key, str) and key:
+            by_key[key] = entry
+    return by_key
+
+
+def _live_out_of_scope_ruling_for_key(state, key):
+    if not isinstance(key, str) or not key:
+        return None
+    live = _live_ruling_by_key(state).get(key)
+    if isinstance(live, dict) and live.get("ruling") == "out-of-scope":
+        return live
+    return None
+
+
+def _live_out_of_scope_blocks_row(row):
+    """True when a live out-of-scope ruling may exclude or restage this row (never Critical)."""
+    if not isinstance(row, dict):
+        return False
+    sev = row.get("severity")
+    return circuit_breaker.is_critical(sev)
+
+
+def _live_out_of_scope_ruling_keys(state):
+    keys = set()
+    for key, entry in _live_ruling_by_key(state).items():
+        if entry.get("ruling") == "out-of-scope":
+            keys.add(key)
+    return keys
+
+
+def _append_round_rulings(state, rows):
+    rec = state["rounds"].setdefault(str(state["round"]), {})
+    prev = rec.get("rulings")
+    if not isinstance(prev, list):
+        prev = []
+    rec["rulings"] = prev + list(rows)
+
+
+def _record_disposition(state, key, disposition, round_no, *, clear_out_of_scope=False, **fields):
+    if clear_out_of_scope:
+        if not isinstance(key, str) or not key:
+            return
+        live = _live_finding_by_key(state, key)
+        if isinstance(live, dict) and live.get("disposition") == "out-of-scope":
+            for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+                live.pop(field, None)
+            live.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+        ledger_by_key, fault = _disposition_ledger_by_key(state)
+        if fault is not None:
+            return
+        entry = ledger_by_key.get(key)
+        if not isinstance(entry, dict) or entry.get("disposition") != "out-of-scope":
+            return
+        ledger = _ensure_disposition_ledger_for_write(state)
+        seen = _ledger_index_by_key(ledger)
+        if key not in seen:
+            return
+        stored = ledger[seen[key]]
+        if not isinstance(stored, dict) or stored.get("disposition") != "out-of-scope":
+            return
+        cleared = _strip_disposition_family(dict(stored))
+        cleared.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
+        ledger[seen[key]] = cleared
+        return
+    if disposition not in session_contract.DISPOSITIONS:
+        raise ValueError("unknown disposition %r" % (disposition,))
+    disp_seq = _next_disposition_seq(state)
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    live = _live_finding_by_key(state, key)
+    if key in seen and isinstance(ledger[seen[key]], dict):
+        entry = dict(ledger[seen[key]])
+    elif live is not None:
+        entry = dict(live)
+        entry[session_contract.RAISED_ROUND_FIELD] = state.get("round", round_no)
+    else:
+        entry = {session_contract.FINDING_KEY_FIELD: key}
+    family = {"disposition": disposition, "dispositionRound": round_no}
+    for fname, val in fields.items():
+        if val is not None:
+            family[fname] = val
+    _apply_disposition_family(entry, family)
+    entry[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
+    if key in seen:
+        ledger[seen[key]] = entry
+    else:
+        ledger.append(entry)
+    if live is not None:
+        _apply_disposition_family(live, family)
+        live[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
+
+
+def _clear_out_of_scope_disposition(state, key):
+    """Drop a live out-of-scope disposition family; rulingsLog retains the history."""
+    _record_disposition(state, key, None, 0, clear_out_of_scope=True)
+
+
+def _record_merged_into(state, key, into_key):
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    live = _live_finding_by_key(state, key)
+    if key in seen and isinstance(ledger[seen[key]], dict):
+        entry = dict(ledger[seen[key]])
+    elif live is not None:
+        entry = dict(live)
+        entry[session_contract.RAISED_ROUND_FIELD] = state.get("round", state["round"])
+    else:
+        entry = {session_contract.FINDING_KEY_FIELD: key}
+    family = {session_contract.MERGED_INTO_FIELD: into_key}
+    _apply_disposition_family(entry, family)
+    if key in seen:
+        ledger[seen[key]] = entry
+    else:
+        ledger.append(entry)
+    if live is not None:
+        _apply_disposition_family(live, family)
+
+
+def _fix_receipt_content_fields(session_dir, head_sha, file_path):
+    if not session_dir or not isinstance(head_sha, str) or not head_sha:
+        return {}
+    if not isinstance(file_path, str) or not file_path:
+        return {}
+    data = _read_head_content_blobs_file(session_dir)
+    if not isinstance(data, dict):
+        return {}
+    for row in data.get("reads") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("headSha") == head_sha and row.get("path") == file_path:
+            fields = {"fixContentHeadSha": head_sha}
+            digest = row.get("contentDigest")
+            if isinstance(digest, str) and digest:
+                fields["fixContentDigest"] = digest
+            nbytes = row.get("bytes")
+            if isinstance(nbytes, int):
+                fields["fixContentBytes"] = nbytes
+            return fields
+    return {}
+
+
+def _fixed_disposition_receipt(state, session_dir, finding_key, target=None):
+    cfg = state.get("config") or {}
+    head = cfg.get(FIX_FOLD_HEAD_KEY) if isinstance(cfg, dict) else None
+    verify_result = session_contract.verify_result_for_head(state, head)
+    receipt = {}
+    if isinstance(head, str) and head:
+        receipt["headSha"] = head
+    if verify_result is not None:
+        receipt["verifyResult"] = verify_result
+    file_path = None
+    if isinstance(target, dict):
+        file_path = target.get("file")
+    if not file_path:
+        live = _live_finding_by_key(state, finding_key)
+        if isinstance(live, dict):
+            file_path = live.get("file")
+    if session_dir and isinstance(head, str) and head and isinstance(file_path, str):
+        receipt.update(_fix_receipt_content_fields(session_dir, head, file_path))
+    return receipt
+
+
+def _fixed_ledger_rows(state):
+    """Fixed disposition-ledger rows as ordered (key, entry) pairs plus the by_key map.
+
+    A pure read: under a recognized owner a malformed ledger yields no rows and is never
+    repaired here. Legacy (owner-absent) ledgers skip malformed rows instead."""
+    owner = session_contract.disposition_ledger_owner_classification(state)
+    if owner == session_contract.DISPOSITION_LEDGER_OWNER_ABSENT:
+        rows = []
+        by_key = {}
+        for key, entry in session_contract.legacy_disposition_ledger_rows(state):
+            if not isinstance(entry, dict) or entry.get("disposition") != "fixed":
+                continue
+            rows.append((key, entry))
+            by_key[key] = entry
+        return rows, by_key, None
+    required = owner == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED
+    ledger_rows, fault = session_contract.read_disposition_ledger(state, required=required)
+    if fault is not None:
+        return [], {}, fault
+    seen = _ledger_index_by_key(ledger_rows)
+    by_key = {
+        key: ledger_rows[idx]
+        for key, idx in seen.items()
+        if isinstance(ledger_rows[idx], dict)
+    }
+    rows = []
+    for key, idx in list(seen.items()):
+        entry = ledger_rows[idx]
+        if not isinstance(entry, dict) or entry.get("disposition") != "fixed":
+            continue
+        rows.append((key, entry))
+    return rows, by_key, None
+
+
+def _fixed_disposition_family_with_receipt(entry, receipt):
+    """Carry the row's whole family forward with an updated receipt.
+
+    The writer applies a WHOLE family and pops every member the family omits. Passing the
+    receipt alone would delete `mergedInto` (and the refuted/out-of-scope reasons) from a
+    retained row and turn a refusing unresolved-merge chain into a certifiable independent
+    disposition — a fail-direction inversion, not a cosmetic loss."""
+    family = session_contract.disposition_family_snapshot(entry)
+    family.pop("disposition", None)
+    family.pop("dispositionRound", None)
+    return dict(family, dispositionReceipt=receipt)
+
+
+def _backfill_fixed_disposition_verify_receipts(state, round_no):
+    """Stamp verify on fixed receipts keyed on each receipt's own head when audits folded before verify."""
+    rows, _by_key, _fault = _fixed_ledger_rows(state)
+    for key, entry in rows:
+        if entry.get("dispositionRound") != round_no:
+            continue
+        receipt = entry.get("dispositionReceipt")
+        if not isinstance(receipt, dict) or receipt.get("verifyResult") is not None:
+            continue
+        verify_result = session_contract.verify_result_for_head(state, receipt.get("headSha"))
+        if verify_result is None:
+            continue
+        updated_receipt = dict(receipt)
+        updated_receipt["verifyResult"] = verify_result
+        family = _fixed_disposition_family_with_receipt(entry, updated_receipt)
+        _record_disposition(state, key, "fixed", round_no, **family)
+
+
+def _archive_departures(state, departing):
+    """Write every departing keyed finding into dispositionLedger (replace-by-key)."""
+    if not departing:
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
     for finding in departing:
-        if not isinstance(finding, dict) or finding.get("disposition") is None:
+        if not isinstance(finding, dict):
             continue
         key = _finding_identity_key(finding)
         if not key:
             continue
+        replacement = dict(finding)
+        if key in seen and isinstance(ledger[seen[key]], dict):
+            prior = ledger[seen[key]]
+            raised_round = replacement.get(session_contract.RAISED_ROUND_FIELD)
+            if raised_round is None:
+                raised_round = prior.get(session_contract.RAISED_ROUND_FIELD)
+            if prior.get("dispositionRound") == raised_round:
+                for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+                    if field in prior and field not in replacement:
+                        replacement[field] = prior[field]
+            raised = session_contract.RAISED_ROUND_FIELD
+            if raised in prior and raised not in replacement:
+                replacement[raised] = prior[raised]
         if key in seen:
-            ledger[seen[key]] = finding
+            ledger[seen[key]] = replacement
         else:
             seen[key] = len(ledger)
-            ledger.append(finding)
+            ledger.append(replacement)
 
 
 def _set_findings(state, new_findings):
@@ -1206,6 +1889,34 @@ def _set_findings(state, new_findings):
     if not isinstance(prior, list):
         prior = []
     new_list = list(new_findings) if new_findings is not None else []
+    _mint_finding_keys(new_list)
+    merged_by_key = {}
+    for finding in new_list:
+        if not isinstance(finding, dict):
+            continue
+        key = _finding_identity_key(finding)
+        if not key:
+            continue
+        if key in merged_by_key:
+            merged_by_key[key] = _merge_same_finding(merged_by_key[key], finding)
+        else:
+            merged_by_key[key] = finding
+    if merged_by_key:
+        seen_keys = set()
+        compact = []
+        for finding in new_list:
+            if not isinstance(finding, dict):
+                compact.append(finding)
+                continue
+            key = _finding_identity_key(finding)
+            if not key:
+                compact.append(finding)
+                continue
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            compact.append(merged_by_key[key])
+        new_list = compact
     new_keys = set()
     for finding in new_list:
         if isinstance(finding, dict):
@@ -1219,19 +1930,19 @@ def _set_findings(state, new_findings):
         key = _finding_identity_key(finding)
         if key and key not in new_keys:
             departing.append(finding)
-    _archive_disposition_findings(state, departing)
+    _archive_departures(state, departing)
     state["findings"] = new_list
 
 
 def _park_finding_key(finding):
-    """Stable dedupe identity for the park-time findings merge — the module's EXISTING per-location
-    key (`_location_id`: `finding_identity` plus line), so two same-title candidates at different
-    lines stay distinct. Returns None when no key can be derived, and an unidentifiable candidate is
-    KEPT rather than dropped: a halted receipt owes over-reporting before under-reporting."""
+    """Stable dedupe identity for the park-time findings merge — the leaf's per-location key, so two
+    same-title candidates at different lines stay distinct. Returns None when no key can be derived,
+    and an unidentifiable candidate is KEPT rather than dropped: a halted receipt owes
+    over-reporting before under-reporting."""
     if not isinstance(finding, dict):
         return None
     try:
-        return _location_id(finding)
+        return session_contract.finding_identity_key(finding)
     except Exception:
         return None
 
@@ -1459,7 +2170,11 @@ def _append_review_record(state, rnd, kind, dim_map, findings):
     (so `_round_reviewed` / `_confirmation_qualifies` read it), the challenged-annotated coverage
     accumulated so far, and the recurrence-derived generalize grace (recurrent_classes over PRIOR
     records + coverage — the same current=compiled / prior=record split tally_round_decider uses)."""
-    findings = [f for f in (findings or []) if isinstance(f, dict)]
+    findings = [
+        _strip_disposition_family(dict(f)) if isinstance(f, dict) else f
+        for f in (findings or [])
+        if isinstance(f, dict)
+    ]
     coverage = _annotate_challenged(state.get("_coverage") or [], findings)
     prior = [r for r in (state.get("_records") or []) if r.get("round") != rnd]
     record = {
@@ -1565,6 +2280,9 @@ def _advance(state, config):
                    "fullDiff": True}
     elif step == P_AUDITS:
         payload = {"targets": state.get("_auditTargets") or []}
+        if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
+            payload["verify"] = {"phase": P_VERIFY,
+                                 "command": config.get("verifyCommand", "none")}
     elif step == P_SCOPED:
         payload = {"hunks": state.get("_newSurface") or {}, "tier": DEEP}
     elif step == P_VERIFY:
@@ -1624,7 +2342,17 @@ def _record_round_append(state, key, value):
         rec[key] = [existing, value]
 
 
+def _record_compile_drops(state, drops):
+    """Extend the round's `compileDrops` list — never overwrite an existing panel write."""
+    if not drops:
+        return
+    for drop in drops:
+        _record_round_append(state, "compileDrops", drop)
+
+
 def _decision(state, kind, detail):
+    if kind not in decision_kinds.DECISION_KINDS:
+        raise ValueError("decision-kind-unregistered:%s" % kind)
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
 
@@ -1651,13 +2379,24 @@ def _record_adapter_provenance(state, artifact, phase):
         rec["adapterProvenance"] = {"byPhase": by_phase}
 
 
-def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None):
+def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None,
+          verified_head_resolution=None, panel_diff_seam=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
 
     `changed_subjects_seam` is threaded to the fixer fold: run_loop passes the injected seam (the
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
-    wires the real git derivation. It is inert for every other phase."""
+    wires the real git derivation. It is inert for every other phase.
+
+    `panel_diff_seam` is threaded to verify and fixer folds (unknown-surface full panels): run_loop
+    passes the injected seam; the CLI submit path passes None so those folds wire the real git
+    derivation. It is inert for every other phase.
+
+    `verified_head_resolution` is inert for every phase but ``P_VERIFY``."""
+    if session_contract.disposition_ledger_owner_classification(state) == (
+        session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
+    ):
+        raise DispositionLedgerOwnerRefusal(DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE)
     artifact = artifact if isinstance(artifact, dict) else {}
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
@@ -1669,13 +2408,15 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_GAPSWEEP:
         _fold_gapsweep(state, config, artifact)
     elif phase == P_AUDITS:
-        _fold_audits(state, config, artifact)
+        _fold_audits(state, config, artifact, session_dir=session_dir)
     elif phase == P_SCOPED:
         _fold_scoped(state, config, artifact)
     elif phase == P_VERIFY:
-        _fold_verify(state, config, artifact)
+        _fold_verify(state, config, artifact, resolution=verified_head_resolution,
+                     panel_diff_seam=panel_diff_seam)
     elif phase == P_FIXER:
-        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir)
+        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
+                    panel_diff_seam=panel_diff_seam)
     elif phase == P_JUDGMENT:
         _fold_judgment(state, config, artifact)
     elif phase == P_STALL:
@@ -1826,62 +2567,10 @@ def canary_liveness(dimensions, seat_status, seats, seat_map, ran_manifest, cana
             if isinstance(eng, str) and eng == vendor:
                 matching.append(probe)
 
-        # axis: every probe is normalized before status — self-asserted outcome cannot certify alone
-        normalized = []
-        for probe in matching:
-            outcome, fault = canary_outcome.normalize(probe)
-            normalized.append((probe, outcome, fault))
-
-        dead = []
-        outcome_failed = []
-        plant_undetected = []
-        passing = []
-        for probe, outcome, fault in normalized:
-            if canary_outcome.is_pass(outcome):
-                passing.append((probe, outcome, fault))
-            elif outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
-                plant_undetected.append((probe, outcome, fault))
-            elif outcome in _CANARY_DISPATCH_FAILURE_OUTCOMES:
-                if probe.get("engaged") is True:
-                    outcome_failed.append((probe, outcome, fault))
-                else:
-                    dead.append((probe, outcome, fault))
-            elif outcome in _CANARY_DEAD_OUTCOMES:
-                dead.append((probe, outcome, fault))
-
-        if dead:
-            deciding, _, fault = sorted(dead, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "dead"
-        elif outcome_failed:
-            deciding, _, fault = sorted(
-                outcome_failed, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "outcome-failed"
-        elif plant_undetected:
-            deciding, _, fault = sorted(
-                plant_undetected, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = canary_outcome.OUTCOME_PLANT_UNDETECTED
-        elif passing:
-            deciding, _, fault = sorted(passing, key=lambda t: _canary_probe_sort_key(t[0]))[0]
-            st = "proven"
-        else:
-            deciding = None
-            fault = None
-            st = "unproven"
-
-        if deciding is not None:
-            det = deciding.get("detail")
-            probe_detail = det if isinstance(det, str) else None
-            if fault:
-                detail_s = fault
-                if probe_detail:
-                    detail_s = "%s; %s" % (fault, probe_detail)
-            else:
-                detail_s = probe_detail
-            ev = deciding.get("evidence")
-            evidence = ev if isinstance(ev, dict) else None
-        else:
-            detail_s = None
-            evidence = None
+        judged = _canary_judge_vendor_probes(matching)
+        st = judged["status"]
+        detail_s = judged["detail"]
+        evidence = judged["evidence"]
 
         by_vendor[vendor] = {
             "status": st, "seats": dims_v, "detail": detail_s, "evidence": evidence,
@@ -1927,6 +2616,108 @@ def _normalize_canary_probes(canary_raw):
     if isinstance(canary_raw, list):
         return [p for p in canary_raw if isinstance(p, dict)]
     return []
+
+
+def _canary_judge_vendor_probes(matching):
+    """Worst probe for one vendor — shared by ``canary_liveness`` and ``_build_control_probe_record``."""
+    # axis: every probe is normalized before status — self-asserted outcome cannot certify alone
+    normalized = []
+    for probe in matching:
+        if not isinstance(probe, dict):
+            continue
+        outcome, fault = canary_outcome.normalize(probe)
+        normalized.append((probe, outcome, fault))
+
+    dead = []
+    outcome_failed = []
+    plant_undetected = []
+    passing = []
+    for probe, outcome, fault in normalized:
+        if canary_outcome.is_pass(outcome):
+            passing.append((probe, outcome, fault))
+        elif outcome == canary_outcome.OUTCOME_PLANT_UNDETECTED:
+            plant_undetected.append((probe, outcome, fault))
+        elif outcome in _CANARY_DISPATCH_FAILURE_OUTCOMES:
+            if probe.get("engaged") is True:
+                outcome_failed.append((probe, outcome, fault))
+            else:
+                dead.append((probe, outcome, fault))
+        elif outcome in _CANARY_DEAD_OUTCOMES:
+            dead.append((probe, outcome, fault))
+
+    if dead:
+        deciding, outcome_token, fault = sorted(
+            dead, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = "dead"
+    elif outcome_failed:
+        deciding, outcome_token, fault = sorted(
+            outcome_failed, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = "outcome-failed"
+    elif plant_undetected:
+        deciding, outcome_token, fault = sorted(
+            plant_undetected, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = canary_outcome.OUTCOME_PLANT_UNDETECTED
+    elif passing:
+        deciding, outcome_token, fault = sorted(
+            passing, key=lambda t: _canary_probe_sort_key(t[0]))[0]
+        st = "proven"
+    else:
+        deciding = None
+        outcome_token = None
+        fault = None
+        st = "unproven"
+
+    if deciding is not None:
+        det = deciding.get("detail")
+        probe_detail = det if isinstance(det, str) else None
+        if fault:
+            detail_s = fault
+            if probe_detail:
+                detail_s = "%s; %s" % (fault, probe_detail)
+        else:
+            detail_s = probe_detail
+        ev = deciding.get("evidence")
+        evidence = ev if isinstance(ev, dict) else None
+    else:
+        detail_s = None
+        evidence = None
+
+    return {
+        "status": st,
+        "detail": detail_s,
+        "evidence": evidence,
+        "deciding": deciding,
+        "outcomeToken": outcome_token,
+    }
+
+
+def _build_control_probe_record(canary_raw):
+    """Per-round sampled competence probe disclosure; never a verdict input."""
+    if canary_raw is None:
+        return {"submitted": False, "vendors": {}}
+    if isinstance(canary_raw, dict):
+        indexed = list(enumerate([canary_raw]))
+    elif isinstance(canary_raw, list):
+        indexed = list(enumerate(canary_raw))
+    else:
+        return {"submitted": True, "vendors": {"<malformed-0>": "malformed"}}
+    vendors = {}
+    by_engine = {}
+    for index, probe in indexed:
+        if not isinstance(probe, dict):
+            vendors["<malformed-%d>" % index] = "malformed"
+            continue
+        engine = probe.get("engine")
+        if not isinstance(engine, str) or not engine:
+            vendors["<malformed-%d>" % index] = "malformed"
+            continue
+        by_engine.setdefault(engine, []).append(probe)
+    for engine, matching in by_engine.items():
+        judged = _canary_judge_vendor_probes(matching)
+        token = judged.get("outcomeToken")
+        if token is not None:
+            vendors[engine] = token
+    return {"submitted": True, "vendors": {k: vendors[k] for k in sorted(vendors)}}
 
 
 def _seat_map_configured_vendor(seat_map, dim):
@@ -2055,7 +2846,6 @@ def _fold_panel(state, config, artifact):
                   % (len(engaged_artifact_dims), ", ".join(engaged_artifact_dims)))
     # Cross-vendor liveness canary — per-vendor judgement via canary_liveness (pure).
     _sm_for_canary = _sm_canary_map(state, seat_map)
-    canary_panel_gap = False
     ran_manifest_canary = (artifact.get("ranManifest")
                            if isinstance(artifact.get("ranManifest"), dict) else {})
     live = canary_liveness(
@@ -2065,7 +2855,6 @@ def _fold_panel(state, config, artifact):
     if not isinstance(by_vendor, dict):
         by_vendor = {}
     unverified_dims = _canary_dims_for_status(live, by_vendor, "unproven")
-    dead_dims = _canary_dims_for_status(live, by_vendor, "dead")
     failed_vendors = {}
     outcome_failed_vendors = {}
     plant_undetected_vendors = {}
@@ -2078,22 +2867,16 @@ def _fold_panel(state, config, artifact):
             failed_vendors[vendor] = info
         elif st == "outcome-failed":
             outcome_failed_vendors[vendor] = info
-            canary_panel_gap = True
         elif st == canary_outcome.OUTCOME_PLANT_UNDETECTED:
             plant_undetected_vendors[vendor] = info
         elif st == "proven":
             ev = info.get("evidence")
             verified_by_vendor[vendor] = ev if isinstance(ev, dict) else {}
-    for dim in dead_dims:
-        if dim not in missing_dims:
-            missing_dims.append(dim)
-        seat_status[dim] = "missing"
     if unverified_dims:
-        canary_panel_gap = True
         _record_round(state, "canaryUnverified", sorted(set(unverified_dims)))
         _decision(state, "canary-unverified",
-                  "cross-vendor seat(s) (%s) returned zero findings and no engaged control "
-                  "probe for their vendor — external-seat liveness unverified"
+                  "cross-vendor seat(s) (%s) returned zero findings and no control probe was "
+                  "submitted for their vendor — recorded"
                   % ", ".join(sorted(set(unverified_dims))))
     if failed_vendors:
         failed_dims = sorted({d for info in failed_vendors.values()
@@ -2119,7 +2902,7 @@ def _fold_panel(state, config, artifact):
             detail = info.get("detail") or "engaged not true"
             _decision(state, "canary-failed",
                       "control probe for vendor %s showed no engagement (%s) — cross-vendor "
-                      "seat(s) %s downgraded to never-ran"
+                      "seat(s) %s; probe outcome recorded"
                       % (vendor, detail, ", ".join(vdims)))
     if outcome_failed_vendors:
         failed_dims = sorted({d for info in outcome_failed_vendors.values()
@@ -2147,11 +2930,9 @@ def _fold_panel(state, config, artifact):
             detail = info.get("detail") or "outcome failure"
             _decision(state, "canary-outcome-failed",
                       "control probe for vendor %s was engaged but reported outcome failure "
-                      "(%s) — cross-vendor seat(s) %s remain run; panel certification withheld"
+                      "(%s) — cross-vendor seat(s) %s; probe outcome recorded"
                       % (vendor, detail, ", ".join(vdims)))
     if plant_undetected_vendors:
-        # axis: a non-pass canary withholds panel certification
-        canary_panel_gap = True
         if len(plant_undetected_vendors) == 1:
             only = next(iter(plant_undetected_vendors.values()))
             cpu_rec = {
@@ -2175,7 +2956,7 @@ def _fold_panel(state, config, artifact):
             detail = info.get("detail") or "plant not detected"
             _decision(state, "canary-plant-undetected",
                       "control probe for vendor %s was engaged but missed the planted defect "
-                      "(%s) — cross-vendor seat(s) %s remain run; panel certification withheld"
+                      "(%s) — cross-vendor seat(s) %s; probe outcome recorded"
                       % (vendor, detail, ", ".join(vdims)))
     if verified_by_vendor:
         if len(live.get("byVendor") or {}) == 1:
@@ -2183,7 +2964,8 @@ def _fold_panel(state, config, artifact):
                           next(iter(verified_by_vendor.values())))
         else:
             _record_round(state, "canaryVerified", verified_by_vendor)
-    incomplete = bool(missing_dims) or canary_panel_gap
+    _record_round(state, "controlProbe", _build_control_probe_record(artifact.get("canaryResult")))
+    incomplete = bool(missing_dims)
     compiled, drops = mechanical_compile(raw, state.get("reviewedDiff"))
     # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
     # confirmation panel: it consumes one of the two-panel budget (the #174 bar). An INCOMPLETE panel
@@ -2250,20 +3032,6 @@ def _fold_panel(state, config, artifact):
             _decision(state, "panel-seat-missing",
                       "panel incomplete — %d configured lens(es) did not run (%s); certification cannot "
                       "be full-panel-confirmed" % (len(missing_dims), ", ".join(missing_dims)))
-        elif canary_panel_gap:
-            unv = sorted({
-                d for info in (live.get("byVendor") or {}).values()
-                if isinstance(info, dict) and info.get("status") == "unproven"
-                for d in (info.get("seats") or [])
-            })
-            if unv:
-                vendors = sorted(
-                    v for v, info in (live.get("byVendor") or {}).items()
-                    if isinstance(info, dict) and info.get("status") == "unproven")
-                _decision(state, "panel-incomplete-canary-gap",
-                          "panel incomplete — cross-vendor seat(s) %s lack an engaged control probe "
-                          "for vendor(s) %s; certification cannot be full-panel-confirmed"
-                          % (", ".join(unv), ", ".join(vendors)))
     # Only a COMPLETE panel can anchor a full-panel-confirmed certification. A missing seat leaves
     # fullPanelRan False so a clean finish downgrades to audited-chain and names the gap.
     state["fullPanelRan"] = not incomplete
@@ -2298,8 +3066,134 @@ def _fold_panel(state, config, artifact):
         dim_map[dim] = {"dimension": dim, "status": seat_status.get(dim, "run"),
                         "confidence": confidence, "tier": tier, "findings": s_findings}
     _append_review_record(state, state["round"], kind, dim_map, compiled)
-    state["_toVerify"] = compiled
+    _stage_findings(state, compiled)
     state["step"] = P_VERIFIERS
+
+
+def _staged_by_id_map(staged):
+    """Build staged-id → finding; refuse duplicate ids."""
+    by_id = {}
+    for finding in staged:
+        if not isinstance(finding, dict):
+            continue
+        staged_id = finding.get("id")
+        if staged_id is None:
+            continue
+        if staged_id in by_id:
+            return None, "%s: duplicate staged id %r" % (STAGED_ID_UNRESOLVABLE_CAUSE, staged_id)
+        by_id[staged_id] = finding
+    return by_id, None
+
+
+def _staged_id_resolution_fault(staged, staged_id):
+    """None when staged_id resolves to exactly one keyed finding; otherwise a named cause."""
+    if staged_id is None:
+        return "%s: missing staged id" % STAGED_ID_UNRESOLVABLE_CAUSE
+    by_id, map_fault = _staged_by_id_map(staged)
+    if map_fault:
+        return map_fault
+    finding = by_id.get(staged_id)
+    if finding is None:
+        return "%s: staged id %r maps to no entry" % (STAGED_ID_UNRESOLVABLE_CAUSE, staged_id)
+    if not _finding_identity_key(finding):
+        return "%s: staged id %r has no derivable finding key" % (STAGED_ID_UNRESOLVABLE_CAUSE,
+                                                                  staged_id)
+    return None
+
+
+def _resolve_staged_finding(staged, staged_id):
+    """Return (finding, fault). fault is None on success."""
+    fault = _staged_id_resolution_fault(staged, staged_id)
+    if fault:
+        return None, fault
+    by_id, _ = _staged_by_id_map(staged)
+    return by_id.get(staged_id), None
+
+
+def verifier_drop_staged_id_fault(state, artifact):
+    """Refuse verifier drops whose staged ids do not resolve before fold."""
+    if verifier_results_fault(artifact) is not None:
+        return None
+    staged = verification.stage_ids(state.get("_toVerify") or [])
+    verdicts = artifact.get("verdicts") if isinstance(artifact.get("verdicts"), list) else []
+    applied = verification.apply_verdicts(staged, verdicts)
+    for drop in applied["drops"]:
+        fault = _staged_id_resolution_fault(staged, drop.get("id"))
+        if fault:
+            return fault
+    by_id = {}
+    for verdict in verdicts:
+        if isinstance(verdict, dict) and isinstance(verdict.get("id"), str):
+            by_id[verdict["id"]] = verdict
+    for staged_id in applied.get("unmatched") or []:
+        verdict = by_id.get(staged_id)
+        if isinstance(verdict, dict) and verdict.get("verdict") == "REFUTED":
+            fault = _staged_id_resolution_fault(staged, staged_id)
+            if fault:
+                return fault
+    for staged_id in applied.get("ambiguous") or []:
+        fault = _staged_id_resolution_fault(staged, staged_id)
+        if fault:
+            return fault
+    return None
+
+
+def _format_grouping_coverage_fault(fault):
+    """Map ``verification.grouping_coverage_fault`` output to a synthesis refusal string."""
+    if not fault:
+        return None
+    kind = fault.get("kind")
+    member_id = fault.get("member_id")
+    if kind == "duplicate_member":
+        return "%s: duplicate member %r in grouping[%d]" % (
+            STAGED_ID_UNRESOLVABLE_CAUSE, member_id, fault.get("index"))
+    if kind == "omits":
+        return "%s: grouping omits staged id %r" % (STAGED_ID_UNRESOLVABLE_CAUSE, member_id)
+    if kind == "extra":
+        return "%s: staged id %r maps to no entry" % (STAGED_ID_UNRESOLVABLE_CAUSE, member_id)
+    return "%s: grouping does not cover every survivor exactly once" % STAGED_ID_UNRESOLVABLE_CAUSE
+
+
+def synthesis_staged_id_fault(state, artifact):
+    """Refuse synthesis author-justified drops and merge members whose ids do not resolve."""
+    verified = state.get("_verified") or []
+    grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
+    if isinstance(grouping, list):
+        fault = _format_grouping_coverage_fault(
+            verification.grouping_coverage_fault(verified, grouping))
+        if fault:
+            return fault
+        for group in grouping:
+            if not isinstance(group, dict):
+                continue
+            for member_id in group.get("member_ids") or []:
+                fault = _staged_id_resolution_fault(verified, member_id)
+                if fault:
+                    return fault
+    merged = verification.merge_and_rank(verified, grouping)
+    findings = merged["findings"]
+    config = state.get("config") or {}
+    _kept, aj_drops = author_justification_filter(findings, config.get("priorComments"))
+    for drop in aj_drops:
+        fault = _staged_id_resolution_fault(verified, drop.get("id"))
+        if fault:
+            return fault
+    for merge in merged.get("merges") or []:
+        if not isinstance(merge, dict):
+            continue
+        kept_id = merge.get("kept_id")
+        kept_finding, fault = _resolve_staged_finding(verified, kept_id)
+        if fault:
+            return fault
+        if kept_finding is None:
+            continue
+        for member_id in merge.get("member_ids") or []:
+            if member_id == kept_id:
+                continue
+            fault = _staged_id_resolution_fault(verified, member_id)
+            if fault:
+                return fault
+    return None
 
 
 def _fold_verifiers(state, config, artifact):
@@ -2322,6 +3216,16 @@ def _fold_verifiers(state, config, artifact):
     })
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
+        staged_finding, fault = _resolve_staged_finding(staged, d.get("id"))
+        if fault:
+            _park_cannot_certify(state, fault)
+            state["step"] = P_TERMINAL
+            return
+        if isinstance(staged_finding, dict):
+            key = _finding_identity_key(staged_finding)
+            if key:
+                reason = d.get("reason") or "verifier refuted (no reason recorded)"
+                _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
     state["step"] = P_SYNTHESIS
@@ -2331,11 +3235,51 @@ def _fold_synthesis(state, config, artifact):
     """Merge same-root-cause survivors (verification.merge_and_rank, coverage-guaranteed), then the
     author-justification POST-filter, then decide gap-sweep / fix / terminal."""
     grouping = artifact.get("grouping") if isinstance(artifact.get("grouping"), list) else None
-    merged = verification.merge_and_rank(state.get("_verified") or [], grouping)
+    verified = state.get("_verified") or []
+    merged = verification.merge_and_rank(verified, grouping)
     findings = merged["findings"]
     kept, aj_drops = author_justification_filter(findings, config.get("priorComments"))
     for d in aj_drops:
         _decision(state, "author-justified-drop", d.get("justification"))
+        staged_finding, fault = _resolve_staged_finding(verified, d.get("id"))
+        if fault:
+            _park_cannot_certify(state, fault)
+            state["step"] = P_TERMINAL
+            return
+        if isinstance(staged_finding, dict):
+            key = _finding_identity_key(staged_finding)
+            if key:
+                justification = d.get("justification") or ""
+                _record_disposition(
+                    state, key, "refuted", state["round"],
+                    refutedReason="author-justified: " + justification)
+    for merge in merged.get("merges") or []:
+        if not isinstance(merge, dict):
+            continue
+        kept_id = merge.get("kept_id")
+        kept_finding, kept_fault = _resolve_staged_finding(verified, kept_id)
+        if kept_fault:
+            _park_cannot_certify(state, kept_fault)
+            state["step"] = P_TERMINAL
+            return
+        kept_key = _finding_identity_key(kept_finding) if isinstance(kept_finding, dict) else None
+        if not kept_key:
+            _park_cannot_certify(state, "%s: staged id %r has no derivable finding key"
+                                % (STAGED_ID_UNRESOLVABLE_CAUSE, kept_id))
+            state["step"] = P_TERMINAL
+            return
+        for member_id in merge.get("member_ids") or []:
+            if member_id == kept_id:
+                continue
+            member, member_fault = _resolve_staged_finding(verified, member_id)
+            if member_fault:
+                _park_cannot_certify(state, member_fault)
+                state["step"] = P_TERMINAL
+                return
+            if isinstance(member, dict):
+                key = _finding_identity_key(member)
+                if key:
+                    _record_merged_into(state, key, kept_key)
     _record_round(state, "authorJustifiedDrops", aj_drops)
     _record_round(state, "merges", merged["merges"])
     _set_findings(state, kept)
@@ -2354,10 +3298,11 @@ def _fold_gapsweep(state, config, artifact):
     """Big-diff gap sweep: candidate findings from the full-diff pass fold through the same
     stage/cluster/verify path, then re-settle."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
-    compiled, _drops = mechanical_compile(candidates, state.get("reviewedDiff"))
+    compiled, drops = mechanical_compile(candidates, state.get("reviewedDiff"))
+    _record_compile_drops(state, drops)
     if compiled:
         # route candidates through verification like any other findings.
-        state["_toVerify"] = compiled
+        _stage_findings(state, compiled)
         state["_gapMerge"] = True
         state["step"] = P_VERIFIERS
         # after verifiers → synthesis will merge with the already-settled findings.
@@ -2366,27 +3311,11 @@ def _fold_gapsweep(state, config, artifact):
     _after_findings_settled(state, config)
 
 
-def _location_id(finding):
-    """Per-LOCATION key: line-less `finding_identity` plus line. Two same-title findings at
-    DIFFERENT lines get DISTINCT keys (#507 R2 v5); audit target ids reuse this form with an
-    occurrence suffix when the same file+title+line repeats in one batch."""
-    return "%s@L%s" % (finding_identity(finding), finding.get("line"))
-
-
 def _judgment_row_ids(findings):
-    """Per-row disposition keys for judgment findings. Reuses the audit-target occurrence pattern:
-    the first row at a location gets the bare per-location id; repeats get ``#1``, ``#2``, … so two
-    surviving tradeoff findings at the same location (e.g. different severities) never share one id."""
+    """Per-row disposition keys for judgment findings — each row's minted findingKey."""
     ids = []
-    seen_location = {}
     for f in findings:
-        if not isinstance(f, dict):
-            ids.append(None)
-            continue
-        loc = _location_id(f)
-        n = seen_location.get(loc, 0)
-        seen_location[loc] = n + 1
-        ids.append(loc if n == 0 else "%s#%d" % (loc, n))
+        ids.append(_finding_key_of(f))
     return ids
 
 
@@ -2455,37 +3384,203 @@ def _gate_guidance_record_id_line(fid):
         _normalize_gate_guidance_header_field(label))
 
 
+def _round_record_sort_key(rnd_key):
+    """Numeric round order for ``state['rounds']`` keys; non-numeric keys sort last."""
+    try:
+        return (0, int(rnd_key))
+    except (TypeError, ValueError):
+        return (1, str(rnd_key))
+
+
+def _fix_batch_row_key(row):
+    """Disposition key for one fix-batch row — content-derived via ``_finding_key_of``."""
+    if not isinstance(row, dict):
+        return None
+    return _finding_key_of(row)
+
+
+def _history_row_key(row):
+    """Identity of one durable history row (judgment log / audit record): the stamped
+    findingKey marker when present; else the leaf's content derivation when the row carries a
+    location and a label; else None. Never `id`."""
+    if not isinstance(row, dict):
+        return None
+    marker = row.get(session_contract.FINDING_KEY_FIELD)
+    if isinstance(marker, str) and marker:
+        return marker
+    if row.get("file") is None or row.get("line") is None:
+        return None
+    if not finding_label(row):
+        return None
+    return session_contract.finding_identity_key(row)
+
+
+def _finding_history(state):
+    """Latest gate and audit rulings per finding key across ``state['rounds']``."""
+    history = {}
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return history
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        round_entry = rounds[rnd_key]
+        if not isinstance(round_entry, dict):
+            continue
+        try:
+            rnd_num = int(rnd_key)
+        except (TypeError, ValueError):
+            continue
+        log = round_entry.get("judgmentDispositions")
+        if isinstance(log, list):
+            for item in log:
+                if not isinstance(item, dict):
+                    continue
+                key = _history_row_key(item)
+                if not key:
+                    continue
+                gate_ruling = {"round": rnd_num, "disposition": item.get("disposition")}
+                if item.get("reason") is not None:
+                    gate_ruling["reason"] = item.get("reason")
+                guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+                if isinstance(guidance, str) and guidance.strip():
+                    gate_ruling["guidance"] = guidance.strip()
+                if item.get("title") is not None:
+                    gate_ruling["title"] = item.get("title")
+                if item.get("file") is not None:
+                    gate_ruling["file"] = item.get("file")
+                if item.get("line") is not None:
+                    gate_ruling["line"] = item.get("line")
+                slot = history.setdefault(key, {"gateRuling": None, "priorAudit": None})
+                slot["gateRuling"] = gate_ruling
+        audits = round_entry.get("audits")
+        if isinstance(audits, list):
+            for item in audits:
+                if not isinstance(item, dict):
+                    continue
+                key = _history_row_key(item)
+                if not key:
+                    continue
+                prior = {"round": rnd_num, "ruling": item.get("ruling")}
+                if item.get("reason") is not None:
+                    prior["reason"] = item.get("reason")
+                if item.get("unauthenticatedCause") is not None:
+                    prior["unauthenticatedCause"] = item.get("unauthenticatedCause")
+                slot = history.setdefault(key, {"gateRuling": None, "priorAudit": None})
+                slot["priorAudit"] = prior
+    return history
+
+
+def _validate_gate_guidance_logs(rounds, rnd, batch_keys):
+    """Refuse untrustworthy fold-owned guidance ids in any round's judgment log."""
+    if not isinstance(rounds, dict):
+        return
+    if batch_keys is None:
+        batch_keys = set()
+    for rnd_key in sorted(rounds.keys(), key=_round_record_sort_key):
+        round_entry = rounds[rnd_key]
+        if not isinstance(round_entry, dict):
+            continue
+        try:
+            rnd_num = int(rnd_key)
+        except (TypeError, ValueError):
+            continue
+        is_current = rnd_num == rnd
+        log = round_entry.get("judgmentDispositions")
+        if not isinstance(log, list):
+            continue
+        seen_ids = set()
+        for item in log:
+            if not isinstance(item, dict):
+                continue
+            if item.get("disposition") != "fix-with-guidance":
+                continue
+            guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+            if not isinstance(guidance, str) or not guidance.strip():
+                continue
+            key = _history_row_key(item)
+            if not key:
+                if is_current:
+                    raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+                continue
+            if key in seen_ids:
+                if is_current or key in batch_keys:
+                    raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
+            seen_ids.add(key)
+
+
 def _gate_guidance_entries(state, rnd):
     """Return validated fold-owned guidance records for order rendering."""
     rounds = state.get("rounds") if isinstance(state, dict) else None
     if not isinstance(rounds, dict):
         return []
-    round_entry = rounds.get(str(rnd))
-    if not isinstance(round_entry, dict):
-        return []
-    log = round_entry.get("judgmentDispositions")
-    if not isinstance(log, list):
-        return []
-    out = []
-    seen_ids = set()
-    for item in log:
-        if not isinstance(item, dict):
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list):
+        batch = state.get("fixBatch")
+    if not isinstance(batch, list):
+        batch = []
+    batch_keys = set()
+    for row in batch:
+        key = _fix_batch_row_key(row)
+        if key:
+            batch_keys.add(key)
+    sliced = bool(state.get("_fixQueue")) or (state.get("_fixBatchIndex") or 0) >= 1
+    _validate_gate_guidance_logs(rounds, rnd, batch_keys)
+    ruling_channel = []
+    for key in sorted(batch_keys):
+        live = _live_ruling_by_key(state).get(key)
+        if not isinstance(live, dict) or live.get("ruling") != "guidance":
             continue
-        if item.get("disposition") != "fix-with-guidance":
-            continue
-        guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+        guidance = live.get("guidance")
         if not isinstance(guidance, str) or not guidance.strip():
             continue
-        fid = item.get("id")
-        if not isinstance(fid, str) or not fid.strip():
-            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
-        fid = fid.strip()
-        if fid in seen_ids:
-            raise ValueError("order-render-refused:%s" % GATE_GUIDANCE_UNUSABLE_REFUSAL)
-        seen_ids.add(fid)
-        out.append({"id": fid, "title": item.get("title"), "file": item.get("file"),
-                    "line": item.get("line"), "guidance": guidance.strip()})
-    return out
+        entry = {"id": key, "guidance": guidance.strip(), "rulingChannel": True}
+        live_row = _live_finding_by_key(state, key)
+        if isinstance(live_row, dict):
+            for field in ("title", "file", "line"):
+                if live_row.get(field) is not None:
+                    entry[field] = live_row.get(field)
+        ruling_channel.append(entry)
+    out = []
+    covered_keys = set()
+    round_entry = rounds.get(str(rnd))
+    if isinstance(round_entry, dict):
+        log = round_entry.get("judgmentDispositions")
+        if isinstance(log, list):
+            for item in log:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("disposition") != "fix-with-guidance":
+                    continue
+                guidance = item.get(GATE_GUIDANCE_RECORD_KEY)
+                if not isinstance(guidance, str) or not guidance.strip():
+                    continue
+                key = _history_row_key(item)
+                if not key:
+                    continue
+                if sliced and key not in batch_keys:
+                    continue
+                covered_keys.add(key)
+                out.append({"id": key, "title": item.get("title"),
+                            "file": item.get("file"), "line": item.get("line"),
+                            "guidance": guidance.strip()})
+    history = _finding_history(state)
+    for key in sorted(batch_keys):
+        if key in covered_keys:
+            continue
+        slot = history.get(key)
+        if not isinstance(slot, dict):
+            continue
+        gate_ruling = slot.get("gateRuling")
+        if not isinstance(gate_ruling, dict):
+            continue
+        if gate_ruling.get("disposition") != "fix-with-guidance":
+            continue
+        guidance = gate_ruling.get("guidance")
+        if not isinstance(guidance, str) or not guidance.strip():
+            continue
+        out.append({"id": key, "title": gate_ruling.get("title"),
+                    "file": gate_ruling.get("file"), "line": gate_ruling.get("line"),
+                    "guidance": guidance.strip(), "round": gate_ruling.get("round")})
+    return out + ruling_channel
 
 
 def _gate_guidance_block(entries):
@@ -2517,17 +3612,29 @@ def _gate_guidance_block(entries):
     aggregate_bytes = 0
     omitted = 0
     for idx, ((entry, guidance, fid), identity_line) in enumerate(zip(guided, identity_lines)):
+        from_ruling = bool(entry.get("rulingChannel"))
+        if from_ruling and aggregate_bytes >= GATE_GUIDANCE_AGGREGATE_BYTE_CAP:
+            raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
         if aggregate_bytes >= GATE_GUIDANCE_AGGREGATE_BYTE_CAP:
+            if any(guided[j][0].get("rulingChannel") for j in range(idx, len(guided))):
+                raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
             omitted = len(guided) - idx
             break
         header_lines = [identity_line]
+        entry_round = entry.get("round")
+        if entry_round is not None:
+            header_lines.append("Ruled in round %s" % entry_round)
         if identity_counts[identity_line] >= 2:
             header_lines.append(
                 "Note: %d guided findings share this identity (file, line, title) — "
                 "read all guidance blocks before applying any fix."
                 % identity_counts[identity_line])
         header_lines.append(_gate_guidance_record_id_line(fid))
-        text, withheld = _truncate_utf8_bytes(guidance, GATE_GUIDANCE_ROW_BYTE_CAP)
+        if from_ruling:
+            text = guidance
+            withheld = 0
+        else:
+            text, withheld = _truncate_utf8_bytes(guidance, GATE_GUIDANCE_ROW_BYTE_CAP)
         escaped = _escape_guidance_placeholder_syntax(text)
         body_lines = ["BEGIN owner-gate guidance"]
         for line in escaped.splitlines() or [""]:
@@ -2540,6 +3647,10 @@ def _gate_guidance_block(entries):
         entry_bytes = len(entry_text.encode("utf-8"))
         remaining = GATE_GUIDANCE_AGGREGATE_BYTE_CAP - aggregate_bytes
         if entry_bytes > remaining:
+            if from_ruling:
+                raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
+            if any(guided[j][0].get("rulingChannel") for j in range(idx + 1, len(guided))):
+                raise ValueError("order-render-refused:%s" % RULING_GUIDANCE_OMITTED)
             omitted = len(guided) - idx
             break
         parts.append(entry_text)
@@ -2637,6 +3748,23 @@ def _fold_judgment(state, config, artifact):
                     state.pop("_judgmentFindings", None)
                     state.pop("_judgmentMechanical", None)
                     return
+            if prior.get("disposition") == "skip" and d.get("disposition") == "skip":
+                prior_reason = prior.get("reason")
+                new_reason = d.get("reason")
+                prior_rs = prior_reason.strip() if isinstance(prior_reason, str) else ""
+                new_rs = new_reason.strip() if isinstance(new_reason, str) else ""
+                if prior_rs != new_rs:
+                    _park_cannot_certify(state, "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid))
+                    state.pop("_judgmentFindings", None)
+                    state.pop("_judgmentMechanical", None)
+                    return
+                prior_fu = prior.get("followUp") if isinstance(prior.get("followUp"), dict) else None
+                new_fu = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
+                if session_contract.canonical(prior_fu or {}) != session_contract.canonical(new_fu or {}):
+                    _park_cannot_certify(state, "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid))
+                    state.pop("_judgmentFindings", None)
+                    state.pop("_judgmentMechanical", None)
+                    return
         by_id[fid] = d
     judgment = [f for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]
     row_ids = _judgment_row_ids(judgment)
@@ -2652,30 +3780,39 @@ def _fold_judgment(state, config, artifact):
             skipped.append({"id": fid, "file": f.get("file"), "line": f.get("line"),
                             "title": f.get("title"), "severity": f.get("severity"),
                             "reason": reason.strip()})
-            disposition_log.append({"id": fid, "title": f.get("title"), "disposition": "skip",
+            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                                    "title": f.get("title"), "disposition": "skip",
                                     "reason": reason.strip()})
             _decision(state, "judgment-skip",
                       "owner skipped judgment blocker %r — reason: %s"
                       % (f.get("title") or fid, reason.strip()))
+            follow_up = d.get("followUp") if isinstance(d.get("followUp"), dict) else None
+            disp_kwargs = {"outOfScopeReason": reason.strip()}
+            if follow_up is not None:
+                disp_kwargs = dict(disp_kwargs, followUp=follow_up)
+            _record_disposition(state, fid, "out-of-scope", state["round"], **disp_kwargs)
             continue
         g = dict(f)
         if disposition == "fix-with-guidance":
             g["judgmentDisposition"] = "fix-with-guidance"
             guidance = d.get("guidance")
-            entry = {"id": fid, "title": f.get("title"), "file": f.get("file"),
+            entry = {"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                     "title": f.get("title"), "file": f.get("file"),
                      "line": f.get("line"), "disposition": "fix-with-guidance"}
             if isinstance(guidance, str) and guidance.strip():
                 entry[GATE_GUIDANCE_RECORD_KEY] = guidance.strip()
             disposition_log.append(entry)
         elif disposition == "fix-as-suggested":
             g["judgmentDisposition"] = "fix-as-suggested"
-            disposition_log.append({"id": fid, "title": f.get("title"),
+            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                                    "title": f.get("title"),
                                     "disposition": "fix-as-suggested"})
         else:
             # missing / unknown disposition, or a skip with no citable reason → fail closed to fix.
             g["judgmentDisposition"] = "fix-as-suggested"
             g["judgmentFailClosed"] = True
-            disposition_log.append({"id": fid, "title": f.get("title"),
+            disposition_log.append({"id": fid, session_contract.FINDING_KEY_FIELD: fid,
+                                    "title": f.get("title"),
                                     "disposition": "fix-as-suggested", "failClosed": True})
             _decision(state, "judgment-fail-closed",
                       "judgment blocker %r had no valid disposition (%r) — folded as "
@@ -2689,8 +3826,7 @@ def _fold_judgment(state, config, artifact):
     state.pop("_judgmentFindings", None)
     state.pop("_judgmentMechanical", None)
     if fix_batch:
-        state["_fixBatch"] = fix_batch
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, fix_batch)
         return
     # Everything skipped and no mechanical blocker: settle. The skipped blockers are owner-accepted
     # product-choice tradeoffs (cited in the ledger) — converge, naming them on the exit disclosure.
@@ -2719,13 +3855,178 @@ def _after_findings_settled(state, config):
     if blocking:
         if _route_judgment_blockers(state, blocking):
             return
-        state["_fixBatch"] = [dict(f) for f in blocking]
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, [dict(f) for f in blocking])
     else:
         _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
 
 # ---- fix + verify legs ----------------------------------------------------------------------
+
+def _disposition_ledger_by_key(state):
+    """Non-mutating ledger lookup keyed by finding identity — ``None`` on read fault."""
+    owner = session_contract.disposition_ledger_owner_classification(state)
+    if owner == session_contract.DISPOSITION_LEDGER_OWNER_ABSENT:
+        by_key = {}
+        for key, entry in session_contract.legacy_disposition_ledger_rows(state):
+            if key:
+                by_key[key] = entry
+        return by_key, None
+    required = owner == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED
+    ledger_rows, fault = session_contract.read_disposition_ledger(state, required=required)
+    if fault is not None:
+        return {}, fault
+    by_key = {}
+    for entry in ledger_rows:
+        key = _finding_identity_key(entry)
+        if key:
+            by_key[key] = entry
+    return by_key, None
+
+
+def _excluded_discharged_fix_row(ledger_by_key, row):
+    """True when a discharged fix must not re-enter the fix batch (A1 chokepoint predicate)."""
+    key = _finding_identity_key(row)
+    if not key:
+        return False
+    entry = ledger_by_key.get(key)
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("disposition") != "fixed":
+        return False
+    disp_seq = entry.get(session_contract.DISPOSITION_SEQ_FIELD)
+    raised_seq = entry.get(session_contract.RAISED_SEQ_FIELD)
+    disp_is_int = isinstance(disp_seq, int) and not isinstance(disp_seq, bool)
+    raised_is_int = isinstance(raised_seq, int) and not isinstance(raised_seq, bool)
+    if disp_is_int and raised_is_int:
+        return disp_seq > raised_seq
+    return False
+
+
+def _filter_excluded_discharged_fixes(state, rows):
+    if not rows:
+        return rows, None
+    ledger_by_key, fault = _disposition_ledger_by_key(state)
+    if fault is not None:
+        return rows, fault
+    oos_keys = _live_out_of_scope_ruling_keys(state)
+    filtered = []
+    for row in rows:
+        if _excluded_discharged_fix_row(ledger_by_key, row):
+            continue
+        key = _fix_batch_row_key(row)
+        if key and key in oos_keys and not _live_out_of_scope_blocks_row(row):
+            continue
+        filtered.append(row)
+    return filtered, None
+
+
+def _resolve_empty_fix_batch_convergence(state, config):
+    """Route an exclusion-emptied batch through the path's own resolver (A2)."""
+    round_rec = state.get("rounds", {}).get(str(state["round"]), {})
+    if round_rec.get("roundKind") == "delta":
+        _settle_delta_converged(state, config)
+        return
+    _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+
+
+def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0):
+    """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
+
+    May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
+    setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
+    the batch was emptied by discharge exclusion (settling the round only when ``batch_index``
+    is 0; on a continuation the caller enters post-fix), or ``"faulted"`` when a disposition-
+    ledger read fault parked the session.
+    """
+    cap = _fix_batch_cap(config)
+    if reset_accumulator:
+        state["fixBatch"] = []
+    offered_nonempty = bool(rows)
+    filtered, ledger_fault = _filter_excluded_discharged_fixes(state, rows)
+    if ledger_fault is not None:
+        _park_cannot_certify(state, ledger_fault.detail)
+        return "faulted"
+    if offered_nonempty and not filtered:
+        rec = state["rounds"].setdefault(str(state["round"]), {})
+        prior = rec.get("fixBatchExcludedByDischarge") or 0
+        _record_round(state, "fixBatchExcludedByDischarge", prior + len(rows))
+        if batch_index == 0:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "without fixer dispatch")
+            _resolve_empty_fix_batch_convergence(state, config)
+        else:
+            _decision(state, "fix-batch-excluded",
+                      "fix batch emptied by discharged-finding exclusion — "
+                      "remaining queue exhausted, the round proceeds to post-fix")
+        return "excluded"
+    state["_fixBatch"] = filtered[:cap]
+    state["_fixQueue"] = filtered[cap:]
+    state["_fixBatchIndex"] = batch_index
+    state["step"] = P_FIXER
+    return "queued"
+
+
+def _offered_fixer_rows(state, extra_rows=None):
+    """Current fixer slice plus queue, then any extra rows (guidance-lifted) not already present."""
+    offered = []
+    seen = set()
+    for row in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or []):
+        if not isinstance(row, dict):
+            continue
+        key = _fix_batch_row_key(row)
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        offered.append(row)
+    for row in extra_rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = _fix_batch_row_key(row)
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        offered.append(dict(row))
+    return offered
+
+
+def _sync_pending_after_ruling_reconcile(state):
+    """Drop or refresh a stored fixer pending whose payload no longer matches the reconciled slice."""
+    pending = state.get("pending")
+    fixer_pending = isinstance(pending, dict) and pending.get("phase") == P_FIXER
+    if state.get("terminal") or state.get("step") != P_FIXER:
+        if fixer_pending:
+            state["pending"] = None
+        return
+    if not fixer_pending:
+        return
+    payload = dict(pending.get("payload") or {})
+    payload["batch"] = list(state.get("_fixBatch") or [])
+    updated = dict(pending)
+    updated["payload"] = payload
+    state["pending"] = updated
+
+
+def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None):
+    """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling."""
+    if state.get("step") != P_FIXER:
+        return None
+    offered = _offered_fixer_rows(state, extra_rows)
+    if not offered:
+        return None
+    batch_index = state.get("_fixBatchIndex") or 0
+    status = _queue_fix_batch(
+        state, config, offered, reset_accumulator=False, batch_index=batch_index)
+    if status == "excluded" and batch_index >= 1 and not state.get("terminal"):
+        state.pop("_escalatedRung", None)
+        state.pop("_fixQueue", None)
+        state.pop("_fixBatchIndex", None)
+        _enter_post_fix(state, config, session_dir=session_dir)
+    _sync_pending_after_ruling_reconcile(state)
+    return status
+
 
 def _subjects_for_dimension(dimension):
     """Policy subjects mentioned by a compiled finding's dimension label — a single label
@@ -2799,7 +4100,8 @@ def _resolve_head_diff(artifact):
     return None, "unknown"
 
 
-def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None):
+def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None,
+                panel_diff_seam=None):
     """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
     the driver sequences + records. The post-fix head diff rides the artifact (git, per the
     dispatch-fixer contract) so the next delta round can split_fix_surface against git — INLINE
@@ -2810,7 +4112,12 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     self-report. The derivation is an injectable seam symmetrical with reviewer/fixer/verify:
     run_loop may inject a scripted replay (the eval harness); the library default + the CLI path
     wire the real git derivation. Unknown/unparseable surface → None → the run-everything rule."""
-    state["fixBatch"] = state.get("_fixBatch") or []
+    index = state.get("_fixBatchIndex") or 0
+    slice_ = state.get("_fixBatch") or []
+    if index == 0:
+        state["fixBatch"] = list(slice_)
+    else:
+        state["fixBatch"] = (state.get("fixBatch") or []) + list(slice_)
     head, head_source = _resolve_head_diff(artifact)
     state["headDiff"] = head
     state["_headDiffSource"] = head_source
@@ -2838,17 +4145,48 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
     cds = artifact.get("coverageDecisions")
     if isinstance(cds, list):
         state.setdefault("_coverage", []).extend(d for d in cds if isinstance(d, dict))
-    _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
-                                 "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))})
-    state.pop("_escalatedRung", None)
+    rec = state.get("rounds", {}).get(str(state["round"]), {})
+    prior_fix = rec.get("fix") if isinstance(rec, dict) else None
+    if index >= 1 and isinstance(prior_fix, dict):
+        fixes = list(prior_fix.get("fixes") or []) + list(artifact.get("fixes") or [])
+        escalated = bool(prior_fix.get("escalated")) or bool(
+            artifact.get("escalated") or state.get("_escalatedRung"))
+        _record_round(state, "fix", {"fixes": fixes, "escalated": escalated})
+    else:
+        _record_round(state, "fix", {"fixes": artifact.get("fixes") or [],
+                                     "escalated": bool(artifact.get("escalated")
+                                                       or state.get("_escalatedRung"))})
+    _record_round_append(state, "fixBatches",
+                         {"index": index, "size": len(slice_),
+                          "fixes": len(artifact.get("fixes") or [])})
+    _record_round(state, "fixerVendor", config.get("fixerVendor"))
     if session_dir:
         head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
         if head_err:
             _record_round(state, "fixFoldHeadRefused", head_err)
         else:
+            _record_round(state, "fixFoldHead", head)
             _record_fix_content_on_findings(state, session_dir, artifact, head)
-            _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
-    state["step"] = P_VERIFY
+            _merge_head_content_blobs(
+                session_dir, state, head, _fixed_ledger_content_paths(state, artifact))
+    queue = state.get("_fixQueue") or []
+    if queue:
+        cap = _fix_batch_cap(config)
+        done = len(slice_)
+        queued = len(queue) - min(cap, len(queue))
+        status = _queue_fix_batch(
+            state, config, queue, reset_accumulator=False, batch_index=index + 1)
+        if status == "queued":
+            _decision(state, "fix-batch-split",
+                      "fix batch slice %d of this round dispatched (%d findings; %d queued)"
+                      % (index + 1, done, queued))
+            return
+        if status == "faulted":
+            return
+    state.pop("_escalatedRung", None)
+    state.pop("_fixQueue", None)
+    state.pop("_fixBatchIndex", None)
+    _enter_post_fix(state, config, session_dir=session_dir, panel_diff_seam=panel_diff_seam)
 
 
 _VERIFY_SKIP = ("skipped", "none", "unverified")
@@ -2941,6 +4279,25 @@ def _audit_result_entry_fault(entry, index, target_ids):
             detail += ("; the artifact carries `newIssue` (singular) — the driver consumes "
                        "`newIssues`, a LIST")
         return detail
+    return None
+
+
+def synthesis_results_fault(artifact):
+    """None when a synthesis artifact satisfies the declared payload contract; otherwise a reason
+    string naming the offending field.
+
+    `grouping: null` (no merging proposed) is a real answer and is not a fault — only a missing,
+    mis-keyed, or mis-shaped `grouping` is refused at the submit chokepoint."""
+    if not isinstance(artifact, dict):
+        return ("synthesis artifact is %s, not a grouping object; expected {\"grouping\": ...}; "
+                "resubmit the same phase/attempt/state-hash with a corrected artifact"
+                % type(artifact).__name__)
+    if "grouping" not in artifact:
+        return ("synthesis artifact carries no `grouping` key; expected {\"grouping\": ...}; "
+                "resubmit the same phase/attempt/state-hash with a corrected artifact")
+    fault = payload_contracts.payload_fault(payload_contracts.P_SYNTHESIS, artifact, "hand-submit")
+    if fault is not None:
+        return fault
     return None
 
 
@@ -3101,14 +4458,26 @@ def _verify_command_configured(config):
     return cmd.strip().lower() not in ("", "none")
 
 
-def _fold_verify(state, config, artifact):
+def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
     `fail`, a `timeout`, a missing/None result, any unrecognized value, OR a skip result while a real
     verify command IS configured (the command did not actually run) HALTS with an honest reason that
-    names the class — never advances into a delta round that could later certify."""
+    names the class — never advances into a delta round that could later certify.
+
+    The verified-head resolution is decided at the submit chokepoint (or passed explicitly by the
+    in-process leg) and forwarded; a missing resolution raises before anything is recorded."""
+    if not (isinstance(resolution, tuple) and len(resolution) == 2):
+        raise ValueError("verify fold: no verified-head resolution was forwarded")
+    verified_head, verified_head_err = resolution
+    if verified_head_err:
+        _record_round(state, "verifiedHeadRefused", verified_head_err)
+    else:
+        _record_round(state, session_contract.VERIFIED_HEAD_FIELD, verified_head)
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
+    if result == "pass":
+        _backfill_fixed_disposition_verify_receipts(state, state["round"])
     if result == "fail":
         state["terminal"] = "halted"
         state["certification"] = {"shape": None, "reason": "verify gate failed"}
@@ -3142,44 +4511,229 @@ def _fold_verify(state, config, artifact):
                   "verify result %r is not pass/skip — fail closed, certification withheld" % (result,))
         state["step"] = P_TERMINAL
         return
-    # advance to the next (delta) round. The diff the just-finished round's panel/audit saw is the
-    # `reviewed` side of the next split_fix_surface; the fixer's head diff is the `head` side.
+    then = state.pop("_verifyThen", None)
+    if then == VERIFY_THEN_POST_AUDITS:
+        _after_audits(state, config)
+        return
+    if then == VERIFY_THEN_PANEL:
+        if not _refresh_panel_diff_at_verified_head(
+                state, config, verified_head, panel_diff_seam=panel_diff_seam):
+            return
+        state["step"] = P_PANEL
+        return
+    # VERIFY_THEN_CEILING, and the legacy position (a gate pending with no flag): the round advance
+    # is here — at the ceiling it parks `round-ceiling`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
-    state["_priorReviewedDiff"] = state.get("reviewedDiff")
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
-    _enter_delta_round(state, config)
+    _enter_delta_round(
+        state, config, panel_diff_seam=panel_diff_seam, panel_head=verified_head)
+
+
+def _try_reuse_ceiling_verify_gate(state, config, session_dir):
+    """Reuse the round's passing gate at the ceiling when the post-fix head matches.
+
+    A reuse is allowed only when ``verify_result_for_head`` returns ``"pass"`` for the post-fix
+    head resolved by ``_resolve_fix_fold_head_sha`` — the canonical verified-head reader. Every
+    other case — an unresolvable head, a non-pass result, or no prior verification for that head
+    — returns False so the ceiling gate runs (fail closed toward running it). On reuse, records
+    ``ceilingGateReused`` and parks ``round-ceiling``."""
+    if session_dir is None:
+        cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
+        post_fix_head = cfg.get(FIX_FOLD_HEAD_KEY)
+        if not (isinstance(post_fix_head, str) and post_fix_head):
+            return False
+    else:
+        post_fix_head, head_err = _resolve_fix_fold_head_sha(session_dir, state)
+        if head_err or not post_fix_head:
+            return False
+    if session_contract.verify_result_for_head(state, post_fix_head) != "pass":
+        return False
+    _record_round(state, "ceilingGateReused", post_fix_head)
+    next_round = state["round"] + 1
+    brk = circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config))
+    detail = brk.get("detail") or "round ceiling reached"
+    detail = "%s (ceiling gate reused for post-fix head %s)" % (detail, post_fix_head)
+    _park_round_ceiling(state, detail)
+    return True
+
+
+def _enter_post_fix(state, config, session_dir=None, panel_diff_seam=None):
+    """After the round's last fix-batch slice folds: advance or run the gate at the ceiling."""
+    next_round = state["round"] + 1
+    if circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config)).get("halt"):
+        # The round at the ceiling completes — fix AND gate — before the boundary refuses the next
+        # round. Reuse the gate when it already passed on this post-fix head; otherwise run it on
+        # the post-fix head (including when the round's earlier gate ran on a different head).
+        if _try_reuse_ceiling_verify_gate(state, config, session_dir):
+            return
+        state["_verifyThen"] = VERIFY_THEN_CEILING
+        state["step"] = P_VERIFY
+        return
+    rec = state.get("rounds", {}).get(str(state["round"]), {})
+    panel_head = rec.get("fixFoldHead") if isinstance(rec, dict) else None
+    if not isinstance(panel_head, str) or not panel_head:
+        if session_dir is None:
+            panel_head = config.get(FIX_FOLD_HEAD_KEY) if isinstance(config, dict) else None
+            if not isinstance(panel_head, str) or not panel_head:
+                panel_head = None
+        else:
+            panel_head = None
+    if not _advance_round(state, config, reason="post-fix-advance"):
+        return
+    state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
+    state["_postFixEntry"] = True
+    _enter_delta_round(
+        state, config, panel_diff_seam=panel_diff_seam, panel_head=panel_head)
 
 
 # ---- delta rounds (2+) ----------------------------------------------------------------------
 
-def _schedule_full_panel_unknown(state, detail):
+def _derive_panel_diff_at_head(config, head_sha):
+    """Derive ``git diff <baseRef>...<head_sha>`` at ``config.repoRoot`` for unknown-surface panels.
+
+    Returns ``(diff_text, None)`` on success or ``(None, detail)`` when derivation must refuse."""
+    repo_root = config.get("repoRoot")
+    base = config.get("baseRef")
+    if not isinstance(repo_root, str) or not repo_root:
+        return None, "repoRoot missing"
+    if not isinstance(base, str) or not base:
+        return None, "baseRef missing"
+    if not isinstance(head_sha, str) or not head_sha:
+        return None, "head unresolved"
+    try:
+        verify = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "%s^{commit}" % base],
+            cwd=repo_root,
+            capture_output=True,
+            timeout=120,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return None, "git unavailable: %s" % exc
+    except subprocess.SubprocessError as exc:
+        return None, "git rev-parse failed: %s" % exc
+    if verify.returncode != 0:
+        return None, "baseRef not a commit"
+    verified_base = verify.stdout.decode("utf-8", errors="replace").strip()
+    if not verified_base:
+        return None, "baseRef not a commit"
+    try:
+        proc = review_diff_bytes.run_git_diff_three_dot(
+            repo_root, verified_base, head_sha, timeout=120)
+    except (FileNotFoundError, OSError) as exc:
+        return None, "git unavailable: %s" % exc
+    except subprocess.SubprocessError as exc:
+        return None, "git diff failed: %s" % exc
+    except ValueError as exc:
+        return None, str(exc)
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+        err = err.strip()
+        msg = "git diff exit %d" % proc.returncode
+        if err:
+            msg += ": %s" % err
+        return None, msg
+    try:
+        diff_text = proc.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return None, "diff not UTF-8: %s" % exc
+    if not diff_text:
+        return None, "empty diff"
+    return diff_text, None
+
+
+def _refresh_panel_diff_at_verified_head(state, config, verified_head, panel_diff_seam=None):
+    """Re-derive unknown-surface panel diff at verify fold time (``VERIFY_THEN_PANEL``).
+
+    Binds ``reviewedDiff`` to ``git diff <base>...<verified_head>`` by construction or parks
+    ``panel-diff-underivable``."""
+    derive = panel_diff_seam or _derive_panel_diff_at_head
+    diff_text, refuse_detail = derive(config, verified_head)
+    if refuse_detail is not None:
+        _park_cannot_certify(
+            state, "%s: %s" % (PANEL_DIFF_UNDERIVABLE_CAUSE, refuse_detail))
+        return False
+    state["headDiff"] = diff_text
+    state["reviewedDiff"] = diff_text
+    return True
+
+
+def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_seam=None):
     """The fail-closed unknown→run-everything rule: an unresolvable delta surface schedules a FULL
-    reviewer-deep panel, never a silently-scoped (or silently-skipped) round."""
+    reviewer-deep panel over the git-derived head diff, never a stale reviewed diff or a silently-
+    scoped round. When head diff cannot be derived, parks ``cannot-certify`` instead."""
+    derive = panel_diff_seam or _derive_panel_diff_at_head
+    diff_text, refuse_detail = derive(config, panel_head)
+    if refuse_detail is not None:
+        _park_cannot_certify(
+            state, "%s: %s" % (PANEL_DIFF_UNDERIVABLE_CAUSE, refuse_detail))
+        return False
+    state["headDiff"] = diff_text
+    state["reviewedDiff"] = diff_text
+    _record_round(state, "panelDiffSource", "git-derived")
     _decision(state, "unknown-surface", detail)
     _record_round(state, "roundKind", "full-panel-unknown-surface")
     state["fullPanelRan"] = False
     state["step"] = P_PANEL
+    return True
 
 
-def _enter_delta_round(state, config):
+def _after_unknown_surface_panel(
+        state, config, detail, post_fix, panel_head, panel_diff_seam=None):
+    """Schedule a full unknown-surface panel when derivable; honor post-fix verify-then-panel."""
+    if not _schedule_full_panel_unknown(
+            state, config, detail, panel_head, panel_diff_seam=panel_diff_seam):
+        return
+    if post_fix:
+        state["_verifyThen"] = VERIFY_THEN_PANEL
+        state["step"] = P_VERIFY
+
+
+def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     """Rounds 2+: split_fix_surface(reviewed, head, fixBatch). unknown → schedule a FULL panel
     (the existing unknown→run-everything rule). Else audit the fixed findings + scoped-find the new
     surface."""
+    post_fix = bool(state.pop("_postFixEntry", False))
     # An unresolvable post-fix head diff (a missing/unreadable `headDiffPath`, no inline diff) is an
     # unknown surface BEFORE the split runs — never fold it through as an empty diff (#507). This is
     # the honest recovery for the field defect: a lost head diff now runs a full panel, not a vacuous
     # scoped scan over nothing.
     if state.pop("_headDiffUnknown", False):
-        _schedule_full_panel_unknown(
-            state, "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
-            % state.get("_headDiffSource"))
+        _after_unknown_surface_panel(
+            state, config,
+            "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
+            % state.get("_headDiffSource"),
+            post_fix, panel_head, panel_diff_seam=panel_diff_seam)
+        return
+    baseline = state.get("deltaBaseline")
+    if not isinstance(baseline, dict):
+        cause = "no baseline record" if baseline is None else "baseline is not a record"
+        _after_unknown_surface_panel(
+            state, config, "%s: %s" % (DELTA_BASELINE_ABSENT, cause), post_fix,
+            panel_head, panel_diff_seam=panel_diff_seam)
+        return
+    stamped_round = baseline.get("round")
+    current_round = state["round"]
+    if (not isinstance(stamped_round, int) or isinstance(stamped_round, bool)
+            or stamped_round != current_round):
+        _after_unknown_surface_panel(
+            state, config,
+            "%s: baseline stamped round %s, current round %s"
+            % (DELTA_BASELINE_ABSENT, stamped_round, current_round),
+            post_fix, panel_head, panel_diff_seam=panel_diff_seam)
+        return
+    reviewed = baseline.get("diff")
+    if not isinstance(reviewed, str):
+        _after_unknown_surface_panel(
+            state, config, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT, post_fix,
+            panel_head, panel_diff_seam=panel_diff_seam)
         return
     split = delta_surface.split_fix_surface(
-        state.get("_priorReviewedDiff") or state.get("reviewedDiff"),
-        state.get("headDiff"), state.get("fixBatch") or [])
+        reviewed, state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
-        _schedule_full_panel_unknown(state, "delta surface unknown — full reviewer-deep panel")
+        _after_unknown_surface_panel(
+            state, config, "delta surface unknown — full reviewer-deep panel", post_fix,
+            panel_head, panel_diff_seam=panel_diff_seam)
         return
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
     # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
@@ -3187,31 +4741,34 @@ def _enter_delta_round(state, config):
     state["_auditTargets"] = _audit_targets(state, config, split.get("auditTargets") or {})
     state["_newSurface"] = split.get("newSurface") or {}
     _record_round(state, "roundKind", "delta")
+    if post_fix:
+        state["_verifyThen"] = VERIFY_THEN_POST_AUDITS
     state["step"] = P_AUDITS
 
 
 def _audit_targets(state, config, audit_targets_map):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
-    hunks that sit over their lines."""
+    hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
+    occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
     fixer_vendor = config.get("fixerVendor")
-    auditor_vendor, independence = _auditor_vendor(config, fixer_vendor)
-    if independence == "degraded":
+    runner_only = bool(state.get("_advanceUsed"))
+    auditor_vendor, independence = _auditor_vendor(
+        config, fixer_vendor, runner_only=runner_only)
+    if independence in ("degraded", "unseatable"):
         state["independenceDegraded"] = True
     targets = []
-    seen_location = {}
+    seen_keys = set()
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
-        loc = _location_id(f)
-        n = seen_location.get(loc, 0)
-        seen_location[loc] = n + 1
-        # Same ``%s#%d`` format as ``_slot_label`` roster occurrence suffixes; the two namespaces
-        # stay disjoint because audit roster keys are per-location unique (no occurrence suffix)
-        # and pre-change persisted ids carry no ``#``.
-        tid = loc if n == 0 else "%s#%d" % (loc, n)
-        targets.append({
+        tid = _finding_key_of(f)
+        if tid in seen_keys:
+            continue
+        seen_keys.add(tid)
+        row = {
             "id": tid,
+            session_contract.FINDING_KEY_FIELD: tid,
             "identity": finding_identity(f),
             "file": f.get("file"), "line": f.get("line"), "title": f.get("title"),
             "severity": f.get("severity"),
@@ -3222,15 +4779,75 @@ def _audit_targets(state, config, audit_targets_map):
             "dimension": f.get("dimension"),
             "taxonomy": f.get("taxonomy"),
             "fixerVendor": fixer_vendor,
-            "auditorVendor": auditor_vendor,
             "independence": independence,
             "verdict": f.get("verdict"),
             "evidence": f.get("evidence"),
-        })
+        }
+        if auditor_vendor is not None:
+            row["auditorVendor"] = auditor_vendor
+        targets.append(row)
     return targets
 
 
-def _fold_audits(state, config, artifact):
+AUDIT_PROVENANCE_RUNNER_RECORD = round_records.AUDIT_PROVENANCE_RUNNER_RECORD
+AUDIT_PROVENANCE_HAND_LANDED = round_records.AUDIT_PROVENANCE_HAND_LANDED
+AUDIT_PROVENANCE_MIXED = round_records.AUDIT_PROVENANCE_MIXED
+AUDIT_PROVENANCE_COLLECTION_MANIFEST = round_records.AUDIT_PROVENANCE_COLLECTION_MANIFEST
+_LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST = round_records.AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST
+
+
+def _audit_adapter_disclosures(state, artifact):
+    """The adapter disclosures block for the audits fold — from the artifact if still present, else
+    from the round record `_record_adapter_provenance` wrote earlier in the same `_fold` call."""
+    prov = artifact.get("provenance") if isinstance(artifact, dict) else None
+    if isinstance(prov, dict):
+        return prov
+    rec = state.get("rounds", {}).get(str(state["round"]), {})
+    adapter = rec.get("adapterProvenance")
+    if not isinstance(adapter, dict):
+        return None
+    by_phase = adapter.get("byPhase")
+    if isinstance(by_phase, dict):
+        phase_prov = by_phase.get(P_AUDITS)
+        return phase_prov if isinstance(phase_prov, dict) else None
+    return adapter if adapter and "byPhase" not in adapter else None
+
+
+def _audit_provenance_basis(state, artifact):
+    """Per-round auditProvenance from adapter-recorded seat sources, not the fold path alone."""
+    if state.get("_submitUsed"):
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+    disclosures = _audit_adapter_disclosures(state, artifact)
+    prov_src = (disclosures.get("provenanceSource")
+                if isinstance(disclosures, dict) else None)
+    if not isinstance(prov_src, dict) or not prov_src:
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+    targets = state.get("_auditTargets") or []
+    seat_ids = [t.get("id") for t in targets
+                if isinstance(t, dict) and t.get("id") is not None]
+    if not seat_ids:
+        seat_ids = list(prov_src)
+    sources = set()
+    for seat in seat_ids:
+        src = prov_src.get(seat)
+        if src is None:
+            return AUDIT_PROVENANCE_MIXED
+        sources.add(src)
+    if not sources:
+        return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+    if len(sources) == 1:
+        only = next(iter(sources))
+        if only == AUDIT_PROVENANCE_RUNNER_RECORD:
+            return AUDIT_PROVENANCE_RUNNER_RECORD
+        if only == AUDIT_PROVENANCE_HAND_LANDED:
+            return AUDIT_PROVENANCE_HAND_LANDED
+        if only == _LEGACY_AUDIT_PROVENANCE_DISPATCH_MANIFEST:
+            return AUDIT_PROVENANCE_COLLECTION_MANIFEST
+        return AUDIT_PROVENANCE_MIXED
+    return AUDIT_PROVENANCE_MIXED
+
+
+def _fold_audits(state, config, artifact, session_dir=None):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
     results = artifact.get("results") if isinstance(artifact.get("results"), list) else []
@@ -3238,18 +4855,19 @@ def _fold_audits(state, config, artifact):
     # The DRIVER records the SELECTED independent auditor per target (its own seating decision).
     expected_auditors = {t.get("id"): t.get("auditorVendor")
                          for t in targets if isinstance(t, dict) and t.get("id") is not None}
-    # Provenance rests on the ORCHESTRATOR's out-of-band dispatch manifest — {result-id: vendor} the
-    # orchestrator recorded from its OWN dispatch records and carried in the submit artifact's
+    # Provenance rests on the recorded dispatch provenance (the runner record at state v5; the
+    # dispatch manifest on a legacy session) — {result-id: vendor} carried in the submit artifact's
     # `collectionManifest`, NEVER derived from the result contents. The fold authenticates a clearing
     # ruling against THIS manifest (must exist AND equal the recorded selection); the in-result
     # `auditorVendor` echo is advisory only. The driver cannot cryptographically verify engine
-    # identity and does not pretend to — the guarantee is exactly as strong as the orchestrator's
-    # dispatch manifest (#507 WO-FIX-RECOVERY).
+    # identity and does not pretend to — the guarantee is exactly as strong as the recorded dispatch
+    # provenance (#507 WO-FIX-RECOVERY).
     collection_manifest = artifact.get("collectionManifest")
     if not isinstance(collection_manifest, dict):
         collection_manifest = None
     outcome = audits.apply_audit_results(targets, results, expected_auditors=expected_auditors,
-                                         collection_manifest=collection_manifest)
+                                         collection_manifest=collection_manifest,
+                                         carry_fields=(session_contract.FINDING_KEY_FIELD,))
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -3263,22 +4881,59 @@ def _fold_audits(state, config, artifact):
         for a in outcome["audits"]]}
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
-        _decision(state, "audit-provenance-fail",
-                  "audit result for %s could not be authenticated against the orchestrator's "
-                  "dispatch manifest (missing entry or wrong vendor) — not-discharged" % pid)
+        audit_reason = None
+        audit_cause = None
+        for audit in outcome.get("audits", []):
+            if isinstance(audit, dict) and audit.get("id") == pid:
+                audit_reason = audit.get("reason")
+                audit_cause = audit.get("unauthenticatedCause")
+                break
+        if audit_cause in (audits.UNAUTHENTICATED_MANIFEST_VENDOR_MISMATCH,
+                           audits.UNAUTHENTICATED_NO_AUDITOR_RECORDED):
+            detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+        elif audit_cause == audits.UNAUTHENTICATED_MANIFEST_ENTRY_MISSING:
+            if isinstance(collection_manifest, dict) and pid in collection_manifest:
+                detail = "audit result for %s could not be authenticated — %s" % (pid, audit_reason)
+            else:
+                found_keys = (sorted(collection_manifest)
+                              if isinstance(collection_manifest, dict) else [])
+                detail = ("audit result for %s could not be authenticated — expected a "
+                          "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+                          "found: %s — not-discharged"
+                          % (pid, pid, found_keys))
+        else:
+            found_keys = (sorted(collection_manifest)
+                          if isinstance(collection_manifest, dict) else [])
+            detail = ("audit result for %s could not be authenticated — expected a "
+                      "collectionManifest entry keyed %r (payload.targets[].id); manifest keys "
+                      "found: %s — not-discharged"
+                      % (pid, pid, found_keys))
+        _decision(state, "audit-provenance-fail", detail)
     for pid in outcome.get("echoMismatch", []):
         _decision(state, "audit-echo-mismatch",
-                  "audit result for %s echoed a vendor other than the orchestrator's dispatch "
-                  "manifest — advisory only; the manifest governed and the discharge stands" % pid)
-    # Provenance rests on the orchestrator's dispatch manifest (never the result echo) — recorded
-    # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY).
-    _record_round(state, "auditProvenance", "collection-manifest")
+                  "audit result for %s echoed a vendor other than the recorded dispatch provenance "
+                  "— advisory only; the manifest governed and the discharge stands" % pid)
+    # Provenance rests on the adapter-recorded seat sources (never the fold path alone) — recorded
+    # per round so the receipt discloses the trust basis (#507 WO-FIX-RECOVERY, #1272 WO-R3).
+    _record_round(state, "auditProvenance", _audit_provenance_basis(state, artifact))
     _record_round(state, "audits", outcome["audits"])
     _record_round(state, "auditIndependence",
                   targets[0]["independence"] if targets else "n/a")
+    targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict) and t.get("id")}
+    for tid in outcome.get("discharged") or []:
+        receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
+        _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt)
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
+    if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
+        state["step"] = P_VERIFY
+        return
+    _after_audits(state, config)
+
+
+def _after_audits(state, config):
+    """Scoped-finder routing after audits fold — or after the post-audits verify gate passes."""
     # Scoped-finder routing (#507 WO-R2b). Dispatch the scoped new-finding scan ONLY when the delta
     # split computed a NON-EMPTY new surface (`_newSurface`, set by `_enter_delta_round`). A
     # genuinely empty new surface (`unknown` was False — an unknown surface never reaches audits, it
@@ -3301,10 +4956,11 @@ def _fold_scoped(state, config, artifact):
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
     new_issues = state.get("_newIssues") or []
     combined = list(candidates) + [ni for ni in new_issues if isinstance(ni, dict)]
-    compiled, _drops = mechanical_compile(combined, state.get("reviewedDiff"))
+    compiled, drops = mechanical_compile(combined, state.get("reviewedDiff"))
+    _record_compile_drops(state, drops)
     state["_postAudit"] = True
     if compiled:
-        state["_toVerify"] = compiled
+        _stage_findings(state, compiled)
         state["step"] = P_VERIFIERS
         # after verify+synthesis, _after_findings_settled runs; but for delta rounds we need the
         # audit-breaker + confirmation re-arm, handled in _settle_delta.
@@ -3404,8 +5060,7 @@ def _settle_delta(state, config):
         batch = _union_open_blockers(new_blocking, nd_targets)
         if _route_judgment_blockers(state, batch):
             return
-        state["_fixBatch"] = batch
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, batch)
         return
 
     _settle_delta_converged(state, config)
@@ -3494,11 +5149,13 @@ def _advance_round(state, config, *, reason):
     The ceiling is a BOUNDARY, not a settle-path terminal: the round at the ceiling completes,
     and the loop then refuses to begin the next one. Returns True when the counter advanced,
     False when it parked `round-ceiling` — a False return means the caller must return
-    immediately without any further state mutation."""
+    immediately without any further state mutation. This function is also the one writer of
+    `state["deltaBaseline"]`."""
     next_round = state["round"] + 1
     if _ceiling_blocks(state, config, next_round, reason):
         return False
     state["round"] = next_round
+    state["deltaBaseline"] = {"round": next_round, "diff": state.get("reviewedDiff")}
     return True
 
 
@@ -3631,39 +5288,23 @@ def _commit_stall_self_recovery(state, config, breaker):
 
 
 def _union_open_blockers(*groups):
-    """Union open blockers into one fix batch — deduped by id when present (#507 R2 residual-3).
+    """Union open blockers into one fix batch — deduped by the leaf's identity key.
 
     First-wins: an admitted entry is never replaced, removed, or downgraded by a later group.
-    Id-bearing audit targets dedupe on ``id`` so occurrence-suffixed siblings at one location stay
-    distinct. An id-less item and any item at the same per-location key (line-less identity + line)
-    represent each other — whichever arrives first is kept. ``_settle_delta`` passes id-less
-    ``new_blocking`` before id-bearing ``nd_targets``; that ordering depends on first-wins."""
+    ``_settle_delta`` passes id-less ``new_blocking`` before id-bearing ``nd_targets``; that
+    ordering depends on first-wins."""
     batch = []
-    seen_ids = set()
-    seen_locs = set()
-    idless_locs = set()
+    seen_keys = set()
     for group in groups:
         for item in group:
             f = dict(item)
-            ident = f.get("identity") or finding_identity(f)
-            if ident is None:
+            key = session_contract.finding_identity_key(f)
+            if key is None:
                 continue
-            loc_key = (ident, f.get("line"))
-            tid = f.get("id")
-            if tid:
-                if tid in seen_ids:
-                    continue
-                if loc_key in idless_locs:
-                    continue
-                batch.append(f)
-                seen_ids.add(tid)
-                seen_locs.add(loc_key)
-            else:
-                if loc_key in seen_locs:
-                    continue
-                batch.append(f)
-                seen_locs.add(loc_key)
-                idless_locs.add(loc_key)
+            if key in seen_keys:
+                continue
+            batch.append(f)
+            seen_keys.add(key)
     return batch
 
 
@@ -3712,8 +5353,7 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
     if batch:
         if _route_judgment_blockers(state, batch):
             return
-        state["_fixBatch"] = batch
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, batch)
     elif refusal == REFUSAL_UNRESOLVABLE_OPEN_SET:
         _park_cannot_certify(
             state,
@@ -3777,11 +5417,18 @@ def _handle_stall(state, config, breaker):
     state["step"] = P_STALL
 
 
+def _stall_target_accept_risk_eligible(target):
+    """A stalled audit target qualifies for accept-the-disclosed-risk when CONFIRMED with evidence."""
+    return (isinstance(target, dict)
+            and target.get("verdict") == "CONFIRMED"
+            and target.get("evidence"))
+
+
 def _accept_risk_eligible(state, breaker):
     """accept-the-disclosed-risk is offerable ONLY when a stalled audit target is CONFIRMED with a
     receipt (an owner may knowingly accept a proven, disclosed risk — never an unproven one)."""
     for t in _stalled_open_targets(state, breaker):
-        if isinstance(t, dict) and t.get("verdict") == "CONFIRMED" and t.get("evidence"):
+        if _stall_target_accept_risk_eligible(t):
             return True
     return False
 
@@ -3790,7 +5437,7 @@ def _stall_targets_accept_risk_eligible(state):
     """Fold-time accept-risk eligibility from the persisted stall-target snapshot — never a cached
     boolean a prior version may have written under a broader rule."""
     for t in state.get("_stallTargets") or []:
-        if isinstance(t, dict) and t.get("verdict") == "CONFIRMED" and t.get("evidence"):
+        if _stall_target_accept_risk_eligible(t):
             return True
     return False
 
@@ -3805,6 +5452,21 @@ def _fold_stall(state, config, artifact):
         state["terminal"] = "held"
         state["certification"] = {"shape": None, "reason": "owner chose to hold"}
     elif choice == ACCEPT_RISK_CHOICE and _stall_targets_accept_risk_eligible(state):
+        follow_up = artifact.get("followUp") if isinstance(artifact.get("followUp"), dict) else None
+        for target in state.get("_stallTargets") or []:
+            if not isinstance(target, dict):
+                continue
+            if not _stall_target_accept_risk_eligible(target):
+                continue
+            if circuit_breaker.is_critical(target.get("severity")):
+                continue
+            key = _finding_key_of(target)
+            if not key:
+                continue
+            disp_kwargs = {"outOfScopeReason": "owner accepted the disclosed risk (stall gate)"}
+            if follow_up is not None:
+                disp_kwargs = dict(disp_kwargs, followUp=follow_up)
+            _record_disposition(state, key, "out-of-scope", state["round"], **disp_kwargs)
         _terminal_converged(state, config, full_panel=False,
                             note="owner accepted the disclosed (CONFIRMED) risk")
         return
@@ -3816,8 +5478,7 @@ def _fold_stall(state, config, artifact):
             state["step"] = P_TERMINAL
             return
         state["_oneMoreRoundUsed"] = True
-        state["_fixBatch"] = [dict(t) for t in targets]
-        state["step"] = P_FIXER
+        _queue_fix_batch(state, config, [dict(t) for t in targets])
         return
     else:
         # an ineligible accept-the-risk or an unknown choice fails closed to a park.
@@ -3909,6 +5570,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "seatStatus": rec.get("seatStatus"),
               "blockingCount": rec.get("blockingCount"),
               "verifyResult": rec.get("verifyResult"),
+              "verifiedHead": rec.get("verifiedHead"),
               "audits": rec.get("audits"),
               # The manifest-keyed audit-provenance boundary (LEDGERS §3): a round that ran
               # fix audits records `collection-manifest` here so the boundary — attestation,
@@ -3916,6 +5578,7 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "auditProvenance": rec.get("auditProvenance"),
               "scopedFinder": rec.get("scopedFinder"),
               "headDiffSource": rec.get("headDiffSource"),
+              "rulings": rec.get("rulings"),
               "unverified": rec.get("unverified"),
               "authorJustifiedDrops": rec.get("authorJustifiedDrops"),
               "compileDrops": rec.get("compileDrops"),
@@ -3943,11 +5606,19 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
             if chan in disclosures:
                 rd[chan] = disclosures[chan]
         rounds.append(rd)
-    findings = [{"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
-                 "title": f.get("title"), "severity": f.get("severity"),
-                 "verdict": f.get("verdict"), "challenge": f.get("challenge"),
-                 "unverified": f.get("unverified")}
-                for f in (state.get("findings") or []) if isinstance(f, dict)]
+    findings = []
+    for f in (state.get("findings") or []):
+        if not isinstance(f, dict):
+            continue
+        row = {"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
+               "title": f.get("title"), "severity": f.get("severity"),
+               "verdict": f.get("verdict"), "challenge": f.get("challenge"),
+               "unverified": f.get("unverified")}
+        if (_state_version(state) or 0) >= STATE_SCHEMA_VERSION:
+            finding_key = f.get(session_contract.FINDING_KEY_FIELD)
+            if isinstance(finding_key, str) and finding_key:
+                row[session_contract.FINDING_KEY_FIELD] = finding_key
+        findings.append(row)
     cfg = state.get("config") or {}
     journal = read_journal(session_dir) if session_dir else None
     degraded, skipped_blockers = build_degraded_prose(state, form, journal=journal)
@@ -4263,7 +5934,8 @@ def _validate_certified_receipt(receipt):
     missing scriptRan or the seat map, or with a non-list rounds/findings/decisions/degraded/
     skippedBlockers, is rejected with a reason. `skippedBlockers` is REQUIRED (possibly empty) so a
     receipt can never omit the skipped-blocking channel (the exit_skipped invariant). Per-round entries
-    may carry an `auditProvenance` field (`collection-manifest` when the round ran fix audits) — it is
+    may carry an `auditProvenance` field (`runner-record`, `hand-landed-evidence`, `mixed-evidence`,
+    or `collection-manifest` on a hand `submit`) — it is
     ACCEPTED, not required. The optional top-level `base` block (pinned diff-base metadata from a CLI
     `next` that ran the base guard) is likewise ACCEPTED, not required — library/eval runs omit it. The
     always-present `baseGuard` field records whether the CLI base guard ran (``BASE_GUARD_CHECKED``,
@@ -4430,6 +6102,21 @@ def _persist_fix_fold_head_sha(session_dir, state, head):
         (json.dumps(meta_obj, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
+def _verified_head_at_fold(session_dir, state):
+    """The head the verify gate ran against, resolved before the verify fold. Fail-closed.
+
+    Called at the submit chokepoint and by the in-process leg, never from inside the fold.
+    Returns (head, error). With a session dir this is the same resolver the fixer fold uses, so
+    the recorded head is the head the fixer landed at and the gate ran against. WITHOUT one
+    (`run_loop`'s in-process leg passes no session_dir) there is NO fallback: `config["headSha"]`
+    is the session-SETUP head and stamping it could credit a head a fixer seam had already moved
+    past, so this refuses instead. Refusing matches today's behaviour on that leg — `_fold_fixer`
+    also gets no session_dir there, so no head was ever recorded."""
+    if session_dir:
+        return _resolve_fix_fold_head_sha(session_dir, state)
+    return (None, "verified head: no session dir — the in-process leg records no verified head")
+
+
 def _resolve_fix_fold_head_sha(session_dir, state):
     """Resolve the certified head once at fix-fold time — never the session-setup headSha.
 
@@ -4487,10 +6174,6 @@ def _session_certified_head(session_dir, state):
     head = cfg.get("headSha")
     if isinstance(head, str) and head:
         return head
-    if isinstance(state, dict) and state.get("headDiff") is not None:
-        return hashlib.sha256(
-            json.dumps(state.get("headDiff") or "run-loop", sort_keys=True).encode()
-        ).hexdigest()[:40]
     return None
 
 
@@ -4504,17 +6187,162 @@ def _resolve_repo_root(session_dir, state):
     return os.path.realpath(root) if root else None
 
 
-def _fixed_finding_paths(state):
+def _fixed_ledger_content_paths(state, artifact=None):
+    """Proof paths for fixed ledger rows plus any fix-batch paths at the certified head."""
+    rows, by_key, _fault = _fixed_ledger_rows(state)
     paths = []
     seen = set()
-    for finding in (state.get("findings") or []) if isinstance(state, dict) else []:
-        if not isinstance(finding, dict) or finding.get("disposition") != "fixed":
-            continue
-        path = finding.get("file")
+    for key, entry in rows:
+        _ = key
+        path = session_contract.fix_proof_path(entry, by_key)
         if isinstance(path, str) and path and path not in seen:
             seen.add(path)
             paths.append(path)
+    for path in _fix_batch_paths(state, artifact):
+        if path not in seen:
+            seen.add(path)
+            paths.append(path)
     return paths
+
+
+def _merge_head_content_blobs(session_dir, state, head_sha, paths):
+    """Write or merge head-content reads bound to a named head (#1271 layer 2).
+
+    Every row records a read that actually happened; presence is never written here."""
+    if not session_dir:
+        return
+    try:
+        head = head_sha
+        if not isinstance(head, str) or not head:
+            return
+        if not paths:
+            return
+        repo_root = _resolve_repo_root(session_dir, state)
+        existing = _read_head_content_blobs_file(session_dir) or {}
+        files = dict(existing.get("files") or {})
+        reads = [row for row in (existing.get("reads") or []) if isinstance(row, dict)]
+        indexed = {(row.get("headSha"), row.get("path")): i for i, row in enumerate(reads)}
+        read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for path in paths:
+            row, raw = _head_content_read_row(repo_root, head, path, read_at)
+            key = (head, path)
+            if key in indexed:
+                reads[indexed[key]] = row
+            else:
+                indexed[key] = len(reads)
+                reads.append(row)
+            if row.get("readError") is None and raw is not None:
+                files[path] = base64.b64encode(raw).decode("ascii")
+            else:
+                files.pop(path, None)
+        blobs = {
+            "schema": HEAD_CONTENT_BLOBS_SCHEMA,
+            "headSha": head,
+            "files": files,
+            "reads": reads,
+        }
+        out_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
+        round_commit.atomic_write_bytes(
+            out_path, (json.dumps(blobs, sort_keys=True) + "\n").encode("utf-8"))
+    except Exception:
+        pass
+
+
+def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None, paths=None):
+    """Write or merge head-content reads bound to a named head (#1271 layer 2).
+
+    Every row records a read that actually happened; presence is never written here."""
+    if not session_dir:
+        return
+    head = head_sha or _session_certified_head(session_dir, state)
+    if not isinstance(head, str) or not head:
+        return
+    try:
+        if paths is None:
+            paths = _fixed_ledger_content_paths(state, artifact)
+        _merge_head_content_blobs(session_dir, state, head, paths)
+    except Exception:
+        pass
+
+
+def _finalize_fixed_disposition_receipts(state, session_dir, certified_head):
+    """Re-bind fixed ledger receipts to the certified head when provable; record residuals otherwise.
+
+    Returns True when ``state`` was mutated (re-bind, residual, or verify stamp)."""
+    rows, by_key, fault = _fixed_ledger_rows(state)
+    if fault is not None:
+        return False
+    pending = []
+    for key, entry in rows:
+        receipt = entry.get("dispositionReceipt")
+        if not isinstance(receipt, dict):
+            pending.append((key, None, None))
+            continue
+        pending.append((key, entry, dict(receipt)))
+    if not pending:
+        return False
+    if not isinstance(certified_head, str) or not certified_head:
+        return False
+    read_outcome = _read_head_content_blobs_file(session_dir, normalized=True)
+    changed = False
+    for key, entry, original_receipt in pending:
+        if entry is None:
+            continue
+        existing_head = original_receipt.get("headSha")
+        head_unchanged = (
+            isinstance(existing_head, str) and existing_head and existing_head == certified_head
+        )
+        probe_receipt = dict(original_receipt)
+        if not head_unchanged:
+            probe_receipt["headSha"] = certified_head
+        binding_failure = session_contract.fix_still_present_at_head(
+            entry, probe_receipt, certified_head, read_outcome, by_key=by_key
+        )
+        if binding_failure:
+            continue
+        updated_receipt = dict(original_receipt)
+        if not head_unchanged:
+            updated_receipt["headSha"] = certified_head
+        verify_result = session_contract.verify_result_for_head(state, certified_head)
+        if verify_result != "pass":
+            if original_receipt.get("verifyResult") is not None:
+                revoked = dict(original_receipt)
+                revoked.pop("verifyResult", None)
+                _record_disposition(
+                    state,
+                    key,
+                    "fixed",
+                    entry.get("dispositionRound"),
+                    **_fixed_disposition_family_with_receipt(entry, revoked),
+                )
+                changed = True
+            continue
+        updated_receipt["verifyResult"] = verify_result
+        _record_disposition(
+            state,
+            key,
+            "fixed",
+            entry.get("dispositionRound"),
+            **_fixed_disposition_family_with_receipt(entry, updated_receipt),
+        )
+        changed = True
+    return changed
+
+
+def _finalize_certification_inputs(session_dir, state, head_sha=None, artifact=None):
+    """One terminal step: persist head-content blobs, re-bind fixed receipts, save state."""
+    if not session_dir:
+        return
+    if session_contract.disposition_ledger_owner_classification(state) == (
+        session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
+    ):
+        return
+    head = head_sha or _session_certified_head(session_dir, state)
+    if not isinstance(head, str) or not head:
+        return
+    _persist_head_content_blobs(session_dir, state, artifact=artifact, head_sha=head)
+    if _finalize_fixed_disposition_receipts(state, session_dir, head):
+        save_state(session_dir, state)
 
 
 def _fix_batch_paths(state, artifact=None):
@@ -4591,15 +6419,21 @@ def _head_content_read_row(repo_root, head_sha, path, read_at=None):
     }, raw
 
 
-def _read_head_content_blobs_file(session_dir):
+def _read_head_content_blobs_file(session_dir, *, normalized=False):
     path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
     if not os.path.isfile(path):
+        if normalized:
+            return session_contract.classify_head_content_read(absent=True)
         return None
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if normalized:
+            return session_contract.classify_head_content_read(error=exc)
         return None
+    if normalized:
+        return session_contract.classify_head_content_read(blobs=data)
     return data if isinstance(data, dict) else None
 
 
@@ -4634,54 +6468,6 @@ def _record_fix_content_on_findings(state, session_dir, artifact, head):
         receipt["fixContentHeadSha"] = head
         receipt["fixContentDigest"] = row.get("contentDigest")
         receipt["fixContentBytes"] = row.get("bytes")
-
-
-def _persist_head_content_blobs(session_dir, state, artifact=None, head_sha=None, paths=None):
-    """Write or merge head-content reads bound to a named head (#1271 layer 2).
-
-    Every row records a read that actually happened; presence is never written here."""
-    if not session_dir:
-        return
-    try:
-        head = head_sha or _session_certified_head(session_dir, state)
-        if not isinstance(head, str) or not head:
-            return
-        if paths is None:
-            paths = _fixed_finding_paths(state)
-            for path in _fix_batch_paths(state, artifact):
-                if path not in paths:
-                    paths.append(path)
-        if not paths:
-            return
-        repo_root = _resolve_repo_root(session_dir, state)
-        existing = _read_head_content_blobs_file(session_dir) or {}
-        files = dict(existing.get("files") or {})
-        reads = [row for row in (existing.get("reads") or []) if isinstance(row, dict)]
-        indexed = {(row.get("headSha"), row.get("path")): i for i, row in enumerate(reads)}
-        read_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        for path in paths:
-            row, raw = _head_content_read_row(repo_root, head, path, read_at)
-            key = (head, path)
-            if key in indexed:
-                reads[indexed[key]] = row
-            else:
-                indexed[key] = len(reads)
-                reads.append(row)
-            if row.get("readError") is None and raw is not None:
-                files[path] = base64.b64encode(raw).decode("ascii")
-            else:
-                files.pop(path, None)
-        blobs = {
-            "schema": HEAD_CONTENT_BLOBS_SCHEMA,
-            "headSha": head,
-            "files": files,
-            "reads": reads,
-        }
-        out_path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
-        round_commit.atomic_write_bytes(
-            out_path, (json.dumps(blobs, sort_keys=True) + "\n").encode("utf-8"))
-    except Exception:
-        pass
 
 
 def _write_certification_artifacts(session_dir):
@@ -4729,8 +6515,10 @@ def _write_certification_artifacts(session_dir):
         round_commit.atomic_write_bytes(
             path, (json.dumps(refusal, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     except OSError as exc:
-        return ("certification refusal artifact write failed (%s) — cannot certify; treat as park"
-                % exc)
+        return ReceiptFault(
+            "certification refusal artifact write failed (%s) — cannot certify; treat as park"
+            % exc,
+            RECEIPT_FAULT_CERTIFICATION)
     return None
 
 
@@ -4768,16 +6556,10 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     cfg.pop("baseGuard", None)
     if source_guard == BASE_GUARD_CHECKED:
         cfg["baseGuard"] = BASE_GUARD_CHECKED
-    for finding in state_copy.get("findings") or []:
-        if not isinstance(finding, dict):
-            continue
-        if finding.get("disposition") == "fixed":
-            receipt = finding.get("dispositionReceipt")
-            if not isinstance(receipt, dict):
-                finding["dispositionReceipt"] = {"headSha": head, "verifyResult": "pass"}
-            elif not receipt.get("headSha"):
-                receipt["headSha"] = head
     meta = {"sessionId": "run-loop-%s" % head[:16], "headSha": head, "producer": "run-loop"}
+    repo_root = cfg.get("repoRoot")
+    if isinstance(repo_root, str) and repo_root:
+        meta["repoRoot"] = repo_root
     _apply_grounded_mode(meta, session_mode.resolve(meta, cfg))
     round_commit.atomic_write_bytes(
         os.path.join(session_dir, round_records.META_FILE),
@@ -4785,7 +6567,7 @@ def _materialize_run_loop_session(state, invocations, source_session_dir=None):
     save_state(session_dir, state_copy)
     if source_session_dir:
         _copy_session_tree(source_session_dir, session_dir)
-        _persist_head_content_blobs(session_dir, state_copy, head_sha=head)
+        _finalize_certification_inputs(session_dir, state_copy, head_sha=head)
         return session_dir
     shutil.rmtree(session_dir, ignore_errors=True)
     return None
@@ -4867,7 +6649,7 @@ def run_loop(seams, config=None):
         raise ValueError("run_loop requires a seams dict")
     try:
         state = new_state(config)
-    except RoundCeilingRefusal as refusal:
+    except (RoundCeilingRefusal, FixBatchCapRefusal) as refusal:
         state = new_state()
         _park_cannot_certify(state, refusal.reason)
         return _run_loop_certified_receipt(state, 0)
@@ -4890,7 +6672,13 @@ def run_loop(seams, config=None):
                 if fault is not None:
                     _record_round_append(state, "verifierArtifactFault",
                                          {"fault": fault, "round": state["round"]})
-            _fold(state, state["config"], action, artifact, seams.get("changed_subjects"))
+            try:
+                _fold(state, state["config"], action, artifact, seams.get("changed_subjects"),
+                      verified_head_resolution=_verified_head_at_fold(None, state),
+                      panel_diff_seam=seams.get("panel_diff"))
+            except DispositionLedgerOwnerRefusal as refusal:
+                _park_cannot_certify(state, refusal.reason)
+                return _run_loop_certified_receipt(state, guard)
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the
             # synthesis fold must re-settle the delta rather than the round-1 path.
@@ -4956,6 +6744,11 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                           "attempt": None, "outcome": "refused-round-ceiling",
                                           "reason": refusal.reason})
             return {"ok": False, "reason": refusal.reason, "value": refusal.value}
+        except FixBatchCapRefusal as refusal:
+            _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
+                                          "attempt": None, "outcome": "refused-fix-batch-cap",
+                                          "reason": refusal.reason})
+            return {"ok": False, "reason": refusal.reason, "value": refusal.value}
         if state.get("_resumeCorrupt"):
             _park_cannot_certify(state, state["_resumeCorrupt"])
             pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
@@ -4970,7 +6763,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fail = _terminal_receipt_gate(session_dir, state)
             if fail:
                 return _receipt_fault_response(fail)
-            return _next_response(pending, state_hash(state))
+            return _next_response(session_dir, state, pending, "next")
     else:
         state = loaded
         if config_overrides and config_overrides.get("recordsPath") is not None:
@@ -4994,7 +6787,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fail = _terminal_receipt_gate(session_dir, state)
             if fail:
                 return _receipt_fault_response(fail)
-            return _next_response(pending, state_hash(state))
+            return _next_response(session_dir, state, pending, "next")
     if state.get("pending"):
         # idempotent re-emit: the state is unchanged since the pending was persisted, so the hash
         # recomputed here equals the one the first `next` returned (the hash is NEVER stored in the
@@ -5012,11 +6805,29 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             fault = _terminal_receipt_gate(session_dir, state)
             if fault:
                 return _receipt_fault_response(fault)
-        return _next_response(pend, state_hash(state))
+        refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, "next")
+        if refusal is not None:
+            return refusal
+        return _next_response(session_dir, state, pend, "next")
     step = _advance(state, state["config"])
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
     pending = {"action": step["action"], "round": step["round"], "phase": step["phase"],
                "attempt": attempt, "payload": step["payload"]}
+    verify = pending.get("payload", {}).get("verify") if isinstance(pending.get("payload"), dict) else None
+    if pending["phase"] == P_AUDITS and isinstance(verify, dict):
+        # attempt is allocated here from the same counter run-verify will use on submit — a mismatch
+        # cannot arise when nothing was submitted for that phase in that round.
+        attempt = _next_dispatch_attempt(session_dir, pending["round"], P_VERIFY, state)
+        verify.update({
+            "round": pending["round"],
+            "attempt": attempt,
+            "landingPath": round_records.bare_payload_path(
+                session_dir, pending["round"], P_VERIFY,
+                round_records.storage_key("verify"), attempt),
+        })
+    refusal = _disposition_ledger_owner_refusal(session_dir, state, pending, "next")
+    if refusal is not None:
+        return refusal
     state["pending"] = pending
     phase = pending.get("phase")
     if isinstance(phase, str) and phase.startswith("dispatch-"):
@@ -5031,6 +6842,11 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         except round_commit.CommitRefused as exc:
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
+        except AuditorUnseatable as exc:
+            return _refuse_cmd(session_dir, "next", AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                               rnd=pending.get("round"), attempt=attempt,
+                               liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
+                               detail=exc.detail)
         except ValueError as exc:
             return _refuse_cmd(session_dir, "next", "order-render-refused", phase=phase,
                                rnd=pending.get("round"), attempt=attempt, detail=str(exc))
@@ -5042,7 +6858,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         fail = _terminal_receipt_gate(session_dir, state)
         if fail:
             return _receipt_fault_response(fail)
-    return _next_response(pending, state_hash(state))
+    return _next_response(session_dir, state, pending, "next")
 
 
 def _receipt_fault_response(detail):
@@ -5082,7 +6898,54 @@ def _refuse_base_guard(session_dir, reason, detail=None, value=None):
     return 1
 
 
-def _next_response(pending, expected_hash):
+def _disposition_ledger_owner_refusal(session_dir, state, pending, cmd):
+    """Refuse hand-out when the disposition-ledger owner is unrecognized (non-terminal only)."""
+    action = pending.get("action") if isinstance(pending, dict) else None
+    if action == P_TERMINAL:
+        return None
+    if (session_contract.disposition_ledger_owner_classification(state)
+            == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED):
+        phase = pending.get("phase") if isinstance(pending, dict) else None
+        rnd = pending.get("round") if isinstance(pending, dict) else None
+        attempt = pending.get("attempt") if isinstance(pending, dict) else None
+        return _refuse_cmd(session_dir, cmd, DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE,
+                           phase=phase, rnd=rnd, attempt=attempt)
+    return None
+
+
+def _ruling_ledger_precondition_refusal(session_dir, state, pending):
+    """Refuse `rule` before mutation when the ledger owner is unrecognized or the ledger is malformed."""
+    pend = pending if isinstance(pending, dict) else {}
+    owner_refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, RULE_CMD)
+    if owner_refusal is not None:
+        return owner_refusal
+    if session_contract.disposition_ledger_owner_classification(state) == (
+            session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED):
+        _rows, fault = session_contract.read_disposition_ledger(state, required=True)
+        if fault is not None:
+            return _refuse_cmd(
+                session_dir, RULE_CMD, fault.token,
+                phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+                detail=fault.detail)
+    _log_rows, log_fault = _read_rulings_log(state)
+    if log_fault is not None:
+        token, detail = log_fault
+        return _refuse_cmd(
+            session_dir, RULE_CMD, token,
+            phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+            detail=detail)
+    seq_fault = _ruling_seq_counter_fault(state)
+    if seq_fault is not None:
+        token, detail = seq_fault
+        return _refuse_cmd(
+            session_dir, RULE_CMD, token,
+            phase=pend.get("phase"), rnd=pend.get("round"), attempt=pend.get("attempt"),
+            detail=detail)
+    return None
+
+
+def _next_response(session_dir, state, pending, cmd):
+    expected_hash = state_hash(state)
     return {
         "ok": True,
         "action": pending["action"],
@@ -5092,6 +6955,982 @@ def _next_response(pending, expected_hash):
         "expectedStateHash": expected_hash,
         "payload": pending.get("payload"),
     }
+
+
+def _serialize_meta_json(meta_obj):
+    return (json.dumps(meta_obj, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _relocate_target_marker_content(session_dir, target_root, branch):
+    return {
+        "schema": _REVIEW_SESSION_SCHEMA,
+        "sessionDir": os.path.realpath(session_dir),
+        "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "repoRoot": os.path.realpath(target_root),
+        "branch": branch,
+    }
+
+
+def _relocate_read_target_marker(marker_path):
+    try:
+        with open(marker_path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _relocate_refresh_target_marker(marker_path, marker_content):
+    payload = _canonical(marker_content).encode("utf-8")
+    round_commit.atomic_write_bytes(marker_path, payload)
+
+
+def _relocate_release_target_marker(marker_path, session_rp):
+    """Remove the target marker when it still names this session."""
+    marker = _relocate_read_target_marker(marker_path)
+    if isinstance(marker, dict) and marker.get("sessionDir") == session_rp:
+        try:
+            os.remove(marker_path)
+        except Exception:
+            pass
+
+
+def _relocate_claim_target_marker(marker_path, marker_content, session_rp):
+    """Atomically claim the target checkout marker. Returns (ok, created, reason)."""
+    payload = _canonical(marker_content).encode("utf-8")
+    if os.path.lexists(marker_path):
+        marker = _relocate_read_target_marker(marker_path)
+        if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
+            return False, False, "foreign"
+        try:
+            _relocate_refresh_target_marker(marker_path, marker_content)
+        except OSError:
+            return False, False, "unwritable"
+        return True, False, None
+    parent = os.path.dirname(marker_path)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError:
+            return False, False, "unwritable"
+    tmp = marker_path + ".claim.tmp"
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, marker_path)
+        except FileExistsError:
+            marker = _relocate_read_target_marker(marker_path)
+            if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
+                return False, False, "foreign"
+            try:
+                _relocate_refresh_target_marker(marker_path, marker_content)
+            except OSError:
+                return False, False, "unwritable"
+            return True, False, None
+        return True, True, None
+    except OSError:
+        return False, False, "unwritable"
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _relocate_recorded_head(meta, state):
+    """Resolve the recorded head for relocate checks — (head_sha, ambiguous)."""
+    cfg = state.get("config") if isinstance(state, dict) else None
+    cfg = cfg if isinstance(cfg, dict) else {}
+    meta_key = meta.get(FIX_FOLD_HEAD_KEY) if isinstance(meta, dict) else None
+    cfg_key = cfg.get(FIX_FOLD_HEAD_KEY)
+    meta_has = bool(isinstance(meta_key, str) and meta_key)
+    cfg_has = bool(isinstance(cfg_key, str) and cfg_key)
+    if meta_has != cfg_has:
+        return None, True
+    if meta_has and cfg_has and meta_key != cfg_key:
+        return None, True
+    if meta_has:
+        return meta_key, False
+    head = meta.get("headSha") if isinstance(meta, dict) else None
+    if not isinstance(head, str) or not head:
+        return None, True
+    return head, False
+
+
+def _relocate_path_inside(child, parent):
+    try:
+        return (os.path.commonpath([os.path.realpath(child), os.path.realpath(parent)])
+                == os.path.realpath(parent))
+    except ValueError:
+        return False
+
+
+def _retire_relocate_marker(old_root, session_dir):
+    try:
+        if not isinstance(old_root, str) or not old_root or not os.path.exists(old_root):
+            return "absent"
+        gitdir = store_core.get_worktree_gitdir(old_root)
+    except store_core.RepoRootUnavailable:
+        return "absent"
+    except Exception:
+        return "failed"
+    marker_path = _review_session_marker_path(gitdir)
+    if not os.path.isfile(marker_path):
+        return "absent"
+    tmp = marker_path + ".retire.tmp"
+    session_rp = os.path.realpath(session_dir)
+    try:
+        os.rename(marker_path, tmp)
+    except OSError:
+        return "failed"
+    try:
+        with open(tmp, encoding="utf-8") as fh:
+            marker = json.load(fh)
+        if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
+            try:
+                os.link(tmp, marker_path)
+            except FileExistsError:
+                pass
+            os.unlink(tmp)
+            return "not-ours"
+        os.unlink(tmp)
+        return "retired"
+    except Exception:
+        try:
+            if not os.path.lexists(marker_path):
+                os.link(tmp, marker_path)
+        except Exception:
+            pass
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        return "failed"
+
+
+def _relocate_try_repair_marker_retirement(session_dir, session_rp, target_toplevel):
+    """Repair a crash between session commit and old-marker retirement."""
+    for row in reversed(read_journal(session_dir)):
+        if row.get("outcome") != "relocated":
+            continue
+        if row.get("newRoot") != target_toplevel:
+            continue
+        old_root = row.get("oldRoot")
+        if not isinstance(old_root, str) or not old_root:
+            return None
+        try:
+            target_gitdir = store_core.get_worktree_gitdir(target_toplevel)
+        except Exception:
+            return None
+        marker_path = _review_session_marker_path(target_gitdir)
+        marker = _relocate_read_target_marker(marker_path)
+        if not isinstance(marker, dict) or marker.get("sessionDir") != session_rp:
+            return None
+        marker_outcome = _retire_relocate_marker(old_root, session_dir)
+        _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
+                                      "result": marker_outcome, "phase": None, "round": None,
+                                      "attempt": None})
+        return {"ok": True, "repaired": True, "markerRetirement": marker_outcome,
+                "relocated": {k: row.get(k) for k in (
+                    "oldRoot", "newRoot", "oldBranch", "newBranch", "sessionDir",
+                    "head", "base", "by", "at", "rewritten")}}
+    return None
+
+
+def cmd_relocate(session_dir, target_root, by):
+    """Relocate a parked review session to a different checkout at the same head and base."""
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, "relocate")
+            if refusal is not None:
+                return refusal
+            return _cmd_relocate_locked(session_dir, target_root, by)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, "relocate", held)
+
+
+def _cmd_relocate_locked(session_dir, target_root, by):
+    ok_meta, meta_or_detail = review_base_guard.read_meta(session_dir)
+    if not ok_meta:
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
+                           detail=meta_or_detail)
+    meta = meta_or_detail
+    old_root = meta.get("repoRoot")
+    if not isinstance(old_root, str) or not old_root or not os.path.isabs(old_root):
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
+                           detail="repoRoot")
+    old_root_rp = os.path.realpath(old_root)
+    session_dir_meta = meta.get("sessionDir")
+    if (not isinstance(session_dir_meta, str) or not session_dir_meta
+            or not session_dir_meta.strip()):
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
+                           detail="sessionDir")
+    if not os.path.isabs(session_dir_meta):
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable",
+                           detail="sessionDir")
+    ok_state, loaded = load_state(session_dir)
+    if not ok_state or loaded is None:
+        detail = loaded if not ok_state else "loop-state.json missing — call next first"
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-unreadable", detail=detail)
+    state = loaded
+    if state.get("terminal"):
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-terminal")
+    pending = state.get("pending")
+    if isinstance(pending, dict) and pending.get("phase") == P_FIXER:
+        return _refuse_cmd(session_dir, "relocate", "relocate-inflight-fixer")
+    try:
+        resolved_root = store_core.repo_root(target_root)
+    except store_core.RepoRootUnavailable as exc:
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
+                           detail=str(exc))
+    if not resolved_root:
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
+                           detail="git rev-parse --show-toplevel failed")
+    target_toplevel = os.path.realpath(resolved_root)
+    if target_toplevel != os.path.realpath(target_root):
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
+                           detail="target_root is not a git toplevel")
+    if os.path.realpath(meta["sessionDir"]) != os.path.realpath(session_dir):
+        return _refuse_cmd(session_dir, "relocate", "relocate-session-dir-moved",
+                           detail="recorded %r, invoked from %r"
+                           % (meta["sessionDir"], session_dir))
+    if target_toplevel == old_root_rp:
+        repaired = _relocate_try_repair_marker_retirement(
+            session_dir, os.path.realpath(session_dir), target_toplevel)
+        if repaired is not None:
+            return repaired
+        return _refuse_cmd(session_dir, "relocate", "relocate-same-checkout")
+    cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
+    base_repo = cfg.get("baseRepo")
+    if not isinstance(base_repo, str) or not base_repo:
+        return _refuse_cmd(session_dir, "relocate", "relocate-repo-unverifiable")
+    live_origin = review_base_guard.origin_repo(target_toplevel)
+    if live_origin is None or live_origin.casefold() != base_repo.casefold():
+        return _refuse_cmd(session_dir, "relocate", "relocate-repo-mismatch",
+                           detail="origin %r does not match recorded baseRepo %r"
+                           % (live_origin, base_repo))
+    meta_base = meta.get("baseRef")
+    cfg_base = cfg.get("baseRef")
+    if meta_base != cfg_base:
+        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch",
+                           detail="meta.baseRef does not match config.baseRef")
+    resolved_pin, pin_reason = review_base_guard.resolve_commit_reason(
+        meta_base, target_toplevel, store_core.run_git)
+    if resolved_pin is None:
+        detail = ("baseRef does not resolve in target: %s" % pin_reason
+                  if pin_reason else "baseRef does not resolve in target")
+        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch", detail=detail)
+    if not isinstance(meta_base, str) or resolved_pin != meta_base.lower():
+        return _refuse_cmd(session_dir, "relocate", "relocate-base-mismatch",
+                           detail="resolved pin %r does not match meta.baseRef %r"
+                           % (resolved_pin, meta_base))
+    recorded_head, head_ambiguous = _relocate_recorded_head(meta, state)
+    if head_ambiguous:
+        return _refuse_cmd(session_dir, "relocate", "relocate-head-ambiguous")
+    head_res = store_core.run_git_result(target_toplevel, "rev-parse", "HEAD")
+    if head_res.status != store_core.GIT_OK or not head_res.out:
+        return _refuse_cmd(session_dir, "relocate", "relocate-head-mismatch",
+                           detail="HEAD unresolvable in target")
+    if head_res.out.lower() != recorded_head.lower():
+        return _refuse_cmd(session_dir, "relocate", "relocate-head-mismatch",
+                           detail="target HEAD %r does not match recorded head %r"
+                           % (head_res.out, recorded_head))
+    records_path = cfg.get("recordsPath")
+    if isinstance(records_path, str):
+        if _relocate_path_inside(records_path, old_root_rp):
+            return _refuse_cmd(session_dir, "relocate", "relocate-records-path-bound",
+                               detail="recordsPath lies inside old repo root")
+    old_branch = meta.get("branch")
+    if not isinstance(old_branch, str):
+        old_branch_res = store_core.run_git_result(old_root_rp, "rev-parse", "--abbrev-ref", "HEAD")
+        old_branch = (old_branch_res.out if old_branch_res.status == store_core.GIT_OK
+                      else None)
+    branch_res = store_core.run_git_result(target_toplevel, "rev-parse", "--abbrev-ref", "HEAD")
+    new_branch = branch_res.out if branch_res.status == store_core.GIT_OK else "HEAD"
+    rewritten = []
+    new_meta = dict(meta)
+    new_meta["repoRoot"] = target_toplevel
+    new_meta["branch"] = new_branch
+    rewritten.append("meta.repoRoot")
+    rewritten.append("meta.branch")
+    new_state = json.loads(_canonical(state))
+    new_cfg = new_state.get("config") if isinstance(new_state.get("config"), dict) else {}
+    if "repoRoot" in new_cfg:
+        new_cfg["repoRoot"] = target_toplevel
+        new_state["config"] = new_cfg
+        rewritten.append("state.config.repoRoot")
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    session_rp = os.path.realpath(session_dir)
+    try:
+        target_gitdir = store_core.get_worktree_gitdir(target_toplevel)
+    except Exception as exc:
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-not-toplevel",
+                           detail=str(exc))
+    target_marker_path = _review_session_marker_path(target_gitdir)
+    if new_branch == "HEAD":
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-detached")
+    marker_content = _relocate_target_marker_content(session_rp, target_toplevel, new_branch)
+    claimed, marker_created, claim_reason = _relocate_claim_target_marker(
+        target_marker_path, marker_content, session_rp)
+    if not claimed:
+        if claim_reason == "foreign":
+            marker = _relocate_read_target_marker(target_marker_path)
+            detail = ("marker sessionDir %r != %r"
+                      % (marker.get("sessionDir") if isinstance(marker, dict) else marker,
+                         session_rp))
+            return _refuse_cmd(session_dir, "relocate", "relocate-target-marker-foreign",
+                               detail=detail)
+        return _refuse_cmd(session_dir, "relocate", "relocate-target-marker-unwritable")
+    journal_fields = {
+        "oldRoot": old_root_rp,
+        "newRoot": target_toplevel,
+        "oldBranch": old_branch,
+        "newBranch": new_branch,
+        "sessionDir": session_rp,
+        "head": recorded_head,
+        "base": resolved_pin,
+        "by": by,
+        "at": at,
+        "rewritten": sorted(rewritten),
+    }
+    journal_entry = _journal_entry_for_commit(session_dir, "relocate", "relocated", **journal_fields)
+    try:
+        c = round_commit.begin(session_dir, "relocate")
+        c.add_replace_file(os.path.join(session_dir, round_records.META_FILE),
+                           _serialize_meta_json(new_meta))
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(new_state).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        if marker_created and exc.reason != "commit-cleanup-failed":
+            _relocate_release_target_marker(target_marker_path, session_rp)
+        if exc.reason == "commit-cleanup-failed":
+            marker_outcome = _retire_relocate_marker(old_root_rp, session_rp)
+            _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
+                                          "result": marker_outcome, "phase": None, "round": None,
+                                          "attempt": None})
+        return _commit_refused_response(session_dir, "relocate", exc)
+    marker_outcome = _retire_relocate_marker(old_root_rp, session_rp)
+    _journal_append(session_dir, {"cmd": "relocate", "outcome": "marker-retirement",
+                                  "result": marker_outcome, "phase": None, "round": None,
+                                  "attempt": None})
+    relocated = dict(journal_fields)
+    return {"ok": True, "relocated": relocated, "markerRetirement": marker_outcome}
+
+
+def cmd_re_emit(session_dir, by):
+    """Re-emit a stale pending dispatch order at the current head as a new attempt."""
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, "re-emit")
+            if refusal is not None:
+                return refusal
+            return _cmd_re_emit_locked(session_dir, by)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, "re-emit", held)
+
+
+def _journal_has_orders_emitted(session_dir, rnd, phase, attempt):
+    for event in read_journal(session_dir):
+        if event.get("outcome") != "orders-emitted":
+            continue
+        if (event.get("round") == rnd and event.get("phase") == phase
+                and event.get("attempt") == attempt):
+            return True
+    return False
+
+
+def _relocation_after_emission(journal, rnd, phase, attempt):
+    """First qualifying relocated row after the attempt's last orders-emitted.
+
+    Returns the relocation row, ``None`` when no qualifying move exists, or
+    ``_RELOCATION_EVIDENCE_INDETERMINATE`` when a relocated row is present but
+    unreadable — callers must refuse rather than treat indeterminate as absent."""
+    last_emit_idx = None
+    for idx, event in enumerate(journal):
+        # axis: a non-object journal row makes relocation evidence indeterminate
+        if not isinstance(event, dict):
+            return _RELOCATION_EVIDENCE_INDETERMINATE
+        if (event.get("outcome") == "orders-emitted"
+                and event.get("round") == rnd and event.get("phase") == phase
+                and event.get("attempt") == attempt):
+            last_emit_idx = idx
+    # axis: a dispatch attempt with no emission row counts as stale when any move exists (fail closed)
+    start = 0 if last_emit_idx is None else last_emit_idx + 1
+    for event in journal[start:]:
+        if event.get("outcome") != "relocated":
+            continue
+        old_root = event.get("oldRoot")
+        new_root = event.get("newRoot")
+        if not isinstance(old_root, str) or not isinstance(new_root, str):
+            return _RELOCATION_EVIDENCE_INDETERMINATE
+        if os.path.realpath(old_root) != os.path.realpath(new_root):
+            return event
+    return None
+
+
+def _journal_has_relocated_row(journal):
+    return any(isinstance(event, dict) and event.get("outcome") == "relocated" for event in journal)
+
+
+def _relocation_lookup(session_dir, rnd, phase, attempt):
+    """Tri-state relocation evidence for fence callers: row, absent, or indeterminate."""
+    journal, lossy = read_journal(session_dir, report_lossy=True)
+    if lossy:
+        return _RELOCATION_EVIDENCE_INDETERMINATE
+    result = _relocation_after_emission(journal, rnd, phase, attempt)
+    if result is _RELOCATION_EVIDENCE_INDETERMINATE:
+        return result
+    # axis: a journal-fault marker makes relocation evidence indeterminate when a move was recorded
+    if _journal_faulted(session_dir) and _journal_has_relocated_row(journal):
+        return _RELOCATION_EVIDENCE_INDETERMINATE
+    return result
+
+
+def _refuse_relocation_evidence_indeterminate(session_dir, cmd, **kwargs):
+    return _refuse_cmd(session_dir, cmd, RELOCATION_EVIDENCE_INDETERMINATE_CAUSE,
+                       detail=RELOCATION_EVIDENCE_INDETERMINATE_DETAIL, **kwargs)
+
+
+def _re_emit_recorded_slots(journal, rnd, phase, attempt):
+    slots = set()
+    for event in journal:
+        if event.get("outcome") != "recorded":
+            continue
+        ident = event.get("recordIdentity")
+        if isinstance(ident, dict):
+            if (event.get("round") == rnd and ident.get("phase") == phase
+                    and ident.get("attempt") == attempt):
+                seat = ident.get("seat") or event.get("seat") or "unknown"
+                slots.add((seat, ident.get("occurrence", 0)))
+        elif (event.get("round") == rnd and event.get("phase") == phase
+              and event.get("attempt") == attempt):
+            seat = event.get("seat") or "unknown"
+            slots.add((seat, event.get("occurrence", 0)))
+    return slots
+
+
+def _re_emit_recorded_seat_labels(journal, rnd, phase, attempt):
+    return sorted(_slot_label(seat, occurrence)
+                  for seat, occurrence in _re_emit_recorded_slots(journal, rnd, phase, attempt))
+
+
+def _re_emit_blocking_result_names(session_dir, journal, rnd, phase, attempt, roster):
+    # axis: a landing or bare entry for an unrecorded old-attempt slot, or one that cannot be checked, blocks re-emit
+    recorded = _re_emit_recorded_slots(journal, rnd, phase, attempt)
+    names = []
+    for seat_key, occurrence in round_records.roster_slots(roster):
+        if (seat_key, occurrence) in recorded:
+            continue
+        skey = round_records.storage_key(seat_key, occurrence)
+        landing = record_paths.landing_path(session_dir, rnd, phase, skey, attempt)
+        bare = record_paths.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+        if record_paths.landing_entry_present(landing):
+            names.append("landing:%s" % skey)
+        if record_paths.landing_entry_present(bare):
+            names.append("bare:%s" % skey)
+    return names
+
+
+def _re_emit_completed_for_attempt(journal, rnd, phase, attempt):
+    """Return (superseded_attempt, superseded_row) when re-emit already committed for ``attempt``."""
+    superseded_row = None
+    for event in journal:
+        if (session_contract.journal_is_re_emit_orders_superseded(event)
+                and event.get("round") == rnd and event.get("phase") == phase
+                and event.get("newAttempt") == attempt):
+            superseded_row = event
+    if superseded_row is None:
+        return None
+    for event in journal:
+        if (event.get("cmd") == RE_EMIT_CMD and event.get("outcome") == "orders-emitted"
+                and event.get("round") == rnd and event.get("phase") == phase
+                and event.get("attempt") == attempt):
+            return superseded_row.get("attempt"), superseded_row
+    return None
+
+
+def _row_matches_ruling_id(row, ruling_id):
+    if not isinstance(row, dict) or not isinstance(ruling_id, str):
+        return False
+    if row.get("id") == ruling_id:
+        return True
+    fkey = row.get(session_contract.FINDING_KEY_FIELD)
+    if fkey == ruling_id:
+        return True
+    derived = _finding_key_of(row)
+    return derived == ruling_id if derived else False
+
+
+def _severity_for_finding_key(state, key, fallback=None):
+    if not isinstance(key, str) or not key:
+        return fallback
+    ordered = []
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict) and _finding_key_of(finding) == key:
+            ordered.append(finding)
+    for row in state.get("_toVerify") or []:
+        if isinstance(row, dict) and _finding_key_of(row) == key:
+            ordered.append(row)
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    if ledger_fault is None:
+        entry = ledger_by_key.get(key)
+        if isinstance(entry, dict):
+            ordered.append(entry)
+    for row in (state.get("_fixBatch") or []) + (state.get("_fixQueue") or []):
+        if isinstance(row, dict) and _fix_batch_row_key(row) == key:
+            ordered.append(row)
+    severities = [row.get("severity") for row in ordered
+                  if isinstance(row, dict) and row.get("severity") is not None]
+    if not severities:
+        return fallback
+    for sev in severities:
+        if circuit_breaker.is_critical(sev):
+            return sev
+    return severities[0]
+
+
+def _row_matches_ruling_finding_key(row, ruling_id):
+    if not isinstance(row, dict) or not isinstance(ruling_id, str):
+        return False
+    fkey = row.get(session_contract.FINDING_KEY_FIELD)
+    if isinstance(fkey, str) and fkey == ruling_id:
+        return True
+    derived = _finding_key_of(row)
+    return derived == ruling_id if derived else False
+
+
+def _resolve_ruling_target(state, ruling_id):
+    if not isinstance(ruling_id, str) or not ruling_id.strip():
+        return None, None, None
+    rid = ruling_id.strip()
+    for finding in state.get("findings") or []:
+        if _row_matches_ruling_finding_key(finding, rid):
+            return _finding_key_of(finding), dict(finding), None
+    combined = ((state.get("_fixBatch") or []) + (state.get("_fixQueue") or [])
+                + (state.get("fixBatch") or []))
+    for row in combined:
+        if _row_matches_ruling_finding_key(row, rid):
+            return _fix_batch_row_key(row), dict(row), None
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    if ledger_fault is not None:
+        return None, None, RULING_FILE_UNREADABLE
+    ledger_entries = list(ledger_by_key.values())
+    for entry in ledger_entries:
+        if isinstance(entry, dict) and _row_matches_ruling_finding_key(entry, rid):
+            return _finding_identity_key(entry), dict(entry), None
+    id_matches = []
+    for finding in state.get("findings") or []:
+        if isinstance(finding, dict) and finding.get("id") == rid:
+            id_matches.append((_finding_key_of(finding), dict(finding)))
+    for row in combined:
+        if isinstance(row, dict) and row.get("id") == rid:
+            id_matches.append((_fix_batch_row_key(row), dict(row)))
+    for entry in ledger_entries:
+        if isinstance(entry, dict) and entry.get("id") == rid:
+            id_matches.append((_finding_identity_key(entry), dict(entry)))
+    by_key = {}
+    for key, row in id_matches:
+        if isinstance(key, str) and key:
+            by_key[key] = row
+    if len(by_key) > 1:
+        return None, None, RULING_TARGET_AMBIGUOUS
+    if len(by_key) == 1:
+        key = next(iter(by_key))
+        return key, by_key[key], None
+    return None, None, None
+
+
+def _load_ruling_file(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except OSError:
+        return None, None, RULING_FILE_UNREADABLE
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None, None, RULING_FILE_UNREADABLE
+    if not isinstance(doc, dict):
+        return None, None, RULING_FILE_SHAPE
+    file_sha = round_records.sha256_text(raw)
+    return doc, file_sha, None
+
+
+def _validate_ruling_entries(doc):
+    rulings = doc.get("rulings")
+    if not isinstance(rulings, list) or not rulings:
+        return None, None, RULING_FILE_SHAPE
+    provenance = doc.get("_provenance")
+    if not _owner_artifact_provenance_well_formed({"_provenance": provenance}):
+        return None, None, RULING_PROVENANCE_MALFORMED
+    parsed = []
+    for spec in rulings:
+        if not isinstance(spec, dict):
+            return None, None, RULING_FILE_SHAPE
+        rid = spec.get("id")
+        kind = spec.get("ruling")
+        reason = spec.get("reason")
+        if not isinstance(rid, str) or not rid.strip():
+            return None, None, RULING_FILE_SHAPE
+        if kind not in RULING_KINDS:
+            return None, None, RULING_UNKNOWN_KIND
+        if not isinstance(reason, str) or not reason.strip():
+            return None, None, RULING_REASON_MISSING
+        entry = {"id": rid.strip(), "ruling": kind, "reason": reason.strip()}
+        if kind == "out-of-scope":
+            follow_up = spec.get("followUp")
+            fault = session_contract.follow_up_shape_fault(follow_up)
+            if fault is not None:
+                return None, None, RULING_FOLLOW_UP_MALFORMED
+            entry["followUp"] = dict(follow_up)
+        if kind == "guidance":
+            guidance = spec.get("guidance")
+            if not isinstance(guidance, str) or not guidance.strip():
+                return None, None, RULING_FILE_SHAPE
+            if len(guidance.encode("utf-8")) > GATE_GUIDANCE_ROW_BYTE_CAP:
+                return None, None, RULING_GUIDANCE_OVERSIZE
+            entry["guidance"] = guidance.strip()
+        parsed.append(entry)
+    return parsed, provenance, None
+
+
+def _fix_batch_file_sha256(session_dir, rnd, state):
+    try:
+        path = _ensure_fix_batch_file(session_dir, rnd, state)
+    except ValueError:
+        raise ValueError("order-render-refused:fix-batch-unreadable")
+    try:
+        with open(path, "rb") as fh:
+            return round_records.sha256_text(fh.read().decode("utf-8"))
+    except OSError:
+        raise ValueError("order-render-refused:fix-batch-unreadable")
+
+
+def _supersede_pending_dispatch_attempt(session_dir, state, by, journal_cmd, pending,
+                                        superseded_fields_extra=None):
+    """Caller must refuse when the pending attempt already has recorded seat results."""
+    phase = pending.get("phase")
+    rnd = pending.get("round")
+    old_attempt = pending.get("attempt")
+    old_roster, roster_refusal = _roster_of(session_dir, state, journal_cmd, phase, rnd, old_attempt)
+    if roster_refusal is not None:
+        return roster_refusal
+    anchor = _orders_anchor(state, session_dir, rnd, phase, old_attempt)
+    if anchor is None:
+        return None
+    new_attempt = max(_next_dispatch_attempt(session_dir, rnd, phase, state), old_attempt + 1)
+    state["pending"] = dict(pending, attempt=new_attempt)
+    roster, roster_refusal = _roster_of(session_dir, state, journal_cmd, phase, rnd, new_attempt)
+    if roster_refusal is not None:
+        return roster_refusal
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    superseded_fields = {
+        "phase": phase, "round": rnd, "attempt": old_attempt, "newAttempt": new_attempt,
+        "supersededManifestSha256": anchor.get("manifestSha256"),
+        "supersededOrderSha256": anchor.get("orders"),
+        "by": by, "at": at,
+    }
+    if isinstance(superseded_fields_extra, dict):
+        superseded_fields.update(superseded_fields_extra)
+    superseded_row = _journal_entry_for_commit(
+        session_dir, journal_cmd, ORDERS_SUPERSEDED_OUTCOME, **superseded_fields)
+    try:
+        _emit_orders_manifest(
+            session_dir, state, rnd, phase, new_attempt, roster,
+            journal_cmd=journal_cmd, pending_payload=state["pending"].get("payload"),
+            seat_map=_effective_seat_map(state),
+            extra_journal_entries=[superseded_row])
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, journal_cmd, exc, phase=phase,
+                                        rnd=rnd, attempt=new_attempt)
+    except AuditorUnseatable as exc:
+        return _refuse_cmd(session_dir, journal_cmd, AUDITOR_UNSEATABLE_CAUSE, phase=phase,
+                           rnd=rnd, attempt=new_attempt,
+                           liveVendors=exc.live_vendors, fixerVendor=exc.fixer_vendor,
+                           detail=exc.detail)
+    except ValueError as exc:
+        return _refuse_cmd(session_dir, journal_cmd, "order-render-refused", phase=phase,
+                           rnd=rnd, attempt=new_attempt, detail=str(exc))
+    return {"superseded": {"attempt": old_attempt, "manifestSha256": anchor.get("manifestSha256")}}
+
+
+def cmd_rule(session_dir, ruling_file, by):
+    try:
+        with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, RULE_CMD)
+            if refusal is not None:
+                return refusal
+            return _cmd_rule_locked(session_dir, ruling_file, by)
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, RULE_CMD, held)
+
+
+def _cmd_rule_locked(session_dir, ruling_file, by):
+    ok, state = load_state(session_dir)
+    if not ok or state is None:
+        detail = state if not ok else "no state"
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE, detail=detail)
+    if state.get("terminal"):
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_SESSION_TERMINAL)
+    doc, file_sha, load_reason = _load_ruling_file(ruling_file)
+    if load_reason is not None:
+        return _refuse_cmd(session_dir, RULE_CMD, load_reason, value=ruling_file)
+    parsed, provenance, shape_reason = _validate_ruling_entries(doc)
+    if shape_reason is not None:
+        return _refuse_cmd(session_dir, RULE_CMD, shape_reason, value=ruling_file)
+    pending = state.get("pending")
+    ledger_refusal = _ruling_ledger_precondition_refusal(session_dir, state, pending)
+    if ledger_refusal is not None:
+        return ledger_refusal
+    if isinstance(pending, dict):
+        phase = pending.get("phase")
+        rnd = pending.get("round")
+        attempt = pending.get("attempt")
+    else:
+        phase = state.get("step")
+        rnd = state.get("round")
+        attempt = None
+    for entry in parsed:
+        key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
+        if target_fault == RULING_TARGET_AMBIGUOUS:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
+        if target_fault == RULING_FILE_UNREADABLE:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE)
+        if key is None:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
+        if entry["ruling"] == "out-of-scope":
+            sev = _severity_for_finding_key(
+                state, key,
+                candidate.get("severity") if isinstance(candidate, dict) else None)
+            if circuit_breaker.is_critical(sev):
+                return _refuse_cmd(session_dir, RULE_CMD, RULING_CRITICAL_OUT_OF_SCOPE,
+                                   id=entry["id"])
+    if (isinstance(pending, dict) and pending.get("phase") == P_FIXER
+            and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
+                                            pending.get("attempt"))):
+        return _refuse_cmd(session_dir, RULE_CMD, RULING_ATTEMPT_PENDING,
+                           phase=pending.get("phase"), rnd=pending.get("round"),
+                           attempt=pending.get("attempt"))
+    if state.get("step") != P_FIXER:
+        for entry in parsed:
+            if entry["ruling"] == "guidance":
+                return _refuse_cmd(
+                    session_dir, RULE_CMD, RULING_GUIDANCE_NOT_FIXER,
+                    phase=phase, rnd=rnd, attempt=attempt)
+    cfg = state.get("config") or {}
+    round_rulings = []
+    restored_rows = []
+    for entry in parsed:
+        key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
+        if target_fault == RULING_TARGET_AMBIGUOUS:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
+        if target_fault == RULING_FILE_UNREADABLE:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE)
+        if key is None:
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_UNKNOWN, id=entry["id"])
+        prior_live = _live_ruling_by_key(state).get(key)
+        seq = _next_ruling_seq(state)
+        log_row = {
+            "seq": seq,
+            "round": state["round"],
+            "phase": phase,
+            "attempt": attempt,
+            "id": entry["id"],
+            "findingKey": key,
+            "ruling": entry["ruling"],
+            "reason": entry["reason"],
+            "provenance": provenance,
+            "rulingFileSha256": file_sha,
+            "by": by,
+        }
+        session_contract.copy_follow_up_field(entry, log_row)
+        if entry.get("guidance") is not None:
+            log_row["guidance"] = entry["guidance"]
+        _writable_rulings_log(state).append(log_row)
+        round_rulings.append(dict(log_row))
+        if entry["ruling"] == "out-of-scope":
+            _record_disposition(
+                state, key, "out-of-scope", state["round"],
+                outOfScopeReason=entry["reason"], followUp=entry.get("followUp"),
+                rulingSeq=seq)
+        elif entry["ruling"] == "guidance":
+            live_row = _live_finding_by_key(state, key)
+            ledger_oos = isinstance(live_row, dict) and live_row.get("disposition") == "out-of-scope"
+            if not ledger_oos:
+                ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+                if ledger_fault is None:
+                    stored = ledger_by_key.get(key)
+                    ledger_oos = isinstance(stored, dict) and stored.get("disposition") == "out-of-scope"
+            prior_oos = isinstance(prior_live, dict) and prior_live.get("ruling") == "out-of-scope"
+            if prior_oos or ledger_oos:
+                _clear_out_of_scope_disposition(state, key)
+                restore = _live_finding_by_key(state, key) or candidate
+                if isinstance(restore, dict):
+                    restored_rows.append(dict(restore))
+        _decision(state, "ruling-recorded",
+                  "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
+    _append_round_rulings(state, round_rulings)
+    _reconcile_fixer_queue_after_rulings(
+        state, cfg, extra_rows=restored_rows, session_dir=session_dir)
+    if state.get("step") == P_FIXER:
+        pending_render_check = state.get("pending")
+        rnd_render = None
+        if isinstance(pending_render_check, dict):
+            rnd_render = pending_render_check.get("round")
+        if rnd_render is None:
+            rnd_render = state.get("round")
+        try:
+            _gate_guidance_block(_gate_guidance_entries(state, rnd_render))
+        except ValueError as exc:
+            phase_r = (pending_render_check.get("phase")
+                       if isinstance(pending_render_check, dict) else P_FIXER)
+            rnd_r = (pending_render_check.get("round")
+                     if isinstance(pending_render_check, dict) else rnd_render)
+            attempt_r = (pending_render_check.get("attempt")
+                         if isinstance(pending_render_check, dict) else None)
+            return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
+                               phase=phase_r, rnd=rnd_r, attempt=attempt_r, detail=str(exc))
+    journal_entry = _journal_entry_for_commit(
+        session_dir, RULE_CMD, "ruling-recorded", phase=phase, round=rnd, attempt=attempt,
+        rulingFileSha256=file_sha, count=len(parsed))
+    try:
+        c = round_commit.begin(session_dir, "rule-record")
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(state).encode("utf-8"))
+        journal_path = os.path.join(session_dir, JOURNAL_FILE)
+        c.add_journal_append(journal_path, journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, RULE_CMD, exc, phase=phase,
+                                        rnd=rnd, attempt=attempt)
+    response = {"ok": True, "recorded": len(parsed), "rulingFileSha256": file_sha}
+    pending_after = state.get("pending")
+    if (isinstance(pending_after, dict) and pending_after.get("action")
+            and not state.get("terminal")):
+        response.update(_next_response(session_dir, state, pending_after, RULE_CMD))
+    return response
+
+
+def _cmd_re_emit_locked(session_dir, by):
+    ok, state = load_state(session_dir)
+    if not ok or state is None:
+        detail = state if not ok else "no state"
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-session-unreadable", detail=detail)
+
+    if state.get("terminal"):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
+    pending = state.get("pending")
+    if not isinstance(pending, dict):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
+    phase = pending.get("phase")
+    if not isinstance(phase, str) or not phase.startswith("dispatch-"):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-pending-order")
+    rnd = pending.get("round")
+    old_attempt = pending.get("attempt")
+
+    refusal = _disposition_ledger_owner_refusal(session_dir, state, pending, RE_EMIT_CMD)
+    if refusal is not None:
+        return refusal
+
+    relocation = _relocation_lookup(session_dir, rnd, phase, old_attempt)
+    if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+        return _refuse_relocation_evidence_indeterminate(
+            session_dir, "re-emit", phase=phase, rnd=rnd, attempt=old_attempt)
+
+    anchor = _orders_anchor(state, session_dir, rnd, phase, old_attempt)
+    if anchor is None or not _journal_has_orders_emitted(session_dir, rnd, phase, old_attempt):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-no-anchor",
+                           phase=phase, rnd=rnd, attempt=old_attempt)
+
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir)
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot")
+    if not isinstance(repo_root, str) or not repo_root:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
+                           detail="session repo root is unset")
+    head_res = store_core.run_git_result(repo_root, "rev-parse", "HEAD")
+    if (head_res.status in (store_core.GIT_UNAVAILABLE, store_core.GIT_DECLINED)
+            or not head_res.out):
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
+                           detail="HEAD unresolvable in session repo root")
+
+    live_head = head_res.out
+    anchor_head = anchor.get("headSha")
+    if not isinstance(anchor_head, str) or not anchor_head:
+        anchor_head = _session_certified_head(session_dir, state)
+    if not isinstance(anchor_head, str) or not anchor_head:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-head-unresolved",
+                           detail="no headSha on anchor and no session certified head")
+
+    if anchor_head.lower() != live_head.lower():
+        return _refuse_cmd(
+            session_dir, "re-emit", "re-emit-head-moved",
+            anchorHead=anchor_head, liveHead=live_head,
+            detail=("the head moved outside the loop; a seat recorded at the live head "
+                    "cannot certify while the session's recorded head is the old one; "
+                    "re-emit does not move the session's head"))
+
+    journal = read_journal(session_dir)
+    if relocation is None:
+        completed = _re_emit_completed_for_attempt(journal, rnd, phase, old_attempt)
+        if completed is not None:
+            superseded_attempt, superseded_row = completed
+            anchor = _orders_anchor(state, session_dir, rnd, phase, superseded_attempt)
+            response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
+            if not response.get("ok"):
+                return response
+            response["superseded"] = {
+                "attempt": superseded_attempt,
+                "manifestSha256": ((anchor or {}).get("manifestSha256")
+                                     or superseded_row.get("supersededManifestSha256")),
+            }
+            return response
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-not-stale",
+                           phase=phase, rnd=rnd, attempt=old_attempt)
+
+    old_roster, roster_refusal = _roster_of(session_dir, state, "re-emit", phase, rnd, old_attempt)
+    if roster_refusal is not None:
+        return roster_refusal
+
+    result_names = _re_emit_blocking_result_names(
+        session_dir, journal, rnd, phase, old_attempt, old_roster)
+    if result_names:
+        return _refuse_cmd(session_dir, "re-emit", "re-emit-attempt-has-results",
+                           phase=phase, rnd=rnd, attempt=old_attempt, names=result_names)
+
+    relocation_fields = {
+        "oldRoot": relocation.get("oldRoot"),
+        "newRoot": relocation.get("newRoot"),
+        "oldBranch": relocation.get("oldBranch"),
+        "newBranch": relocation.get("newBranch"),
+        "sessionDir": relocation.get("sessionDir"),
+        "at": relocation.get("at"),
+    }
+    superseded_fields_extra = {
+        "head": live_head,
+        "relocation": relocation_fields,
+    }
+    recorded_labels = _re_emit_recorded_seat_labels(journal, rnd, phase, old_attempt)
+    if recorded_labels:
+        superseded_fields_extra["supersededRecords"] = recorded_labels
+    superseded_out = _supersede_pending_dispatch_attempt(
+        session_dir, state, by, RE_EMIT_CMD, pending, superseded_fields_extra)
+    if isinstance(superseded_out, dict) and not superseded_out.get("ok", True):
+        return superseded_out
+
+    save_state(session_dir, state)
+    response = _next_response(session_dir, state, state["pending"], RE_EMIT_CMD)
+    if not response.get("ok"):
+        return response
+    response["superseded"] = superseded_out.get("superseded") or {
+        "attempt": old_attempt,
+        "manifestSha256": anchor.get("manifestSha256"),
+    }
+    return response
 
 
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
@@ -5132,7 +7971,11 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     landed signal except on the `commit-cleanup-failed` path: `round_commit.run()` fsyncs its
     `DONE` marker — the fold is durable — and then cleanup raises, and the answer carries
     `foldLanded: True`. Callers must not read its absence on other `ok: false` answers as not-landed
-    evidence."""
+    evidence.
+
+    On the verify phase the head is resolved before the fold; a resolution failure refuses
+    ``verified-head-unresolved`` with nothing written but the journal row, so the same artifact can
+    be resubmitted."""
     try:
         with round_records.session_lock(session_dir):
             refusal = _commit_recover_or_refuse(session_dir, "submit")
@@ -5145,7 +7988,28 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             state = prep["state"]
             round_no = prep["round_no"]
             art_hash = prep["art_hash"]
-            _fold(state, state["config"], phase, artifact, session_dir=session_dir)
+            if phase == P_VERIFY:
+                try:
+                    resolution = _verified_head_at_fold(session_dir, state)
+                except OSError as exc:
+                    resolution = (None, "verified head: %s" % exc)
+            else:
+                resolution = None
+            if phase == P_VERIFY and resolution[1]:
+                _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                              "round": round_no, "attempt": attempt,
+                                              "outcome": VERIFIED_HEAD_UNRESOLVED_CAUSE,
+                                              "detail": resolution[1]})
+                return {"ok": False, "reason": VERIFIED_HEAD_UNRESOLVED_CAUSE,
+                        "detail": resolution[1]}
+            try:
+                _fold(state, state["config"], phase, artifact, session_dir=session_dir,
+                      verified_head_resolution=resolution)
+            except DispositionLedgerOwnerRefusal:
+                _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                              "round": round_no, "attempt": attempt,
+                                              "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
+                return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
             if _via_advance and _pending_policy_applied is not None:
                 applied = state.get("_policyApplied")
                 if not isinstance(applied, list):
@@ -5232,6 +8096,85 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
         return _lock_held_refusal(session_dir, "submit", held)
 
 
+def _judgment_skip_equiv(prior, new):
+    """True when two skip dispositions carry the same normalized reason and followUp."""
+    prior_reason = prior.get("reason")
+    new_reason = new.get("reason")
+    prior_rs = prior_reason.strip() if isinstance(prior_reason, str) else ""
+    new_rs = new_reason.strip() if isinstance(new_reason, str) else ""
+    if prior_rs != new_rs:
+        return False
+    prior_fu = prior.get("followUp") if isinstance(prior.get("followUp"), dict) else None
+    new_fu = new.get("followUp") if isinstance(new.get("followUp"), dict) else None
+    return session_contract.canonical(prior_fu or {}) == session_contract.canonical(new_fu or {})
+
+
+def judgment_disposition_collision_fault(artifact):
+    """Refuse duplicate judgment ids with conflicting dispositions before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    by_id = {}
+    raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    for disp in raw:
+        if not isinstance(disp, dict) or disp.get("id") is None:
+            continue
+        fid = disp.get("id")
+        prior = by_id.get(fid)
+        if prior is not None:
+            if prior.get("disposition") != disp.get("disposition"):
+                return "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid)
+            if prior.get("disposition") == "fix-with-guidance" \
+                    and disp.get("disposition") == "fix-with-guidance":
+                prior_g = prior.get("guidance")
+                new_g = disp.get("guidance")
+                prior_s = prior_g.strip() if isinstance(prior_g, str) else ""
+                new_s = new_g.strip() if isinstance(new_g, str) else ""
+                if prior_s != new_s:
+                    return "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid)
+            if prior.get("disposition") == "skip" and disp.get("disposition") == "skip":
+                if not _judgment_skip_equiv(prior, disp):
+                    return "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid)
+        by_id[fid] = disp
+    return None
+
+
+def judgment_follow_up_fault(artifact):
+    """Refuse malformed followUp on skip dispositions before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
+    for disp in raw:
+        if not isinstance(disp, dict) or disp.get("disposition") != "skip":
+            continue
+        reason = disp.get("reason")
+        if not (isinstance(reason, str) and reason.strip()):
+            # Reasonless skip is not honor-able — let _fold_judgment fail-closed instead.
+            continue
+        if "followUp" not in disp:
+            continue
+        fault = session_contract.follow_up_shape_fault(disp.get("followUp"))
+        if fault:
+            entry_id = disp.get("id") or "?"
+            _binding_failure, detail = fault
+            return "%s: %s: %s" % (FOLLOWUP_MALFORMED_CAUSE, entry_id, detail)
+    return None
+
+
+def stall_follow_up_fault(artifact):
+    """Refuse malformed followUp on accept-the-disclosed-risk before fold."""
+    if not isinstance(artifact, dict):
+        return None
+    if artifact.get("choice") != ACCEPT_RISK_CHOICE:
+        return None
+    if "followUp" not in artifact:
+        return None
+    fault = session_contract.follow_up_shape_fault(artifact.get("followUp"))
+    if fault:
+        _binding_failure, detail = fault
+        return "%s: stall: %s" % (FOLLOWUP_MALFORMED_CAUSE, detail)
+    return None
+
+
 def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
     ok, loaded = load_state(session_dir)
     if not ok:
@@ -5310,6 +8253,21 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "echo-mismatch"})
         return {"ok": False, "reason": "phase/attempt echo does not match the pending step"}
+    if (not _via_advance and isinstance(phase, str) and phase.startswith("dispatch-")):
+        # axis: a hand submit of a dispatch phase emitted before the move is refused; the advance-driven fold is not
+        relocation = _relocation_lookup(session_dir, pending.get("round"), phase, attempt)
+        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": RELOCATION_EVIDENCE_INDETERMINATE_CAUSE})
+            return {"ok": False, "reason": RELOCATION_EVIDENCE_INDETERMINATE_CAUSE,
+                    "detail": RELOCATION_EVIDENCE_INDETERMINATE_DETAIL}
+        if relocation is not None:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE})
+            return {"ok": False, "reason": RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
+                    "detail": RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL}
     # The state-hash echo is the anti-stale/fork fence — REQUIRED (#507 v13). A first-time fold with
     # no hash is refused (a missing hash must never fold fail-open); exact replays are already
     # returned as duplicates above, before this point.
@@ -5325,6 +8283,14 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "hash-mismatch"})
         return {"ok": False, "reason": "state-hash mismatch — the state moved under a stale submit"}
+
+    if session_contract.disposition_ledger_owner_classification(state) == (
+        session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
+    ):
+        _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                      "round": pending.get("round"), "attempt": attempt,
+                                      "outcome": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE})
+        return {"ok": False, "reason": DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE}
 
     # #845: the panel seat-key invariant, at the chokepoint. A `seats` map keyed by findings-file
     # stems instead of `payload.dimensions` submits `ok` today and fails phases later with empty
@@ -5376,6 +8342,25 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "verifier-results-shape"})
             return {"ok": False, "reason": fault}
+        fault = verifier_drop_staged_id_fault(state, artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "staged-id-unresolvable"})
+            return {"ok": False, "reason": fault}
+    if phase == P_SYNTHESIS:
+        fault = synthesis_results_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "synthesis-results-shape"})
+            return {"ok": False, "reason": fault}
+        fault = synthesis_staged_id_fault(state, artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "staged-id-unresolvable"})
+            return {"ok": False, "reason": fault}
     if phase == P_STALL:
         choice = artifact.get("choice") if isinstance(artifact, dict) else None
         if isinstance(choice, str) and choice in RETIRED_STALL_CHOICES:
@@ -5407,6 +8392,25 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": STALL_ACCEPT_RISK_NOT_ELIGIBLE})
             return {"ok": False, "reason": STALL_ACCEPT_RISK_NOT_ELIGIBLE}
+        fault = stall_follow_up_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "follow-up-malformed"})
+            return {"ok": False, "reason": fault}
+    if phase == P_JUDGMENT:
+        fault = judgment_disposition_collision_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": JUDGMENT_DISPOSITION_COLLISION_CAUSE})
+            return {"ok": False, "reason": fault}
+        fault = judgment_follow_up_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "follow-up-malformed"})
+            return {"ok": False, "reason": fault}
 
     # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.
     # `cmd_submit` never reads the durable store, so `record-result` (or `--sweep`) followed by a
@@ -5461,13 +8465,16 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
 
 
 def _write_receipt(session_dir, state):
-    """Write the terminal receipt atomically. OSError PROPAGATES — a receipt-write failure is itself
-    a receipt defect the CLI must surface (see _finalize_receipt), never a silent swallow (#507
-    v14)."""
+    """Write the terminal receipt atomically. ReceiptWriteError PROPAGATES — a receipt-write failure
+    is itself a receipt defect the CLI must surface (see _finalize_receipt), never a silent swallow
+    (#507 v14)."""
     receipt = build_receipt(state, session_dir)
     path = os.path.join(session_dir, RECEIPT_FILE)
-    round_commit.atomic_write_bytes(
-        path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    try:
+        round_commit.atomic_write_bytes(
+            path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    except OSError as exc:
+        raise ReceiptWriteError(str(exc)) from exc
     return receipt
 
 
@@ -5486,18 +8493,28 @@ def _verify_terminal_receipt(session_dir):
         with open(os.path.join(session_dir, RECEIPT_FILE), encoding="utf-8") as fh:
             on_disk = json.load(fh)
     except (OSError, ValueError) as exc:
-        return "terminal receipt unreadable (%s) — cannot certify; treat as park" % exc
+        return ReceiptFault(
+            "terminal receipt unreadable (%s) — cannot certify; treat as park" % exc,
+            RECEIPT_FAULT_VERIFY)
     if receipt_kind(on_disk) == RECEIPT_INTERIM_SCHEMA:
-        return ("terminal receipt is interim — cannot certify; treat as park")
+        return ReceiptFault(
+            "terminal receipt is interim — cannot certify; treat as park",
+            RECEIPT_FAULT_VERIFY)
     ok, why = validate_receipt(on_disk)
     if not ok:
-        return "terminal receipt invalid (%s) — cannot certify; treat as park" % why
+        return ReceiptFault(
+            "terminal receipt invalid (%s) — cannot certify; treat as park" % why,
+            RECEIPT_FAULT_VERIFY)
     if not (on_disk.get("scriptRan") or {}).get("invocations"):
-        return ("terminal receipt scriptRan is empty — the journal (the driver's ran evidence) did "
-                "not persist; cannot certify; treat as park")
+        return ReceiptFault(
+            "terminal receipt scriptRan is empty — the journal (the driver's ran evidence) did "
+            "not persist; cannot certify; treat as park",
+            RECEIPT_FAULT_VERIFY)
     if _journal_faulted(session_dir):
-        return ("driver journal recorded a write fault — the scriptRan evidence is incomplete "
-                "(a next/submit event was lost); cannot certify; treat as park")
+        return ReceiptFault(
+            "driver journal recorded a write fault — the scriptRan evidence is incomplete "
+            "(a next/submit event was lost); cannot certify; treat as park",
+            RECEIPT_FAULT_VERIFY)
     return None
 
 
@@ -5507,15 +8524,14 @@ def _finalize_receipt(session_dir, state):
     evidence — did not persist) is a RECEIPT DEFECT: return a reason so the CLI fails closed (the
     orchestrator must treat it as a park), never certifying on a missing/short receipt (#507 v14).
     Returns None on success."""
+    certified_head = _session_certified_head(session_dir, state)
+    _finalize_certification_inputs(session_dir, state, head_sha=certified_head)
     try:
         _write_receipt(session_dir, state)
-    except OSError as exc:
-        return "terminal receipt write failed (%s) — cannot certify; treat as park" % exc
-    _persist_head_content_blobs(
-        session_dir,
-        state,
-        head_sha=_session_certified_head(session_dir, state),
-    )
+    except ReceiptWriteError as exc:
+        return ReceiptFault(
+            "terminal receipt write failed (%s) — cannot certify; treat as park" % exc,
+            exc.kind)
     cert_fault = _write_certification_artifacts(session_dir)
     if cert_fault:
         return cert_fault
@@ -5535,7 +8551,8 @@ def _terminal_receipt_gate(session_dir, state):
     later replayed `next` that re-wrote the receipt from state and answered ok. Once finalized, only a
     genuinely valid ON-DISK receipt (re-read fresh each call) clears the fault; a state overwrite
     cannot. Returns a fault detail string or None, persisting the finalized mark and the durable
-    `_receiptFault` detail so the durability survives across separate CLI processes (#507).
+    `_receiptFault` detail so the durability survives across separate CLI processes (#507). The fault
+    class is data minted at the raise site, not inferred from exception text.
 
     INVARIANT (#507, third audit): no terminal-phase invocation — first-emission next, replayed next,
     terminating submit, or a duplicate/replayed submit — may answer ok without a fresh on-disk receipt
@@ -5544,9 +8561,13 @@ def _terminal_receipt_gate(session_dir, state):
         fault = _verify_terminal_receipt(session_dir)
     else:
         fault = _finalize_receipt(session_dir, state)
-        if fault is None or "certification" not in fault:
+        if fault is not None and not isinstance(fault, ReceiptFault):
+            raise TypeError("terminal receipt fault without a class: %r" % (fault,))
+        # axis: finalization is decided by the fault's minted class, never by the text of an exception.
+        if fault is None or fault.kind != RECEIPT_FAULT_CERTIFICATION:
             state["_receiptFinalized"] = True
     state["_receiptFault"] = fault or None
+    state["_receiptFaultClass"] = fault.kind if fault else None
     save_state(session_dir, state)
     return fault
 
@@ -5890,12 +8911,7 @@ def _vendor_is_external_engine(vendor):
     """True when ``vendor`` is a registered non-claude engine (codex/cursor today).
 
     Unknown vendors fail closed to host transport — they cannot land on the engine stdout branch."""
-    if not isinstance(vendor, str) or not vendor.strip():
-        return False
-    v = vendor.strip()
-    if v == "claude":
-        return False
-    return v in model_registry.vendors()
+    return session_contract.runner_channel_vendor(vendor)
 
 
 def _seat_is_engine(row):
@@ -5903,8 +8919,8 @@ def _seat_is_engine(row):
     return _vendor_is_external_engine(row.get("vendor"))
 
 
-CHANNEL_FILE = "file"
-CHANNEL_STDOUT = "stdout"
+CHANNEL_FILE = session_contract.CHANNEL_FILE
+CHANNEL_STDOUT = session_contract.CHANNEL_STDOUT
 
 # Phases whose seats an orchestrator dispatches through `dispatch-review` — a READ-ONLY sandbox on
 # an external engine. `dispatch-fixer` is deliberately absent: it is a foreground in-place writer,
@@ -6240,10 +9256,13 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "VERIFICATION_ROOT",
     "CWD",
     "REPO_ROOT",
-    "VERIFY_COMMAND",
+    "VERIFY_BUDGET",
     "ROUND",
     "TARGET_ID",
     "GATE_GUIDANCE",
+    "FIX_BATCH_SHA256",
+    "FIXER_STEP_5_BLOCK",
+    "FIXER_ESCALATION_BLOCK",
 })
 
 
@@ -6356,6 +9375,75 @@ def _ensure_round_head_diff(session_dir, rnd, state):
     return _ensure_bytes_at_path(session_dir, head_path, head_text.encode("utf-8"))
 
 
+FIX_BATCH_HISTORY_FIELDS = ("priorAudit", "gateRuling")
+
+
+def _fixer_verify_budget(batch, cfg):
+    """Scoped verify prose for one fix-batch slice — never the project's full verify command."""
+    files = sorted({row.get("file") for row in (batch or [])
+                    if isinstance(row, dict) and isinstance(row.get("file"), str)})
+    files_str = ", ".join(files) if files else "(none named)"
+    full = cfg.get("verifyCommand") or "none"
+    return ("Scoped verify budget for this batch — target files: %s. "
+            "Run the tests that reference those files (select by reading the test files' own text "
+            "for the target path, never by test-file name) plus the project's static validators, "
+            "at most once each. The project's full verify command is NOT yours to run inside this "
+            "attempt — the orchestrator runs it once after the round's fixes land: %s"
+            % (files_str, full))
+
+
+def _materialized_fix_batch_rows(state):
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list):
+        batch = state.get("fixBatch")
+    if not isinstance(batch, list):
+        raise ValueError("order-render-refused:fix-batch-unavailable")
+    history = _finding_history(state)
+    materialized = []
+    for row in batch:
+        if not isinstance(row, dict):
+            materialized.append(row)
+            continue
+        row_copy = dict(row)
+        for field in FIX_BATCH_HISTORY_FIELDS:
+            row_copy.pop(field, None)
+        key = _fix_batch_row_key(row_copy)
+        if key and key in history:
+            slot = history[key]
+            if isinstance(slot, dict):
+                prior = slot.get("priorAudit")
+                if isinstance(prior, dict):
+                    row_prior = {"round": prior.get("round"), "ruling": prior.get("ruling")}
+                    if prior.get("reason") is not None:
+                        row_prior["reason"] = prior.get("reason")
+                    row_copy["priorAudit"] = row_prior
+                gate_ruling = slot.get("gateRuling")
+                if isinstance(gate_ruling, dict):
+                    row_gate = {"round": gate_ruling.get("round"),
+                                "disposition": gate_ruling.get("disposition")}
+                    if gate_ruling.get("reason") is not None:
+                        row_gate["reason"] = gate_ruling.get("reason")
+                    row_copy["gateRuling"] = row_gate
+        materialized.append(row_copy)
+    return materialized
+
+
+def _fix_batch_path_for_round(session_dir, rnd, state):
+    rdir = round_records.round_dir(session_dir, rnd)
+    batch_index = state.get("_fixBatchIndex") or 0
+    if batch_index >= 1:
+        return os.path.join(rdir, "fix-batch.%d.json" % batch_index)
+    return os.path.join(rdir, "fix-batch.json")
+
+
+def _fix_batch_canonical_bytes(state):
+    return round_records.canonical(_materialized_fix_batch_rows(state)).encode("utf-8")
+
+
+def _fix_batch_sha256_from_state(state):
+    return round_records.sha256_text(_fix_batch_canonical_bytes(state).decode("utf-8"))
+
+
 def _ensure_fix_batch_file(session_dir, rnd, state):
     """Materialize fix-batch.json from state for fixer orders.
 
@@ -6363,14 +9451,8 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
     (absent, ``None``, or wrong type) refuses before any path computation or write. A known
     batch — including a known-empty list — still materializes.
     """
-    batch = state.get("_fixBatch")
-    if not isinstance(batch, list):
-        batch = state.get("fixBatch")
-    if not isinstance(batch, list):
-        raise ValueError("order-render-refused:fix-batch-unavailable")
-    rdir = round_records.round_dir(session_dir, rnd)
-    path = os.path.join(rdir, "fix-batch.json")
-    return _ensure_bytes_at_path(session_dir, path, round_records.canonical(batch).encode("utf-8"))
+    path = _fix_batch_path_for_round(session_dir, rnd, state)
+    return _ensure_bytes_at_path(session_dir, path, _fix_batch_canonical_bytes(state))
 
 
 # Round-relative paths the driver materializes for order templates — production reads this registry.
@@ -6466,7 +9548,8 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
 
 
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
-                        session_dir, rnd, paths, channel, roster=None):
+                        session_dir, rnd, paths, channel, roster=None,
+                        materialize_shared_inputs=True):
     """Phase-specific placeholder dict for `round_orders.render_order`.
 
     Raises `ValueError("order-render-refused:...")` when a slot cannot be filled truthfully
@@ -6593,7 +9676,10 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CHANNEL": channel,
         }
     elif phase == P_FIXER:
-        fix_batch_path = ROUND_MATERIALIZER_REGISTRY["fix_batch"](session_dir, rnd, state)
+        if materialize_shared_inputs:
+            fix_batch_path = ROUND_MATERIALIZER_REGISTRY["fix_batch"](session_dir, rnd, state)
+        else:
+            fix_batch_path = _fix_batch_path_for_round(session_dir, rnd, state)
         # Match _ensure_fix_batch_file: _fixBatch wins over fixBatch so guidance and sidecar agree.
         fix_batch = state.get("_fixBatch")
         if not isinstance(fix_batch, list):
@@ -6618,13 +9704,18 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
                     unaccounted.append({"index": idx, "title": row_title})
             if unaccounted:
                 _record_round(state, _GATE_GUIDANCE_ROW_CARRIED_CHANNEL, unaccounted)
+        if materialize_shared_inputs:
+            batch_sha = _fix_batch_file_sha256(session_dir, rnd, state)
+        else:
+            batch_sha = _fix_batch_sha256_from_state(state)
         ph = {
             "FIX_BATCH_PATH": fix_batch_path,
+            "FIX_BATCH_SHA256": batch_sha,
             "PROFILE_PATH": _profile_path_for_orders(repo_root),
             "RUBRIC_PATH": rubric_path,
             "CWD": repo_root,
             "REPO_ROOT": _shell_quote_path(repo_root),
-            "VERIFY_COMMAND": cfg.get("verifyCommand") or "none",
+            "VERIFY_BUDGET": _fixer_verify_budget(fix_batch, cfg),
             "ROUND": str(rnd),
             "GATE_GUIDANCE": _gate_guidance_block(guidance_entries),
         }
@@ -6632,7 +9723,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
-                                pending_payload, row, roster=None):
+                                pending_payload, row, roster=None, materialize_shared_inputs=True):
     """Render the order context for one seat/occurrence, using the CALLER's resolved transport row.
 
     `row` is required — never re-resolved here. `_seat_transport_row` is not pure for the
@@ -6671,18 +9762,23 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "landing_path": paths["landing_path"],
         "envelope_stub_path": paths["envelope_stub_path"],
         "ratified_residuals": residuals,
+        # Quoted data for the order lint (see `_order_lint_text`): the owner's own verify command,
+        # read from the session config — the one source now that the fixer template quotes it
+        # inside the scoped verify budget rather than through a placeholder of its own.
+        "verify_command": cfg.get("verifyCommand"),
         "residuals_provenance": prov,
         "residuals_read_failure": res_failure,
         "payload": pending_payload if isinstance(pending_payload, dict) else {},
         "host_seat": host_seat,
         "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
                                               cfg, pending_payload,
-                                              session_dir, rnd, paths, channel, roster=roster),
+                                              session_dir, rnd, paths, channel, roster=roster,
+                                              materialize_shared_inputs=materialize_shared_inputs),
     }, paths
 
 
 def _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence, row,
-                          manifest_sha, order_sha, state):
+                          manifest_sha, order_sha, state, head_sha=None):
     """Seat-result header fields knowable at emission — NOT `recordedAt` / `payloadSha256`."""
     schema = _seat_result_schema(state)
     if schema is None:
@@ -6704,6 +9800,8 @@ def _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence
         header["occurrence"] = occurrence
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
         header["provenance"] = round_records.PROVENANCE_DISPATCH_OBSERVED
+        if head_sha:
+            header["headSha"] = head_sha
     return header
 
 
@@ -6759,8 +9857,16 @@ def _orders_anchor_from_journal(session_dir, rnd, phase, attempt):
             raw = manifest.get("seats")
             if isinstance(raw, dict):
                 orders = {seat: round_records.NOT_EMITTED for seat in raw}
-        return {"manifestSha256": manifest_sha, "orders": orders, "path": path}
+        anchor = {"manifestSha256": manifest_sha, "orders": orders, "path": path}
+        head_sha = manifest.get("headSha")
+        if isinstance(head_sha, str) and head_sha:
+            anchor["headSha"] = head_sha
+        return anchor
     return None
+
+
+def _anchor_cited_head(state, session_dir, rnd, phase, attempt):
+    return (_orders_anchor(state, session_dir, rnd, phase, attempt) or {}).get("headSha")
 
 
 def _seat_dispatch_row(state, seat_key, seat_map=None):
@@ -6777,7 +9883,7 @@ def _seat_dispatch_row(state, seat_key, seat_map=None):
 
 
 def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance",
-                          pending_payload=None, seat_map=None):
+                          pending_payload=None, seat_map=None, extra_journal_entries=()):
     """Emit per-slot order prompts, envelope stubs, and the orders manifest for a dispatch phase.
 
     Every roster SLOT is rendered, hashed, and written inside the single `orders-emit` commit
@@ -6786,6 +9892,34 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     that refuses."""
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
+    if phase == P_AUDITS and state.get("_advanceUsed"):
+        targets = pending_payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        cfg = state.get("config") or {}
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            if not session_contract.runner_channel_vendor(target.get("auditorVendor")):
+                host_independent, _fam = receipt_disclosures.independent_auditor(
+                    cfg, cfg.get("fixerVendor"), runner_only=False)
+                if host_independent is not None:
+                    detail = (
+                        "The durable-record path requires a fix auditor dispatched through the "
+                        "runner (codex or cursor). The independent-family auditor vendor "
+                        "%s is live but cannot prove it ran on the durable-record path, so the "
+                        "fix cannot be audited independently. Start a fresh session whose "
+                        "--vendors names a second runner vendor (codex or cursor) of a different "
+                        "family from the fixer, or use hand next/submit for the whole session."
+                        % host_independent)
+                else:
+                    detail = (
+                        "The durable-record path requires a fix auditor dispatched through the "
+                        "runner (codex or cursor), but none is among this session's vendors. "
+                        "Start a fresh session seeded with --vendors naming a runner vendor "
+                        "(for example codex or cursor), or use hand next/submit for the whole "
+                        "session.")
+                raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
     seats = {}
     order_hashes = {}
@@ -6841,7 +9975,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         if phase == P_FIXER:
             lint_text = _order_lint_text(order_text, context)
             lint = order_lint.check_text(
-                lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer")
+                lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer",
+                allow_payload_contract=context.get("host_seat") is True)
             if not lint.get("ok"):
                 first = (lint.get("findings") or [{}])[0]
                 token = first.get("token") or "unknown"
@@ -6857,6 +9992,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             "vendor": row["vendor"],
             "model": row["model"],
             "engine": row["engine"],
+            "channel": _seat_channel(phase, row),
             "resultContract": _seat_result_schema(state),
             "orderSha256": order_sha,
             "orderPath": paths["order_path"],
@@ -6868,12 +10004,17 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     if vendor_gaps:
         _disclose_order_vendor_provenance_gaps(state, vendor_gaps)
 
+    certified_head = _session_certified_head(session_dir, state)
     manifest = {"schema": ORDERS_MANIFEST_SCHEMA, "session": _meta_session_id(session_dir),
                 "round": rnd, "phase": phase, "attempt": attempt,
                 "orders": round_records.NOT_EMITTED, "seats": seats}
+    if certified_head:
+        manifest["headSha"] = certified_head
     path = _orders_manifest_path(session_dir, rnd, phase, attempt)
     manifest_sha = round_records.sha256_text(round_records.canonical(manifest))
     anchor = {"manifestSha256": manifest_sha, "orders": dict(order_hashes), "path": path}
+    if certified_head:
+        anchor["headSha"] = certified_head
     anchors = state.get("_ordersAnchors")
     if not isinstance(anchors, dict):
         anchors = {}
@@ -6894,9 +10035,13 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             c.add_replace_file(order_path, order_bytes)
             # Projection of the anchor, never the authority — ingestion validates the mirrored hash.
             stub = _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence,
-                                         row, manifest_sha, order_sha, state)
+                                         row, manifest_sha, order_sha, state,
+                                         head_sha=certified_head)
             c.add_replace_file(stub_path, round_records.canonical(stub).encode("utf-8"))
-        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        journal_path = os.path.join(session_dir, JOURNAL_FILE)
+        for extra_entry in extra_journal_entries:
+            c.add_journal_append(journal_path, extra_entry)
+        c.add_journal_append(journal_path, journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
         raise exc
@@ -6992,49 +10137,10 @@ def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
 
 
 def _journal_execution_evidence_fields(evidence):
-    """Mandatory execution-evidence members plus each optional field when present — shared by
-    ``_journal_revision_fields`` and ``_assemble_dispatch_evidence`` so the two copies cannot drift."""
-    if not isinstance(evidence, dict):
-        return None
-    if not all(field in evidence for field in round_records.EXECUTION_EVIDENCE_FIELDS):
-        return None
-    out = {field: evidence[field] for field in round_records.EXECUTION_EVIDENCE_FIELDS}
-    for field in round_records.EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
-        val = evidence.get(field)
-        if isinstance(val, str) and val:
-            out[field] = val
-    return out
-
-
-def _journal_revision_fields(envelope):
-    """The revision identity a `recorded` row carries: the payload hash (kept, never removed —
-    FR-D5) and the ENVELOPE's own CAS token, which is what `reconcile` compares. Every site that
-    journals a stored envelope's revision splats this; a site that journals a revision without it
-    is the defect this helper exists to make impossible. Takes an ENVELOPE — a reconcile entry is
-    not an envelope and must not be passed here."""
-    if not isinstance(envelope, dict):
-        return {"payloadSha256": None, "casToken": None, "executionEvidence": None}
-    execution_evidence = _journal_execution_evidence_fields(envelope.get("executionEvidence"))
-    return {"payloadSha256": envelope.get("payloadSha256"),
-            "casToken": round_records.envelope_cas_token(envelope),
-            "executionEvidence": execution_evidence}
-
-
-def _journal_stored_revision(envelope):
-    """Complete revision identity a `recorded` row carries for a stored envelope — the revision
-    triple plus the certification-facing provenance and evidence markers. Every site that
-    journals a stored envelope splats this; reconcile entries are not envelopes."""
-    fields = _journal_revision_fields(envelope)
-    if isinstance(envelope, dict):
-        fields["provenance"] = envelope.get("provenance")
-        fields["envelopeSha256"] = envelope.get("envelopeSha256")
-        fields["executionEvidencePresent"] = "executionEvidence" in envelope
-    else:
-        fields["provenance"] = None
-        fields["envelopeSha256"] = None
-        fields["executionEvidencePresent"] = False
-    fields.update(_journal_transport_fields(envelope))
-    return fields
+    """Mandatory execution-evidence members plus each optional field when present. One home:
+    ``round_records.execution_evidence_fields``, shared with ``recorded_row_fields`` and
+    ``_assemble_dispatch_evidence`` so the copies cannot drift."""
+    return round_records.execution_evidence_fields(evidence)
 
 
 def _journal_record_identities(session_dir, rnd, phase):
@@ -7144,7 +10250,7 @@ def _read_head_diff(path):
 
 
 def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurrence=0,
-                     journal_entry=None):
+                     journal_entry=None, cited_head=None):
     """Copy the fixer's head diff into the STORE beside its envelope and stamp the immutable copy's
     path into the stored payload.
 
@@ -7159,12 +10265,15 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
         return diff_path, None
     diff_path, diff_bytes, final, payload_sha = _envelope_with_head_diff(
         session_dir, envelope, content, rnd, phase, seat_key, attempt, occurrence)
+    final = round_records.envelope_bind_cited_head_source(
+        final, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
     try:
         c = round_commit.begin(session_dir, "head-diff-bind")
         c.add_replace_file(diff_path, diff_bytes)
         c.add_replace_file(spath, round_records.canonical(final).encode("utf-8"))
         if journal_entry is not None:
-            journal_entry.update(_journal_revision_fields(final))
+            journal_entry.update(round_records.recorded_row_fields(
+                final, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR))
             c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
@@ -7188,7 +10297,7 @@ def _fixer_head_diff_needs_repair(stored):
 
 
 def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurrence, cmd=None,
-                            expect_round=None, expect_phase=None):
+                            expect_round=None, expect_phase=None, cited_head=None):
     """Repair a fixer store record whose head-diff blob was not yet bound.
 
     Returns (payload_sha, detail) where detail is None, a refusal token string, or a
@@ -7216,7 +10325,8 @@ def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurren
             **_journal_identity_fields(phase, seat_key, occurrence, attempt))
     try:
         _path, payload_sha = _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content,
-                                              occurrence, journal_entry=journal_entry)
+                                              occurrence, journal_entry=journal_entry,
+                                              cited_head=cited_head)
     except round_commit.CommitRefused as exc:
         return None, exc
     return payload_sha, None
@@ -7297,44 +10407,127 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
         return _lock_held_refusal(session_dir, "record-result", held)
 
 
-def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir):
-    """Bind runner telemetry to the driver's order hash. Returns (envelope, refusal_reason, extra)."""
+def _runner_shaped_result(phase, result_kind, envelope_payload):
+    """The runner-shaped result whose payload the seat landed — derived from the seat-payload
+    contract's declared type for the kind (payload_contracts), so the digest subject comes from
+    engine_adapter's own semantics."""
+    contract, _ = payload_contracts.payload_contract(phase)
+    types = contract.get("types") or {}
+    declared = types.get(result_kind)
+    # List kinds wrap under the kind key; scalar kinds land the record itself
+    # (payload_contracts.is_list_type).
+    if payload_contracts.is_list_type(declared):
+        return {"ok": True, "resultKind": result_kind, **envelope_payload}
+    return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
+
+
+def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_cited_head,
+                                phase):
+    """Bind runner telemetry to the driver's order hash.
+
+    Returns (envelope, refusal_reason, extra, cited_head_source)."""
     if not evidence_run_dir:
-        return None, None, {}
+        return None, None, {}, None
     import engine_dispatch
     record, err = engine_dispatch.run_execution_record(evidence_run_dir)
     if err is not None:
-        return None, "evidence-run-dir-unreadable", {"detail": err}
+        return None, "evidence-run-dir-unreadable", {"detail": err}, None
     prompt_sha = record.get("orderPromptSha256")
     order_sha = envelope.get("orderSha256")
     # Absent order-prompt hash cannot prove the binding — refuse rather than compare promptSha256.
     if not isinstance(prompt_sha, str) or not prompt_sha or prompt_sha != order_sha:
         return None, "evidence-order-mismatch", {"orderPromptSha256": prompt_sha,
-                                                 "orderSha256": order_sha}
+                                                 "orderSha256": order_sha}, None
     result_digest = record.get("resultDigest")
     result_kind = record.get("resultKind")
     if (not isinstance(result_digest, str) or not result_digest
             or not isinstance(result_kind, str) or not result_kind):
-        return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}
+        return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}, None
+    run_kind = record.get("runKind")
+    if run_kind == engine_dispatch.RUN_KIND_WRITE:
+        if not session_contract.execution_only_admissible_for_phase(phase):
+            return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
+    elif run_kind == engine_dispatch.RUN_KIND_REVIEW:
+        if phase == P_FIXER:
+            return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
     envelope_payload = envelope.get("payload")
-    if result_kind == session_contract.WRITE_RESULT_KIND:
+    payload_adopted = False
+    if (result_kind in session_contract.RECORD_RESULT_KINDS
+            and envelope_payload is None):
+        result_content = record.get("resultContent")
+        if isinstance(result_content, dict):
+            envelope_payload = dict(result_content)
+            payload_adopted = True
+    if session_contract.evidence_binding(result_kind) == session_contract.EXECUTION_ONLY_BINDING:
+        # axis: write-run stamp proves the run happened under this order — no transported payload
+        # is bound; never read it as payload proof
         pass
     else:
-        if not isinstance(envelope_payload, dict) or result_kind not in envelope_payload:
+        if not isinstance(envelope_payload, dict):
+            mismatch_extra = {"resultDigest": result_digest, "resultKind": result_kind}
+            result_content = record.get("resultContent")
+            if isinstance(result_content, dict):
+                mismatch_extra["expectedPayloadSha256"] = round_records.payload_sha256(
+                    result_content)
+            return None, "evidence-result-mismatch", mismatch_extra, None
+        shaped = _runner_shaped_result(envelope.get("phase"), result_kind, envelope_payload)
+        carried, adapter_subject = engine_adapter.review_payload_carried(shaped, result_kind)
+        digest_carried, digest_subject = session_contract.evidence_digest_subject(
+            envelope_payload, result_kind)
+        # Leaf rule (session_contract.evidence_digest_subject) is the writer's rule; drift test
+        # pins it equal to review_payload_carried on the runner-shaped result.
+        if not carried or not digest_carried:
             return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "resultKind": result_kind}
-        payload_digest = round_records.payload_sha256(envelope_payload[result_kind])
+                                                       "resultKind": result_kind}, None
+        if round_records.payload_sha256(adapter_subject) != round_records.payload_sha256(
+                digest_subject):
+            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
+                                                       "resultKind": result_kind,
+                                                       "subjectDisagreement": True}, None
+        payload_digest = round_records.payload_sha256(digest_subject)
         if result_digest != payload_digest:
-            return None, "evidence-result-mismatch", {"resultDigest": result_digest,
-                                                       "payloadSha256": payload_digest,
-                                                       "resultKind": result_kind}
+            mismatch_extra = {"resultDigest": result_digest,
+                              "payloadSha256": payload_digest,
+                              "resultKind": result_kind}
+            result_content = record.get("resultContent")
+            if isinstance(result_content, dict):
+                mismatch_extra["expectedPayloadSha256"] = round_records.payload_sha256(
+                    result_content)
+            return None, "evidence-result-mismatch", mismatch_extra, None
+    cited_head_source = None
+    view_head = None
+    if run_kind == engine_dispatch.RUN_KIND_WRITE:
+        cited_head_source = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
+    elif run_kind == engine_dispatch.RUN_KIND_REVIEW:
+        view_head = record.get("viewHeadSha")
+        if not isinstance(view_head, str) or not view_head:
+            return None, "view-head-underivable", {"runKind": run_kind}, None
+        if not isinstance(anchor_cited_head, str) or not anchor_cited_head:
+            return None, "view-head-underivable", {"runKind": run_kind,
+                                                    "anchorCitedHead": anchor_cited_head}, None
+        if view_head != anchor_cited_head:
+            return None, "view-head-anchor-mismatch", {"viewHeadSha": view_head,
+                                                        "anchorCitedHead": anchor_cited_head}, None
+        cited_head_source = round_records.CITED_HEAD_SOURCE_RUNNER_VIEW
+    else:
+        return None, "view-head-underivable", {"runKind": run_kind}, None
     evidence = _journal_execution_evidence_fields(record)
     if evidence is None:
-        return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}
+        return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}, None
     out = dict(envelope)
+    if payload_adopted:
+        out["payload"] = envelope_payload
+        out["payloadSha256"] = round_records.payload_sha256(envelope_payload)
+    if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
+        env_head = envelope.get("headSha")
+        if env_head is None:
+            out["headSha"] = view_head
+        elif env_head != view_head:
+            return None, "head-anchor-mismatch", {"envelopeHeadSha": env_head,
+                                                   "viewHeadSha": view_head}, None
     out["executionEvidence"] = evidence
     out["envelopeSha256"] = round_records.envelope_sha256(out.get("payload"), evidence)
-    return out, None, {}
+    return out, None, {}, cited_head_source
 
 
 def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=False,
@@ -7449,6 +10642,8 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     # Validate BEFORE storing: a refusal must leave nothing behind.
     landing_replace_path = None
     assembled = None
+    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
+    cited_head_source = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
     if isinstance(seat, str) and seat in roster:
         envelope, _lerr, landing_replace_path = _read_landing_envelope(
             session_dir, rnd, phase, seat, cur_attempt, occurrence)
@@ -7457,13 +10652,16 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                                attempt=cur_attempt, seat=_slot_label(seat, occurrence))
         if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
                 and envelope.get("provenance") == round_records.PROVENANCE_DISPATCH_OBSERVED):
-            assembled, ev_reason, ev_extra = _assemble_dispatch_evidence(
-                session_dir, envelope, evidence_run_dir)
+            assembled, ev_reason, ev_extra, assembly_source = _assemble_dispatch_evidence(
+                session_dir, envelope, evidence_run_dir, cited_head, phase)
+            if assembly_source is not None:
+                cited_head_source = assembly_source
             if ev_reason is not None:
                 return _refuse_cmd(session_dir, "record-result", ev_reason, phase=phase,
                                    rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                                    **ev_extra)
-        fault = _preflight_payload_fault(phase, envelope, seat)
+        preflight_envelope = assembled if assembled is not None else envelope
+        fault = _preflight_payload_fault(phase, preflight_envelope, seat)
         if fault:
             return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
                                rnd=rnd, attempt=cur_attempt, seat=seat, detail=fault)
@@ -7478,25 +10676,41 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                                        attempt=cur_attempt, seat=seat, headDiffPath=head_path)
     else:
         head_content = None
+    relocation_fenced = False
+    if isinstance(phase, str) and phase.startswith("dispatch-"):
+        relocation = _relocation_lookup(session_dir, rnd, phase, cur_attempt)
+        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+            return _refuse_relocation_evidence_indeterminate(
+                session_dir, "record-result", phase=phase, rnd=rnd, attempt=cur_attempt,
+                seat=_slot_label(seat, occurrence))
+        relocation_fenced = relocation is not None
     plan, landing_refusal = round_records.validate_landing(
         session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
         supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence,
         seat_result_schema=seat_schema,
-        envelope_override=assembled)
+        envelope_override=assembled,
+        evidence_minted=assembled is not None,
+        fenced=relocation_fenced)
     if landing_refusal is not None:
         return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail=landing_refusal.get("message") or landing_refusal.get("storePath"))
-    envelope = plan["envelope"]
+    envelope = round_records.envelope_bind_cited_head_source(plan["envelope"], cited_head_source)
     payload_sha = plan["payloadSha256"]
     head_store_path = None
     head_diff_bytes = None
     if head_content is not None:
         head_store_path, head_diff_bytes, envelope, payload_sha = _envelope_with_head_diff(
             session_dir, envelope, head_content, rnd, phase, seat, cur_attempt, occurrence)
+        envelope = round_records.envelope_bind_cited_head_source(envelope, cited_head_source)
+    row_cited_head = cited_head
+    if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
+        row_cited_head = assembled["headSha"]
     journal_entry = _journal_entry_for_commit(
         session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
-        seat=seat, occurrence=occurrence, **_journal_stored_revision(envelope),
+        seat=seat, occurrence=occurrence,
+        **round_records.recorded_row_fields(envelope, row_cited_head, cited_head_source),
+        **_journal_transport_fields(envelope),
         superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
@@ -7505,8 +10719,9 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         # Stamp the landing file only when read from the full-envelope slot — bare-payload slots
         # stay single-file; the stamped envelope is written to the store copy alone.
         if landing_replace_path is not None and assembled is not None:
+            stamped = round_records.envelope_bind_cited_head_source(assembled, cited_head_source)
             c.add_replace_file(landing_replace_path,
-                                round_records.canonical(assembled).encode("utf-8"))
+                                round_records.canonical(stamped).encode("utf-8"))
         c.add_replace_file(plan["storePath"], round_records.canonical(envelope).encode("utf-8"))
         if head_store_path is not None:
             c.add_replace_file(head_store_path, head_diff_bytes)
@@ -7543,10 +10758,12 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         stored, _lerr = round_records.read_json(spath)
         if not _fixer_head_diff_needs_repair(stored):
             continue
+        cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
         rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt,
                                                    occurrence, cmd=cmd,
                                                    expect_round=expect_round,
-                                                   expect_phase=expect_phase)
+                                                   expect_phase=expect_phase,
+                                                   cited_head=cited_head)
         if detail == "head-diff-unreadable":
             payload = stored.get("payload") if isinstance(stored, dict) else {}
             return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd, attempt=attempt,
@@ -7554,6 +10771,14 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         if isinstance(detail, round_commit.CommitRefused):
             return _commit_refused_response(session_dir, cmd, detail, phase=phase, rnd=rnd,
                                           attempt=attempt, seat=seat_key)
+    fenced = False
+    if isinstance(phase, str) and phase.startswith("dispatch-"):
+        # axis: a sweep or advance that would ingest a landing for an attempt emitted before the move is refused; one with nothing to ingest is not
+        relocation_fence = _relocation_lookup(session_dir, rnd, phase, attempt)
+        if relocation_fence is _RELOCATION_EVIDENCE_INDETERMINATE:
+            return _refuse_relocation_evidence_indeterminate(
+                session_dir, cmd, phase=phase, rnd=rnd, attempt=attempt)
+        fenced = relocation_fence is not None
     for seat_key, occurrence in round_records.roster_slots(roster):
         try:
             skey = round_records.storage_key(seat_key, occurrence)
@@ -7581,7 +10806,8 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                            attempt=attempt)
     results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
                                           roster=roster, anchor=anchor,
-                                          seat_result_schema=seat_schema)
+                                          seat_result_schema=seat_schema,
+                                          fenced=fenced)
     recorded = []
     stale_strays = []
     for result in results:
@@ -7600,10 +10826,12 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                 if _fixer_head_diff_needs_repair(stored):
                     seat = result.get("seatKey")
                     occurrence = result.get("occurrence") or 0
+                    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
                     rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat,
                                                                attempt, occurrence, cmd=cmd,
                                                                expect_round=expect_round,
-                                                               expect_phase=expect_phase)
+                                                               expect_phase=expect_phase,
+                                                               cited_head=cited_head)
                     if detail == "head-diff-unreadable":
                         payload = stored.get("payload") if isinstance(stored, dict) else {}
                         return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd,
@@ -7634,10 +10862,12 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                     **_journal_transport_fields(stored),
                     **_journal_addressing_fields(expect_round, expect_phase),
                     **_journal_identity_fields(phase, seat, occurrence, attempt))
+                cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
                 try:
                     _unused, rehashed = _store_head_diff(session_dir, rnd, phase, seat, attempt,
                                                          content, occurrence,
-                                                         journal_entry=journal_entry)
+                                                         journal_entry=journal_entry,
+                                                         cited_head=cited_head)
                 except round_commit.CommitRefused as exc:
                     return _commit_refused_response(session_dir, cmd, exc, phase=phase, rnd=rnd,
                                                   attempt=attempt, seat=seat)
@@ -7647,10 +10877,21 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             skey = round_records.storage_key(seat, occurrence)
             spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
             stored_envelope, read_err = round_records.read_json(spath)
-            if read_err is None and isinstance(stored_envelope, dict):
-                revision_fields = _journal_stored_revision(stored_envelope)
-            else:
-                revision_fields = {"payloadSha256": payload_sha}
+            if read_err is not None or not isinstance(stored_envelope, dict):
+                return _refuse_cmd(session_dir, cmd, "recorded-row-store-unreadable",
+                                   fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                                   seat=seat, storePath=spath)
+            cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
+            try:
+                cited_head_source = round_records.stored_cited_head_source(stored_envelope)
+            except round_records.IncompleteRevisionIdentity as exc:
+                return _refuse_cmd(session_dir, cmd, "recorded-row-incomplete",
+                                   fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                                   seat=seat, storePath=spath,
+                                   detail=", ".join(exc.missing))
+            revision_fields = round_records.recorded_row_fields(
+                stored_envelope, cited_head, cited_head_source)
+            revision_fields.update(_journal_transport_fields(stored_envelope))
             _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
                            seat=seat, occurrence=occurrence, **revision_fields,
                            **_journal_addressing_fields(expect_round, expect_phase),
@@ -7762,6 +11003,8 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
         "evidence": evidence,
         "occurrence": occurrence,
     }
+    envelope = round_records.envelope_bind_cited_head_source(
+        envelope, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
     try:
         lpath = round_records.landing_path(
             session_dir, rnd, phase, round_records.storage_key(seat, occurrence), cur_attempt)
@@ -7772,13 +11015,23 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
     round_records.atomic_write_json(lpath, envelope)
     out = round_records.ingest_landing(session_dir, rnd, phase, seat, cur_attempt,
                                        current_attempt=cur_attempt, roster=roster, anchor=anchor,
-                                       occurrence=occurrence, seat_result_schema=seat_schema)
+                                       occurrence=occurrence, seat_result_schema=seat_schema,
+                                       cited_head_source=round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
     if not out.get("ok"):
         return _refuse_cmd(session_dir, "record-missing", out.get("reason"), phase=phase, rnd=rnd,
                            attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail=out.get("message") or out.get("storePath"))
+    store_path = out.get("storePath")
+    stored_envelope, read_err = round_records.read_json(store_path)
+    if read_err is not None or not isinstance(stored_envelope, dict):
+        return _refuse_cmd(session_dir, "record-missing", "recorded-row-store-unreadable",
+                           fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=cur_attempt,
+                           seat=_slot_label(seat, occurrence), storePath=store_path)
+    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
     _journal_event(session_dir, "record-missing", "recorded", phase=phase, round=rnd,
                    attempt=cur_attempt, seat=seat, occurrence=occurrence, reason=reason,
+                   **round_records.recorded_row_fields(
+                       stored_envelope, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR),
                    **_journal_addressing_fields(expect_round, expect_phase),
                    **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
@@ -7888,6 +11141,9 @@ def _judgment_artifact_from_resolution(state, resolution):
         entry = {"id": row_ids[row_index], "disposition": disposition}
         if disposition == review_gate_policy.JUDGMENT_SKIP_DISPOSITION:
             entry["reason"] = _GATE_POLICY_SKIP_REASON
+            follow_up = rule.get("followUp")
+            if follow_up is not None:
+                entry["followUp"] = dict(follow_up)
         dispositions.append(entry)
     return {"dispositions": dispositions}
 
@@ -8189,6 +11445,9 @@ def _dispatch_manifest_disclosure(mpath, merr):
     disclosed degradation by design). A definite ``ENOENT`` / ``ENOTDIR`` is ``absent``; every other
     read failure on a path that exists (or cannot be ruled absent) is ``unreadable``.
 
+    At state v5 the manifest is ignored when every landed envelope is ``seat-result/2``
+    (`dispatchManifestIgnored`); provenance is the runner record on each stored envelope.
+
     Manifest-less runs are a disclosed degradation by design — this never refuses `advance`, only
     surfaces the expected path so an operator is not left guessing after a stall."""
     if merr is None:
@@ -8264,7 +11523,8 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
         envelope["provenance"] = round_records.PROVENANCE_ORCHESTRATOR_FULFILLED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, None)
-    return envelope
+    return round_records.envelope_bind_cited_head_source(
+        envelope, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
 
 
 def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt, config,
@@ -8359,13 +11619,17 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
                                   "seat record that could not carry its session provenance")
     envelope = _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt,
                                                 seat_key, occurrence, payload, session_id)
+    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
     record = {
         "storePath": record_path,
         "envelope": envelope,
         "journal": _journal_entry_for_commit(
             session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
             seat=seat_key, occurrence=occurrence,
-            **_journal_stored_revision(envelope), superseded=False,
+            **round_records.recorded_row_fields(
+                envelope, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR),
+            superseded=False,
+            **_journal_transport_fields(envelope),
             **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
     }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
@@ -8451,6 +11715,11 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal
+    if isinstance(phase, str) and phase.startswith("dispatch-"):
+        relocation = _relocation_lookup(session_dir, rnd, phase, attempt)
+        if relocation is _RELOCATION_EVIDENCE_INDETERMINATE:
+            return _refuse_relocation_evidence_indeterminate(
+                session_dir, "advance", phase=phase, rnd=rnd, attempt=attempt)
     anchor = _orders_anchor(state, session_dir, rnd, phase, attempt)
 
     # 1. reconcile the two-commit window. THE STORE FILE IS AUTHORITATIVE.
@@ -8475,19 +11744,33 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_
         ident = entry.get("recordIdentity")
         if not isinstance(ident, dict) and slot is not None:
             ident = round_records.record_identity(phase, slot[0], slot[1], entry.get("attempt"))
-        revision_fields = {"payloadSha256": entry.get("payloadSha256"),
-                           "casToken": entry.get("casToken")}
-        if slot is not None:
-            seat_key, occurrence = slot
-            entry_attempt = entry.get("attempt")
-            if entry_attempt is not None:
-                skey = round_records.storage_key(seat_key, occurrence)
-                spath = round_records.store_path(session_dir, rnd, phase, skey, entry_attempt)
-                stored_envelope, read_err = round_records.read_json(spath)
-                if read_err is None and isinstance(stored_envelope, dict):
-                    revision_fields = _journal_stored_revision(stored_envelope)
+        storage_key = entry.get("storageKey")
+        entry_attempt = entry.get("attempt")
+        if storage_key is None or entry_attempt is None:
+            return _refuse_cmd(session_dir, "advance", "recorded-row-store-unreadable",
+                               fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                               detail="reappend entry missing storageKey or attempt")
+        spath = round_records.store_path(session_dir, rnd, phase, storage_key, entry_attempt)
+        stored_envelope, read_err = round_records.read_json(spath)
+        if read_err is not None or not isinstance(stored_envelope, dict):
+            seat_key = slot[0] if slot is not None else None
+            return _refuse_cmd(session_dir, "advance", "recorded-row-store-unreadable",
+                               fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                               seat=seat_key, storePath=spath)
+        cited_head = _anchor_cited_head(state, session_dir, rnd, phase, entry_attempt)
+        try:
+            cited_head_source = round_records.stored_cited_head_source(stored_envelope)
+        except round_records.IncompleteRevisionIdentity as exc:
+            seat_key = slot[0] if slot is not None else None
+            return _refuse_cmd(session_dir, "advance", "recorded-row-incomplete",
+                               fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                               seat=seat_key, storePath=spath,
+                               detail=", ".join(exc.missing))
+        revision_fields = round_records.recorded_row_fields(
+            stored_envelope, cited_head, cited_head_source)
+        revision_fields.update(_journal_transport_fields(stored_envelope))
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
-                       attempt=entry.get("attempt"), seat=slot[0] if slot else None,
+                       attempt=entry_attempt, seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,
                        reappended=True, recordIdentity=ident, **revision_fields)
     orphans = rec.get("journalOrphan") or []
@@ -9091,6 +12374,7 @@ def build_parser():
                                    "state → fails loud (nonzero), never a silent default")
     cli_contract.add_argument(pn, "--verify-command", contract="free-text", default=None)
     cli_contract.add_argument(pn, "--max-rounds", contract="integer", default=None, type=int)
+    cli_contract.add_argument(pn, "--fix-batch-cap", contract="integer", default=None, type=int)
     cli_contract.add_argument(pn, "--max-rounds-absolute", contract="integer", default=None,
                               type=int,
                               help="hard round ceiling (fresh state only): owner-tunable like "
@@ -9174,6 +12458,22 @@ def build_parser():
     pc = sub.add_parser("checkpoint")
     cli_contract.add_argument(pc, "--session-dir", contract="existing-directory", required=True)
     pc.add_argument("--stop-reason", required=True, choices=list(CHECKPOINT_STOP_REASONS))
+
+    prl = sub.add_parser("relocate")
+    cli_contract.add_argument(prl, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(prl, "--repo-root", contract="repo-root", required=True)
+    cli_contract.add_argument(prl, "--by", contract="free-text", required=True)
+
+    pre = sub.add_parser("re-emit")
+    cli_contract.add_argument(pre, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pre, "--by", contract="free-text", required=True)
+
+    pru = sub.add_parser("rule")
+    cli_contract.add_argument(pru, "--session-dir", contract="existing-directory", required=True)
+    cli_contract.add_argument(pru, "--ruling-file", contract="free-text", required=True,
+                              dest="ruling_file")
+    cli_contract.add_argument(pru, "--by", contract="free-text", required=True)
+
     return parser
 
 
@@ -9245,6 +12545,20 @@ def _dispatch(args):
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:
             overrides["maxRounds"] = args.max_rounds
+        if args.fix_batch_cap is not None:
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False,
+                                             "reason": "fix-batch-cap-not-fresh-state",
+                                             "value": args.fix_batch_cap}) + "\n")
+                return 1
+            overrides["fixBatchCap"] = args.fix_batch_cap
+            try:
+                _default_config(dict(overrides))
+            except FixBatchCapRefusal as refusal:
+                sys.stdout.write(json.dumps({"ok": False, "reason": refusal.reason,
+                                             "value": refusal.value}) + "\n")
+                return 1
         if args.max_rounds_absolute is not None:
             st_ok, st = load_state(args.session_dir)
             if not (st_ok and st is None):
@@ -9345,6 +12659,18 @@ def _dispatch(args):
         out = cmd_attest(args.session_dir, args.failure, args.note)
     elif args.cmd == "checkpoint":
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
+    elif args.cmd == "relocate":
+        out = cmd_relocate(args.session_dir, args.repo_root, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == "re-emit":
+        out = cmd_re_emit(args.session_dir, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
+    elif args.cmd == "rule":
+        out = cmd_rule(args.session_dir, args.ruling_file, args.by)
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 1 if not out.get("ok") else 0
     else:
         try:
             with open(args.artifact, encoding="utf-8") as fh:
