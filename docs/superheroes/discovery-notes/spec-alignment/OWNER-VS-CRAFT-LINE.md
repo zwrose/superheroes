@@ -138,3 +138,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
   corpus examples are illustrations only; an owner's specific preferences are that project's
   rulings, which test 1 then makes craft. The owner confirmed the recap of the discovery's
   purpose (2026-09-27): the line is groundwork for the first experiment, not the deliverable.
+- Per-project adjustment: start with a fixed line; a project adjusts it only through the owner's own rulings (a handed-back kind of call becomes craft by test 4). No per-project setting for now.
