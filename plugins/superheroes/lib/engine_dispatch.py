@@ -149,6 +149,8 @@ MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
 MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
 MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH = "run-dir-claude-mode-mismatch"
+MODE_REFUSAL_CLAUDE_MODE_RETIRED = claude_modes.ENTRY_REASON_CLAUDE_MODE_RETIRED
+MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_RETIRED = claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_RETIRED
 PR_BODY_REFUSAL_RUN_DIR_MISMATCH = "run-dir-pr-body-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
@@ -202,8 +204,8 @@ def _entry_claude_mode_refusal(claude_mode, **kwargs):
         return None
     if claude_mode in claude_modes.RETIRED_CLAUDE_MODES:
         return _claude_mode_entry_refusal(
-            claude_modes.ENTRY_REASON_CLAUDE_MODE_RETIRED,
-            "%s:%s" % (claude_modes.ENTRY_REASON_CLAUDE_MODE_RETIRED, claude_mode),
+            MODE_REFUSAL_CLAUDE_MODE_RETIRED,
+            "%s:%s" % (MODE_REFUSAL_CLAUDE_MODE_RETIRED, claude_mode),
             **kwargs,
         )
     return _claude_mode_entry_refusal(
@@ -222,7 +224,7 @@ def _continuation_run_dir_claude_mode_retired(journal_claude_mode):
     return {
         "ok": False,
         "reason": dispatch_outcome.REASON_UNRUNNABLE,
-        "detail": claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_RETIRED,
+        "detail": MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_RETIRED,
         "attempts": 0,
         "terminal": True,
         "forfeited": False,
