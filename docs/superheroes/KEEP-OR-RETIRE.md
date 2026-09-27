@@ -1949,7 +1949,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### S19 — Order lint (deterministic half + semantic seat)
 
 - **Component.** Not a census row. `lib/order_lint.py check` (the deterministic half) and the
-  `mechanical`-role Haiku seat under `rubric/orders/order-lint-semantic.md` (the semantic half),
+  read-only `order-linter` agent (`plugins/superheroes/agents/order-linter.md`) at the `mechanical`-role
+  Haiku cell, prompted by `rubric/orders/order-lint-semantic.md` (the semantic half),
   run by the workhorse before every implementer and review-fix dispatch and by the round driver at
   every fixer-order emission. Cost: one sub-second CLI run plus one sub-minute Haiku dispatch per
   order.

@@ -104,11 +104,11 @@ runner's appended write-report contract is not what is linted. Exit 1 with a nam
 order.
 
 **The semantic half** is the `order-linter` agent (`agents/order-linter.md`, dispatched as
-`superheroes:order-linter`) at the mechanical role's registry cell (Haiku tier). Its tool grant is
-read-only (`Read`, `Grep`, `Glob`), so the seat cannot edit the tree or run a command whatever the
-order says; never dispatch the semantic half on any other agent. It returns its answer in its reply,
-not in a file. A derail never falls back to a `general-purpose` re-dispatch, which would restore
-every tool; it is a check that did not happen, as below.
+`superheroes:order-linter`) at the mechanical role's registry cell (Haiku tier). Its tool grant (the
+`tools:` line of `agents/order-linter.md`) is read-only, so the seat cannot edit the tree or run a
+command whatever the order says; never dispatch the semantic half on any other agent. It returns its
+answer in its reply, not in a file. A derail never falls back to a `general-purpose` re-dispatch,
+which would restore every tool; it is a check that did not happen, as below.
 Run the model gate first, with `"role": "mechanical"` in the seat. The prompt is
 `rubric/orders/order-lint-semantic.md` followed by two lines naming the order's absolute path and the
 repo root. It returns findings-only JSON with an investigated list.
@@ -119,8 +119,9 @@ repo root. It returns findings-only JSON with an investigated list.
   omits the order's absolute path, or it lists paths that do not resolve under the repository root
   or session scratch. Re-dispatch it once. If it still did not happen, the order is not dispatched:
   fix it or park. "Lint skipped" is never a state.
-- Where the registry lists no model for the `mechanical` role on the host vendor, the semantic half
-  is unavailable on that host. The deterministic half still runs and still binds, the order is
+- Where the registry lists no model for the `mechanical` role on the host vendor, or the host cannot
+  enforce the seat's tool grant (Codex, whose `spawn_agent` takes no tool restriction), the semantic
+  half is unavailable on that host. The deterministic half still runs and still binds, the order is
   dispatched, and the dispatch-provenance row records `semantic-lint-unavailable:<vendor>` as a
   disclosed degradation.
 
@@ -131,7 +132,7 @@ rework.
 
 ## The model gate
 
-Run the gate before each of the five dispatch kinds the charter's §7 names, on the effective seat
+Run the gate before each dispatch kind the charter's §7 names, on the effective seat
 model you will pass (explicit in the seat JSON, or null for the seat default):
 
 `python3 -B <plugin root>/lib/dispatch_guard.py check --seat '{"vendor":"<vendor>","model":"<id>","effort":<str-or-null>,"role":"<role>"}'`
