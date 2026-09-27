@@ -1,6 +1,6 @@
 """Producer for round_certification session fixtures — driver test tree only.
 
-Every checked-in fixture journal row is built through ``round_driver._journal_revision_fields``
+Every checked-in fixture journal row is built through ``round_records.recorded_row_fields``
 and every envelope through the production envelope writer helpers in this module.
 """
 import base64
@@ -40,12 +40,12 @@ def _slot_nonce(seat, phase, attempt, occurrence=0):
     return "nonce-%s-%s-a%d-o%d" % (seat, phase, attempt, occurrence)
 
 
-def _binding_fields(nonce, payload=None):
+def _binding_fields(nonce, payload=None, source="runner"):
     if payload is None:
         payload = {"findings": []}
     findings = payload.get("findings", [])
     return {
-        "source": "runner",
+        "source": source,
         "runnerNonce": nonce,
         "recordDigest": RR.payload_sha256(payload),
         "resultDigest": RR.payload_sha256(findings),
@@ -65,9 +65,11 @@ def _observation_fields(*, read="engaged", tool_calls=1):
     }
 
 
-def _execution_evidence(nonce, *, payload=None, read="engaged", tool_calls=1):
+def _execution_evidence(nonce, *, payload=None, read="engaged", tool_calls=1, source="runner",
+                        run_kind="review"):
     return {
-        **_binding_fields(nonce, payload=payload),
+        **_binding_fields(nonce, payload=payload, source=source),
+        "runKind": run_kind,
         "observation": _observation_fields(read=read, tool_calls=tool_calls),
     }
 
@@ -106,14 +108,19 @@ def production_hand_landed_envelope(seat, payload, *, phase=PANEL_PHASE, attempt
 def production_dispatch_observed_envelope(seat, payload, *, phase=PANEL_PHASE, attempt=0,
                                             occurrence=0, payload_sha=None, read="engaged",
                                             binding=None):
+    run_kind = session_contract.run_kind_for_phase(phase)
     if binding is None:
         evidence = _execution_evidence(
-            _slot_nonce(seat, phase, attempt, occurrence), payload=payload, read=read)
+            _slot_nonce(seat, phase, attempt, occurrence), payload=payload, read=read,
+            run_kind=run_kind)
     elif "observation" in binding:
-        evidence = binding
+        evidence = dict(binding)
+        if "runKind" not in evidence:
+            evidence["runKind"] = run_kind
     else:
         evidence = {
             **binding,
+            "runKind": run_kind,
             "observation": _observation_fields(read=read, tool_calls=1),
         }
     if payload_sha is None:
@@ -168,7 +175,7 @@ def production_recorded_journal_row(envelope, *, seat, phase=PANEL_PHASE, attemp
         row["headSha"] = head_sha
     if extra:
         row.update(extra)
-    row.update(RD._journal_revision_fields(envelope))
+    row.update(RR.recorded_row_fields(envelope, head_sha, RR.CITED_HEAD_SOURCE_ORDER_ANCHOR))
     return row
 
 
@@ -701,7 +708,9 @@ def build_case05_critical_out_of_scope():
                     "id": "C-oos",
                     "severity": "Critical",
                     "disposition": "out-of-scope",
-                    "followUp": {"revisitTrigger": "milestone M2", "classClosure": "none"},
+                    "outOfScopeReason": "accepted risk",
+                    "followUp": {"item": "critical deferral", "revisitTrigger": "milestone M2",
+                                 "classClosure": "none"},
                 }
             ]
         },
@@ -781,6 +790,7 @@ def build_specimen_must_certify_sixteen_seat_audit():
             _slot_nonce(seat, AUDIT_PHASE, 0),
             payload=payload,
             tool_calls=None,
+            source="codex",
         )
         envelope = production_hand_landed_envelope(
             seat, payload, phase=AUDIT_PHASE, evidence=evidence)
@@ -911,7 +921,8 @@ def build_followup_missing_class_closure():
                     "id": "I-missing-closure",
                     "severity": "Important",
                     "disposition": "out-of-scope",
-                    "followUp": {"revisitTrigger": "2026-12-01"},
+                    "outOfScopeReason": "deferred",
+                    "followUp": {"item": "deferred work", "revisitTrigger": "2026-12-01"},
                 }
             ]
         },
@@ -935,7 +946,9 @@ def build_followup_class_closure_none():
                     "id": "I-none-closure",
                     "severity": "Important",
                     "disposition": "out-of-scope",
+                    "outOfScopeReason": "deferred",
                     "followUp": {
+                        "item": "deferred work",
                         "revisitTrigger": "2026-12-01",
                         "classClosure": "none",
                     },
@@ -962,7 +975,8 @@ def build_followup_no_revisit_trigger():
                     "id": "I-no-trigger",
                     "severity": "Important",
                     "disposition": "out-of-scope",
-                    "followUp": {"classClosure": "tracked in issue-42"},
+                    "outOfScopeReason": "deferred",
+                    "followUp": {"item": "deferred work", "classClosure": "tracked in issue-42"},
                 }
             ]
         },
@@ -986,7 +1000,9 @@ def build_followup_documented_trigger():
                     "id": "I-documented",
                     "severity": "Important",
                     "disposition": "out-of-scope",
+                    "outOfScopeReason": "deferred",
                     "followUp": {
+                        "item": "deferred work",
                         "revisitTrigger": "documented",
                         "classClosure": "none",
                     },

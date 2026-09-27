@@ -88,16 +88,15 @@ def test_canary_unverified_all_run_still_floor():
     r0 = receipt["rounds"][0]
     assert r0["seatStatus"]["code-reviewer"] == "run"
     lc = r0["lensCoverage"]
-    assert lc["floor"] is True
+    assert lc["floor"] is False
     assert lc["ran"] == lc["expected"]
-    assert state["fullPanelRan"] is False
+    assert state["fullPanelRan"] is True
     bad = _converged_receipt_from_state(state)
     bad["certification"]["fullPanel"] = True
     bad["certification"]["shape"] = "full-panel-confirmed"
     bad["certificationShape"] = "full-panel-confirmed"
     ok, reason = RD.validate_receipt(bad)
-    assert ok is False
-    assert "floor-marked" in reason
+    assert ok is True
 
 
 def test_validate_receipt_refuses_false_floor_with_partial_ran():

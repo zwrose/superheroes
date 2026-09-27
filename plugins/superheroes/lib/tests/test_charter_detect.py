@@ -46,6 +46,34 @@ def test_detects_detective(tmp_path):
     assert cd.detect_charter(str(path)) == "detective"
 
 
+def test_detects_showrunner_resume_as_showrunner(tmp_path):
+    """A seat started by /superheroes:showrunner-resume runs the showrunner charter."""
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("showrunner-resume")])
+    assert cd.detect_charter(str(path)) == "showrunner"
+
+
+def test_detects_showrunner_handoff_as_showrunner(tmp_path):
+    """A seat running /superheroes:showrunner-handoff runs the showrunner charter."""
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("showrunner-handoff")])
+    assert cd.detect_charter(str(path)) == "showrunner"
+
+
+def test_non_charter_commands_do_not_detect(tmp_path):
+    """Other superheroes commands, and near-miss names, never map to a charter."""
+    for command in ("review-code", "showrunnerx", "showrunner-resumex", "checkpoint"):
+        path = tmp_path / ("%s.jsonl" % command)
+        _write_transcript(path, [_user_charter(command)])
+        assert cd.detect_charter(str(path)) is None, command
+
+
+def test_command_table_maps_only_onto_charter_names():
+    assert set(cd.COMMAND_CHARTERS.values()) == set(cd.CHARTER_NAMES)
+    for name in cd.CHARTER_NAMES:
+        assert cd.COMMAND_CHARTERS[name] == name
+
+
 def test_charter_names_matches_detection_regex():
     """CHARTER_NAMES is the single roster; reverting detective drops it here first."""
     assert "detective" in cd.CHARTER_NAMES

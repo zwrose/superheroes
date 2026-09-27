@@ -36,6 +36,15 @@ _CODEX_REVIEWER_DEEP_MODEL, _CODEX_REVIEWER_DEEP_EFFORT = model_registry.matrix_
 HEAD = HEAD_SHA
 
 
+def _stored_revision(envelope, cited_head=None):
+    """What a `recorded` row carries for a stored envelope: the chokepoint's revision identity
+    (``round_records.recorded_row_fields``) plus the journal transport stamp."""
+    fields = round_records.recorded_row_fields(
+        envelope, cited_head, round_records.stored_cited_head_source(envelope))
+    fields.update(RD._journal_transport_fields(envelope))
+    return fields
+
+
 def _stored_with_engaged_observation(stored):
     """Certification refuses before model assertion unless observation.read is engaged."""
     evidence = stored.get("executionEvidence")
@@ -98,7 +107,9 @@ def _driver_panel_recorded_rows(tmp_path, native_seat, runner_seat):
                 session_dir, pend["round"], pend["phase"],
                 round_records.storage_key(seat, occurrence), pend["attempt"],
             )
-            run_dir = tdi._execution_run_dir(tmp_path, order_path, [])
+            run_dir = tdi._execution_run_dir(
+                tmp_path, order_path, [],
+                view_head_sha=RD._anchor_cited_head(state, session_dir, pend["round"], pend["phase"], pend["attempt"]))
             tdi._dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
             out = RD.cmd_record_result(
                 session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
@@ -119,9 +130,9 @@ def _driver_panel_recorded_rows(tmp_path, native_seat, runner_seat):
         if row.get("outcome") == "recorded" and isinstance(row.get("seat"), str)
     }
     native_row = dict(recorded[native_seat])
-    native_row.update(RD._journal_stored_revision(stored_by_seat[native_seat]))
+    native_row.update(_stored_revision(stored_by_seat[native_seat], native_row.get("citedHead")))
     runner_row = dict(recorded[runner_seat])
-    runner_row.update(RD._journal_stored_revision(stored_by_seat[runner_seat]))
+    runner_row.update(_stored_revision(stored_by_seat[runner_seat], runner_row.get("citedHead")))
     return native_row, runner_row, store_specs
 
 
@@ -242,6 +253,7 @@ def _record_runner_seat_with_resolved_inputs(tmp_path, runner_seat):
         assert snapshot["engineModel"] == _CODEX_REVIEWER_DEEP_MODEL
         run_dir = tdi._execution_run_dir(
             tmp_path, order_path, [], resolved_inputs=snapshot,
+            view_head_sha=RD._anchor_cited_head(state, session_dir, pend["round"], pend["phase"], pend["attempt"]),
         )
         tdi._dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence)
         out = RD.cmd_record_result(
@@ -268,7 +280,7 @@ def test_receipt_seat_model_is_the_runner_records_engine_model(tmp_path):
     assert recorded_row[session_contract.SEAT_TRANSPORT_KEY] == session_contract.SEAT_TRANSPORT_RUNNER
     assert recorded_row["executionEvidence"]["engineModel"] == _CODEX_REVIEWER_DEEP_MODEL
     runner_row = dict(recorded_row)
-    runner_row.update(RD._journal_stored_revision(stored))
+    runner_row.update(_stored_revision(stored, runner_row.get("citedHead")))
     runner_row["headSha"] = HEAD
     seat_cfg = {
         "vendor": "codex",
@@ -335,7 +347,7 @@ def test_receipt_seat_model_none_for_hand_landed_record_carrying_a_model(tmp_pat
     assert err is None
     durable = _stored_with_engaged_observation(durable)
     journal_row = dict(recorded_row)
-    journal_row.update(RD._journal_stored_revision(durable))
+    journal_row.update(_stored_revision(durable, journal_row.get("citedHead")))
     journal_row["headSha"] = HEAD
     cert_dir = write_certifiable_session(
         tmp_path,

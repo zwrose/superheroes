@@ -1,4 +1,6 @@
 """Layering invariants for payload_contracts — import closure and re-export identity."""
+import ast
+import importlib.util
 import json
 import os
 import subprocess
@@ -34,6 +36,7 @@ _ENGINE_ADAPTER_LIB_CLOSURE = frozenset({
     "review_findings_schema",
     "review_memory",
     "round_phases",
+    "round_panel_contract",  # stdlib-only panel-contract leaf round_phases re-exports from
     "seat_bundle",
 })
 
@@ -61,6 +64,7 @@ _PAYLOAD_CONTRACTS_LIB_CLOSURE = frozenset({
     "payload_contracts",
     "review_memory",
     "round_phases",
+    "round_panel_contract",  # stdlib-only panel-contract leaf round_phases re-exports from
 })
 
 
@@ -102,6 +106,62 @@ def test_engine_adapter_import_closure_is_pinned():
             "engine_adapter import closure mismatch: unexpected=%r missing=%r"
             % (unexpected, missing)
         )
+
+
+_LIB_TOP_LEVEL_MODULE_NAMES = frozenset(
+    entry[:-3]
+    for entry in os.listdir(_LIB)
+    if entry.endswith(".py") and not entry.startswith("_")
+)
+
+
+def _stdlib_prefix():
+    spec = importlib.util.find_spec("json")
+    assert spec is not None and spec.origin
+    return os.path.dirname(os.path.abspath(spec.origin))
+
+
+def _import_roots(tree):
+    roots = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.level:
+                roots.append(("relative", node.lineno))
+                continue
+            if node.module:
+                roots.append((node.module.split(".")[0], node.lineno))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                roots.append((alias.name.split(".")[0], node.lineno))
+    return roots
+
+
+def _is_stdlib_or_future(root):
+    if root == "__future__":
+        return True
+    if root in sys.builtin_module_names:
+        return True
+    if root in _LIB_TOP_LEVEL_MODULE_NAMES:
+        return False
+    spec = importlib.util.find_spec(root)
+    if spec is None or not spec.origin:
+        return False
+    return os.path.abspath(spec.origin).startswith(_stdlib_prefix())
+
+
+def test_round_panel_contract_imports_no_lib_modules():
+    """round_panel_contract is a stdlib-only leaf — no lib/ imports."""
+    path = os.path.join(_LIB, "round_panel_contract.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+    violations = []
+    for root, lineno in _import_roots(tree):
+        if root == "relative":
+            violations.append("%s:%s: relative import" % (path, lineno))
+            continue
+        if not _is_stdlib_or_future(root):
+            violations.append("%s:%s: %r" % (path, lineno, root))
+    assert not violations, "non-stdlib import in round_panel_contract: %s" % violations
 
 
 def test_payload_contracts_import_closure_is_pinned():

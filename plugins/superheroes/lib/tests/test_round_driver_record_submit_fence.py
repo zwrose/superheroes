@@ -88,8 +88,11 @@ _EXPECTED_CMD_NAMES = (
     "cmd_attest",
     "cmd_checkpoint",
     "cmd_next",
+    "cmd_re_emit",  # no durable seat records: new-attempt orders + journal
     "cmd_record_missing",
     "cmd_record_result",
+    "cmd_relocate",  # no durable seat records: rewrites checkout keys + journal
+    "cmd_rule",  # session state + journal; no durable seat records
     "cmd_submit",
 )
 
@@ -874,7 +877,7 @@ def _owner_artifact_path_for_phase(session_dir, phase, tmp_path):
     if phase == round_driver.P_JUDGMENT:
         state = _state(session_dir)
         finding = state["_judgmentFindings"][0]
-        artifact = {"dispositions": [{"id": round_driver._location_id(finding),
+        artifact = {"dispositions": [{"id": round_driver._finding_key_of(finding),
                                       "disposition": "fix-as-suggested"}]}
     elif phase == round_driver.P_STALL:
         artifact = {"choice": round_driver.HOLD_CHOICE}

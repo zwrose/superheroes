@@ -8,7 +8,7 @@
 - [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)
 - [`--ignore-event` and re-arming](#--ignore-event-and-re-arming)
 - [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-wedge)
-- [The default promise, and the number behind it](#the-default-promise-and-the-number-behind-it)
+- [The quiet window, and the number behind it](#the-quiet-window)
 - [Timing flags](#timing-flags)
 - [What it tells you](#what-it-tells-you)
 - [The boundary the owner accepted](#the-boundary-the-owner-accepted)
@@ -179,34 +179,31 @@ them is a refusal (`ignore-event-invalid`).
 A malformed pair is a refusal (`ignore-event-invalid`), never a silent drop.
 
 **Pattern — the exception, not the routine:** when `loop` wakes you on an event you have **verified**
-benign (for `lane-stale`: pid live **and** transcript fresh — the watcher now checks the transcript
-itself, so a `lane-stale` that still fires is one it could not vouch for), re-arm with
-`--ignore-event <launchId>:<event>` so that exact pair stops waking you **while that lane's other
-events still do**. Within a single `loop` invocation, the first unsuppressed **lane-ending** event
-exits the loop; persistence across invocations is **your** job — pass `--ignore-event` on re-arm.
-The tool does not dedupe suppressed pairs across invocations by itself. **Do not pre-arm
-`--ignore-event` for `lane-stale` as a matter of course**: an arm that ignores every lane's stale
-signal has quietly reduced the watcher's exits to `lane-terminal`, `lane-blocked`, and
-`builder-exited`, and the wave's wedges arrive as surprises. If you find yourself suppressing the
-same event on most lanes of a wave, that is a field observation to record (the promise or the second
-chance is wrong), not a pattern to keep.
+benign, re-arm with `--ignore-event <launchId>:<event>` so that exact pair stops waking you **while
+that lane's other events still do**. Within a single `loop` invocation, the first unsuppressed
+**lane-ending** event exits the loop; persistence across invocations is **your** job — pass
+`--ignore-event` on re-arm. The tool does not dedupe suppressed pairs across invocations by itself.
+**Do not pre-arm `--ignore-event` for `lane-stale` as a matter of course**: an arm that ignores
+every lane's stale signal has quietly reduced the watcher's exits to `lane-terminal`,
+`lane-blocked`, and `builder-exited`, and the wave's wedges arrive as surprises. If you find
+yourself suppressing the same event on most lanes of a wave, that is a field observation to record,
+not a pattern to keep.
 
 ## Before treating `lane-stale` as a wedge
 
-A stale lane whose transcript is **fresh** is the **benign long-dispatch shape** — a builder alive
-inside a long engine dispatch whose heartbeat promise lapsed between stamps. **The watcher now reads
-that pair for you.** Before emitting `lane-stale` it resolves the lane's session transcript from
-the **session id the launcher recorded on the launch record**, and a transcript written **inside
-that lane's own `staleAfterSeconds` window** suppresses the event.
+`lane-stale` is a **wedged builder**: a started lane whose recorded leader pid is positively live,
+with no terminal heartbeat (`parked` / `handback`), whose session transcript is colder than the
+quiet window **or** cannot be resolved. Only a terminal stamp (`parked` / `handback`) takes a
+lane out of this check — a `blocked` lane stays in it, so `lane-blocked` wins precedence and
+`lane-stale` surfaces under `alsoObserved` or fires when `lane-blocked` is ignored. That is the wedge. The one-shot `run`
+verb applies the same rule, so a scheduled `run` reports a wedged lane even when no watch loop is
+armed.
 
-So `lane-stale` now means three things at once: the heartbeat outran the promise, the pid is
-positively live, **and** the transcript is cold. That is the wedge.
-
-A suppressed lane is not silently dropped — it rides the arm's result under **`staleSuppressed`**,
-each entry carrying the note `stale-suppressed-transcript-fresh`, the lane's heartbeat age, its
-promise, and how old the transcript actually was. The note rides **every** result of that arm
-including `timer`, which is what puts it in the `--log` line, so a long quiet arm still shows which
-lanes it judged to be working.
+Before emitting `lane-stale`, the watcher resolves the lane's session transcript from the **session
+id the launcher recorded on the launch record** and compares its mtime to
+`LIVENESS_QUIET_WINDOW_SECONDS` in `lib/wave_watch.py`. Each `lane-stale` entry carries `launchId`,
+`state` (heartbeat state or null), `transcriptAgeSeconds` (null when unresolved), and
+`quietWindowSeconds`.
 
 **The check fails toward the alert, never toward silence.** Every way the transcript read can fail to
 prove work — no session id on the lane's ledger record, no transcript on disk, two-or-more
@@ -222,53 +219,33 @@ not as *the transcript is cold*: without it, an I/O failure and a genuinely wedg
 the same alert with the same silence behind it. **Absence is not unresolved** — a missing projects
 root, a missing bucket, or a missing transcript means the transcript is not there, which is the wedge
 signal `lane-stale` exists to report, so those alert with **no** token. A pre-#1029 record carrying
-no session id gets no second chance and no token either — that is the documented no-identity class,
-not a failed reading.
+no session id alerts with no token either — that is the documented no-identity class, not a failed
+reading.
 
 **Only the lane's own transcript may vouch for it.** The launch record's session id names exactly one
 file: `<sessionId>.jsonl` under a config root's `projects` tree. Exactly one config root is searched,
 never both — because a same-named file under any other root belongs to a different session. **The
 lane's own recorded root wins:** the launcher records on the launch record the `configDir` its
 builder was spawned under, and the watcher searches *that* root, so a lane launched under another
-Claude instance (`.claude-two`, a per-launch exception) still gets its second chance instead of
-alerting because the watcher looked in its own root. A record carrying no `configDir` — every
-pre-#1036 launch — resolves under the watcher's own env root as before (`CLAUDE_CONFIG_DIR` outright
-when set, otherwise `~/.claude`). A symlinked entry is never followed; and the watcher **stat's
-only** — it never reads transcript contents.
+Claude instance (`.claude-two`, a per-launch exception) still resolves correctly instead of looking in
+the watcher's own root. A record carrying no `configDir` — every pre-#1036 launch — resolves under
+the watcher's own env root as before (`CLAUDE_CONFIG_DIR` outright when set, otherwise `~/.claude`).
+A symlinked entry is never followed; and the watcher **stat's only** — it never reads transcript
+contents.
 
-Launches without a recorded session id get **no second chance** — pre-change ledger records still
-alert. The concurrent-foreign-session-in-the-same-worktree residual is **closed** by recorded
-identity: a different session carries a different id and cannot vouch for this lane.
+A lane with no heartbeat file or an unreadable one still gets this check. Launches without a
+recorded session id fail toward alert. The concurrent-foreign-session-in-the-same-worktree residual is
+**closed** by recorded identity: a different session carries a different id and cannot vouch for this
+lane.
 
-A transcript-suppressed lane is **not** the same as an `--ignore-event` suppression: `--ignore-event`
-silences an event the watcher still believes, so the lane keeps showing up under `alsoObserved`; a
-transcript-suppressed lane is one the watcher judged to be *working*, so it drops out of
-`alsoObserved` too. A lane found still stale on a later tick of the same arm loses its earlier
-suppression note, so the note can never contradict the event it rides on.
+## The quiet window
 
-Field specimen the fix was built from: heartbeat age 1835 s against an 1800 s promise, transcript
-mtime 2.5 minutes — benign, and before this it terminated an arm anyway.
-
-## The default promise, and the number behind it
-
-A builder states its own `staleAfterSeconds` when it stamps (`--stale-after`), and that promise is
-what `lane-stale` measures against. A caller that states **no** promise gets the default in
-`lib/heartbeat.py` — `DEFAULT_STALE_AFTER_SECONDS`, **24000 s** (6 h 40 m).
-
-That floor is derived, not chosen: it is **2× the worst benign inter-stamp gap measured on this
-host, 11960 s**. The measurement pooled **45** inter-stamp gaps across **10** builder lanes, read
-from the session transcripts, and counted a gap as *benign* only when the transcript never went
-colder than **600** s anywhere inside it — 600 s being the host's foreground-Bash ceiling — so the
-lane was demonstrably working the whole way through. **44** of the 45 gaps were benign.
-
-Those numbers live in one place, `heartbeat.STALE_AFTER_MEASUREMENT`; this paragraph and
-CONVENTIONS §15 are drift-checked against it, so correcting the measurement cannot leave a stale
-derivation behind.
-
-The previous default was 300 s, which no real build has ever met: a caller that omitted the flag was
-guaranteed to read `stale` within five minutes. The floor moves only that fallback — a builder that
-states its own promise is unaffected, and `builder-exited` still surfaces a lane whose pid dies
-regardless of any promise.
+Liveness uses one quiet window for every lane: `LIVENESS_QUIET_WINDOW_SECONDS` in
+`lib/heartbeat.py` (bound in `lib/wave_watch.py`). The field-check narrative and measured
+counts live in the module comment beside that constant in `lib/heartbeat.py`. No per-lane
+promise exists; a lane whose transcript file does not exist yet gets the same window measured
+from its recorded start and alerts once that window passes. `builder-exited` still surfaces a
+lane whose pid dies regardless of transcript age.
 
 ## Timing flags
 
@@ -375,22 +352,16 @@ fire last, which is not necessarily the one whose green you are claiming: a watc
 invocation. Every `loop` result also carries `passedOver` and `passedOverCount` (empty or zero when
 nothing was passed over). `run` results never carry `arms`, `passedOver`, or `passedOverCount`.
 
-`lane-stale` is a **wedged builder**: alive but frozen past its own `staleAfterSeconds` promise. It
-fires only when the builder's pid is positively alive — an uncertain probe is not a wedge, and a
-dead builder is `builder-exited` instead — **and** only when the lane's session transcript is cold.
-See [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-wedge) for the
-transcript second chance, the `staleSuppressed` note it emits instead, and why an unresolvable
-transcript still alerts.
+`lane-stale` is a **wedged builder** under the quiet-window rule above. It fires only when the
+builder's pid is positively alive — an uncertain probe is not a wedge, and a dead builder is
+`builder-exited` instead. See [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-wedge)
+for resolution, degradation tokens, and why an unresolvable transcript still alerts.
 
 Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
 on their `reserved` ledger record, and the batch `count` tallies them as `overlapsAccepted`. The
 watcher does not act on either — read them when a lane you are watching hits a conflict at landing:
 the later lander rebases onto the moved base (the `base-moved` standing ruling) and keeps its lane
 branch-current as `merge-train.md` requires. That is the accepted cost, not a wedge.
-
-`staleSuppressed` rides any result — `timer` included — when the transcript second chance held a
-lane back from `lane-stale` during that arm. It is a **note about what the watcher saw**, not an
-event: a result carrying only `staleSuppressed` is a result where nothing actionable happened.
 
 **Refusals** (exit 1, `ok=False`):
 
@@ -466,10 +437,11 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 
 ## How it relates to the heartbeat sweep
 
-The heartbeat sweep (`lib/heartbeat.py`) and `wave_watch` are complementary, not substitutes: the
-sweep is a scheduled, whole-wave read the advisor runs and acts on; the watcher is a blocking arm
-(`loop` at wave launch, or a one-off `run`) — `loop` returns on the first arm its exit classifier
-does not pass over — a refusal, a lane-ending event, an unknown event, or a `stack-state-changed`
-carrying the launchable idle-seat flag — or at its `--max-total-seconds` ceiling (see "What ends a
-loop and what it passes over"); `run` returns at once.
-Neither asserts a lane is dead.
+The heartbeat sweep (`lib/heartbeat.py`) reads **endings** — `terminal`, `nonterminal`, and
+`unknown` — on a schedule the advisor runs and acts on. **Liveness** lives in `wave_watch`: pid
+positively live plus session transcript age against `LIVENESS_QUIET_WINDOW_SECONDS`. The watcher is a
+blocking arm (`loop` at wave launch, or a one-off `run`) — `loop` returns on the first arm its exit
+classifier does not pass over — a refusal, a lane-ending event, an unknown event, or a
+`stack-state-changed` carrying the launchable idle-seat flag — or at its `--max-total-seconds`
+ceiling (see "What ends a loop and what it passes over"); `run` returns at once. Neither the sweep
+nor the watcher asserts a lane is dead.
