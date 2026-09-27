@@ -8,6 +8,7 @@ variables), while the driver in production always runs inside a checkout and rea
 production never sees.
 """
 
+import json
 import os
 import subprocess
 
@@ -68,6 +69,19 @@ def make_checkout(path):
     if len(head) != 40:
         raise RuntimeError("git rev-parse HEAD in %s returned %r" % (path, head))
     return head
+
+
+def seed_session_meta(session_dir, repo_root):
+    """Mirror review-code setup, which records the session's repoRoot in meta.json."""
+    os.makedirs(session_dir, exist_ok=True)
+    meta_path = os.path.join(session_dir, "meta.json")
+    meta = {}
+    if os.path.isfile(meta_path):
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+    meta["repoRoot"] = str(repo_root)
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(meta) + "\n")
 
 
 def enter_checkout(path):
