@@ -397,7 +397,7 @@ never landed. Declaring nothing leaves that check off, which is why declaring is
 
 **Lint every order before you dispatch it, both halves.** The deterministic half is `order_lint.py
 check` over the authored order text, and a refusal token is stop-and-fix-the-order. The semantic
-half is one native subagent at the mechanical role's registry cell, and an Important finding is
+half is the read-only `order-linter` agent at the mechanical role's registry cell, and an Important finding is
 stop-and-fix. A lint that did not happen is re-dispatched once, and after that the order is not
 dispatched. Record both halves' results in the order's dispatch-provenance row.
 
@@ -408,7 +408,7 @@ calibration where configured, judged and disclosed in the work order where not. 
 silently inherit your session tier. **Record the effective engine + model in every work order**, so
 the dispatch's provenance is explicit.
 
-**The registry is the model authority.** For **each** of the four dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, a **`check-runner` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on the effective seat model before dispatching. An unlisted model is a park, never a pick. Record the resolved `model_id`
+**The registry is the model authority.** For **each** of the five dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, a **`check-runner` dispatch**, an **`order-linter` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on the effective seat model before dispatching. An unlisted model is a park, never a pick. Record the resolved `model_id`
 and `effort` in the dispatch-provenance table.
 
 **Read `skills/workhorse/reference/orders.md` § The model gate when you run the gate or read a refusal.**
@@ -668,7 +668,7 @@ one bullet per degradation or the single word **None**. A missing build-record o
 section is a review finding, not a silent pass: **None** means no degradations, never absence of
 the section.
 
-The build record carries a **dispatch provenance** section that lists each dispatch (the brief-check reviewer, every implementer, every `check-runner`, the pilot, the review-code seats) with the engine and model it ran on, each validated against the registry allowlist. It also carries the
+The build record carries a **dispatch provenance** section that lists each dispatch (the brief-check reviewer, every implementer, every `check-runner`, every `order-linter` seat, the pilot, the review-code seats) with the engine and model it ran on, each validated against the registry allowlist. It also carries the
 keyed **Follow-ups for the advisor** list with its marker, the size tripwire row §4's size step
 filled, and the bite-proof records. The PR body carries a DoD disposition table (the
 `superheroes:dod-table` marker), one row per Definition-of-Done bullet.
