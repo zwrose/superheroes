@@ -47,7 +47,7 @@ enforceable now; the behavioral checks are filled in as Phase 1 builds the loop.
 ## Running
 
 ```bash
-python3 -m pytest eval/lib/tests/ -q
+scripts/pinned-python -m pytest eval/lib/tests/ -q
 ```
 
 `jsonschema` is a **required** test dependency for the schema-validation tests
