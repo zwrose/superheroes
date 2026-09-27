@@ -488,9 +488,10 @@ above).
    filled or `None`; every follow-up id carries a keyed disposition and every owner call sits in
    the collector, or, when the collector's pointer is unresolved and the owner cannot supply it,
    is recorded in this receipt as a disclosed degradation with its append deferred and its
-   proposing ordinal preserved for later — that disclosed degradation satisfies this condition on
-   its own, with no duplicate collector opened and no further reconciliation owed; your verdict
-   sits in the owner half pointing at the receipt.
+   proposing ordinal preserved for later — that disclosed degradation satisfies this condition
+   for the current vet, with no duplicate collector opened; when the pointer is later resolved,
+   the deferred append and reconciliation are still owed, preserving the original proposing
+   ordinal. Your verdict sits in the owner half pointing at the receipt.
 5. **Decide what reaches the owner before the merge click.** Two tests:
    - **Test 1:** would a user notice this without reading the diff?
    - **Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
