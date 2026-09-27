@@ -2563,6 +2563,21 @@ def _showrunner_orchestration_duty():
     return m.group(0)
 
 
+def _showrunner_tempted_tier_row():
+    """The tempted-table row pairing account-default inheritance with the tier doctrine, now on
+    the excuses reference page."""
+    text = _read("skills/showrunner/reference/excuses.md")
+    m = re.search(
+        r"\| \"The account default tier is fine[^|]+\|[^|]+\|",
+        text,
+    )
+    assert m, (
+        "skills/showrunner/reference/excuses.md tempted-table tier row not found "
+        "(moved or reworded?)"
+    )
+    return m.group(0)
+
+
 def _launch_doctrine_builder_dispatch_section():
     """The Builder dispatch tier artifact-home section in launch-doctrine.md."""
     text = _read("rubric/launch-doctrine.md")
@@ -2623,13 +2638,36 @@ def test_count_result_blocks_in_showrunner_orchestration_page():
     )
 
 
+def test_showrunner_provisioning_duty_load_bearing_content():
+    """§11: skills/showrunner/reference/provisioning.md carries load-bearing provisioning clauses
+    moved off duty 10 by the charter restructure."""
+    # axis: presence of each of the four provisioning clauses on the page that now holds them; each
+    # clause alone must fail this guard. The launcher element guards both the heading and the
+    # operative instruction — either one going missing alone must fail this guard.
+    text = _read("skills/showrunner/reference/provisioning.md")
+    lower = re.sub(r"\s+", " ", text.lower())
+    missing = []
+    if "without any seeded sign-in" not in lower:
+        missing.append("unauthenticated-app-first ordering")
+    if "is a no-go" not in lower:
+        missing.append("partial-failure no-go rule")
+    if "acceptance record (who accepted, when, and why)" not in lower:
+        missing.append("weaker-acceptance record")
+    if "the launcher carries the slot" not in lower or "supply the slot and generation" not in lower:
+        missing.append("launcher-carries-the-slot clause")
+    assert not missing, (
+        "skills/showrunner/reference/provisioning.md missing load-bearing element(s): %s"
+        % ", ".join(missing)
+    )
+
+
 def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
     """§11: loaded advisor surfaces and the doctrine artifact home must carry the builder-dispatch
     tier rule keyed to model_registry.FABLE_NEVER_DEFAULT — builder launches default to opus; fable
     is never a launch default. A failure means the rule drifted out of a surface the advisor or
     doctrine actually loads."""
-    # axis: each guarded region (duty-9 orchestration passage and the launch-doctrine artifact
-    # home) must name engine_pref.BUILDER_DISPATCH_TIER_DEFAULT and each
+    # axis: each guarded region (duty-9 orchestration passage, the excuses-page tier row, and the
+    # launch-doctrine artifact home) must name engine_pref.BUILDER_DISPATCH_TIER_DEFAULT and each
     # registry-refused launch tier; partial drift in any one region alone must fail this guard.
     import engine_pref
     import model_registry
@@ -2643,6 +2681,7 @@ def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
 
     regions = (
         ("showrunner/SKILL.md duty 9 orchestration passage", _showrunner_orchestration_duty()),
+        ("showrunner/reference/excuses.md tempted-table tier row", _showrunner_tempted_tier_row()),
         ("launch-doctrine.md artifact home", _launch_doctrine_builder_dispatch_section()),
     )
 
