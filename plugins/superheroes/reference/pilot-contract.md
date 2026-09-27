@@ -3217,7 +3217,7 @@ matrix).
 ### CLI
 
 ```text
-python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "${CLAUDE_PLUGIN_ROOT}"
        /lib/pilot_conformance.py run --cwd <path>
        [--policy-root <path>] [--reach-root <path> ...] [--slots-dir <path>]
        [--slot-ref <ref>] [--branch <name>] [--slot <id>]

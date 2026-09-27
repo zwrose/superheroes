@@ -14,6 +14,17 @@ import pytest
 # start /bin/sh inside the previous budget — a machine that cannot do it in 45 s has a
 # problem this test should report loudly as a setup race, not hide.
 ATTEMPT_TIMEOUTS = (1, 2, 5, 15, 45)
+# The one root the /proc probe reads; tests can point it at a missing directory to exercise
+# the non-/proc branch on any platform.
+_PROC_ROOT = "/proc"
+# Wall-clock budget for tests whose scenario is a run that COMPLETES (not a timeout). There the
+# budget is only a hang guard: a green run returns as soon as the child exits, so a generous value
+# costs nothing, and a hang regression still goes red — it just takes this long. A short budget
+# instead races process startup: macOS assesses a freshly written executable on its first exec and
+# those assessments queue system-wide, so a two-line script took up to ~6 s to finish with 36
+# parallel workers (0.17 s serially). Tests adopt it once their own budget has been measured
+# racing startup; timeout-direction tests keep their own short budgets.
+COMPLETION_BUDGET_SECONDS = 120
 
 GrandchildProbe = namedtuple(
     "GrandchildProbe", ("pid", "result", "elapsed", "timeout_used", "pgid")
@@ -40,9 +51,27 @@ def _try_read_grandchild_pid(pid_file):
         return None
 
 
+def _ps_process_state(pid):
+    """Return ``ps`` state letters for ``pid``, or ``None`` when ``ps`` cannot say; the zombie reading mirrors engine_dispatch._process_alive."""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "state="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if out.returncode == 0:
+            stripped = (out.stdout or "").strip()
+            if stripped:
+                return stripped
+    except Exception:
+        pass
+    return None
+
+
 def _observed_process_state(pid):
     """Return a description of ``pid`` if still present, else ``None`` when gone."""
-    proc_stat = os.path.join("/proc", str(pid), "stat")
+    proc_stat = os.path.join(_PROC_ROOT, str(pid), "stat")
     if os.path.isfile(proc_stat):
         try:
             with open(proc_stat, encoding="utf-8") as handle:
@@ -75,7 +104,20 @@ def _observed_process_state(pid):
         return None
     except PermissionError:
         return "alive (kill(pid, 0) raised PermissionError; /proc unavailable)"
-    return "alive (kill(pid, 0) succeeded; /proc unavailable)"
+    # kill(pid, 0) succeeds for a zombie; ps settles it (mirrors engine_dispatch._process_alive).
+    ps_state = _ps_process_state(pid)
+    if ps_state is not None and ps_state.startswith("Z"):
+        return None
+    if ps_state is None:
+        # ps could not say: the pid may have been reaped after kill(pid, 0) succeeded. Only a
+        # second kill(pid, 0) that finds no such process reads gone; anything else stays alive.
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return None
+        except PermissionError:
+            pass
+    return f"alive (kill(pid, 0) succeeded; /proc unavailable; ps state {ps_state!r})"
 
 
 def _wait_for_process_gone(pid, timeout=10):
