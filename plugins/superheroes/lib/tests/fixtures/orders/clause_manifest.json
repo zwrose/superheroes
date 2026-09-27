@@ -36,7 +36,7 @@
     "retry ONCE. If it still fails, STOP and report CHECK_FAILED",
     "autofix-probe-",
     "Commit ALL changes in ONE commit",
-    "do NOT guess. Report it for owner escalation (see Payload contract)"
+    "do NOT guess. Report it for owner escalation via the runner's native write-result contract"
   ],
   "dispatch-gap-sweep": [
     "You are the gap-sweep finder for a big-diff review round",
@@ -49,7 +49,7 @@
   ],
   "dispatch-audits": [
     "You are the fix auditor for one cleared-or-stalled finding target",
-    "You are **never** the fixer's vendor",
+    "When an independent runner-channel vendor is live, you are never the fixer's vendor",
     "Return exactly one audit result for this target",
     "Judge only this one target",
     "Never change the repository, and never claim a run you did not make",

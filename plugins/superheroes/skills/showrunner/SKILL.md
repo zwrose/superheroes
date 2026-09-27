@@ -780,7 +780,7 @@ above).
    builder's terminal outcome** with `record-outcome` before its successor launches — an unrecorded
    death makes the batch `indeterminate` and the successor's own outcome cannot repair it.
 
-   **An advisor orchestrating a wave owes a scheduled heartbeat sweep and one wave watch per batch,
+   **An advisor orchestrating a wave owes a scheduled liveness sweep and one wave watch per batch,
    and acts on what they report.** The sweep reports; it never asserts a lane dead, and it resumes
    nothing on its own. **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` when you run the sweep or read its classes.**
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` when you arm or re-arm a wave watch.**
@@ -793,7 +793,7 @@ above).
 
    **Done when:** every launch ran through the launcher on a recorded go with each check marked ran
    or N/A; every lane in the batch has its terminal outcome recorded, and your vet ruling recorded
-   for every delivered lane; `count` reads with no `indeterminate`; a wave has its heartbeat sweep
+   for every delivered lane; `count` reads with no `indeterminate`; a wave has its liveness sweep
    scheduled and its watch armed.
 10. **Provision slots for an authenticated wave.** When a build needs authenticated pilot coverage
    across multiple accounts, provisioning is yours before any headless builder launches — the builder

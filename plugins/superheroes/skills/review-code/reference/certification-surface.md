@@ -42,10 +42,11 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `verdict` | Loop terminal verdict (`converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, `capped-with-open-blocker`, `uncertified-manual`) |
 | `certificationShape` | Writer override — see certification-shape rule below |
 | `certification` | Loop state's `certification` block |
-| `rounds` | Per-round projection with disclosure channels via `receipt_disclosures` |
-| `findings` | Projected findings with dispositions and disposition proofs |
+| `rounds` | Per-round projection with disclosure channels via `receipt_disclosures`. Each round may carry `controlProbe` — the sampled competence-probe summary folded from legacy panel `canaryResult` when present; shape, outcome vocabulary, and when the probe runs are **Cross-vendor control probe** in `auto-fix-loop.md` (register R7: post-certification only). Recorded for disclosure; the certification writer never reads it into a verdict. Absent on older rounds means unrecorded. |
+| `findings` | Projected findings with dispositions and disposition proofs. Surviving Minor or Nit findings without a recorded disposition are omitted here and appear in `disclosures.survivingNonBlocking` instead. When state carries `dispositionLedgerOwner: "ledger"`, the disposition ledger is the durable owner of record — the writer's finding set is **seeded from the ledger** and every key it holds is graded, with a live row for the same key supplying the graded shape where one is still open. The writer does not yet read the ledger exclusively, so a live row can still supply a disposition family; the exclusive read — with its refusal for a live disposition the ledger does not hold — lands in a later layer. A `mergedInto` entry is graded through its representative; a chain that does not resolve refuses `disposition-without-receipt`. |
 | `decisions` | Loop decision log |
 | `seatMap` | Union projection from seat-map receipts |
+| `independence` | Audit independence block: `status`, `basis`, `fixerVendor`, `fixerFamily`, `declaredVendors`, `auditSeats[]` (`seat`, `round`, `vendor`, `family`, `model`), and when degraded `sameFamilySeats` |
 | `scriptRan` | Journal summary (`invocations`, `byPhase`) |
 | `degraded` | Degraded-prose lines from `build_degraded_prose` |
 | `skippedBlockers` | Owner-skipped judgment blockers (required, possibly empty) |
@@ -53,8 +54,8 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `terminalState` | `certified`, `cap`, or `cannot-certify` |
 | `terminalCause` | `null` when certified; otherwise `{kind, reason}` from the terminal-cause table |
 | `seats` | Per collected seat: `seat`, `phase`, `round`, `attempt`, `provenance` |
-| `disclosures` | `{importantOutOfScope: [...]}` — Important findings with valid out-of-scope follow-up |
-| `provenanceLabels` | `{derived: [...], makerAuthored: [...]}` naming which keys are journal-derived |
+| `disclosures` | `{importantOutOfScope: [...], survivingNonBlocking: [...]}` — `importantOutOfScope`: Important findings with valid out-of-scope follow-up; `survivingNonBlocking`: surviving Minor or Nit findings without a recorded disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`) |
+| `provenanceLabels` | `{derived: [...], makerAuthored: [...]}` — each entry is a top-level receipt key or one dotted nested path with `*` for any seat; derived entries are journal-derived, makerAuthored entries are projected from state |
 
 Optional keys when present in state: `base` (pinned-base metadata), `policyApplied`.
 
@@ -68,10 +69,10 @@ Four escape classes (`REFUSAL_CLASSES`). Each refusal is `{class, artifact, deta
 
 | Class | Refuses on | Artifact names |
 | --- | --- | --- |
-| `unrun-review` | A dispatch-observed or hand-landed seat lacks qualifying execution telemetry on the certified head | Seat key or envelope path |
+| `unrun-review` | A dispatch-observed or hand-landed seat lacks qualifying execution telemetry on the certified head; a host-channel (`file`) seat without runner evidence refuses here | Seat key, envelope path, or journal file |
 | `same-family-seat` | The seat map records same-family degradation, or registry lookup finds an undeclared seat in the maker's model family | First offending seat key |
 | `unfetched-findings` | Journal seat never closed; envelope missing or unreadable; journal/envelope hash disagreement; unreadable session/journal/state; orchestrator-fulfilled provenance on receipt | Path, seat key, or state file |
-| `disposition-without-receipt` | Base guard did not run; finding lacks disposition; fixed/refuted/out-of-scope disposition lacks required proof on certified head; Critical out-of-scope | Finding id or `loop-state.json` |
+| `disposition-without-receipt` | Base guard did not run; finding without disposition when severity is Critical (`Critical finding may not take the non-blocking path`) or Important (`finding has no disposition recorded`); severity outside the closed contract; fixed/refuted/out-of-scope disposition lacks required proof on certified head; Critical out-of-scope | Finding id or `loop-state.json` |
 
 A post-shrink escape in any of the four classes is filed as a **misses-log entry on the collector's
 pinned comment**, so the keep-or-retire list reads catches and escapes together.
@@ -85,10 +86,14 @@ from the four escape classes so misses-log escape accounting stays trustworthy.
 
 ## Execution-evidence field set
 
-Declared once in this module:
+One home in `session_contract` (`EXECUTION_EVIDENCE_BINDING_FIELDS`); the writer and records
+layer re-export the same tuple object.
 
-**Binding fields** (`EXECUTION_EVIDENCE_BINDING_FIELDS`): `source`, `runnerNonce`, `recordDigest`,
-`resultDigest`, `resultKind`.
+**Binding fields** (`session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS`): `source`,
+`runnerNonce`, `recordDigest`, `resultDigest`, `resultKind`, `runKind`. At terminal
+certification every binding field is mandatory on dispatch-observed and hand-landed evidence;
+at ingest `runKind` may still be absent on the durable projection (`round_records` optional
+field) and is refused at certification when missing or mismatched (`evidence-run-kind-mismatch`).
 
 **Observation fields** (`EXECUTION_EVIDENCE_OBSERVATION_FIELDS`): `tokens`, `toolCalls`,
 `stdoutBytes`, `wallSeconds`, `source`, `read`, `telemetry`.
@@ -97,6 +102,10 @@ Declared once in this module:
 
 - `read`: `engaged`, `unknown` (`EXECUTION_EVIDENCE_READ_VALUES`)
 - `telemetry`: `tool-calls`, `none` (`EXECUTION_EVIDENCE_TELEMETRY_VALUES`)
+- `runKind`: `review`, `write` (`session_contract.RUN_KIND_VALUES`); expected value per phase
+  from `session_contract.run_kind_for_phase` — `write` on `dispatch-fixer`, `review` on every
+  other driver dispatch phase (`session_contract.RUN_KIND_BY_PHASE`); refusal
+  `evidence-run-kind-phase-unknown` when the phase is outside that closed set
 
 Journal `recorded` rows and landed `seat-result/2` envelopes both carry an `executionEvidence`
 block validated against these same constants — `_journal_execution_binding` reads binding fields
@@ -117,6 +126,21 @@ envelope evidence against the same binding and observation rules.
 `provenance: hand-landed`, the receipt's `certificationShape` is `audited-chain` — never
 `full-panel-confirmed`, and any `full-panel*` shape in loop state is downgraded the same way.
 Otherwise the shape follows loop state's `certification.shape`.
+
+**Audited-chain fix-receipt reconciliation.** A fix audit whose ruling is
+`discharged-but-new-issue` counts toward the fix-receipt leg only after every new issue that
+audit raised (linked by `originAuditId` to that audit's fold id) carries a closed disposition
+from `session_contract.DISPOSITIONS` on the disposition ledger, with the raise recorded at or
+after the audit round and the disposition sequence strictly after the raise sequence. Until that
+reconciliation holds, certification refuses recoverably under `unrun-review` with binding failure
+`execution-evidence-stale-head` and a gap suffix that names the fault:
+`new-issue-undispositioned` when a valid ledger row lacks a qualifying disposition;
+`new-issue-evidence-malformed` for unusable audit-linked candidates;
+`new-issue-ledger-owner-unrecognized` or `new-issue-ledger-malformed` for ledger-owner/read
+faults; `new-issue-duplicate-identity` for duplicate ledger keys;
+`new-issue-merge-unresolvable` when a merge chain does not resolve. Recoverable
+`new-issue-undispositioned` clears when the missing dispositions land, without re-running the
+original fix audit.
 
 ## Head-content contract (`head-content-blobs.json`)
 
@@ -151,7 +175,7 @@ failure refuses `disposition-without-receipt` with the named binding failure:
 | 6 | `reads[]` has a row for `(certified head, path)` | `fix-content-missing` |
 | 7 | Row `readError` is null (read succeeded) | `fix-content-unreadable` |
 | 8 | SHA-256 over `files[path]` decoded bytes equals row `contentDigest` | `fix-content-reverted` |
-| 9 | Row `contentDigest` equals the finding's `dispositionReceipt.fixContentDigest` | `fix-content-reverted` |
+| 9 | Row `contentDigest` at the certified head equals `dispositionReceipt.fixContentDigest` (recorded at fix-fold, preserved through terminal re-bind) | `fix-content-reverted` |
 
 **Residual.** Step 8 refuses a blob whose recorded content does not hash to its recorded digest, but
 a journal-only writer that may not read git **cannot** verify that a read ever happened — a fully

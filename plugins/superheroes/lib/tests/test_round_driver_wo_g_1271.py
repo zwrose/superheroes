@@ -174,7 +174,9 @@ def test_cleared_disposition_findings_remain_in_certification_view():
         isinstance(entry, dict) and entry.get("id") == "F-fixed"
         for entry in (state.get("dispositionLedger") or [])
     )
-    certified = RC._certification_findings(state)
+    by_key, refusal = RC._certification_findings_by_key(state)
+    assert refusal is None
+    certified = list(by_key.values())
     ids = {f.get("id") for f in certified if isinstance(f, dict)}
     assert "F-fixed" in ids
 
@@ -259,8 +261,9 @@ def test_fix_fold_head_resolution_failure_refuses(tmp_path, monkeypatch):
         session_dir=str(session_dir),
     )
 
-    assert state["rounds"][str(state["round"])]["fixFoldHeadRefused"]
-    assert "git rev-parse HEAD failed" in state["rounds"][str(state["round"])]["fixFoldHeadRefused"]
+    # re-pinned (#1272 layer 2d): the fixer fold now advances the round; the refusal is recorded on the fold's own round
+    assert state["rounds"]["1"]["fixFoldHeadRefused"]
+    assert "git rev-parse HEAD failed" in state["rounds"]["1"]["fixFoldHeadRefused"]
     assert "fixContentHeadSha" not in (state["findings"][0].get("dispositionReceipt") or {})
     assert not os.path.isfile(os.path.join(session_dir, RD.HEAD_CONTENT_BLOBS_FILE))
 

@@ -16,12 +16,13 @@ import engine_adapter
 import model_registry
 import payload_contracts
 import review_findings_schema
+import session_contract
 
 CHANNEL_NATIVE = "native"
 CHANNEL_MARKER = "marker"
 
-RUN_KIND_REVIEW = "review"
-RUN_KIND_WRITE = "write"
+RUN_KIND_REVIEW = session_contract.RUN_KIND_REVIEW
+RUN_KIND_WRITE = session_contract.RUN_KIND_WRITE
 
 # Native results are structured JSON written to a dedicated file; the authoritative cap lives on
 # engine_adapter.ENGINE_OUTPUT_MAX_BYTES (engine_dispatch.MAX_STDOUT_CAPTURE reads the same home).
