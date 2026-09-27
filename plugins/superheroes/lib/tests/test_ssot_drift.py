@@ -2641,7 +2641,9 @@ def test_count_result_blocks_in_showrunner_orchestration_page():
 def test_showrunner_provisioning_duty_load_bearing_content():
     """§11: skills/showrunner/reference/provisioning.md carries load-bearing provisioning clauses
     moved off duty 10 by the charter restructure."""
-    # axis: presence of each of the four provisioning clauses on the page that now holds them; each clause alone must fail this guard.
+    # axis: presence of each of the four provisioning clauses on the page that now holds them; each
+    # clause alone must fail this guard. The launcher element guards both the heading and the
+    # operative instruction — either one going missing alone must fail this guard.
     text = _read("skills/showrunner/reference/provisioning.md")
     lower = re.sub(r"\s+", " ", text.lower())
     missing = []
@@ -2651,7 +2653,7 @@ def test_showrunner_provisioning_duty_load_bearing_content():
         missing.append("partial-failure no-go rule")
     if "acceptance record (who accepted, when, and why)" not in lower:
         missing.append("weaker-acceptance record")
-    if "the launcher carries the slot" not in lower:
+    if "the launcher carries the slot" not in lower or "supply the slot and generation" not in lower:
         missing.append("launcher-carries-the-slot clause")
     assert not missing, (
         "skills/showrunner/reference/provisioning.md missing load-bearing element(s): %s"
