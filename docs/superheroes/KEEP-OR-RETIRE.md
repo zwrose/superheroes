@@ -1297,21 +1297,6 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** capability-gap — the file exists to compensate for a model that reaches for the
   pre-native mental model; evidence observed on the Claude family.
 
-#### E13 — The covenant merge-line test
-
-- **Component.** `lib/tests/test_covenant_merge_line.py`, pinning the covenant's merge hard
-  line to keep its compaction-safe minimum: the owner's word for a merge itself, the three
-  merge preconditions (review evidence, CI green, branch current with base), the own-word
-  requirement for release/publish/force-push, and the pointer to the showrunner charter's
-  duty 6.
-- **Start date.** 2026-09-27.
-- **Condition.** Citation-based, 45 days.
-- **Last demonstrated benefit.** unknown — ships with this change.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** structural — one bullet, closed enumeration of its six elements; an element-presence
-  check only, not a sentence pin.
-
 ### F. Config & calibration
 
 #### F1 — Configure + calibration + modes
