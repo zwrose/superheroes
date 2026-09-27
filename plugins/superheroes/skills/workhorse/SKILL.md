@@ -479,9 +479,11 @@ need that surfaces mid-run parks the same way, because a running headless sessio
 **Read `skills/workhorse/reference/dispatch-mechanics.md` § Awaiting a dispatch — the in-turn contract when you launch, continue, or batch a dispatch, or decide how to wait.**
 
 **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present, stamp the
-builder liveness heartbeat with `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" stamp` at each
-state change, per CONVENTIONS §15, and stamp `parked` and `handback` only after the durable evidence
-exists. When it is absent the session is not advisor-managed, so never invent an id.
+builder heartbeat with `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" stamp` per
+CONVENTIONS §15: one `working` stamp at intake (it proves the store is writable), `blocked` when blocked on
+something only the owner or advisor can clear, `working` again when the blocker clears, and `parked`
+and `handback` only after the durable evidence exists. When it is absent the session is not
+advisor-managed, so never invent an id.
 
 **Done when:** every work order was linted, gated, and dispatched with its provenance row recorded,
 and every dispatch returned a terminal result in-turn or sits behind a durable park.

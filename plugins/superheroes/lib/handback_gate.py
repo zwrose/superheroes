@@ -43,6 +43,7 @@ import os
 import re
 import subprocess
 
+import review_diff_bytes
 import round_driver as RD
 import round_records as RR
 import store_core
@@ -778,35 +779,16 @@ def _refuse(reason, detail, *, subject=None, sidecar_path=None, head_sha=None):
     }
 
 
-def _recompute_diff_sha256(base_sha, repo_root):
+def _recompute_diff_sha256(base_sha, repo_root, head_sha):
     """Pinned diff recompute — plain ``git diff`` matching production review-code."""
     try:
-        r = subprocess.run(
-            ["git", "-C", repo_root, "diff", "%s...HEAD" % base_sha],
-            capture_output=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
+        r = review_diff_bytes.run_git_diff_three_dot(
+            repo_root, base_sha, head_sha, timeout=10)
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
     if r.returncode != 0:
         return None
     return hashlib.sha256(r.stdout).hexdigest()
-
-
-def _resolve_implicit_pr_base(cwd, run_git):
-    """Resolve ``gh pr create`` implicit ``--base`` from local git config — invariant (b)."""
-    branch = run_git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-    if branch and branch != "HEAD":
-        merge_base = run_git(cwd, "config", "--get", "branch.%s.gh-merge-base" % branch)
-        if merge_base:
-            return merge_base
-    sym = run_git(cwd, "symbolic-ref", "refs/remotes/origin/HEAD")
-    if sym:
-        ref = sym.strip()
-        prefix = "refs/remotes/origin/"
-        if ref.startswith(prefix):
-            return ref[len(prefix):]
-    return None
 
 
 def _origin_owner(cwd, run_git):
@@ -974,7 +956,7 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
     if action == "pr-create":
         cmd_base = pr.get("base")
         if cmd_base is None:
-            cmd_base = _resolve_implicit_pr_base(cwd, run_git)
+            cmd_base = store_core.resolve_implicit_pr_base(cwd, run_git)
             if cmd_base is None:
                 return _refuse("handback-subject-unresolvable",
                                 "pr create without --base cannot be bound to sidecar "
@@ -1004,10 +986,10 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
                         "git rev-parse for sidecar baseSha %r failed" % pinned_base,
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
-    recomputed_diff = _recompute_diff_sha256(pinned_base, cwd)
+    recomputed_diff = _recompute_diff_sha256(verified_base, cwd, head_sha)
     if recomputed_diff is None:
         return _refuse("handback-inspection-failed",
-                        "diff recompute for %s...HEAD failed" % pinned_base,
+                        "diff recompute for %s...%s failed" % (pinned_base, head_sha),
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
     if recomputed_diff != sidecar.get("diffSha256"):

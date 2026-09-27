@@ -6,7 +6,7 @@
 - [Amending a lane's record](#amending-a-lanes-record)
 - [The ledger is version-coupled](#the-ledger-is-version-coupled)
 - [The launcher provisions each build's worktree](#the-launcher-provisions-each-builds-worktree)
-- [Heartbeat sweep and wave watch](#heartbeat-sweep-and-wave-watch)
+- [Liveness sweep and wave watch](#liveness-sweep-and-wave-watch)
 - [Adoption mechanics](#adoption-mechanics)
 
 # Orchestration — launcher, ledger, and wave mechanics
@@ -69,21 +69,24 @@ commit. It records the path on the `reserved` record and starts the session insi
 already exists, or that git still registers, **refuses the launch** (`launch-worktree-collision`):
 reap the stale checkout, then relaunch. Never force it.
 
-## Heartbeat sweep and wave watch
+## Liveness sweep and wave watch
 
-**Scheduled heartbeat sweep.** An advisor orchestrating a wave owes a scheduled sweep that resumes
-stalled lanes — not a one-off rescue when something feels wrong. Run
-`python3 -B <plugin root>/lib/heartbeat.py sweep --repo-root <repo-root>`, read the classes, and
-**act**: resume or investigate.
+**Scheduled liveness sweep.** An advisor orchestrating a wave owes a scheduled two-read sweep — not a
+one-off rescue when something feels wrong.
 
-- `stale` means the lane outran **its own promise** (`staleAfterSeconds`, which the builder
-  stamped).
-- `unknown` means the signal could not be read. It is **actionable, not clean**.
-- `terminal` on a launch the ledger still reports live is **actionable pending `record-outcome`**,
-  never a resolved lane.
+- **Liveness:** run
+  `python3 -B <plugin root>/lib/wave_watch.py run --repo-root <repo-root> --batch <id>` per live
+  batch. `lane-stale` means the pid is live and the session transcript is quiet past
+  `LIVENESS_QUIET_WINDOW_SECONDS`, or could not be resolved: investigate or resume.
+- **Endings:** run `python3 -B <plugin root>/lib/heartbeat.py sweep --repo-root <repo-root>` and read
+  the classes.
+  - `terminal` on a launch the ledger still reports live is **actionable pending `record-outcome`**,
+    never a resolved lane.
+  - `unknown` means the signal could not be read. It is **actionable, not clean**.
+  - `nonterminal` says nothing about liveness.
 
 The sweep **reports; it never asserts a lane is dead** — a heartbeat cannot prove death — and it
-never resumes anything on its own. You act on what it reports. The script is `lib/heartbeat.py`.
+never resumes anything on its own. You act on what it reports.
 
 **Wave watch.** Arm one harness **background task per batch** — a `loop` invocation that re-arms
 internally — instead of hand-rolling a per-session watch loop. There is no daemon to orphan. The

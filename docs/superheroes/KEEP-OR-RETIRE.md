@@ -299,31 +299,28 @@ The list's units are the census rows, and each entry is keyed to its census id.
 
 #### B3 — Heartbeat
 
-- **Component.** Semantic builder heartbeat stamp and advisor sweep classifier; a false `fresh`
-  answer is the dangerous failure mode, and every lane carries periodic stamp overhead.
+- **Component.** Builder heartbeat stamp and advisor sweep classifier for lane **endings** (`terminal`,
+  `nonterminal`, `unknown`); every launcher-issued lane carries stamp overhead at intake and on
+  block/park/handback.
 - **Start date.** 2026-09-15.
-- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing
-  heartbeat sweep classifications of `stale` or `terminal` that drove advisor or wave_watch action.
-  On firing, a proposal to the owner at a gardening pass.
+- **Condition.** Citation-based, 45 days — vet, forfeit-dispute, or incident receipts citing a
+  `lane-terminal` / `lane-blocked` event or a sweep `terminal` class that drove advisor action. On
+  firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Classified six stalled lanes in one advisor sweep
   (the assessment record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — fail-closed liveness signal for unattended builders; a low catch count
-  means builders are finishing, not that wedged lanes stopped happening. **Outcome at the
-  orchestration decommission: kept, and it stays the lane's terminal signal.** The catch it adds
-  that the transcript freshness check lacks is the dead-versus-done distinction: a lane that ends
-  with its handback or park posted stamps a terminal state, which the watcher reports as
-  `lane-terminal`, and a lane's own `blocked` stamp becomes `lane-blocked`; a lane that dies with
-  neither surfaces only as `builder-exited`, from its pid. A cold transcript and an exited pid read
-  the same for a handback, a park, and a crash; the trial receipt's heartbeat line
-  (`LEDGERS.md` §5.4) records the same trap for idle signals, which report a wedged lane as idle
-  and so read as completion. Record, read 2026-09-25: 600 lane heartbeat files across the two
-  launch-ledger roots under `~/.claude/superheroes-launch-ledger/`, 539 of them carrying a terminal
-  stamp (329 `handback`, 210 `parked`). On the stale class the record shows no such catch: 25
-  watcher logs under `~/.claude/wave-logs/superheroes/` carry `stale-suppressed-transcript-fresh`
-  and none carries an emitted `lane-stale`, so there the transcript overruled every heartbeat-stale
-  reading.
+- **Notes.** structural — fail-closed **ending** signal for unattended builders. **Split
+  2026-09-26 (owner ruling):** the "still alive" half **retired** — the builder's
+  `--stale-after` promise, heartbeat `fresh`/`stale` classes, and transcript-second-chance
+  suppression. Record: 25 watch logs where the transcript overruled every heartbeat-stale reading and
+  none emitted `lane-stale`; the 2026-09-26 seat-resume specimen where 3 of 4 live, working builders
+  read stale 2.2–4.3 h past their promises with transcripts written within 8 minutes. Liveness is
+  now one rule in `lib/wave_watch.py` (pid live plus transcript quiet window). The **ending** half
+  **kept**: 539 of 600 lanes carry a terminal stamp (329 `handback`, 210 `parked`) — the
+  dead-versus-done distinction a cold transcript and an exited pid cannot make alone; a lane that
+  ends with its handback or park posted stamps a terminal state (`lane-terminal`), and `blocked`
+  becomes `lane-blocked`; a lane that dies with neither surfaces as `builder-exited` from its pid.
 
 #### B4 — Seat canary (planted-defect control probe)
 
@@ -737,7 +734,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** structural — a single writer for the certified receipt is a load-bearing boundary; no
   engine family applies.
 - **Property.** Hand-landed single-source binding — for a hand-landed seat the binding has one
-  source, the landed envelope: `round_driver._journal_revision_fields` copies `executionEvidence` from
+  source, the landed envelope: `round_records.recorded_row_fields` copies `executionEvidence` from
   that envelope into the `record-result` journal row, so the row the writer reads is derived from the
   same envelope it is compared against, not independent corroboration. The writer resolves evidence by
   provenance — telemetry on the certified head for a dispatch-observed seat, the envelope's
@@ -746,13 +743,54 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   full-panel-confirmed.
 - **Property condition.** Usage-based, 60 days: a hand-landed seat gains an independent record of its
   landing that the journal can cross-check. On firing, a proposal to the owner at a gardening pass.
-- **Property.** A hand-landed envelope carries no cited head at all — neither
-  `round_records.SEAT_RESULT_V2_FIELDS` nor `EXECUTION_EVIDENCE_FIELDS` contains `headSha` — so a
-  hand-landed seat's evidence is bound by the envelope's payload/evidence binding and is never
-  head-bound; the writer's dead read of that absent field has been removed rather than left as a
-  guard that cannot be one.
+- **Property.** The v2 envelope may carry an optional `headSha`, checked against the emission anchor
+  at ingestion; the recorded row's `citedHead` is the anchor head. A hand-landed seat's evidence is
+  bound by the envelope's payload/evidence binding and is never head-bound unless the envelope
+  declares a head.
 - **Property condition.** Usage-based, 60 days: a landed envelope carries a cited head the writer
   can check. On firing, a proposal to the owner at a gardening pass.
+
+#### D32 — The recorded-row revision-identity chokepoint
+
+- **Component.** `round_records.require_complete_revision` at both journal sinks
+  (`round_driver._journal_append` and `round_commit.Commit.add_journal_append`) — refuses a
+  `recorded` row missing any key of `REVISION_IDENTITY_FIELDS` before it reaches disk; refusal
+  tokens `recorded-row-incomplete` / `IncompleteRevisionIdentity`.
+- **Start date.** 2026-09-18.
+- **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
+  `recorded-row-incomplete` or `IncompleteRevisionIdentity` as the thing that blocked a partial
+  recorded row. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown — it ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one builder (`recorded_row_fields`) and two sink guards so a row missing
+  its revision identity is refused at write time rather than at each call site. No engine family
+  applies.
+
+#### D33 — The staging chokepoint and the departure archive
+
+- **Component.** `round_driver._stage_findings` (the only writer of `_toVerify`; seeds the ledger)
+  and `_archive_departures` (every departure lands in the ledger); the refusal surfaces as the
+  writer's "finding has no disposition recorded".
+- **Start date.** 2026-09-19.
+- **Condition.** Citation-based, 45 days.
+- **Last demonstrated benefit.** unknown — ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — one seeding site and one archive site so a raised finding cannot escape
+  the writer.
+
+#### D34 — The evidence-digest drift test
+
+- **Component.** `lib/tests/test_evidence_digest_subject_1272.py`, pinning
+  `session_contract.evidence_digest_subject` equal to `engine_adapter.review_payload_carried` for
+  every result kind (the writer cannot import the adapter).
+- **Start date.** 2026-09-19.
+- **Condition.** Citation-based, 45 days.
+- **Last demonstrated benefit.** unknown — ships with this change.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a leaf rule beside a type-declared one, pinned equal.
 
 #### D19 — `check_unrun_review`
 
@@ -2088,3 +2126,7 @@ file, returns exactly that set.
   its boundary, for every lane of a wave and not merely for most lanes, so that ending a turn stops
   costing the result; the supervising process surviving a turn boundary does not satisfy this on its
   own. (Receipt: **needed**, LEDGERS.md §5.4, "the turn-end doctrine and its slice recipes".)
+- `plugins/superheroes/lib/round_driver.py` — the `order-anchor` cited-head derivation retained for
+  write runs and for records landed without a runner run directory. **delete-when:** every seat's
+  evidence is minted from a runner record, so `runner-view` is the only derivation a `recorded` row
+  can declare.
