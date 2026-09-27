@@ -404,11 +404,13 @@ ingesting):
 | `executionEvidence` | Optional runner telemetry block (`source`, `runnerNonce`, `recordDigest`, `observation`) stamped by `record-result --evidence-run-dir` for `dispatch-observed` seats |
 | `provenance` | One of `dispatch-observed`, `hand-landed`, `orchestrator-fulfilled` — required at v2; emission stubs for dispatch phases carry `dispatch-observed` |
 | `envelopeSha256` | SHA-256 over canonical `{"payload": <payload>, "executionEvidence": <evidence-or-null>}`; required at ingest — an absent or mismatched value is refused **`envelope-torn`** |
+| `headSha` | Optional; the emission stub carries the head the driver bound into the orders anchor at emission — when present it must equal the anchor's head (refused **`head-anchor-mismatch`**), and an envelope carrying one against an anchor that has none is refused **`head-anchor-unanchored`** |
 
 All other fields match `seat-result/1`. The emission stub never carries `recordedAt`, `payloadSha256`,
 `executionEvidence`, or `envelopeSha256` — the orchestrator stamps `recordedAt` and `payloadSha256`
 when landing, and `record-result` computes `envelopeSha256` (and may add `executionEvidence`) at
-ingest.
+ingest; when the orders anchor carries a head, the emission stub may carry `headSha` bound to that
+anchor.
 
 The **`seat-missing/1`** shape is deliberately different: it records a seat that produced no artifact
 and carries **no** `payload` or `payloadSha256` — instead `reason` (one of `forfeit`, `timeout`,
@@ -445,7 +447,9 @@ file.
 
 The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and journaled as
 `orders-emitted`; ingestion checks envelopes against that anchor (`manifest-anchor-mismatch` when
-they disagree).
+they disagree). The anchor and the hashed manifest also carry the emission head as `headSha`, which
+every `recorded` journal row carries as `citedHead` — the head the order was bound to at emission,
+not a runner-observed view head.
 
 **Order-input ownership.** Orders cite round-scoped paths that must exist before a seat can run.
 The driver materializes them before order emit (see also the inline comment at
@@ -684,6 +688,11 @@ cannot is an overclaim.
 ## Journal and receipt
 
 **Journal (`driver-journal.jsonl`).** One JSON object per line: `{cmd, phase, round, attempt, outcome, ts}`.
+Every `recorded` row carries the complete revision identity — `payloadSha256`, `casToken`,
+`executionEvidence`, `provenance`, `envelopeSha256`, `executionEvidencePresent`, `citedHead` — built
+from the stored envelope; a row missing any of them is refused at the write (**`recorded-row-incomplete`**
+inside a commit); a sweep or reappend whose store record cannot be read refuses
+**`recorded-row-store-unreadable`** and journals nothing.
 Outcomes include `refused-base-guard` when `next` is rejected by the base guard before round work.
 The receipt's `scriptRan` field summarizes it: `{invocations, byPhase}` where `byPhase` counts
 `next:<phase>` and `submit:<phase>` entries. A terminal on the mandated path has a non-empty journal.

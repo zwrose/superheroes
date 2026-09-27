@@ -66,7 +66,9 @@ SEAT_RESULT_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", 
                       "model", "dispatchRef", "orderSha256", "manifestSha256", "recordedAt",
                       "payloadSha256", "payload")
 SEAT_RESULT_V2_FIELDS = SEAT_RESULT_FIELDS + ("executionEvidence", "provenance",
-                                              "envelopeSha256")
+                                              "envelopeSha256", "headSha")
+REVISION_IDENTITY_FIELDS = ("payloadSha256", "casToken", "executionEvidence", "provenance",
+                            "envelopeSha256", "executionEvidencePresent", "citedHead")
 PROVENANCE_DISPATCH_OBSERVED = "dispatch-observed"
 PROVENANCE_HAND_LANDED = "hand-landed"
 PROVENANCE_ORCHESTRATOR_FULFILLED = "orchestrator-fulfilled"
@@ -150,6 +152,62 @@ def envelope_sha256(payload, execution_evidence):
     evidence together, so real evidence from one act can never be re-paired with different
     content."""
     return sha256_text(canonical({"payload": payload, "executionEvidence": execution_evidence}))
+
+
+class IncompleteRevisionIdentity(ValueError):
+    """A `recorded` journal row or its builder input lacks complete revision identity."""
+
+    def __init__(self, missing):
+        self.missing = tuple(missing)
+        super().__init__("incomplete revision identity: missing %s" % (self.missing,))
+
+
+def execution_evidence_fields(evidence):
+    """Mandatory execution-evidence members plus each optional field when present, or None when a
+    mandatory member is missing — the one projection a journal row and a dispatch record copy."""
+    if not isinstance(evidence, dict):
+        return None
+    if not all(field in evidence for field in EXECUTION_EVIDENCE_FIELDS):
+        return None
+    out = {field: evidence[field] for field in EXECUTION_EVIDENCE_FIELDS}
+    for field in EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
+        val = evidence.get(field)
+        if isinstance(val, str) and val:
+            out[field] = val
+    return out
+
+
+def recorded_row_fields(stored_envelope, cited_head):
+    """THE builder for revision identity on a `recorded` journal row.
+
+    Accepts a stored `seat-result/1`, `seat-result/2`, or `seat-missing/1` envelope; a non-dict
+    raises `IncompleteRevisionIdentity` because a row with no stored envelope has no revision
+    identity to record."""
+    if not isinstance(stored_envelope, dict):
+        raise IncompleteRevisionIdentity(REVISION_IDENTITY_FIELDS)
+    schema = stored_envelope.get("schema")
+    if schema not in SEAT_RESULT_SCHEMAS and schema != SEAT_MISSING_SCHEMA:
+        raise IncompleteRevisionIdentity(REVISION_IDENTITY_FIELDS)
+    execution_evidence = execution_evidence_fields(stored_envelope.get("executionEvidence"))
+    return {
+        "payloadSha256": stored_envelope.get("payloadSha256"),
+        "casToken": envelope_cas_token(stored_envelope),
+        "executionEvidence": execution_evidence,
+        "provenance": stored_envelope.get("provenance"),
+        "envelopeSha256": stored_envelope.get("envelopeSha256"),
+        "executionEvidencePresent": "executionEvidence" in stored_envelope,
+        "citedHead": cited_head,
+    }
+
+
+def require_complete_revision(entry):
+    # axis: every `recorded` row must carry the full revision-identity tuple before it reaches disk.
+    if not isinstance(entry, dict) or entry.get("outcome") != "recorded":
+        return None
+    missing = tuple(field for field in REVISION_IDENTITY_FIELDS if field not in entry)
+    if missing:
+        raise IncompleteRevisionIdentity(missing)
+    return None
 
 
 def envelope_cas_token(envelope):
@@ -421,7 +479,7 @@ def _anchor_check(envelope, seat_key, anchor, occurrence=0):
     env_order = envelope.get("orderSha256")
     if anchor is None:
         if env_manifest == NOT_EMITTED and env_order == NOT_EMITTED:
-            return None
+            return _head_anchor_check(envelope, anchor)
         return "manifest-anchor-unanchored"
     if not isinstance(anchor, dict):
         return "manifest-anchor-mismatch"
@@ -441,11 +499,23 @@ def _anchor_check(envelope, seat_key, anchor, occurrence=0):
     if env_order == NOT_EMITTED:
         if want_order != NOT_EMITTED:
             return "manifest-anchor-mismatch"
-        return None
+        return _head_anchor_check(envelope, anchor)
     if want_order == NOT_EMITTED:
         return "manifest-anchor-mismatch"
     if env_order != want_order:
         return "manifest-anchor-mismatch"
+    return _head_anchor_check(envelope, anchor)
+
+
+def _head_anchor_check(envelope, anchor):
+    env_head = envelope.get("headSha")
+    if env_head is None:
+        return None
+    anchor_head = anchor.get("headSha") if isinstance(anchor, dict) else None
+    if not anchor_head:
+        return "head-anchor-unanchored"
+    if env_head != anchor_head:
+        return "head-anchor-mismatch"
     return None
 
 
