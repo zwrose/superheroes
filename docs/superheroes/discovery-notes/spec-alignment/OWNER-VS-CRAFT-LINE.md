@@ -162,3 +162,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
   testing; what it turns up is an error for review or a quality-bar call (already owner).
 - Owner list judged "good for an initial list" (answers the "anything missing?" item).
 - Category 5/6 (owner's own time, attention, and habits): tentative keep confirmed as a firm keep.
+- "Craft shown to the owner" bucket: DROPPED. Every craft call is already recorded for the owner's veto (glossary craft-call definition), and a real owner consequence is raised as its own decision by the consequence rule. A size threshold like the light-lane line count is a quality-bar call (owner, asked).
