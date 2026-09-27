@@ -270,9 +270,10 @@ child of this project is a native stack; an exception is owner-ruled and recorde
 
 ### Layer
 
-One pull request in a stack, at one position, based on the branch of the layer below. See
-[native-stacks.md](native-stacks.md) § What a layer is and the workhorse charter §2 for the lane
-lifecycle.
+One pull request in a stack, at one position, based on the branch of the layer below, with its own
+sub-issue of the feature issue it breaks down. See [Each layer is a
+sub-issue](native-stacks.md#each-layer-is-a-sub-issue), [native-stacks.md](native-stacks.md) § What a
+layer is, and the workhorse charter §2 for the lane lifecycle.
 
 ## Threat and component tags
 
