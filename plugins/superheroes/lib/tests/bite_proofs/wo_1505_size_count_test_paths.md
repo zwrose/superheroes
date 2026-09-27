@@ -1,51 +1,35 @@
 # #1505 bite-proof — `is_test_path` test-path conventions
 
-Per-element bite-proof for the new `test_size_count.py` detectors. Each neutralization is one targeted edit to `plugins/superheroes/lib/size_count.py`; the named pytest node(s) ran alone (`-q -p no:cacheprovider` via `scripts/pinned-python`); the edit was reverted by writing back the pre-neutralization file content.
+Per-element bite-proof for the `test_size_count.py` detectors over `plugins/superheroes/lib/size_count.py`. For each element the production code was neutralized with one targeted edit, the whole test file ran, and then the edit was reverted by the inverse edit. The detectors were unedited throughout.
 
-**Command:**
+**Head proven:** `2127ae9b`, in a detached probe worktree at that commit. After each restore `git status --porcelain plugins/superheroes/lib/size_count.py` was empty.
+
+**Provenance:** the orchestrator ran these proofs (workhorse, Claude Opus 5.5). The implementer's first record (cursor `composer-2.5`) was replaced by this one: it attributed the `count()` test's red to E2, where the runs show it comes from E3, E6, E11 and E12.
+
+**Command** (whole file, so the red set per element is visible, not only the named node):
 
 ```
-scripts/pinned-python -B -X pycache_prefix=/private/tmp/wo1505-pyc -m pytest <node ids> -q -p no:cacheprovider
+scripts/pinned-python -B -X pycache_prefix=/private/tmp/wo1505-bp-pyc -m pytest plugins/superheroes/lib/tests/test_size_count.py -q -p no:cacheprovider -rf
 ```
 
-**Restore receipt:** after each inverse restore, `git diff --stat plugins/superheroes/lib/size_count.py` matched the pre-neutralization worktree state (`21 insertions, 2 deletions` vs base `981e892`).
+Node prefix `C` = `test_is_test_path_matches_each_convention`.
 
-## Summary
-
-| ID | Guarded element | Axis | Neutralization | Proving node(s) | Red (decisive) |
+| ID | Guarded element (`size_count.py` at `2127ae9b`) | Axis | Neutralization | Red set (exact) | Decisive red line |
 |---|---|---|---|---|---|
-| E1 | size_count.py:10 `TEST_DIR_NAMES` | `test` dir component | omit `"test"` from frozenset | `::test_is_test_path_matches_each_convention[dir-test]` | `assert False` on `test/integration/x.ts` |
-| E2 | size_count.py:10 | `tests` dir component | omit `"tests"` | `[dir-tests]`, `::test_is_test_path_matches_backslash`, `::test_count_skips_test_paths_and_counts_look_alikes` | dir-tests + backslash assert False; count `24 == 11` |
-| E3 | size_count.py:10 | `__tests__` dir | omit `"__tests__"` | `[dir-__tests__]` | assert False on `src/lib/__tests__/foo.ts` |
-| E4 | size_count.py:10 | `spec` dir | omit `"spec"` | `[dir-spec]` | assert False on `spec/models/user_rb.rb` |
-| E5 | size_count.py:10 | `e2e` dir | omit `"e2e"` | `[dir-e2e]` | assert False on `e2e/login.ts` |
-| E6 | size_count.py:12 `TEST_FILE_GLOBS` | `*.test.*` glob on file name | remove `"*.test.*"` line | `[glob-*.test.*]` | assert False on `src/foo.test.ts` |
-| E7 | size_count.py:12 | `*.spec.*` | remove `"*.spec.*"` | `[glob-*.spec.*]` | assert False on `src/foo.spec.tsx` |
-| E8 | size_count.py:12 | `test_*.py` | remove `"test_*.py"` | `[glob-test_*.py]` | assert False on `lib/test_x.py` |
-| E9 | size_count.py:12 | `*_test.py` | remove `"*_test.py"` | `[glob-*_test.py]` | assert False on `pkg/x_test.py` |
-| E10 | size_count.py:12 | `*_test.go` | remove `"*_test.go"` | `[glob-*_test.go]` | assert False on `pkg/x_test.go` |
-| E11 | size_count.py:27 | dir names only on path prefixes | `parts[:-1]` → `parts` | `::test_is_test_path_directory_names_never_match_the_file_name[test]` | `assert not True` on bare `test` |
-| E12 | size_count.py:30 | globs only on file name | fnmatch each `parts` component | `::test_is_test_path_globs_never_match_a_directory[src/widget.test.ts/index.ts]` | `assert not True` on `src/widget.test.ts/index.ts` |
-| E13 | size_count.py:48 `count()` | skip test paths | `if is_test_path(path):` → `if False:` | `::test_count_skips_test_paths_and_counts_look_alikes` | `assert 24 == 11` |
+| E1 | :10 `TEST_DIR_NAMES` member `test` | `test` as a directory | `{"test", "tests",` → `{"tests",` | `C[dir-test]` — 1 failed, 43 passed | `assert False` … `is_test_path('test/integration/x.ts')` |
+| E2 | :10 member `tests` | `tests` as a directory | drop `"tests", ` | `C[dir-tests]`, `test_is_test_path_matches_backslash` — 2 failed | `is_test_path('a/tests/b.py')` → False |
+| E3 | :10 member `__tests__` | `__tests__` as a directory | drop `"__tests__", ` | `C[dir-__tests__]`, `test_count_skips_test_paths_and_counts_look_alikes` — 2 failed | `is_test_path('src/lib/__tests__/foo.ts')` → False |
+| E4 | :10 member `spec` | `spec` as a directory | drop `"spec", ` | `C[dir-spec]` — 1 failed | `is_test_path('spec/models/user_rb.rb')` → False |
+| E5 | :10 member `e2e` | `e2e` as a directory | drop `, "e2e"` | `C[dir-e2e]` — 1 failed | `is_test_path('e2e/login.ts')` → False |
+| E6 | :12 glob `*.test.*` | test-named file | delete the `"*.test.*",` line | `C[glob-*.test.*]`, the `count()` test — 2 failed | `is_test_path('src/foo.test.ts')` → False |
+| E7 | :13 glob `*.spec.*` | spec-named file | delete the `"*.spec.*",` line | `C[glob-*.spec.*]` — 1 failed | `is_test_path('src/foo.spec.tsx')` → False |
+| E8 | :14 glob `test_*.py` | pytest-named file | delete the `"test_*.py",` line | `C[glob-test_*.py]` — 1 failed | `is_test_path('lib/test_x.py')` → False |
+| E9 | :15 glob `*_test.py` | pytest-named file | delete the `"*_test.py",` line | `C[glob-*_test.py]` — 1 failed | `is_test_path('pkg/x_test.py')` → False |
+| E10 | :16 glob `*_test.go` | Go test file | delete the `"*_test.go",` line | `C[glob-*_test.go]` — 1 failed | `is_test_path('pkg/x_test.go')` → False |
+| E11 | :27 `parts[:-1]` | directory names never match the file name | `for component in parts[:-1]:` → `for component in parts:` | all six `test_is_test_path_directory_names_never_match_the_file_name[...]` + the `count()` test — 7 failed | `assert not True` … `is_test_path('test')` |
+| E12 | :30 glob on `name` only | globs never match a directory | `fnmatchcase(name, pattern) for pattern in …` → `fnmatchcase(c, pattern) for c in parts for pattern in …` | all three `test_is_test_path_globs_never_match_a_directory[...]` + the `count()` test — 4 failed | `assert not True` … `is_test_path('src/widget.test.ts/index.ts')` |
+| E13 | :47 `count()` skips test paths (the consumer) | test lines stay out of both counts | `if is_test_path(path):` → `if False:` | `test_count_skips_test_paths_and_counts_look_alikes`, `test_test_paths_are_excluded` — 2 failed | `assert 24 == 11`; `Left contains one more item: {'path': 'pkg/tests/t_test.py', 'lines': 5}` |
 
-## Green
+**Restore receipts:** after the E1–E5 restores, after E6–E10 and after E11–E13, the whole file ran `44 passed` with exit 0 and `git status --porcelain` over `size_count.py` printed nothing.
 
-Every neutralization was reverted; each proving node then passed (summary line `1 passed` or `3 passed` for E2). Final file run: **44 passed**.
-
-## E1 detail
-
-- **Neutralization:** `TEST_DIR_NAMES = frozenset({"tests", "__tests__", "spec", "e2e"})`
-- **Raw red:** `FAILED ...[dir-test]` — `AssertionError: assert False` for `test/integration/x.ts`
-- **Raw green:** `1 passed in ...`
-
-## E2 detail
-
-- **Neutralization:** omit `"tests"` from `TEST_DIR_NAMES`
-- **Raw red:** 2 failed (`dir-tests`, backslash); count test would also fail on same neutralization (included in red run)
-- **Raw green:** `3 passed`
-
-## E13 detail
-
-- **Neutralization:** `if False:` instead of `if is_test_path(path):`
-- **Raw red:** `assert 24 == 11` (test paths counted into tripwire)
-- **Raw green:** `1 passed`
+**Green:** `44 passed` (final run, exit 0).
