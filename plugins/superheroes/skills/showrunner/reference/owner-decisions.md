@@ -718,8 +718,9 @@ lanes → file its own issue; else a new surface → stack a layer; else same su
 line → fold into the child; the gardening record carries both counts.
 **Append-always at vet:** every owner call to the collector with door grading (machinery: band,
 evidence tier, resulting tier; product: classification and ratification) and venue on each append;
-an uncertain machinery grading, or a product item on no ratified milestone, reads
-`grading not yet settled` in those fields and still appends.
+an uncertain machinery grading marks each unsettled field `grading not yet settled` and keeps each
+settled one; a product item on no ratified milestone marks its ratification the same way; either
+still appends.
 **Registry:** `<!-- superheroes:revisit-registry -->` — one pinned comment, one line per declined
 item.
 
