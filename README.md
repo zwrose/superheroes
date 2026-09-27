@@ -89,6 +89,7 @@ conformance probe once per dispatchable engine before any builder launches.
 | `/superheroes:showrunner-handoff` | Hand the advisor seat over deliberately before this session goes dark. |
 | `/superheroes:showrunner-resume` | Pick the advisor seat back up from durable state in a new or restarted session. |
 | `/superheroes:checkpoint` | Freshen live state and emit a ready-to-paste `/compact` command before compaction. |
+| `/superheroes:adopt-version` | Take up a newly installed superheroes version in this live seat — diff, re-read what changed, run the upgrade checklist, and brief the owner — with no handoff. Works in any charter seat. |
 | `/superheroes:discuss-open-decisions` | Walk the owner through open decisions that are theirs — standing proposals, open parks, anything pending — filtered to what is genuinely theirs, in two batches with the blocking ones first. |
 
 ## Workhorse — the builder session
