@@ -1,116 +1,119 @@
-# The owner-decision vs craft line — derived from evidence (draft, unratified)
+# The owner-decision vs craft line
 
-**Status: candidate for the owner to keep / strike / reword. Not approved.** Derived 2026-09-21
-from 234 real cases where a decision turned out to be the owner's: 51 post-approval spec
-amendment entries (both repos) and 183 transcript moments where the owner reversed an agent's
-default or raised something nobody asked. Three Sonnet labelers described each case in plain
-words and judged who should own that kind of call; synthesis in the main session. Labels and
-the corpus are local under `docs/research/spec-alignment-transcript-mining/line/`.
+**Status: owner-ratified in chat 2026-09-21 to 2026-09-27, item by item, as an input to the
+spec-alignment discovery. Not shipped, not a spec, no work-item minted.** It strengthens the
+plugin's existing material-consequence line (glossary, and the showrunner issue contract's
+"Craft calls, owner calls, and the material-consequence line"); it is not a second line. The
+earlier derived draft is in git history. The owner's rulings, in order, are logged at the end.
 
-Caveats. The corpus is selected for cases where the owner *did* intervene, so the labelers'
-"owner" rate (164 of 234, 70%) is biased upward. Superheroes-shaped decisions dominate by
-volume (105 owner-workflow vs 56 end-user-visible), because there were more superheroes
-transcripts, not because they matter more. Nothing here is measured against a control.
+Derived from 234 real cases where a decision turned out to be the owner's (51 post-approval
+spec amendments across two repos, 183 transcript moments). The corpus is selected for owner
+interventions, so it under-samples craft; the craft list was filled out by owner ruling.
 
-## The line, in one paragraph
+## The line
 
-A decision is the owner's when getting it right needs something only the owner has: how the
-product should feel or what it should mean to a person using it; a fact about real usage; the
-owner's risk tolerance, stated principles, or personal preferences; the owner's own time,
-attention, and habits; or a judgment about whether something should exist at all given what it
-costs to build and keep. A decision is craft when the right answer is derivable from what
-already exists: an approved decision, a design board, a stated rule, the codebase, a checkable
-fact, or ordinary correctness, consistency, and hygiene.
+A decision is the owner's when getting it right needs something only the owner has: who the
+product is for and what it is for, what it means to a person, what they see at a given moment,
+whether it should exist at all, how much risk and cost to carry, the owner's own time and
+habits, a case no stated principle settles, the quality bar, the words users read, and
+priority. How it gets built, tested and cleaned up is craft, and so is anything an approved
+decision or rule already answers. A craft choice never becomes the owner's, but an owner
+consequence it carries is raised as its own decision. When in doubt, it goes to the owner.
+Each owner ruling becomes a standing rule, so over time more of a project's calls become craft.
+Mistakes are not decisions; review catches them.
+
+## Scope
+
+- One line for the whole plugin and every adopting project: discovery, the advisor, merges,
+  post-approval fixes, deviations, follow-ups.
+- Categories and tests are generic. Examples illustrate; an owner's specific preferences are
+  that project's rulings, not part of the line.
+- The line is fixed. A project adjusts it only through the owner's rulings (a handed-back kind
+  of call becomes craft by test 4), recorded where agents read them. No per-project setting.
+- Doubt resolves to an owner call. Over-consultation is fixed by a fuller craft list and by
+  better presentation, never by moving the default.
 
 ## Four tests (apply in order)
 
-1. **Derivable?** Could the agent have got the answer from an approved artifact, a standing rule,
-   the code, or a fact it could check? → **craft**. (Matching a board exactly, applying
-   review-independence rules to a new context, flipping "awaiting" to "live", a dependency edge
-   that was claimed but not wired, a factual error in prose.)
-2. **Experience-dependent?** Does the answer depend on how a person will experience the product,
-   what a word will mean to them, or what real usage looks like? → **owner**.
-3. **Tolerance-dependent?** Does the answer depend on how much risk, cost, machinery, or
-   attention the owner is willing to carry, or on a principle the owner has stated? → **owner**.
-4. **Already handed back?** Was the owner asked this and did they defer it? → **craft**, and a
-   later disagreement is an amendment, not a defect (matches discovery's FR-20/21).
+1. **Derivable?** Could the answer come from an approved artifact, a standing rule, the code, or
+   a checkable fact? Then craft.
+2. **Experience-dependent?** Does it depend on how a person will experience the product, what a
+   word will mean to them, or what real usage looks like? Then owner.
+3. **Tolerance-dependent?** Does it depend on how much risk or cost the owner is willing to
+   carry, or on a principle the owner has stated? Then owner.
+4. **Already handed back?** Was the owner asked, and did they defer it? Then craft, and a later
+   disagreement is an amendment, not a defect.
 
-## The owner's categories, with examples from the corpus
+## Owner categories (initial list; expected to grow as real cases show gaps)
 
-1. **What the product means to a person.** The mental model behind a feature.
-   - Skipping a week clears its plan rather than suspending it (I174).
-   - "Today" is the device's calendar date, not a server clock (I034).
-   - The shopping list tracks one week at a time, not a merge of all upcoming weeks (I040).
-2. **What a person sees or can do in a situation.** Behavior at the screen, especially at first
-   contact. Most of these surfaced only when the owner walked a running preview.
-   - A warning about a day appears only where that day is visible (I025, I203).
-   - Shortening a week never silently drops a planned meal (I031).
-   - Increasing a checked-off item un-checks it and shows one row (I035).
-3. **Whether a thing exists at all.** Scope and cost-versus-value, including retiring built
-   machinery. The single largest owner category by count.
-   - No migration UI; a script, because the user base is two people (I189).
-   - Kill the two-tier sharing model; one edit level is enough (I186).
-   - Tear out the unused flake instrument; retire the merge-safety gate (I016, I093).
-4. **Risk tolerance and trust boundaries.** What is defended against, who may bypass, what is
-   stored, privacy defaults.
-   - Stop defending against untrusted contributors that never materialized (I097).
-   - Store no credentials for automated test waves (I041).
-   - Privacy default reversed at merge time to match an earlier ruling (I166).
-5. **The owner's own time, attention, and habits.** What reaches them, how, when, and what the
-   agent may commit them to.
-   - No issue filing without the owner's word (I047).
-   - The owner manages usage pacing; never hold a lane for quota (I161, I176).
-   - Notifications by email, not ntfy (I216, rejected twice).
-6. **Standing principles applied to a new case.** Autonomy, no machinery in place of judgment,
-   plain language, the product/craft line itself.
-   - Reject a dial for classifying machinery vs product; use judgment (I099).
-   - A dispatch-authority gate conflicts with the stated autonomy principle (I123).
-   - The real axis is product decisions vs craft decisions, not tiers (I159).
-7. **The quality bar and what counts as proof.** Thresholds, evidence before spend, whether a
-   residual defect ships.
-   - Clean-run threshold lowered from 30 to 10 (I005, I126).
-   - Two follow-ups declined for lack of evidence the problem happens (I056).
-   - Hold the merge and order a fix round rather than accept residuals (I058).
-8. **Words people will read.** Product copy and coined vocabulary that lands on every future
-   reader.
-   - Age-confirmation copy toned down so the product doesn't feel adult (I076).
-   - "Specify / Defer-to-build / Show-it" rejected as unclear names (I134).
-   - "Home" overloaded across two approved specs, caught late (I142).
-9. **Priority and timing.** What ships when, when to decide, how much to invest now.
-   - A feature pulled into the release once its real goal was clear (I043).
-   - Defer the terms document until just before go-live (I075).
-   - An eight-issue decomposition rejected as too much for now (I051).
+1. **Who the product is for and what it is for.** The root the others hang from. Needs a formal,
+   expected place to be documented (candidate requirement; owner leans toward configure).
+2. **What the product means to a person.** The idea behind a feature.
+3. **What a person sees or can do at a given moment.** Behavior on the screen. Kept separate from
+   2: an idea fits one sentence, a moment needs a concrete instance to look at.
+4. **Whether a thing should exist at all.** Scope, cost versus value, retiring built things.
+5. **Risk tolerance and trust.** What is defended against, who may bypass, what is stored,
+   privacy defaults.
+6. **The owner's own time, attention, and habits.** What reaches them, how and when, and what
+   agents may commit them to.
+7. **A case that tests or creates a principle.** If a stated principle plainly decides it,
+   craft; if the case seems to conflict with one, or no principle covers it, owner.
+8. **The quality bar and what counts as proof.** Thresholds, evidence before spend, whether a
+   known residual defect ships.
+9. **All user-facing copy.** Agents draft; the owner approves. "User-facing" means what the
+   product says to its users (for this plugin: session messages, prompts, reports, README,
+   command descriptions). Instruction text agents read stays craft under the prose standard.
+10. **Priority and timing.** What ships when, when to decide, how much to invest now. The shape of
+    a breakdown is craft.
 
-## Craft, with examples
+## Craft (always craft; agents decide, record for the owner's veto)
 
-Comprehension errors and misread instructions (I070, I205); self-inconsistency and factual
-errors in prose (I130, I199, I104); matching an approved board or reusing an existing pattern
-(I001, I074); applying an owner-set rule to a new instance (I226); bookkeeping flips (I011,
-I017); implementation detail leaking into a requirement (I079); jargon in owner-facing text
-(I103, I106; plain language is the default, not a decision); process-completeness gaps the
-review should have caught (I208, I223); routine size splits (I059, later ruled the advisor's).
+- Matching an approved design, or reusing an existing product pattern. If nothing approved
+  covers the case, it falls back to owner category 3.
+- Applying an owner-set rule to a new case (bounded by category 7).
+- Bookkeeping: status or label changes when a fact changes, with no rule change.
+- Pulling implementation detail out of a requirement (the remaining "what" stays owner).
+- Routine size splits and the shape of a breakdown.
+- How it is built: code structure and architecture.
+- How it is tested. The owner keeps the right to ask pointed questions at any time; a question
+  does not reclassify testing.
+- Tools and libraries.
+- Internal names in code.
+- How errors are handled inside.
+- How a speed or size target is met.
+- Cleanup that changes no behavior.
 
-## What the corpus says about *how* these go wrong
+**The consequence rule.** A craft choice that carries an owner consequence raises that
+consequence to the owner as its own decision (a tool is craft; the new cost or outside service
+it brings is a separate owner decision). The craft choice itself never flips.
 
-- **The failure is usually a decision never framed as one, not a wrong answer.** The dominant
-  pattern is a default, scope boundary, or "already ratified" framing that the owner had to
-  discover by probing. The remedy is surfacing, not better guessing.
-- **Category 2 surfaces at the preview, not the spec.** Nearly every product-behavior amendment
-  came from walking the running thing. The approval gate cannot catch these without instances.
-- **Categories 3 to 6 recur across sessions.** The same defaults get re-proposed (ntfy twice,
-  quota pacing twice, guard-on-guard many times). A grounding doc of decisions and non-goals
-  targets these directly.
-- **Category 8 is caught late and is expensive.** Coined terms need a pass of their own.
+## Not decisions
 
-## Open for the owner
+Misreads, self-contradiction, wrong facts, jargon in owner-facing text, and gaps a review should
+have caught are errors, not decisions. They are not on the line; review catches them.
 
-- Keep / strike / reword each category. Are any two the same thing? Is anything missing?
-- Where does the line sit for *craft calls with product consequences* (I202's line-count
-  threshold; I059's split)? The corpus says the advisor owns them and shows them.
-- Does the line differ between weekly-eats (product) and superheroes (workflow)? The corpus
-  suggests the categories are the same and only the mix differs.
+## How it interacts with what ships today
 
-## Owner rulings (walk in progress, started 2026-09-21, resumed 2026-09-26)
+- The plugin default text for "material" (issue contract) is what this line strengthens: the
+  categories, tests and craft list replace the looser "anything a plausible product preference
+  could distinguish."
+- Configure item 13, "Material consequence line," stays the per-project home for the owner's
+  rulings (examples mined from the ruling record, both directions). That matches the fixed-line
+  ruling: the line is shipped, the project's rulings accumulate beside it.
+- Configure item 10, "Threat model," already documents category 5 per project. Category 1 (who
+  it is for, what it is for) would be its sibling.
+
+## What the corpus says about how these go wrong
+
+- The failure is usually a decision never framed as one, not a wrong answer. The remedy is
+  surfacing, not better guessing.
+- Category 3 surfaces at the preview walk, not the spec read. The approval gate cannot catch
+  these without concrete instances.
+- Categories 4, 6, 7 and 8 recur across sessions (the same defaults re-proposed). A per-project
+  record of rulings targets these.
+- Category 9 is caught late and is expensive.
+
+## Owner rulings log (2026-09-21 to 2026-09-27)
 
 - The one-paragraph line: rewrite it last, from whatever survives the walk.
 - Four tests: tests 1, 2 and 4 kept. Test 3 reworded: drop "attention"; it reads "depends on
@@ -163,3 +166,6 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Owner list judged "good for an initial list" (answers the "anything missing?" item).
 - Category 5/6 (owner's own time, attention, and habits): tentative keep confirmed as a firm keep.
 - "Craft shown to the owner" bucket: DROPPED. Every craft call is already recorded for the owner's veto (glossary craft-call definition), and a real owner consequence is raised as its own decision by the consequence rule. A size threshold like the light-lane line count is a quality-bar call (owner, asked).
+- Summary paragraph approved as written in "The line" above (2026-09-27, "I think that's right").
+  Numbering note: rulings above use the draft's category numbers; the final list above
+  renumbers with "who it is for" as category 1.
