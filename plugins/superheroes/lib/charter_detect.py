@@ -19,6 +19,8 @@ CHARTER_NAMES = ("showrunner", "workhorse", "detective")
 
 # The one name-to-charter table: every slash command that loads a charter.
 # The resume and handoff skills load the showrunner charter for their seat.
+# Bites on: a charter-loading command name that is exactly a key here; a key
+# missing from the table, or a near-miss name, detects as None.
 COMMAND_CHARTERS = {
     "showrunner": "showrunner",
     "showrunner-resume": "showrunner",
