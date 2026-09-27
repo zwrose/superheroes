@@ -639,14 +639,14 @@ def test_edge_dispatch_manifest_present_but_not_a_dict(tmp_path):
 
 
 def test_edge_canary_entry_with_no_engine(tmp_path):
-    """A probe with no `engine` matches NO vendor in `canary_liveness` — it is silently inert while
-    reading as 'a control probe was supplied'."""
+    """Malformed probes pass through assembly; fold records them as malformed in controlProbe."""
     _d, _n, state = _at(tmp_path, RD.P_PANEL)
     envelopes = [_result_env(dim, {"findings": []}) for dim in RD.DIMENSIONS]
     artifact, reason = RA.assemble(RD.P_PANEL, envelopes, state, state["config"],
                                    canary=[{"engine": "codex", "engaged": True},
                                            {"engaged": True}])
-    assert artifact is None and reason == "canary-entry-has-no-engine:index-1"
+    assert reason is None and artifact is not None
+    assert artifact["canaryResult"][1] == {"engaged": True}
 
 
 def test_edge_envelope_with_no_seat():

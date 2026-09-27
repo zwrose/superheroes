@@ -23,7 +23,6 @@ DECISION_KINDS = (
     "judgment-gate",
     "judgment-skip",
     "not-discharged",
-    "panel-incomplete-canary-gap",
     "panel-seat-missing",
     "receipt-missing-seat",
     "resume-confirmation",
