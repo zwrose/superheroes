@@ -17,7 +17,7 @@ def _read_plugin(rel):
         return fh.read()
 
 
-# axis: presence of each of the six merge-line elements in the covenant's first hard-line bullet; any one element alone missing must fail.
+# axis: presence of each of the six merge-line elements in the covenant's first hard-line bullet; any one element alone missing must fail. The review-evidence literal carries its governing "only with" connective, not just the bare noun phrase, so inverting it (e.g. to "even without") fails that element.
 # coverage: closed enumeration — the six elements are the whole compaction-safe minimum of this bullet; a seventh element is added here, not elsewhere.
 def test_covenant_merge_line_keeps_its_minimum():
     text = _read_plugin("rubric/covenant.md")
@@ -36,7 +36,7 @@ def test_covenant_merge_line_keeps_its_minimum():
 
     elements = {
         "own-word for a merge": "only inside the owner's word",
-        "review-evidence precondition": "the lane's review evidence",
+        "review-evidence precondition": "only with the lane's review evidence",
         "ci-green precondition": "CI green on the recorded head",
         "branch-current precondition": "a branch current with its base",
         "own-word for release, publish, force-push": (
