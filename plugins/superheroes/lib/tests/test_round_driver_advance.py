@@ -35,6 +35,9 @@ import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from session_checkout import enter_checkout  # noqa: E402
 
 
 def _load(name):
@@ -1598,7 +1601,11 @@ def _advance(d, tmp_path, **kw):
 
 
 def _pending_at_run_verify(session_dir):
-    """Park a session on the advance path at run-verify with no orders manifest."""
+    """Park a session on the advance path at run-verify with no orders manifest.
+
+    The verify fold reads the fix-fold head from the cwd's repository, so the session runs inside a
+    real checkout — `checkout` beside the session dir (`tmp_path/checkout`) — as in production."""
+    enter_checkout(os.path.join(os.path.dirname(session_dir), "checkout"))
     state = _state(session_dir)
     state["step"] = RD.P_VERIFY
     state["_advanceUsed"] = True

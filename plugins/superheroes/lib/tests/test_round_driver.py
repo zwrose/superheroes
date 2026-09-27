@@ -30,6 +30,9 @@ from source_access_scan import source_obj_accesses_key
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from session_checkout import enter_checkout  # noqa: E402
 
 
 def _load(name):
@@ -420,7 +423,11 @@ def test_journal_appended_per_call(tmp_path):
 # =============================================================================
 
 def _drive_cli(session_dir, cfg, respond, max_steps=80):
-    """Drive next/submit to a terminal using `respond(phase, payload, round) -> artifact`."""
+    """Drive next/submit to a terminal using `respond(phase, payload, round) -> artifact`.
+
+    The driven session runs inside a real checkout (`<session_dir>/checkout`), as it does in
+    production, so the driver's cwd-discovered repository read resolves a HEAD."""
+    enter_checkout(os.path.join(session_dir, "checkout"))
     first = True
     for _ in range(max_steps):
         n = RD.cmd_next(session_dir, cfg if first else None)
@@ -501,7 +508,9 @@ _GOOD_VERIFY = {"result": "pass"}
 def _drive_to_phase(session_dir, cfg, respond, target_phase, max_steps=80):
     """Drive next/submit with `respond` until the PENDING step is `target_phase`; return that
     `next`. Asserts the loop did not reach a terminal first, so a routing change that stops
-    reaching the phase fails loudly instead of silently skipping the test's body."""
+    reaching the phase fails loudly instead of silently skipping the test's body. The driven
+    session runs inside a real checkout (`<session_dir>/checkout`), as it does in production."""
+    enter_checkout(os.path.join(session_dir, "checkout"))
     first = True
     for _ in range(max_steps):
         n = RD.cmd_next(session_dir, cfg if first else None)

@@ -18,6 +18,9 @@ import round_driver as RD  # noqa: E402
 import round_records as RR  # noqa: E402
 import session_contract  # noqa: E402
 
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from session_checkout import enter_checkout  # noqa: E402
 from test_recorded_row_chokepoint_1272 import (  # noqa: E402
     HEAD_SHA,
     FakeAdapters,
@@ -607,6 +610,10 @@ def test_advance_reappend_refuses_invalid_stored_cited_head_source(tmp_path, ada
 
 
 def _at_run_verify(tmp_path, session_dir):
+    """Bring the session to a pending run-verify. The fold that follows reads the fix-fold head
+    from the cwd's repository, so the session runs inside a real checkout (`tmp_path/checkout`),
+    as it does in production."""
+    enter_checkout(os.path.join(str(tmp_path), "checkout"))
     _record_all_panel_seats(session_dir)
     assert _advance(session_dir, tmp_path)["ok"] is True
     state = _state(session_dir)
