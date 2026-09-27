@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Read-only planner for adopting a newer installed plugin cache version."""
-import argparse, filecmp, json, os, re, sys
+import argparse
+import filecmp
+import json
+import os
+import re
+import sys
 
 _VER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _HVER = re.compile(r"^## (\d+\.\d+\.\d+)\s*$")
@@ -50,7 +55,8 @@ def _bucket(path, role):
 
 def _parse_transition(path, fv, tv, installed):
     try:
-        lines = [ln.rstrip("\n") for ln in open(path, encoding="utf-8")]
+        with open(path, encoding="utf-8") as fh:
+            lines = [ln.rstrip("\n") for ln in fh]
     except OSError:
         return None
     fence, sections, found = False, [], set()
@@ -126,7 +132,6 @@ def _plan(role, cache, from_v, to_v):
     return 0
 
 def main(argv=None):
-    argv = argv if argv is not None else sys.argv
     ap = argparse.ArgumentParser()
     p = ap.add_subparsers(dest="cmd", required=True).add_parser("plan")
     p.add_argument("--role", required=True, choices=["showrunner", "workhorse", "detective"])
@@ -135,7 +140,7 @@ def main(argv=None):
     g.add_argument("--from", dest="from_ver")
     p.add_argument("--to")
     p.add_argument("--cache-dir")
-    args = ap.parse_args(argv[1:])
+    args = ap.parse_args(argv)
     if args.from_root:
         fr = os.path.abspath(args.from_root)
         from_v, cache = os.path.basename(fr), os.path.abspath(args.cache_dir or os.path.dirname(fr))
