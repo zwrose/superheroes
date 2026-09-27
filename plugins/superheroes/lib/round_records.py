@@ -66,7 +66,8 @@ SEAT_RESULT_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", 
                       "model", "dispatchRef", "orderSha256", "manifestSha256", "recordedAt",
                       "payloadSha256", "payload")
 SEAT_RESULT_V2_FIELDS = SEAT_RESULT_FIELDS + ("executionEvidence", "provenance",
-                                              "envelopeSha256", "headSha")
+                                              "envelopeSha256", "headSha",
+                                              "citedHeadSource")
 REVISION_IDENTITY_FIELDS = ("payloadSha256", "casToken", "executionEvidence", "provenance",
                             "envelopeSha256", "executionEvidencePresent", "citedHead",
                             "citedHeadSource")

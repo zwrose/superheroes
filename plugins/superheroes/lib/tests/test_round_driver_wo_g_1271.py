@@ -174,7 +174,8 @@ def test_cleared_disposition_findings_remain_in_certification_view():
         isinstance(entry, dict) and entry.get("id") == "F-fixed"
         for entry in (state.get("dispositionLedger") or [])
     )
-    certified = RC._certification_findings(state)
+    certified, refusal = RC._certification_findings(state)
+    assert refusal is None
     ids = {f.get("id") for f in certified if isinstance(f, dict)}
     assert "F-fixed" in ids
 

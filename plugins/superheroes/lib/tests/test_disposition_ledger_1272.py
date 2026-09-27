@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -26,6 +27,13 @@ SC = _load("session_contract")
 RC = _load("round_certification")
 V = _load("verification")
 RR = _load("round_records")
+
+_RCF_SPEC = importlib.util.spec_from_file_location(
+    "round_certification_fixtures",
+    os.path.join(_HERE, "round_certification_fixtures.py"),
+)
+_RCF = importlib.util.module_from_spec(_RCF_SPEC)
+_RCF_SPEC.loader.exec_module(_RCF)
 
 
 def _cfg():
@@ -256,8 +264,8 @@ def test_L2_merged_away_member_resolves_through_representative(tmp_path):
     assert len(live) == 1
     rep = live[0]
     assert SC.finding_identity_key(rep) == key0
-    rep["disposition"] = "refuted"
-    rep["refutedReason"] = "merged into representative"
+    RD._record_disposition(state, key0, "refuted", 1,
+                           refutedReason="merged into representative")
     state["dispositionLedgerOwner"] = "ledger"
     ctx = _ctx(state, tmp_path)
     assert RC.check_disposition_without_receipt(ctx) is None
@@ -439,7 +447,8 @@ def test_L6_without_owner_marker_three_source_merge_unchanged():
     legacy = {"file": "old.py", "line": 1, "title": "legacy", "severity": "Minor",
               SC.FINDING_KEY_FIELD: "legacy-key"}
     state = {"schemaVersion": 5, "findings": [], "_records": [{"findings": [legacy]}]}
-    certified = RC._certification_findings(state)
+    certified, refusal = RC._certification_findings(state)
+    assert refusal is None
     keys = {SC.finding_identity_key(f) for f in certified}
     assert "legacy-key" in keys
 
@@ -449,7 +458,8 @@ def test_L6_with_owner_marker_empty_ledger_excludes_records_findings():
               SC.FINDING_KEY_FIELD: "legacy-key"}
     state = {"schemaVersion": 5, "dispositionLedgerOwner": "ledger", "dispositionLedger": [],
              "findings": [], "_records": [{"findings": [legacy]}]}
-    certified = RC._certification_findings(state)
+    certified, refusal = RC._certification_findings(state)
+    assert refusal is None
     assert certified == []
 
 
@@ -468,7 +478,9 @@ def test_L6_first_stage_backfills_records_into_ledger_undisposed(tmp_path):
     new_key = SC.finding_identity_key(compiled[0])
     RD._record_disposition(state, new_key, "refuted", 2, refutedReason="no")
     state["findings"] = []
-    certified_keys = set(RC._certification_findings_by_key(state))
+    certified_keys, refusal = RC._certification_findings_by_key(state)
+    assert refusal is None
+    certified_keys = set(certified_keys)
     assert "o::old@L1" in certified_keys
     ctx = _ctx(state, tmp_path)
     refusal = RC.check_disposition_without_receipt(ctx)
@@ -478,6 +490,28 @@ def test_L6_first_stage_backfills_records_into_ledger_undisposed(tmp_path):
 
 
 # --- C13: head-bound verify receipts -------------------------------------------------
+
+def _init_two_head_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True, capture_output=True)
+    path = repo / "f.py"
+    path.write_bytes(_FIX_PRESENT_BYTES)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "-m", "one"], cwd=repo, check=True, capture_output=True)
+    head1 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "commit", "-q", "--allow-empty", "-m", "two"], cwd=repo, check=True, capture_output=True,
+    )
+    head2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    return repo, head1, head2
+
 
 def _audit_discharge_fixed(state, head_sha):
     """Fold audits discharging the sole fix-batch target; return ledger key and receipt."""
@@ -499,8 +533,9 @@ def _audit_discharge_fixed(state, head_sha):
 
 
 def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
-    head1, head2 = "a" * 40, "b" * 40
+    repo, head1, head2 = _init_two_head_repo(tmp_path)
     state = RD.new_state(_cfg())
+    state["config"]["repoRoot"] = str(repo)
     state["round"] = 1
     state["rounds"] = {"1": {"verifyResult": "pass", "fixFoldHead": head1}}
     key, receipt1 = _audit_discharge_fixed(state, head1)
@@ -514,18 +549,56 @@ def test_C13_two_round_moving_head_no_stale_verify_then_backfill(tmp_path):
     assert receipt2.get("verifyResult") is None
 
     RD._fold_verify(state, state["config"], {"result": "pass"})
+    state["rounds"]["2"]["verifyResult"] = "pass"
+    state["rounds"]["2"]["fixFoldHead"] = head2
     entry = _ledger_by_key(state)[key]
     receipt_after = entry.get("dispositionReceipt") or {}
     assert receipt_after.get("verifyResult") == "pass"
     assert receipt_after.get("headSha") == head2
 
     state["dispositionLedgerOwner"] = "ledger"
-    entry = dict(entry)
     receipt_after = dict(entry.get("dispositionReceipt") or {})
     receipt_after["fixContentDigest"] = _FIX_PRESENT_DIGEST
-    entry["dispositionReceipt"] = receipt_after
+    RD._record_disposition(
+        state, key, entry["disposition"], entry["dispositionRound"],
+        dispositionReceipt=receipt_after,
+    )
+    entry = _ledger_by_key(state)[key]
     state["findings"] = [entry]
-    ctx = _ctx(state, tmp_path, certified_head=head2)
+    state["terminal"] = "converged"
+    state["step"] = RD.P_TERMINAL
+    state["certification"] = {
+        "shape": "audited-chain",
+        "fullPanel": False,
+        "independence": "independent",
+        "base": "fetched",
+        "shapeDrivers": [],
+    }
+    state["decisions"] = [{"round": 2, "kind": "converged", "detail": "certified"}]
+    state["config"]["headSha"] = head2
+    state["config"]["baseGuard"] = RC.BASE_GUARD_CHECKED
+    session_dir = _RCF.write_session(
+        tmp_path,
+        name="c13-terminal",
+        state=state,
+        meta={
+            "headSha": head2,
+            "baseGuard": RC.BASE_GUARD_CHECKED,
+            "repoRoot": str(repo),
+        },
+        faithful_session=True,
+    )
+    ok, live = RD.load_state(session_dir)
+    assert ok and live is not None
+    fault = RD._terminal_receipt_gate(session_dir, live)
+    assert fault is None, fault
+    ok, reloaded = RD.load_state(session_dir)
+    assert ok
+    terminal_receipt = _ledger_by_key(reloaded)[key].get("dispositionReceipt") or {}
+    assert terminal_receipt.get("verifyResult") == "pass"
+    assert terminal_receipt.get("headSha") == head2
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
     assert RC.check_disposition_without_receipt(ctx) is None
 
 
@@ -689,18 +762,21 @@ def test_C13_backfill_merges_record_severity_preserves_disposition_family(tmp_pa
 def test_C13_out_of_scope_reason_required_before_follow_up_checks(tmp_path):
     follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
                  "classClosure": "tracked separately"}
-    base = {"file": "o", "line": 1, "title": "old", "severity": "Important",
-            "disposition": "out-of-scope", "dispositionRound": 1, "followUp": follow_up}
+    finding = {"file": "o", "line": 1, "title": "old", "severity": "Important"}
+    compiled, _ = RD.mechanical_compile([finding], None)
     state = RD.new_state(_cfg())
+    RD._stage_findings(state, compiled)
+    key = SC.finding_identity_key(compiled[0])
     state["dispositionLedgerOwner"] = "ledger"
-    state["findings"] = [dict(base)]
+    RD._record_disposition(state, key, "out-of-scope", 1, followUp=follow_up)
     ctx = _ctx(state, tmp_path)
     refusal = RC.check_disposition_without_receipt(ctx)
     assert refusal is not None
     assert refusal["class"] == "disposition-without-receipt"
     assert refusal["detail"] == "out-of-scope disposition lacks recorded reason"
     reason = "deferred to next release"
-    state["findings"] = [dict(base, outOfScopeReason=reason)]
+    RD._record_disposition(state, key, "out-of-scope", 1,
+                           outOfScopeReason=reason, followUp=follow_up)
     ctx = _ctx(state, tmp_path)
     assert RC.check_disposition_without_receipt(ctx) is None
     assert ctx["important_disclosures"] == [
@@ -755,3 +831,40 @@ def test_L7_departure_preserves_raised_round_through_archive_and_record(tmp_path
 
 
 # --- L8 uses L2 open-representative case (bite-proof run separately) -----------------
+
+
+def test_bite_verify_backfill_preserves_disposition_family():
+    """axis: the same-round verify stamp adds verifyResult and erases no family member.
+
+    A fixed row retained with `mergedInto` (or a refuted/out-of-scope reason) must keep it.
+    Losing `mergedInto` here turns a row that certification REFUSES on an unresolved merge
+    chain into an independently graded fixed disposition — a fail-direction inversion.
+    """
+    head = "c" * 40
+    key = "fixed-key"
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["rounds"] = {"2": {"fixFoldHead": head}}
+    state[SC.DISPOSITION_LEDGER_KEY] = [{
+        SC.FINDING_KEY_FIELD: key,
+        "file": "a.py",
+        "line": 1,
+        "title": "t",
+        "severity": "Minor",
+        "disposition": "fixed",
+        "dispositionRound": 2,
+        "dispositionReceipt": {"headSha": head},
+        SC.MERGED_INTO_FIELD: "representative-key",
+        "outOfScopeReason": "carried reason",
+    }]
+    state["findings"] = []
+
+    RD._backfill_fixed_disposition_verify_receipts(state, 2, "pass")
+
+    entry = _ledger_by_key(state)[key]
+    assert entry["dispositionReceipt"]["verifyResult"] == "pass"
+    assert entry["dispositionReceipt"]["headSha"] == head
+    assert entry[SC.MERGED_INTO_FIELD] == "representative-key"
+    assert entry["outOfScopeReason"] == "carried reason"
+    assert entry["disposition"] == "fixed"
+    assert entry["dispositionRound"] == 2

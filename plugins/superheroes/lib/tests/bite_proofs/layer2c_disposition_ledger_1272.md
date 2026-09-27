@@ -12,30 +12,50 @@ Command prefix for every run:
 ## BP-2c-a — E4 unresolvable `mergedInto` refuses (not graded undisposed)
 
 **Guarded element.** `round_certification.check_disposition_without_receipt`, the
-`if resolved is None:` refusal at the `mergedInto` resolution arm.
+`if _resolve_merged_into_entry(finding, by_key) is None:` refusal at the `mergedInto` resolution arm.
 **Axis.** A broken merge chain must refuse `disposition-without-receipt`, not fall through to grade
 the member as undisposed.
 **Detector.** `test_L2_merged_away_member_resolves_through_representative` (second half).
 
-**Neutralization.** `if resolved is None:` → `if False:` (that line only).
+**Neutralization.**
+
+```python
+        if finding.get(session_contract.MERGED_INTO_FIELD):
+            if _resolve_merged_into_entry(finding, by_key) is None:
+```
+→
+```python
+        if finding.get(session_contract.MERGED_INTO_FIELD):
+            if False:
+```
 
 **Raw red** (exit 1):
 
 ```
+        refusal = RC.check_disposition_without_receipt(ctx)
+        assert refusal is not None
+        assert refusal["class"] == "disposition-without-receipt"
+>       assert refusal["detail"] == "merged-into chain does not resolve", refusal
+E       AssertionError: {'artifact': 'root b', 'bindingFailure': None, 'class': 'disposition-without-receipt', 'detail': 'finding has no disposition recorded'}
+E         - merged-into chain does not resolve
+E         + finding has no disposition recorded
 FAILED plugins/superheroes/lib/tests/test_disposition_ledger_1272.py::test_L2_merged_away_member_resolves_through_representative
-...
->           disposition = graded.get("disposition")
-E           AttributeError: 'NoneType' object has no attribute 'get'
+1 failed in 0.36s
 ```
 
-**Restore.** `if False:` → `if resolved is None:`.
+**Restore.** Exact inverse (`if False:` → `if _resolve_merged_into_entry(finding, by_key) is None:`).
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 0.14s
+1 passed in 0.35s
 ```
+
+**History (2026-09-20, C13 layer 2f).** The inherited record quoted `if resolved is None:` →
+`if False:` in `_effective_certification_finding`; at this head that neutralization is vacuous because
+the detector's assertion is reached through the earlier `mergedInto` arm above — corrected here in
+place rather than in a separate note.
 
 ## BP-2c-b — E2 disposition-family strip at seeding
 
@@ -373,45 +393,6 @@ implementer's or fixer's inherited claim.
 | **BP-2c-g** | `test_L2_restaged_finding_strips_prior_round_disposition` | **yes**, exit 1 | yes |
 | BP-2c-e | `test_C13_two_round_moving_head_verify_never_passes_refuses` | proved at `0451579e`; guarded code untouched since | — |
 | BP-2c-f | `test_C13_fix_fold_records_fix_fold_head` | proved at `0451579e`; guarded code untouched since | — |
-
-**Correction to BP-2c-a's recorded neutralization.** The inherited record names
-`if resolved is None:` → `if False:` in `round_certification`. At this head that text occurs **once**,
-in `_effective_certification_finding` — and neutralizing it there leaves the detector **green**
-(`1 passed in 0.25s`, exit 0), because the assertion the detector makes is reached through the
-**earlier** arm in `check_disposition_without_receipt`. A proof run against the recorded
-neutralization would therefore have been **vacuous**. The guarded element the record's prose names —
-"the `mergedInto` resolution arm of `check_disposition_without_receipt`" — is correct; only the quoted
-line is stale. The neutralization that actually bites at this head is:
-
-```python
-        if finding.get(session_contract.MERGED_INTO_FIELD):
-            if _resolve_merged_into_entry(finding, by_key) is None:
-```
-→
-```python
-        if finding.get(session_contract.MERGED_INTO_FIELD):
-            if False:
-```
-
-**Raw red** with that neutralization (exit 1):
-
-```
-        refusal = RC.check_disposition_without_receipt(ctx)
-        assert refusal is not None
-        assert refusal["class"] == "disposition-without-receipt"
->       assert refusal["detail"] == "merged-into chain does not resolve", refusal
-E       AssertionError: {'artifact': 'root b', 'bindingFailure': None, 'class': 'disposition-without-receipt', 'detail': 'finding has no disposition recorded'}
-E         - merged-into chain does not resolve
-E         + finding has no disposition recorded
-FAILED plugins/superheroes/lib/tests/test_disposition_ledger_1272.py::test_L2_merged_away_member_resolves_through_representative
-1 failed in 0.28s
-```
-
-**Restore.** Exact inverse. **Raw green** (exit 0): `1 passed`, in the paired run
-`1 failed, 1 passed in 0.29s` (the failure being BP-2c-b's red).
-
-This correction is recorded rather than silently applied: a stale neutralization in a bite-proof
-record is the record's own failure mode — it reads as a proof while proving nothing.
 
 ### The other reds, quoted
 

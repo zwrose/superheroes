@@ -231,6 +231,21 @@ def test_assemble_refuses_write_run_for_review_phase(tmp_path):
     assert extra == {"runKind": engine_dispatch.RUN_KIND_WRITE, "phase": RD.P_PANEL}
 
 
+def test_assemble_refuses_review_run_for_fixer_phase(tmp_path):
+    record = _runner_record(runKind=engine_dispatch.RUN_KIND_REVIEW)
+    envelope = {
+        "phase": RD.P_FIXER,
+        "orderSha256": "a" * 64,
+        "payload": PANEL_PAYLOAD,
+    }
+    assembled, refusal, extra, source = _assemble_with_record(
+        tmp_path, envelope, record, anchor_head=ANCHOR_HEAD, phase=RD.P_FIXER)
+    assert assembled is None
+    assert source is None
+    assert refusal == "evidence-run-kind-mismatch"
+    assert extra == {"runKind": engine_dispatch.RUN_KIND_REVIEW, "phase": RD.P_FIXER}
+
+
 def test_assemble_write_run_declares_order_anchor_without_view_head(tmp_path):
     fixes = [{"file": "a.py", "description": "x"}]
     record = _runner_record(

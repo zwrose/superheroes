@@ -70,6 +70,11 @@ REFUSAL_CLASSES = frozenset(
     ("unrun-review", "same-family-seat", "unfetched-findings", "disposition-without-receipt")
 )
 
+CERTIFICATION_LIVE_CONTENT_FIELDS = (
+    "file", "line", "title", "severity", "verdict", "challenge", "unverified", "id",
+)
+EXECUTION_ONLY_BINDING = "execution-only"
+
 PANEL_PHASE = session_contract.PANEL_PHASE
 FIXER_PHASE = session_contract.FIXER_PHASE
 AUDITS_PHASE = session_contract.AUDITS_PHASE
@@ -176,7 +181,9 @@ def certify(session_dir):
     terminal_state, terminal_cause, refusal = _resolve_terminal(verdict, ctx["state"])
     if refusal is not None:
         return None, refusal
-    receipt = _build_receipt(ctx, terminal_state, terminal_cause)
+    receipt, build_refusal = _build_receipt(ctx, terminal_state, terminal_cause)
+    if build_refusal is not None:
+        return None, build_refusal
     refusal = _validate_receipt_findings(receipt)
     if refusal is not None:
         return None, refusal
@@ -349,23 +356,80 @@ def _out_of_scope_follow_up(finding):
 
 def _certification_findings_by_key(state):
     """Keyed findings for disposition checks — ledger owner uses ledger + live only."""
+    classification = session_contract.disposition_ledger_owner_classification(state)
+    if classification == "unrecognized":
+        value = state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD)
+        return {}, _refusal(
+            "disposition-without-receipt",
+            STATE_FILE,
+            "unrecognized dispositionLedgerOwner value %r" % (value,),
+            binding_failure="disposition-ledger-owner-unrecognized",
+        )
     by_key = {}
-    if state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD) == (
-        session_contract.DISPOSITION_LEDGER_OWNER_VALUE
-    ):
+    if classification == "recognized":
+        # axis: ledger-owned reads take disposition family from the ledger only — _records is not a source
+        ledger_by_key = {}
         ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-        if isinstance(ledger, list):
-            for finding in ledger:
-                if isinstance(finding, dict):
-                    key = _finding_identity_key(finding)
-                    if key:
-                        by_key[key] = finding
+        if not isinstance(ledger, list):
+            return {}, _refusal(
+                "disposition-without-receipt",
+                STATE_FILE,
+                "dispositionLedger must be a list when dispositionLedgerOwner is %r"
+                % (session_contract.DISPOSITION_LEDGER_OWNER_VALUE,),
+                binding_failure="disposition-ledger-malformed",
+            )
+        for finding in ledger:
+            if not isinstance(finding, dict):
+                return {}, _refusal(
+                    "disposition-without-receipt",
+                    STATE_FILE,
+                    "dispositionLedger row must be an object",
+                    binding_failure="disposition-ledger-malformed",
+                )
+            key = _finding_identity_key(finding)
+            if not key:
+                return {}, _refusal(
+                    "disposition-without-receipt",
+                    STATE_FILE,
+                    "dispositionLedger row lacks a finding key",
+                    binding_failure="disposition-ledger-malformed",
+                )
+            ledger_by_key[key] = finding
+        live_by_key = {}
         for finding in state.get("findings") or []:
             if isinstance(finding, dict):
                 key = _finding_identity_key(finding)
                 if key:
-                    by_key[key] = finding
-        return by_key
+                    live_by_key[key] = finding
+        for key, ledger_entry in ledger_by_key.items():
+            merged = {}
+            for field in session_contract.DISPOSITION_FAMILY_FIELDS:
+                if field in ledger_entry:
+                    merged[field] = ledger_entry[field]
+            for field in (
+                session_contract.FINDING_KEY_FIELD,
+                session_contract.RAISED_ROUND_FIELD,
+            ):
+                if field in ledger_entry:
+                    merged[field] = ledger_entry[field]
+            live = live_by_key.get(key)
+            content_source = live if live is not None else ledger_entry
+            for field in CERTIFICATION_LIVE_CONTENT_FIELDS:
+                if field in content_source:
+                    merged[field] = content_source[field]
+            by_key[key] = merged
+        for key, live in live_by_key.items():
+            if key in by_key:
+                continue
+            if session_contract.has_disposition_family(live):
+                # axis: live disposition without a ledger seat refuses — disposition-without-receipt
+                return {}, _refusal(
+                    "disposition-without-receipt",
+                    key,
+                    "live finding disposition has no ledger entry",
+                )
+            by_key[key] = dict(live)
+        return by_key, None
     ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
     if isinstance(ledger, list):
         for finding in ledger:
@@ -387,12 +451,15 @@ def _certification_findings_by_key(state):
             key = _finding_identity_key(finding)
             if key:
                 by_key[key] = finding
-    return by_key
+    return by_key, None
 
 
 def _certification_findings(state):
     """Live open-work plus durable ledger and review-record history for disposition checks."""
-    return list(_certification_findings_by_key(state).values())
+    by_key, refusal = _certification_findings_by_key(state)
+    if refusal is not None:
+        return [], refusal
+    return list(by_key.values()), None
 
 
 def _resolve_merged_into_entry(finding, by_key):
@@ -968,14 +1035,14 @@ def _hand_landed_evidence_qualifies(
             or not isinstance(result_digest, str) or not result_digest):
         return False, "execution-evidence-binding-incomplete"
     if result_kind == session_contract.WRITE_RESULT_KIND:
-        pass
-    else:
-        carried, subject = session_contract.evidence_digest_subject(payload, result_kind)
-        if not carried:
-            return False, "execution-evidence-result-mismatch"
-        computed = session_contract.payload_sha256(subject)
-        if result_digest != computed:
-            return False, "execution-evidence-result-mismatch"
+        # axis: write-run stamp proves the run happened — binds no payload (execution-only)
+        return True, EXECUTION_ONLY_BINDING
+    carried, subject = session_contract.evidence_digest_subject(payload, result_kind)
+    if not carried:
+        return False, "execution-evidence-result-mismatch"
+    computed = session_contract.payload_sha256(subject)
+    if result_digest != computed:
+        return False, "execution-evidence-result-mismatch"
     return True, None
 
 
@@ -1542,7 +1609,9 @@ def check_disposition_without_receipt(ctx):
         )
     certified_head = _certified_head_sha(ctx)
     disclosures = []
-    by_key = _certification_findings_by_key(state)
+    by_key, marker_refusal = _certification_findings_by_key(state)
+    if marker_refusal is not None:
+        return marker_refusal
     for finding in by_key.values():
         if not isinstance(finding, dict):
             continue
@@ -1839,7 +1908,13 @@ def _finding_disposition_proof(finding):
     return finding.get("dispositionReceipt")
 
 
-def _project_finding(finding):
+def _project_finding(finding, by_key=None):
+    """axis: merged-away members report the representative's disposition family, not their own."""
+    effective = (
+        _effective_certification_finding(finding, by_key)
+        if by_key is not None
+        else finding
+    )
     row = {
         "id": finding.get("id"),
         "file": finding.get("file"),
@@ -1849,11 +1924,20 @@ def _project_finding(finding):
         "verdict": finding.get("verdict"),
         "challenge": finding.get("challenge"),
         "unverified": finding.get("unverified"),
-        "disposition": finding.get("disposition"),
+        "disposition": effective.get("disposition"),
     }
-    proof = _finding_disposition_proof(finding)
+    proof = _finding_disposition_proof(effective)
     if proof is not None:
-        row["dispositionReceipt"] = proof
+        row = dict(row, dispositionReceipt=proof)
+    finding_key = finding.get(session_contract.FINDING_KEY_FIELD)
+    if finding_key:
+        row[session_contract.FINDING_KEY_FIELD] = finding_key
+    raised_round = finding.get(session_contract.RAISED_ROUND_FIELD)
+    if raised_round is not None:
+        row[session_contract.RAISED_ROUND_FIELD] = raised_round
+    merged_into = finding.get(session_contract.MERGED_INTO_FIELD)
+    if merged_into:
+        row[session_contract.MERGED_INTO_FIELD] = merged_into
     return row
 
 
@@ -1955,9 +2039,11 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
         }
         for s in seats_info
     ]
-    by_key = _certification_findings_by_key(state)
+    by_key, marker_refusal = _certification_findings_by_key(state)
+    if marker_refusal is not None:
+        return None, marker_refusal
     findings = [
-        _project_finding(_effective_certification_finding(f, by_key))
+        _project_finding(f, by_key)
         for f in by_key.values()
         if isinstance(f, dict)
     ]
@@ -2032,7 +2118,7 @@ def _build_receipt(ctx, terminal_state, terminal_cause):
     policy_applied = state.get("_policyApplied")
     if isinstance(policy_applied, list) and policy_applied:
         receipt["policyApplied"] = list(policy_applied)
-    return receipt
+    return receipt, None
 
 
 def map_verdict_to_terminal_state(verdict):
