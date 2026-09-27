@@ -76,7 +76,6 @@ def _census_excluded(rel):
 # a section gains a deliberate second pointer):
 # workhorse §6 Decompose — order-template doctrine points at bite-proof home (count=1)
 # workhorse §8 Verify — orchestrator re-reads doctrine when build adds detector (count=1)
-# workhorse § When you're tempted — temptation table row on vacuous bite-proofs (count=1)
 # implementer § The rules — disclosure shapes and doctrine reference in short-return rule (count=1)
 # implementer § Validating — validity rule 6 names expected bite-proof (count=1)
 # test-reviewer § Named test-smell taxonomy — axis-line smell cites doctrine home (count=1)
@@ -86,7 +85,6 @@ def _census_excluded(rel):
 _CONSUMER_ROSTER = [
     ("skills/workhorse/SKILL.md", "## 6. Decompose into work orders", 1),
     ("skills/workhorse/SKILL.md", "## 8. Verify — re-run every receipt yourself", 1),
-    ("skills/workhorse/SKILL.md", "## When you're tempted", 1),
     ("agents/implementer.md", "## The rules", 1),
     ("agents/implementer.md", "## Validating your work order", 1),
     ("agents/test-reviewer.md", "## Named test-smell taxonomy", 1),
@@ -158,18 +156,6 @@ _CLAUSE_ROWS = [
         "home_section": "## The record",
         "copy_holder": "skills/workhorse/SKILL.md",
         "copy_holder_section": "## 8. Verify — re-run every receipt yourself",
-    },
-    {
-        "clause": "A green run is equally consistent with",
-        "home_section": "## The obligation",
-        "copy_holder": "skills/workhorse/SKILL.md",
-        "copy_holder_section": "## When you're tempted",
-    },
-    {
-        "clause": "with the detector unedited",
-        "home_section": "## The record",
-        "copy_holder": "skills/workhorse/SKILL.md",
-        "copy_holder_section": "## When you're tempted",
     },
     {
         "clause": "through the path the test uses",

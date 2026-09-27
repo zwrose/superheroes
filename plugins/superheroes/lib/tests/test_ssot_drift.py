@@ -1979,19 +1979,6 @@ def _workhorse_git_identity_section2_paragraph():
     return m.group(0)
 
 
-def _workhorse_git_identity_tempted_row():
-    """The tempted-table row for synthesizing git identity on commit."""
-    text = _read("skills/workhorse/SKILL.md")
-    m = re.search(
-        r'\| "Git won\'t say who I am[^|]+\|[^|]+\|',
-        text,
-    )
-    assert m, (
-        "workhorse/SKILL.md git-identity tempted-table row not found (moved or reworded?)"
-    )
-    return m.group(0)
-
-
 def _workhorse_advisor_vet_bullet():
     """§11's `## Advisor vet` bullet — the builder's stamp instruction and the reminder it seeds."""
     section = _workhorse_section_11()
@@ -2294,22 +2281,6 @@ _NUMBER_WORDS = {
     "twelve": 12,
 }
 
-_ORDINAL_WORDS = {
-    "first": 1,
-    "second": 2,
-    "third": 3,
-    "fourth": 4,
-    "fifth": 5,
-    "sixth": 6,
-    "seventh": 7,
-    "eighth": 8,
-    "ninth": 9,
-    "tenth": 10,
-    "eleventh": 11,
-    "twelfth": 12,
-}
-
-
 def _preflight_charter_block(text):
     begin = text.find(_PREFLIGHT_CHARTER_BEGIN)
     end = text.find(_PREFLIGHT_CHARTER_END)
@@ -2394,7 +2365,7 @@ def test_preflight_enum_form_ids_catches_stale_inline_citation():
 
 
 def test_showrunner_preflight_count_prose_matches_home():
-    """Duty 9 count words in showrunner/SKILL.md track dispatch-preflight.md's enumeration."""
+    """Duty 9's check-count word in showrunner/SKILL.md tracks dispatch-preflight.md's enumeration."""
     import launch_doctrine as ld
 
     home_text = _read("skills/showrunner/reference/dispatch-preflight.md")
@@ -2414,32 +2385,6 @@ def test_showrunner_preflight_count_prose_matches_home():
     assert _NUMBER_WORDS[eight_word] == check_count, (
         "showrunner/SKILL.md duty 9 says %r checks but dispatch-preflight.md enumerates %d"
         % (eight_word, check_count)
-    )
-
-    ninth_match = re.search(r"not an? ([a-z]+) check\b", duty, re.IGNORECASE)
-    assert ninth_match, (
-        "showrunner/SKILL.md duty 9 missing 'not a/an <ordinal> check' prose (moved or reworded?)"
-    )
-    ninth_word = ninth_match.group(1).lower()
-    assert ninth_word in _ORDINAL_WORDS, (
-        "showrunner/SKILL.md duty 9 uses unknown ordinal %r in ninth-check guard" % ninth_word
-    )
-    assert _ORDINAL_WORDS[ninth_word] == check_count + 1, (
-        "showrunner/SKILL.md 'not a %s check' no longer matches len(home)+1 (%d+1)"
-        % (ninth_word, check_count)
-    )
-
-    list_match = re.search(r"\b([a-z]+)-check list\b", duty, re.IGNORECASE)
-    assert list_match, (
-        "showrunner/SKILL.md duty 9 missing '<word>-check list' prose (moved or reworded?)"
-    )
-    list_word = list_match.group(1).lower()
-    assert list_word in _NUMBER_WORDS, (
-        "showrunner/SKILL.md duty 9 uses unknown word %r in eight-check-list guard" % list_word
-    )
-    assert _NUMBER_WORDS[list_word] == check_count, (
-        "showrunner/SKILL.md '%s-check list' no longer matches dispatch-preflight enumeration (%d)"
-        % (list_word, check_count)
     )
 
 
@@ -2599,7 +2544,6 @@ def test_workhorse_git_identity_prose_matches_the_doctrine():
 
     for label, text in (
         ("workhorse/SKILL.md §2", _workhorse_git_identity_section2_paragraph()),
-        ("workhorse/SKILL.md tempted-table", _workhorse_git_identity_tempted_row()),
     ):
         missing = [t for t in required if t not in text]
         assert not missing, (
@@ -2619,27 +2563,16 @@ def _showrunner_orchestration_duty():
     return m.group(0)
 
 
-def _showrunner_provisioning_duty():
-    """Duty 10 (Provision slots for an authenticated wave) through the tempted-table heading."""
-    text = _read("skills/showrunner/SKILL.md")
-    m = re.search(
-        r"10\. \*\*Provision slots.*?(?=\n## When you're tempted)",
-        text,
-        re.DOTALL,
-    )
-    assert m, "showrunner/SKILL.md duty 10 (Provision slots) not found (moved or renumbered?)"
-    return m.group(0)
-
-
 def _showrunner_tempted_tier_row():
-    """The tempted-table row pairing account-default inheritance with the tier doctrine."""
-    text = _read("skills/showrunner/SKILL.md")
+    """The tempted-table row pairing account-default inheritance with the tier doctrine, now on
+    the excuses reference page."""
+    text = _read("skills/showrunner/reference/excuses.md")
     m = re.search(
         r"\| \"The account default tier is fine[^|]+\|[^|]+\|",
         text,
     )
     assert m, (
-        "showrunner/SKILL.md tempted-table tier row not found "
+        "skills/showrunner/reference/excuses.md tempted-table tier row not found "
         "(moved or reworded?)"
     )
     return m.group(0)
@@ -2660,13 +2593,15 @@ def _launch_doctrine_builder_dispatch_section():
     return m.group(1)
 
 
-def test_amendment_vocabulary_in_showrunner_charter():
-    """§11: showrunner charter carries post-terminal amendment vocabulary from launch_ledger."""
+def test_amendment_vocabulary_in_showrunner_orchestration_page():
+    """§11: the showrunner orchestration page carries post-terminal amendment vocabulary from
+    launch_ledger."""
     # axis: caller-writable amendment kinds, vet rulings, and the amend verb must appear in the
-    # charter pinned in their invocation context (--kind / --value lines), not merely anywhere in prose.
+    # orchestration page pinned in their invocation context (--kind / --value lines), not merely
+    # anywhere in prose.
     import launch_ledger
 
-    doc = _read("skills/showrunner/SKILL.md")
+    doc = _read("skills/showrunner/reference/orchestration.md")
     missing = []
     for kind in launch_ledger.CALLER_WRITABLE_AMENDMENT_KINDS:
         if "--kind %s" % kind not in doc:
@@ -2682,31 +2617,35 @@ def test_amendment_vocabulary_in_showrunner_charter():
     if "amend" not in doc:
         missing.append("verb 'amend'")
     assert not missing, (
-        "showrunner/SKILL.md missing amendment vocabulary from launch_ledger.py: %s"
+        "showrunner/reference/orchestration.md missing amendment vocabulary from "
+        "launch_ledger.py: %s"
         % ", ".join(missing)
     )
 
 
-def test_count_result_blocks_in_showrunner_charter():
-    """§11: showrunner charter names count-result blocks sourced from launch_ledger."""
+def test_count_result_blocks_in_showrunner_orchestration_page():
+    """§11: the showrunner orchestration page names count-result blocks sourced from launch_ledger."""
     import launch_ledger
 
-    doc = _read("skills/showrunner/SKILL.md")
-    duty = _showrunner_orchestration_duty()
+    doc = _read("skills/showrunner/reference/orchestration.md")
     missing = []
     for block in launch_ledger.CHARTER_NAMED_COUNT_BLOCKS:
-        if block not in duty:
+        if block not in doc:
             missing.append(block)
     assert not missing, (
-        "showrunner/SKILL.md duty 9 missing count-result block(s) from "
+        "showrunner/reference/orchestration.md missing count-result block(s) from "
         "launch_ledger.COUNT_RESULT_BLOCKS: %r" % missing
     )
 
 
 def test_showrunner_provisioning_duty_load_bearing_content():
-    """§11: duty 10 carries load-bearing provisioning clauses."""
-    duty = _showrunner_provisioning_duty()
-    lower = duty.lower()
+    """§11: skills/showrunner/reference/provisioning.md carries load-bearing provisioning clauses
+    moved off duty 10 by the charter restructure."""
+    # axis: presence of each of the four provisioning clauses on the page that now holds them; each
+    # clause alone must fail this guard. The launcher element guards both the heading and the
+    # operative instruction — either one going missing alone must fail this guard.
+    text = _read("skills/showrunner/reference/provisioning.md")
+    lower = re.sub(r"\s+", " ", text.lower())
     missing = []
     if "without any seeded sign-in" not in lower:
         missing.append("unauthenticated-app-first ordering")
@@ -2714,10 +2653,10 @@ def test_showrunner_provisioning_duty_load_bearing_content():
         missing.append("partial-failure no-go rule")
     if "acceptance record (who accepted, when, and why)" not in lower:
         missing.append("weaker-acceptance record")
-    if "the launcher carries the slot" not in lower:
+    if "the launcher carries the slot" not in lower or "supply the slot and generation" not in lower:
         missing.append("launcher-carries-the-slot clause")
     assert not missing, (
-        "showrunner/SKILL.md duty 10 missing load-bearing element(s): %s"
+        "skills/showrunner/reference/provisioning.md missing load-bearing element(s): %s"
         % ", ".join(missing)
     )
 
@@ -2727,7 +2666,7 @@ def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
     tier rule keyed to model_registry.FABLE_NEVER_DEFAULT — builder launches default to opus; fable
     is never a launch default. A failure means the rule drifted out of a surface the advisor or
     doctrine actually loads."""
-    # axis: each guarded region (duty-9 orchestration passage, tempted-table tier row, and the
+    # axis: each guarded region (duty-9 orchestration passage, the excuses-page tier row, and the
     # launch-doctrine artifact home) must name engine_pref.BUILDER_DISPATCH_TIER_DEFAULT and each
     # registry-refused launch tier; partial drift in any one region alone must fail this guard.
     import engine_pref
@@ -2742,7 +2681,7 @@ def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
 
     regions = (
         ("showrunner/SKILL.md duty 9 orchestration passage", _showrunner_orchestration_duty()),
-        ("showrunner/SKILL.md tempted-table tier row", _showrunner_tempted_tier_row()),
+        ("showrunner/reference/excuses.md tempted-table tier row", _showrunner_tempted_tier_row()),
         ("launch-doctrine.md artifact home", _launch_doctrine_builder_dispatch_section()),
     )
 
@@ -4042,8 +3981,6 @@ def _anchor_extract_bullet(text, prefix, surface):
 
 
 def _anchor_resolution_section(rel):
-    if rel == "skills/workhorse/SKILL.md":
-        return _workhorse_intake_anchor_section(), rel
     if rel == "skills/showrunner/reference/issue-contract.md":
         return _issue_contract_section("## Anchor resolution"), rel
     raise ValueError("unexpected anchor resolution surface %r" % rel)
@@ -4098,21 +4035,6 @@ def _anchor_assert_resolution_bullets_complete(rel):
     )
     for prefix in _ANCHOR_BULLET_PREFIXES:
         _anchor_extract_bullet(section, prefix, surface)
-
-
-def _anchor_log_side_fails_closed_paragraph(rel):
-    section, surface = _anchor_resolution_section(rel)
-    m = re.search(
-        r"\*\*The log side fails closed too\.\*\*.*?"
-        r"(?=^\*\*(?:On any failure|Why the cursor))",
-        section,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert m, (
-        "%s: The log side fails closed too paragraph not found (moved or reworded?)"
-        % surface
-    )
-    return m.group(0)
 
 
 def _anchor_resolution_bullets(rel):
@@ -4229,40 +4151,23 @@ def _showrunner_anchor_coverage_bullet():
     return bullet
 
 
-def test_anchor_resolution_bullets_match_between_home_and_workhorse():
+def test_anchor_resolution_bullets_complete_in_home():
     # axis: whitespace-normalized equality of the three resolution bullets across copies
-    workhorse = _anchor_resolution_bullets("skills/workhorse/SKILL.md")
-    home = _anchor_resolution_bullets(
+    _anchor_resolution_bullets(
         "skills/showrunner/reference/issue-contract.md"
     )
-    for i, (w, h) in enumerate(zip(workhorse, home)):
-        if w != h:
-            pytest.fail(
-                "anchor resolution bullet index %d differs — workhorse: %r; home: %r"
-                % (i, w, h)
-            )
 
 
-def test_anchor_cursor_rule_clauses_present_in_both_copies():
+def test_anchor_cursor_rule_clauses_present_in_home():
     # axis: synchronized-deletion guard — clauses must appear in the Spec-section bullet
-    workhorse_section, workhorse_surface = _anchor_resolution_section(
-        "skills/workhorse/SKILL.md"
-    )
     home_section, home_surface = _anchor_resolution_section(
         "skills/showrunner/reference/issue-contract.md"
-    )
-    workhorse_bullet = _anchor_extract_bullet(
-        workhorse_section, "- **Spec-section anchor.**", workhorse_surface
     )
     home_bullet = _anchor_extract_bullet(
         home_section, "- **Spec-section anchor.**", home_surface
     )
     for clause in _ANCHOR_CURSOR_CLAUSES:
         clause_norm = _anchor_whitespace_normalize(clause)
-        assert clause_norm in workhorse_bullet, (
-            "workhorse Spec-section anchor bullet missing cursor clause %r "
-            "(moved or reworded?)" % clause
-        )
         assert clause_norm in home_bullet, (
             "issue-contract Spec-section anchor bullet missing cursor clause %r "
             "(moved or reworded?)" % clause
@@ -4419,31 +4324,6 @@ def test_superseded_ruling_notice_duty_in_showrunner_charter():
     )
 
 
-def test_anchor_log_side_fails_closed():
-    # axis: log-side fail-closed paragraph is a two-copy duplicate with four named conditions
-    workhorse_para = _anchor_log_side_fails_closed_paragraph("skills/workhorse/SKILL.md")
-    home_para = _anchor_log_side_fails_closed_paragraph(
-        "skills/showrunner/reference/issue-contract.md"
-    )
-    workhorse_norm = _anchor_whitespace_normalize(workhorse_para)
-    home_norm = _anchor_whitespace_normalize(home_para)
-    assert workhorse_norm == home_norm, (
-        "log-side fails-closed paragraph drift — workhorse: %r; home: %r"
-        % (workhorse_para, home_para)
-    )
-    for clause in (
-        "no Amendments log at all",
-        "the log cannot be read",
-        "missing its class or its touched-section list",
-        "greater than the number of entries the log holds",
-    ):
-        clause_norm = _anchor_whitespace_normalize(clause)
-        assert clause_norm in workhorse_norm, (
-            "log-side fails-closed paragraph missing condition %r (moved or reworded?)"
-            % clause
-        )
-
-
 def test_anchor_stop_terminal_and_resume_gate():
     # axis: stop terminal differs from register-check park; resume and repair gates pinned
     intake = _workhorse_intake_anchor_section()
@@ -4528,14 +4408,6 @@ _PRE_DOCTRINE_ANNOTATION_FRAGMENTS = (
 
 _PRE_DOCTRINE_REGISTER_TOKEN_RE = re.compile(r"\bR\d+\b")
 
-_WORKHORSE_REPAIR_TEMPLATE_SENTINEL = "**The stop-report carries its own repair.**"
-
-_WORKHORSE_REPAIR_TEMPLATE_POINTER = (
-    "`skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues"
-)
-
-_WORKHORSE_REPAIR_FIELD_BULLET_RE = re.compile(r"^- \*\*([^*]+)\*\*", re.MULTILINE)
-
 # The home template's fenced block. The slot ORDER this cluster asserts comes from the
 # RUNTIME home — `issue_contract.SLOTS` — and the fence is checked against it; the fence
 # is itself a copy of that sequence, so deriving the order from the fence alone would
@@ -4550,12 +4422,6 @@ _PRE_DOCTRINE_TEMPLATE_FENCE_RE = re.compile(
 # `check_build_ready()` success payload, and its value spelling is read off that payload
 # rather than re-typed (see `_pre_doctrine_completion_tokens_from_home`).
 _PRE_DOCTRINE_QUOTED_RESULT_KEYS = ("ok", "reason")
-
-# The two copy-holder fields that follow the derived slots, in order. Short durable
-# tokens, not full bullet prose — rewording the bullet around them stays free.
-_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS = ("separator", "original body")
-
-_BLANK_LINE_RE = re.compile(r"^[ \t]*$", re.MULTILINE)
 
 
 def _pre_doctrine_section():
@@ -4578,39 +4444,6 @@ def _issue_contract_contents_block():
     assert m, "issue-contract.md: # Contents list not found (moved or reworded?)"
     block = m.group(1)
     assert block.strip(), "issue-contract.md: # Contents list is empty"
-    return block
-
-
-def _workhorse_repair_template_block():
-    """The stop-report repair-template paragraph plus its field bullets.
-
-    Bounded structurally at both ends: the sentinel opens it, and it closes at the
-    end of the field-bullet list (the first blank line after the last `- **…**`
-    bullet). No ordinary prose sentence is a delimiter, so rewording the paragraph
-    that follows the list does not break this reader.
-    """
-    span = _workhorse_intake_anchor_section()
-    m_start = re.search(
-        r"^\*\*The stop-report carries its own repair\.\*\*",
-        span,
-        re.MULTILINE,
-    )
-    assert m_start, (
-        "workhorse/SKILL.md: repair-template block start not found in the "
-        "anchor-intake span (moved or reworded?)"
-    )
-    tail = span[m_start.start():]
-    m_first = _WORKHORSE_REPAIR_FIELD_BULLET_RE.search(tail)
-    assert m_first, (
-        "workhorse/SKILL.md: no repair-template field bullets found after the "
-        "sentinel (bullet list removed or reshaped?)"
-    )
-    # The list runs unbroken to the first blank line after its first bullet; that
-    # blank line is the structural end of the block.
-    m_end = _BLANK_LINE_RE.search(tail, m_first.end())
-    end = m_end.start() if m_end else len(tail)
-    block = tail[:end].strip()
-    assert block, "workhorse/SKILL.md: repair-template block is empty"
     return block
 
 
@@ -4857,57 +4690,13 @@ def test_pre_doctrine_section_carries_no_register_token():
     )
 
 
-def test_workhorse_intake_repair_template_required_with_pointer():
-    # axis: the stop-report repair requirement and its section-specific pointer
-    span = _workhorse_intake_anchor_section()
-    assert _WORKHORSE_REPAIR_TEMPLATE_SENTINEL in span, (
-        "workhorse/SKILL.md anchor-intake span: missing repair-template sentinel %r "
-        "(removed or reworded?)" % _WORKHORSE_REPAIR_TEMPLATE_SENTINEL
-    )
-    span_norm = _anchor_whitespace_normalize(span)
-    pointer_norm = _anchor_whitespace_normalize(_WORKHORSE_REPAIR_TEMPLATE_POINTER)
-    assert pointer_norm in span_norm, (
-        "workhorse/SKILL.md anchor-intake span: missing pointer %r to where the "
-        "missing-slot repair recipes live (removed or reworded?)"
-        % _WORKHORSE_REPAIR_TEMPLATE_POINTER
-    )
-
-
-def test_workhorse_intake_repair_template_field_bullets_follow_home_slot_order():
+def test_pre_doctrine_template_slot_order_matches_runtime_slots():
     # axis: copy-holder ORDER — the workhorse field bullets carry the home
     # template's slot sequence, in that order, followed by the separator and
     # original-body fields. The expected sequence is the RUNTIME contract's
     # issue_contract.SLOTS — cross-checked against the fenced template in
     # issue-contract.md § Pre-doctrine issues — never hand-written here.
-    slots = _pre_doctrine_template_slot_order()
-    block = _workhorse_repair_template_block()
-    labels = _WORKHORSE_REPAIR_FIELD_BULLET_RE.findall(block)
-    expected_count = len(slots) + len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS)
-    assert len(labels) == expected_count, (
-        "workhorse/SKILL.md repair template: expected exactly %d field bullets "
-        "(%d home slots + %d trailing fields), found %d; labels: %r"
-        % (
-            expected_count,
-            len(slots),
-            len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS),
-            len(labels),
-            labels,
-        )
-    )
-    for index, slot in enumerate(slots):
-        assert re.search(r"\b%s\b" % re.escape(slot), labels[index]), (
-            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
-            "not name the %r slot — issue_contract.SLOTS declares the slot order %r "
-            "and every copy-holder must follow it"
-            % (index + 1, labels[index], slot, slots)
-        )
-    for offset, token in enumerate(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS):
-        index = len(slots) + offset
-        assert token in labels[index], (
-            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
-            "not carry the %r field (reordered, removed, or duplicated?); labels: %r"
-            % (index + 1, labels[index], token, labels)
-        )
+    _pre_doctrine_template_slot_order()
 
 
 # --- Cluster: four-route drift (register R6 → the two charters) ---------------

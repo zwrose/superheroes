@@ -1,6 +1,6 @@
 ---
 name: showrunner-resume
-description: "First action in a new, restarted, or compacted showrunner advisor seat — no arguments; with or without handoff. Reads durable state only, pins this seat's config on launches, classifies each lane from one decision table, records outcomes, arms watches. Not checkpoint or handoff."
+description: "First action in a new, restarted, or compacted showrunner advisor seat — no arguments; with or without handoff. Reads durable state only and brings every lane back under watch. Not checkpoint or handoff."
 user-invocable: true
 ---
 

@@ -79,9 +79,8 @@ issues, drafts each builder's launch prompt as just the command and the issue po
 durable lives in the issue), vets
 every PR from its artifacts — the diff, the issue/spec, the build brief — against what was
 asked and what was proposed, diagnoses anomalies from artifacts, and coordinates releases. It
-keeps **merge approval** with the owner — a scoped word in chat after the PRs are talked
-through — and may **execute merges inside that scope** after the lane's review and
-verification evidence, CI green on the recorded head, and a current branch. A wave preflight runs the
+keeps **merge approval** with the owner; the merge policy is stated once, in duty 6 of
+[`plugins/superheroes/skills/showrunner/SKILL.md`](plugins/superheroes/skills/showrunner/SKILL.md). A wave preflight runs the
 conformance probe once per dispatchable engine before any builder launches.
 
 | Command | Use it to… |

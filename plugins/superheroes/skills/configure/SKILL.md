@@ -1,6 +1,6 @@
 ---
 name: configure
-description: "Use to set up, fix, view, or tune a project's superheroes calibration — the single front door for superheroes configuration. It senses what a project needs, lets you see the whole project's calibration on one screen and change a setting, and can move a project between in-repo and out-of-repo storage. Not for code review, technical planning, or running the build loop."
+description: "Use to set up, fix, view, or tune a project's superheroes calibration — the single front door for superheroes configuration. Lets you see the whole project's calibration on one screen, change a setting, or move a project between in-repo and out-of-repo storage. Not for code review, technical planning, or running the build loop."
 user-invocable: true
 ---
 
