@@ -12,7 +12,7 @@ Reached from `configure` when a project is configured but needs repair (FR-1): a
 layout, an incomplete set-up, a pending structural change, or a calibration still marked
 provisional. Apply what is unambiguous silently; surface what needs an owner decision.
 
-`ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash block below.
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash block below.
 
 ## 1 — Apply mechanical updates silently (FR-8)
 
@@ -26,7 +26,7 @@ refusal; it never migrates, unlinks, or commits (detection writes nothing) but i
 `read()` inherits `mode_registry.resolve`'s project-store backfill:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import core_md
 print(core_md.resolve_shared('.'))"
@@ -69,7 +69,7 @@ When a project that previously had no remote has just gained one, re-anchor its 
 that remote so pre-remote work does not fork:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" rebind --cwd .
 ```
 
@@ -93,7 +93,7 @@ re-renders the core in place and surgically flips each layer, preserving `create
 bumping `updated`:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/core_md.py" confirm --cwd .
 ```
 
