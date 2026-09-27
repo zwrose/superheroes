@@ -827,21 +827,7 @@ COMPILE_DROP_LINE_NOT_INTEGER = "line is not an integer"
 
 
 def _coerce_line(value):
-    """Return ``(ok, line)``: an int (never a bool) passes as itself; a numeric string
-    (``"291"``, surrounding whitespace tolerated) coerces to its int; anything else refuses."""
-    if isinstance(value, bool):
-        return False, value
-    if isinstance(value, int):
-        return True, value
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped and stripped.isascii() and stripped.isdecimal():
-            try:
-                return True, int(stripped)
-            except ValueError:
-                return False, value
-        return False, value
-    return False, value
+    return session_contract.coerce_line(value)
 
 
 def _nit_cap(findings):

@@ -19,6 +19,7 @@ from round_certification_fixtures import (
     case06_mixed_panel,
     case07_audited_chain,
     case07_audited_chain_missing_audit,
+    case08_new_issue_audit,
     followup_class_closure_none,
     followup_documented_trigger,
     followup_missing_class_closure,
@@ -234,6 +235,65 @@ def test_case_7_audited_chain_certifies(tmp_path):
     assert receipt["auditedChain"]["panelHead"] == panel_head
     seat_names = {row["seat"] for row in receipt["seats"]}
     assert "code-reviewer" in seat_names
+
+
+_CASE8_MINOR_NEW_ISSUE = {
+    "severity": "Minor",
+    "file": "src/leak.py",
+    "line": 4,
+    "title": "regression adjacent to fix",
+}
+
+
+def test_case_8_new_issue_audit_refuses_then_certifies_once_dispositioned(tmp_path):
+    session_dir = case08_new_issue_audit(
+        tmp_path,
+        seed_raised_new_issue=True,
+        new_issues=[dict(_CASE8_MINOR_NEW_ISSUE)],
+    )
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] == "unrun-review"
+    assert refusal["bindingFailure"] == "execution-evidence-stale-head"
+    assert "audited-chain-gap:new-issue-undispositioned" in refusal["detail"]
+
+    state_path = os.path.join(session_dir, RC.STATE_FILE)
+    state = json.load(open(state_path, encoding="utf-8"))
+    new_issue = _CASE8_MINOR_NEW_ISSUE
+    new_key = session_contract.minted_identity_key(new_issue)
+    raised_seq = None
+    for row in state[session_contract.DISPOSITION_LEDGER_KEY]:
+        if row.get(session_contract.FINDING_KEY_FIELD) == new_key:
+            raised_seq = row[session_contract.RAISED_SEQ_FIELD]
+            row["disposition"] = "refuted"
+            row["refutedReason"] = "not reproduced on re-read"
+            row[session_contract.DISPOSITION_SEQ_FIELD] = raised_seq + 1
+            break
+    assert raised_seq is not None
+    with open(state_path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, sort_keys=True)
+    receipt, refusal = _certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+    assert receipt["certificationShape"] == "audited-chain"
+
+
+def test_case_8_important_new_issue_refuses_with_chain_token(tmp_path):
+    session_dir = case08_new_issue_audit(tmp_path, seed_raised_new_issue=True)
+    receipt, refusal = _certify(session_dir)
+    assert receipt is None
+    assert refusal is not None
+    assert refusal["class"] != "disposition-without-receipt"
+    assert "audited-chain-gap:new-issue-undispositioned" in refusal["detail"]
+
+
+def test_case_8_plain_discharged_still_certifies(tmp_path):
+    session_dir = case08_new_issue_audit(tmp_path, ruling="discharged")
+    receipt, refusal = _certify(session_dir)
+    assert refusal is None, refusal
+    assert receipt is not None
+    assert receipt["certificationShape"] == "audited-chain"
 
 
 def test_case_7_missing_audit_dispatch_refuses_fix_receipt_leg(tmp_path):
