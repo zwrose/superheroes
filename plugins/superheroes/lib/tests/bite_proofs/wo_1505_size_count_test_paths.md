@@ -36,25 +36,29 @@ Node prefix `C` = `test_is_test_path_matches_each_convention`.
 
 ## Continuation — fixture conventions (E14–E19)
 
-**Head proven:** `f20ea569` plus uncommitted order work on branch `build/1505-fixture-conventions`. After each restore `diff -q plugins/superheroes/lib/size_count.py /private/tmp/wo1505b-scratch/size_count.py.post-impl` matched and `git diff plugins/superheroes/lib/size_count.py` was empty.
+Per-element bite-proof for the tests that pin the widened list: the fixture folders, `conftest.py`, and case-insensitive directory matching. The method is the same as above. Each element was neutralized by one targeted edit to production `size_count.py`, the whole test file ran, and the edit was reverted by the inverse edit. The detectors were unedited throughout.
+
+**Head proven:** `fe5dce0d`, in a detached probe worktree at that commit. After each restore `git status --porcelain plugins/superheroes/lib/size_count.py` was empty.
+
+**Provenance:** the orchestrator ran these proofs (workhorse, Claude Opus 5.5). They replace the implementer's section (cursor `composer-2.5`). That section gave the right red sets, but its restore receipt claimed an empty `git diff` over an uncommitted tree.
 
 **Command** (whole file):
 
 ```
-scripts/pinned-python -B -X pycache_prefix=/private/tmp/wo1505b-pyc -m pytest plugins/superheroes/lib/tests/test_size_count.py -q -p no:cacheprovider -rf
+scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest plugins/superheroes/lib/tests/test_size_count.py -q -p no:cacheprovider -rf
 ```
 
-Node prefix `C` = `test_is_test_path_matches_each_convention`; `L` = `test_is_test_path_rejects_look_alikes`.
+Node prefixes: `C` = `test_is_test_path_matches_each_convention`, `L` = `test_is_test_path_rejects_look_alikes`.
 
-| ID | Guarded element (`size_count.py`) | Axis | Neutralization | Red set (exact) | Decisive red line |
+| ID | Guarded element (`size_count.py` at `fe5dce0d`) | Axis | Neutralization | Red set (exact) | Decisive red line |
 |---|---|---|---|---|---|
-| E14 | :10 member `testdata` | `testdata` as a directory | drop `"testdata", ` | `C[dir-testdata]` — 1 failed, 63 passed | `assert False` … `is_test_path('go/pkg/testdata/golden.txt')` |
+| E14 | :10 `TEST_DIR_NAMES` member `testdata` | `testdata` as a directory | drop `"testdata", ` | `C[dir-testdata]` — 1 failed, 63 passed | `assert False` … `is_test_path('go/pkg/testdata/golden.txt')` |
 | E15 | :10 member `__mocks__` | `__mocks__` as a directory | drop `"__mocks__", ` | `C[dir-__mocks__]`, `C[dir-case-__Mocks__]` — 2 failed | `is_test_path('src/__mocks__/api.ts')` → False |
-| E16 | :10 member `__fixtures__` | `__fixtures__` as a directory | drop `"__fixtures__"` | `C[dir-__fixtures__]` — 1 failed | `is_test_path('src/__fixtures__/user.json')` → False |
-| E17 | :17 glob `conftest.py` | pytest conftest file name | delete the `"conftest.py",` line | `C[glob-conftest.py]` — 1 failed | `is_test_path('plugins/x/conftest.py')` → False |
+| E16 | :10 member `__fixtures__` | `__fixtures__` as a directory | drop `, "__fixtures__"` | `C[dir-__fixtures__]` — 1 failed | `is_test_path('src/__fixtures__/user.json')` → False |
+| E17 | :17 glob `conftest.py` | pytest `conftest.py` by name | delete the `"conftest.py",` line | `C[glob-conftest.py]` — 1 failed | `is_test_path('plugins/x/conftest.py')` → False |
 | E18 | :29 `component.lower()` | directory names match case-insensitively | `component.lower() in TEST_DIR_NAMES` → `component in TEST_DIR_NAMES` | `C[dir-case-Tests]`, `C[dir-case-__Mocks__]`, `C[dir-case-E2E]` — 3 failed | `is_test_path('Tests/x.py')` → False |
 | E19 | :31 `fnmatchcase(name, …)` | file-name globs stay case-sensitive | `fnmatchcase(name, pattern)` → `fnmatchcase(name.lower(), pattern)` | `L[src/Foo.Test.ts]`, `L[Conftest.py]` — 2 failed | `assert not True` … `is_test_path('src/Foo.Test.ts')` |
 
-**Restore receipts:** after each inverse edit, `size_count.py` matched `/private/tmp/wo1505b-scratch/size_count.py.post-impl`; restored lines: E14–E16 re-insert directory members in `TEST_DIR_NAMES`; E17 re-add `"conftest.py",`; E18 restore `component.lower() in TEST_DIR_NAMES`; E19 restore `fnmatch.fnmatchcase(name, pattern)`.
+**Restore receipts:** after each of the six inverse edits the whole file ran `64 passed` with exit 0, and `git status --porcelain` over `size_count.py` printed nothing.
 
-**Green:** `64 passed` after E14 restore and after E19 restore (exit 0); intermediate restores E15–E18 confirmed by `diff -q` against the saved post-implementation copy before the next neutralization.
+**Green:** `64 passed` (final run, exit 0).
