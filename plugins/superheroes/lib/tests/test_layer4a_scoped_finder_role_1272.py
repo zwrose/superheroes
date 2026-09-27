@@ -27,6 +27,7 @@ SB = _load("seat_bundle", "seat_bundle.py")
 ED = _load("engine_dispatch", "engine_dispatch.py")
 
 _ROLE = "scoped-finder"
+_CODEX_CELL_MODEL = MR.matrix_config(_ROLE, "codex")[0]
 
 
 def _guard_check(seat):
@@ -43,7 +44,7 @@ def test_edge1_codex_scoped_finder_guard_check():
     proc = _guard_check(
         {
             "vendor": "codex",
-            "model": "gpt-5.6-sol",
+            "model": _CODEX_CELL_MODEL,
             "effort": "xhigh",
             "role": _ROLE,
         }
@@ -51,7 +52,7 @@ def test_edge1_codex_scoped_finder_guard_check():
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
     assert payload["ok"] is True
-    assert payload["model_id"] == "gpt-5.6-sol"
+    assert payload["model_id"] == _CODEX_CELL_MODEL
     assert payload["effort"] == "xhigh"
 
 
@@ -146,7 +147,7 @@ def test_t_parse_template_documented_codex_bundle():
     seat = json.dumps(
         {
             "vendor": "codex",
-            "model": "gpt-5.6-sol",
+            "model": _CODEX_CELL_MODEL,
             "effort": "xhigh",
             "role": _ROLE,
         }
@@ -154,6 +155,6 @@ def test_t_parse_template_documented_codex_bundle():
     resolved = SB.resolve_entry(seat, verb="dispatch-review")
     assert resolved["ok"] is True
     assert resolved["vendor"] == "codex"
-    assert resolved["model"] == "gpt-5.6-sol"
+    assert resolved["model"] == _CODEX_CELL_MODEL
     assert resolved["effort"] == "xhigh"
     assert resolved["role"] == _ROLE

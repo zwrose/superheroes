@@ -34,6 +34,7 @@ MR = _load("model_registry", "model_registry.py")
 
 _REVIEW_ROLE = "reviewer"
 _WRITE_ROLE = "implementer"
+_REVIEW_MODEL, _REVIEW_EFFORT = MR.matrix_config(_REVIEW_ROLE, "codex")
 
 
 def _seat_json(vendor, model, effort, role=_REVIEW_ROLE):
@@ -113,7 +114,7 @@ def test_dispatch_review_run_dir_symlink_refused_through_cli(tmp_path, capsys):
     prompt.write_text("review this", encoding="utf-8")
     rc = ED.main([
         "dispatch-review",
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
+        "--seat", _seat_json("codex", _REVIEW_MODEL, _REVIEW_EFFORT, _REVIEW_ROLE),
         "--prompt-path", str(prompt),
         "--repo-root", str(repo),
         "--run-dir", str(symlink),
@@ -141,7 +142,7 @@ def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys)
     prompt.write_text("review this", encoding="utf-8")
     rc = ED.main([
         "dispatch-review",
-        "--seat", _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
+        "--seat", _seat_json("codex", _REVIEW_MODEL, _REVIEW_EFFORT, _REVIEW_ROLE),
         "--prompt-path", str(prompt),
         "--repo-root", str(repo),
         "--mode", "brief-check",
@@ -187,7 +188,7 @@ def test_dispatch_review_repo_root_omitted_refused_at_argparse(tmp_path):
             [
                 "dispatch-review",
                 "--seat",
-                _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
+                _seat_json("codex", _REVIEW_MODEL, _REVIEW_EFFORT, _REVIEW_ROLE),
                 "--prompt-path",
                 str(prompt),
             ]
@@ -205,7 +206,7 @@ def test_dispatch_review_repo_root_not_a_git_repo_refused_at_argparse(tmp_path):
             [
                 "dispatch-review",
                 "--seat",
-                _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
+                _seat_json("codex", _REVIEW_MODEL, _REVIEW_EFFORT, _REVIEW_ROLE),
                 "--prompt-path",
                 str(prompt),
                 "--repo-root",
@@ -271,7 +272,7 @@ def test_dispatch_review_run_dir_creatable_when_parent_missing(tmp_path):
         [
             "dispatch-review",
             "--seat",
-            _seat_json("codex", "gpt-5.6-sol", "high", _REVIEW_ROLE),
+            _seat_json("codex", _REVIEW_MODEL, _REVIEW_EFFORT, _REVIEW_ROLE),
             "--prompt-path",
             str(prompt),
             "--repo-root",

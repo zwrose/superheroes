@@ -24,3 +24,6 @@ htmlcov/
 # review-crew store — lives in the machine-local global store, never in-repo
 .claude/review-decisions.json
 .claude/review-profile.md
+
+# claude plugin eval run output (the suite lives in plugins/superheroes/evals/)
+plugins/superheroes/evals/results/
