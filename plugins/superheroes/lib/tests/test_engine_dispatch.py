@@ -12513,7 +12513,11 @@ def test_run_execution_record_native_review_evidence_binding(tmp_path):
     assert err is None
     assert record.get("resultDigest")
     assert record.get("resultKind") == "findings"
+    # The envelope carries its phase: the driver shapes the runner's result from the
+    # seat-payload contract for that phase (C13 layer 1b), and a phase-less envelope is
+    # refused rather than tolerated.
     envelope = {
+        "phase": round_driver.P_PANEL,
         "orderSha256": record["orderPromptSha256"],
         "payload": {"findings": res["findings"]},
     }
@@ -12523,6 +12527,7 @@ def test_run_execution_record_native_review_evidence_binding(tmp_path):
     assert assembled is not None
     mutated = [dict(res["findings"][0], id="mutated-id")]
     bad_envelope = {
+        "phase": round_driver.P_PANEL,
         "orderSha256": record["orderPromptSha256"],
         "payload": {"findings": mutated},
     }

@@ -16,7 +16,14 @@ from round_certification_fixtures import (
 )
 
 CERTIFICATION_EXTRA_KEYS = frozenset(
-    ("terminalState", "terminalCause", "seats", "disclosures", "provenanceLabels")
+    (
+        "terminalState",
+        "terminalCause",
+        "seats",
+        "disclosures",
+        "provenanceLabels",
+        "independence",
+    )
 )
 
 # The writer's receipt is a superset of the driver's except certificationShape when any

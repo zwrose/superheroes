@@ -4,6 +4,7 @@ import re
 import receipt_disclosures
 import round_certification as RC
 import round_driver as RD
+import round_phases
 import round_records as RR
 import session_contract
 
@@ -78,3 +79,9 @@ def test_execution_evidence_observation_fields_match_records():
         RC.EXECUTION_EVIDENCE_OBSERVATION_FIELDS
         == RR.EXECUTION_EVIDENCE_OBSERVATION_FIELDS
     )
+
+
+def test_phase_tokens_match_round_phases():
+    assert session_contract.PANEL_PHASE == round_phases.P_PANEL
+    assert session_contract.FIXER_PHASE == round_phases.P_FIXER
+    assert session_contract.AUDITS_PHASE == round_phases.P_AUDITS
