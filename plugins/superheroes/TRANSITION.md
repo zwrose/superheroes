@@ -35,9 +35,10 @@ liveness), or `unknown`. The old fresh and stale classes are removed, because a 
 promises a stamp cadence: `stamp` still accepts its old cadence argument from older callers and
 ignores it, and the window a stamped record carries is always `LIVENESS_QUIET_WINDOW_SECONDS`
 (2700 seconds). Liveness has one signal: `wave_watch.py` raises `lane-stale` when a lane's process
-is live and its own session transcript was not written within that window, or cannot be resolved to
-exactly one transcript (an ambiguous or unresolved lookup fails toward the alert), so the event
-means no fresh transcript could be established, not proof of inactivity. A consumer that matched
+is live and the watcher cannot establish that its own session transcript was written within that
+window. A cold transcript alerts, and so does an ambiguous or unreadable lookup; a transcript that
+does not exist yet alerts only once the same window has passed since the lane's recorded start. The
+event means no fresh transcript could be established, not proof of inactivity. A consumer that matched
 the old fresh or stale class from the sweep must match `nonterminal` for an unended lane and take
 liveness from `lane-stale`.
 
