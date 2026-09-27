@@ -641,7 +641,6 @@ def test_compose_launch_propagates_adapter_refusal(tmp_path, monkeypatch):
 
     def _refuse_builder(token, session_id, prompt):
         return {
-            "ok": False,
             "argv": [],
             "reason": "builder-session-id-invalid",
             "detail": "a canonical lowercase UUID string",
@@ -651,6 +650,21 @@ def test_compose_launch_propagates_adapter_refusal(tmp_path, monkeypatch):
     result = L.compose_launch(repo, 656, premise)
     assert result["ok"] is False
     assert result["reason"] == "builder-session-id-invalid"
+    assert result["detail"] == "a canonical lowercase UUID string"
+
+
+def test_compose_launch_refusal_without_detail_carries_no_detail(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+
+    def _refuse_builder(token, session_id, prompt):
+        return {"argv": [], "reason": "unknown-claude-tier"}
+
+    monkeypatch.setattr(L.engine_adapter, "claude_builder_argv", _refuse_builder)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is False
+    assert result["reason"] == "unknown-claude-tier"
+    assert "detail" not in result
 
 
 def _write_core_with_builder_tier(repo, prefs):
@@ -6077,10 +6091,11 @@ def test_cli_launch_parser_threads_allow_foreign_instance(tmp_path, monkeypatch)
 def test_walk_preflight_failed_check_carries_checks(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     checks = _all_checks()
+    _cell_model, _cell_effort = L.model_registry.matrix_config("reviewer-deep", "codex")
     checks["engine-auth"] = {
         "state": "fail",
         "reason": "conformance probe failed: codex",
-        "evidence": "codex channel=native cell=codex/gpt-5.6-sol/xhigh",
+        "evidence": f"codex channel=native cell=codex/{_cell_model}/{_cell_effort}",
     }
     result = L.walk_preflight(checks, repo)
     assert result["ok"] is False
@@ -7801,6 +7816,55 @@ def test_canary_transcript_unreadable(tmp_path, monkeypatch):
     assert result["reason"] == "canary-transcript-unreadable"
 
 
+def test_canary_truncation_follows_reader_bit(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    session_id = "33333333-bbbb-cccc-dddd-eeeeeeeeeeee"
+    launch_id = "launch-reader-bit-trunc"
+    rows = [
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "no tools"}]},
+        }
+    ]
+    transcript_path = _write_canary_transcript(config_dir, session_id, rows)
+    _canary_reserved(repo, launch_id, session_id, str(config_dir))
+
+    def _fake_reader(_config_dir, _session_id):
+        return rows, [transcript_path], 10, True
+
+    monkeypatch.setattr(
+        L.engine_dispatch, "read_session_transcript_rows", _fake_reader,
+    )
+    result = L.canary(repo, launch_id)
+    assert result["reason"] == "canary-transcript-truncated"
+
+
+def test_canary_not_truncated_when_reader_bit_clear(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    config_dir = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    session_id = "44444444-bbbb-cccc-dddd-eeeeeeeeeeee"
+    launch_id = "launch-reader-bit-clear"
+    rows = [_assistant_tool_use("one-tool")]
+    transcript_path = _write_canary_transcript(config_dir, session_id, rows)
+    _canary_reserved(repo, launch_id, session_id, str(config_dir))
+    big_size = L.engine_dispatch.MAX_STDOUT_CAPTURE + 1
+
+    def _fake_reader(_config_dir, _session_id):
+        return rows, [transcript_path], big_size, False
+
+    monkeypatch.setattr(
+        L.engine_dispatch, "read_session_transcript_rows", _fake_reader,
+    )
+    result = L.canary(repo, launch_id)
+    assert result["ok"] is True
+    assert result["truncated"] is False
+
+
 def test_canary_transcript_truncated_zero_tool_calls(tmp_path, monkeypatch):
   # axis: canary-transcript-truncated when tail has no tool calls
     repo = _init_repo(tmp_path / "repo")
@@ -7883,3 +7947,113 @@ def test_cli_canary_lane_unknown(tmp_path, monkeypatch):
     assert exit_code == 1
     payload = json.loads(buf.getvalue())
     assert payload["reason"] == "canary-lane-unknown"
+
+
+# --- stack gate: adoption of an occupied layer position (#1486) --------------
+
+
+def _adoption_members(head, occupant_number=4242, occupant_base="branch"):
+    # The layer below is queried as headRefName "branch" (see _membership_ok); the occupant
+    # at position 2 sits on that branch unless a test says otherwise.
+    return [
+        {"position": 1, "number": 1352, "headRefOid": head, "headRefName": "branch", "baseRefName": "main"},
+        {"position": 2, "number": occupant_number, "headRefOid": "a" * 40, "headRefName": "b2", "baseRefName": occupant_base},
+    ]
+
+
+def _launch_adoption(tmp_path, monkeypatch, members, **premise_overrides):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    head = _head_sha(repo)
+    members = members(head)
+
+    def reader(**kwargs):
+        return _membership_ok(1, head, members=members)
+
+    premise = _stack_premise(repo, stack=7, layerPosition=2, **premise_overrides)
+    result = L.launch_build(
+        repo,
+        656,
+        premise,
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+        pr_lookup=lambda *a, **k: _pr_lookup_ok(),
+        membership_reader=reader,
+    )
+    if result.get("ok"):
+        try:
+            os.kill(result["pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    return repo, result
+
+
+def test_stack_gate_adoption_of_own_position_passes_and_records_stack_fields(tmp_path, monkeypatch):
+  # bite-axis: adopts naming the occupant at layerPosition, on the layer below's branch, passes
+    repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head), adopts=4242,
+    )
+    assert result["ok"] is True, result.get("reason")
+    assert result["stackGate"]["applied"] is True
+    assert result["stackGate"]["adopts"] == 4242
+    reserved = [r for r in ll.read(repo)["records"] if r.get("event") == "reserved"][0]
+    assert reserved["premise"]["stack"] == 7
+    assert reserved["premise"]["layerPosition"] == 2
+    assert reserved["premise"]["adopts"] == 4242
+
+
+def test_stack_gate_new_layer_at_occupied_position_still_refuses(tmp_path, monkeypatch):
+  # axis: no adopts at an occupied position is a new layer on a taken position
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "layer-position-occupied"
+
+
+def test_stack_gate_adopts_naming_another_pr_refuses(tmp_path, monkeypatch):
+  # axis: adopts that is not the member at layerPosition refuses layer-position-occupied
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head), adopts=5555,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "layer-position-occupied"
+
+
+def test_stack_gate_adopted_occupant_off_the_layer_below_refuses(tmp_path, monkeypatch):
+  # axis: the named occupant must sit on the layer below's head branch
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch,
+        lambda head: _adoption_members(head, occupant_base="main"), adopts=4242,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "layer-position-occupied"
+
+
+def test_stack_gate_adopts_with_empty_position_refuses(tmp_path, monkeypatch):
+  # axis: an adoption premise whose position holds no pull request has nothing to adopt
+    _repo, result = _launch_adoption(
+        tmp_path, monkeypatch, lambda head: _adoption_members(head)[:1], adopts=4242,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "adopts-occupant-missing"
+
+
+@pytest.mark.parametrize("overrides,reason", [
+    ({"adopts": 4242}, "premise-adopts-without-stack"),
+    ({"stack": 1, "layerPosition": 2, "adopts": 0}, "premise-adopts-invalid"),
+    ({"stack": 1, "layerPosition": 2, "adopts": True}, "premise-adopts-invalid"),
+    ({"stack": 1, "layerPosition": 2, "adopts": "4242"}, "premise-adopts-invalid"),
+    ({"stack": 1, "layerPosition": 1, "adopts": 4242}, "premise-adopts-bottom-layer"),
+])
+def test_premise_adopts_shape_refuses(tmp_path, overrides, reason):
+  # axis: adopts requires the stack pair and a positive int
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    premise.update(overrides)
+    result = L.validate_premise(premise, repo)
+    assert result["ok"] is False
+    assert result["reason"] == reason

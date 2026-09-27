@@ -497,15 +497,18 @@ def test_render_dispatch_calibration_cursor_implementer_shows_registry_token(tmp
 
 
 def test_render_shows_review_panel_seat_pins(tmp_path):
+    import model_registry as model_reg
+
+    pin_model = model_reg.pin_only_models("codex")[0]
     root = _seed_core_and_layer(tmp_path, engine_preferences={
         "seatPins": {
-            "code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+            "code-reviewer": {"vendor": "codex", "model": pin_model, "effort": "high"},
             "bad-seat": "nope",
         },
     })
     screen = cv.render(str(tmp_path), root=root)
     assert "Review-panel seat pins:" in screen
-    assert "code-reviewer: codex (model=gpt-5.6-sol, effort=high)" in screen
+    assert f"code-reviewer: codex (model={pin_model}, effort=high)" in screen
     assert "Rejected seat pins (not applied — seat falls back to rotation):" in screen
     assert "bad-seat: pin must be an object with a vendor" in screen
     assert "⚠" in screen

@@ -142,7 +142,10 @@ band-wide storage mode**.
 ```
 
 - **`core.md`** carries band-wide project facts: stack, the canonical *verify* command,
-  threat model, canonical patterns. Its **single writer** is the calibration owner
+  threat model, canonical patterns. Its `` ```json superheroes-core `` `` block may also carry an
+  optional `vetChecks` key — owner-declared through `configure` and read by the advisor's vet, with
+  the shape homed in `plugins/superheroes/skills/showrunner/reference/vet-receipt.md`. Its **single
+  writer** is the calibration owner
   (`init` / the profile-management skill) — not `the-architect` (which owns the `spec`
   definition-doc). Because `core.md` is project-keyed and shared across a project's
   checkouts (§2.3), the writer **serializes its writes under the project-scoped config
@@ -502,16 +505,17 @@ Everything in the plugin's source tree is shared and host-neutral:
 Each `SKILL.md` carries a host-map pointer line:
 
 > This skill speaks in host-neutral actions. Resolve them to your runtime's tools
-> by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md`
+> by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md`
 > (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude
 > Code, `codex-tools.md` on Codex.
 
-The portable root seam `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` (assigned
-once per bash block) lets skills reference bundled helpers on both hosts. Bare
-`${CLAUDE_PLUGIN_ROOT}` is banned — use the seam form above; `validate_hosts.py` enforces
-it. The pointer line above uses
-that same seam so it resolves at the plugin **root** (where `hosts/` lives); a bare
-relative `hosts/` path would resolve against the skill's own folder, which has none.
+`${CLAUDE_PLUGIN_ROOT}` names the plugin root on both hosts: Claude Code sets it for plugin
+hooks, and Codex sets it as a compatibility alias of its own `PLUGIN_ROOT`. Skills assign
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` once per bash block to reference bundled helpers; in skill
+text and Bash commands neither host expands the variable: the model resolves it in text (§7.4), and the Bash layer is tracked in #93. The
+pointer line above uses the same variable so it resolves at the plugin **root** (where `hosts/`
+lives); a bare relative `hosts/` path would resolve against the skill's own folder, which has
+none. `validate_hosts.py` requires the pointer line in every `SKILL.md`.
 
 ### 7.2 Host-adaptation layer (thin, per-host)
 
@@ -549,7 +553,7 @@ A session started **directly from a slash command** (e.g. `/superheroes:workhors
 in a fresh worktree — superheroes' usual entry path) does **not** receive the harness's
 auto-injected context layer that a plain chat start gets: project `CLAUDE.md`, the
 `MEMORY.md` head, and the env block are all absent, and nothing expands the §7.1 host-map
-pointer's `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`. The only channel that survives the spawn
+pointer's `${CLAUDE_PLUGIN_ROOT}`. The only channel that survives the spawn
 is a `SessionStart` hook's `additionalContext`.
 
 On Claude Code, `hooks/session_start.py` (wired in `hooks.json` with `--host claude`) closes
@@ -582,10 +586,10 @@ reaches a Codex session only through a project's own `CLAUDE.md` copy; and in ou
 storage mode there is no carrier at all.
 
 Scope boundary: this fixes the host-map **Read** (model-resolved, so an injected absolute path
-is the lever). The `lib/` **bash** seam of §7.1 — skills shelling out to `lib/` helpers through
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`, which the Bash tool does not expand — is a *different*
+is the lever). The `lib/` **bash** layer of §7.1 — skills shelling out to `lib/` helpers through
+`${CLAUDE_PLUGIN_ROOT}`, which the Bash tool does not expand — is a *different*
 layer that context injection cannot fix; it is tracked separately
-([#93](https://github.com/zwrose/superheroes/issues/93)) and the seam form here is unchanged.
+([#93](https://github.com/zwrose/superheroes/issues/93)) and this bootstrap does not change it.
 
 ### 7.5 Cross-engine contract (host-run-on vs engine-dispatched-to)
 
@@ -625,10 +629,13 @@ threads the role's resolved model into the engine argv as a dispatch fact —
 `lib/model_registry.py` (the vendor registry + role×vendor matrix) decides what
 actually runs; the adapter and `engine_pref` re-derive from it.
 
-Codex tier map: haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
-An optional per-role `enginePreferences.codexModels` pin may select one of those
-canonical IDs (plus `gpt-6-astra` for `reviewer-deep` only, at effort `high`); a pinned model runs at the effort
-of its own registry rung, not the role's configured effort. A one-run preflight pin wins over the
+Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none.
+An optional per-role `enginePreferences.codexModels` pin may select `gpt-6-sol`, the
+pin-only `gpt-5.6-sol` (valid only for a role with a codex cell, at that role's own
+effort), or `gpt-6-astra` for `reviewer-deep` only (at effort `high`); a pinned model runs
+at the effort of its own registry rung, not the role's configured effort. A pin to the
+retired `gpt-5.6-terra` is refused by name (`model-retired: gpt-5.6-terra is retired; use
+gpt-6-sol`), never falling back silently. A one-run preflight pin wins over the
 persistent pin, which wins over tier mapping. The provider-specific pin is carried separately from the shared
 tier so a failed Codex dispatch falls directly open to the host model with a valid native
 model — never automatically downgrading to another GPT model. Effort stays
@@ -641,7 +648,7 @@ error at configure/calibration time, named `fable-on-external-engine`, raised by
 `dispatch-vocab` probe (which reads the project's configuration), by `dispatch_selftest.run` when
 a caller supplies that configuration, and by both configure-facing write paths (the tier writer
 and the engine-preference writer), so an invalid combination cannot be saved in the first place; there is **no cross-family
-substitution** (this replaces the old silent `fable→gpt-5.6-sol` remap). Fable's
+substitution**. Fable's
 long-term availability on Max plans removes the reason a graceful degrade ever existed.
 The dispatch-time named refusal (`fable-unrunnable`) **remains as defensive depth** for
 callers that bypass configuration, but is unreachable from a valid configuration.
@@ -657,9 +664,13 @@ When git cannot be run and the repository root is unknown, the accessor reports
 `legacy-profile-unsupported`. A genuinely absent `core.md` (with a known repo root)
 remains a clean create. A gate that treats an unreadable config as "no config"
 **fails open**, which is the failure this closes. The
-GPT-5.6 tier requires a sufficiently
-new Codex CLI; an unavailable model follows the observable fall-open path to
-the host model, never a guessed version gate. Dispatch provenance — the concrete engine,
+registry names a minimum Codex CLI version for the models the codex defaults use; the
+preflight and the composition-liveness check review-code runs before seating a panel
+both run `codex --version` first, and a CLI below that floor is refused by name,
+`codex-cli-too-old`, telling the owner to upgrade the Codex CLI to that version or later
+(an unparseable version is refused `codex-cli-version-unknown`). A cached liveness
+receipt never skips that check, so an older CLI is told at preflight or composition,
+never first inside a review seat. Dispatch provenance — the concrete engine,
 model, and effort actually used — is recorded in the PR body (the Workhorse
 charter's "dispatch provenance" section), not a separate journal.
 
@@ -903,6 +914,17 @@ PR-body markers from the retired execution spine survive independently of it:
   separates those two states, because the builder stamps the marker.
   A slot with **no marker at all** is read against the advisor's own receipt: with no receipt comment it is a body predating the contract (*not yet vetted*); with a receipt already posted it is a rewrite that dropped the verdict and marker together.
   Because the receipt is posted before the body write, a standing reminder means the **owner-half write** is owed — the receipt may already exist, so the advisor checks for its own existing receipt comment before posting another.
+- **Keyed follow-ups** — the build record's *Follow-ups for the advisor* section keys each item
+  `- FU<n> [<class>] <text>` and carries one `<!-- superheroes:followups FU1 FU2 -->` marker (or
+  `<!-- superheroes:followups none -->`); the vet receipt's completed dispositions key one bullet
+  per id, `- FU<n>: <disposition>`, and carry one `<!-- superheroes:dispositions FU1 FU2 -->` marker
+  (or `<!-- superheroes:dispositions none -->`). `plugins/superheroes/lib/vet_slot.py`'s `write` is
+  the one home for the `## Advisor vet` slot write and refuses when the two markers disagree. The
+  class and disposition vocabulary is taught, not coded: the build-record list in the **workhorse**
+  charter's §11, the receipt field and the command in
+  `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` field 7. Accepted limit: each
+  marker is its author's declaration, so the writer reads no prose and the vet reads the prose
+  against the markers.
 
 **Omission floor (owner half).** Anything the owner still **carries after merging** appears
 in the PR's owner half, **stated as a consequence**. The checkable floor beneath that
@@ -1341,12 +1363,14 @@ canonical ruling record is `LEDGERS.md` §4.
 
 ## 15. Builder liveness heartbeat
 
-> **Cross-boundary contract** (§11). The builder stamps semantic liveness; the advisor's wave sweep
-> reads it. `plugins/superheroes/lib/heartbeat.py`'s module constants are **authoritative**; prose
-> copies in charters and this section are pinned to them by a drift test.
+> **Cross-boundary contract** (§11). The builder stamps lane endings and blockers; liveness is one
+> shared rule in `lib/wave_watch.py`. `plugins/superheroes/lib/heartbeat.py`'s module constants are
+> **authoritative** for the heartbeat; prose copies in charters and this section are pinned by a drift
+> test.
 
 **Producer:** the workhorse builder (`skills/workhorse/SKILL.md` — stamp duty in §7).
-**Consumer:** the showrunner's scheduled heartbeat sweep (`skills/showrunner/SKILL.md` duty 9).
+**Consumers:** the showrunner's scheduled liveness sweep (`skills/showrunner/SKILL.md` duty 9);
+`lib/wave_watch.py` for `lane-terminal` and `lane-blocked`.
 
 **Path:** `<root>/<repoId>/heartbeats/<launchId>.json`, `0700` directories, `0600` files.
 
@@ -1357,7 +1381,7 @@ canonical ruling record is `LEDGERS.md` §4.
 `^[A-Za-z0-9_-]{1,64}$`.
 
 **Record fields:** `schema` (`1`), `launchId`, `issue`, `state`, `phase`, `lastDispatch`, `ts`,
-`staleAfterSeconds`, `note`.
+`note`.
 
 **`lastDispatch` sub-schema** (optional; `null` when absent): `kind`, `engine`, `model`, `runId`
 (non-empty strings), `startedAt` (non-empty ISO-8601 UTC string, e.g. `2026-08-01T14:00:00Z`).
@@ -1365,25 +1389,26 @@ canonical ruling record is `LEDGERS.md` §4.
 **States:** `working`, `awaiting-dispatch`, `blocked`, `parked`, `handback`. **Terminal:**
 `parked`, `handback`.
 
-**Sweep classes:** `fresh`, `stale`, `terminal`, `unknown`.
+**Sweep classes:** `terminal`, `nonterminal`, `unknown`. `nonterminal` means a valid stamp in a
+non-terminal state and says nothing about liveness.
 
 **Verbs:** `stamp`, `read`, `sweep`.
 
-**Default promise.** A caller that states no `staleAfterSeconds` gets
-`heartbeat.DEFAULT_STALE_AFTER_SECONDS` = **24000** seconds — floored at 2× the worst *benign*
-inter-stamp gap measured on the reference host (11960 s, over 45 gaps across 10 builder lanes, 44 of
-them benign). The prior 300 s default was below every real build's stamping cadence, so an omitting
-caller read `stale` within five minutes. A builder that states its own promise is unaffected.
+**Liveness.** One rule for every reader: the lane's recorded leader pid is positively live **and** the
+lane's own session transcript — resolved by the launch record's session id and config root, **stat
+only** (the existing identity rule) — was written within `LIVENESS_QUIET_WINDOW_SECONDS` in `lib/heartbeat.py` (re-exported by
+`lib/wave_watch.py`). A lane whose transcript file does not exist yet gets the same window from its
+recorded start. No per-lane promise exists. A Codex-hosted builder has no Claude session
+transcript, so it would alert `lane-stale` (fail toward alert) where a stamp used to vouch for it;
+today's launcher spawns only `claude -p` builders.
 
-**Semantic core.** The builder stamps `staleAfterSeconds` — its own promise about when it will next
-stamp. A lane is late only when it has outrun **the promise it made itself** — semantic liveness, not
-another mtime watchdog. A builder inside a nine-minute dispatch is not a false alarm. The corpus holds
-**3 watchdog design failures and 3 false alarms** from mtime and process-table signals.
-
-**Fail-closed direction.** A missing, unreadable, corrupt, schema-skewed, non-finite or **future-dated**
-heartbeat classifies `unknown`, never `fresh`. A ledger failure makes the sweep **refuse at the top
-level** rather than return an empty, healthy-looking result. The sweep **never asserts that a lane is
-dead** — a heartbeat cannot prove death.
+**Fail-closed direction.** A missing, unreadable, corrupt, schema-skewed, non-finite or
+**future-dated** heartbeat classifies `unknown`, never `nonterminal` or `terminal`. A ledger
+failure makes the sweep **refuse at the top level** rather than return an empty,
+healthy-looking result. The sweep **never asserts that a lane is dead** — a heartbeat cannot
+prove death. The retired next-stamp promise field is still written, with a fixed value, so readers older
+than this contract can load new stamps; every reader here ignores it, and an older record carrying any
+value in it loads normally.
 
 **Accepted storage bound.** The store keeps **one small JSON file per launch, retained indefinitely**
 — nothing reaps them, and the sweep ignores launches the ledger no longer reports live, so those
