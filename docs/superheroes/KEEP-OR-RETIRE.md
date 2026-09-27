@@ -1301,15 +1301,15 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 - **Component.** `lib/tests/test_covenant_merge_line.py`, pinning the covenant's merge hard
   line to keep its compaction-safe minimum: the owner's word for a merge itself, the three
-  merge preconditions (review evidence, CI green, branch current with base), the own-word
-  requirement for release/publish/force-push, and the pointer to the showrunner charter's
-  duty 6.
+  merge preconditions (review evidence, CI green, branch current with base), the closed
+  precondition list joined by "and" (never "or"), the own-word requirement for
+  release/publish/force-push, and the pointer to the showrunner charter's duty 6.
 - **Start date.** 2026-09-27.
 - **Condition.** Citation-based, 45 days.
 - **Last demonstrated benefit.** unknown — ships with this change.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
-- **Notes.** structural — one bullet, closed enumeration of its six elements.
+- **Notes.** structural — one bullet, closed enumeration of its seven elements.
 
 ### F. Config & calibration
 

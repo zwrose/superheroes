@@ -1,9 +1,10 @@
-"""Guards the covenant's merge hard line against losing any of its six elements.
+"""Guards the covenant's merge hard line against losing any of its seven elements.
 
 The first bullet under `## The hard lines` in rubric/covenant.md must keep its
 compaction-safe minimum: the owner's word for a merge itself, the three merge
-preconditions, the own-word requirement for release/publish/force-push, and the
-pointer to the showrunner charter's duty 6.
+preconditions, the closed precondition list joined by "and" (never "or"), the
+own-word requirement for release/publish/force-push, and the pointer to the
+showrunner charter's duty 6.
 """
 import os
 import re
@@ -17,8 +18,8 @@ def _read_plugin(rel):
         return fh.read()
 
 
-# axis: presence of each of the six merge-line elements in the covenant's first hard-line bullet; any one element alone missing must fail. The review-evidence literal carries its governing "only with" connective, not just the bare noun phrase, so inverting it (e.g. to "even without") fails that element.
-# coverage: closed enumeration — the six elements are the whole compaction-safe minimum of this bullet; a seventh element is added here, not elsewhere.
+# axis: presence of each of the seven merge-line elements in the covenant's first hard-line bullet; any one element alone missing must fail. The review-evidence literal carries its governing "only with" connective, not just the bare noun phrase, so inverting it (e.g. to "even without") fails that element. The precondition-list literal is the whole closed clause joined by "and", so swapping any of its internal conjunctions to "or" (an AND-to-OR weakening) fails that element even though each individual precondition phrase still appears elsewhere in the bullet.
+# coverage: closed enumeration — the seven elements are the whole compaction-safe minimum of this bullet; an eighth element is added here, not elsewhere.
 def test_covenant_merge_line_keeps_its_minimum():
     text = _read_plugin("rubric/covenant.md")
 
@@ -39,6 +40,10 @@ def test_covenant_merge_line_keeps_its_minimum():
         "review-evidence precondition": "only with the lane's review evidence",
         "ci-green precondition": "CI green on the recorded head",
         "branch-current precondition": "a branch current with its base",
+        "precondition list joined by and": (
+            "only with the lane's review evidence, CI green on the recorded head, "
+            "and a branch current with its base"
+        ),
         "own-word for release, publish, force-push": (
             "a release, publish, or force-push needs a word for that act itself"
         ),
