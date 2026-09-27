@@ -1,6 +1,6 @@
 ---
 name: showrunner-handoff
-description: "Use in the showrunner advisor seat you are leaving while it is still alive — deliberate handover before the seat goes dark. Parks builders when the account is going dark, stops watch loops, freshens the resume point. Emits no paste block. Not checkpoint (`/compact`); not showrunner-resume (incoming seat)."
+description: "Use in the showrunner advisor seat you are leaving while it is still alive — deliberate handover before the seat goes dark. Leaves durable state for the incoming seat. Emits no paste block. Not checkpoint (`/compact`); not showrunner-resume (incoming seat)."
 user-invocable: true
 ---
 
