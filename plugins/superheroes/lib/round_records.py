@@ -35,7 +35,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import model_registry  # noqa: E402
+import model_registry  # noqa: E402 — stdlib-only leaf; no cycle with records layer
 import record_paths  # noqa: E402
 import round_phases  # noqa: E402
 import session_contract  # noqa: E402
@@ -66,16 +66,51 @@ SEAT_RESULT_FIELDS = ("schema", "session", "round", "phase", "seat", "attempt", 
                       "model", "dispatchRef", "orderSha256", "manifestSha256", "recordedAt",
                       "payloadSha256", "payload")
 SEAT_RESULT_V2_FIELDS = SEAT_RESULT_FIELDS + ("executionEvidence", "provenance",
-                                              "envelopeSha256")
+                                              "envelopeSha256", "headSha",
+                                              "citedHeadSource")
+REVISION_IDENTITY_FIELDS = ("payloadSha256", "casToken", "executionEvidence", "provenance",
+                            "envelopeSha256", "executionEvidencePresent", "citedHead",
+                            "citedHeadSource")
 PROVENANCE_DISPATCH_OBSERVED = "dispatch-observed"
+CITED_HEAD_SOURCE_RUNNER_VIEW = "runner-view"
+CITED_HEAD_SOURCE_ORDER_ANCHOR = "order-anchor"
+CITED_HEAD_SOURCES = (CITED_HEAD_SOURCE_RUNNER_VIEW, CITED_HEAD_SOURCE_ORDER_ANCHOR)
 PROVENANCE_HAND_LANDED = "hand-landed"
 PROVENANCE_ORCHESTRATOR_FULFILLED = "orchestrator-fulfilled"
+
+RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE = "record-attempt-predates-relocation"
+RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL = (
+    "the orders for this attempt were emitted before the session moved checkouts and "
+    "may already have run in the old checkout; run `re-emit` and dispatch the new attempt"
+)
+AUDIT_PROVENANCE_RUNNER_RECORD = "runner-record"
+AUDIT_PROVENANCE_HAND_LANDED = "hand-landed-evidence"
+AUDIT_PROVENANCE_MIXED = "mixed-evidence"
+AUDIT_PROVENANCE_COLLECTION_MANIFEST = "collection-manifest"
+AUDIT_PROVENANCE_LEGACY_DISPATCH_MANIFEST = "dispatch-manifest"
+AUDIT_PROVENANCE_SOURCES = (
+    AUDIT_PROVENANCE_RUNNER_RECORD,
+    AUDIT_PROVENANCE_HAND_LANDED,
+    AUDIT_PROVENANCE_MIXED,
+    AUDIT_PROVENANCE_COLLECTION_MANIFEST,
+)
+# Phases whose discharge depends on who executed the seat (runner record, not orchestrator manifest).
+PROVENANCE_RUNNER_RECORD_PHASES = (round_phases.P_AUDITS,)
 SEAT_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED,
                    PROVENANCE_ORCHESTRATOR_FULFILLED)
 EVIDENCE_BEARING_PROVENANCE = (PROVENANCE_DISPATCH_OBSERVED, PROVENANCE_HAND_LANDED)
-EXECUTION_EVIDENCE_FIELDS = ("source", "runnerNonce", "recordDigest", "resultDigest", "resultKind",
-                             "observation")
-EXECUTION_EVIDENCE_OPTIONAL_FIELDS = ("engineModel",)
+EXECUTION_EVIDENCE_BINDING_FIELDS = session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
+_EXECUTION_EVIDENCE_MANDATORY_BINDING = tuple(
+    field
+    for field in EXECUTION_EVIDENCE_BINDING_FIELDS
+    if field != session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD
+)
+EXECUTION_EVIDENCE_FIELDS = _EXECUTION_EVIDENCE_MANDATORY_BINDING + ("observation",)
+EXECUTION_EVIDENCE_OPTIONAL_FIELDS = (
+    "engineModel",
+    "model",
+    session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD,
+)
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
@@ -90,6 +125,8 @@ _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK = {
     "resultKind": lambda value: isinstance(value, str) and value,
     "observation": lambda value: isinstance(value, dict),
     "engineModel": lambda value: isinstance(value, str) and value,
+    "model": lambda value: value is None or (isinstance(value, str) and value),
+    session_contract.EXECUTION_EVIDENCE_RUN_KIND_FIELD: session_contract.run_kind_value_ok,
 }
 # A seat-missing envelope records a seat that produced NO artifact. Same envelope minus the
 # payload pair, plus a `reason` from MISSING_REASONS and an optional free-text `evidence`.
@@ -150,6 +187,85 @@ def envelope_sha256(payload, execution_evidence):
     evidence together, so real evidence from one act can never be re-paired with different
     content."""
     return sha256_text(canonical({"payload": payload, "executionEvidence": execution_evidence}))
+
+
+class IncompleteRevisionIdentity(ValueError):
+    """A `recorded` journal row or its builder input lacks complete revision identity."""
+
+    def __init__(self, missing):
+        self.missing = tuple(missing)
+        super().__init__("incomplete revision identity: missing %s" % (self.missing,))
+
+
+def stored_cited_head_source(stored_envelope):
+    """The durable cited-head derivation bound on a stored envelope, or order-anchor for legacy rows."""
+    if not isinstance(stored_envelope, dict):
+        return CITED_HEAD_SOURCE_ORDER_ANCHOR
+    if "citedHeadSource" not in stored_envelope:
+        return CITED_HEAD_SOURCE_ORDER_ANCHOR
+    source = stored_envelope["citedHeadSource"]
+    if source in CITED_HEAD_SOURCES:
+        return source
+    raise IncompleteRevisionIdentity(("citedHeadSource",))
+
+
+def envelope_bind_cited_head_source(envelope, cited_head_source):
+    """Stamp `citedHeadSource` onto an envelope about to be written to the store."""
+    if cited_head_source not in CITED_HEAD_SOURCES:
+        raise IncompleteRevisionIdentity(("citedHeadSource",))
+    out = dict(envelope)
+    out["citedHeadSource"] = cited_head_source
+    return out
+
+
+def execution_evidence_fields(evidence):
+    """Mandatory execution-evidence members plus each optional field when present, or None when a
+    mandatory member is missing — the one projection a journal row and a dispatch record copy."""
+    if not isinstance(evidence, dict):
+        return None
+    if not all(field in evidence for field in EXECUTION_EVIDENCE_FIELDS):
+        return None
+    out = {field: evidence[field] for field in EXECUTION_EVIDENCE_FIELDS}
+    for field in EXECUTION_EVIDENCE_OPTIONAL_FIELDS:
+        if field in evidence and _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):
+            out[field] = evidence[field]
+    return out
+
+
+def recorded_row_fields(stored_envelope, cited_head, cited_head_source):
+    """THE builder for revision identity on a `recorded` journal row.
+
+    Accepts a stored `seat-result/1`, `seat-result/2`, or `seat-missing/1` envelope; a non-dict
+    raises `IncompleteRevisionIdentity` because a row with no stored envelope has no revision
+    identity to record."""
+    if cited_head_source not in CITED_HEAD_SOURCES:
+        raise IncompleteRevisionIdentity(("citedHeadSource",))
+    if not isinstance(stored_envelope, dict):
+        raise IncompleteRevisionIdentity(REVISION_IDENTITY_FIELDS)
+    schema = stored_envelope.get("schema")
+    if schema not in SEAT_RESULT_SCHEMAS and schema != SEAT_MISSING_SCHEMA:
+        raise IncompleteRevisionIdentity(REVISION_IDENTITY_FIELDS)
+    execution_evidence = execution_evidence_fields(stored_envelope.get("executionEvidence"))
+    return {
+        "payloadSha256": stored_envelope.get("payloadSha256"),
+        "casToken": envelope_cas_token(stored_envelope),
+        "executionEvidence": execution_evidence,
+        "provenance": stored_envelope.get("provenance"),
+        "envelopeSha256": stored_envelope.get("envelopeSha256"),
+        "executionEvidencePresent": "executionEvidence" in stored_envelope,
+        "citedHead": cited_head,
+        "citedHeadSource": cited_head_source,
+    }
+
+
+def require_complete_revision(entry):
+    # axis: every `recorded` row must carry the full revision-identity tuple before it reaches disk.
+    if not isinstance(entry, dict) or entry.get("outcome") != "recorded":
+        return None
+    missing = tuple(field for field in REVISION_IDENTITY_FIELDS if field not in entry)
+    if missing:
+        raise IncompleteRevisionIdentity(missing)
+    return None
 
 
 def envelope_cas_token(envelope):
@@ -245,28 +361,10 @@ def roster_slots(roster):
 # paths — every builder is fenced inside the session dir
 # =============================================================================================
 
-def landing_dir(session_dir, rnd, phase):
-    record_paths._require_token("phase", phase)
-    return record_paths._guard_within(session_dir,
-                                      os.path.join(record_paths.round_dir(session_dir, rnd),
-                                                   "landing", phase))
-
-
-def landing_path(session_dir, rnd, phase, skey, attempt):
-    return record_paths._guard_within(
-        session_dir,
-        os.path.join(landing_dir(session_dir, rnd, phase),
-                     record_paths._seat_filename(skey, attempt)))
-
-
-def bare_payload_path(session_dir, rnd, phase, skey, attempt):
-    """Host-seat payload-only landing slot — sibling to the full-envelope `landing_path`."""
-    record_paths._require_token("skey", skey)
-    record_paths._require_index("attempt", attempt)
-    return record_paths._guard_within(
-        session_dir,
-        os.path.join(landing_dir(session_dir, rnd, phase),
-                     "%s.a%d.payload.json" % (skey, attempt)))
+landing_dir = record_paths.landing_dir
+landing_path = record_paths.landing_path
+bare_payload_path = record_paths.bare_payload_path
+landing_entry_present = record_paths.landing_entry_present
 
 
 def order_prompt_path(session_dir, rnd, phase, skey, attempt):
@@ -374,6 +472,8 @@ def _normalize_envelope(envelope, occurrence=0):
     addressed to, which is also the slot the file lives in, so the stored record says WHICH of two
     same-id seats it is rather than leaving the reader to infer it from the filename."""
     out = dict(envelope)
+    # Writer-owned revision identity — never authoritative from a landing envelope.
+    out.pop("citedHeadSource", None)
     out["occurrence"] = occurrence
     for key in ("round", "attempt"):
         value = out.get(key)
@@ -421,7 +521,7 @@ def _anchor_check(envelope, seat_key, anchor, occurrence=0):
     env_order = envelope.get("orderSha256")
     if anchor is None:
         if env_manifest == NOT_EMITTED and env_order == NOT_EMITTED:
-            return None
+            return _head_anchor_check(envelope, anchor)
         return "manifest-anchor-unanchored"
     if not isinstance(anchor, dict):
         return "manifest-anchor-mismatch"
@@ -441,11 +541,23 @@ def _anchor_check(envelope, seat_key, anchor, occurrence=0):
     if env_order == NOT_EMITTED:
         if want_order != NOT_EMITTED:
             return "manifest-anchor-mismatch"
-        return None
+        return _head_anchor_check(envelope, anchor)
     if want_order == NOT_EMITTED:
         return "manifest-anchor-mismatch"
     if env_order != want_order:
         return "manifest-anchor-mismatch"
+    return _head_anchor_check(envelope, anchor)
+
+
+def _head_anchor_check(envelope, anchor):
+    env_head = envelope.get("headSha")
+    if env_head is None:
+        return None
+    anchor_head = anchor.get("headSha") if isinstance(anchor, dict) else None
+    if not anchor_head:
+        return "head-anchor-unanchored"
+    if env_head != anchor_head:
+        return "head-anchor-mismatch"
     return None
 
 
@@ -628,7 +740,8 @@ def _probe_store_entry(spath):
 
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                      supersede=False, expect_sha256=None, anchor=None, occurrence=0,
-                     seat_result_schema=None, envelope_override=None):
+                     seat_result_schema=None, envelope_override=None,
+                     evidence_minted=False, cited_head_source=None, fenced=False):
     """Every check `ingest_landing` performs, with NO write.
 
     When ``envelope_override`` is a dict, that dict is validated in place of reading the
@@ -738,6 +851,31 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
             if declared_envelope_sha != computed_envelope_sha:
                 return None, _refuse("envelope-torn", computed=computed_envelope_sha,
                                      declared=declared_envelope_sha, landingPath=lpath)
+            if phase in PROVENANCE_RUNNER_RECORD_PHASES:
+                # axis: on a discharge-bearing phase, a stored envelope's vendor provenance is
+                # derivable from a runner record — never from a file the orchestrator typed.
+                if provenance == PROVENANCE_DISPATCH_OBSERVED and not evidence_minted:
+                    return None, _refuse("provenance-underivable", seat=seat_key, phase=phase,
+                                         provenance=provenance,
+                                         detail=("dispatch-observed provenance derives from a runner "
+                                                 "run directory (record-result --evidence-run-dir); "
+                                                 "a landed executionEvidence block, a sweep, or a "
+                                                 "record-result without a run directory cannot "
+                                                 "establish who executed this seat"))
+                if provenance == PROVENANCE_HAND_LANDED and "executionEvidence" not in envelope:
+                    return None, _refuse("provenance-underivable", seat=seat_key, phase=phase,
+                                         provenance=provenance,
+                                         detail=("hand-landed provenance derives from the "
+                                                 "execution-evidence binding on the landed "
+                                                 "envelope; none is present"))
+                if provenance in EVIDENCE_BEARING_PROVENANCE and "executionEvidence" in envelope:
+                    source = envelope["executionEvidence"].get("source")
+                    if source not in model_registry.VENDORS:
+                        return None, _refuse("provenance-underivable", seat=seat_key, phase=phase,
+                                             provenance=provenance, source=source,
+                                             detail=("executionEvidence.source must name the "
+                                                     "executing vendor (one of %s)"
+                                                     % ", ".join(model_registry.VENDORS)))
     elif schema == SEAT_MISSING_SCHEMA:
         if envelope.get("reason") not in MISSING_REASONS:
             return None, _refuse("missing-reason",
@@ -766,21 +904,29 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
             return None, _refuse("cas-mismatch", expected=expect_sha256, actual=current_sha,
                                  storePath=spath)
 
+    normalized = _normalize_envelope(envelope, occurrence)
+    if cited_head_source is not None:
+        normalized = envelope_bind_cited_head_source(normalized, cited_head_source)
     plan = {
         "storePath": spath,
-        "envelope": _normalize_envelope(envelope, occurrence),
+        "envelope": normalized,
         "payloadSha256": stored_sha,
         "superseded": bool(exists and supersede),
         "seatKey": seat_key,
         "storageKey": skey,
         "occurrence": occurrence,
     }
+    # axis: a landing for an attempt emitted before relocation is refused unless runner evidence minted it
+    if fenced and not evidence_minted:
+        return None, _refuse(RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
+                             message=RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL)
     return plan, None
 
 
 def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                    supersede=False, expect_sha256=None, anchor=None, occurrence=0,
-                   seat_result_schema=None):
+                   seat_result_schema=None, evidence_minted=False, cited_head_source=None,
+                   fenced=False):
     """Ingest ONE landed seat envelope into the durable store. Never raises on bad input.
 
     Returns `{"ok": True, "storePath", "payloadSha256", "superseded"}` or a refusal
@@ -814,7 +960,10 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
                                      current_attempt=current_attempt, roster=roster,
                                      supersede=supersede, expect_sha256=expect_sha256,
                                      anchor=anchor, occurrence=occurrence,
-                                     seat_result_schema=seat_result_schema)
+                                     seat_result_schema=seat_result_schema,
+                                     evidence_minted=evidence_minted,
+                                     cited_head_source=cited_head_source,
+                                     fenced=fenced)
     if refusal is not None:
         return refusal
     atomic_write_json(plan["storePath"], plan["envelope"])
@@ -825,7 +974,7 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
 
 
 def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None,
-                  seat_result_schema=None):
+                  seat_result_schema=None, evidence_minted=False, fenced=False):
     """Ingest every unclaimed landing file for `phase` at `current_attempt`.
 
     Idempotent by construction: a seat already in the store is reported `already-stored` with
@@ -883,9 +1032,16 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
                                        message=("store entry %r is present but its target does not "
                                                 "resolve" % spath)))
                 continue
+        if fenced:
+            results.append(_refuse(RECORD_ATTEMPT_PREDATES_RELOCATION_CAUSE,
+                                   seatKey=seat_key, storageKey=skey, occurrence=occurrence,
+                                   message=RECORD_ATTEMPT_PREDATES_RELOCATION_DETAIL))
+            continue
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
                              current_attempt=current_attempt, roster=roster, anchor=anchor,
-                             occurrence=occurrence, seat_result_schema=seat_result_schema)
+                             occurrence=occurrence, seat_result_schema=seat_result_schema,
+                             evidence_minted=evidence_minted,
+                             cited_head_source=CITED_HEAD_SOURCE_ORDER_ANCHOR)
         out.setdefault("seatKey", seat_key)
         out.setdefault("storageKey", skey)
         out.setdefault("occurrence", occurrence)

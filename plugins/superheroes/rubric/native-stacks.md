@@ -133,7 +133,13 @@ the premise shape change is in `TRANSITION.md`:
   run.
 - `order-mismatch` — the membership read found the stack's order inconsistent with the premise.
 - `layer-position-occupied` — the claimed `layerPosition` is already held by an existing member
-  (`layerPosition >= 2` only).
+  (`layerPosition >= 2` only), unless the premise's `adopts` names exactly that member and it sits on
+  the layer below's head branch (an adoption re-occupying its own position).
+- `adopts-occupant-missing` — the premise's `adopts` names a pull request, but no member holds the
+  claimed `layerPosition`, so there is nothing to adopt.
+- `premise-adopts-without-stack`, `premise-adopts-invalid`, `premise-adopts-bottom-layer` — `adopts`
+  is present without the stack pair, is not a positive integer, or sits on `layerPosition` 1 (the
+  bottom layer is never gated).
 - `dependency-closed-unmerged` — the premise names a closed, unmerged dependency pull request.
 - `dependency-open-ready-pr` — the premise names an open dependency pull request with a READY
   vet and the resolved base commit is not that pull request's current head.

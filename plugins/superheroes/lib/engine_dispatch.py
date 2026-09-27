@@ -97,7 +97,7 @@ WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
 NATIVE_SCHEMA_NAME = "native-schema.json"
-RUN_KIND_REVIEW = "review"
+RUN_KIND_REVIEW = session_contract.RUN_KIND_REVIEW
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
 REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
 _REVIEW_RESULT_KINDS_CHOICES_CONTRACT = (
@@ -107,7 +107,7 @@ _CLAUDE_MODES_CHOICES_CONTRACT = (
     "choices:" + ",".join(str(mode) for mode in engine_result_channel.CLAUDE_MODES)
 )
 RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
-RUN_KIND_WRITE = "write"
+RUN_KIND_WRITE = session_contract.RUN_KIND_WRITE
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
 _GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
                      "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_GLOBAL",
@@ -7265,6 +7265,16 @@ def run_execution_record(run_dir):
         observation = _observation_from_attempt(run_dir_real, state, attempt)
         if not isinstance(observation, dict):
             return None, "observation-unavailable"
+        view_head_sha = None
+        view_meta = opened.get("viewMeta")
+        if isinstance(view_meta, dict):
+            head_sha_val = view_meta.get("headSha")
+            if isinstance(head_sha_val, str) and head_sha_val:
+                view_head_sha = head_sha_val
+        if view_head_sha is None:
+            base_sha = opened.get("baseSha")
+            if isinstance(base_sha, str) and base_sha:
+                view_head_sha = base_sha
         record = {
             "source": engine,
             "runnerNonce": echo_nonce,
@@ -7272,12 +7282,26 @@ def run_execution_record(run_dir):
             "observation": observation,
             "promptSha256": prompt_sha256,
             "orderPromptSha256": opened.get("basePromptSha256"),
+            "runKind": run_kind,
+            "viewHeadSha": view_head_sha,
         }
         if isinstance(attempt_prompt_path, str) and attempt_prompt_path:
             record["attemptPromptPath"] = attempt_prompt_path
         if isinstance(result_digest, str) and result_digest and isinstance(result_kind, str) and result_kind:
             record["resultDigest"] = result_digest
             record["resultKind"] = result_kind
+        if run_kind != RUN_KIND_WRITE and isinstance(result_kind, str):
+            if result_kind in session_contract.RECORD_RESULT_KINDS:
+                _, result_content = _result_kind_and_content_from_parse(res)
+                if isinstance(result_content, dict):
+                    record["resultContent"] = result_content
+        resolved = opened.get("resolvedInputs")
+        if isinstance(resolved, dict) and "engineModel" in resolved:
+            engine_model = resolved.get("engineModel")
+            if engine_model is None:
+                record["model"] = None
+            elif isinstance(engine_model, str) and engine_model:
+                record["model"] = engine_model
         resolved = opened.get("resolvedInputs")
         if isinstance(resolved, dict):
             engine_model = resolved.get("engineModel")

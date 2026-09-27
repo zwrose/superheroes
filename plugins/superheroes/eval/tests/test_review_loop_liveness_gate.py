@@ -1,7 +1,7 @@
-"""Eval harness must not pre-satisfy the cross-vendor liveness gate (#681 FIX-3).
+"""Eval harness records absent legacy canary probes without withholding certification (#1272).
 
-At least one fixture path runs with fabricated canary evidence suppressed so a regression where
-missing liveness should withhold certification is observable through the real harness seam.
+At least one fixture path runs with fabricated canary evidence suppressed so record-only
+``controlProbe`` / ``canaryUnverified`` behavior stays observable through the real harness seam.
 """
 import sys
 from pathlib import Path
@@ -18,13 +18,14 @@ if str(EVAL) not in sys.path:
 import review_loop_runner as harness  # noqa: E402
 
 
-def test_suppressed_canary_probes_withholds_certification():
-    """premortem-reviewer (codex) runs empty in round 1; without probes, gate bites."""
+def test_suppressed_canary_probes_still_certifies_with_record_only_disclosure():
+    """premortem-reviewer (codex) runs empty in round 1; without probes, run still certifies."""
     observed = harness.run_fixture(
         FIXTURES / "plan_120_replay.json",
         supply_canary_probes=False,
     )
-    assert observed["terminal"] == "halted"
-    assert observed["_driverReceipt"]["certificationShape"] is None
+    assert observed["terminal"] == "clean"
+    assert observed["_driverReceipt"]["certificationShape"] is not None
     round1 = observed["_driverReceipt"]["rounds"][0]
     assert round1["canaryUnverified"] == ["premortem-reviewer"]
+    assert round1["controlProbe"] == {"submitted": False, "vendors": {}}
