@@ -139,3 +139,7 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
   rulings, which test 1 then makes craft. The owner confirmed the recap of the discovery's
   purpose (2026-09-27): the line is groundwork for the first experiment, not the deliverable.
 - Per-project adjustment: start with a fixed line; a project adjusts it only through the owner's own rulings (a handed-back kind of call becomes craft by test 4). No per-project setting for now.
+- New category (owner): "who the product is for and what it is for" becomes its own category,
+  the root the others hang from. Owner also wants a formal, expected place to document it,
+  leaning toward configure. Carried forward as a candidate requirement (merges with the
+  grounding-doc candidate in HANDOFF.md); not yet elicited or approved.
