@@ -103,7 +103,12 @@ implementer template included. The lint recognizes a verbatim copy of the shippe
 runner's appended write-report contract is not what is linted. Exit 1 with a named token refuses the
 order.
 
-**The semantic half** is one native subagent at the mechanical role's registry cell (Haiku tier).
+**The semantic half** is the `order-linter` agent (`agents/order-linter.md`, dispatched as
+`superheroes:order-linter`) at the mechanical role's registry cell (Haiku tier). Its tool grant is
+read-only (`Read`, `Grep`, `Glob`), so the seat cannot edit the tree or run a command whatever the
+order says; never dispatch the semantic half on any other agent. It returns its answer in its reply,
+not in a file. A derail never falls back to a `general-purpose` re-dispatch, which would restore
+every tool; it is a check that did not happen, as below.
 Run the model gate first, with `"role": "mechanical"` in the seat. The prompt is
 `rubric/orders/order-lint-semantic.md` followed by two lines naming the order's absolute path and the
 repo root. It returns findings-only JSON with an investigated list.
@@ -126,7 +131,7 @@ rework.
 
 ## The model gate
 
-Run the gate before each of the four dispatch kinds the charter's §7 names, on the effective seat
+Run the gate before each of the five dispatch kinds the charter's §7 names, on the effective seat
 model you will pass (explicit in the seat JSON, or null for the seat default):
 
 `python3 -B <plugin root>/lib/dispatch_guard.py check --seat '{"vendor":"<vendor>","model":"<id>","effort":<str-or-null>,"role":"<role>"}'`

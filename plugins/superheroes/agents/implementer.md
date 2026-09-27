@@ -172,7 +172,7 @@ overrunning or silently truncating.
   **never proceed on a guessed premise** applied to a document instead of a command, and it is not a
   seventh validity rule — the six below are unchanged.
 - **Your order was linted before it reached you — say so when it plainly was not.** The orchestrator
-  runs `lib/order_lint.py check` and the semantic seat where the host has a mechanical cell before
+  runs `lib/order_lint.py check` and the read-only `order-linter` seat where the host has a mechanical cell before
   dispatch; when the host does not, the order's dispatch-provenance row records
   `semantic-lint-unavailable:<vendor>`. An order
   that still carries an unfilled `{{NAME}}` or `{name}` placeholder, cites a slashed path that does
