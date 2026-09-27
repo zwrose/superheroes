@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Run Python for this repository under its one pinned interpreter.
+# The pin's only home is .python-version at the repository root; this script names no version.
+# Requires a uv-managed interpreter at the pin; never uses a system Python.
+# Provision the interpreter once per machine with `uv python install` (it reads .python-version).
+# Paths resolve from this script's location, never the caller's cwd; the caller's cwd is kept,
+# so relative paths in the arguments keep their meaning.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+pin="$(tr -d '[:space:]' < "$root/.python-version")"
+exec uv run --no-project --managed-python --python "$pin" --with-requirements "$root/requirements-dev.txt" python "$@"

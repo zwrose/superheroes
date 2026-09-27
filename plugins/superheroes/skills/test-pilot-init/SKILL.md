@@ -3,7 +3,7 @@ name: test-pilot-init
 description: "Internal helper reached from `superheroes:configure` to refresh test-pilot's profile, seeding blocks, and browser tooling layer. Not a front door; owners run `superheroes:configure` instead."
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # test-pilot-init
 
@@ -14,7 +14,7 @@ seeding blocks. Two modes: **create** (nothing resolves) and **reconcile**
 ## Step 1 — Resolve
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 RES=$(python3 -B "$ROOT_DIR/lib/store.py" resolve) || RC=$?
 RC=${RC:-0}
 if printf '%s' "$RES" | jq -e '.refusal != null' >/dev/null 2>&1; then
@@ -74,7 +74,7 @@ before Step 6's writer runs. Follow-up: `/superheroes:configure`.
 
 <!-- decision-point: id=tp-init-storage mode=notify kind=storage-location default="returned .mode from store CLI" carrier=test-pilot-layer -->
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 DEC=$(python3 -B "$ROOT_DIR/lib/store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
 LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
 SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
@@ -139,7 +139,7 @@ Continue to Step 6. Follow-up: `/superheroes:configure`.
 
 ## Step 6 — Scaffold
 
-1. Fill `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/profile.md` (prose AND the
+1. Fill `${CLAUDE_PLUGIN_ROOT}/templates/profile.md` (prose AND the
    `json test-pilot-config` block — keep them consistent) and write it to
    the resolved profile path. Set provenance `status=provisional` always on this create path —
    only `/superheroes:configure` confirms with real answers.
@@ -149,7 +149,7 @@ Continue to Step 6. Follow-up: `/superheroes:configure`.
    seed script. Every block declares non-empty `targets` and pins PEP 723
    dependency versions.
 3. Generate the catalog:
-   `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/catalog.py" --blocks-dir <blocks_dir>`
+   `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/catalog.py" --blocks-dir <blocks_dir>`
 4. CREATE path (fresh setup, FR-5): Fail-closed guard before the pipes below — not the
    mechanical-carrier redesign: refuse when either the shared facts JSON (stack, verify command,
    threat model) or `$TEST_PILOT_LAYER_BODY` (test-pilot's `json test-pilot-config` block + prose,
@@ -158,7 +158,7 @@ Continue to Step 6. Follow-up: `/superheroes:configure`.
    When either payload is empty, surface `assembly produced empty payloads; halting rather than
    writing an empty layer` and **stop** — do not pipe into `write` or `write-layer`. When both
    payloads are present, pipe the shared facts JSON into
-   `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
+   `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/core_md.py" write
    --status provisional` to write the band-wide `core.md`, and pipe `$TEST_PILOT_LAYER_BODY` into
    `core_md.py write-layer --hero test-pilot --status <s>` so they land in the `test-pilot.md`
    layer (FR-3). On reconcile of a pre-existing profile, the legacy `profile.md` is not adopted —
@@ -183,7 +183,7 @@ block, run the headless conformance pass (normative CLI in
 `reference/pilot-contract.md` §The conformance run):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 REPORT_JSON="$(mktemp)"
 trap 'rm -f "$REPORT_JSON"' EXIT
 CONFORMANCE_ARGS=(run --cwd .)
@@ -238,7 +238,7 @@ has answered every one of its no-default fields. Do not scaffold it during init.
   the `pilot` block at all (resolved via `policyRef.declaration` against an external policy
   document).
 - Normative field table, refusal tokens, and probe vocabulary:
-  `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md`.
+  `${CLAUDE_PLUGIN_ROOT}/reference/pilot-contract.md`.
 
 ## Step 7 — Reconcile mode
 
