@@ -123,6 +123,11 @@ def _session(tmp_path, name="s", **cfg_over):
   return d
 
 
+def _session_with_anchor_head(tmp_path, name="s", **cfg_over):
+  # Review-run evidence binding needs an anchor head to compare the runner-observed view head against (C13 layer 1c); literal matches _execution_run_dir view meta.
+  return _session(tmp_path, name=name, headSha="abc123fake", **cfg_over)
+
+
 def _state(session_dir):
   ok, state = RD.load_state(session_dir)
   assert ok, state
@@ -746,7 +751,7 @@ def test_seam_a_record_ingest_recovers_via_driver_command(tmp_path, adapters, mo
 
 
 def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, adapters):
-  d = _session(tmp_path, name="ev-stamp")
+  d = _session_with_anchor_head(tmp_path, name="ev-stamp")
   pend = _pending(d)
   path, _env, before = _dispatch_observed_land(d, "code-reviewer")
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
@@ -767,7 +772,10 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   assert ev_err is None
   after_obj, after_err = RR.read_json(path)
   assert after_err is None
-  assert set(after_obj) - set(_env) == {"executionEvidence", "payloadHashSource"}
+  # citedHeadSource: durable cited-head derivation layer 1c binds onto a stored envelope;
+  # headSha: runner-observed cited head that layer 1c carries onto a review-run envelope
+  assert set(after_obj) - set(_env) == {
+      "executionEvidence", "payloadHashSource", "headSha", "citedHeadSource"}
   assert set(_env) - set(after_obj) == set()
   assert after_obj["executionEvidence"] == {
       key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
@@ -815,7 +823,7 @@ def test_seam_a_record_result_refusal_evidence_run_dir_unreadable_leaves_landing
 
 def test_seam_a_record_result_evidence_binding_accepts_genuine_run(tmp_path, adapters):
   # axis: binding accepts a run directory opened over the real order file
-  d = _session(tmp_path, name="ev-binding-ok")
+  d = _session_with_anchor_head(tmp_path, name="ev-binding-ok")
   pend = _pending(d)
   _dispatch_observed_land(d, "code-reviewer")
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
@@ -882,7 +890,7 @@ def test_seam_a_evidence_result_binding_incomplete_refuses(tmp_path, adapters):
 
 
 def test_seam_a_zero_finding_review_still_stamps(tmp_path, adapters):
-  d = _session(tmp_path, name="ev-zero-findings")
+  d = _session_with_anchor_head(tmp_path, name="ev-zero-findings")
   pend = _pending(d)
   path, _env, before = _dispatch_observed_land(d, "code-reviewer", payload={"findings": []})
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
@@ -965,7 +973,7 @@ def test_seam_a_record_result_refusal_commit_refused_leaves_landing_bytes(tmp_pa
 
 
 def test_seam_a_recorded_journal_agrees_with_store(tmp_path, adapters):
-  d = _session(tmp_path, name="journal-agree")
+  d = _session_with_anchor_head(tmp_path, name="journal-agree")
   pend = _pending(d)
   _dispatch_observed_land(d, "code-reviewer")
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],

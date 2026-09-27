@@ -12521,9 +12521,13 @@ def test_run_execution_record_native_review_evidence_binding(tmp_path):
         "orderSha256": record["orderPromptSha256"],
         "payload": {"findings": res["findings"]},
     }
-    assembled, refusal, _extra = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir)
+    # C13 layer 1c: the assembler also takes the order anchor's cited head and the phase, and
+    # returns the cited-head source alongside. A review run's view head must equal the anchor's.
+    assembled, refusal, _extra, cited_head_source = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), envelope, run_dir, record.get("viewHeadSha"),
+        round_driver.P_PANEL)
     assert refusal is None
+    assert cited_head_source == round_driver.round_records.CITED_HEAD_SOURCE_RUNNER_VIEW
     assert assembled is not None
     mutated = [dict(res["findings"][0], id="mutated-id")]
     bad_envelope = {
@@ -12531,8 +12535,9 @@ def test_run_execution_record_native_review_evidence_binding(tmp_path):
         "orderSha256": record["orderPromptSha256"],
         "payload": {"findings": mutated},
     }
-    assembled_bad, refusal_bad, _extra_bad = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), bad_envelope, run_dir)
+    assembled_bad, refusal_bad, _extra_bad, _src_bad = round_driver._assemble_dispatch_evidence(
+        str(tmp_path / "session"), bad_envelope, run_dir, record.get("viewHeadSha"),
+        round_driver.P_PANEL)
     assert assembled_bad is None
     assert refusal_bad == "evidence-result-mismatch"
 

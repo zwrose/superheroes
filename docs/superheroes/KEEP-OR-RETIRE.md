@@ -756,6 +756,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   (`round_driver._journal_append` and `round_commit.Commit.add_journal_append`) — refuses a
   `recorded` row missing any key of `REVISION_IDENTITY_FIELDS` before it reaches disk; refusal
   tokens `recorded-row-incomplete` / `IncompleteRevisionIdentity`.
+- **Start date.** 2026-09-18.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
   `recorded-row-incomplete` or `IncompleteRevisionIdentity` as the thing that blocked a partial
   recorded row. On firing, a proposal to the owner at a gardening pass.
@@ -771,6 +772,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** `round_driver._stage_findings` (the only writer of `_toVerify`; seeds the ledger)
   and `_archive_departures` (every departure lands in the ledger); the refusal surfaces as the
   writer's "finding has no disposition recorded".
+- **Start date.** 2026-09-19.
 - **Condition.** Citation-based, 45 days.
 - **Last demonstrated benefit.** unknown — ships with this change.
 - **Consumer evidence.** unmeasured.
@@ -783,6 +785,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** `lib/tests/test_evidence_digest_subject_1272.py`, pinning
   `session_contract.evidence_digest_subject` equal to `engine_adapter.review_payload_carried` for
   every result kind (the writer cannot import the adapter).
+- **Start date.** 2026-09-19.
 - **Condition.** Citation-based, 45 days.
 - **Last demonstrated benefit.** unknown — ships with this change.
 - **Consumer evidence.** unmeasured.
@@ -2123,3 +2126,7 @@ file, returns exactly that set.
   its boundary, for every lane of a wave and not merely for most lanes, so that ending a turn stops
   costing the result; the supervising process surviving a turn boundary does not satisfy this on its
   own. (Receipt: **needed**, LEDGERS.md §5.4, "the turn-end doctrine and its slice recipes".)
+- `plugins/superheroes/lib/round_driver.py` — the `order-anchor` cited-head derivation retained for
+  write runs and for records landed without a runner run directory. **delete-when:** every seat's
+  evidence is minted from a runner record, so `runner-view` is the only derivation a `recorded` row
+  can declare.
