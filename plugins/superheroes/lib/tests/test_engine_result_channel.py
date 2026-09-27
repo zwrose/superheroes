@@ -547,7 +547,7 @@ def test_review_result_contract_stdout_delivery_exact_sentence():
 def test_every_dispatchable_vendor_has_channel_delivery_pin_and_argv():
     # axis: BUILD_ARGV_VENDORS chokepoint — every member has channel, delivery, and argv (#1273)
     matrix_cells = {
-        "codex": ("gpt-5.6-terra", "high"),
+        "codex": MR.matrix_config("reviewer", "codex"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
         "claude": ("sonnet-5", "high"),
     }

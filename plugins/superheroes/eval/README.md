@@ -262,10 +262,10 @@ EVAL_DIR=plugins/superheroes/eval
 # Score one variant's findings against a fixture. The findings input is a dir
 # (loads every *.json), a glob, or a single JSON file; each file is a JSON array
 # of emitted findings (each has at least dimension, file, line).
-python3 "$EVAL_DIR/score.py" "$EVAL_DIR/fixtures/refactor" "$OUT/code-reviewer.refactor.improved.json"
+scripts/pinned-python "$EVAL_DIR/score.py" "$EVAL_DIR/fixtures/refactor" "$OUT/code-reviewer.refactor.improved.json"
 
 # Compare improved vs a baseline to get the non-regression gate:
-python3 "$EVAL_DIR/score.py" "$EVAL_DIR/fixtures/refactor" \
+scripts/pinned-python "$EVAL_DIR/score.py" "$EVAL_DIR/fixtures/refactor" \
     "$OUT/code-reviewer.refactor.improved.json" \
     --baseline "$OUT/code-reviewer.refactor.baseline.json"
 ```
@@ -302,7 +302,7 @@ use the same ±15 window; all other traps are line-scoped (±2).
 Unit tests live in `eval/tests/`:
 
 ```bash
-python3 -m pytest plugins/superheroes/eval/tests/ -q
+scripts/pinned-python -m pytest plugins/superheroes/eval/tests/ -q
 ```
 
 ## Provenance / reuse

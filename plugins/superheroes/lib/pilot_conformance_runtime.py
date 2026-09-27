@@ -1254,7 +1254,9 @@ def horizon_validity_exercise(*, inputs, now):
 
 
 # WORKAROUND: env-var transport of connection detail across multi-account ownership probes
-# delete-when: the background-session trial receipt marks multi-account provisioning transport not needed
+# delete-when: a re-run of the background-session trial observes its "multi-account
+# provisioning transport" condition met; the condition is restated in the keep-or-retire
+# record's marker inventory
 @pilot_conformance.register("ownership-probe", surfaces=_OWNERSHIP_PROBE_SURFACES)
 def ownership_probe_exercise(*, inputs, now):
     probe_inputs, skip_reason = _exercise_key(inputs, "ownership_probe")
