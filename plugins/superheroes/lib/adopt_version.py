@@ -26,7 +26,14 @@ def _refuse(reason, detail):
 
 def _collect(root):
     out, bad = {}, lambda ps: any(p in _SKIP for p in ps)
-    for dp, dns, fns in os.walk(root, followlinks=False):
+    walk_error = None
+
+    def _on_walk_error(exc):
+        nonlocal walk_error
+        if walk_error is None:
+            walk_error = exc
+
+    for dp, dns, fns in os.walk(root, followlinks=False, onerror=_on_walk_error):
         rel = os.path.relpath(dp, root)
         parts = rel.replace("\\", "/").split("/") if rel != "." else []
         if bad(parts):
@@ -42,6 +49,8 @@ def _collect(root):
                 out[rel_p] = ("link", os.readlink(full))
             elif os.path.isfile(full):
                 out[rel_p] = ("file", full)
+    if walk_error is not None:
+        return None
     return out
 
 def _bucket(path, role):
@@ -113,6 +122,10 @@ def _plan(role, cache, from_v, to_v):
             return _refuse("transition-unreadable", "TRANSITION.md missing or unreadable")
         trans, miss = parsed
         ca, cb = _collect(fr), _collect(tr)
+        if ca is None:
+            return _refuse("version-tree-unreadable", f"from version tree unreadable under {fr}")
+        if cb is None:
+            return _refuse("version-tree-unreadable", f"to version tree unreadable under {tr}")
         for k in sorted(set(ca) | set(cb)):
             if k not in ca:
                 kind = "added"

@@ -92,6 +92,27 @@ def test_missing_transition_sections(capsys, tmp_path):
     assert data["missingTransitionSections"] == ["1.1.0", "2.0.0"]
 
 
+def test_refuse_version_tree_traversal_error(capsys, tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    _mkver(cache, "1.0.0")
+    _mkver(cache, "2.0.0")
+    (cache / "2.0.0" / "TRANSITION.md").write_text("## 2.0.0\n")
+    real_scandir = os.scandir
+
+    def scandir_raises(path):
+        if str(path).startswith(str(cache)):
+            raise PermissionError("injected")
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", scandir_raises)
+    code, data = _plan(
+        capsys, "--role", "showrunner", "--from", "1.0.0", "--to", "2.0.0",
+        "--cache-dir", str(cache),
+    )
+    assert code == 1
+    assert data["reason"] == "version-tree-unreadable"
+
+
 def test_diff_buckets(capsys, tmp_path):
     cache = tmp_path / "cache"
     role = "showrunner"
