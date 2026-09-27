@@ -1,6 +1,6 @@
 ---
 name: showrunner
-description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "vet this PR", "route this issue", "what should we build next". It sizes and routes incoming work to one of four routes (discovery, detective, build-ready, micro), decomposes into mergeable issues, drafts launch prompts, vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro — advisor-typed only — skips advisor vet), and coordinates releases. Not the builder (that is workhorse); not spec elicitation (discovery); not code review (review-code).
+description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "vet this PR", "route this issue", "what should we build next". It routes incoming work to one of four routes (discovery, detective, build-ready, micro), vets every PR from its artifacts against the issue/spec and the build brief, and coordinates releases. Not the builder (that is workhorse); not spec elicitation (discovery); not code review (review-code).
 user-invocable: true
 ---
 

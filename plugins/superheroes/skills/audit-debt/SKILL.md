@@ -1,6 +1,6 @@
 ---
 name: audit-debt
-description: Use when periodically sweeping a whole repository for accumulated technical, security, and architectural debt (for example a monthly audit), rather than reviewing a single change.
+description: Use when periodically sweeping a whole repository for accumulated technical, security, and architectural debt (for example a monthly audit), rather than reviewing a single change. Gives a severity-ranked debt backlog and proposed issues; it never edits code.
 user-invocable: true
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: discuss-open-decisions
-description: "Use when the owner needs to rule on open decisions — asking what is waiting on them, returning from time away, or when undelivered calls have piled up. Sweeps the standing-proposals collector, open parks, and in-session pending items; applies the owner-needed filter; delivers batch 1 (decisions blocking the advisor, never new-issue filings) as numbered chat prose, pauses for rulings, executes what they unblocked, then batch 2 and last batch 3, the merge click list. Not routing, vetting, or building."
+description: "Use when the owner needs to rule on open decisions — asking what is waiting on them, returning from time away, or when undelivered calls have piled up. Sweeps the standing-proposals collector, open parks, and in-session pending items and delivers batch 1 (decisions blocking the advisor, never new-issue filings) as numbered chat prose. Not routing, vetting, or building."
 user-invocable: true
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: test-pilot-execute
-description: Use when a test-pilot plan should be exercised before human spot-check — "run the test plan", "pilot this PR", "verify the branch in the browser". Drives the app via a browser MCP, records what it observes at each step, and posts a results comment. Observe-and-report only — a bug it finds is a finding, never an edit.
+description: Use when a test-pilot plan should be exercised before human spot-check — "run the test plan", "pilot this PR", "verify the branch in the browser". Drives the app via a browser MCP and posts a results comment. Observe-and-report only — a bug it finds is a finding, never an edit.
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
