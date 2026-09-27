@@ -1987,9 +1987,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   `plugins/superheroes/lib/tests/test_engine_dispatch_write.py`
   `test_claude_mode_background_write_refused`).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired — claude background dispatch mode was removed entirely (issue #1504, owner ruling 2026-09-27); `--claude-mode background` refuses `claude-mode-retired` on both dispatch verbs, so the review-only write gate has nothing left to gate.
 - **Notes.** structural — the gate is temporary shape, not the background channel itself.
-  Tag: `background-channel`.
+  Tag: `background-channel`. The gate's function `_claude_mode_background_write_refusal` and token
+  `claude-mode-background-write` were deleted with the mode.
 
 #### S22 — Size counter (`size_count.py`)
 

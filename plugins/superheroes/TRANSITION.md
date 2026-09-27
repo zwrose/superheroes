@@ -7,6 +7,44 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Claude background dispatch mode retired
+
+Upgrading from 0.35.0 changes how claude dispatch modes work:
+
+- **Print is the only claude dispatch mode.** Omit `--claude-mode` or pass `--claude-mode print`.
+  `--claude-mode` still accepts the retired value `background` only so callers receive a named
+  refusal: on `dispatch-review` and `dispatch-write` it refuses before anything spawns with
+  `entryReason: claude-mode-retired`, `detail: claude-mode-retired:background`, `attempts: 0` —
+  it never falls back to print.
+- **Continuing a run opened in background mode is refused.** Re-invoking either dispatch verb on a
+  run directory whose journal was opened with `claudeMode: background` refuses with
+  `detail: run-dir-claude-mode-retired`, `attempts: 0`; nothing re-opens or spawns.
+- **The conformance probe probes only print for claude** (`probedModes: ["print"]`).
+
+Removed with no replacement — print mode has none of them:
+
+- The `claude --bg` launch path and transcript-based result delivery.
+- Session suspend, re-attach, and stop-and-confirm of background sessions.
+- The `claude-mode-background-write` refusal and the seven `background-*` attempt refusals
+  (`lib/background_outcome.py` is deleted).
+- Result and journal fields `bgStop`, `backgroundStopUnconfirmed`, `transcriptResult`, and
+  `transcriptToolCalls`.
+- `dispatch-abandon` stopping a claude session (the runner no longer stops detached background
+  sessions).
+
+#### Before you upgrade
+
+- **Re-run the conformance probe for claude into a fresh run directory after upgrading.** A saved
+  0.35.0 claude probe result that lists both modes is refused by the preflight entry as
+  `probe-result-malformed:<path>`; a caller-supplied probe run directory that still holds a
+  `background/` subdirectory refuses `run-dir-not-empty-unopened`.
+- **Run operator cleanup once for any detached background session a 0.35.0 run may have left.**
+  List sessions with `claude agents --json` (per `CLAUDE_CONFIG_DIR`), and stop any row of kind
+  `background` whose cwd is a dispatch sanitized view with `claude stop <id>`. The runner no longer
+  does this.
+
 ## 0.35.0
 
 ### Before you upgrade
