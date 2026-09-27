@@ -161,3 +161,4 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
   ("AI habits are pretty terrible when it comes to tests"). A question does not reclassify
   testing; what it turns up is an error for review or a quality-bar call (already owner).
 - Owner list judged "good for an initial list" (answers the "anything missing?" item).
+- Category 5/6 (owner's own time, attention, and habits): tentative keep confirmed as a firm keep.
