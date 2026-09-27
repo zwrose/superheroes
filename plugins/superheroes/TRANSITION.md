@@ -85,6 +85,33 @@ can reach the fixer. Only corrupted or hand-edited state reaches it — `rule` i
 `rulings-log-malformed` rather than write to a malformed log. Record rulings through `rule`; never
 edit `rulingsLog` by hand.
 
+### The covenant's merge wording
+
+`rubric/covenant.md` keeps its rule and drops its restatement: promise 1 and the first hard line now
+say that nothing merges, releases, publishes, or force-pushes without the owner's word, and point
+to `skills/showrunner/SKILL.md` duty 6 as the merge policy's one full statement. Every Claude Code
+session on a calibrated project gets the new text from the installed plugin through the
+SessionStart bootstrap, so nothing is refreshed by hand there. `configure`'s durable `CLAUDE.md`
+offer writes the review-discipline section, not the covenant, and that section's source changed by
+one pointer line; a project that took it needs no action. A project that pasted the covenant into
+its own `CLAUDE.md` by hand (the only carrier on Codex) holds the longer old wording, which states
+the same rule; replacing it with the new `rubric/covenant.md` is optional.
+
+### Skill descriptions as pointers
+
+The skill descriptions are reworded as shorter when-to-load pointers: they say when a skill
+applies and leave the mechanism to the skill body. No skill name, command, or
+`user-invocable` flag changed, so a consuming project has nothing to update.
+
+### Charters as maps
+
+The workhorse, showrunner, and detective charters keep their sections and duties, and much of
+their mechanism, including the workhorse and detective excuse tables, moves to reference pages the session reads on demand: `skills/workhorse/reference/`
+gains `intake.md`, `orders.md`, `handback.md`, and `excuses.md`; `skills/showrunner/reference/`
+gains `routing.md`, `vetting.md`, `orchestration.md`, `provisioning.md`, and `excuses.md`;
+`skills/detective/reference/` gains `excuses.md`. Nothing was removed or renamed, and no command or
+path a consuming project calls changed. This is informational.
+
 ## 0.34.0
 
 ### Before you upgrade
