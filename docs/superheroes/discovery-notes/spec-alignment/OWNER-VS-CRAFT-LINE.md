@@ -133,3 +133,8 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
 - Jargon in owner-facing text (old craft 7): moved to the "errors are not decisions" note; it is a slip against a standing rule, not a decision.
 - Craft: routine size splits: kept as craft.
 - Craft calls with visible consequences (e.g. a size threshold): advisor decides, owner is shown, not asked; owner disagreement on seeing it is a new ruling, not a defect. Kept, tentatively ("probably fine"); revisit at the final read.
+- Scope reframe (owner, binding): this line ships in the superheroes plugin and must scale to any
+  adopting project. One line for all projects; categories and tests written generically; the
+  corpus examples are illustrations only; an owner's specific preferences are that project's
+  rulings, which test 1 then makes craft. The owner confirmed the recap of the discovery's
+  purpose (2026-09-27): the line is groundwork for the first experiment, not the deliverable.
