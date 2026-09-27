@@ -20,7 +20,9 @@ You are reviewing CHANGES MADE BY THIS FIX. Do NOT flag pre-existing issues outs
 hunks. Only flag code in `+` or `-` lines of the scoped surface.
 
 ## Verification rules
-- `file:line` citation required. No citation → drop your own finding before writing it out.
+- `file:line` citation required. No citation → drop your own finding before writing it out. Cite
+  `line` as an integer (a JSON number, e.g. `"line": 291`), never a string — a string line is
+  refused at compile.
 - Before flagging "missing X", grep the verification root for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
 - Judge only from the diff, the scoped hunks, and the repo.

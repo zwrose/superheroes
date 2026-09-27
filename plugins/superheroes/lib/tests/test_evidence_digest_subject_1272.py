@@ -63,10 +63,12 @@ _DRIFT_CASES = [
 
 
 def test_record_result_kinds_subset_of_review_result_kinds():
+    """Bites on: a record kind added to session_contract.RECORD_RESULT_KINDS that engine_adapter.REVIEW_RESULT_KINDS does not know."""
     assert set(session_contract.RECORD_RESULT_KINDS) <= set(engine_adapter.REVIEW_RESULT_KINDS)
 
 
 def test_review_list_result_kinds_partition_review_result_kinds():
+    """Bites on: a review result kind that is neither a list kind, a record kind, nor grouping (the partition leaks)."""
     assert (set(session_contract.REVIEW_LIST_RESULT_KINDS)
             | set(session_contract.RECORD_RESULT_KINDS)
             | {"grouping"} == set(engine_adapter.REVIEW_RESULT_KINDS))
@@ -81,11 +83,13 @@ _NON_REVIEW_KIND_CASES = [
 
 @pytest.mark.parametrize("kind,payload,expected", _NON_REVIEW_KIND_CASES)
 def test_evidence_digest_subject_non_review_kinds(kind, payload, expected):
+    """Bites on: the writer's digest subject for result/fixes payloads diverging from the value the payload carries."""
     assert session_contract.evidence_digest_subject(payload, kind) == expected
 
 
 @pytest.mark.parametrize("kind,label,payload", _DRIFT_CASES)
 def test_evidence_digest_subject_matches_review_payload_carried(kind, label, payload):
+    """Bites on: session_contract.evidence_digest_subject and engine_adapter.review_payload_carried hashing different bytes for the same payload (the drift the two-homes ruling accepts under this test)."""
     phase = _PHASE_FOR_KIND[kind]
     shaped = RD._runner_shaped_result(phase, kind, payload)
     assert session_contract.evidence_digest_subject(payload, kind) == (
@@ -93,6 +97,7 @@ def test_evidence_digest_subject_matches_review_payload_carried(kind, label, pay
 
 
 def test_is_list_type_classifies_contract_tokens():
+    """Bites on: a contract token classified as a list type that payload_contracts does not declare."""
     assert payload_contracts.is_list_type(payload_contracts.LIST_TYPE_TOKEN) is True
     assert payload_contracts.is_list_type(payload_contracts.NULLABLE_LIST_TYPE_TOKEN) is True
     for token in ("list", "object", None):

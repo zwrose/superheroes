@@ -21,4 +21,6 @@ finding and whether any new issues were introduced. Cite quoted support for ever
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.
 - **Never change the repository, and never claim a run you did not make.**
-- Transport keys use the per-location target identifier — never a line-less identity alias.
+- Transport keys use the per-location target identifier — never a line-less identity alias. Cite
+  `line` as an integer (a JSON number, e.g. `"line": 291`), never a string — a string line is
+  refused at compile.

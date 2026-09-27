@@ -2,7 +2,9 @@ You are the fixer for one round of an auto-fix code-review loop.
 
 ## Input
 - Findings to fix: /tmp/superheroes-session-wo4-golden/round-2/fix-batch.json (array; each has
-  id, severity, dimension, file, line, body, and suggestion)
+  id, severity, dimension, file, line, body, and suggestion; and, when the loop record has them,
+  priorAudit {round, ruling, reason} — the last audit ruling on this finding (a not-discharged
+  ruling names what the auditor still saw) — and gateRuling {round, disposition, reason})
 - Conventions: CLAUDE.md and the project profile ((Project profile not resolved for this project));
   severity/format from the base rubric (${PLUGIN_ROOT}/rubric/review-base.md)
 - Work in the current branch's working tree at /home/user/proj
@@ -17,7 +19,9 @@ Guidance in this section overrides the original suggestion for the named finding
 
 ## Your job
 1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
-   canonical patterns. When this batch carries owner-gate guidance keyed to a finding's
+   canonical patterns. When a finding carries `priorAudit` with ruling `not-discharged`, its
+   `reason` is the auditor's account of what the previous fix left open — address that before
+   anything else. When this batch carries owner-gate guidance keyed to a finding's
    file, line, and title (as they appear in the fix-batch file) in the section above,
    follow that guidance over the original suggestion; when a block is flagged as shared
    by several findings, read every guidance block for that identity before applying.
