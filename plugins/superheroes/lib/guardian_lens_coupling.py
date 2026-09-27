@@ -40,6 +40,7 @@ root-manifest stack-tags check looks only at the repo root and misses nested wor
 import json
 import os
 import re
+import signal
 import stat
 import sys
 
@@ -979,6 +980,9 @@ class CouplingLens(object):
         """Run depcruise via run_tool; return a structured ecosystem result."""
         before_cache = adapters.cache_paths_present(repo)
         targets = _js_targets(repo, src_census)
+        if not targets:
+            return self._eco_fail(
+                "js", "%s js: no tracked JS/TS files to cruise" % self.name)
         try:
             abs_targets = adapters.absolute_repo_operands(repo, targets)
         except ValueError as exc:
@@ -989,6 +993,33 @@ class CouplingLens(object):
             repo, adapters.TYPESCRIPT_SUPPORTED_MAJORS)
         ts_toolchain_provided = toolchain is not None
 
+        fixed_argv = adapters.depcruise_argv([])
+        platform_max = guardian_census.platform_arg_max_bytes()
+        budget, env_measurement_failed = guardian_census.argv_operand_budget_detail(
+            repo, fixed_argv)
+        operand_bytes = guardian_census.operand_payload_bytes(repo, targets)
+
+        def _js_fail(reason, ts=ts_toolchain_provided):
+            return self._eco_fail(
+                "js", reason, ts,
+                operand_payload_bytes=operand_bytes,
+                argv_operand_budget_bytes=budget)
+
+        if operand_bytes > budget:
+            if env_measurement_failed:
+                reason = (
+                    "%s js: child-env measurement failed — cannot derive operand argv "
+                    "budget for depcruise (fail-closed budget 0 bytes)"
+                    % self.name)
+                return _js_fail(reason)
+            reason = (
+                "%s js: tracked-file operand payload is %d bytes across %d files, "
+                "exceeding the derived %d-byte operand budget (platform ARG_MAX %d "
+                "after child env and fixed argv) — remedy: batch the depcruise into "
+                "budget-sized runs; not measured"
+                % (self.name, operand_bytes, len(targets), budget, platform_max))
+            return _js_fail(reason)
+
         argv = adapters.depcruise_argv(abs_targets)
         res = gc.run_tool(argv, ctx, timeout=adapters.COLLECT_TIMEOUT, cwd=repo,
                           ok_exits=(0,), extra_node_path=toolchain)
@@ -998,12 +1029,30 @@ class CouplingLens(object):
             reason = "%s js: %s (%s)" % (
                 self.name, adapters.OUTCOMES["repo-write"][1],
                 ", ".join(sorted(wrote)))
-            return self._eco_fail("js", reason, ts_toolchain_provided)
+            return _js_fail(reason)
 
         if not res.get("ok"):
             why = res.get("reason") or "dependency-cruiser failed"
             detail = (res.get("stderr") or "").strip().splitlines()
-            tail = (" — " + detail[-1]) if detail else ""
+            # bite-proof axis: a crash reason names the fatal stderr line, not a stack frame.
+            _fatal_markers = (
+                "fatal error", "heap out of memory", "allocation failed", "out of memory")
+            tail_line = None
+            for line in detail:
+                low = line.lower()
+                if any(m in low for m in _fatal_markers):
+                    tail_line = line
+                    break
+            if tail_line is None and detail:
+                tail_line = detail[-1]
+            tail = (" — " + tail_line) if tail_line else ""
+            exit_code = res.get("exit")
+            if tail and isinstance(exit_code, int) and exit_code < 0:
+                try:
+                    signame = signal.Signals(-exit_code).name
+                except ValueError:
+                    signame = "signal %d" % (-exit_code)
+                tail += " (killed by %s)" % signame
             # Evidence-only parse of stdout (never promote a failed run to collected).
             parsed = adapters.parse_depcruise_json(
                 res.get("stdout") or "", returncode=res.get("exit") or 1)
@@ -1011,7 +1060,7 @@ class CouplingLens(object):
             if adapters.is_ok(parsed.get("outcome")):
                 evidence = " (stdout was parseable but the run failed — not promoted)"
             reason = "%s js: %s%s%s" % (self.name, why, tail, evidence)
-            return self._eco_fail("js", reason, ts_toolchain_provided)
+            return _js_fail(reason)
 
         parsed = adapters.parse_depcruise_json(
             res.get("stdout") or "", returncode=res.get("exit") or 0)
@@ -1021,7 +1070,7 @@ class CouplingLens(object):
             reason = "%s js: %s%s" % (
                 self.name, default_reason or outcome,
                 (" — " + parsed["detail"]) if parsed.get("detail") else "")
-            return self._eco_fail("js", reason, ts_toolchain_provided)
+            return _js_fail(reason)
 
         payload = parsed.get("payload") or {}
         versions = adapters.depcruise_versions(payload)
@@ -1038,7 +1087,7 @@ class CouplingLens(object):
             reason = _collapse_reason(
                 self.name + " js", src_census, collapse, versions,
                 ts_toolchain_provided=ts_toolchain_provided)
-            return self._eco_fail("js", reason, ts_toolchain_provided)
+            return _js_fail(reason)
 
         cliff = detect_cliff(_eco_prev_digest(prev, "js"), len(parsed_paths),
                              src_census["total"])
@@ -1048,7 +1097,7 @@ class CouplingLens(object):
                 "source census held at %d (a genuine shrink drops sources too)"
                 % (self.name, adapters.OUTCOMES["module-count-cliff"][1],
                    cliff["modules"], cliff["priorModules"], cliff["sources"]))
-            return self._eco_fail("js", reason, ts_toolchain_provided)
+            return _js_fail(reason)
 
         rows = _classify_edges(repo, dep_edges, src_census["workspaces"])
         # Tag rows with tool token for candidate minting later.
@@ -1063,6 +1112,10 @@ class CouplingLens(object):
             }
             for ws in src_census["workspaces"]
         }
+        # bite-proof axis: recorded argv is bounded; operands are summarized.
+        _operand_summary = "<%d tracked JS/TS files under %s>" % (
+            len(abs_targets), os.path.realpath(repo))
+        _recorded_argv = adapters.depcruise_recorded_argv(argv, _operand_summary)
         section = {
             "status": "collected",
             "reason": None,
@@ -1070,7 +1123,10 @@ class CouplingLens(object):
             "outcome": outcome,
             "sourcesCensused": src_census["total"],
             "modulesParsed": len(parsed_paths),
-            "argv": argv,
+            "argv": _recorded_argv,
+            "operandCount": len(abs_targets),
+            "operandPayloadBytes": operand_bytes,
+            "argvOperandBudgetBytes": budget,
             "typescriptToolchainProvided": ts_toolchain_provided,
         }
         if untracked_filtered:
@@ -1206,15 +1262,22 @@ class CouplingLens(object):
         }
 
     @staticmethod
-    def _eco_fail(ecosystem, reason, typescript_toolchain_provided=None):
+    def _eco_fail(
+            ecosystem, reason, typescript_toolchain_provided=None,
+            operand_payload_bytes=None, argv_operand_budget_bytes=None):
         section = {
             "status": "not-collected",
             "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
             "tool": (adapters.DEPCRUISE_TOOL if ecosystem == "js"
                      else adapters.IMPORT_LINTER_TOOL),
         }
-        if ecosystem == "js" and typescript_toolchain_provided is not None:
-            section["typescriptToolchainProvided"] = typescript_toolchain_provided
+        if ecosystem == "js":
+            if typescript_toolchain_provided is not None:
+                section["typescriptToolchainProvided"] = typescript_toolchain_provided
+            if operand_payload_bytes is not None:
+                section["operandPayloadBytes"] = operand_payload_bytes
+            if argv_operand_budget_bytes is not None:
+                section["argvOperandBudgetBytes"] = argv_operand_budget_bytes
         return {
             "status": "not-collected",
             "reason": _safe_repo_text(reason, max_len=max(REPO_TEXT_MAX * 4, 800)),
@@ -1575,15 +1638,15 @@ def _collapse_reason(lens_name, src_census, collapse, versions,
 
 
 def _js_targets(repo, src_census):
-    """First-party directories to cruise. Vendored trees are never targets."""
-    tops = set()
-    for _ws, rel_file, _lang in src_census["files"]:
-        segs = _segments(rel_file)
-        tops.add(segs[0] if len(segs) > 1 else ".")
-    if "." in tops:
-        return ["."]  # sources sit at the repo root; --exclude keeps vendored trees out
-    real = sorted(t for t in tops if os.path.isdir(os.path.join(repo, t)))
-    return real or ["."]
+    """First-party cruise operands: exactly the tracked JS/TS census files.
+
+    Each repo-relative censused file is one operand — never a directory, never the repo
+    root, never an untracked sibling under a tracked directory. An empty census returns
+    ``[]`` (the caller degrades; depcruise is never handed ``\".\"``).
+    """
+    del repo  # operands are census-relative; existence is guaranteed at census time.
+    # bite-proof axis: operands are the tracked census files, never a directory.
+    return sorted({rel_file for _ws, rel_file, _lang in src_census["files"]})
 
 
 def _filter_depcruise_to_tracked(repo, payload, tracked_set, collector_cwd=None):
@@ -1603,6 +1666,7 @@ def _filter_depcruise_to_tracked(repo, payload, tracked_set, collector_cwd=None)
     for edge in edges_in:
         f_abs = _absolutize(collector_cwd, edge.get("from", ""))
         t_abs = _absolutize(collector_cwd, edge.get("to", ""))
+        # bite-proof axis: an edge with an untracked endpoint never counts
         if (_rel_posix(repo, f_abs) in tracked_rel
                 and _rel_posix(repo, t_abs) in tracked_rel):
             kept = dict(edge)

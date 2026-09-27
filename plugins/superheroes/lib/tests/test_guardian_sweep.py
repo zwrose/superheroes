@@ -2,8 +2,11 @@ import ast
 import json
 import os
 import re
+import subprocess
 
 import guardian_lens as gl
+import guardian_vitals as gv
+import round_driver as rd
 import guardian_report as gr
 import guardian_store as gs
 import guardian_sweep as gsw
@@ -3130,3 +3133,355 @@ def test_stack_tags_deeply_nested_package_json_no_crash(tmp_path):
     (tmp_path / "package.json").write_text('{"x":' * 1100 + '0' + '}' * 1100)
     fact = _stack_tags_fact(tmp_path, repo)
     assert "react" in fact["receipt"]["unverifiable"]
+
+
+def _git(repo, *args):
+    subprocess.run(["git", "-C", repo] + list(args), check=True, capture_output=True)
+
+
+def _head_sha(repo):
+    return subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+
+
+def _setup_origin_main(repo):
+    head = _head_sha(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/main", head)
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+
+def test_verify_command_binds_base_ref_to_origin_head(tmp_path):
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    head = _head_sha(repo)
+    assert recorded == ["echo --base %s" % head]
+    assert gsw.VERIFY_BASE_TOKEN not in recorded[0]
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "ok"
+    assert fact["testsSelected"] == 0
+    assert fact["note"] == sc.VERIFY_BASE_EQUALS_HEAD_NOTE
+    assert out["verifyResult"]["testsSelected"] == 0
+    assert out["verifyResult"]["note"] == sc.VERIFY_BASE_EQUALS_HEAD_NOTE
+
+
+def test_verify_command_base_ref_ignores_shadowing_origin_tag(tmp_path):
+    # bite-proof axis: {baseRef} binds refs/remotes/origin/<base>; a same-named local tag never shadows it.
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    old_sha = _head_sha(repo)
+    (tmp_path / "advance.txt").write_text("advance\n")
+    _git(repo, "add", "advance.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "advance")
+    _setup_origin_main(repo)
+    remote_sha = _head_sha(repo)
+    assert remote_sha != old_sha
+    _git(repo, "tag", "origin/main", old_sha)
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    assert recorded == ["echo --base %s" % remote_sha]
+    assert old_sha not in recorded[0]
+
+
+def test_verify_command_binds_base_ref_to_gh_merge_base(tmp_path):
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    main_sha = _head_sha(repo)
+    (tmp_path / "release.txt").write_text("release\n")
+    _git(repo, "add", "release.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "release")
+    release_sha = _head_sha(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/release", release_sha)
+    (tmp_path / "feature.txt").write_text("feature\n")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "feature")
+    feature_sha = _head_sha(repo)
+    branch = subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+    _git(repo, "config", "branch.%s.gh-merge-base" % branch, "release")
+    recorded = []
+
+    def fake_run(cmd, **kwargs):
+        recorded.append(cmd)
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    assert main_sha != release_sha != feature_sha
+    assert recorded == ["echo --base %s" % release_sha]
+    assert main_sha not in recorded[0]
+    assert feature_sha not in recorded[0]
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "ok"
+    assert fact["diffScoped"] is True
+    assert fact["note"] == sc.VERIFY_DIFF_SCOPED_NOTE
+    assert out["verifyResult"]["diffScoped"] is True
+    assert out["verifyResult"]["note"] == sc.VERIFY_DIFF_SCOPED_NOTE
+
+
+def test_verify_diff_scoped_head_ahead_of_base_pytest_summary_not_suite_vitals(tmp_path):
+    """HEAD ahead of bound base: subset pytest summary must not publish as whole-suite vitals."""
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    main_sha = _head_sha(repo)
+    (tmp_path / "release.txt").write_text("release\n")
+    _git(repo, "add", "release.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "release")
+    release_sha = _head_sha(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/release", release_sha)
+    (tmp_path / "feature.txt").write_text("feature\n")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "feature")
+    branch = subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+    _git(repo, "config", "branch.%s.gh-merge-base" % branch, "release")
+    summary = "=== 3 passed, 1 skipped in 0.42s ==="
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = summary
+            stderr = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    assert main_sha != release_sha
+    vitals_out = gv.collect(repo, verify_result=out["verifyResult"])
+    note = sc.VERIFY_DIFF_SCOPED_NOTE
+    for name in ("suiteTestCount", "suiteSkipped", "suiteRuntimeSeconds"):
+        assert vitals_out["vitals"][name] is None
+        assert vitals_out["notCollected"][name] == note
+        assert "diff-scoped" in vitals_out["notCollected"][name]
+
+
+def test_verify_diff_scoped_dirty_worktree_at_head_pytest_summary_not_suite_vitals(tmp_path):
+    """Bound base equals HEAD but uncommitted test edits still diff-scope verify vitals."""
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_dirty.py").write_text("def test_dirty():\n    assert True\n")
+    summary = "=== 5 passed in 1.23s ==="
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = summary
+            stderr = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "ok"
+    assert fact["diffScoped"] is True
+    assert fact["note"] == sc.VERIFY_DIFF_SCOPED_NOTE
+    vitals_out = gv.collect(repo, verify_result=out["verifyResult"])
+    note = sc.VERIFY_DIFF_SCOPED_NOTE
+    for name in ("suiteTestCount", "suiteSkipped", "suiteRuntimeSeconds"):
+        assert vitals_out["vitals"][name] is None
+        assert vitals_out["notCollected"][name] == note
+
+
+def test_verify_diff_scoped_git_unavailable_at_head_pytest_summary_not_suite_vitals(
+        tmp_path, monkeypatch):
+    """Base equals HEAD but worktree diff unknown: fail closed, no suite vitals."""
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    _setup_origin_main(repo)
+    summary = "=== 5 passed in 1.23s ==="
+    real_run_git_result = sc.run_git_result
+
+    def stub_run_git_result(cwd, *args, **kwargs):
+        if args[:4] == ("diff", "--name-only", "-z", "HEAD"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "TimeoutExpired")
+        return real_run_git_result(cwd, *args, **kwargs)
+
+    monkeypatch.setattr(sc, "run_git_result", stub_run_git_result)
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = summary
+            stderr = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "ok"
+    assert fact["diffScoped"] is True
+    assert fact["note"] == sc.VERIFY_DIFF_SCOPED_NOTE
+    vitals_out = gv.collect(repo, verify_result=out["verifyResult"])
+    note = sc.VERIFY_DIFF_SCOPED_NOTE
+    for name in ("suiteTestCount", "suiteSkipped", "suiteRuntimeSeconds"):
+        assert vitals_out["vitals"][name] is None
+        assert vitals_out["notCollected"][name] == note
+
+
+def test_verify_command_unresolvable_base_ref_is_not_run(tmp_path):
+    repo = init_calibrated_repo(tmp_path, verify_command="echo --base {baseRef}")
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class R:
+            returncode = 0
+            stdout = ""
+        return R()
+
+    out = gsw.verify_config(
+        repo, root=_store(tmp_path), run=fake_run, needed_facts={"verify-command"})
+    assert calls == []
+    fact = next(f for f in out["facts"] if f["fact"] == "verify-command")
+    assert fact["status"] == "not-run"
+    assert gsw.VERIFY_BASE_TOKEN in fact["receipt"]
+
+
+def test_verify_base_token_literal_matches_round_driver():
+    assert gsw.VERIFY_BASE_TOKEN is sc.VERIFY_BASE_TOKEN
+    assert rd.VERIFY_BASE_TOKEN is sc.VERIFY_BASE_TOKEN
+
+
+def test_verify_diff_scoped_note_literal():
+    # bite-proof axis: the named note carries the exact token diff-scoped.
+    assert sc.VERIFY_DIFF_SCOPED_NOTE == (
+        "diff-scoped: calibrated verify command selects touched tests only")
+    assert gsw.VERIFY_DIFF_SCOPED_NOTE is sc.VERIFY_DIFF_SCOPED_NOTE
+
+
+def test_verify_diff_scoped_note_bite_proof_red_on_token(monkeypatch):
+    monkeypatch.setattr(sc, "VERIFY_DIFF_SCOPED_NOTE", "diff-scoped: drift")
+
+    def _check():
+        assert sc.VERIFY_DIFF_SCOPED_NOTE == (
+            "diff-scoped: calibrated verify command selects touched tests only")
+
+    _expect_assertion_error(_check, match=r"selects touched tests only")
+
+
+def test_verify_base_equals_head_note_literal():
+    # bite-proof axis: the named note carries the exact token base-equals-head.
+    assert sc.VERIFY_BASE_EQUALS_HEAD_NOTE == (
+        "base-equals-head: no touched tests to select")
+    assert gsw.VERIFY_BASE_EQUALS_HEAD_NOTE is sc.VERIFY_BASE_EQUALS_HEAD_NOTE
+
+
+def _expect_assertion_error(fn, *, match):
+    try:
+        fn()
+    except AssertionError as exc:
+        if not re.search(match, str(exc)):
+            raise AssertionError(
+                "detector raised AssertionError but message %r does not match %r"
+                % (str(exc), match)
+            ) from None
+        return exc
+    except BaseException as exc:  # noqa: BLE001
+        raise AssertionError(
+            "detector did not bite: expected AssertionError, got %s: %s"
+            % (type(exc).__name__, exc)
+        ) from None
+    raise AssertionError("detector did not bite: no exception raised")
+
+
+def test_verify_base_equals_head_note_bite_proof_red_on_token(monkeypatch):
+    monkeypatch.setattr(sc, "VERIFY_BASE_EQUALS_HEAD_NOTE", "base-equals-head: drift")
+
+    def _check():
+        assert sc.VERIFY_BASE_EQUALS_HEAD_NOTE == (
+            "base-equals-head: no touched tests to select")
+
+    _expect_assertion_error(_check, match=r"no touched tests to select")
+
+
+def test_coverage_entry_with_tool_but_no_lens_is_reported(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {
+        "coverage": [
+            {"tool": "renovate", "path": "renovate.json"},
+            {"lens": "deps", "tool": "dependabot", "path": ".github/dependabot.yml"},
+        ],
+    })
+    out = gsw.verify_config(repo, root=root, needed_facts=set())
+    fact = next(f for f in out["facts"] if f["fact"] == "recorded-coverage")
+    assert fact["status"] == "unbound"
+    assert fact["receipt"]["unbound"] == [{
+        "token": "coverage-entry-no-lens",
+        "tool": "renovate",
+        "path": "renovate.json",
+    }]
+
+
+def test_recorded_coverage_unbound_degrades_lens(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {
+        "coverage": [
+            {"tool": "renovate", "path": "renovate.json"},
+        ],
+    })
+    prior_entry = {"collectorVersion": "0.0.0-test", "digest": {"v": 1}}
+    snap = {
+        "schemaVersion": gs.SNAPSHOT_SCHEMA_VERSION,
+        "sweptSha": "abc",
+        "vitals": {},
+        "lenses": {"fixture": prior_entry},
+    }
+    gs.write_snapshot_cas(repo, snap, None, root=root)
+    lens = FixtureLens(
+        required_facts=("recorded-coverage",),
+        emit_normal=True,
+        digest={"v": 2},
+        diff_new=["fixture:normal"],
+    )
+    collect_sentinel = lens.last_prev_digest
+    bundle = gsw.collect(repo, lenses=[lens], root=root)
+    assert len(bundle["funnel"]["degradedLenses"]) == 1
+    assert bundle["funnel"]["degradedLenses"][0]["lens"] == "fixture"
+    assert "recorded-coverage" in bundle["funnel"]["degradedLenses"][0]["reason"]
+    assert bundle["nextSnapshot"]["lenses"]["fixture"] == prior_entry
+    assert lens.last_prev_digest is collect_sentinel
+
+
+def test_coverage_entries_all_bound_stay_present(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    root = _store(tmp_path)
+    write_guardian_layer(tmp_path, {
+        "coverage": [
+            {"lens": "deps", "tool": "dependabot", "path": ".github/dependabot.yml"},
+        ],
+    })
+    out = gsw.verify_config(repo, root=root, needed_facts=set())
+    fact = next(f for f in out["facts"] if f["fact"] == "recorded-coverage")
+    assert fact["status"] == "present"

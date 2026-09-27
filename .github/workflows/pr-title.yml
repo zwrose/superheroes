@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
       - name: PR title is a Conventional Commit
         run: python3 .github/scripts/check_conventional_commit.py "$PR_TITLE"
         env:
