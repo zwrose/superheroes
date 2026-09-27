@@ -169,8 +169,8 @@ shape is wrong and the thinking wins.
    call (from the PR itself for micro), with a one-line note when the build escalated, naming the
    lane it moved from and the lane it moved to. It exists so the gardening pass can read misses by
    lane.
-10. **Misses-log appends.** Each misses-log append this vet made — what escaped or was
-    over-declined, and its class — or `None`. The misses log's home and classes are
+10. **Misses-log appends.** Each misses-log append this vet made — what it was, and its class:
+    declined-then-escaped, launched-then-regretted, or mis-tiered — or `None`. The misses log's home and classes are
     `skills/showrunner/reference/owner-decisions.md` § Every grading keeps its scoring, and the
     misses log.
 
@@ -396,7 +396,7 @@ inspection <what you did>; window: <…>
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`
 **Open owner calls at merge.** <…> | `None`
 **Lane.** <full | light | micro> <escalated: from → to, if it did>
-**Misses-log appends.** <what escaped or was over-declined — class> | `None`
+**Misses-log appends.** <each append this vet made — what it was, and its class: declined-then-escaped, launched-then-regretted, or mis-tiered> | `None`
 
 <triggered fields, each only when its trigger is present in the artifacts>
 ```
