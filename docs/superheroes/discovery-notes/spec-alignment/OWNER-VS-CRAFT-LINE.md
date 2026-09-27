@@ -143,3 +143,10 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
   the root the others hang from. Owner also wants a formal, expected place to document it,
   leaning toward configure. Carried forward as a candidate requirement (merges with the
   grounding-doc candidate in HANDOFF.md); not yet elicited or approved.
+- Scope and default (owner, binding): the plugin has ONE craft/owner line. It already exists as the
+  glossary's "material consequence" line (used by the advisor for merges, post-word fixes,
+  deviations, follow-ups; extended per project through rulings in the configure profile). This
+  work strengthens that line; it does not create a second one. Craft-by-default is REJECTED: the
+  discovery began with the owner not being consulted enough. "Doubt resolves to an owner call"
+  stays. Over-consultation is fixed two other ways: a fuller craft list so fewer calls land in
+  doubt, and better presentation (the first experiment), not by moving the default.
