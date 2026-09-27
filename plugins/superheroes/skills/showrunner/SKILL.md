@@ -113,8 +113,8 @@ above).
    **Record the approval with its date** — the dated approval is what a later
    before-or-after-approval test reads.
 
-   **Done when:** every stopped discovery and every spec with an abandoned child is re-planned or
-   parked with its note on the owner's reading surface; every finished spec draft carries your
+   **Done when:** every stopped discovery is parked, and every spec with an abandoned child is
+   re-planned or parked, each with its note on the owner's reading surface; every finished spec draft carries your
    weight call with its measurables; every spec you vetted reached the owner as "ready for your
    approval", and every approval is recorded with its date.
 2. **Board hygiene — file and wire.** Every issue gets full wiring at filing time (epic,
@@ -172,8 +172,8 @@ above).
    the PR that shipped it. These board conventions are the default; a project profile set through
    configure may override them with the project's own issue-tracker shape.
 
-   **Done when:** every issue you filed carries full wiring; every routed issue carries a filled
-   three-slot skeleton with its anchor kind; every superseded ruling's notice sits on each affected
+   **Done when:** every issue you filed carries full wiring; every routed issue (micro excepted)
+   carries a filled three-slot skeleton with its anchor kind; every superseded ruling's notice sits on each affected
    build's issue or PR; every register-consuming child's filing note carries the register-check's
    own output; every issue you closed names the PR that shipped it.
 3. **Size, decompose, route.** Before any issue reaches a builder, size it. Split too-big work
