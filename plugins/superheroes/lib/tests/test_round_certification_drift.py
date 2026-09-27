@@ -1,6 +1,7 @@
 import os
 import re
 
+import decision_kinds
 import receipt_disclosures
 import round_certification as RC
 import round_driver as RD
@@ -43,12 +44,17 @@ def test_receipt_disclosures_schema_version_matches_driver():
     assert receipt_disclosures.SCHEMA_VERSION == RD.SCHEMA_VERSION
 
 
+def test_decision_keys_are_the_leaf():
+    # axis: certification writer reads the decision-kind home — no copy
+    assert RC._DECISION_KEYS is decision_kinds.DECISION_KINDS
+
+
 def test_decision_keys_match_driver_census():
     driver_path = os.path.join(_LIB, "round_driver.py")
     with open(driver_path, encoding="utf-8") as fh:
         source = fh.read()
     driver_keys = set(re.findall(r'_decision\(state,\s*"([^"]+)"', source))
-    assert set(RC._DECISION_KEYS) == driver_keys
+    assert set(decision_kinds.DECISION_KINDS) == driver_keys
 
 
 def test_execution_evidence_telemetry_values_match_records():

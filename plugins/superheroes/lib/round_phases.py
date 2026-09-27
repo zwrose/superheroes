@@ -17,6 +17,9 @@ P_JUDGMENT = "present-judgment"
 P_STALL = "present-stall-menu"
 P_TERMINAL = "terminal"
 
+# Default cap on findings per dispatch-fixer order (#1272 round economy).
+FIX_BATCH_CAP_DEFAULT = 4
+
 ALL_PHASES = (
     P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_GAPSWEEP, P_VERIFY, P_FIXER,
     P_JUDGMENT, P_STALL, P_TERMINAL,

@@ -22,5 +22,6 @@ finding and whether any new issues were introduced. Cite quoted support for ever
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.
 - **Never change the repository, and never claim a run you did not make.**
 - Transport keys use the per-location target identifier — never a line-less identity alias. Cite
-  `line` as an integer (a JSON number, e.g. `"line": 291`), never a string — a string line is
-  refused at compile.
+  `line` as an integer (a JSON number, e.g. `"line": 291`). A numeric
+  string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
+  (`line is not an integer`) and the finding is dropped.

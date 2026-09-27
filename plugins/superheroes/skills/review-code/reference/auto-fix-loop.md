@@ -689,6 +689,10 @@ Write $SESSION_DIR/round-<N>/triage.json — every listed finding id exactly onc
 `round_orders.render_order` on each `next` for `dispatch-fixer`. The orchestrator **dispatches the
 emitted order file** — do not hand-compose from a fenced template.
 
+The fixer's verify budget is **scoped** — its target files' referencing tests plus the static
+validators — never the project's full verify command; the orchestrator's `run-verify` is the
+round's one full run (§ Round economy in `round-driver.md`).
+
 The authoritative template body lives at `rubric/orders/dispatch-fixer.md` under the plugin
 root. The fenced block below is illustrative only.
 
@@ -704,16 +708,19 @@ You are the fixer for one round of an auto-fix code-review loop.
   severity/format from the base rubric (<absolute RUBRIC path>)
 - Work in the current branch's working tree at <cwd>
 - Repo root: <absolute REPO_ROOT>
-- Verify command: <VERIFY_CMD, or the literal "none" when the profile is mode: unverified>
+- Verify budget: <the scoped budget the driver renders — target files, referencing tests, static validators; the full command named as the orchestrator's>
 
 ## Your job
 1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
    canonical patterns. Never push/merge/deploy (those stay user-gated).
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
-3. If a verify command was provided, run it. If it fails, fix the failure and
-   retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
-   output — never commit broken code. If the verify command is "none"
-   (unverified profile), skip this check entirely.
+3. Run the scoped verify budget above — the tests that reference your target files plus the
+   project's static validators, at most once each; never the project's full verify command (the
+   orchestrator runs that once after this round's fix batch lands, and a fixer attempt that runs it
+   forfeits on the attempt cap before its work is collected). If the budget's run fails, fix the
+   failure and retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
+   output — never commit broken code. If the full verify command in the budget reads "none"
+   (unverified profile), skip the static validators and run only the referencing tests, if any.
    When you need to verify something by *running* it, choose a throwaway test file path inside
    the build worktree, named with the fixed prefix `autofix-probe-` so a leftover one is
    identifiable. **Before writing it, check that the chosen path does not already exist** — a

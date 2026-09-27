@@ -57,7 +57,17 @@ def _fixer_placeholders():
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CWD": _REPO,
         "REPO_ROOT": shlex.quote(_REPO),
-        "VERIFY_COMMAND": "npm test",
+        # The round economy (C13 layer 2d) replaced the fixer template's bare VERIFY_COMMAND
+        # with the scoped verify budget; this golden copy fills it the way
+        # `test_round_orders._fixer_placeholders` does, so the render leaves neither an
+        # unfilled placeholder nor an unused context key.
+        "VERIFY_BUDGET": (
+            "Scoped verify budget for this batch — target files: auth.py. "
+            "Run the tests that reference those files (select by reading the test files' own text "
+            "for the target path, never by test-file name) plus the project's static validators, "
+            "at most once each. The project's full verify command is NOT yours to run inside this "
+            "attempt — the orchestrator runs it once after the round's fixes land: pytest -q"
+        ),
         "ROUND": "2",
         "GATE_GUIDANCE": "No owner-gate guidance is attached to this batch.",
     }
@@ -282,10 +292,80 @@ def test_fixer_emission_ignores_lint_triggers_inside_verify_command(tmp_path, mo
     order_path = RR.order_prompt_path(session_dir, state["round"], RP.P_FIXER, _FIXER_SKEY, 0)
     order_text = open(order_path, encoding="utf-8").read()
     assert verify in order_text
+    # R28 re-pin (C13 bring-current, option b): the retired VERIFY_COMMAND placeholder is no
+    # longer the elision's source — the owner's command is read from the session config and
+    # elided inside the scoped verify budget. The emission above is the production gate; this
+    # asserts the lint text the emission built.
+    budget = RD._fixer_verify_budget(state.get("fixBatch") or [], state["config"])
     lint = OL.check_text(RD._order_lint_text(order_text, {
-        "placeholders": {"VERIFY_COMMAND": verify},
+        "placeholders": {"VERIFY_BUDGET": budget},
+        "verify_command": verify,
     }), repo, kind="fixer")
     assert lint["ok"] is True
+
+
+def test_fixer_emission_elides_only_the_owner_verify_command_from_the_budget(tmp_path, monkeypatch):
+    # axis: the narrow elision — the owner's command goes, the driver's target-file list stays graded
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    repo = str(tmp_path / "proj")
+    os.makedirs(repo)
+    # A real project-shaped verify command: validator paths, the driver-bound `{baseRef}` token
+    # (exempt by `order_lint._DRIVER_PH`, so it is NOT what bites), and one ordinary `{name}`
+    # token of the owner's own — which is what the lint would refuse on if it were not elided.
+    verify = ("/venv/bin/python .github/scripts/validate_skills.py"
+              " && /usr/bin/python3 .github/scripts/verify_touched_tests.py --base {baseRef}"
+              " && xargs -I {item} echo ok")
+    state.setdefault("config", {})["repoRoot"] = repo
+    state["config"]["verifyCommand"] = verify
+    target = "plugins/superheroes/lib/round_driver.py"
+    # Every path the order names resolves, so the ONE thing left for the lint to refuse on is
+    # the non-exempt `{item}` token inside the owner's command — the production failure exactly.
+    for path in (target, ".github/scripts/validate_skills.py",
+                 ".github/scripts/verify_touched_tests.py"):
+        os.makedirs(os.path.join(repo, os.path.dirname(path)), exist_ok=True)
+        open(os.path.join(repo, path), "w", encoding="utf-8").close()
+    state["fixBatch"] = [{"file": target, "title": "t", "line": 1}]
+    # The production path emits without refusing.
+    assert "manifestSha256" in _emit_fixer(session_dir, state)
+    order_path = RR.order_prompt_path(session_dir, state["round"], RP.P_FIXER, _FIXER_SKEY, 0)
+    order_text = open(order_path, encoding="utf-8").read()
+    assert verify in order_text
+    budget = RD._fixer_verify_budget(state["fixBatch"], state["config"])
+    lint_text = RD._order_lint_text(order_text, {
+        "placeholders": {"VERIFY_BUDGET": budget},
+        "verify_command": verify,
+    })
+    # The owner's command is gone from the lint text; the driver's own target-file list is not.
+    assert verify not in lint_text
+    assert RD.QUOTED_DATA_LINT_ELISION in lint_text
+    assert target in lint_text
+
+
+def test_verify_command_elision_is_anchored_to_the_budget_tail(tmp_path, monkeypatch):
+    # axis: the elision removes the QUOTED TAIL only — never an earlier substring match inside
+    # the driver's own target-file list (review round 1, Important)
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    repo = str(tmp_path / "proj")
+    os.makedirs(repo)
+    # The owner's command is a SUBSTRING of the target path the driver names.
+    target = "prefix/foo/bar.py"
+    verify = "foo/bar.py"
+    os.makedirs(os.path.join(repo, os.path.dirname(target)), exist_ok=True)
+    open(os.path.join(repo, target), "w", encoding="utf-8").close()
+    state.setdefault("config", {})["repoRoot"] = repo
+    state["config"]["verifyCommand"] = verify
+    state["fixBatch"] = [{"file": target, "title": "t", "line": 1}]
+    budget = RD._fixer_verify_budget(state["fixBatch"], state["config"])
+    assert budget.endswith(verify)
+    lint_text = RD._order_lint_text(
+        "PROLOGUE\n" + budget + "\nEPILOGUE\n",
+        {"placeholders": {"VERIFY_BUDGET": budget}, "verify_command": verify})
+    # The driver's target path survives whole — it is NOT rewritten by the elision.
+    assert target in lint_text
+    # And the quoted tail is gone.
+    assert lint_text.rstrip().endswith("EPILOGUE")
+    assert RD.QUOTED_DATA_LINT_ELISION in lint_text
+    assert lint_text.count(verify) == 1  # only the one inside `target`
 
 
 def test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root(tmp_path, monkeypatch):
@@ -311,3 +391,45 @@ def test_fixer_emission_resolves_plugin_relative_citation_via_plugin_root(tmp_pa
             match=r"order-render-refused:%s:order-lint:order-path-unresolved:rubric/no_such_rubric_1339.md"
             % _FIXER_SKEY):
         _emit_fixer(session_dir, state)
+
+
+@pytest.mark.parametrize("eol", ["\r\n", "\r"], ids=["crlf", "cr"])
+def test_verify_command_elision_survives_carriage_returns(tmp_path, monkeypatch, eol):
+    # axis: the owner's verify command is folded through the mask's newline policy before the
+    # budget-tail match, so a CR/CRLF in it cannot defeat the elision and expose `{item}`
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    repo = str(tmp_path / "proj")
+    os.makedirs(repo)
+    verify = "pytest a.py" + eol + "echo {item}"
+    state.setdefault("config", {})["repoRoot"] = repo
+    state["config"]["verifyCommand"] = verify
+    # The production path emits without refusing (no order-placeholder-unfilled).
+    assert "manifestSha256" in _emit_fixer(session_dir, state)
+    order_path = RR.order_prompt_path(session_dir, state["round"], RP.P_FIXER, _FIXER_SKEY, 0)
+    with open(order_path, encoding="utf-8", newline="") as fh:
+        order_text = fh.read()
+    budget = RD._fixer_verify_budget(state.get("fixBatch") or [], state["config"])
+    assert budget.endswith(verify)
+    lint_text = RD._order_lint_text(order_text, {
+        "placeholders": {"VERIFY_BUDGET": budget},
+        "verify_command": verify,
+    })
+    assert "{item}" not in lint_text
+    assert RD.QUOTED_DATA_LINT_ELISION in lint_text
+    assert OL.check_text(lint_text, repo, kind="fixer")["ok"] is True
+
+
+_CRLF_PLACEHOLDER_GUIDANCE = "Keep the {name} field as the owner wrote it.\r\nSecond line of guidance."
+
+
+def test_gate_guidance_elision_survives_crlf(tmp_path, monkeypatch):
+    # axis: owner-gate guidance is folded through the mask's newline policy before the elision
+    # match, so a CRLF in it cannot expose its `{name}` token to the lint
+    session_dir, state = _seed_session(tmp_path, monkeypatch)
+    _seed_gate_guidance(state, _CRLF_PLACEHOLDER_GUIDANCE)
+    assert "manifestSha256" in _emit_fixer(session_dir, state)
+    lint_text = RD._order_lint_text(
+        "PROLOGUE\n" + OL.normalize_newlines(_CRLF_PLACEHOLDER_GUIDANCE) + "\nEPILOGUE\n",
+        {"placeholders": {"GATE_GUIDANCE": _CRLF_PLACEHOLDER_GUIDANCE}})
+    assert "{name}" not in lint_text
+    assert RD.QUOTED_DATA_LINT_ELISION in lint_text

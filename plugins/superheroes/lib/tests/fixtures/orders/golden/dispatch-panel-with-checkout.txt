@@ -14,7 +14,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 
 ## Context files
 - Diff: /tmp/superheroes-session-wo4-golden/round-2/diff.txt
-- Base rubric (severity, verification rules, panel output format): ${PLUGIN_ROOT}/rubric/review-base.md
+- Base rubric (severity, verification rules, panel output format): /private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1272-3f5292aa7e89b0ea/e27eb96f-ee0c-49d2-870c-1507a21ea6d1/scratchpad/wo-B/plugins/superheroes/rubric/review-base.md
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - CLAUDE.md (project conventions): CLAUDE.md
@@ -43,8 +43,9 @@ positives.
 
 ## Verification rules
 - `file:line` citation required. No citation → drop your own finding
-  before writing it out. Cite `line` as an integer (a JSON number, e.g. `"line": 291`), never a
-  string — a string line is refused at compile.
+  before writing it out. Cite `line` as an integer (a JSON number, e.g. `"line": 291`). A numeric
+  string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
+  (`line is not an integer`) and the finding is dropped.
 - Before flagging "missing X", grep the codebase (PR checkout, in PR mode)
   for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
