@@ -1282,7 +1282,7 @@ def _filter_patch_sections(patch_bytes, is_genuinely_binary=None):
     ``_rel_path_would_be_stripped`` reaches the written patch. Opaque (binary)
     sections are refused with ``sanitized-view-diff-opaque`` unless
     ``is_genuinely_binary`` confirms every present side is a regular-file blob
-    whose first ``_BINARY_SNIFF_BYTES`` contain a NUL byte — those sections
+    whose prefix matches ``_blob_prefix_is_genuine_binary`` — those sections
     become placeholder lines instead. Text sections pass byte-identical.
     """
     if not patch_bytes:
@@ -1325,20 +1325,109 @@ def _section_change_kind(section):
     return "modified"
 
 
+def _decode_utf8_allow_trailing_truncation(data):
+    """Decode UTF-8, allowing only an incomplete multibyte sequence at the end."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        if exc.reason != "unexpected end of data":
+            return None
+        trimmed = data[: exc.start]
+        if not trimmed:
+            return None
+        try:
+            return trimmed.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+
+def _has_interior_nul_salt(prefix):
+    """True when a NUL sits between two non-NUL bytes (NUL-salted source)."""
+    for i in range(1, len(prefix) - 1):
+        if prefix[i] == 0 and prefix[i - 1] != 0 and prefix[i + 1] != 0:
+            return True
+    return False
+
+
+def _prefix_looks_like_utf16le_ascii(prefix):
+    """True when ``prefix`` is BOM-less UTF-16LE encoding mostly ASCII text."""
+    if len(prefix) < 2 or len(prefix) % 2 != 0:
+        return False
+    for i in range(0, len(prefix), 2):
+        ch, nul = prefix[i], prefix[i + 1]
+        if nul != 0:
+            return False
+        if ch in (9, 10, 13) or 32 <= ch <= 126:
+            continue
+        return False
+    return True
+
+
+def _looks_like_text_blob_prefix(prefix):
+    """Return whether a sniff-window prefix should be treated as text, not opaque binary."""
+    if prefix.startswith(
+        (b"\xff\xfe", b"\xfe\xff", b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")
+    ):
+        return True
+    if _prefix_looks_like_utf16le_ascii(prefix):
+        return True
+    stripped = prefix.replace(b"\x00", b"")
+    if not stripped or b"\n" not in stripped:
+        return False
+    if not (
+        stripped.startswith(b"#!")
+        or _has_interior_nul_salt(prefix)
+    ):
+        return False
+    text = _decode_utf8_allow_trailing_truncation(stripped)
+    if text is None:
+        return False
+    for ch in text:
+        if ord(ch) < 32 and ch not in "\t\n\r\x0b\x0c\x1b":
+            return False
+    return True
+
+
+def _blob_prefix_is_genuine_binary(prefix):
+    """True when a blob prefix is opaque binary data (NUL present and not text-like).
+
+    A side is genuine binary only when its first ``_BINARY_SNIFF_BYTES`` contain a
+    NUL and ``_looks_like_text_blob_prefix`` is false — UTF-16/UTF-32 BOM prefixes,
+    BOM-less UTF-16 ASCII, and NUL-salted UTF-8 source stay text and refuse
+    placeholding (``sanitized-view-diff-opaque``).
+    """
+    if b"\0" not in prefix:
+        return False
+    if _looks_like_text_blob_prefix(prefix):
+        return False
+    return True
+
+
 def _binary_placeholder_section(section, path, kind):
-    first_nl = section.find(b"\n")
-    if first_nl == -1:
-        header = section + b"\n"
-    else:
-        header = section[: first_nl + 1]
-    line = (
+    placeholder = (
         b"# superheroes: binary file "
         + kind.encode("ascii")
         + b": "
         + json.dumps(path, ensure_ascii=True).encode("ascii")
         + b" (binary content not shown)\n"
     )
-    return header + line
+    header_lines = []
+    for line in section.split(b"\n"):
+        if line.startswith(b"@@"):
+            break
+        if line.startswith(b"Binary files ") and line.endswith(b" differ"):
+            break
+        if line.startswith(b"GIT binary patch"):
+            break
+        header_lines.append(line)
+    if not header_lines:
+        first_nl = section.find(b"\n")
+        if first_nl == -1:
+            header = section + b"\n"
+        else:
+            header = section[: first_nl + 1]
+        return header + placeholder
+    return b"\n".join(header_lines) + b"\n" + placeholder
 
 
 def _argv_byte_size(argv):
@@ -1749,7 +1838,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
                         "sanitized-view-diff-failed"
                     ) from exc
                 raise
-            if b"\0" not in prefix:
+            if not _blob_prefix_is_genuine_binary(prefix):
                 return False
         return True
 

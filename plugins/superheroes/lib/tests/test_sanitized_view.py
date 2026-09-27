@@ -3,9 +3,11 @@ import json
 import os
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import time
+import zlib
 
 import pytest
 
@@ -2122,25 +2124,44 @@ def test_review_diff_at_at_in_path_binary_is_placeheld(tmp_path):
     try:
         with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
-        assert (
-            b'diff --git a/sec@@.txt b/sec@@.txt\n'
-            b'# superheroes: binary file modified: "sec@@.txt" (binary content not shown)\n'
-        ) in patch
+        assert b'diff --git a/sec@@.txt b/sec@@.txt\n' in patch
+        sec_chunk = patch.split(b"diff --git a/sec@@.txt b/sec@@.txt\n", 1)[1]
+        assert sec_chunk.startswith(b"index ")
+        assert _binary_placeholder_line_bytes("sec@@.txt", "modified") in patch
         assert b"changed\n" in patch
     finally:
         sv.destroy_sanitized_view(view["path"])
 
 
-def _binary_placeholder_section_bytes(path, kind):
-    header = ("diff --git a/%s b/%s\n" % (path, path)).encode("ascii")
-    line = (
+def _binary_placeholder_line_bytes(path, kind):
+    return (
         b"# superheroes: binary file "
         + kind.encode("ascii")
         + b": "
         + json.dumps(path, ensure_ascii=True).encode("ascii")
         + b" (binary content not shown)\n"
     )
-    return header + line
+
+
+def _binary_placeholder_section_bytes(path, kind):
+    header = ("diff --git a/%s b/%s\n" % (path, path)).encode("ascii")
+    return header + _binary_placeholder_line_bytes(path, kind)
+
+
+def _minimal_png():
+    def chunk(tag, data):
+        crc = zlib.crc32(tag + data) & 0xffffffff
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    raw = b"\x89PNG\r\n\x1a\n"
+    raw += chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+    raw += chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\xff"))
+    raw += chunk(b"IEND", b"")
+    return raw
+
+
+def _woff_like_blob():
+    return b"wOFF\x00\x01\x00\x00" + bytes(range(32, 96))
 
 
 def test_review_diff_binary_sections_become_placeholders(tmp_path):
@@ -2202,7 +2223,11 @@ def test_review_diff_binary_sections_become_placeholders(tmp_path):
             ("old.png", "deleted"),
             ("new.png", "added"),
         ):
-            assert _binary_placeholder_section_bytes(path, kind) in patch
+            assert _binary_placeholder_line_bytes(path, kind) in patch
+            assert (
+                ("diff --git a/%s b/%s\n" % (path, path)).encode("ascii") in patch
+            )
+        assert b"index " in patch
         assert b"Binary files " not in patch
         assert b"\0" not in patch
         t_only = subprocess.run(
@@ -2262,9 +2287,230 @@ def test_review_diff_binary_larger_than_sniff_window_is_placeheld(tmp_path):
     try:
         with open(_patch_abs(view), "rb") as fh:
             patch = fh.read()
-        assert _binary_placeholder_section_bytes("a.bin", "modified") in patch
-        assert _binary_placeholder_section_bytes("b.bin", "modified") in patch
+        assert _binary_placeholder_line_bytes("a.bin", "modified") in patch
+        assert _binary_placeholder_line_bytes("b.bin", "modified") in patch
         assert b"changed\n" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_binary_placeholder_section_keeps_pre_hunk_headers():
+    section = (
+        b"diff --git a/x.bin b/x.bin\n"
+        b"old mode 100644\n"
+        b"new mode 100755\n"
+        b"index 1111111..2222222 100755\n"
+        b"Binary files a/x.bin and b/x.bin differ\n"
+    )
+    out = sv._binary_placeholder_section(section, "x.bin", "modified")
+    assert b"diff --git a/x.bin b/x.bin\n" in out
+    assert b"old mode 100644\n" in out
+    assert b"new mode 100755\n" in out
+    assert b"index 1111111..2222222 100755\n" in out
+    assert b"Binary files " not in out
+    assert _binary_placeholder_line_bytes("x.bin", "modified") in out
+
+
+def test_review_diff_binary_mode_change_shows_mode_headers(tmp_path):
+    repo = _init_repo(tmp_path / "bin-mode", files={"keep.txt": "k\n"}, commit=False)
+    bin_path = os.path.join(repo, "run.bin")
+    with open(bin_path, "wb") as fh:
+        fh.write(b"\x00exec-v1\n")
+    os.chmod(bin_path, 0o644)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(bin_path, "wb") as fh:
+        fh.write(b"\x00exec-v2\n")
+    os.chmod(bin_path, 0o755)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "chmod",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert b"old mode 100644\n" in patch
+        assert b"new mode 100755\n" in patch
+        assert _binary_placeholder_line_bytes("run.bin", "modified") in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_utf16_bom_script_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "utf16-bom", files={"keep.txt": "k\n"}, commit=False)
+    script = os.path.join(repo, "setup.ps1")
+    with open(script, "wb") as fh:
+        fh.write("Write-Host ok\n".encode("utf-16"))
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(script, "wb") as fh:
+        fh.write("Write-Host changed\n".encode("utf-16"))
+    _git(repo, "add", script)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_utf16le_ascii_script_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "utf16-le", files={"keep.txt": "k\n"}, commit=False)
+    script = os.path.join(repo, "run.py")
+    with open(script, "wb") as fh:
+        fh.write("print('ok')\n".encode("utf-16-le"))
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(script, "wb") as fh:
+        fh.write("print('changed')\n".encode("utf-16-le"))
+    _git(repo, "add", script)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_nul_salted_ascii_script_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "nul-salt", files={"keep.txt": "k\n"}, commit=False)
+    script = os.path.join(repo, "salt.sh")
+    with open(script, "wb") as fh:
+        fh.write(b"#!/bin/sh\nx\x00y\necho ok\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(script, "wb") as fh:
+        fh.write(b"#!/bin/sh\nx\x00z\necho changed\n")
+    _git(repo, "add", script)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_real_png_and_woff_like_still_placeheld(tmp_path):
+    png = _minimal_png()
+    woff = _woff_like_blob()
+    repo = _init_repo(tmp_path / "real-bin", files={"keep.txt": "k\n"}, commit=False)
+    with open(os.path.join(repo, "icon.png"), "wb") as fh:
+        fh.write(png)
+    with open(os.path.join(repo, "font.woff"), "wb") as fh:
+        fh.write(woff)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "icon.png"), "wb") as fh:
+        fh.write(png + b"\x00")
+    with open(os.path.join(repo, "font.woff"), "wb") as fh:
+        fh.write(woff + b"\x01")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert _binary_placeholder_line_bytes("icon.png", "modified") in patch
+        assert _binary_placeholder_line_bytes("font.woff", "modified") in patch
+        assert b"Binary files " not in patch
     finally:
         sv.destroy_sanitized_view(view["path"])
 

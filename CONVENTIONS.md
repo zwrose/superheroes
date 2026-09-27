@@ -815,7 +815,9 @@ authoritative ancestry cannot be established, and any shallow-state answer other
 this contract. Repo-local config overrides remain defence in depth, not the proof of authority. Opaque or unaccounted patch content refuses
 with `sanitized-view-diff-opaque`, `sanitized-view-diff-unaccounted`, or (for git command failure)
 `sanitized-view-diff-failed`, except that a kept review-patch section git renders as binary becomes a
-placeholder when every present side is a regular-file blob whose first 8000 bytes contain a NUL byte;
+placeholder when every present side is a regular-file blob whose prefix sniff window
+(``_BINARY_SNIFF_BYTES`` in ``plugins/superheroes/lib/sanitized_view.py``) contains a NUL byte
+and is not classified as text by that module's genuine-binary predicate;
 that result is never a clean review and there is no automatic fallback.
 
 **Dispatch vocabulary contract.** Three token shapes stay distinct:
