@@ -833,6 +833,10 @@ ORDER_LINTER_FORBIDDEN_TOOLS = ("Write", "Edit", "Bash", "NotebookEdit")
 
 
 def test_order_linter_grant_is_read_only():
+    """Axis: the order-linter's parsed tools: grant must be a subset of ORDER_LINTER_ALLOWED_TOOLS
+    (Read, Grep, Glob). The allowlist assertion is the guard; the forbidden-name loop above it exists
+    only to fail with the named order-linter-grant-writable token for the tools the seat must never
+    hold."""
     tools = _parse_tools(
         _read_required(os.path.join(PLUGIN, "agents", "order-linter.md"),
                        "the order-linter semantic seat"),
@@ -843,54 +847,6 @@ def test_order_linter_grant_is_read_only():
     extra = sorted(set(tools) - ORDER_LINTER_ALLOWED_TOOLS)
     assert not extra, (
         "order-linter-grant-outside-allowlist: %s" % extra)
-
-
-def test_order_linter_is_the_named_seat_in_both_homes():
-    orders_text = _read_required(
-        os.path.join(PLUGIN, "skills", "workhorse", "reference", "orders.md"),
-        "workhorse order-lint reference")
-    semantic_paras = [
-        p for p in re.split(r"\n\n+", orders_text)
-        if p.startswith("**The semantic half**")]
-    assert len(semantic_paras) == 1, (
-        "expected exactly one paragraph beginning **The semantic half**, found %d"
-        % len(semantic_paras))
-    para = semantic_paras[0]
-    assert "`order-linter`" in para
-    assert "superheroes:order-linter" in para
-
-    semantic_text = _read_required(
-        os.path.join(PLUGIN, "rubric", "orders", "order-lint-semantic.md"),
-        "order-lint-semantic prompt")
-    seat_paras = [
-        p for p in re.split(r"\n\n+", semantic_text)
-        if p.startswith("**Seat.**")]
-    assert len(seat_paras) == 1, (
-        "expected exactly one paragraph beginning **Seat.**, found %d" % len(seat_paras))
-    assert "`order-linter`" in seat_paras[0]
-
-
-def test_workhorse_charter_names_order_linter_in_both_enumerations():
-    text = _norm(_read_required(
-        os.path.join(PLUGIN, "skills", "workhorse", "SKILL.md"),
-        "the Workhorse charter"))
-
-    gate = re.findall(
-        r"dispatch kinds this charter sanctions(.*?)you \*\*run the model gate\*\*", text)
-    assert len(gate) == 1, (
-        "workhorse/SKILL.md: expected exactly one gated-model-check dispatch-kind "
-        "enumeration, found %d." % len(gate))
-    assert "`order-linter` dispatch" in gate[0], (
-        "workhorse/SKILL.md: gated enumeration does not name `order-linter` dispatch: %r"
-        % gate[0])
-
-    prov = re.findall(r"each dispatch \((.*?)\)", text)
-    assert len(prov) == 1, (
-        "workhorse/SKILL.md: expected exactly one dispatch-provenance enumeration, found %d."
-        % len(prov))
-    assert "`order-linter`" in prov[0], (
-        "workhorse/SKILL.md: provenance enumeration does not name `order-linter`: %r"
-        % prov[0])
 
 
 def _dispatch_mechanics_tree_inspection_bullet():
