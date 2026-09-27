@@ -16,6 +16,9 @@ __all__ = (
     "store_path",
     "store_dir",
     "round_dir",
+    "landing_dir",
+    "landing_path",
+    "bare_payload_path",
     "RESERVED_PREFIX",
     "_guard_within",
     "_require_token",
@@ -99,3 +102,26 @@ def _seat_filename(skey, attempt):
 def store_path(session_dir, rnd, phase, skey, attempt):
     return _guard_within(session_dir, os.path.join(store_dir(session_dir, rnd, phase),
                                                    _seat_filename(skey, attempt)))
+
+
+def landing_dir(session_dir, rnd, phase):
+    _require_token("phase", phase)
+    return _guard_within(session_dir,
+                         os.path.join(round_dir(session_dir, rnd), "landing", phase))
+
+
+def landing_path(session_dir, rnd, phase, skey, attempt):
+    return _guard_within(
+        session_dir,
+        os.path.join(landing_dir(session_dir, rnd, phase),
+                     _seat_filename(skey, attempt)))
+
+
+def bare_payload_path(session_dir, rnd, phase, skey, attempt):
+    """Host-seat payload-only landing slot — sibling to the full-envelope `landing_path`."""
+    _require_token("skey", skey)
+    _require_index("attempt", attempt)
+    return _guard_within(
+        session_dir,
+        os.path.join(landing_dir(session_dir, rnd, phase),
+                     "%s.a%d.payload.json" % (skey, attempt)))
