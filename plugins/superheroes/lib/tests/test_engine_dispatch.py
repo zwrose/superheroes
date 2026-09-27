@@ -44,6 +44,17 @@ def _load_model_registry():
 
 MR = _load_model_registry()
 
+
+def _load_claude_modes():
+    spec = importlib.util.spec_from_file_location(
+        "claude_modes", os.path.join(_HERE, "..", "claude_modes.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+claude_modes = _load_claude_modes()
+
 _REVIEW_ROLE = "reviewer"
 _WRITE_ROLE = "implementer"
 
@@ -2731,7 +2742,6 @@ def test_subprocess_popen_census():
     assert popen_counts == {
         "_run_engine": 1,
         "_run_engine_files": 1,
-        "_run_claude_background_launch": 1,
         "_spawn_attempt": 1,
     }
     assert run_engine_files_has_cwd
@@ -6645,8 +6655,8 @@ def test_review_mode_argparse_choices_match_review_modes():
     ("outer-exception", {}, "outer_exc", "review", "internal-RuntimeError", False, True),
     ("claude-mode-unknown", {"claude_mode": "bogus"},
      None, "review", "claude-mode-unknown:'bogus'", False, True),
-    ("claude-mode-unsupported", {"seat": _codex_seat(), "claude_mode": "background"},
-     None, "review", "claude-mode-unsupported:codex", False, True),
+    ("claude-mode-retired", {"claude_mode": "background"},
+     None, "review", "claude-mode-retired:background", False, True),
 ])
 def test_dispatch_review_every_outcome_carries_mode(
     tmp_path, monkeypatch, label, kwargs, setup, expected_mode, expected_detail,
@@ -10724,12 +10734,12 @@ def test_entry_refusal_producer_census_declared_reasons(tmp_path, monkeypatch, c
     )
     _assert_dispatch_result_entry_refusal(
         ED.dispatch_review(
-            seat=_codex_seat(), prompt_path=prompt, repo_root=repo_root,
+            seat=_reviewer_claude_seat(), prompt_path=prompt, repo_root=repo_root,
             run_engine=_never_call, build_view=_never_build_view,
             claude_mode="background",
         ),
-        "dispatch-review-library-claude-mode-unsupported",
-        "claude-mode-unsupported",
+        "dispatch-review-library-claude-mode-retired",
+        "claude-mode-retired",
     )
     _assert_dispatch_result_entry_refusal(
         ED.dispatch_review(
@@ -14946,13 +14956,16 @@ def _plant_claude_review_journal_with_claude_mode(
     fed = _fed_prompt(open(prompt_path, encoding="utf-8").read(), view_meta={"headSha": "abc"})
     cwd = os.path.realpath(repo_root)
     opts = {"cwd": cwd}
-    if claude_mode is not None:
-        opts["claudeMode"] = claude_mode
+    argv_mode = claude_mode
+    if argv_mode is not None and argv_mode != claude_modes.MODE_PRINT:
+        argv_mode = claude_modes.MODE_PRINT
+    if argv_mode is not None:
+        opts["claudeMode"] = argv_mode
     built = EA.build_argv_result(seat, "review", opts)
     assert built["reason"] is None, built
     argv = built["argv"]
     argv, native_err, native_schema_path = ED._open_native_channel_argv(
-        run_dir, "claude", list(argv), ED.RUN_KIND_REVIEW, claude_mode=claude_mode,
+        run_dir, "claude", list(argv), ED.RUN_KIND_REVIEW, claude_mode=argv_mode,
     )
     assert native_err is None, native_err
     opened = {
@@ -14975,29 +14988,6 @@ def _plant_claude_review_journal_with_claude_mode(
     return opened
 
 
-def test_claude_mode_background_review_open_records_caller_provenance(tmp_path, monkeypatch):
-    _ensure_claude_config_dir(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-open")
-    seat = _reviewer_claude_seat()
-    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
-    res = ED.dispatch_review(
-        seat=seat,
-        prompt_path=_valid_prompt(tmp_path),
-        repo_root=repo_root,
-        run_engine=fake,
-        build_view=_stable_build_view(tmp_path),
-        run_dir=run_dir,
-        claude_mode="background",
-        max_wait=0,
-    )
-    assert res["ok"] is False
-    opened = _review_opened_record(run_dir)
-    assert opened["claudeMode"] == "background"
-    assert opened["resolvedInputs"]["claudeMode"] == "background"
-    assert opened["resolvedInputs"]["claudeModeSource"] == "caller"
-
-
 def test_claude_mode_omitted_records_default_source(tmp_path, monkeypatch):
     _ensure_claude_config_dir(tmp_path, monkeypatch)
     repo_root = _repo(tmp_path)
@@ -15016,6 +15006,18 @@ def test_claude_mode_omitted_records_default_source(tmp_path, monkeypatch):
     assert opened.get("claudeMode") is None
     assert opened["resolvedInputs"]["claudeMode"] is None
     assert opened["resolvedInputs"]["claudeModeSource"] == "default"
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, claude_modes.CLASS_DISPATCHABLE),
+    ("print", claude_modes.CLASS_DISPATCHABLE),
+    ("background", claude_modes.CLASS_RETIRED),
+    ("bogus", claude_modes.CLASS_UNKNOWN),
+    (3, claude_modes.CLASS_UNKNOWN),
+    (["print"], claude_modes.CLASS_UNKNOWN),
+])
+def test_claude_modes_classify_truth_table(value, expected):
+    assert claude_modes.classify(value) == expected
 
 
 def test_claude_mode_unknown_refused_before_open(tmp_path):
@@ -15038,20 +15040,209 @@ def test_claude_mode_unknown_refused_before_open(tmp_path):
     assert len(fake.calls) == 0
 
 
-def test_claude_mode_unsupported_codex_background_refused(tmp_path):
-    fake = FakeRunner([])
+def test_dispatch_review_claude_mode_background_refuses_retired_before_spawn(tmp_path):
+    # axis: entry retired branch refuses background before spawn
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
     res = ED.dispatch_review(
-        seat=_codex_seat(),
+        seat=_reviewer_claude_seat(),
         prompt_path=_valid_prompt(tmp_path),
         repo_root=_repo(tmp_path),
         run_engine=fake,
-        build_view=_never_build_view,
+        build_view=_fake_build_view(tmp_path),
         claude_mode="background",
     )
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == "claude-mode-unsupported:codex"
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert len(fake.calls) == 0
+
+
+def test_main_dispatch_review_claude_mode_background_refuses_retired(
+    tmp_path, monkeypatch, capsys,
+):
+    # axis: CLI --claude-mode background reaches entry retired refusal
+    recorder = []
+
+    def _recorder(*args, **kwargs):
+        recorder.append((args, kwargs))
+        raise AssertionError("spawn must not run")
+
+    monkeypatch.setattr(ED, "_run_engine", _recorder)
+    seat = json.dumps(_reviewer_claude_seat())
+    prompt = _valid_prompt(tmp_path)
+    repo_root = _repo(tmp_path)
+    rc = ED.main([
+        "dispatch-review",
+        "--seat", seat,
+        "--prompt-path", prompt,
+        "--repo-root", repo_root,
+        "--claude-mode", "background",
+    ])
+    assert rc == 1
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
+    assert res["attempts"] == 0
+    assert recorder == []
+
+
+@pytest.mark.parametrize("claude_mode", [None, "print"])
+def test_dispatch_review_continuation_of_background_journal_refuses_retired(
+    tmp_path, monkeypatch, claude_mode,
+):
+    # axis: continuation chokepoint refuses journal claudeMode background
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "bg-continuation")
+    repo_root = _repo(tmp_path)
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _reviewer_claude_seat()
+    _plant_claude_review_journal_with_claude_mode(
+        tmp_path, run_dir, repo_root, seat, config_dir=cfg, claude_mode="background",
+    )
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
+    kwargs = {
+        "seat": seat,
+        "prompt_path": _valid_prompt(tmp_path),
+        "repo_root": repo_root,
+        "run_engine": fake,
+        "build_view": _stable_build_view(tmp_path),
+        "run_dir": run_dir,
+        "order_id": "claude-mode-test",
+        "max_wait": 0,
+    }
+    if claude_mode is not None:
+        kwargs["claude_mode"] = claude_mode
+    res = ED.dispatch_review(**kwargs)
+    assert res["detail"] == claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_RETIRED
+    assert res["detail"] != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert len(fake.calls) == 0
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") in ("attempt-started", "engine-started") for r in records)
+
+
+def test_dispatch_review_continuation_of_unknown_mode_journal_refuses_unknown(
+    tmp_path, monkeypatch,
+):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "bogus-continuation")
+    repo_root = _repo(tmp_path)
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _reviewer_claude_seat()
+    _plant_claude_review_journal_with_claude_mode(
+        tmp_path, run_dir, repo_root, seat, config_dir=cfg, claude_mode="bogus",
+    )
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
+    res = ED.dispatch_review(
+        seat=seat,
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_stable_build_view(tmp_path),
+        run_dir=run_dir,
+        order_id="claude-mode-test",
+        max_wait=0,
+    )
+    assert res["detail"] == claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_UNKNOWN
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
+
+
+def test_poll_and_abandon_on_legacy_background_journal_do_not_raise(
+    tmp_path, monkeypatch,
+):
+    # axis: legacy background journal records do not break poll or abandon
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "legacy-bg-poll")
+    repo_root = _repo(tmp_path)
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _reviewer_claude_seat()
+    _plant_claude_review_journal_with_claude_mode(
+        tmp_path, run_dir, repo_root, seat, config_dir=cfg, claude_mode="background",
+    )
+    dead_pid = 99999999
+    now = time.time()
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": dead_pid, "at": now,
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 1, "enginePgid": dead_pid, "at": now,
+    })
+    launch_id = "abcd1234"
+    session_id = "s1"
+    ED._journal_append(run_dir, {
+        "kind": "background-launched", "attempt": 1, "launchId": launch_id,
+        "bgSessionId": session_id, "at": now,
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-suspended", "attempt": 1, "launchId": launch_id,
+        "bgSessionId": session_id, "wallSeconds": 5, "at": now,
+    })
+    popen_calls = []
+    run_calls = []
+    claude_exe = EA.CLAUDE_EXECUTABLE
+    real_subprocess_popen = ED.subprocess.Popen
+    real_subprocess_run = ED.subprocess.run
+
+    def _argv_is_claude(argv):
+        if not argv:
+            return False
+        head = argv[0]
+        return head == claude_exe or (
+            isinstance(head, str)
+            and os.path.basename(head) == os.path.basename(claude_exe)
+        )
+
+    def _record_popen(*args, **kwargs):
+        popen_calls.append((args, kwargs))
+        argv = args[0] if args else []
+        if _argv_is_claude(argv):
+            raise AssertionError("unexpected claude Popen")
+        return real_subprocess_popen(*args, **kwargs)
+
+    def _record_run(*args, **kwargs):
+        run_calls.append((args, kwargs))
+        argv = args[0] if args else []
+        if _argv_is_claude(argv):
+            raise AssertionError("unexpected claude subprocess.run")
+        return real_subprocess_run(*args, **kwargs)
+
+    monkeypatch.setattr(ED.subprocess, "Popen", _record_popen)
+    monkeypatch.setattr(ED.subprocess, "run", _record_run)
+    poll_res = ED.dispatch_poll(run_dir)
+    assert poll_res is not None
+    assert not str(poll_res.get("detail", "")).startswith("internal-")
+    abandon_res = ED.dispatch_abandon(run_dir)
+    assert abandon_res["terminal"] is True
+    assert not str(abandon_res.get("detail", "")).startswith("internal-")
+    for args, _kwargs in popen_calls + run_calls:
+        argv = args[0] if args else []
+        assert not _argv_is_claude(argv)
+
+
+def test_claude_print_review_materializes_stdout_result(tmp_path, monkeypatch):
+    # axis: print-mode review still materializes stdout result
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind="verdicts",
+    )
+    assert res["ok"] is True
+    records, _ = ED._journal_read(res["runDir"])
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended["stdoutResult"] == "materialized"
+    assert "launchId" not in ended
+    assert "transcriptResult" not in ended
 
 
 def test_run_dir_claude_mode_mismatch_refused(tmp_path, monkeypatch):
@@ -15074,7 +15265,7 @@ def test_run_dir_claude_mode_mismatch_refused(tmp_path, monkeypatch):
         claude_mode="print",
         max_wait=0,
     )
-    assert res["detail"] == ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
+    assert res["detail"] == claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_RETIRED
     assert res["attempts"] == 0
     records, _ = ED._journal_read(run_dir)
     assert len([r for r in records if r.get("kind") == "run-opened"]) == 1
@@ -15101,8 +15292,9 @@ def test_continuation_omitted_claude_mode_inherits_journal(tmp_path, monkeypatch
         order_id="claude-mode-test",
         max_wait=0,
     )
-    assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
-    assert res["claudeMode"] == "background"
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["detail"] == claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_RETIRED
+    assert res["attempts"] == 0
 
 
 def test_legacy_journal_without_claude_mode_continues_with_explicit_print(tmp_path, monkeypatch):
@@ -15170,63 +15362,11 @@ def test_stdout_delivery_gate_unresolved_delivery_forfeits(tmp_path, monkeypatch
     assert gate["detail"] == "result-delivery-unresolved"
 
 
-def test_stdout_delivery_gate_transcript_branch(tmp_path, monkeypatch):
-    # axis: transcript delivery branch discriminates missing, occupied, and materialized transcriptResult
-    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-
-    def _gate_for_transcript_result(*, transcript_result=None):
-        run_dir = str(tmp_path / ("transcript-gate-%s" % (transcript_result or "missing")))
-        opened = _plant_claude_background_journal(
-            tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-        )
-        assert ERC.result_delivery(opened["engine"], opened["claudeMode"]) == (
-            ERC.RESULT_DELIVERY_TRANSCRIPT
-        )
-        ED._journal_append(run_dir, {
-            "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
-        })
-        ended = {"kind": "attempt-ended", "attempt": 1, "exit": 0, "at": time.time()}
-        if transcript_result is not None:
-            ended["transcriptResult"] = transcript_result
-        ED._journal_append(run_dir, ended)
-        return ED._stdout_delivery_gate(run_dir, 1, opened)
-
-    gate_missing = _gate_for_transcript_result()
-    assert gate_missing == {
-        "forfeit": True,
-        "reason": ED.dispatch_outcome.REASON_FORFEITED,
-        "detail": "native-result-missing",
-    }
-
-    gate_occupied = _gate_for_transcript_result(transcript_result="occupied")
-    assert gate_occupied == {
-        "forfeit": True,
-        "reason": ED.dispatch_outcome.REASON_FORFEITED,
-        "detail": "native-result-path-occupied",
-    }
-
-    assert _gate_for_transcript_result(transcript_result="materialized") is None
-
-
 def test_native_materializer_delivery_census():
     assert ED._NATIVE_MATERIALIZER_DELIVERIES <= ERC.RESULT_DELIVERY_MEMBERS
     assert ED._NATIVE_MATERIALIZER_DELIVERIES == frozenset({
         ERC.RESULT_DELIVERY_STDOUT,
-        ERC.RESULT_DELIVERY_TRANSCRIPT,
     })
-
-
-def test_claude_background_materializer_error_when_transcript_unreadable(tmp_path):
-    run_dir = str(tmp_path / "bg-materializer-error")
-    os.makedirs(run_dir, exist_ok=True)
-    opened = {
-        "engine": "claude",
-        "channel": ERC.CHANNEL_NATIVE,
-        "claudeMode": "background",
-    }
-    stdout_path = str(tmp_path / "missing-transcript.stdout")
-    assert ED._materialize_stdout_result(run_dir, 1, opened, stdout_path, None) == "error"
 
 
 def test_claude_review_json_schema_argv_text_drift_refuses_coherence(tmp_path, monkeypatch):
@@ -15251,30 +15391,6 @@ def test_claude_review_json_schema_argv_text_drift_refuses_coherence(tmp_path, m
     _, err = ED._spawn_argv_coherence(opened, drifted)
     assert err is not None
     assert "spawn argv does not match resolvedInputs snapshot" in err
-
-
-def test_claude_background_argv_carries_json_schema_from_journal(tmp_path, monkeypatch):
-    _ensure_claude_config_dir(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-schema")
-    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
-    ED.dispatch_review(
-        seat=_reviewer_claude_seat(),
-        prompt_path=_valid_prompt(tmp_path),
-        repo_root=repo_root,
-        run_engine=fake,
-        build_view=_stable_build_view(tmp_path),
-        run_dir=run_dir,
-        claude_mode="background",
-        max_wait=0,
-    )
-    opened = _review_opened_record(run_dir)
-    schema_path = os.path.join(run_dir, ED.NATIVE_SCHEMA_NAME)
-    with open(schema_path, encoding="utf-8") as fh:
-        schema_text = fh.read().rstrip("\n")
-    assert opened["argv"][-2:] == ["--json-schema", schema_text]
-    assert "--bg" in opened["argv"]
-    assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
 
 
 def _vendor_branch_call_targets(tree, func_name, vendor):
@@ -15343,846 +15459,6 @@ def test_no_quota_leg_on_the_claude_dispatch_path():
     assert built["reason"] is None, built
     assert built["argv"][:2] == ["claude", "-p"]
 
-
-# --- C14 layer 2: background attempt flow (#1273 WO-B2) -----------------------
-
-
-def _bg_launch_id():
-    return "a1b2c3d4"
-
-
-def _bg_session_id():
-    return "sess-bg-001"
-
-
-def _bg_agent_row(launch_id, session_id, *, state="working", status="busy"):
-    row = {"id": launch_id, "sessionId": session_id, "state": state}
-    if state == "working":
-        row["pid"] = 4242
-        row["status"] = status
-    return row
-
-
-def _bg_transcript_rows(structured_output=None, *, turn_end=True, tool_calls=1):
-    rows = []
-    for idx in range(tool_calls):
-        rows.append({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use",
-                "id": "tool-read-%d" % (idx + 1),
-                "name": "Read",
-                "input": {"path": "foo%d.py" % idx},
-            }]},
-        })
-    if structured_output is not None:
-        rows.append({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use", "id": "tool-so-1", "name": "StructuredOutput",
-                "input": structured_output,
-            }]},
-        })
-    if turn_end:
-        rows.append({"type": "user", "toolEndsTurn": True})
-    return rows
-
-
-def _write_bg_transcript(config_dir, session_id, rows):
-    proj = os.path.join(config_dir, "projects", "mangled-cwd")
-    os.makedirs(proj, exist_ok=True)
-    path = os.path.join(proj, session_id + ".jsonl")
-    with open(path, "w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
-    return path
-
-
-def _plant_claude_background_journal(tmp_path, run_dir, repo_root, seat, *, config_dir):
-    return _plant_claude_review_journal_with_claude_mode(
-        tmp_path, run_dir, repo_root, seat, config_dir=config_dir, claude_mode="background",
-    )
-
-
-def _bg_harness(tmp_path, monkeypatch, *, config_dir=None, agents_rows=None):
-    cfg = config_dir or str(tmp_path / "claude-cfg")
-    os.makedirs(cfg, exist_ok=True)
-    launch_id = _bg_launch_id()
-    session_id = _bg_session_id()
-    state = {
-        "launch_calls": [],
-        "cli_calls": [],
-        "agents_rows": agents_rows if agents_rows is not None else [
-            _bg_agent_row(launch_id, session_id),
-        ],
-        "transcript_rows": [],
-        "now": 0.0,
-        "ack_stdout": "backgrounded · %s\n" % launch_id,
-        "launch_exit": 0,
-    }
-
-    class _FakeProc:
-        pid = 9999
-        returncode = 0
-
-        def poll(self):
-            return 0
-
-        def wait(self, timeout=None):
-            return 0
-
-    def fake_popen(argv, **kwargs):
-        state["launch_calls"].append(list(argv))
-        stdout_fd = kwargs.get("stdout")
-        if isinstance(stdout_fd, int):
-            os.write(stdout_fd, state["ack_stdout"].encode("utf-8"))
-            os.close(stdout_fd)
-        stderr_fd = kwargs.get("stderr")
-        if isinstance(stderr_fd, int):
-            os.close(stderr_fd)
-        proc = _FakeProc()
-        proc.returncode = state["launch_exit"]
-        return proc
-
-    def fake_cli(args, config_dir_arg, cwd=None, timeout=30):
-        state["cli_calls"].append(list(args))
-        if args[:1] == ["agents"]:
-            return 0, json.dumps(state["agents_rows"]), ""
-        if args[:1] == ["stop"]:
-            stopped = args[1]
-            state["agents_rows"] = [
-                dict(r, state="stopped", status=None, pid=None)
-                if r.get("id") == stopped else r
-                for r in state["agents_rows"]
-            ]
-            return 0, "", ""
-        return 0, "", ""
-
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(ED, "_claude_cli", fake_cli)
-
-    def fake_now():
-        return state["now"]
-
-    def fake_sleep(secs):
-        state["now"] += secs
-
-    monkeypatch.setattr(ED, "_NOW", fake_now)
-    monkeypatch.setattr(ED, "_SLEEP", fake_sleep)
-    return cfg, launch_id, session_id, state
-
-
-def _run_bg_engine_files(tmp_path, run_dir, opened, *, timeout=60, monkeypatch=None):
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
-    progress_path = opened.get("progressPath") or os.path.join(run_dir, "progress.jsonl")
-    ED._journal_append(run_dir, {
-        "kind": "attempt-started", "attempt": 1,
-        "childPid": os.getpid(), "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-launching", "attempt": 1,
-        "childPid": os.getpid(), "argv": list(opened["argv"]), "at": time.time(),
-    })
-    ED._run_engine_files(
-        run_dir, 1, opened["argv"], opened["cwd"],
-        opened["promptPath"], stdout_path, stderr_path,
-        timeout, progress_path,
-    )
-
-
-def _bg_attempt_ended(run_dir, attempt=1):
-    records, _ = ED._journal_read(run_dir)
-    ended = [
-        r for r in records
-        if r.get("kind") == "attempt-ended" and r.get("attempt") == attempt
-    ]
-    return ended[-1]
-
-
-def _bg_attempt_suspended(run_dir, attempt=1):
-    records, _ = ED._journal_read(run_dir)
-    suspended = [
-        r for r in records
-        if r.get("kind") == "attempt-suspended" and r.get("attempt") == attempt
-    ]
-    return suspended[-1]
-
-
-def test_claude_background_happy_path_materializes_and_admits(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-happy")
-    seat = _reviewer_claude_seat()
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, seat, config_dir=cfg,
-    )
-    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=2))
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=60, monkeypatch=monkeypatch)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["transcriptResult"] == "materialized"
-    assert ended["launchId"] == launch_id
-    assert ended["bgSessionId"] == session_id
-    assert ended["bgStop"] == "stopped"
-    assert ended["transcriptToolCalls"] == 2
-    with open(ED._native_result_path(run_dir, 1), encoding="utf-8") as fh:
-        assert json.loads(fh.read()) == structured
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    grade = ED._grade_review_attempt(run_dir, state, 1)
-    assert grade["ok"] is True
-    assert grade["engagement"]["source"] == "claude-transcript"
-    assert grade["engagement"]["toolCalls"] == 2
-
-
-def test_claude_background_result_is_last_structured_output(tmp_path, monkeypatch):
-    cfg, _launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-last-so")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    first = {"ok": True, "signal": "ok"}
-    last = _wrap_native_review_result(_native_review_branch("verdicts"))
-    rows = _bg_transcript_rows(first, tool_calls=0)
-    rows.insert(-1, {
-        "type": "assistant",
-        "message": {"content": [{
-            "type": "tool_use", "id": "tool-so-2", "name": "StructuredOutput",
-            "input": last,
-        }]},
-    })
-    _write_bg_transcript(cfg, session_id, rows)
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    with open(ED._native_result_path(run_dir, 1), encoding="utf-8") as fh:
-        assert json.loads(fh.read()) == last
-
-
-def test_claude_background_secret_scrubbed_from_result_and_journal(tmp_path, monkeypatch):
-    import review_findings_schema as RFS
-
-    cfg, _launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-secret")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    finding = {}
-    for key in RFS.CANONICAL_MEMBER_KEYS:
-        schema = RFS.FINDING_PROPERTY_SCHEMAS[key]
-        if "enum" in schema:
-            finding[key] = next(v for v in schema["enum"] if v is not None)
-        elif schema.get("type") == ["integer", "null"]:
-            finding[key] = None
-        elif schema.get("type") == ["boolean", "null"]:
-            finding[key] = None
-        elif schema.get("type") == ["string", "null"]:
-            finding[key] = "example"
-        else:
-            finding[key] = "example"
-    secret = "ghp_" + ("a" * 36)
-    finding["body"] = "log shows %s" % secret
-    branch = _native_review_branch("findings", findings=[finding])
-    structured = _wrap_native_review_result(branch)
-    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured))
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    with open(ED._native_result_path(run_dir, 1), encoding="utf-8") as fh:
-        materialized = fh.read()
-    assert secret not in materialized
-    assert "[REDACTED]" in materialized
-    records, _ = ED._journal_read(run_dir)
-    assert secret not in json.dumps(records)
-
-
-@pytest.mark.parametrize(
-    "ack_stdout,launch_exit,refusal",
-    [
-        ("", 0, "background-launch-unacknowledged"),
-        ("error: failed\n", 0, "background-launch-unacknowledged"),
-        ("backgrounded · abcdefg\n", 0, "background-launch-unacknowledged"),
-        ("backgrounded · %s\n" % _bg_launch_id(), 1, "background-launch-failed"),
-    ],
-)
-def test_claude_background_launch_refusals(
-    tmp_path, monkeypatch, ack_stdout, launch_exit, refusal,
-):
-    cfg, launch_id, _session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    harness["ack_stdout"] = ack_stdout
-    harness["launch_exit"] = launch_exit
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / ("bg-launch-%s" % refusal))
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["refusal"] == refusal
-    if refusal == "background-launch-failed":
-        assert ended["exit"] == launch_exit
-
-
-def test_claude_background_session_unlisted_refused(tmp_path, monkeypatch):
-    cfg, launch_id, _session_id, harness = _bg_harness(tmp_path, monkeypatch, agents_rows=[])
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-unlisted")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["refusal"] == "background-session-unlisted"
-    assert ended["launchId"] == launch_id
-
-
-def test_claude_background_transcript_ambiguous_refused(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-ambiguous")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    _write_bg_transcript(cfg, session_id, _bg_transcript_rows({"ok": True}))
-    alt = os.path.join(cfg, "projects", "other", session_id + ".jsonl")
-    os.makedirs(os.path.dirname(alt), exist_ok=True)
-    shutil.copyfile(
-        os.path.join(cfg, "projects", "mangled-cwd", session_id + ".jsonl"), alt,
-    )
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=10)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["refusal"] == "background-transcript-ambiguous"
-
-
-def test_claude_background_session_ended_without_result_refused(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    harness["agents_rows"] = [_bg_agent_row(launch_id, session_id, state="stopped")]
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-ended")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=10)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["refusal"] == "background-session-ended-without-result"
-
-
-def test_claude_background_ack_only_graded_native_result_missing(tmp_path, monkeypatch):
-    cfg, _launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-no-result")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    _write_bg_transcript(
-        cfg, session_id, _bg_transcript_rows(None, turn_end=True, tool_calls=1),
-    )
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=10)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended.get("refusal") is None
-    assert ended["transcriptResult"] == "absent"
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    grade = ED._grade_review_attempt(run_dir, state, 1)
-    assert grade["detail"] == "native-result-missing"
-
-
-def test_claude_background_budget_expiry_records_resume_fields(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-budget")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=1)
-    suspended = _bg_attempt_suspended(run_dir)
-    assert suspended["launchId"] == launch_id
-    assert suspended["bgSessionId"] == session_id
-    assert suspended.get("transcriptRowCursor") == 0
-    assert suspended.get("bgStop") is None
-    records, _ = ED._journal_read(run_dir)
-    assert not any(r.get("kind") == "attempt-ended" for r in records)
-
-
-def test_claude_background_continuation_reattaches_without_second_launch(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-reattach")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=1)
-    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured))
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=60)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["transcriptResult"] == "materialized"
-    assert len(harness["launch_calls"]) == 1
-
-
-def test_background_stop_records_stopped_already_ended_and_stop_unconfirmed(
-    tmp_path, monkeypatch,
-):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    cwd = os.path.realpath(_repo(tmp_path))
-
-    harness["agents_rows"] = [_bg_agent_row(launch_id, session_id)]
-
-    def cli_stopped(args, config_dir, cwd=None, timeout=30):
-        if args[:1] == ["agents"]:
-            return 0, json.dumps(harness["agents_rows"]), ""
-        harness["agents_rows"] = []
-        return 0, "", ""
-
-    monkeypatch.setattr(ED, "_claude_cli", cli_stopped)
-    assert ED._background_stop(launch_id, cfg, cwd) == "stopped"
-
-    harness["agents_rows"] = []
-
-    def cli_already_ended(args, config_dir, cwd=None, timeout=30):
-        if args[:1] == ["agents"]:
-            return 0, json.dumps(harness["agents_rows"]), ""
-        return 0, "", ""
-
-    monkeypatch.setattr(ED, "_claude_cli", cli_already_ended)
-    assert ED._background_stop(launch_id, cfg, cwd) == "already-ended"
-
-    harness["agents_rows"] = [_bg_agent_row(launch_id, session_id)]
-
-    def cli_stop_failed(args, config_dir, cwd=None, timeout=30):
-        if args[:1] == ["agents"]:
-            return 0, json.dumps(harness["agents_rows"]), ""
-        return 1, "", "stop failed"
-
-    monkeypatch.setattr(ED, "_claude_cli", cli_stop_failed)
-    assert ED._background_stop(launch_id, cfg, cwd) == "stop-unconfirmed"
-
-
-def test_claude_background_stop_listing_blind_not_already_ended(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    cwd = os.path.realpath(_repo(tmp_path))
-
-    def cli_blind(args, config_dir, cwd=None, timeout=30):
-        if args[:1] == ["agents"]:
-            return 1, "", "agents failed"
-        return 0, "", ""
-
-    monkeypatch.setattr(ED, "_claude_cli", cli_blind)
-    assert ED._background_stop(launch_id, cfg, cwd) == "stop-unconfirmed"
-
-
-def test_claude_background_agents_unreadable_refused(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-agents-blind")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    _write_bg_transcript(cfg, session_id, [
-        {"type": "user", "message": {"content": "working"}},
-    ])
-    agents_calls = {"count": 0}
-
-    def cli_blind_after_launch(args, config_dir, cwd=None, timeout=30):
-        harness["cli_calls"].append(list(args))
-        if args[:1] == ["agents"]:
-            agents_calls["count"] += 1
-            if agents_calls["count"] > 2:
-                return 1, "", "agents failed"
-            return 0, json.dumps(harness["agents_rows"]), ""
-        if args[:1] == ["stop"]:
-            stopped = args[1]
-            harness["agents_rows"] = [
-                dict(r, state="stopped", status=None, pid=None)
-                if r.get("id") == stopped else r
-                for r in harness["agents_rows"]
-            ]
-            return 0, "", ""
-        return 0, "", ""
-
-    monkeypatch.setattr(ED, "_claude_cli", cli_blind_after_launch)
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=10)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["refusal"] == "background-agents-unreadable"
-
-
-def test_spawn_attempt_resume_not_resumable_when_no_suspension(tmp_path):
-    run_dir = str(tmp_path / "bg-not-resumable")
-    os.makedirs(run_dir, exist_ok=True)
-    state = {
-        "opened": {"argv": [], "timeout": 30, "retryTimeout": 30},
-        "attempts": {1: {"childPid": None, "enginePgid": None, "ended": None}},
-    }
-    ok, detail = ED._spawn_attempt(run_dir, state, 1, resume=True)
-    assert ok is False
-    assert detail == "attempt-not-resumable"
-
-
-def test_supervise_resumes_suspended_background_attempt(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-supervise-resume")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    ED._journal_append(run_dir, {
-        "kind": "background-launched", "attempt": 1,
-        "launchId": launch_id, "bgSessionId": session_id, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-suspended", "attempt": 1,
-        "launchId": launch_id, "bgSessionId": session_id,
-        "transcriptRowCursor": 0, "transcriptFileSize": 0,
-        "wallSeconds": 1.0, "at": time.time(),
-    })
-    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=1))
-
-    class _FakeProc:
-        pid = os.getpid()
-        returncode = 0
-
-        def poll(self):
-            return 0
-
-        def wait(self, timeout=None):
-            return 0
-
-    def fake_popen(argv, **kwargs):
-        if argv and "run-child" in argv:
-            run_dir_arg = argv[argv.index("--run-dir") + 1]
-
-            def run_child_when_ready():
-                for _ in range(100):
-                    records, _ = ED._journal_read(run_dir_arg)
-                    state = ED._journal_state(records)
-                    slot = (state.get("attempts") or {}).get(1) or {}
-                    if slot.get("childPid") == os.getpid():
-                        ED._run_child_main(run_dir_arg)
-                        return
-                    time.sleep(0.01)
-
-            import threading
-            threading.Thread(target=run_child_when_ready, daemon=True).start()
-        else:
-            harness["launch_calls"].append(list(argv))
-            stdout_fd = kwargs.get("stdout")
-            if isinstance(stdout_fd, int):
-                os.write(stdout_fd, harness["ack_stdout"].encode("utf-8"))
-                os.close(stdout_fd)
-            stderr_fd = kwargs.get("stderr")
-            if isinstance(stderr_fd, int):
-                os.close(stderr_fd)
-        return _FakeProc()
-
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    res = ED._supervise(
-        run_dir, run_kind=ED.RUN_KIND_REVIEW, deadline=time.monotonic() + 60,
-    )
-    assert res["terminal"] is True
-    assert res["ok"] is True
-    claude_launches = [
-        call for call in harness["launch_calls"]
-        if any("claude" in str(arg) for arg in call)
-    ]
-    assert claude_launches == []
-    records, _ = ED._journal_read(run_dir)
-    ended = next(
-        r for r in records
-        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
-    )
-    assert ended["transcriptResult"] == "materialized"
-
-
-# axis: background budget exhaustion ends the attempt with a timeout record and never resumes.
-def test_supervise_bg_budget_exhaustion_ends_attempt_without_resume(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-budget-exhaust-supervise")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    cap = opened["timeout"]
-    ED._journal_append(run_dir, {
-        "kind": "attempt-started", "attempt": 1,
-        "childPid": None, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "background-launched", "attempt": 1,
-        "launchId": launch_id, "bgSessionId": session_id, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-suspended", "attempt": 1,
-        "launchId": launch_id, "bgSessionId": session_id,
-        "wallSeconds": cap, "transcriptRowCursor": 0,
-        "at": time.time(),
-    })
-    spawn_calls = []
-    real_spawn = ED._spawn_attempt
-
-    def counting_spawn(run_dir_real, state, attempt, **kwargs):
-        spawn_calls.append((attempt, kwargs.get("resume")))
-        return real_spawn(run_dir_real, state, attempt, **kwargs)
-
-    monkeypatch.setattr(ED, "_spawn_attempt", counting_spawn)
-    ED._supervise(
-        run_dir, run_kind=ED.RUN_KIND_REVIEW, deadline=time.monotonic() + 5,
-    )
-    records, _ = ED._journal_read(run_dir)
-    ended = [
-        r for r in records
-        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
-    ]
-    assert len(ended) == 1
-    ended = ended[0]
-    assert ended["timedOut"] is True
-    assert ended["exit"] is None
-    assert ended["wallSeconds"] == cap
-    assert ended["capSeconds"] == cap
-    assert ended["launchId"] == launch_id
-    assert ended["bgSessionId"] == session_id
-    assert isinstance(ended["timeoutAt"], (int, float))
-    assert ended["timeoutAt"] <= ended["at"]
-    assert not any(resume for _att, resume in spawn_calls if resume)
-    assert any(call[:1] == ["stop"] for call in harness["cli_calls"])
-
-
-# axis: pre-retry stop-unconfirmed refuses terminal-unrunnable without spawning the retry.
-def test_supervise_pre_retry_refuses_on_background_stop_unconfirmed(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-pre-retry-stop-unconfirmed")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    ED._journal_append(run_dir, {
-        "kind": "attempt-started", "attempt": 1,
-        "childPid": 4242, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "background-launched", "attempt": 1,
-        "launchId": launch_id, "bgSessionId": session_id, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
-        "exit": 1, "timedOut": False, "signal": None,
-        "refusal": None, "launchId": launch_id, "at": time.time(),
-    })
-
-    def cli_stop_unconfirmed(args, config_dir, cwd=None, timeout=30):
-        if args[:1] == ["agents"]:
-            return 0, json.dumps(harness["agents_rows"]), ""
-        return 1, "", "stop failed"
-
-    monkeypatch.setattr(ED, "_claude_cli", cli_stop_unconfirmed)
-    spawn_calls = []
-
-    def counting_spawn(run_dir_real, state, attempt, **kwargs):
-        spawn_calls.append(attempt)
-        return False, "spawn-blocked-for-test"
-
-    monkeypatch.setattr(ED, "_spawn_attempt", counting_spawn)
-    res = ED._supervise(
-        run_dir, run_kind=ED.RUN_KIND_REVIEW, deadline=time.monotonic() + 5,
-    )
-    assert res["terminal"] is True
-    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
-    assert res["detail"] == "background-stop-unconfirmed"
-    assert 2 not in spawn_calls
-
-
-def test_dispatch_abandon_stops_live_background_session(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-abandon-stop")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    ED._journal_append(run_dir, {
-        "kind": "attempt-started", "attempt": 1,
-        "childPid": 4242, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "background-launched", "attempt": 1,
-        "launchId": launch_id, "bgSessionId": session_id, "at": time.time(),
-    })
-    res = ED.dispatch_abandon(run_dir)
-    assert res["detail"] == "run-abandoned"
-    assert any(call[:1] == ["stop"] for call in harness["cli_calls"])
-    records, _ = ED._journal_read(run_dir)
-    assert any(r.get("kind") == "attempt-bg-stop" for r in records)
-
-
-def test_fold_run_surfaces_background_stop_unconfirmed(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-stop-unconfirmed-fold")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    ED._journal_append(run_dir, {
-        "kind": "attempt-started", "attempt": 1,
-        "childPid": 4242, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
-        "exit": 1, "timedOut": False, "signal": None,
-        "refusal": "background-launch-failed",
-        "launchId": launch_id, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "background-launched", "attempt": 1,
-        "launchId": launch_id, "bgSessionId": session_id, "at": time.time(),
-    })
-
-    def cli_blind(args, config_dir, cwd=None, timeout=30):
-        if args[:1] == ["agents"]:
-            return 1, "", "agents failed"
-        return 0, "", ""
-
-    monkeypatch.setattr(ED, "_claude_cli", cli_blind)
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    result = {
-        "ok": False, "terminal": True,
-        "reason": ED.dispatch_outcome.REASON_UNRUNNABLE,
-        "detail": "test-fold", "attempts": 1, "forfeited": False,
-    }
-    folded = ED._fold_run(run_dir, state, result)
-    assert folded.get("backgroundStopUnconfirmed") is True
-
-
-def test_claude_background_launched_append_failure_stops_session(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-launched-append-fail")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    real_append = ED._journal_append
-
-    def append_fail(run_dir_real, record):
-        if record.get("kind") == "background-launched":
-            return False
-        return real_append(run_dir_real, record)
-
-    monkeypatch.setattr(ED, "_journal_append", append_fail)
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["refusal"] == "journal-append-failed"
-    assert any(call[:1] == ["stop"] for call in harness["cli_calls"])
-
-
-def test_claude_background_resume_ignores_stale_turn_end_signal(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-stale-turn")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    partial_rows = [
-        {"type": "user", "message": {"content": "first"}},
-        {"type": "user", "message": {"content": "second"}},
-    ]
-    _write_bg_transcript(cfg, session_id, partial_rows)
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=1)
-    suspended = _bg_attempt_suspended(run_dir)
-    assert suspended["transcriptRowCursor"] == 2
-    stale_only = [{"type": "user", "toolEndsTurn": True}] + partial_rows
-    _write_bg_transcript(cfg, session_id, stale_only)
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=10)
-    records_mid, _ = ED._journal_read(run_dir)
-    assert any(r.get("kind") == "attempt-suspended" for r in records_mid)
-    assert not any(r.get("kind") == "attempt-ended" for r in records_mid)
-    fresh_rows = stale_only + _bg_transcript_rows(
-        _wrap_native_review_result(_native_review_branch("verdicts")),
-        tool_calls=1,
-    )
-    _write_bg_transcript(cfg, session_id, fresh_rows)
-    _run_bg_engine_files(tmp_path, run_dir, opened, timeout=60)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["transcriptResult"] == "materialized"
-    assert ended["transcriptToolCalls"] == 1
-
-
-def test_claude_background_launched_recorded_before_poll(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-launched")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=1))
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    records, _ = ED._journal_read(run_dir)
-    launched = [r for r in records if r.get("kind") == "background-launched"]
-    assert len(launched) == 2
-    assert launched[0]["launchId"] == launch_id
-    assert "bgSessionId" not in launched[0]
-    assert launched[1]["launchId"] == launch_id
-    assert launched[1]["bgSessionId"] == session_id
-
-
-def test_claude_background_engagement_from_transcript_not_null(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-engagement")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=3))
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    grade = ED._grade_review_attempt(run_dir, state, 1)
-    assert isinstance(grade["engagement"]["toolCalls"], int)
-    assert grade["engagement"]["toolCalls"] == 3
-    assert grade["engagement"]["source"] == "claude-transcript"
-    assert grade["engagement"]["telemetry"] != "none"
-
-
-def test_claude_background_listing_skips_interactive_row_without_id(tmp_path, monkeypatch):
-    interactive = {"sessionId": "interactive", "pid": 1}
-    cfg2, launch_id2, session_id2, _harness = _bg_harness(
-        tmp_path, monkeypatch,
-        agents_rows=[interactive, _bg_agent_row(_bg_launch_id(), _bg_session_id())],
-    )
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-interactive-skip")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg2,
-    )
-    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    _write_bg_transcript(cfg2, session_id2, _bg_transcript_rows(structured))
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    ended = _bg_attempt_ended(run_dir)
-    assert ended["bgSessionId"] == session_id2
-
-
-def test_claude_print_mode_unchanged_by_background_flow(tmp_path, monkeypatch):
-    _ensure_claude_config_dir(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
-    res = ED.dispatch_review(
-        seat=_reviewer_claude_seat(),
-        prompt_path=_valid_prompt(tmp_path),
-        repo_root=repo_root,
-        run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-        expected_result_kind="verdicts",
-    )
-    assert res["ok"] is True
-    records, _ = ED._journal_read(res["runDir"])
-    ended = next(
-        r for r in records
-        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
-    assert ended["stdoutResult"] == "materialized"
-    assert "launchId" not in ended
-    assert "transcriptResult" not in ended
-
-
-# --- result completion producers (#1273 WO-B) ---
 
 _COMPLETION_KEYS = (
     ERC.FIELD_RESULT_COMPLETE_AT,
@@ -16711,20 +15987,6 @@ def test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal(
     _assert_completion_keys(ended, structured)
 
 
-def test_completion_producer_transcript_delivery_records_stamp(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "transcript-completion")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    structured = _wrap_native_review_result(_native_review_branch("verdicts"))
-    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=1))
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    ended = _bg_attempt_ended(run_dir)
-    _assert_completion_keys(ended, structured)
-
-
 def test_completion_producer_rewrite_keeps_first_digest(tmp_path, monkeypatch):
     """axis: edge 8 — first observation wins; a later rewrite must not replace the digest."""
     first = _native_write_result_json(report="first")
@@ -16781,39 +16043,6 @@ def test_completion_producer_timed_out_foreground_carries_deadline_stamp(tmp_pat
     assert ERC.FIELD_DEADLINE_EPOCH in ended
     assert ERC.FIELD_RESULT_COMPLETE_EPOCH in ended
     assert ended[ERC.FIELD_DEADLINE_EPOCH] == ended[ERC.FIELD_RESULT_COMPLETE_EPOCH]
-
-
-def test_supervise_bg_budget_exhaustion_carries_deadline_not_completion(tmp_path, monkeypatch):
-    cfg, launch_id, session_id, harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "bg-budget-deadline-stamp")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    cap = opened["timeout"]
-    ED._journal_append(run_dir, {
-        "kind": "attempt-started", "attempt": 1,
-        "childPid": None, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "background-launched", "attempt": 1,
-        "launchId": launch_id, "bgSessionId": session_id, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-suspended", "attempt": 1,
-        "launchId": launch_id, "bgSessionId": session_id,
-        "wallSeconds": cap, "transcriptRowCursor": 0,
-        "at": time.time(),
-    })
-    monkeypatch.setattr(ED, "_spawn_attempt", lambda *a, **k: (False, "blocked"))
-    ED._supervise(
-        run_dir, run_kind=ED.RUN_KIND_REVIEW, deadline=time.monotonic() + 5,
-    )
-    ended = _bg_attempt_ended(run_dir)
-    assert ERC.FIELD_DEADLINE_MONO in ended
-    assert ERC.FIELD_DEADLINE_EPOCH in ended
-    for key in _COMPLETION_KEYS:
-        assert key not in ended
 
 
 # --- admission completion window (#1273 WO-C) ---
@@ -16943,26 +16172,8 @@ def _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope):
     return run_dir, state
 
 
-def _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope):
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "review-transcript")
-    cfg, _launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
-    _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    with open(ED._native_result_path(run_dir, 1), "w", encoding="utf-8") as fh:
-        json.dump(envelope, fh, separators=(",", ":"))
-        fh.write("\n")
-    ended = dict(ended, transcriptResult="materialized", transcriptToolCalls=0)
-    _journal_test_attempt_ended(run_dir, 1, ended)
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    state["attempts"][1] = {"ended": ended}
-    return run_dir, state
-
-
 _WRITE_ADMISSION_DELIVERIES = ("argv", "prompt", "stdout")
-_REVIEW_ADMISSION_DELIVERIES = ("argv", "prompt", "stdout", "transcript")
+_REVIEW_ADMISSION_DELIVERIES = ("argv", "prompt", "stdout")
 
 
 @pytest.mark.parametrize("delivery", _WRITE_ADMISSION_DELIVERIES)
@@ -17028,10 +16239,8 @@ def test_review_admission_complete_before_deadline_admits(tmp_path, delivery, mo
         run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
     elif delivery == "prompt":
         run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
-    elif delivery == "stdout":
-        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
     else:
-        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
 
@@ -17047,10 +16256,8 @@ def test_review_admission_complete_after_deadline_forfeits(tmp_path, delivery, m
         run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
     elif delivery == "prompt":
         run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
-    elif delivery == "stdout":
-        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
     else:
-        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "result-completion-after-deadline"
@@ -17064,10 +16271,8 @@ def test_review_admission_no_completion_stamp_forfeits(tmp_path, delivery, monke
         run_dir, state = _review_admission_codex_argv(tmp_path, ended, envelope)
     elif delivery == "prompt":
         run_dir, state = _review_admission_cursor_prompt(tmp_path, ended, envelope)
-    elif delivery == "stdout":
-        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
     else:
-        run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
+        run_dir, state = _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "result-completion-unrecorded"
@@ -17214,27 +16419,6 @@ def test_completion_producer_natural_exit_after_cap_forfeits(tmp_path, monkeypat
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "result-completion-after-deadline"
-
-
-def test_completion_producer_transcript_scrubbed_digest_admits(tmp_path, monkeypatch):
-    """axis: transcript producer stamps scrubbed digest matching on-disk materialization."""
-    cfg, _launch_id, session_id, _harness = _bg_harness(tmp_path, monkeypatch)
-    repo_root = _repo(tmp_path)
-    run_dir = str(tmp_path / "transcript-scrub-stamp")
-    opened = _plant_claude_background_journal(
-        tmp_path, run_dir, repo_root, _reviewer_claude_seat(), config_dir=cfg,
-    )
-    structured = _wrap_native_review_result(_native_review_branch("findings"))
-    branch = structured["result"]
-    branch["findings"][0]["body"] = "log shows Bearer " + ("a" * 32)
-    _write_bg_transcript(cfg, session_id, _bg_transcript_rows(structured, tool_calls=1))
-    _run_bg_engine_files(tmp_path, run_dir, opened)
-    ended = _bg_attempt_ended(run_dir)
-    _assert_completion_keys(ended, structured)
-    records, _ = ED._journal_read(run_dir)
-    state = ED._journal_state(records)
-    grade = ED._grade_review_attempt(run_dir, state, 1)
-    assert grade.get("ok") is True
 
 
 # --- incremental stdout completion e2e (#1273 WO-B) ---
@@ -18333,36 +17517,6 @@ def test_review_admission_timed_out_complete_before_deadline_admits(
         run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
-
-
-def test_claude_cli_spawns_claude_cli_argv(monkeypatch):
-    captured = {}
-
-    def fake_run(cmd, **kwargs):
-        captured["cmd"] = cmd
-        class Out:
-            returncode = 0
-            stdout = "[]"
-            stderr = ""
-        return Out()
-
-    monkeypatch.setattr(ED.subprocess, "run", fake_run)
-    rc, stdout, stderr = ED._claude_cli(["agents", "--json"], "/cfg", cwd="/wt")
-    assert rc == 0
-    assert captured["cmd"] == ED.engine_adapter.claude_cli_argv(["agents", "--json"])
-
-
-def test_claude_cli_invalid_args_never_spawns(monkeypatch):
-    called = []
-
-    def fake_run(cmd, **kwargs):
-        called.append(cmd)
-
-    monkeypatch.setattr(ED.subprocess, "run", fake_run)
-    rc, stdout, stderr = ED._claude_cli(["stop", ""], "/cfg", cwd="/wt")
-    assert rc == 127
-    assert stderr == "claude-cli-argv-invalid"
-    assert called == []
 
 
 def test_review_terminal_forfeit_surfaces_dropped_cause():

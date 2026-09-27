@@ -10,6 +10,7 @@ import inspect
 import json
 import os
 
+import claude_modes
 import dispatch_allowlist
 import model_registry
 import resolved_inputs_vocab
@@ -73,7 +74,7 @@ ENTRY_REFUSAL_REASONS = frozenset({
     "allowlist-raised",
     "allowlist-refused",
     "claude-mode-unknown",
-    "claude-mode-unsupported",
+    claude_modes.ENTRY_REASON_CLAUDE_MODE_RETIRED,
     "effort-invalid",
     "effort-key-absent",
     "effort-token-conflict",

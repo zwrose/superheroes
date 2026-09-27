@@ -441,7 +441,6 @@ def test_result_delivery_print_default_identity(vendor, expected):
 
 def test_claude_modes_reexported_from_adapter():
     assert ERC.MODE_PRINT == EA.MODE_PRINT
-    assert ERC.MODE_BACKGROUND == EA.MODE_BACKGROUND
     assert ERC.CLAUDE_MODES == EA.CLAUDE_MODES
 
 
@@ -450,7 +449,6 @@ def test_result_delivery_members_closed():
         ERC.RESULT_DELIVERY_ARGV,
         ERC.RESULT_DELIVERY_PROMPT,
         ERC.RESULT_DELIVERY_STDOUT,
-        ERC.RESULT_DELIVERY_TRANSCRIPT,
     })
 
 
@@ -467,40 +465,6 @@ def test_normalize_claude_mode_treats_omitted_as_print():
     assert ERC.normalize_claude_mode(ERC.MODE_PRINT) == ERC.MODE_PRINT
 
 
-def test_result_delivery_claude_background_transcript():
-    assert ERC.result_delivery("claude", ERC.MODE_BACKGROUND) == ERC.RESULT_DELIVERY_TRANSCRIPT
-
-
-def _adapter_non_print_capability_pairs():
-    pairs = set()
-    for mode, engines in EA._NON_PRINT_CLAUDE_MODE_ENGINES.items():
-        for engine in engines:
-            pairs.add((engine, mode))
-    return pairs
-
-
-def test_non_print_claude_mode_capability_delivery_agree():
-    # axis: adapter capability table and derived delivery map stay in bidirectional lockstep
-    adapter_pairs = _adapter_non_print_capability_pairs()
-    delivery_pairs = set(ERC._RESULT_DELIVERY_BY_ENGINE_MODE)
-    missing_delivery = adapter_pairs - delivery_pairs
-    assert not missing_delivery, (
-        "adapter declares non-print (engine, mode) pairs with no delivery: %r"
-        % sorted(missing_delivery)
-    )
-    ghost_delivery = delivery_pairs - adapter_pairs
-    assert not ghost_delivery, (
-        "derived delivery map has (engine, mode) pairs adapter does not declare: %r"
-        % sorted(ghost_delivery)
-    )
-
-
-@pytest.mark.parametrize("vendor", ["codex", "cursor"])
-def test_result_delivery_background_refuses_non_claude(vendor):
-    with pytest.raises(ValueError, match="has no delivery for mode"):
-        ERC.result_delivery(vendor, ERC.MODE_BACKGROUND)
-
-
 def test_result_delivery_undeclared_mode_refuses():
     with pytest.raises(ValueError, match="unknown claude mode"):
         ERC.result_delivery("claude", "bogus")
@@ -509,16 +473,6 @@ def test_result_delivery_undeclared_mode_refuses():
 def test_result_delivery_unknown_engine_before_bad_mode():
     with pytest.raises(ERC.UnknownEngineError):
         ERC.result_delivery("bogus", "bogus")
-
-
-@pytest.mark.parametrize("mode,expected", [
-    (None, True),
-    (ERC.MODE_PRINT, True),
-    (ERC.MODE_BACKGROUND, True),
-    ("bogus", False),
-])
-def test_claude_mode_ok(mode, expected):
-    assert ERC.claude_mode_ok(mode) is expected
 
 
 def test_result_delivery_unknown_engine_refuses():

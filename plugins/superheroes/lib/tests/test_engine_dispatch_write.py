@@ -3398,13 +3398,16 @@ def _plant_claude_write_journal_with_claude_mode(
     prompt_path = _prompt(tmp_path)
     cwd = os.path.realpath(wt)
     opts = {"cwd": cwd}
-    if claude_mode is not None:
-        opts["claudeMode"] = claude_mode
+    argv_mode = claude_mode
+    if argv_mode is not None and argv_mode != "print":
+        argv_mode = "print"
+    if argv_mode is not None:
+        opts["claudeMode"] = argv_mode
     built = EA.build_argv_result(seat, "build", opts)
     assert built["reason"] is None, built
     argv = built["argv"]
     argv, native_err, native_schema_path = ED._open_native_channel_argv(
-        run_dir, "claude", list(argv), ED.RUN_KIND_WRITE, claude_mode=claude_mode,
+        run_dir, "claude", list(argv), ED.RUN_KIND_WRITE, claude_mode=argv_mode,
     )
     assert native_err is None, native_err
     with open(prompt_path, encoding="utf-8") as fh:
@@ -3443,54 +3446,103 @@ def test_claude_mode_unknown_refused_before_open_write(tmp_path):
     assert len(fake.calls) == 0
 
 
-def test_claude_mode_unsupported_codex_background_refused_write(tmp_path):
-    fake = FakeRunner([])
+def test_dispatch_write_claude_mode_background_refuses_retired_before_spawn(tmp_path):
+    # axis: write entry retired branch refuses background before spawn
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
     res = _dispatch_write(
-        tmp_path, fake,
-        seat=_codex_seat(),
-        claude_mode="background",
+        tmp_path, fake, claude_mode="background", seat=_implementer_claude_seat(),
     )
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == "claude-mode-unsupported:codex"
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
     assert res["attempts"] == 0
+    assert res["terminal"] is True
     assert len(fake.calls) == 0
 
 
-def test_claude_mode_background_write_refused(tmp_path, monkeypatch):
-    _ensure_claude_config_dir(tmp_path, monkeypatch)
+def test_main_dispatch_write_claude_mode_background_refuses_retired(
+    tmp_path, monkeypatch, capsys,
+):
+    # axis: CLI dispatch-write --claude-mode background refuses at entry
+    recorder = []
+
+    def _recorder(*args, **kwargs):
+        recorder.append((args, kwargs))
+        raise AssertionError("spawn must not run")
+
+    monkeypatch.setattr(ED, "_run_engine", _recorder)
     wt, _main = _linked_worktree(tmp_path)
-    seat = _implementer_claude_seat()
-    fake = FakeRunner([])
-    res = _dispatch_write(
-        tmp_path, fake,
-        cwd=wt,
-        seat=seat,
-        claude_mode="background",
-    )
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == ED.MODE_REFUSAL_CLAUDE_MODE_BACKGROUND_WRITE
+    run_dir = str(tmp_path / "write-bg-cli")
+    seat = json.dumps(_implementer_claude_seat())
+    prompt = _prompt(tmp_path)
+    rc = ED.main([
+        "dispatch-write",
+        "--seat", seat,
+        "--prompt-path", prompt,
+        "--cwd", wt,
+        "--run-dir", run_dir,
+        "--claude-mode", "background",
+    ])
+    assert rc == 1
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
     assert res["attempts"] == 0
-    assert len(fake.calls) == 0
+    assert recorder == []
 
 
-def test_claude_mode_background_write_continuation_refused(tmp_path, monkeypatch):
+@pytest.mark.parametrize("claude_mode", [None, "print"])
+def test_dispatch_write_continuation_of_background_journal_refuses_retired(
+    tmp_path, monkeypatch, claude_mode,
+):
+    # axis: write continuation refuses journal claudeMode background
     _ensure_claude_config_dir(tmp_path, monkeypatch)
     wt, _main = _linked_worktree(tmp_path)
-    run_dir = str(tmp_path / "bg-continue")
+    run_dir = str(tmp_path / "write-bg-continuation")
     cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
     seat = _implementer_claude_seat()
-    _plant_claude_write_journal_with_claude_mode(
+    planted = _plant_claude_write_journal_with_claude_mode(
         tmp_path, run_dir, wt, seat, config_dir=cfg, claude_mode="background",
     )
-    fake = FakeRunner([])
+    with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+        fh.write(planted["fedPrompt"])
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    kwargs = {
+        "cwd": wt,
+        "run_dir": run_dir,
+        "seat": seat,
+        "order_id": "claude-mode-test",
+    }
+    if claude_mode is not None:
+        kwargs["claude_mode"] = claude_mode
+    res = _dispatch_write(tmp_path, fake, **kwargs)
+    assert res["detail"] == "run-dir-claude-mode-retired"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_write_continuation_of_unknown_mode_journal_refuses_unknown(
+    tmp_path, monkeypatch,
+):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-bogus-continuation")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _implementer_claude_seat()
+    planted = _plant_claude_write_journal_with_claude_mode(
+        tmp_path, run_dir, wt, seat, config_dir=cfg, claude_mode="bogus",
+    )
+    with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+        fh.write(planted["fedPrompt"])
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
     res = _dispatch_write(
-        tmp_path, fake,
+        tmp_path,
+        fake,
         cwd=wt,
         run_dir=run_dir,
         seat=seat,
         order_id="claude-mode-test",
     )
-    assert res["detail"] == ED.MODE_REFUSAL_CLAUDE_MODE_BACKGROUND_WRITE
+    assert res["detail"] == ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_UNKNOWN
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
 
@@ -3529,38 +3581,9 @@ def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
     assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
 
 
-def test_background_journal_refuses_claude_mode_background_write_before_run_dir_mismatch(
-    tmp_path, monkeypatch,
-):
-    _ensure_claude_config_dir(tmp_path, monkeypatch)
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir = str(tmp_path / "mode-mismatch")
-    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
-    seat = _implementer_claude_seat()
-    planted = _plant_claude_write_journal_with_claude_mode(
-        tmp_path, run_dir, wt, seat, config_dir=cfg, claude_mode="background",
-    )
-    fake = FakeRunner([])
-    res = _dispatch_write(
-        tmp_path, fake,
-        cwd=wt,
-        run_dir=run_dir,
-        seat=seat,
-        order_id="claude-mode-test",
-        claude_mode="print",
-    )
-    assert res["detail"] == ED.MODE_REFUSAL_CLAUDE_MODE_BACKGROUND_WRITE
-    assert res["detail"] != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-    records, _ = ED._journal_read(run_dir)
-    assert len([r for r in records if r.get("kind") == "run-opened"]) == 1
-    assert records[0]["argv"] == planted["argv"]
-
-
 def test_claude_mode_literal_census_pins_write_path_mismatch_gate_reachability():
     # axis: declared claude mode literals pin when write-path run-dir-claude-mode-mismatch becomes reachable
-    assert ERC.CLAUDE_MODES == ("print", "background"), (
-        "a new claude mode makes the write-path run-dir-claude-mode-mismatch gate reachable; "
-        "the gate now needs a real test"
+    assert ERC.CLAUDE_MODES == ("print",), (
+        "a new dispatchable claude mode makes the write-path run-dir-claude-mode-mismatch "
+        "gate reachable; the gate now needs a real test"
     )
