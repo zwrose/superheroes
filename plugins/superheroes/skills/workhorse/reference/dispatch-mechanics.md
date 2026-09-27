@@ -301,8 +301,7 @@ All three dispatchable engines — **codex**, **cursor**, and **claude** — use
 quoted in a fenced block) — under the argv `cursor-agent --model <tok> -p --trust -f --sandbox
 enabled --output-format stream-json` for both roles (`--mode plan` is gone: plan mode cannot write
 the file). Builder lanes are not dispatched through this runner — the launcher starts them as
-`claude -p` sessions whose command comes from `engine_adapter.claude_builder_argv`; background mode
-is for review seats only. **Claude** receives `--json-schema <declared schema JSON>` on argv at
+`claude -p` sessions whose command comes from `engine_adapter.claude_builder_argv`. **Claude** receives `--json-schema <declared schema JSON>` on argv at
 run-open and the prompt on stdin under `claude -p --model <tok> --effort <effort> --output-format stream-json
 --verbose`, plus `--restricted` for review or `--permission-mode acceptEdits --restricted`
 for write; a claude write dispatch is edit-only inside the run cwd because no OS sandbox is
@@ -311,25 +310,15 @@ The runner materializes the `structured_output` from the last `{"type":"result"}
 on stdout to `<run-dir>/native-result-<n>.json` at attempt end. `attempt-ended.stdoutResult`
 records `materialized`, `absent`, `error`, or `occupied` — only `materialized` is loaded;
 `occupied` forfeits `native-result-path-occupied`; `absent` and `error` forfeit
-`native-result-missing`. **Print mode** is the default: omit `--claude-mode` or pass
-`--claude-mode print`. **Background mode** is selected with `--claude-mode background` on
-`dispatch-review` only — a write dispatch in background mode refuses before anything spawns
-(`claude-mode-background-write`, `attempts: 0`), because a detached session outlives the
-process whose liveness the worktree lease is keyed on, so the lease could be reclaimed while
-the session may still be editing. A run's mode is fixed when the run opens; a continuation
-that supplies a disagreeing `--claude-mode` refuses `run-dir-claude-mode-mismatch` with
-`attempts: 0`. In background mode the launch child acknowledges and exits; the runner resolves
-the session through the per-account agent listing, polls the session transcript until the turn
-ends, and materializes the last structured-output payload to the same
-`<run-dir>/native-result-<n>.json` path print mode uses, where the same admission gate loads
-it — a launch acknowledgement alone is not a result. A background session does not end when
-its turn does; it stays live until stopped, so every terminal path stops it and confirms the
-stop (`bgStop` records `stopped`, `already-ended`, or `stop-unconfirmed` — an unconfirmed stop
-is recorded, not assumed). When a slice expires before the turn ends, the attempt is suspended
-with the launch and session ids and a transcript cursor; a continuation re-attaches to that
-session rather than launching a second one. Background telemetry comes from the session
-transcript's tool calls (`attempt-ended.transcriptToolCalls`), not from stdout — the background
-argv carries no event stream. At run-open the shell resolves `CLAUDE_CONFIG_DIR` through
+`native-result-missing`. **Print mode** is the only claude dispatch mode: omit `--claude-mode` or
+pass `--claude-mode print`. `--claude-mode` accepts `print`; it also still accepts the retired
+value `background` only so that value reaches a named refusal — on `dispatch-review` and
+`dispatch-write` it refuses before anything spawns with `entryReason: claude-mode-retired`,
+`detail: claude-mode-retired:background`, `attempts: 0`; it never falls back to print. A run's
+mode is fixed when the run opens; a continuation that supplies a disagreeing `--claude-mode`
+refuses `run-dir-claude-mode-mismatch` with `attempts: 0`, and a continuation of a run opened in
+background mode refuses `run-dir-claude-mode-retired` with `attempts: 0` — nothing re-opens or
+spawns. At run-open the shell resolves `CLAUDE_CONFIG_DIR` through
 `lib/config_dir.resolve(env, cwd)`, records it as `run-opened.configDir`, and refuses at open with
 `config-dir-unusable:<why>` when it is not an existing directory; at spawn the same value is injected
 with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>` (`engine-started.env` records both pins). Telemetry
@@ -367,9 +356,7 @@ so stdout is read once for the result and never re-read or re-split; if the fina
 the file shrinks below what was already read, nothing is materialized and the dropped result is
 reported as `stdout-result-dropped` with its cause (`final-read-failed`, `shrunk-below-read`,
 `bytes-changed`); just before a held result is saved, the bytes it was parsed from are re-checked
-by digest and a mismatch drops it the same way; it still never repairs a malformed file. **Claude
-background mode** never reads stdout
-for a result — the transcript path above. Claude adds `config-dir-unusable:<why>` at run-open and
+by digest and a mismatch drops it the same way; it still never repairs a malformed file. Claude adds `config-dir-unusable:<why>` at run-open and
 the adapter refusals `unregistered-engine-model`,
 `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
 
@@ -380,8 +367,7 @@ stamp the first moment the result file parses as complete JSON; **claude print**
 poll loop first observes a complete `{"type":"result"}` line on stdout — each poll advances an
 incremental read, with one final drain after the process is reaped — and later materialization to
 the result path is not the completion time; a final line with no trailing newline is complete only
-at end of file, so it is stamped at that final drain; **claude background** stamps the supervisor's record of the result's arrival
-in the transcript rows; the in-process seam stamps its own capture. Every attempt-ended record also
+at end of file, so it is stamped at that final drain; the in-process seam stamps its own capture. Every attempt-ended record also
 carries `deadlineMono` and `deadlineEpoch` (the wall cap on that clock, stamped unconditionally at
 attempt end; `timeoutAt` remains for display only on timed-out attempts). Admission compares only
 those stamped fields in one loader every native
