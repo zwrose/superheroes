@@ -826,6 +826,29 @@ def test_workhorse_charter_names_check_runner_in_both_enumerations():
         "provenance row recording the engine + model it ran on." % prov[0])
 
 
+# The order-linter seat reads an order it must never carry out, so it holds no write, edit, or
+# shell path.
+ORDER_LINTER_ALLOWED_TOOLS = {"Read", "Grep", "Glob"}
+ORDER_LINTER_FORBIDDEN_TOOLS = ("Write", "Edit", "Bash", "NotebookEdit")
+
+
+def test_order_linter_grant_is_read_only():
+    """Axis: the order-linter's parsed tools: grant must be a subset of ORDER_LINTER_ALLOWED_TOOLS
+    (Read, Grep, Glob). The allowlist assertion is the guard; the forbidden-name loop above it exists
+    only to fail with the named order-linter-grant-writable token for the tools the seat must never
+    hold."""
+    tools = _parse_tools(
+        _read_required(os.path.join(PLUGIN, "agents", "order-linter.md"),
+                       "the order-linter semantic seat"),
+        "order-linter")
+    assert "Read" in tools
+    for name in ORDER_LINTER_FORBIDDEN_TOOLS:
+        assert name not in tools, "order-linter-grant-writable: `%s`" % name
+    extra = sorted(set(tools) - ORDER_LINTER_ALLOWED_TOOLS)
+    assert not extra, (
+        "order-linter-grant-outside-allowlist: %s" % extra)
+
+
 def _dispatch_mechanics_tree_inspection_bullet():
     """The dispatch-mechanics reference's tree-inspection bullet (FIX-2 item 8).
 

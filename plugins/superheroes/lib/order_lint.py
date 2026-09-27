@@ -1,5 +1,5 @@
-"""Deterministic half of order lint (#1339); semantic half is a Haiku seat
-(prompt: ``rubric/orders/order-lint-semantic.md``).
+"""Deterministic half of order lint (#1339); the semantic half is the read-only
+``agents/order-linter.md`` seat (prompt: ``rubric/orders/order-lint-semantic.md``).
 
 Reads the authored order text only — never the runner-augmented prompt. Every verbatim
 copy of the shipped ``agents/implementer.md`` body (frontmatter stripped, read from this
