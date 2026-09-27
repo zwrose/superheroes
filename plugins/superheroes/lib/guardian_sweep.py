@@ -41,6 +41,10 @@ _DEFAULT_VERIFY_BUDGET_SECONDS = 300
 # (first-seed lens count × this).
 _DEFAULT_FIRST_BASELINE_VALIDATE_MAX = 10
 _VERIFY_STDOUT_CAP = 8 * 1024
+VERIFY_BASE_TOKEN = store_core.VERIFY_BASE_TOKEN
+VERIFY_BASE_EQUALS_HEAD_NOTE = store_core.VERIFY_BASE_EQUALS_HEAD_NOTE
+VERIFY_DIFF_SCOPED_NOTE = store_core.VERIFY_DIFF_SCOPED_NOTE
+COVERAGE_NO_LENS_TOKEN = "coverage-entry-no-lens"
 # Aggregate budget across all filed-issue `gh issue view` lookups in one collect.
 # Per-call timeout is capped so one hung call cannot consume the whole budget alone.
 _ISSUE_RESOLVE_BUDGET_SECONDS = 30.0
@@ -270,6 +274,108 @@ def _bound_stdout(text):
     return text[-_VERIFY_STDOUT_CAP:]
 
 
+def _pin_name_to_commit(cwd, name):
+    """Pin a branch name to a full commit id (remote-tracking ref first, then local)."""
+    for candidate in ("refs/remotes/origin/%s" % name, name):
+        out = store_core.run_git(
+            cwd, "rev-parse", "--verify", "--quiet", "%s^{commit}" % candidate)
+        if out is None:
+            continue
+        pin = out.strip().lower()
+        if store_core.VERIFY_BASE_PIN_RE.fullmatch(pin):
+            return pin
+    return None
+
+
+def _bind_verify_base_ref(cwd):
+    """Return (pinned_commit, None) or (None, reason) for verify-command binding."""
+    name = store_core.resolve_implicit_pr_base(cwd)
+    if not name:
+        return None, "no branch gh-merge-base and origin/HEAD does not resolve"
+    pin = _pin_name_to_commit(cwd, name)
+    if pin is None:
+        return None, "%s does not resolve to a commit" % name
+    return pin, None
+
+
+def _pinned_base_equals_head(cwd, pin):
+    """True when the bound base tip is HEAD (commits only — see worktree helper)."""
+    if not isinstance(pin, str) or not pin.strip():
+        return False
+    head = store_core.run_git(cwd, "rev-parse", "HEAD")
+    if head is None:
+        return False
+    head = head.strip().lower()
+    if pin.strip().lower() == head:
+        return True
+    merge = store_core.run_git(cwd, "merge-base", pin, "HEAD")
+    if merge is None:
+        return False
+    return merge.strip().lower() == head
+
+
+def _worktree_paths_vs_head(cwd):
+    """Repo-relative paths changed in the working tree vs HEAD (untracked included).
+
+    Matches ``verify_touched_tests.changed_paths`` when the merge-base with the bound
+    base is HEAD: fix-round edits are uncommitted and must still diff-scope verify vitals.
+
+    Returns ``None`` when git did not answer (``GIT_UNAVAILABLE`` or other non-``GIT_OK``
+    status) so callers fail closed instead of treating an unknown as a clean tree.
+    """
+    paths = set()
+    diff = store_core.run_git_result(cwd, "diff", "--name-only", "-z", "HEAD")
+    if diff.status != store_core.GIT_OK:
+        return None
+    if diff.out:
+        paths |= {p for p in diff.out.split("\0") if p}
+    untracked = store_core.run_git_result(
+        cwd, "ls-files", "--others", "--exclude-standard", "-z")
+    if untracked.status != store_core.GIT_OK:
+        return None
+    if untracked.out:
+        paths |= {p for p in untracked.out.split("\0") if p}
+    return sorted(paths)
+
+
+def _verify_diff_scoped_at_head(cwd, pin):
+    """True when the bound base is HEAD but the working tree still scopes touched tests."""
+    if not _pinned_base_equals_head(cwd, pin):
+        return False
+    paths = _worktree_paths_vs_head(cwd)
+    if paths is None:
+        return True
+    return bool(paths)
+
+
+def _verify_base_equals_head_extra(stdout):
+    """Extra verify-command fields when the bound base equals HEAD.
+
+    Diff-scoped selection is empty at HEAD, but the calibrated command may still
+    run a full suite (e.g. gate + pytest). Stamp zero selected tests only when
+    the transcript has no parseable pytest summary."""
+    if guardian_vitals.parse_verify_output(stdout)["suiteTestCount"] is not None:
+        return {}
+    return {"testsSelected": 0, "note": VERIFY_BASE_EQUALS_HEAD_NOTE}
+
+
+def _verify_diff_scoped_extra():
+    """Extra verify-command fields when {baseRef} was bound and HEAD is ahead of that base."""
+    return {"diffScoped": True, "note": VERIFY_DIFF_SCOPED_NOTE}
+
+
+def _coverage_entry_unbound(entry):
+    if not isinstance(entry, dict):
+        return False
+    tool = entry.get("tool")
+    if not isinstance(tool, str) or not tool:
+        return False
+    lens = entry.get("lens")
+    if isinstance(lens, str) and lens:
+        return False
+    return True
+
+
 def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
     """Trust-but-verify the four FACTS. `run` is injectable for tests.
 
@@ -320,44 +426,99 @@ def verify_config(cwd, root=None, run=None, config=None, needed_facts=None):
         else:
             stdout = ""
             duration = None
-            try:
-                t0 = time.monotonic()
-                r = run(vcmd, shell=True, cwd=cwd, capture_output=True, text=True,
-                        timeout=budget)
-                duration = time.monotonic() - t0
-                stdout = _bound_stdout(getattr(r, "stdout", None) or "")
-                if r.returncode == 0:
-                    status, receipt = "ok", "%s → exit 0" % vcmd
+            base_equals_head = False
+            verify_diff_scoped = False
+            verify_base_bound = False
+            if VERIFY_BASE_TOKEN in vcmd:
+                # bite-proof axis: {baseRef} is bound to a pinned commit or the command does not run.
+                pin, why = _bind_verify_base_ref(cwd)
+                if pin is None:
+                    receipt = (
+                        "verify command not run: placeholder %s unresolved (%s)"
+                        % (VERIFY_BASE_TOKEN, why))
+                    verify_result = {
+                        "status": "not-run",
+                        "receipt": receipt,
+                        "stdout": "",
+                        "durationSeconds": None,
+                    }
+                    facts.append({
+                        "fact": "verify-command",
+                        "status": "not-run",
+                        "receipt": receipt,
+                    })
                 else:
-                    status, receipt = "failed", "%s → exit %d" % (vcmd, r.returncode)
-            except subprocess.TimeoutExpired as exc:
-                duration = budget
-                stdout = _bound_stdout(
-                    (getattr(exc, "stdout", None) or "")
-                    if isinstance(getattr(exc, "stdout", None), str)
-                    else "")
-                status, receipt = "not-collected", "%s → timeout" % vcmd
-            except (OSError, subprocess.SubprocessError) as exc:
-                status, receipt = "not-collected", "%s → %s" % (vcmd, exc)
+                    base_equals_head = _pinned_base_equals_head(cwd, pin)
+                    verify_base_bound = True
+                    if base_equals_head:
+                        verify_diff_scoped = _verify_diff_scoped_at_head(cwd, pin)
+                    else:
+                        verify_diff_scoped = True
+                    vcmd = vcmd.replace(VERIFY_BASE_TOKEN, pin)
+            if not any(f.get("fact") == "verify-command" for f in facts):
+                try:
+                    t0 = time.monotonic()
+                    r = run(vcmd, shell=True, cwd=cwd, capture_output=True, text=True,
+                            timeout=budget)
+                    duration = time.monotonic() - t0
+                    stdout = _bound_stdout(getattr(r, "stdout", None) or "")
+                    if r.returncode == 0:
+                        status, receipt = "ok", "%s → exit 0" % vcmd
+                    else:
+                        status, receipt = "failed", "%s → exit %d" % (vcmd, r.returncode)
+                except subprocess.TimeoutExpired as exc:
+                    duration = budget
+                    stdout = _bound_stdout(
+                        (getattr(exc, "stdout", None) or "")
+                        if isinstance(getattr(exc, "stdout", None), str)
+                        else "")
+                    status, receipt = "not-collected", "%s → timeout" % vcmd
+                except (OSError, subprocess.SubprocessError) as exc:
+                    status, receipt = "not-collected", "%s → %s" % (vcmd, exc)
 
-            verify_result = {
-                "status": status,
-                "receipt": receipt,
-                "stdout": stdout,
-                "durationSeconds": duration,
-            }
-            # Trust boundary: raw verify stdout stays local to verify_result for the
-            # vitals parser. Never leak it into factVerdicts / the model-facing bundle.
-            facts.append({
-                "fact": "verify-command",
-                "status": status,
-                "receipt": receipt,
-                "durationSeconds": duration,
-            })
+                verify_result = {
+                    "status": status,
+                    "receipt": receipt,
+                    "stdout": stdout,
+                    "durationSeconds": duration,
+                }
+                if verify_base_bound and verify_diff_scoped:
+                    verify_result.update(_verify_diff_scoped_extra())
+                elif status == "ok" and base_equals_head:
+                    verify_result.update(_verify_base_equals_head_extra(stdout))
+                # Trust boundary: raw verify stdout stays local to verify_result for the
+                # vitals parser. Never leak it into factVerdicts / the model-facing bundle.
+                fact_row = {
+                    "fact": "verify-command",
+                    "status": status,
+                    "receipt": receipt,
+                    "durationSeconds": duration,
+                }
+                if verify_base_bound and verify_diff_scoped:
+                    fact_row.update(_verify_diff_scoped_extra())
+                elif status == "ok" and base_equals_head:
+                    fact_row.update(_verify_base_equals_head_extra(stdout))
+                facts.append(fact_row)
 
     # 2. recorded-coverage
     cov = config.get("coverage") or []
-    if cov:
+    # bite-proof axis: a tool-named coverage entry with no lens is reported.
+    unbound_cov = []
+    for entry in cov:
+        if _coverage_entry_unbound(entry):
+            unbound_cov.append({
+                "token": COVERAGE_NO_LENS_TOKEN,
+                "tool": entry["tool"],
+                "path": entry.get("path")
+                if isinstance(entry.get("path"), str) else None,
+            })
+    if unbound_cov:
+        facts.append({
+            "fact": "recorded-coverage",
+            "status": "unbound",
+            "receipt": {"entries": cov, "unbound": unbound_cov},
+        })
+    elif cov:
         facts.append({
             "fact": "recorded-coverage",
             "status": "present",
