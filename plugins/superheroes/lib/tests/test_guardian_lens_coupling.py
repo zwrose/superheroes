@@ -31,6 +31,7 @@ import subprocess
 
 import pytest
 
+import guardian_census
 import guardian_coupling_adapters as adapters
 import guardian_ledger
 import guardian_lens as gl
@@ -451,11 +452,32 @@ def test_depcruise_argv_opts_out_of_caching_and_vendored_trees():
     assert "--output-type" in argv and "json" in argv
     assert "--no-config" in argv
     assert "--config" not in argv
+    assert "--include-only" not in argv
     assert "--" in argv
     assert argv[argv.index("--") + 1] == "./src"
     for flag in ("--exclude", "--do-not-follow"):
         assert argv[argv.index(flag) + 1] == adapters.DEPCRUISE_EXCLUDE_RE
     assert "node_modules" in adapters.DEPCRUISE_EXCLUDE_RE
+
+
+def test_depcruise_argv_is_constant_size_with_max_depth(tmp_path):
+    repo = str(tmp_path)
+    operands_3 = [
+        os.path.realpath(os.path.join(repo, "src/a.ts")),
+        os.path.realpath(os.path.join(repo, "src/b.ts")),
+        os.path.realpath(os.path.join(repo, "vite.config.ts")),
+    ]
+    operands_300 = [
+        os.path.realpath(os.path.join(repo, "src/f%d.ts" % i)) for i in range(300)]
+
+    def _flags_through_separator(argv):
+        return argv[: argv.index("--") + 1]
+
+    argv3 = adapters.depcruise_argv(operands_3)
+    argv300 = adapters.depcruise_argv(operands_300)
+    assert _flags_through_separator(argv3) == _flags_through_separator(argv300)
+    depth_idx = argv3.index("--max-depth")
+    assert argv3[depth_idx + 1] == "1"
 
 
 @pytest.mark.parametrize("ecosystem", ["js", "py"])
@@ -2481,3 +2503,280 @@ def test_coupling_vitals_incomplete_sections_always_emit_nonempty_identity():
         reading = glc.LENS.vitals(digest)["couplingEdges"]
         assert len(reading) == 3, reading
         assert reading[2] == expected_identity
+
+
+# ======================================================================================
+# JS cruise targets + depcruise crash reasons (#1452)
+# ======================================================================================
+
+def _commit_tracked(repo, *relpaths):
+    subprocess.run(["git", "-C", repo, "add"] + list(relpaths), check=True)
+    subprocess.run(
+        ["git", "-C", repo,
+         "-c", "user.email=guardian@test.local", "-c", "user.name=guardian-test",
+         "commit", "-q", "-m", "sources"],
+        check=True)
+
+
+def _argv_operands_realpath(argv, repo):
+    sep = argv.index("--")
+    return sorted(os.path.realpath(p) for p in argv[sep + 1:])
+
+
+def test_js_targets_are_the_census_files(tmp_path):
+    repo = str(tmp_path)
+    write(repo, "src" + "/" + "app.ts", "export const x = 1;\n")
+    write(repo, "next.config.ts", "export default {};\n")
+    got = glc.census(census_ctx(repo, tracked=["src/app.ts", "next.config.ts"]), repo, "js")[0]
+    targets = glc._js_targets(repo, got)
+    assert targets == ["next.config.ts", "src/app.ts"]
+    assert "." not in targets
+    assert not any(os.path.isdir(os.path.join(repo, t)) for t in targets)
+
+
+def test_collect_argv_passes_only_tracked_files(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"cruise-targets"}\n')
+    write(repo, "src/app.ts", "export const x = 1;\n")
+    write(repo, "next.config.ts", "export default {};\n")
+    write(repo, "src/decoy.ts", "export const junk = 1;\n")
+    tracked = ["package.json", "src/app.ts", "next.config.ts"]
+    captured = []
+
+    def handler(argv, kwargs):
+        captured.append(list(argv))
+        return (0, dc_report(extra_sources=tracked), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "collected"
+    assert captured, "depcruise must run"
+    expected = sorted(
+        os.path.realpath(os.path.join(repo, p))
+        for p in ("next.config.ts", "src/app.ts"))
+    for argv in captured:
+        assert _argv_operands_realpath(argv, repo) == expected
+        assert os.path.realpath(repo) not in _argv_operands_realpath(argv, repo)
+        assert os.path.realpath(os.path.join(repo, "src/decoy.ts")) not in (
+            _argv_operands_realpath(argv, repo))
+        assert os.path.realpath(os.path.join(repo, "src")) not in (
+            _argv_operands_realpath(argv, repo))
+        depth_idx = argv.index("--max-depth")
+        assert argv[depth_idx + 1] == "1"
+
+
+def test_tracked_to_untracked_edge_is_dropped(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"untracked-edge"}\n')
+    write(repo, "src/a.ts", "export const a = 1;\n")
+    write(repo, "src/b.ts", "import './a';\nexport const b = 1;\n")
+    write(repo, "src/u.ts", "export const u = 1;\n")
+    tracked = ["package.json", "src/a.ts", "src/b.ts"]
+    report = dc_report(edges=[
+        ("src/a.ts", "src/u.ts"),
+        ("src/b.ts", "src/a.ts"),
+    ])
+    out = lens().collect(ctx(
+        repo, tmp_path,
+        run=make_run(lambda argv, kw: (0, report, ""), tracked=tracked)))
+    assert st(out) == "collected", out.get("reason")
+    assert out["digest"]["counters"]["edges"] == 1
+    assert out["digest"]["ecosystems"]["js"]["untrackedFiltered"] >= 1
+
+
+def test_operand_budget_exceeded_degrades_without_invoking_depcruise(tmp_path, monkeypatch):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"operand-budget"}\n')
+    write(repo, "src/app.ts", "export const x = 1;\n")
+    tracked = ["package.json", "src/app.ts"]
+    js_targets = ["src/app.ts"]
+    budget = 1
+    monkeypatch.setattr(
+        guardian_census, "argv_operand_budget_detail", lambda repo, fa: (budget, False))
+    operand_bytes = guardian_census.operand_payload_bytes(repo, js_targets)
+    assert operand_bytes > budget
+    calls = []
+
+    def handler(argv, kwargs):
+        calls.append(list(argv))
+        return (0, dc_report(extra_sources=tracked), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "not-collected"
+    assert out["digest"] is None
+    reason = out.get("reason") or ""
+    assert (
+        "tracked-file operand payload is %d bytes across %d files"
+        % (operand_bytes, len(js_targets))) in reason
+    assert "derived %d-byte operand budget" % budget in reason
+    assert "platform ARG_MAX %d" % guardian_census.platform_arg_max_bytes() in reason
+    assert "remedy: batch the depcruise into budget-sized runs" in reason
+    assert "not measured" in reason
+    depcruise_calls = [
+        a for a in calls if a and a[0] == adapters.DEPCRUISE_BIN]
+    assert not depcruise_calls, "depcruise must not run when operand budget exceeded"
+
+
+def test_js_collected_section_records_operand_payload_and_argv_budget(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"budget-fields"}\n')
+    write(repo, "src/app.ts", "export const x = 1;\n")
+    tracked = ["package.json", "src/app.ts"]
+    js_targets = ["src/app.ts"]
+
+    def handler(argv, kwargs):
+        return (0, dc_report(extra_sources=tracked[1:]), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "collected", out.get("reason")
+    js = out["digest"]["ecosystems"]["js"]
+    expected_budget, _env_failed = guardian_census.argv_operand_budget_detail(
+        repo, adapters.depcruise_argv([]))
+    assert not _env_failed
+    assert js["operandPayloadBytes"] == guardian_census.operand_payload_bytes(
+        repo, js_targets)
+    assert js["argvOperandBudgetBytes"] == expected_budget
+
+
+_V8_OOM_STDERR = (
+    "FATAL ERROR: Ineffective mark-compacts near heap limit "
+    "Allocation failed - JavaScript heap out of memory\n"
+    "12: 0x1076b64fc v8::internal::Runtime_AllocateInYoungGeneration\n"
+    "79: 0x18cf504e4 start [/usr/lib/dyld]\n"
+)
+
+
+def test_depcruise_crash_reason_names_fatal_cause(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"oom-reason"}\n')
+    write(repo, "src/app.ts", "export const x = 1;\n")
+
+    def handler(argv, kwargs):
+        return (-6, "", _V8_OOM_STDERR)
+
+    out = lens().collect(ctx(
+        repo, tmp_path,
+        run=make_run(handler, tracked=["package.json", "src/app.ts"])))
+    assert st(out) == "not-collected"
+    assert out["digest"] is None
+    reason = out.get("reason") or ""
+    assert "heap out of memory" in reason.lower()
+    assert "SIGABRT" in reason
+    assert "start [/usr/lib/dyld]" not in reason
+
+
+@pytest.mark.skipif(
+    _resolve_collector_bin(adapters.DEPCRUISE_BIN) is None,
+    reason="dependency-cruiser not installed",
+)
+def test_untracked_import_chain_is_not_followed_end_to_end(tmp_path):
+    """--max-depth 1 must not parse v/w off an untracked u→v→w chain (#1452)."""
+    depcruise = _resolve_collector_bin(adapters.DEPCRUISE_BIN)
+    assert depcruise is not None
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"untracked-chain"}\n')
+    write(repo, "src/a.ts", "import './u';\nexport const a = 1;\n")
+    write(repo, "src/b.ts", "import './a';\nexport const b = 1;\n")
+    write(repo, "src/u.ts", "import './v';\nexport const u = 1;\n")
+    write(repo, "src/v.ts", "import './w';\nexport const v = 1;\n")
+    write(repo, "src/w.ts", "export const w = 1;\n")
+    _commit_tracked(repo, "package.json", "src/a.ts", "src/b.ts")
+    root = store(tmp_path)
+    raw_stdout = []
+
+    def handler(argv, kwargs):
+        run_argv = [depcruise] + argv[1:]
+        proc = subprocess.run(
+            run_argv,
+            cwd=kwargs.get("cwd") or repo,
+            capture_output=True,
+            text=True,
+            check=False)
+        raw_stdout.append(proc.stdout)
+        return (proc.returncode, proc.stdout, proc.stderr)
+
+    out = lens().collect({
+        "cwd": repo, "root": root, "prevDigest": None,
+        "run": make_run(handler, tracked=["package.json", "src/a.ts", "src/b.ts"]),
+    })
+    assert st(out) == "collected", out.get("reason")
+    assert raw_stdout, "depcruise must run through the lens seam"
+    report = json.loads(raw_stdout[0])
+    for mod in report.get("modules") or []:
+        src = mod.get("source") or ""
+        assert not src.endswith("v.ts"), src
+        assert not src.endswith("w.ts"), src
+
+
+@pytest.mark.skipif(
+    _resolve_collector_bin(adapters.DEPCRUISE_BIN) is None,
+    reason="dependency-cruiser not installed",
+)
+def test_mixed_file_and_dir_operands_run_end_to_end(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"mixed-operands"}\n')
+    write(repo, "src/b.ts", "export const b = 1;\n")
+    write(repo, "src/a.ts", "import { b } from './b';\nexport const a = b;\n")
+    write(repo, "vite.config.ts", "import './src/a';\nexport default {};\n")
+    write(repo, "junk/x.ts", "export const x = 1;\n")
+    _commit_tracked(
+        repo, "package.json", "src/a.ts", "src/b.ts", "vite.config.ts")
+    root = store(tmp_path)
+    out = lens().collect({"cwd": repo, "root": root, "prevDigest": None})
+    assert st(out) == "collected"
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["status"] == "collected"
+    assert out["digest"]["counters"]["modulesParsed"] >= 3
+    argv = js["argv"]
+    assert js["operandCount"] == 3
+    sep = argv.index("--")
+    assert len(argv[sep + 1:]) == 1
+    assert argv[sep + 1].startswith("<3 tracked JS/TS files under ")
+    assert js.get("untrackedFiltered", 0) == 0
+
+
+@pytest.mark.skipif(
+    _resolve_collector_bin(adapters.DEPCRUISE_BIN) is None,
+    reason="dependency-cruiser not installed",
+)
+def test_tracked_import_of_untracked_file_confined_before_collection(tmp_path):
+    """Tracked operands must not let depcruise parse untracked import targets (#1452)."""
+    repo = init_calibrated_repo(tmp_path)
+    write(repo, "package.json", '{"name":"max-depth-confinement"}\n')
+    write(repo, "src/app.ts", "import './untracked-helper';\nexport const a = 1;\n")
+    write(repo, "src/untracked-helper.ts", "export const helper = 1;\n")
+    _commit_tracked(repo, "package.json", "src/app.ts")
+    root = store(tmp_path)
+    out = lens().collect({"cwd": repo, "root": root, "prevDigest": None})
+    assert st(out) == "collected", out.get("reason")
+    js = out["digest"]["ecosystems"]["js"]
+    assert js["modulesParsed"] == 1
+    recorded = js["argv"]
+    assert "--max-depth" in recorded
+    assert recorded[recorded.index("--max-depth") + 1] == "1"
+
+
+def test_digest_argv_summarizes_file_operands(tmp_path):
+    repo = init_calibrated_repo(tmp_path)
+    tracked = ["package.json"]
+    for i in range(30):
+        rel = "src/f%d.ts" % i
+        write(repo, rel)
+        tracked.append(rel)
+    captured = []
+
+    def handler(argv, kwargs):
+        captured.append(list(argv))
+        return (0, dc_report(extra_sources=tracked[1:]), "")
+
+    out = lens().collect(ctx(repo, tmp_path, run=make_run(handler, tracked=tracked)))
+    assert st(out) == "collected"
+    digest = out["digest"]
+    js_argv = digest["ecosystems"]["js"]["argv"]
+    sep = js_argv.index("--")
+    assert len(js_argv[sep + 1:]) == 1
+    assert js_argv[sep + 1].startswith("<30 tracked JS/TS files under ")
+    assert digest["ecosystems"]["js"]["operandCount"] == 30
+    assert captured, "depcruise must run"
+    run_argv = captured[0]
+    run_sep = run_argv.index("--")
+    assert len(run_argv[run_sep + 1:]) == 30

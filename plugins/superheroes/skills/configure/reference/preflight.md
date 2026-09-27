@@ -16,7 +16,7 @@ preflight step (#472). It runs once, **at session start, while the owner is stil
 before the session goes autonomous. Follow it top to bottom; every check below ends in
 **pass**, **fail**, or **N/A with the reason** — a check is never silently skipped.
 
-`ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash block below.
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash block below.
 
 ## Framing + the timing rule
 
@@ -86,7 +86,7 @@ will actually dispatch through — the brief-check reviewer, and any external-en
 reviewer, or pilot this project configures. Derive them; do not hard-code one engine:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import core_md, preflight_probe
@@ -101,31 +101,36 @@ If the project is **all-Claude** (`engines` comes back empty), this check is **N
 move on. A non-ok result for a configured engine means the CLI is not installed, not
 authenticated, or not answering — fix it with the owner before going further.
 
-### A.2a — Astra registration probe
+### A.2a — Registration security-lens probe
 
-Only at a wave preflight the owner or advisor chose to spend on Astra registration — at most one
-attempt per wave. The durable attempt record lives in the project's store directory (not a temp directory):
+Only at a wave preflight the owner or advisor chose to spend on registration for the
+registry's `registration-probe` role — at most one attempt per wave. The probe, its ledger,
+and its claim files are named for the registration-probe role; ledgers and claims written under
+the older `astra-probe` names still read, and `astra-probe` is accepted as a legacy spelling
+of the command. Read the model the probe actually ran under off the returned payload or the
+ledger's `model` field — never assume it from the command name. The durable attempt record
+lives in the project's store directory (not a temp directory):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B "$ROOT_DIR/lib/conformance_probe.py" astra-probe --repo-root <root> --wave <wave-id> --run-dir <dir> [--max-wait S]
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/conformance_probe.py" registration-probe --repo-root <root> --wave <wave-id> --run-dir <dir> [--max-wait S]
 ```
 
 A non-terminal slice returns `continue: true` — re-invoke with the same `--run-dir`. A pass is a
 returned finding on the planted file, at one of the planted lines, rated Critical; other findings in
 the same result neither earn nor spoil it. A result with only unrelated findings, or a failed
-dispatch, is a miss. An unreadable attempts ledger refuses `astra-probe-ledger-unreadable` and is
-never overwritten. A second wave attempt with a different run dir refuses
-`astra-probe-wave-already-attempted`; three recorded misses set `ownerProposal: true`. A pass does
-not register a model by itself — a reviewed commit removing `probe-pending` from its registry row
-does; Astra's row no longer carries it.
+dispatch, is a miss. An unreadable attempts ledger refuses `registration-probe-ledger-unreadable`
+and is never overwritten. A second wave attempt with a different run dir refuses
+`registration-probe-wave-already-attempted`; three recorded misses set `ownerProposal: true`. A
+pass does not register a model by itself — a reviewed commit removing `probe-pending` from its
+registry row does; the probed model's row no longer carries it.
 
 ### A.3 — `gh`
 
 Confirm sign-in:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import preflight_probe
@@ -162,7 +167,7 @@ compute it once and carry it forward into two places: the build brief, and the P
 section, so anyone reading the PR later can see exactly what ran without re-deriving it:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys, json; sys.path.insert(0, '$ROOT_DIR/lib')
 import preflight_probe
@@ -200,7 +205,7 @@ Before launch, run one real review dispatch per dispatchable engine (`codex`, `c
 liveness check the selftest is not:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/conformance_probe.py" run --engine <codex|cursor|claude> [--wave <launch-id>]
 ```
 
@@ -214,7 +219,7 @@ When this build will run `review-code` (it always does at handback), seed the sh
 **liveness receipt** now, so the build's review loop rides it instead of re-probing every round:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
 ```
 
@@ -265,7 +270,7 @@ distinct configured non-Claude engine itself (the same `configured_cross_vendor_
 §A.2; pass `--engine <name>` only to force one specific engine, e.g. for back-compat scripting):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/preflight_probe.py" run --cwd .
 ```
 
