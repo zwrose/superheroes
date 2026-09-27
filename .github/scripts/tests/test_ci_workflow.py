@@ -17,6 +17,11 @@ if _LIB not in sys.path:
 
 import guardian_coupling_adapters as adapters  # noqa: E402
 
+from ci_requirements_helpers import (  # noqa: E402
+    active_requirement_names,
+    expand_requirements,
+)
+
 
 def _ci_data():
     import yaml
@@ -187,13 +192,17 @@ def test_release_bump_gate_sets_gh_token():
 def test_validate_installs_all_coupling_collectors():
     # Axis: silent-skip return — collectors must be installed so real-seam tests cannot degrade.
     data = _ci_data()
-    python_deps_run = _validate_step_run(
-        data, "Install Python dependencies (validators + tests + import-linter)"
+    python_deps_run = expand_requirements(
+        _validate_step_run(
+            data, "Install Python dependencies (validators + tests + import-linter)"
+        ),
+        _ROOT,
     )
     collectors_run = _validate_step_run(
         data, "Install coupling collectors (ungate coupling lens real-seam tests)"
     )
-    assert "import-linter" in python_deps_run
+    req_names = active_requirement_names(python_deps_run)
+    assert "import-linter" in req_names
     assert "dependency-cruiser" in collectors_run
     assert "typescript" in collectors_run
 
@@ -201,15 +210,47 @@ def test_validate_installs_all_coupling_collectors():
 def test_ci_collector_pins_match_guardian_adapters():
     # Axis: ci.yml install majors must track guardian_coupling_adapters pins (CONVENTIONS §11.3).
     data = _ci_data()
-    python_deps_run = _validate_step_run(
-        data, "Install Python dependencies (validators + tests + import-linter)"
+    python_deps_run = expand_requirements(
+        _validate_step_run(
+            data, "Install Python dependencies (validators + tests + import-linter)"
+        ),
+        _ROOT,
     )
     collectors_run = _validate_step_run(
         data, "Install coupling collectors (ungate coupling lens real-seam tests)"
     )
+    import_linter_lines = [
+        ln
+        for ln in python_deps_run.splitlines()
+        if ln.strip().lower().startswith("import-linter")
+    ]
     assert f"dependency-cruiser@{adapters.DEPCRUISE_PIN}" in collectors_run
     assert f"typescript@{adapters.TYPESCRIPT_PIN}" in collectors_run
-    assert f"import-linter>={adapters.IMPORT_LINTER_PIN}," in python_deps_run
+    assert any(
+        f"import-linter>={adapters.IMPORT_LINTER_PIN}," in ln
+        for ln in import_linter_lines
+    )
+
+
+def test_expand_requirements_ignores_inline_commented_requirement_ref():
+    # Axis: shell inline # must not expose -r tokens the workflow step does not execute.
+    run = (
+        "uv pip install --system pytest pytest-xdist jsonschema pyyaml "
+        "# -r requirements-dev.txt"
+    )
+    expanded = expand_requirements(run, _ROOT)
+    assert "import-linter" not in active_requirement_names(expanded)
+
+
+def test_expand_requirements_raises_when_named_file_missing(tmp_path):
+    # Axis: missing -r/--requirement path fails closed instead of silently skipping.
+    run = "uv pip install --system -r missing-requirements.txt"
+    try:
+        expand_requirements(run, str(tmp_path))
+    except AssertionError as exc:
+        assert "missing-requirements.txt" in str(exc)
+    else:
+        raise AssertionError("expected AssertionError for missing requirements file")
 
 
 def test_release_please_still_runs_check_release_bump():

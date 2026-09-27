@@ -17,15 +17,13 @@ from validate_marketplace import SEMVER
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PLUGINS = os.path.join(REPO, "plugins")
-# WORKAROUND: portable plugin-root seam and host-map lint for dual-host skill prose
-# delete-when: every host resolves plugin root through one variable without this fallback seam
-SEAM = '${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}'
-# The pointer line must resolve via the portable seam (CONVENTIONS §7.1): a bare
+# The pointer line must resolve at the plugin root (CONVENTIONS §7.1): a bare
 # `hosts/<your-host>-tools.md` anchors at the skill's own folder (which has no hosts/),
-# so require the ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}} prefix. This also rejects a
+# so require the ${CLAUDE_PLUGIN_ROOT} prefix. This also rejects a
 # hardcoded host (e.g. ${...}/hosts/claude-tools.md) — the <your-host> placeholder
 # is still required.
-POINTER_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}/hosts/<your-host>-tools\.md")
+# Bites on: a SKILL.md whose rooted host-map pointer is absent or in the retired fallback form.
+POINTER_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/hosts/<your-host>-tools\.md")
 BANNED = ("subagent_type", "the Agent tool", "the Skill tool", "the Task tool")
 
 def lint_skill(text):
@@ -36,10 +34,6 @@ def lint_skill(text):
     for tok in BANNED:
         if tok in text:
             errs.append(f"banned host-coupled token in prose: {tok!r}")
-    # bare ${CLAUDE_PLUGIN_ROOT} that is NOT part of the portable seam
-    for m in re.finditer(r"\$\{CLAUDE_PLUGIN_ROOT(:-\$\{PLUGIN_ROOT\})?\}", text):
-        if m.group(1) is None:
-            errs.append("bare ${CLAUDE_PLUGIN_ROOT} — use the portable seam " + SEAM)
     return errs
 
 def _load(path, errors):

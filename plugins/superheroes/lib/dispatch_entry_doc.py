@@ -25,7 +25,7 @@ _PLUGIN_ROOT = os.path.normpath(os.path.join(_LIB_DIR, ".."))
 _DEFAULT_OUT = os.path.join(
     _PLUGIN_ROOT, "skills", "workhorse", "reference", "dispatch-entry.md"
 )
-_REGEN_CMD = "/usr/bin/python3 -B plugins/superheroes/lib/dispatch_entry_doc.py"
+_REGEN_CMD = "scripts/pinned-python -B plugins/superheroes/lib/dispatch_entry_doc.py"
 _CONTRACT_REQUIRED = (
     ("engine_dispatch", engine_dispatch),
     ("dispatch_guard", dispatch_guard),

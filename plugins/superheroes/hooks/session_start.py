@@ -5,7 +5,7 @@ via `additionalContext`:
 **Bootstrap (ALWAYS — all four sources `startup|resume|clear|compact`).** Inject
 the two records only this bootstrap uniquely supplies — the resolved ABSOLUTE
 plugin + host-tool-map roots (so a skill's
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<host>-tools.md` Read lands on the
+`${CLAUDE_PLUGIN_ROOT}/hosts/<host>-tools.md` Read lands on the
 real file) and the distilled covenant — plus nothing the harness already loads.
 Current Claude Code natively supplies project/user CLAUDE.md, the env block, and
 the MEMORY.md head on all spawn paths (probe-verified #627 F1, Claude Code
