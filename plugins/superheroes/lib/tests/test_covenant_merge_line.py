@@ -1,8 +1,9 @@
-"""Guards the covenant's merge hard line against losing any of its five elements.
+"""Guards the covenant's merge hard line against losing any of its six elements.
 
 The first bullet under `## The hard lines` in rubric/covenant.md must keep its
-compaction-safe minimum: the three merge preconditions, the own-word requirement for
-release/publish/force-push, and the pointer to the showrunner charter's duty 6.
+compaction-safe minimum: the owner's word for a merge itself, the three merge
+preconditions, the own-word requirement for release/publish/force-push, and the
+pointer to the showrunner charter's duty 6.
 """
 import os
 import re
@@ -16,8 +17,8 @@ def _read_plugin(rel):
         return fh.read()
 
 
-# axis: presence of each of the five merge-line elements in the covenant's first hard-line bullet; any one element alone missing must fail.
-# coverage: closed enumeration — the five elements are the whole compaction-safe minimum of this bullet; a sixth element is added here, not elsewhere.
+# axis: presence of each of the six merge-line elements in the covenant's first hard-line bullet; any one element alone missing must fail.
+# coverage: closed enumeration — the six elements are the whole compaction-safe minimum of this bullet; a seventh element is added here, not elsewhere.
 def test_covenant_merge_line_keeps_its_minimum():
     text = _read_plugin("rubric/covenant.md")
 
@@ -34,6 +35,7 @@ def test_covenant_merge_line_keeps_its_minimum():
     bullet = re.sub(r"\s+", " ", bullet_match.group(0))
 
     elements = {
+        "own-word for a merge": "only inside the owner's word",
         "review-evidence precondition": "the lane's review evidence",
         "ci-green precondition": "CI green on the recorded head",
         "branch-current precondition": "a branch current with its base",
