@@ -113,8 +113,9 @@ above).
    **Record the approval with its date** — the dated approval is what a later
    before-or-after-approval test reads.
 
-   **Done when:** every stopped discovery is parked, and every spec with an abandoned child is
-   re-planned or parked, each with its note on the owner's reading surface; every finished spec draft carries your
+   **Done when:** every stopped discovery is parked with its note on the owner's reading surface;
+   every spec with an abandoned child is either re-planned (its coverage map repaired and a
+   replacement child filed) or parked with its note on the owner's reading surface; every finished spec draft carries your
    weight call with its measurables; every spec you vetted reached the owner as "ready for your
    approval", and every approval is recorded with its date.
 2. **Board hygiene — file and wire.** Every issue gets full wiring at filing time (epic,
