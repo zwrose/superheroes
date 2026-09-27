@@ -7,6 +7,124 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## 0.35.0
+
+### Before you upgrade
+
+Check these in a consuming project before it takes 0.35.0:
+
+- **Read liveness from the watcher, not the heartbeat sweep.** `heartbeat.py sweep` now classes a
+  record as `terminal`, `nonterminal`, or `unknown`; the old fresh and stale classes are gone, and
+  a script matching them must be updated. See [Heartbeat sweep classes](#heartbeat-sweep-classes).
+- **Update a script that matches an `astra-probe-*` refusal token.** The registration probe's
+  refusal tokens are now `registration-probe-*`, with no alias. See
+  [Registration probe tokens](#registration-probe-tokens).
+- **An adoption launch passes `adopts` to re-occupy its own stack position.** Without it the launch
+  still refuses `layer-position-occupied`; four new refusal tokens come with it. See
+  [Launcher adoption premise](#launcher-adoption-premise).
+- **Accept `survivingNonBlocking` in a v5 certification receipt, and never hand-edit
+  `rulingsLog`.** The certification loop ships through its rulings channel with one disclosed
+  fail-open on a malformed `rulingsLog`. See
+  [Certification receipt and the rulings channel](#certification-receipt-and-the-rulings-channel).
+- **Accept vet receipt spine fields 9 and 10 in a template or reader of your own.** Every vet
+  receipt now carries **Lane** and **Misses-log appends**. See
+  [Vet receipt spine fields 9 and 10](#vet-receipt-spine-fields-9-and-10).
+
+### Heartbeat sweep classes
+
+`heartbeat.py sweep` classes each record as `terminal` (the builder stamped `parked` or
+`handback`), `nonterminal` (a valid record whose state is not terminal — it says nothing about
+liveness), or `unknown`. The old fresh and stale classes are removed, because a builder no longer
+promises a stamp cadence: `stamp` still accepts its old cadence argument from older callers and
+ignores it, and the window a stamped record carries is always `LIVENESS_QUIET_WINDOW_SECONDS`
+(2700 seconds). Liveness has one signal: `wave_watch.py` raises `lane-stale` when a lane's process
+is live and the watcher cannot establish that its own session transcript was written within that
+window. A cold transcript alerts, and so does an ambiguous or unreadable lookup; a transcript that
+does not exist yet alerts only once the same window has passed since the lane's recorded start. The
+event means no fresh transcript could be established, not proof of inactivity. A consumer that matched
+the old fresh or stale class from the sweep must match `nonterminal` for an unended lane and take
+liveness from `lane-stale`.
+
+### Registration probe tokens
+
+One entry changes on the surface listed under
+[Astra and the codex role pin](#astra-and-the-codex-role-pin):
+
+- `conformance_probe registration-probe` (`astra-probe` still works as a legacy alias of the verb;
+  refusal token `registration-probe-wave-already-attempted` when the same wave is re-attempted with
+  a different run dir). The probe's refusal tokens were renamed from `astra-probe-*` to
+  `registration-probe-*` with no alias: `registration-probe-scale-unreadable`,
+  `registration-probe-ledger-unreadable`, `registration-probe-record-write-failed`,
+  `registration-probe-wave-already-attempted`, `registration-probe-seat-unresolved`, and
+  `registration-probe-claim-unreadable`. A script that matches an old `astra-probe-*` refusal token
+  must be updated.
+
+### Launcher adoption premise
+
+A stacked premise (see [Launcher stacked premise](#launcher-stacked-premise)) may now carry
+`adopts`: the pull request number of the existing member an adoption takes over at its own
+`layerPosition`. `validate_premise` copies it into the stamped premise like every other key.
+
+`launcher.py launch` narrows one refusal and adds four tokens: `layer-position-occupied` when the
+claimed `layerPosition` is already held by an existing member (`layerPosition >= 2` only) and the
+premise's `adopts` does not name that member on the layer below's branch; `adopts-occupant-missing`
+when `adopts` names a pull request but the claimed position is empty;
+`premise-adopts-without-stack`, `premise-adopts-invalid`, and `premise-adopts-bottom-layer` when
+`adopts` lacks the stack pair, is not a positive integer, or is on the bottom layer.
+
+### Certification receipt and the rulings channel
+
+On success, `certification-receipt.json` (see
+[Certification receipt artifact](#certification-receipt-artifact)) carries the `disclosures` block
+with `importantOutOfScope` for Important out-of-scope deferrals and, for a session at state schema
+v5, `survivingNonBlocking` for surviving Minor or Nit findings without disposition. A receipt from
+an earlier schema (v2–v4, still supported) omits `survivingNonBlocking`. A consumer that enumerates
+the block's keys strictly must accept the new one when present.
+
+The certification loop ships through layer 4d-2, where rulings reach the round driver as a declared
+input through `round_driver.py rule`. One fail-open ships disclosed: when a session's `rulingsLog`
+is malformed, the driver reads it as empty, so an out-of-scope ruling does not hold and its finding
+can reach the fixer. Only corrupted or hand-edited state reaches it — `rule` itself refuses
+`rulings-log-malformed` rather than write to a malformed log. Record rulings through `rule`; never
+edit `rulingsLog` by hand.
+
+### The covenant's merge wording
+
+`rubric/covenant.md` keeps its rule and drops its restatement: promise 1 and the first hard line now
+say that nothing merges, releases, publishes, or force-pushes without the owner's word, and point
+to `skills/showrunner/SKILL.md` duty 6 as the merge policy's one full statement. Every Claude Code
+session on a calibrated project gets the new text from the installed plugin through the
+SessionStart bootstrap, so nothing is refreshed by hand there. `configure`'s durable `CLAUDE.md`
+offer writes the review-discipline section, not the covenant, and that section's source changed by
+one pointer line; a project that took it needs no action. A project that pasted the covenant into
+its own `CLAUDE.md` by hand (the only carrier on Codex) holds the longer old wording, which states
+the same rule; replacing it with the new `rubric/covenant.md` is optional.
+
+### Skill descriptions as pointers
+
+The skill descriptions are shortened toward when-to-load pointers: each leads with when the skill
+applies, and most of the mechanism moves to the skill body, though some descriptions still
+summarize what the skill does. No skill name, command, or
+`user-invocable` flag changed, so a consuming project has nothing to update.
+
+### Charters as maps
+
+The workhorse, showrunner, and detective charters keep their sections and duties, and much of
+their mechanism, including the workhorse and detective excuse tables, moves to reference pages the session reads on demand: `skills/workhorse/reference/`
+gains `intake.md`, `orders.md`, `handback.md`, and `excuses.md`; `skills/showrunner/reference/`
+gains `routing.md`, `vetting.md`, `orchestration.md`, `provisioning.md`, and `excuses.md`;
+`skills/detective/reference/` gains `excuses.md`. Nothing was removed or renamed, and no command or
+path a consuming project calls changed. This is informational.
+
+### Vet receipt spine fields 9 and 10
+
+The vet receipt's always-present spine (`skills/showrunner/reference/vet-receipt.md`) grows from
+eight fields to ten. Field 9, **Lane**, records the lane the PR ran (`full`, `light`, or `micro`),
+with a note when the build escalated. Field 10, **Misses-log appends**, records each misses-log
+append the vet made and its class, or `None`. Like every spine field, each is filled or written as
+`None`. An advisor session reads the new shape from the installed plugin. A project whose own
+template, script, or reader expects exactly eight spine fields must add or accept the two new ones.
+
 ## 0.34.0
 
 ### Before you upgrade
@@ -66,10 +184,7 @@ never interchanged); `order-mismatch` when the membership read found the stack's
 with the premise (previously folded into `stack-read-unavailable`, so a consumer matching on
 `stack-read-unavailable` for this case must now also match `order-mismatch`);
 `layer-position-occupied` when the claimed `layerPosition` is already held by an existing member
-(`layerPosition >= 2` only) and the premise's `adopts` does not name that member on the layer
-below's branch; `adopts-occupant-missing` when `adopts` names a pull request but the claimed position
-is empty; `premise-adopts-without-stack`, `premise-adopts-invalid`, and `premise-adopts-bottom-layer`
-when `adopts` lacks the stack pair, is not a positive integer, or is on the bottom layer; `premise-dependency-invalid` when `dependency` is present but not a
+(`layerPosition >= 2` only); `premise-dependency-invalid` when `dependency` is present but not a
 positive integer (`bool` is not an integer here); `dependency-closed-unmerged` when the premise
 names a closed, unmerged dependency pull request; `dependency-open-ready-pr` when the premise
 names an open dependency pull request with a READY vet and the resolved base commit is not that pull
@@ -230,14 +345,8 @@ A consumer meets:
 - the `registration-probe` role the registration probe dispatches under — its cell is now
   `gpt-6-sol` at `high`, which has passed; it stays for any model registered
   probe-pending later;
-- `conformance_probe registration-probe` (`astra-probe` still works as a legacy alias of the verb;
-  refusal token `registration-probe-wave-already-attempted` when the same wave is re-attempted with
-  a different run dir). The probe's refusal tokens were renamed from `astra-probe-*` to
-  `registration-probe-*` with no alias: `registration-probe-scale-unreadable`,
-  `registration-probe-ledger-unreadable`, `registration-probe-record-write-failed`,
-  `registration-probe-wave-already-attempted`, `registration-probe-seat-unresolved`, and
-  `registration-probe-claim-unreadable`. A script that matches an old `astra-probe-*` refusal token
-  must be updated;
+- `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
+  wave is re-attempted with a different run dir);
 - pin refusal tokens `pin-probe-pending` (for a future probe-pending model), `pin-role-not-eligible`,
   and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — every
   codex `pilot` pin is refused);
@@ -344,9 +453,8 @@ dispositions.
 At a terminal, the driver now writes a **certification artifact** beside `round-receipt.json`:
 
 - **Success** — `certification-receipt.json`: carries `terminalState`, `terminalCause`, per-seat
-  provenance in `seats`, the `disclosures` block (`importantOutOfScope` for Important out-of-scope
-  deferrals, `survivingNonBlocking` for surviving Minor or Nit findings without disposition), and
-  each finding's disposition plus its disposition proof (`dispositionReceipt` where applicable).
+  provenance in `seats`, the `disclosures` block (`importantOutOfScope`), and each finding's
+  disposition plus its disposition proof (`dispositionReceipt` where applicable).
 - **Refusal** — `certification-refusal.json`: names one of the four escape classes
   (`unrun-review`, `same-family-seat`, `unfetched-findings`, `disposition-without-receipt`) and the
   artifact that failed.
