@@ -6,6 +6,8 @@ Sibling of loop_synthesis.py: applies a review panel's per-finding verification 
 though a model made the judgments. stdlib only; never raises on bad input; fail-closed —
 a model's silence or malformed verdict never drops a finding.
 """
+import re
+
 import circuit_breaker
 import panel_tally
 import round_phases
@@ -29,6 +31,11 @@ def stage_ids(findings):
         copy["id"] = f"v{index}"
         staged.append(copy)
     return staged
+
+
+def is_staged_id(value):
+    """True iff value matches the v<N> shape that stage_ids mints."""
+    return isinstance(value, str) and re.fullmatch(r"v[0-9]+", value) is not None
 
 
 def cluster_findings(findings):

@@ -3,7 +3,7 @@
 import hashlib
 import json
 
-from finding_identity import finding_identity
+from finding_identity import clamp_title, finding_identity, finding_label, normalize_title
 
 __all__ = (
     "STATE_FILE",
@@ -18,7 +18,11 @@ __all__ = (
     "SEAT_MISSING_SCHEMA",
     "FIX_FOLD_HEAD_KEY",
     "WRITE_RESULT_KIND",
+    "RECORD_RESULT_KINDS",
+    "REVIEW_LIST_RESULT_KINDS",
     "FINDING_KEY_FIELD",
+    "TRANSIENT_FINDING_FIELDS",
+    "evidence_digest_subject",
     "SEAT_TRANSPORT_KEY",
     "SEAT_TRANSPORT_RUNNER",
     "SEAT_TRANSPORT_NATIVE",
@@ -30,7 +34,16 @@ __all__ = (
     "payload_sha256",
     "finding_identity_key",
     "location_key",
+    "minted_identity_key",
+    "finding_content_canonical",
+    "content_hash_suffix",
 )
+
+# Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
+TRANSIENT_FINDING_FIELDS = frozenset({
+    "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
+    "disposition", "dispositionReceipt",
+})
 
 SEAT_TRANSPORT_KEY = "transport"
 SEAT_TRANSPORT_RUNNER = "runner"
@@ -47,6 +60,8 @@ SEAT_TRANSPORTS_DISCLOSED = (SEAT_TRANSPORT_NATIVE, SEAT_TRANSPORT_HAND_LANDED)
 
 # Result kind a write run's execution record carries — binds the run's own report, not a payload key.
 WRITE_RESULT_KIND = "evidence"
+RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
+REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
@@ -83,11 +98,64 @@ def payload_sha256(payload):
     return sha256_text(canonical(payload))
 
 
+def evidence_digest_subject(payload, result_kind):
+    """The bytes bound by execution evidence for a review result kind. Never raises.
+
+    Four arms, each mirroring the runner rule for that kind family:
+    - record kinds (`RECORD_RESULT_KINDS`): whole payload when the record field is truthy
+    - `grouping`: the grouping value when the key is present (any type)
+    - other non-review kinds (`result`, `fixes`, …): the key's value when present (any type)
+    - review list kinds (`REVIEW_LIST_RESULT_KINDS`): the list under the key when it is a list
+    """
+    if not isinstance(payload, dict):
+        return False, None
+    if result_kind in RECORD_RESULT_KINDS:
+        if payload.get(result_kind):
+            return True, payload
+        return False, None
+    if result_kind == "grouping":
+        if "grouping" not in payload:
+            return False, None
+        return True, payload.get("grouping")
+    if result_kind not in REVIEW_LIST_RESULT_KINDS:
+        if result_kind not in payload:
+            return False, None
+        return True, payload[result_kind]
+    value = payload.get(result_kind)
+    if isinstance(value, list):
+        return True, value
+    return False, None
+
+
+def minted_identity_key(finding):
+    """Identity the loop mints from content — no foreign preset."""
+    if not isinstance(finding, dict):
+        return None
+    base = location_key(finding)
+    full_norm = normalize_title(finding_label(finding))
+    clamped_norm = normalize_title(clamp_title(finding_label(finding)))
+    if full_norm != clamped_norm:
+        return base + "#" + sha256_text(full_norm)[:12]
+    return base
+
+
+def finding_content_canonical(finding):
+    """Canonical JSON of a finding row with transient loop-stamped fields removed."""
+    if not isinstance(finding, dict):
+        return None
+    body = {k: v for k, v in finding.items() if k not in TRANSIENT_FINDING_FIELDS}
+    return canonical(body)
+
+
+def content_hash_suffix(finding):
+    return sha256_text(finding_content_canonical(finding))[:12]
+
+
 def finding_identity_key(finding):
-    """Stable identity for disposition-ledger entries — shared by driver and writer."""
+    """The one derivation of a finding's identity. Never reads `id`."""
     if not isinstance(finding, dict):
         return None
     key = finding.get(FINDING_KEY_FIELD)
     if isinstance(key, str) and key:
         return key
-    return location_key(finding)
+    return minted_identity_key(finding)

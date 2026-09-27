@@ -5070,27 +5070,29 @@ def test_mechanical_blocker_carried_through_judgment_gate():
     assert [b["title"] for b in state["_fixBatch"]] == ["null deref"]
 
 
-def test_judgment_row_ids_occurrence_suffix_same_location():
-    """Repeated tradeoff findings at the same location get distinct disposition ids (#1, #2, …)."""
-    loc = RD._location_id(_TRADEOFF)
+def test_judgment_row_ids_same_finding_same_id():
+    """Byte-identical tradeoff findings at the same location are one finding and share one disposition id."""
+    key = RD._judgment_row_ids([dict(_TRADEOFF)])[0]
     findings = [dict(_TRADEOFF), dict(_TRADEOFF)]
-    assert RD._judgment_row_ids(findings) == [loc, "%s#1" % loc]
+    assert RD._judgment_row_ids(findings) == [key, key]
 
 
 def test_judgment_colliding_identity_different_severity_dispositions_not_collapse():
     """Two tradeoff findings at the same location with different severities must each receive their
     disposition — a skip for one must not silently override fix-as-suggested for a Critical."""
-    loc_id = RD._location_id({"title": "same choice", "severity": "Critical",
-                              "file": "f.py", "line": 10, "tradeoff": True})
-    critical = {"title": "same choice", "severity": "Critical", "file": "f.py", "line": 10,
-                "tradeoff": True}
-    important = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
-                 "tradeoff": True}
+    loc_id_prefix = RD.session_contract.location_key({"title": "same choice " + "x" * 205 + " alpha",
+                                                      "severity": "Critical", "file": "f.py", "line": 10,
+                                                      "tradeoff": True})
+    critical = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Critical",
+                "file": "f.py", "line": 10, "tradeoff": True}
+    important = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important",
+                 "file": "f.py", "line": 10, "tradeoff": True}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [dict(critical), dict(important)])
     step = RD._advance(state, state["config"])
     ids = [f["id"] for f in step["payload"]["findings"]]
-    assert ids == [loc_id, "%s#1" % loc_id]
+    assert len(ids) == 2 and ids[0] != ids[1]
+    assert all(i.startswith(loc_id_prefix) for i in ids)
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": ids[0], "disposition": "fix-as-suggested"},
         {"id": ids[1], "disposition": "skip", "reason": "defer the important one"},
@@ -5322,10 +5324,10 @@ def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
 
 def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
     """E4: two guided tradeoffs at the same location — ambiguity note, both guidance texts kept."""
-    a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
-         "tradeoff": True}
-    b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
-         "tradeoff": True}
+    a = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Important",
+         "file": "f.py", "line": 10, "tradeoff": True}
+    b = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important",
+         "file": "f.py", "line": 10, "tradeoff": True}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [dict(a), dict(b)])
     step = RD._advance(state, state["config"])
@@ -5356,7 +5358,9 @@ def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
     for guidance, record_id in record_by_guidance.items():
         assert record_id in block
         assert "> %s" % guidance in block
-    assert block.count("### f.py:10 — same choice") == 2
+    identity_line = RD._gate_guidance_identity_line(
+        {"file": "f.py", "line": 10, "title": "same choice " + "x" * 205 + " alpha"})
+    assert block.count(identity_line) == 2
     assert block.count("Note: 2 guided findings share this identity") == 2
     assert block.count("BEGIN owner-gate guidance") == 2
 
@@ -8377,9 +8381,12 @@ def test_write_certification_artifacts_refusal_write_failure_returns_fault(tmp_p
 def test_write_certification_artifacts_fault_strings_match_terminal_receipt_gate_coupling(
         tmp_path, monkeypatch):
     """_terminal_receipt_gate distinguishes certification-write faults from every other fault by
-    matching the substring 'certification' in the fault string (_receiptFinalized is set only when
-    fault is None or 'certification' not in fault). A reworded message here would silently re-open
-    the replay fall-open over a missing certification artifact."""
+    the typed fault class RECEIPT_FAULT_CERTIFICATION (layer 1b), not by substring matching on the
+    message. _receiptFinalized is set only when fault is None or fault.kind is not
+    RECEIPT_FAULT_CERTIFICATION. This test still pins that the certification-write fault path is
+    the only non-None return from _write_certification_artifacts and that the fault carries that
+    class; a reworded message must not silently re-open the replay fall-open over a missing
+    certification artifact."""
     _COUPLING_SUBSTRING = "certification"
 
     # Census of every non-None return from _write_certification_artifacts — only one path exists:

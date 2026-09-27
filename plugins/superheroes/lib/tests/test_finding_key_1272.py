@@ -91,7 +91,7 @@ def test_mechanical_compile_mints_finding_key_equal_to_location_id():
     ]
     compiled, _ = RD.mechanical_compile(findings, None)
     for f in compiled:
-        assert f.get(SC.FINDING_KEY_FIELD) == RD._location_id(f)
+        assert f.get(SC.FINDING_KEY_FIELD) == SC.location_key(f)
 
 
 def test_mechanical_compile_discards_inbound_finding_key():
@@ -107,6 +107,18 @@ def test_mechanical_compile_discards_inbound_finding_key():
     assert len(set(keys)) == 2
 
 
+def _shared_location_key(findings):
+    return SC.location_key(findings[0])
+
+
+def _hex12_suffix(key, base):
+    assert key.startswith(base + "#")
+    suffix = key[len(base) + 1:]
+    assert len(suffix) == 12
+    assert all(c in "0123456789abcdef" for c in suffix)
+    return suffix
+
+
 def test_mechanical_compile_mints_distinct_keys_when_location_collides():
     prefix = "x" * 165
     findings = [
@@ -115,9 +127,15 @@ def test_mechanical_compile_mints_distinct_keys_when_location_collides():
     ]
     compiled, _ = RD.mechanical_compile(findings, None)
     keys = [f[SC.FINDING_KEY_FIELD] for f in compiled]
+    base = _shared_location_key(findings)
     assert len(keys) == 2
     assert keys[0] != keys[1]
-    assert keys[1] == keys[0] + "#1"
+    _hex12_suffix(keys[0], base)
+    _hex12_suffix(keys[1], base)
+    reversed_findings = list(reversed(findings))
+    compiled_rev, _ = RD.mechanical_compile(reversed_findings, None)
+    keys_rev = sorted([f[SC.FINDING_KEY_FIELD] for f in compiled_rev])
+    assert sorted(keys) == keys_rev
 
 
 def test_seat_supplied_duplicate_finding_keys_do_not_collide_in_ledger():
@@ -172,7 +190,7 @@ def test_finding_identity_key_never_returns_positional_id():
     f = {"id": "v3", "file": "z.py", "line": 1, "title": "only id"}
     key = SC.finding_identity_key(f)
     assert key != "v3"
-    assert key == RD._location_id(f)
+    assert key == SC.location_key(f)
 
 
 # --- T4: fail-closed edges E1–E3, E6 ---------------------------------------------------------
@@ -266,8 +284,12 @@ def test_duplicate_keys_in_one_set_findings_list_rekeyed_both_live():
     keys = [SC.finding_identity_key(f) for f in state["findings"]]
     assert len(keys) == 2
     assert keys[0] != keys[1]
-    assert keys[0] == "caller-controlled"
-    assert keys[1] == "caller-controlled#1"
+    _hex12_suffix(keys[0], "caller-controlled")
+    _hex12_suffix(keys[1], "caller-controlled")
+    state_rev = RD.new_state(_cfg())
+    RD._set_findings(state_rev, [finding2, finding1])
+    keys_rev = sorted([SC.finding_identity_key(f) for f in state_rev["findings"]])
+    assert sorted(keys) == keys_rev
 
 
 def test_set_findings_idempotent_on_same_list():

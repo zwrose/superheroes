@@ -302,9 +302,9 @@ def _trusted_vendors(roster, indexed, dispatch_manifest, disclosures):
                 trusted[seat] = source
                 prov_src = disclosures.setdefault("provenanceSource", {})
                 if provenance == round_records.PROVENANCE_DISPATCH_OBSERVED:
-                    prov_src[seat] = "runner-record"
+                    prov_src[seat] = round_records.AUDIT_PROVENANCE_RUNNER_RECORD
                 elif provenance == round_records.PROVENANCE_HAND_LANDED:
-                    prov_src[seat] = "hand-landed-evidence"
+                    prov_src[seat] = round_records.AUDIT_PROVENANCE_HAND_LANDED
             elif seat not in underived:
                 underived.append(seat)
             echo = envelope.get("vendor")
