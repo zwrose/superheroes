@@ -754,7 +754,9 @@ without a tool call.
   `dispatch-write` with `--max-wait` (≤ **540 s**, a hard cap the runner **refuses past, never
   clamps** — an over-cap or negative value comes back `unrunnable` with detail
   `max-wait-out-of-range:<value>:allowed=0..540`, nothing opened and nothing spawned, so waiting
-  longer than the cap means **omitting the flag and polling**, never passing a bigger number;
+  longer than the cap means **re-invoking the originating verb on the same `--run-dir` with another
+  slice** (`reference/dispatch-mechanics.md` § Awaiting a dispatch — the in-turn contract), never
+  passing a bigger number;
   a zero slice on **`dispatch-review`** is a legal **open-and-return-now** — it opens the run and returns `running`
   **without starting an attempt at all**; on **`dispatch-write`**, `--max-wait` **also** bounds git preflight (`preflight_timeout`, floored at **1 s** — `reference/dispatch-mechanics.md` § Launch slice vs continuation slice), so a zero slice is not a safe pre-open and can return terminal **`git-preflight-timeout`** with nothing opened — a continuation **cannot** recover an unlaunched run; on its own it completes nothing; a `running` result whose
   attempt count is **zero** means nothing has launched **yet** — re-invoke the same verb on the same
