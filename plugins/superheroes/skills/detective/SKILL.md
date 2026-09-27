@@ -174,7 +174,9 @@ approved artifact.
   reached. **Stop** and deliver the not-demonstrated receipt **naming what was ruled out**, rather
   than spending on with no owner present.
 
-**Done when:** every stopped diagnosis has a posted not-demonstrated receipt that names what was
-ruled out, and any obvious fix appears only as a recommended follow-up.
+**Done when:** every stopped diagnosis with no demonstrated cause has a posted not-demonstrated
+receipt that names what was ruled out; a diagnosis that ends with a demonstrated cause instead
+carries that receipt (element 2 of the diagnosis receipt), and either way any obvious fix appears
+only as a recommended follow-up.
 
 **Read `skills/detective/reference/excuses.md` when you catch yourself arguing for an exception.**
