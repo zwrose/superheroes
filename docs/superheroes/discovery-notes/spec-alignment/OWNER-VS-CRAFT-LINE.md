@@ -150,3 +150,14 @@ review should have caught (I208, I223); routine size splits (I059, later ruled t
   discovery began with the owner not being consulted enough. "Doubt resolves to an owner call"
   stays. Over-consultation is fixed two other ways: a fuller craft list so fewer calls land in
   doubt, and better presentation (the first experiment), not by moving the default.
+- Craft list filled out (owner-approved additions): how it is built (code structure,
+  architecture); how it is tested; tools and libraries; internal names in code; internal error
+  handling; how a speed or size target is met; cleanup that changes no behavior.
+- Framing rule (owner): craft items are ALWAYS craft; they never flip to owner. One choice can
+  carry two decisions. General rule: "a craft choice that carries an owner consequence raises
+  that consequence to the owner as its own decision" (e.g. a tool choice is craft; a new cost or
+  outside service it brings is a separate owner decision).
+- Tests (owner): craft, and the owner keeps the right to ask pointed questions at any time
+  ("AI habits are pretty terrible when it comes to tests"). A question does not reclassify
+  testing; what it turns up is an error for review or a quality-bar call (already owner).
+- Owner list judged "good for an initial list" (answers the "anything missing?" item).
