@@ -422,7 +422,7 @@ def test_claude_probe_refuses_leftover_background_subdir(tmp_path, monkeypatch):
 
 def test_probe_accepts_parent_run_dir_with_only_recognized_mode_subdirs(tmp_path, monkeypatch):
     # Negative half of the guard above: a parent containing only the recognized print/
-    # background/ mode subdirectories (both empty — no prior journal) is NOT refused as
+    # mode subdirectory (empty — no prior journal) is NOT refused as
     # run-dir-not-empty-unopened, and the probe proceeds to dispatch normally.
     home = tmp_path / "home"
     home.mkdir()
@@ -446,61 +446,7 @@ def test_probe_accepts_parent_run_dir_with_only_recognized_mode_subdirs(tmp_path
     )
     for mode in ("print",):
         assert payload["modeLegs"][mode]["resultProduction"]["detail"] != "run-dir-not-empty-unopened"
-
-
-def test_claude_probe_green_as_far_as_the_injected_seam_can_reach(tmp_path, monkeypatch):
-    """Push the claude two-mode aggregation as close to all-green as this harness setup allows
-    without also supplying background telemetry.
-
-    print's three legs pass exactly as in the all-green single-mode tests above. background can
-    be fed a schema-valid `StructuredOutput` transcript row (the shape
-    `engine_adapter.claude_transcript_result` reads — see
-    `test_claude_telemetry_absent_when_only_the_structured_output_call` above for the same
-    shape), and `_materialize_stdout_result` genuinely writes a valid native result file for it;
-    `_execute_injected_attempt` now stamps that outcome on `transcriptResult` and records
-    `transcriptToolCalls` from the transcript rows, so background's resultProduction passes.
-    This setup still omits a non-StructuredOutput tool call in the background transcript, so
-    progressTelemetry stays `telemetry-absent` — see `test_claude_probe_all_green_both_modes`
-    for the full both-mode green path.
-    """
-    home = tmp_path / "home"
-    home.mkdir()
-    (home / ".claude").mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    repo = _repo(tmp_path)
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir, exist_ok=True)
-    structured = {"result": _native_verdicts_branch()}
-    print_stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
-    # Background delivery is RESULT_DELIVERY_TRANSCRIPT: `_materialize_stdout_result` reads the
-    # last `StructuredOutput` tool_use block's `input` straight from the transcript rows (see
-    # `engine_adapter.claude_transcript_result`) — the same shape used by the progressTelemetry
-    # test above (`test_claude_telemetry_absent_when_only_the_structured_output_call`) — rather
-    # than the `structured_output` envelope field STDOUT delivery reads.
-    background_stdout = json.dumps({
-        "type": "assistant",
-        "message": {"content": [{
-            "type": "tool_use", "id": "so1", "name": "StructuredOutput",
-            "input": {"result": _native_verdicts_branch()},
-        }]},
-    })
-
-    def print_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        return print_stdout, False, 0, ""
-
-    def background_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        return background_stdout, False, 0, ""
-
-    fake = FakeRunner([print_runner], sync_native=False)
-    payload, code, stderr = CP.probe(
-        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert payload["probedModes"] == ["print"]
-    for leg_name in CP._LEG_NAMES:
-        assert payload["modeLegs"]["print"][leg_name]["ok"] is True, leg_name
-    assert payload["ok"] is True
+    assert len(fake.calls) >= 1
     assert code == 0
 
 

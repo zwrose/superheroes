@@ -319,11 +319,6 @@ def channel_for(engine):
     return _CHANNEL_BY_ENGINE[engine]
 
 
-def claude_mode_ok(mode):
-    """True when mode is absent or one of the declared claude dispatch modes."""
-    return mode is None or mode in CLAUDE_MODES
-
-
 def normalize_claude_mode(mode):
     """Treat omitted journal mode as print for continuation comparison (#1273)."""
     if mode is None:

@@ -44,6 +44,10 @@ Removed with no replacement — print mode has none of them:
   List sessions with `claude agents --json` (per `CLAUDE_CONFIG_DIR`), and stop any row of kind
   `background` whose cwd is a dispatch sanitized view with `claude stop <id>`. The runner no longer
   does this.
+- **Fold any run directory that 0.35.0 opened in background mode.** Run
+  `dispatch-abandon --run-dir <dir>` once on each such directory. Until you do,
+  `dispatch-poll` still reports the run as running, because a continuation now refuses without
+  closing it.
 
 ## 0.35.0
 

@@ -151,6 +151,7 @@ MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
 MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH = "run-dir-claude-mode-mismatch"
 MODE_REFUSAL_CLAUDE_MODE_RETIRED = claude_modes.ENTRY_REASON_CLAUDE_MODE_RETIRED
 MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_RETIRED = claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_RETIRED
+MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_UNKNOWN = claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_UNKNOWN
 PR_BODY_REFUSAL_RUN_DIR_MISMATCH = "run-dir-pr-body-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
@@ -200,9 +201,10 @@ def _claude_mode_unknown_detail(value):
 
 def _entry_claude_mode_refusal(claude_mode, **kwargs):
     """Entry chokepoint for --claude-mode. Returns a refusal dict or None. Never raises."""
-    if claude_mode is None or claude_mode == claude_modes.MODE_PRINT:
+    kind = claude_modes.classify(claude_mode)
+    if kind == claude_modes.CLASS_DISPATCHABLE:
         return None
-    if claude_mode in claude_modes.RETIRED_CLAUDE_MODES:
+    if kind == claude_modes.CLASS_RETIRED:
         return _claude_mode_entry_refusal(
             MODE_REFUSAL_CLAUDE_MODE_RETIRED,
             "%s:%s" % (MODE_REFUSAL_CLAUDE_MODE_RETIRED, claude_mode),
@@ -215,16 +217,20 @@ def _entry_claude_mode_refusal(claude_mode, **kwargs):
     )
 
 
-def _continuation_run_dir_claude_mode_retired(journal_claude_mode):
+def _continuation_claude_mode_refusal(journal_claude_mode):
     """Continuation chokepoint for journal claudeMode. Returns refusal dict or None. Never raises."""
-    if journal_claude_mode is None:
+    kind = claude_modes.classify(journal_claude_mode)
+    if kind == claude_modes.CLASS_DISPATCHABLE:
         return None
-    if journal_claude_mode in claude_modes.CLAUDE_MODES:
-        return None
+    detail = (
+        MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_RETIRED
+        if kind == claude_modes.CLASS_RETIRED
+        else MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_UNKNOWN
+    )
     return {
         "ok": False,
         "reason": dispatch_outcome.REASON_UNRUNNABLE,
-        "detail": MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_RETIRED,
+        "detail": detail,
         "attempts": 0,
         "terminal": True,
         "forfeited": False,
@@ -5411,11 +5417,11 @@ def _dispatch_review_impl(seat, *, prompt_path,
                     )
                 journal_claude_mode = opened.get("claudeMode")
                 resolved_claude_mode["claudeMode"] = journal_claude_mode
-                retired = _continuation_run_dir_claude_mode_retired(journal_claude_mode)
-                if retired is not None:
+                claude_refusal = _continuation_claude_mode_refusal(journal_claude_mode)
+                if claude_refusal is not None:
                     return _finish_preflight_terminal(
                         repo_detail,
-                        retired,
+                        claude_refusal,
                         run_dir=run_dir_real, argv=argv, engine=engine,
                     )
                 if (
@@ -6005,10 +6011,10 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 )
             journal_claude_mode = opened.get("claudeMode")
             resolved_claude_mode["claudeMode"] = journal_claude_mode
-            retired = _continuation_run_dir_claude_mode_retired(journal_claude_mode)
-            if retired is not None:
+            claude_refusal = _continuation_claude_mode_refusal(journal_claude_mode)
+            if claude_refusal is not None:
                 return _write_preflight_terminal(
-                    retired,
+                    claude_refusal,
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
             if (

@@ -475,16 +475,6 @@ def test_result_delivery_unknown_engine_before_bad_mode():
         ERC.result_delivery("bogus", "bogus")
 
 
-@pytest.mark.parametrize("mode,expected", [
-    (None, True),
-    (ERC.MODE_PRINT, True),
-    ("background", False),
-    ("bogus", False),
-])
-def test_claude_mode_ok(mode, expected):
-    assert ERC.claude_mode_ok(mode) is expected
-
-
 def test_result_delivery_unknown_engine_refuses():
     with pytest.raises(ERC.UnknownEngineError):
         ERC.result_delivery("bogus")

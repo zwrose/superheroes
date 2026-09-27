@@ -15,6 +15,16 @@ _FORBIDDEN_LITERALS = frozenset({
     "bgStop",
     "backgroundStopUnconfirmed",
     "transcript",
+    "background-launch-unacknowledged",
+    "background-launch-failed",
+    "background-session-unlisted",
+    "background-transcript-ambiguous",
+    "background-agents-unreadable",
+    "background-session-ended-without-result",
+    "background-stop-unconfirmed",
+    "transcriptResult",
+    "transcriptToolCalls",
+    "claude-mode-unsupported",
 })
 
 _REMOVED_SYMBOLS = frozenset({
@@ -47,6 +57,7 @@ _REMOVED_SYMBOLS = frozenset({
 
 def retired_background_problems(lib_root):
     problems = []
+    scanned = set()
     lib_root = os.path.abspath(lib_root)
     for name in sorted(os.listdir(lib_root)):
         if not name.endswith(".py"):
@@ -54,6 +65,7 @@ def retired_background_problems(lib_root):
         path = os.path.join(lib_root, name)
         if not os.path.isfile(path):
             continue
+        scanned.add(name)
         rel = os.path.relpath(path, lib_root)
         try:
             source = open(path, encoding="utf-8").read()
@@ -83,12 +95,21 @@ def retired_background_problems(lib_root):
                         alias.asname and alias.asname in _REMOVED_SYMBOLS
                     ):
                         problems.append("%s:%d:%s" % (rel, node.lineno, alias.name))
-    return sorted(problems)
+    return sorted(problems), scanned
 
 
-def test_shipped_lib_has_no_retired_background_surface():
+def test_shipped_lib_has_no_retired_background_surface(tmp_path):
     # axis: shipped lib modules carry no retired background literals or symbols
-    assert retired_background_problems(_LIB_ROOT) == []
+    problems, scanned = retired_background_problems(_LIB_ROOT)
+    assert problems == []
+    assert scanned
+    for required in (
+        "engine_dispatch.py",
+        "engine_adapter.py",
+        "engine_result_channel.py",
+        "claude_modes.py",
+    ):
+        assert required in scanned
     assert not os.path.isfile(os.path.join(_LIB_ROOT, "background_outcome.py"))
 
 
@@ -98,13 +119,19 @@ def test_census_bites_on_planted_background_surface(tmp_path):
     planted.write_text(
         'import background_outcome\n'
         'argv = ["claude", "--bg"]\n'
+        'detail = "background-stop-unconfirmed"\n'
         'def _background_stop():\n'
         '    pass\n',
         encoding="utf-8",
     )
     clean = tmp_path / "clean.py"
     clean.write_text("x = 1\n", encoding="utf-8")
-    problems = retired_background_problems(str(tmp_path))
+    problems, _scanned = retired_background_problems(str(tmp_path))
     whats = [p.split(":", 2)[-1] for p in problems if p.startswith("planted.py:")]
-    assert sorted(whats) == ["--bg", "_background_stop", "background_outcome"]
+    assert sorted(whats) == [
+        "--bg",
+        "_background_stop",
+        "background-stop-unconfirmed",
+        "background_outcome",
+    ]
     assert not any(p.startswith("clean.py:") for p in problems)

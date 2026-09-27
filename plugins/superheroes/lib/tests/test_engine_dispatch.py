@@ -14957,7 +14957,7 @@ def _plant_claude_review_journal_with_claude_mode(
     cwd = os.path.realpath(repo_root)
     opts = {"cwd": cwd}
     argv_mode = claude_mode
-    if claude_mode == claude_modes.RETIRED_MODE_BACKGROUND:
+    if argv_mode is not None and argv_mode != claude_modes.MODE_PRINT:
         argv_mode = claude_modes.MODE_PRINT
     if argv_mode is not None:
         opts["claudeMode"] = argv_mode
@@ -15006,6 +15006,18 @@ def test_claude_mode_omitted_records_default_source(tmp_path, monkeypatch):
     assert opened.get("claudeMode") is None
     assert opened["resolvedInputs"]["claudeMode"] is None
     assert opened["resolvedInputs"]["claudeModeSource"] == "default"
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, claude_modes.CLASS_DISPATCHABLE),
+    ("print", claude_modes.CLASS_DISPATCHABLE),
+    ("background", claude_modes.CLASS_RETIRED),
+    ("bogus", claude_modes.CLASS_UNKNOWN),
+    (3, claude_modes.CLASS_UNKNOWN),
+    (["print"], claude_modes.CLASS_UNKNOWN),
+])
+def test_claude_modes_classify_truth_table(value, expected):
+    assert claude_modes.classify(value) == expected
 
 
 def test_claude_mode_unknown_refused_before_open(tmp_path):
@@ -15111,6 +15123,33 @@ def test_dispatch_review_continuation_of_background_journal_refuses_retired(
     assert not any(r.get("kind") in ("attempt-started", "engine-started") for r in records)
 
 
+def test_dispatch_review_continuation_of_unknown_mode_journal_refuses_unknown(
+    tmp_path, monkeypatch,
+):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "bogus-continuation")
+    repo_root = _repo(tmp_path)
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _reviewer_claude_seat()
+    _plant_claude_review_journal_with_claude_mode(
+        tmp_path, run_dir, repo_root, seat, config_dir=cfg, claude_mode="bogus",
+    )
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
+    res = ED.dispatch_review(
+        seat=seat,
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_stable_build_view(tmp_path),
+        run_dir=run_dir,
+        order_id="claude-mode-test",
+        max_wait=0,
+    )
+    assert res["detail"] == claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_UNKNOWN
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
 def test_poll_and_abandon_on_legacy_background_journal_do_not_raise(
     tmp_path, monkeypatch,
 ):
@@ -15123,9 +15162,16 @@ def test_poll_and_abandon_on_legacy_background_journal_do_not_raise(
     _plant_claude_review_journal_with_claude_mode(
         tmp_path, run_dir, repo_root, seat, config_dir=cfg, claude_mode="background",
     )
+    dead_pid = 99999999
+    now = time.time()
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": dead_pid, "at": now,
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 1, "enginePgid": dead_pid, "at": now,
+    })
     launch_id = "abcd1234"
     session_id = "s1"
-    now = time.time()
     ED._journal_append(run_dir, {
         "kind": "background-launched", "attempt": 1, "launchId": launch_id,
         "bgSessionId": session_id, "at": now,
@@ -15136,25 +15182,44 @@ def test_poll_and_abandon_on_legacy_background_journal_do_not_raise(
     })
     popen_calls = []
     run_calls = []
+    claude_exe = EA.CLAUDE_EXECUTABLE
+    real_subprocess_popen = ED.subprocess.Popen
+    real_subprocess_run = ED.subprocess.run
+
+    def _argv_is_claude(argv):
+        if not argv:
+            return False
+        head = argv[0]
+        return head == claude_exe or (
+            isinstance(head, str)
+            and os.path.basename(head) == os.path.basename(claude_exe)
+        )
 
     def _record_popen(*args, **kwargs):
         popen_calls.append((args, kwargs))
-        raise AssertionError("unexpected Popen")
+        argv = args[0] if args else []
+        if _argv_is_claude(argv):
+            raise AssertionError("unexpected claude Popen")
+        return real_subprocess_popen(*args, **kwargs)
 
     def _record_run(*args, **kwargs):
         run_calls.append((args, kwargs))
-        raise AssertionError("unexpected run")
+        argv = args[0] if args else []
+        if _argv_is_claude(argv):
+            raise AssertionError("unexpected claude subprocess.run")
+        return real_subprocess_run(*args, **kwargs)
 
     monkeypatch.setattr(ED.subprocess, "Popen", _record_popen)
     monkeypatch.setattr(ED.subprocess, "run", _record_run)
     poll_res = ED.dispatch_poll(run_dir)
     assert poll_res is not None
+    assert not str(poll_res.get("detail", "")).startswith("internal-")
     abandon_res = ED.dispatch_abandon(run_dir)
     assert abandon_res["terminal"] is True
-    claude_exe = EA.CLAUDE_EXECUTABLE
+    assert not str(abandon_res.get("detail", "")).startswith("internal-")
     for args, _kwargs in popen_calls + run_calls:
         argv = args[0] if args else []
-        assert not (argv and argv[0] == claude_exe)
+        assert not _argv_is_claude(argv)
 
 
 def test_claude_print_review_materializes_stdout_result(tmp_path, monkeypatch):

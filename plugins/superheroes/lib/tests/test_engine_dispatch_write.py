@@ -3399,7 +3399,7 @@ def _plant_claude_write_journal_with_claude_mode(
     cwd = os.path.realpath(wt)
     opts = {"cwd": cwd}
     argv_mode = claude_mode
-    if claude_mode == "background":
+    if argv_mode is not None and argv_mode != "print":
         argv_mode = "print"
     if argv_mode is not None:
         opts["claudeMode"] = argv_mode
@@ -3516,6 +3516,33 @@ def test_dispatch_write_continuation_of_background_journal_refuses_retired(
         kwargs["claude_mode"] = claude_mode
     res = _dispatch_write(tmp_path, fake, **kwargs)
     assert res["detail"] == "run-dir-claude-mode-retired"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_write_continuation_of_unknown_mode_journal_refuses_unknown(
+    tmp_path, monkeypatch,
+):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-bogus-continuation")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _implementer_claude_seat()
+    planted = _plant_claude_write_journal_with_claude_mode(
+        tmp_path, run_dir, wt, seat, config_dir=cfg, claude_mode="bogus",
+    )
+    with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+        fh.write(planted["fedPrompt"])
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    res = _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt,
+        run_dir=run_dir,
+        seat=seat,
+        order_id="claude-mode-test",
+    )
+    assert res["detail"] == ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_UNKNOWN
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
 
