@@ -811,6 +811,7 @@ def test_check_disposition_without_receipt_critical_out_of_scope_refuses(tmp_pat
                     "id": "C1",
                     "severity": "Critical",
                     "disposition": "out-of-scope",
+                    "outOfScopeReason": "accepted risk",
                     "followUp": {
                         "revisitTrigger": "milestone M",
                         "classClosure": "none",
@@ -834,6 +835,7 @@ def test_check_disposition_without_receipt_missing_revisit_trigger_refuses(tmp_p
                     "id": "I1",
                     "severity": "Important",
                     "disposition": "out-of-scope",
+                    "outOfScopeReason": "deferred",
                     "followUp": {"classClosure": "tracked in issue-99"},
                 }
             ]
@@ -853,6 +855,7 @@ def test_check_disposition_without_receipt_missing_class_closure_refuses(tmp_pat
                     "id": "I1",
                     "severity": "Important",
                     "disposition": "out-of-scope",
+                    "outOfScopeReason": "deferred",
                     "followUp": {"revisitTrigger": "2026-12-01"},
                 }
             ]

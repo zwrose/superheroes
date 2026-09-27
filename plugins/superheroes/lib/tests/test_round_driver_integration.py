@@ -47,6 +47,10 @@ import round_records  # noqa: E402
 import sanitized_view  # noqa: E402
 import session_contract  # noqa: E402
 
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from session_checkout import enter_checkout, make_checkout  # noqa: E402
+
 _CODEX_IMPLEMENTER_MODEL = model_registry.matrix_config("implementer", "codex")[0]
 
 # =============================================================================================
@@ -163,15 +167,15 @@ def _execution_evidence(**over):
     return evidence
 
 
-def _execution_evidence_for_payload(payload, source="runner"):
+def _execution_evidence_for_payload(payload, source="runner", read="unknown"):
     observation = {
         "tokens": None,
-        "toolCalls": None,
+        "toolCalls": 1,
         "stdoutBytes": 0,
         "wallSeconds": 0.0,
-        "source": "none",
-        "read": "unknown",
-        "telemetry": "none",
+        "source": "codex-events",
+        "read": read,
+        "telemetry": "tool-calls",
     }
     for kind in engine_adapter.REVIEW_RESULT_KINDS + ("fixes", "result"):
         if kind in payload:
@@ -187,7 +191,7 @@ def _execution_evidence_for_payload(payload, source="runner"):
     return _execution_evidence(observation=observation, source=source)
 
 
-def _land(session_dir, state, pend, seat, payload, occurrence=0):
+def _land(session_dir, state, pend, seat, payload, occurrence=0, evidence_read="unknown"):
     """Write ONE seat's envelope into the LANDING area (what the host does)."""
     manifest_sha, order_sha = _anchor_hashes(session_dir, state, pend, seat)
     schema = round_records.seat_result_schema_for_state_version(state.get("schemaVersion"))
@@ -211,7 +215,8 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0):
     }
     if schema == round_records.SEAT_RESULT_SCHEMA_V2:
         evidence_source = _auditor_vendor_for(state)(seat)
-        evidence = _execution_evidence_for_payload(payload, source=evidence_source)
+        evidence = _execution_evidence_for_payload(
+            payload, source=evidence_source, read=evidence_read)
         envelope["executionEvidence"] = evidence
         envelope["provenance"] = round_records.PROVENANCE_HAND_LANDED
         envelope["envelopeSha256"] = round_records.envelope_sha256(payload, evidence)
@@ -350,6 +355,7 @@ def _fixture_repo(tmp_path, name):
         if not target.exists():
             target.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8")
     repo_root.mkdir(parents=True, exist_ok=True)
+    make_checkout(repo_root)
     return str(repo_root)
 
 
@@ -361,7 +367,9 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     head_diff_path = str(tmp_path / (name + "-head.diff"))
     with open(head_diff_path, "w", encoding="utf-8") as fh:
         fh.write(HEAD_DIFF)
-    cfg_over.setdefault("repoRoot", _fixture_repo(tmp_path, name))
+    repo_root = _fixture_repo(tmp_path, name)
+    cfg_over.setdefault("repoRoot", repo_root)
+    enter_checkout(repo_root)
     out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
     assert out["ok"], out
     if head_sha is not None:
@@ -888,7 +896,8 @@ def _execution_run_dir(tmp_path, order_path, panel_findings, echo_nonce="nonce-p
 
 def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
                                                   panel_findings, head_diff_path,
-                                                  telemetry_shape="dispatch-observed"):
+                                                  telemetry_shape="dispatch-observed",
+                                                  evidence_read="unknown"):
     _assert_adapters_are_real()
     state = _state(session_dir)
     pend = state["pending"]
@@ -914,7 +923,8 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
             out = round_driver.cmd_record_result(
                 session_dir, seat, occurrence=occurrence, evidence_run_dir=run_dir)
         else:
-            _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+            _land(session_dir, state, pend, seat, payload, occurrence=occurrence,
+                  evidence_read=evidence_read)
             out = _record(session_dir, seat, occurrence=occurrence)
         assert out["ok"], (phase, seat, occurrence, out)
     if phase == round_driver.P_PANEL and telemetry_shape != "no-telemetry":
@@ -932,7 +942,8 @@ def _drive_one_phase_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
 def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdir,
                                                       panel_findings, head_diff_path,
                                                       max_steps=24,
-                                                      telemetry_shape="dispatch-observed"):
+                                                      telemetry_shape="dispatch-observed",
+                                                      evidence_read="unknown"):
     folded = []
     for _ in range(max_steps):
         if _state(session_dir).get("terminal"):
@@ -940,7 +951,7 @@ def _drive_to_terminal_with_panel_dispatch_evidence(session_dir, tmp_path, gitdi
         before = _state(session_dir)["pending"]["phase"]
         phase, out = _drive_one_phase_with_panel_dispatch_evidence(
             session_dir, tmp_path, gitdir, panel_findings, head_diff_path,
-            telemetry_shape=telemetry_shape)
+            telemetry_shape=telemetry_shape, evidence_read=evidence_read)
         assert out["ok"], (phase, out)
         assert out["folded"]["phase"] == phase, out
         assert _state(session_dir)["step"] != before, (phase, _state(session_dir)["step"])
@@ -1067,14 +1078,7 @@ def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_
 
 def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_records_dispositions(
         tmp_path):
-    """Seam between this child (the writer's disposition-without-receipt check) and C13.
-
-    C13 lands the loop's disposition recording at ``round_driver.py`` :2349, :2720, and :3318,
-    all routed through ``_set_findings``. When that producer lands, this test flips to a certifying
-    assertion in C13 under R28's first clause (the behavior is fixed and the test is kept). This
-    is not a statement that refusing is desirable — only that refusing is what the code correctly
-    does while no producer exists.
-    """
+    """End-to-end: a converged loop records fixed disposition on the ledger for raised findings."""
     seat_map = {
         "seats": {
             dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
@@ -1094,12 +1098,22 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
     assert round_driver.P_PANEL in folded
     state = _state(session_dir)
     assert state["terminal"] == "converged", state.get("certification")
-    receipt, refusal = round_certification.certify(session_dir)
-    assert receipt is None
-    assert refusal is not None
-    assert refusal["class"] == "disposition-without-receipt"
-    assert refusal["artifact"] == finding["title"]
-    assert refusal["detail"] == "finding has no disposition recorded"
+    compiled, _ = round_driver.mechanical_compile([finding], None)
+    key = session_contract.finding_identity_key(compiled[0])
+    ledger = {session_contract.finding_identity_key(e): e
+              for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
+    assert key in ledger
+    entry = ledger[key]
+    assert entry["disposition"] == "fixed"
+    assert entry["dispositionRound"] == 2
+    receipt = entry["dispositionReceipt"]
+    assert isinstance(receipt.get("headSha"), str) and receipt["headSha"]
+    assert receipt["verifyResult"] == "pass"
+    cert_receipt, refusal = round_certification.certify(session_dir)
+    if refusal is not None:
+        assert (refusal["class"] != "disposition-without-receipt"
+                or refusal["detail"] != "finding has no disposition recorded"), (
+            "unexpected disposition-without-receipt: %r" % refusal)
 
 
 def _git(cwd, *args, check=True):
