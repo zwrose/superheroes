@@ -14,8 +14,8 @@ belongs to and lists every change with its replacement.
 Check these in a consuming project before it takes 0.35.0:
 
 - **Read liveness from the watcher, not the heartbeat sweep.** `heartbeat.py sweep` now classes a
-  record as `terminal`, `nonterminal`, or `unknown`; the `fresh` and `stale` classes are gone, and a
-  script matching them must be updated. See [Heartbeat sweep classes](#heartbeat-sweep-classes).
+  record as `terminal`, `nonterminal`, or `unknown`; the old fresh and stale classes are gone, and
+  a script matching them must be updated. See [Heartbeat sweep classes](#heartbeat-sweep-classes).
 - **Update a script that matches an `astra-probe-*` refusal token.** The registration probe's
   refusal tokens are now `registration-probe-*`, with no alias. See
   [Registration probe tokens](#registration-probe-tokens).
@@ -31,12 +31,13 @@ Check these in a consuming project before it takes 0.35.0:
 
 `heartbeat.py sweep` classes each record as `terminal` (the builder stamped `parked` or
 `handback`), `nonterminal` (a valid record whose state is not terminal — it says nothing about
-liveness), or `unknown`. The `fresh` and `stale` classes are removed, because a builder no longer
-promises a stamp cadence: `stamp --stale-after` is accepted and ignored for older callers, and a
-stamped record's `staleAfterSeconds` is always `LIVENESS_QUIET_WINDOW_SECONDS` (2700). Liveness has
-one signal: `wave_watch.py` raises `lane-stale` when a lane's process is live and its own session
-transcript was not written within that window. A consumer that matched `fresh` or `stale` from the
-sweep must match `nonterminal` for an unended lane and take liveness from `lane-stale`.
+liveness), or `unknown`. The old fresh and stale classes are removed, because a builder no longer
+promises a stamp cadence: `stamp` still accepts its old cadence argument from older callers and
+ignores it, and the window a stamped record carries is always `LIVENESS_QUIET_WINDOW_SECONDS`
+(2700 seconds). Liveness has one signal: `wave_watch.py` raises `lane-stale` when a lane's process
+is live and its own session transcript was not written within that window. A consumer that matched
+the old fresh or stale class from the sweep must match `nonterminal` for an unended lane and take
+liveness from `lane-stale`.
 
 ### Registration probe tokens
 
