@@ -22,9 +22,9 @@ Check these in a consuming project before it takes 0.35.0:
 - **An adoption launch passes `adopts` to re-occupy its own stack position.** Without it the launch
   still refuses `layer-position-occupied`; four new refusal tokens come with it. See
   [Launcher adoption premise](#launcher-adoption-premise).
-- **Accept `survivingNonBlocking` in a certification receipt, and never hand-edit `rulingsLog`.** The
-  certification loop ships through its rulings channel with one disclosed fail-open on a malformed
-  `rulingsLog`. See
+- **Accept `survivingNonBlocking` in a v5 certification receipt, and never hand-edit
+  `rulingsLog`.** The certification loop ships through its rulings channel with one disclosed
+  fail-open on a malformed `rulingsLog`. See
   [Certification receipt and the rulings channel](#certification-receipt-and-the-rulings-channel).
 
 ### Heartbeat sweep classes
@@ -69,9 +69,10 @@ when `adopts` names a pull request but the claimed position is empty;
 
 On success, `certification-receipt.json` (see
 [Certification receipt artifact](#certification-receipt-artifact)) carries the `disclosures` block
-with two keys: `importantOutOfScope` for Important out-of-scope deferrals, and
-`survivingNonBlocking` for surviving Minor or Nit findings without disposition. A consumer that
-enumerates the block's keys strictly must accept the new one.
+with `importantOutOfScope` for Important out-of-scope deferrals and, for a session at state schema
+v5, `survivingNonBlocking` for surviving Minor or Nit findings without disposition. A receipt from
+an earlier schema (v2–v4, still supported) omits `survivingNonBlocking`. A consumer that enumerates
+the block's keys strictly must accept the new one when present.
 
 The certification loop ships through layer 4d-2, where rulings reach the round driver as a declared
 input through `round_driver.py rule`. One fail-open ships disclosed: when a session's `rulingsLog`
