@@ -31,7 +31,7 @@ Fail direction, by construction:
   * a diff that changed no code exits **0** and says so;
   * otherwise the exit status is pytest's own.
 
-Stdlib only; runs under the repo's `/usr/bin/python3` (3.9) as well as CI's 3.12.
+Stdlib only; runs under the repo's pinned interpreter (`scripts/pinned-python` locally, setup-python in CI) and spawns pytest through `scripts/pinned-python` by default.
 """
 from __future__ import annotations
 
@@ -41,9 +41,10 @@ import re
 import subprocess
 import sys
 
-# CLAUDE.md pins these: Apple's python caches bytecode outside the tree, so a same-size,
-# same-second edit otherwise runs stale bytecode.
-DEFAULT_PYTHON = "/usr/bin/python3"
+# Child pytest runs through scripts/pinned-python; the pycache prefix keeps a same-size, same-second edit from running stale bytecode.
+DEFAULT_PYTHON = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "scripts", "pinned-python")
 PYCACHE_PREFIX = "/private/tmp/superheroes-pyc"
 PYTEST_ARGS = ("-q", "-n", "auto", "-p", "no:cacheprovider")
 

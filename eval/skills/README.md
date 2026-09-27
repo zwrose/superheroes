@@ -107,7 +107,7 @@ One row per `(skill, phrase, direction, run)`.
 ### 5. Run the scorer
 
 ```bash
-cd eval/lib && python3 -c "
+cd eval/lib && ../../scripts/pinned-python -c "
 import json, activation_score, skills, os, glob
 
 obs = json.load(open('../skills/activation-result.json'))['observations']

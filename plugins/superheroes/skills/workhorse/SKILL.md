@@ -4,7 +4,7 @@ description: Use to run the build — Workhorse is the entry point that takes a 
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Workhorse — the build session (an orchestrator)
 
@@ -22,7 +22,7 @@ The builder debugs in service of a fix — that work stays inside builds and bel
 ## You stand on the covenant
 
 Every superheroes session carries the covenant — read and obey
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/covenant.md`. **This charter specializes those
+`${CLAUDE_PLUGIN_ROOT}/rubric/covenant.md`. **This charter specializes those
 standing orders for the build; it does not repeat them.**
 
 **Host-injected session guidance varies by host surface and version** — e.g. a Claude Code desktop autonomy directive (2.1.217) or a "do not call the AgentTool unless the user requested it" directive (2.1.219) — and does not override this charter's delegation model for superheroes work; a user's invocation of this skill *is* the request such guidance refers to.
@@ -50,7 +50,7 @@ present** and
 **recorded in the issue**. **Micro** is the showrunner's lane — recorded in the **PR**,
 not an issue; see the showrunner charter and `review-discipline.md`. The canonical lane
 table and cross-lane invariants live in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` — **do not restate that table
+`${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` — **do not restate that table
 here.**
 
 **Default to the full lane; anything unclear resolves upward** (as bounded in
@@ -63,7 +63,7 @@ charter states today.
 
 **Light lane — shape for the builder**
 
-- **No build brief and no pre-code brief check** (§4–§5 are full-lane only).
+- **No build brief and no pre-code brief check** (§4–§5 are full-lane only, except §4's size step).
 - **You type the implementation** in this session rather than dispatching work orders (§7).
 - **Review before handback is one independent cross-vendor reviewer** — not the full `review-code`
   panel loop — and that reviewer must be **outside the maker family** (you typed the change, so you
@@ -99,22 +99,21 @@ never a self-declared downgrade):
 
 - The orchestrator **measures the working diff's non-test lines (additions plus deletions outside `tests/`) as it types**
   and **escalates when that count crosses ~400** — a flat measured line, not an estimate (basis: `review-discipline.md` § Size).
+  The **size step** (§4) runs in this lane too.
 - It **spreads into surfaces the lane call did not anticipate**.
 - It turns out to **touch a quiet-failure path**.
 - It turns out to need something **irreversible or expensive** — a migration, a new dependency, an
   auth or data-model change, a new external contract. **These go to the owner before they are built,
   in any lane.**
 
-**Separately from escalation**, the two absolute bars of `review-discipline.md` § Size apply in this lane as in
-full, on their own basis (non-test lines added or modified; deletions, regenerated artifacts, tests and records
-excluded): at **300** report the count and a proposed cut on the issue and continue; at **600** stop and act on the
-advisor's recorded ruling — continue, split or park. Neither bar is an escalation trigger.
+**Separately from escalation**, the size tripwire and the two absolute bars of `review-discipline.md` § Size
+apply in this lane as in full; none of them is an escalation trigger.
 
 **Escalation bridge (light → full).** When you escalate, **write the brief now** and **disclose
 that it was written late**, naming the trigger. Record already-typed work in the dispatch-provenance
 section as **orchestrator-typed** (your maker family). Then run the **full review loop** (brief
 check if not yet done, delegation as needed, full `review-code`) before handback — prose disclosure,
-not a new gate.
+not a new gate. The size step keeps the build's starting estimate (`review-discipline.md` § Size).
 
 **Light lane — implementer dispatch.** **Any implementer dispatch originating in the light lane is
 an escalation to the full lane** (escalation bridge above) — review fixes and pilot-discovered bugs
@@ -131,7 +130,7 @@ A routed issue carries exactly one of the advisor's four routes — `discovery`,
 
 - **`build-ready`** → the owner starting the issue is your go-ahead; no discovery needed — set up the
   workspace (§2), run the preflight (§3); **in the full lane** write the brief (§4); **in the light
-  lane** skip §4–§5 and build per Build lanes (you type the implementation).
+  lane** skip §4–§5 except §4's size step, and build per Build lanes (you type the implementation).
 - **`discovery`** → **route it back and stop.** You do not elicit requirements in a build session:
   discovery ends in an owner-approved spec, and that spec is what a build starts from. Report on the
   issue that it reached a builder still needing discovery, and hand it to the advisor —
@@ -152,8 +151,10 @@ happens **before any spend** — before the workspace, before the brief, before 
 
 When the routed issue is a **register-consuming child** — an epic child of a package that has a
 register, or a single-issue child standing in for one under FR-36 — run the register-check at
-**build intake** before the brief, whether or not the body contains a quoted block; a body with
-zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
+**build intake** before the brief, whether or not the body contains a quoted block; for a stack
+layer, use the register-check [stack layer
+inputs](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md#stack-layer-inputs);
+a body with zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
 derived from the issue alone, the route names the register and child token for you to pass. On
 `pass`, record the check's own output in the intake note — the `result` line, or `pass` together
 with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child token are
@@ -164,7 +165,7 @@ advisor resolves it before filing or before marking the package verified) rather
 treating the check as inapplicable; that is the same fail-closed direction as **A non-zero exit
 blocks**. **A non-zero exit blocks** the build — on `fail` **park**; on `undecided` **park**,
 exactly like `fail`. Detail:
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
+`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md`.
 
 **Confirm the Anchor resolves before any spend.** A routed issue cites an **Anchor** — the
 owner-approved decision it is downstream of — in a body header of the form `Anchor (<kind>):`,
@@ -243,7 +244,7 @@ template above was built for.
 This layer grades the **issue**, never the diff. The layer that inspects the diff is the advisor's
 standing anchor-coverage row at vet. And it adds **no machinery over the Amendments log** — it
 reads the log's entry numbers, classes, and touched sections as they already stand. Detail:
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md`.
 
 **Launch-prompt discipline.** Your launch prompt — the message this build session is started with,
 whoever drafted it (advisor routing prompt or owner's own words), not the context the harness injects
@@ -268,7 +269,7 @@ first durable post — carry the adjudication and its reasoning, not verbatim re
 dropped by omission). **Second, treat every claim you inherit as unverified until you re-run it
 yourself** — a prior session's commit message, PR body, or comment is an input to your verification
 (§8), never a substitute for it; that a receipt was *claimed* is not evidence it was *earned*. The
-full doctrine is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md` § Recovery — and
+full doctrine is `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery — and
 **the advisor makes the resume-or-adopt call, not you**.
 
 Intake is the last owner-interactive step. After the go-ahead you set up the workspace and run
@@ -305,7 +306,7 @@ build that verifies the slot but not the generation can be a stale occupant of a
 already been reassigned. Verify both, at intake, before any work. When the launch supplied both
 `slot` and `generation`, they arrive in the child environment as `SUPERHEROES_SLOT_REF`
 (`<slot>@<generation>`). Read
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Slot reference format; the
+`${CLAUDE_PLUGIN_ROOT}/reference/pilot-contract.md` (Slot reference format; the
 lifecycle refusal tokens for a missing or stale slot) for the slot-reference format and refusal
 semantics — cite the reference and stop; no mechanism in the charter.
 
@@ -331,29 +332,39 @@ on a CI runner, so a fixture's own commits still pass an explicit inline one.)
 
 ### Building a layer of a stack
 
-Every multi-PR child of a superheroes project is a [native stack](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/glossary.md#stack); an exception is owner-ruled and recorded — see
-[native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) for what a stack is and the glossary for the two terms.
+Every multi-PR child of a superheroes project is a [native stack](${CLAUDE_PLUGIN_ROOT}/rubric/glossary.md#stack); an exception is owner-ruled and recorded — see
+[native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) for what a stack is and the glossary for the two terms.
 A layer's branch, its PR base, and its stack membership all name the **layer below**,
 and each of the three is established from the **remote**, never from a local assumption.
 
+- **The layer's order and PR title line** — the order lives at the top of the layer's own sub-issue;
+  the pull request's first line names that sub-issue with a non-closing verb until the stack merges
+  ([native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § Each layer is
+  a sub-issue; non-closing verb rule in §11).
 - **Branch from the layer below's head** and set the **PR base to that branch** — the bottom layer
   branches from and targets the stack's base (normally `main`).
-- **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests, so
-  the **bottom layer** has nothing to link to at its own handback: it records that the stack does not
-  exist yet and names the layer that will form it. The stack is created by `gh stack link <bottom> <top>`
-  when the layer above opens; from then on every layer verifies membership from the branch before
-  claiming it. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack comes to exist).
+- **`gh stack link` at handback when the stack exists** — a stack needs at least two pull requests.
+  When the **bottom layer** hands back **before** any upper-layer pull request exists, it has
+  nothing to link yet: it records that the stack does not exist and names the layer that will form
+  it. Link only when **every planned layer from the stack bottom through the upper layer of the pair
+  to be linked** already has a pull request — do not link an upper fragment while a lower planned
+  layer still lacks one. When that contiguous span is complete, **whichever lane hands back with it
+  newly satisfied** runs `gh stack link` with pull request numbers only, bottom to top through that
+  span — including when the upper layer handed back first and the bottom layer is second. Parallel
+  layers and the full rule:
+  [native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md)
+  § Each layer is a sub-issue, item 4. Arguments run bottom to top ([native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § How a stack comes to exist).
   A base-branch chain that was never linked **is not a stack** — nothing downstream, not the advisor's click list,
   not the atomic merge, works on it.
 - **Membership is verified from the branch before it is claimed** — the GraphQL read in
-  [native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How membership is verified, not `gh stack view`, which reads local tracking state only.
+  [native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § How membership is verified, not `gh stack view`, which reads local tracking state only.
   "Linked" is a claim like any other: quote the PR's own `stackEntry` position and the stack's ordered entries in the PR body.
 - **The verify gate takes the pinned base** — on a stacked branch the review session's verify command
   carries `{baseRef}` bound to the **pinned base commit** (`review-code` § *The verify command*); without it a layer's
   gate selects the whole stack below it.
 - **The register check reads main's copy, and the handback says which copy it read** — a layer's
-  worktree carries whatever the layers below wrote ([register-check.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md)).
-- **Size is reported at 300 and the call is handed up at 600** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md) § Review bars and recorded residuals) — a layer growing past the bars is split into another layer rather than
+  worktree carries whatever the layers below wrote ([register-check.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md)).
+- **The size bars apply** ([review-discipline.md](${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md) § Size) — a layer that grows into a second surface is split into another layer rather than
   allowed to swallow two surfaces.
 - **Never hand-rebase and never force-push a layer inside a lane** — both move a head other layers and the
   review are pinned to; take in a moved base or a moved lower layer **by merge** — a **local `--no-ff`
@@ -363,7 +374,7 @@ and each of the three is established from the **remote**, never from a local ass
   takes a fresh remote-head check, CI on the new sha, and a receipt naming it; GitHub's cascading rebase is the disclosed alternative when a
   merge cannot resolve the conflict — it rewrites every commit above the change, and each moved layer then owes what the content pin decides: recompute the digest, and an equal digest re-pins with CI and re-reviews nothing while an unequal digest takes the branch the pin already
   defines
-  ([native-stacks.md](${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/native-stacks.md) § How a stack stays current).
+  ([native-stacks.md](${CLAUDE_PLUGIN_ROOT}/rubric/native-stacks.md) § How a stack stays current).
 - **A conflict round when a lower layer changes under you** — bring the lower layer current first, then
   update your layer from it, bottom-up, and **disclose the conflict round in the PR body**.
 
@@ -374,7 +385,7 @@ just your worktree + branch. **You own integration** — you merge the work orde
 together, no one else does.
 
 **Full lane only — declare the build lane.** Once the worktree and branch exist, before any
-autonomous work, run `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/build_lane.py" declare
+autonomous work, run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/build_lane.py" declare
 --repo-root "<abs>" --lane full --issue <n>` with the routed issue number. Light and micro lanes
 declare nothing. A **refusal to declare is a park**, not something to work around: the declaration
 writes the **full-lane scope marker** and that is all it does today — the marker is the record.
@@ -395,7 +406,7 @@ approval is in place, only by using it:
   every approval and credential it needs to reach *all* the app before test-pilot depends on it — an
   auth wall it can't pass is exactly what would stall you mid-run.
 - **The cross-vendor CLI** — run the hardened probe in
-  `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/preflight_probe.py`; the probe is the call, never a
+  `${CLAUDE_PLUGIN_ROOT}/lib/preflight_probe.py`; the probe is the call, never a
   hand-rolled one.
 - **`gh`** — confirm sign-in **and exercise one real `gh` write**, not just a read: auto-mode
   permission classification gates `gh` **writes separately from reads**, so a green `gh auth status`
@@ -411,17 +422,18 @@ the PR** rather than skipping it silently. Only builds with an app surface exerc
 If one fails it surfaces to the owner **now, while they're here** — never go autonomous with a tool
 you haven't proven, or you will stall at the first approval prompt (which could be the middle of the
 night). The preflight's checklist itself lives in the configure **preflight** reference
-(`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/preflight.md`) — follow it; it
+(`${CLAUDE_PLUGIN_ROOT}/skills/configure/reference/preflight.md`) — follow it; it
 enumerates every check (the live-exercise probes, engine/model availability, worktree hygiene,
 board wiring) and the fail-loud go/no-go. Don't restate it here.
 
 ## 4. Write the build brief (before code)
 
-**Full lane only** — the light lane skips this section (Build lanes).
+**Full lane only** — the light lane skips this section (Build lanes), except the **size step** below,
+which runs in both lanes.
 
 ~20–40 lines, **posted on the issue** and carried into the PR. Six items, in order:
 
-1. **Shape** — what gets built where; expected diff size as THREE numbers — non-test changed lines (additions plus deletions outside `tests/`; the input to the scope check below), test-code lines (derived from the DoD: one fixture per row, one bite-proof per guarded element, one census per invariant), and **record lines** — the committed prose receipts the build owes, chiefly the bite-proof records under `lib/tests/bite_proofs/`. Budget the third bucket separately because it is receipts, not test code: the two-number form had nowhere to put it, so PR #1129 landed **648 unbudgeted record lines** while both of its estimated buckets came in on target. The scope check and its 2× tripwire below read the **non-test** number only — record lines never enlarge the size you may ship without disclosure.
+1. **Shape** — what gets built where; expected diff size as THREE numbers — non-test changed lines (counted as `review-discipline.md` § Size defines them; the input to the scope check below), test-code lines (derived from the DoD: one fixture per row, one bite-proof per guarded element, one census per invariant), and **record lines** — the committed prose receipts the build owes, chiefly the bite-proof records under `lib/tests/bite_proofs/`. Budget the third bucket separately because it is receipts, not test code: the two-number form had nowhere to put it, so PR #1129 landed **648 unbudgeted record lines** while both of its estimated buckets came in on target. The scope check and the size step below read the **non-test** number only — record lines never enlarge the size you may ship without disclosure.
 2. **Contracts & state** — new/changed interfaces and data shapes; where state lives and who mutates it.
 3. **Reuse plan** — what existing code you build on; what you checked for before writing new.
 4. **Hard seams** — the 2–3 riskiest spots and how each is handled; conscious deferrals stated.
@@ -433,12 +445,10 @@ visible, never silent. **Scope check:** if the shape implies an oversized or mul
 propose a split before building; an irreducible big diff ships with an explicit scope disclosure.
 When the work is a family of parallel siblings, **one concern per PR** — one lens per PR for
 lens-family work — and any **shared shell or contract seam lands first, as its own small PR**,
-before the siblings that build on it. **Crossing twice the size your brief estimated in non-test changed
-lines (additions plus deletions outside `tests/`) is itself the tripwire** — disclose it mid-build and offer a split,
-rather than letting the overrun surface at handback. Two absolute bars ride beside it, counted over non-test lines
-added or modified (deletions, regenerated artifacts, tests and records excluded): at **300**, report the count and a
-proposed cut on the issue and continue; at **600**, stop and hand the call to the advisor, who rules continue, split or park — never yours
-alone and never the owner's — and act on the advisor's recorded ruling (`review-discipline.md` § Size). **Gates and enforcement:** any work order that
+before the siblings that build on it. **The size step, in both lanes:** carry out the
+builder's part of `review-discipline.md` § Size — the count at each commit, the message to the advisor
+at the tripwire, the parks — waiting in-turn as the host tool map says, and record the outcome in the
+PR's **size tripwire** row (§11). **Gates and enforcement:** any work order that
 adds a **gate, hook, or enforcement mechanism** names, in the brief before code, the ratified
 precondition that unlocks it and the evidence that it is met — in every project. When the project
 being built is the superheroes source repository itself, cite the entry and unlock condition in the
@@ -545,7 +555,7 @@ the orchestrator's own surface at authoring time:
 - **A detector-adding order names the recorded red→green failure-proof it expects.** An order that
   adds or changes a **detector** — anything whose job is to fail when something is wrong — names the
   **recorded red→green failure-proof** it expects, and **what that record must contain is whatever
-  `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/bite-proof.md` defines** — cite the home for the
+  `${CLAUDE_PLUGIN_ROOT}/rubric/bite-proof.md` defines** — cite the home for the
   contents instead of listing them. The implementer's validity rule 6 is the backstop for an order
   that omits it; what this clause adds on the authoring side is the **recorded** half — a green run
   alone is equally consistent with a detector that cannot fail. Failure prevented: guards shipped
@@ -572,7 +582,7 @@ is a *lane*, never a size judgment — "this fix is tiny" is still not a reason 
 build. **In the light lane you type the implementation** (Build lanes and the implementer-dispatch
 rule above). **Full lane and escalated-from-light paths:** every work order goes
 to an implementer under the one **implementer template**
-(`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/agents/implementer.md`), which holds the rules and the
+(`${CLAUDE_PLUGIN_ROOT}/agents/implementer.md`), which holds the rules and the
 work-order protocol:
 
 - **Claude subagent** → dispatch the template as-is.
@@ -581,7 +591,7 @@ work-order protocol:
 
 **Cited paths in every dispatched seat** — paths cited to an implementer **or** pilot dispatch
 resolve against **the build's own worktree** when the cited file is part of the change under build
-(this repo's plugin-is-the-product case), because `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` resolves to the *installed*
+(this repo's plugin-is-the-product case), because `${CLAUDE_PLUGIN_ROOT}` resolves to the *installed*
 cache and would hand the seat released text while the branch is editing exactly that text. Before
 passing a canonical-home citation into a dispatch, confirm the absolute path is inside the build
 worktree. **`--expect-item` does not cover this** — it is final-diff membership, never proof of
@@ -600,7 +610,7 @@ a path already dirty before the run and unchanged after is not credited. Declari
 behaviour unchanged — which is exactly why declaring is required rather than optional. Mechanics:
 `reference/dispatch-mechanics.md` § Declared items.
 
-**Lint every order before you dispatch it — both halves, and a refusal or an Important finding is stop-and-fix-the-order, never a dispatch.** The deterministic half is `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/order_lint.py" check --order <the order file> --repo-root <the build worktree> --alt-root <the build worktree's plugin root, in this repository> --expect-item <each declared item>` over the **authored order text** (the same text you hand the runner or the subagent, an inlined implementer template included — the lint recognises a verbatim copy of the shipped `agents/implementer.md` body and grades only the text around it, so never lint a trimmed subset; the runner's appended write-report contract is not what is linted). Exit 1 with a named token refuses. The semantic half is one native subagent at the mechanical role's registry cell (Haiku tier; run the model gate below first, `--seat` with `"role": "mechanical"`), prompt = `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/orders/order-lint-semantic.md` followed by two lines naming the order's absolute path and the repo root, returning findings-only JSON with an investigated list. Where the registry lists no model for the `mechanical` role on the host vendor (Codex today — `model_registry` has `mechanical: codex: None`), the semantic half is **UNAVAILABLE** on that host: the deterministic half still runs and is still binding, the order is dispatched, and the dispatch-provenance row records `semantic-lint-unavailable:<vendor>` as a disclosed degradation. Any **Important** finding is stop-and-fix; **Minor** is your call, recorded in the dispatch-provenance row. An unparseable answer, an empty investigated list, or an investigated list that omits the order's absolute path or lists paths that do not resolve under the repository root or session scratch means the check did not happen — re-dispatch it once, then the order is not dispatched (fix it or park; "lint skipped" is never a state). Both halves run before **every** implementer order and every review-fix work order you author, on both channels (native subagent and `dispatch-write`); the review-code in-place fixer's order is driver-rendered and gets the deterministic half at the driver's emission (auto-fix-loop.md names it). Record both halves' results — the token list or `clean`, and the semantic seat's finding count with its wall time — in each order's dispatch-provenance row. The lint exists because an orchestrator writes orders faster than it re-reads them, and each order defect costs a full implementer dispatch plus a rework: a plugin-only file named as repo-wide and a stdout report literal beside declared items are the deterministic half's tokens (plugin-only path unresolved; the fixer literal `{"fixes"` with declared expect-items); a marker-channel order asking for the native shape and forbidden phrases supplied by the order are the semantic half's items (b) and (d).
+**Lint every order before you dispatch it — both halves, and a refusal or an Important finding is stop-and-fix-the-order, never a dispatch.** The deterministic half is `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/order_lint.py" check --order <the order file> --repo-root <the build worktree> --alt-root <the build worktree's plugin root, in this repository> --expect-item <each declared item>` over the **authored order text** (the same text you hand the runner or the subagent, an inlined implementer template included — the lint recognises a verbatim copy of the shipped `agents/implementer.md` body and grades only the text around it, so never lint a trimmed subset; the runner's appended write-report contract is not what is linted). Exit 1 with a named token refuses. The semantic half is one native subagent at the mechanical role's registry cell (Haiku tier; run the model gate below first, `--seat` with `"role": "mechanical"`), prompt = `${CLAUDE_PLUGIN_ROOT}/rubric/orders/order-lint-semantic.md` followed by two lines naming the order's absolute path and the repo root, returning findings-only JSON with an investigated list. Where the registry lists no model for the `mechanical` role on the host vendor (Codex today — `model_registry` has `mechanical: codex: None`), the semantic half is **UNAVAILABLE** on that host: the deterministic half still runs and is still binding, the order is dispatched, and the dispatch-provenance row records `semantic-lint-unavailable:<vendor>` as a disclosed degradation. Any **Important** finding is stop-and-fix; **Minor** is your call, recorded in the dispatch-provenance row. An unparseable answer, an empty investigated list, or an investigated list that omits the order's absolute path or lists paths that do not resolve under the repository root or session scratch means the check did not happen — re-dispatch it once, then the order is not dispatched (fix it or park; "lint skipped" is never a state). Both halves run before **every** implementer order and every review-fix work order you author, on both channels (native subagent and `dispatch-write`); the review-code in-place fixer's order is driver-rendered and gets the deterministic half at the driver's emission (auto-fix-loop.md names it). Record both halves' results — the token list or `clean`, and the semantic seat's finding count with its wall time — in each order's dispatch-provenance row. The lint exists because an orchestrator writes orders faster than it re-reads them, and each order defect costs a full implementer dispatch plus a rework: a plugin-only file named as repo-wide and a stdout report literal beside declared items are the deterministic half's tokens (plugin-only path unresolved; the fixer literal `{"fixes"` with declared expect-items); a marker-channel order asking for the native shape and forbidden phrases supplied by the order are the semantic half's items (b) and (d).
 
 Both paths carry identical instructions by construction. Choose each implementer's **model tier
 deliberately** — from the project's model/engine calibration where configured, **judged and disclosed
@@ -614,7 +624,7 @@ four dispatch kinds this charter sanctions — an **implementer order**, a **fix
 **`check-runner` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on
 the effective seat model you will pass (explicit in the seat JSON or null for the seat default)
 *before dispatching*:
-`python3 -B ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/dispatch_guard.py check --seat '{"vendor":"<vendor>","model":"<id>","effort":<str-or-null>,"role":"<role>"}'`.
+`python3 -B ${CLAUDE_PLUGIN_ROOT}/lib/dispatch_guard.py check --seat '{"vendor":"<vendor>","model":"<id>","effort":<str-or-null>,"role":"<role>"}'`.
 For the full dispatch CLI argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
 It validates that
 model against the seat's **registry allowlist** (`lib/model_registry.py`, the single
@@ -681,7 +691,7 @@ ship remaining minors as disclosed follow-ups; the handback must **state that th
 tripwire fired** and name the seam problem. Where you cannot say with confidence that the lane has
 converged, the park branch binds. Where the build cannot truthfully hand back, **a formal park binds when the lane has not converged** — park with receipts; resumption after the park is owner- or
 advisor-ruled, and a builder cannot lift the park on its own.
-The ratified ruling lives in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
+The ratified ruling lives in `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`
 under `### The third-rework tripwire`.
 
 **Headless turn-end rule — the turn's final act, not work in flight.** A headless builder session
@@ -725,7 +735,7 @@ without a tool call.
   did not record the PID, you do not have a kill target, and going hunting for one is precisely how
   you end up holding someone else's. The one sanctioned way to recover a target you failed to record
   — by your own run's cwd or port, never by command text — and the field record behind this rule are
-  in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md`
+  in `${CLAUDE_PLUGIN_ROOT}/skills/workhorse/reference/dispatch-mechanics.md`
   § Process cleanup.
 - **Gated strings as data, never inline in Bash.** A permission-gated literal that is being **written
   or matched as data** — a probe's test string, a memory or ledger append, any carrier that is not
@@ -801,15 +811,17 @@ without a tool call.
   reconciliation is closed for that scope. The **timeout** contract stays the skill's; the **channel**
   duty attaches to what the builder itself launches.
 - **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
-  was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
-  entering a phase, before and after a dispatch, on park, on handback. The contract lives in
-  CONVENTIONS §15 — path, fields, states, and verbs there; do not restate them here. Stamp with
-  `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" stamp --repo-root "<repo-root>" --state <state> --phase <phase> --stale-after <seconds-until-next-stamp>`
-  (`SUPERHEROES_LAUNCH_ID` supplies `--launch-id` when unset); pick `--stale-after` for the phase you are entering — your own promise about when you will stamp again. When `SUPERHEROES_LAUNCH_ID` is **absent**, the session was
-  **not** launched by the advisor's launcher: **not advisor-managed, no heartbeat coverage** — that
-  is **not** permission to invent an id, and **not** a build failure. A directly-invoked workhorse
-  session is a normal case, not an error. **Ordering:** `parked` and `handback` are stamped **only
-  after** the durable issue/PR evidence exists, never before.
+  was launched by the advisor's launcher — stamp the builder heartbeat per CONVENTIONS §15:
+  one `working` stamp at intake (it proves the store is writable), `blocked` when blocked on
+  something only the owner/advisor can clear, **`working` again when the blocker clears and the
+  builder resumes**, and `parked` / `handback` only after the durable
+  issue/PR evidence exists. Stamp with
+  `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" stamp --repo-root "<repo-root>" --state <state> --phase <phase>`
+  (`SUPERHEROES_LAUNCH_ID` supplies `--launch-id` when unset). When `SUPERHEROES_LAUNCH_ID` is
+  **absent**, the session was **not** launched by the advisor's launcher: **not advisor-managed, not a
+  build failure** — that is **not** permission to invent an id. A directly-invoked workhorse session
+  is a normal case, not an error. **Ordering:** `parked` and `handback` are stamped **only after**
+  the durable issue/PR evidence exists, never before.
 - **Park when the in-turn poll cannot fit.** End with a **durable park** — what is running, where
   output is, what the advisor must do — **on the issue or the PR** (where the advisor will find it
   without being told to look), never a session transcript or scratch file; an outcome that outruns any
@@ -866,7 +878,7 @@ dispatch it** — **park durably** on the issue or PR **with the work order read
 the work** so each dispatch is awaitable in one turn. The **concrete mechanics differ by dispatch
 kind** — the foreground Bash cap, the `--max-wait` slice loop on the originating verb, the
 output-file-not-`| tail` stall signal, the CPU-vs-elapsed liveness read — so **read
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch
+`${CLAUDE_PLUGIN_ROOT}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch
 time**, before you invoke a long dispatch.
 
 A **skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
@@ -884,7 +896,7 @@ of which physics applies** — **harness-tracked** background work dies at turn 
 child with durable on-disk output** survives and is recoverable (see §7 "Channel and wait are two
 choices", two-physics bullet). Without that evidence, state the wait as owed to the reader rather
 than implying something is running. **What grounds a test-pass claim** lives in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/test-receipt-evidence.md` — do not restate that policy
+`${CLAUDE_PLUGIN_ROOT}/rubric/test-receipt-evidence.md` — do not restate that policy
 here. **The local full suite runs at most once per build, at the final head — and not at all when that
 suite workflow already has a successful run on that head.** A second local run proves nothing CI does
 not, and it costs the lane the suite's whole wall-clock while it waits. The **calibrated verify
@@ -894,7 +906,9 @@ worktree** — three builds burned roughly five full-suite runs against in-fligh
 started while edits are still landing measures a tree that no longer exists, and its green is not a
 receipt; the requirement attaches to the calibrated verify and any local full-suite run alike. **A
 handback whose suite receipt is still pending says so**, reports that the **calibrated verify
-passed**, and makes **no test-pass claim at all**.
+passed**, and makes **no test-pass claim at all**. A background command's harness-reported exit
+code belongs to the whole command line, not the gate inside it. Read the gate's own exit status
+(`$?` right after it, or its receipt) before you report a gate result.
 When you probe a guard by mutating the code it guards, apply the mutation as a **targeted,
 revertible edit through the host's edit action** — never a whole-file rewrite and never an ad-hoc
 shell edit — and revert it before moving on. **Before you run any mutation probe, commit the landed
@@ -907,7 +921,7 @@ Where the probe runs — and why a tree with live readers is the wrong place —
 **A new or changed detector ships with a recorded bite-proof.** The canonical statement — the
 obligation, the four ways a bite-proof is vacuous, the record shape, and the disclosures owed when
 the proof cannot be produced or runs under a normalization — lives in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/bite-proof.md`. **Read it when a build adds one.**
+`${CLAUDE_PLUGIN_ROOT}/rubric/bite-proof.md`. **Read it when a build adds one.**
 The implementer produces the proof — **in a lane where you type the change, you produce it yourself,
 to the same record shape**; **you re-run it yourself** — and **carry the red and green receipts into
 the build record**, per guarded element (**redacted** — secrets, tokens, private URLs, PII — and say
@@ -1013,7 +1027,7 @@ for a proposal *unrelated* to the behavior the diff introduces or worsens; a blo
 security finding on that behavior is fixed or honestly parked, never deferred as out of scope.
 
 **Bounded acceptance for prose-contract DoDs** — when the contract under review is **prose**, the
-general re-review bar is unterminating and the ratified bounded form is the scoped exception: no new Critical or Important finding in a review round on the final head, after a stated number of rounds, with Minor residuals disclosed. The **advisor at vet** (or the **owner**, when they set the bound before review begins) states that number of rounds, and it is recorded in the **PR body** or the **vet receipt**. An unterminating bar can only be abandoned. The canonical statement lives in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
+general re-review bar is unterminating and the ratified bounded form is the scoped exception: no new Critical or Important finding in a review round on the final head, after a stated number of rounds, with Minor residuals disclosed. The **advisor at vet** (or the **owner**, when they set the bound before review begins) states that number of rounds, and it is recorded in the **PR body** or the **vet receipt**. An unterminating bar can only be abandoned. The canonical statement lives in `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`
 under `### Bounded acceptance — prose-contract DoDs`.
 
 ## 11. Hand back the ready PR
@@ -1118,9 +1132,24 @@ plus for both lanes a **dispatch provenance** section — each dispatch (the bri
 implementer, every `check-runner`, the pilot, the review-code seats) with the **engine + model** it ran on — each validated
 against the registry allowlist (#600), so the advisor can vet what ran without your context — plus a
 **Follow-ups for the advisor** section — out-of-scope discoveries, deferred work, or issues you noticed
-but cannot file yourself (you never wire the board). List them plainly under that exact heading (write
+but cannot file yourself (you never wire the board). List them under that exact heading (write
 **None** when there are none) so the advisor can turn them into issues and the advisor's triage
-backstop can grep the section. The PR body also carries a **DoD disposition table** (the
+backstop can grep the section. Key every item as one top-level bullet, `- FU<n> [<class>] <text>`,
+with the class one of `owner-call`, `defect`, `craft`, `flake`, or `info`. An optional first line
+counts them: `Follow-ups: <n> (<m> owner-call)`. Indented sub-bullets may add detail. Below the
+list, write one marker line, the machine's copy of the same ids from the same list:
+`<!-- superheroes:followups FU1 FU2 -->`, or `<!-- superheroes:followups none -->` when the section
+says None. The advisor's slot writer compares this marker, not the prose, with the receipt's
+dispositions marker; it trusts the marker as your declaration, and the vet reads both. The handback
+comment states the same count line. When a PR closes or is superseded before its vet, carry its
+follow-ups into the superseding build record, each under the next unused FU number (in the marker
+too), its origin as text: `- FU<n> [<class>] (from #N FU<m>) <text>`. For both lanes the build record also carries a **size tripwire** row,
+filled by §4's size step: `not crossed (N of estimate M)`; `crossed at <commit>; messaged <time>;
+advisor ruled <split|continue|park> (<issue comment link>)`; `crossed at <commit>; messaged <time>;
+parked, no reply (<issue comment link>)`; `crossed at <commit>; messaging
+unavailable on this host; parked (<issue comment link>)`; `crossed at <commit>; disclosed to the
+owner in session`; or, when that commit also crossed 600, `crossed at <commit>; disclosed to the owner
+in session; parked at 600 (<issue comment link>)`. Every form is followed by `; deleted files: <path> (<N> lines), …` or `; deleted files: none` — whole deleted non-test files are reported, not counted (`review-discipline.md` § Size). The PR body also carries a **DoD disposition table** (the
 `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each
 **done** (with an evidence pointer) or **deferred** (with a filed issue and a one-line reason). This is
 distinct from the review dispositions table above (that grades review findings; this grades every spec'd
@@ -1172,7 +1201,7 @@ preserve-verbatim rule for the advisor's vet write already applies. When you are
 owner** — a consequential flag, an ambiguous route, a decision you cannot make — **park honestly with
 receipts**: what is done, what is blocked, what you need. A truthful park beats a false ship.
 
-**When a park hands a decision back to the owner, read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` and give the blocked decision the per-item spine that file defines.** A park that
+**When a park hands a decision back to the owner, read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md` and give the blocked decision the per-item spine that file defines.** A park that
 states only *what is blocked* hands the owner a question; the spine hands them a decision they can make.
 
 ## Memory

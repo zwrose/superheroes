@@ -1,5 +1,7 @@
 # audit-debt relocation mapping (Task 17)
 
+> **Note (plugin-root form).** Paths quoted below are shown in the current `${CLAUDE_PLUGIN_ROOT}` form; when this record was written they carried a fallback form of the root variable, since retired.
+
 ## Pre-change line count
 479
 
@@ -17,7 +19,7 @@
 ## Pointer placed in SKILL.md
 
 Replaced the three sections with a single `## Scoring Reference` paragraph pointing at
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/audit-debt/reference/sweep-detail.md`.
+`${CLAUDE_PLUGIN_ROOT}/skills/audit-debt/reference/sweep-detail.md`.
 
 ## UFR-2 attestation
 

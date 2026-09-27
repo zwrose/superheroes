@@ -37,6 +37,7 @@ if _LIB not in sys.path:
 # reaches. A side-loaded copy would let a stub sit in `sys.modules` unnoticed.
 import engine_adapter  # noqa: E402
 import engine_dispatch  # noqa: E402
+import model_registry  # noqa: E402
 import payload_contracts  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_adapters  # noqa: E402
@@ -45,6 +46,8 @@ import round_driver  # noqa: E402
 import round_records  # noqa: E402
 import sanitized_view  # noqa: E402
 import session_contract  # noqa: E402
+
+_CODEX_IMPLEMENTER_MODEL = model_registry.matrix_config("implementer", "codex")[0]
 
 # =============================================================================================
 # the diffs — a BIG round-1 diff (so the gap-sweep phase is on the path) and its post-fix head
@@ -958,7 +961,7 @@ def test_real_loop_refuses_dispatch_observed_without_cited_head_until_loop_recor
     """
     seat_map = {
         "seats": {
-            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
             for dim in round_driver.DIMENSIONS
         }
     }
@@ -1008,7 +1011,7 @@ def test_real_loop_refuses_when_certified_head_unresolvable(tmp_path):
     """Proves a session with no resolvable certified head does not certify."""
     seat_map = {
         "seats": {
-            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
             for dim in round_driver.DIMENSIONS
         }
     }
@@ -1037,7 +1040,7 @@ def test_real_loop_refuses_dispatch_observed_seat_without_runner_tool_calls(tmp_
     """Proves the engagement gate bites on a real loop, not only on a fixture."""
     seat_map = {
         "seats": {
-            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
             for dim in round_driver.DIMENSIONS
         }
     }
@@ -1074,7 +1077,7 @@ def test_real_loop_with_finding_refuses_disposition_without_receipt_until_loop_r
     """
     seat_map = {
         "seats": {
-            dim: {"vendor": "codex", "model": "gpt-5.6-sol", "engine": "codex"}
+            dim: {"vendor": "codex", "model": _CODEX_IMPLEMENTER_MODEL, "engine": "codex"}
             for dim in round_driver.DIMENSIONS
         }
     }

@@ -793,22 +793,6 @@ def _recompute_diff_sha256(base_sha, repo_root):
     return hashlib.sha256(r.stdout).hexdigest()
 
 
-def _resolve_implicit_pr_base(cwd, run_git):
-    """Resolve ``gh pr create`` implicit ``--base`` from local git config — invariant (b)."""
-    branch = run_git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-    if branch and branch != "HEAD":
-        merge_base = run_git(cwd, "config", "--get", "branch.%s.gh-merge-base" % branch)
-        if merge_base:
-            return merge_base
-    sym = run_git(cwd, "symbolic-ref", "refs/remotes/origin/HEAD")
-    if sym:
-        ref = sym.strip()
-        prefix = "refs/remotes/origin/"
-        if ref.startswith(prefix):
-            return ref[len(prefix):]
-    return None
-
-
 def _origin_owner(cwd, run_git):
     """Return the owner segment of ``origin`` (e.g. ``org`` from ``github.com/org/repo``)."""
     origin = store_core.normalize_remote(run_git(cwd, "remote", "get-url", "origin"))
@@ -974,7 +958,7 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
     if action == "pr-create":
         cmd_base = pr.get("base")
         if cmd_base is None:
-            cmd_base = _resolve_implicit_pr_base(cwd, run_git)
+            cmd_base = store_core.resolve_implicit_pr_base(cwd, run_git)
             if cmd_base is None:
                 return _refuse("handback-subject-unresolvable",
                                 "pr create without --base cannot be bound to sidecar "
