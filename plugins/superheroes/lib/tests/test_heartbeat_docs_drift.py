@@ -1,7 +1,7 @@
 """CONVENTIONS §15 heartbeat contract drift guard.
 
 Module constants in heartbeat.py are authoritative; prose copies in CONVENTIONS §15
-and the workhorse/showrunner charters must stay pinned to them.
+the workhorse charter and the showrunner orchestration page must stay pinned to them.
 """
 import os
 import re
@@ -87,14 +87,18 @@ def test_workhorse_charter_matches_heartbeat_constants():
     _assert_tokens_present(text, "skills/workhorse/SKILL.md", tokens)
 
 
-def test_showrunner_charter_matches_heartbeat_constants():
-    text = _read_plugin("skills/showrunner/SKILL.md")
+def test_showrunner_orchestration_page_matches_heartbeat_constants():
+    """The scheduled liveness sweep paragraph in the showrunner orchestration page tracks
+    heartbeat.SWEEP_CLASSES and the sweep invocation tokens."""
+    text = _read_plugin("skills/showrunner/reference/orchestration.md")
     m = re.search(
         r"\*\*Scheduled liveness sweep.*?(?=\n\s*\*\*Wave-preflight)",
         text,
         re.DOTALL,
     )
-    assert m, "showrunner duty-9 liveness sweep paragraph not found"
+    assert m, (
+        "showrunner reference/orchestration.md liveness sweep paragraph not found"
+    )
     duty = m.group(0)
     tokens = (
         sorted(hb.SWEEP_CLASSES)
@@ -110,7 +114,9 @@ def test_showrunner_charter_matches_heartbeat_constants():
             "LIVENESS_QUIET_WINDOW_SECONDS",
         ]
     )
-    _assert_tokens_present(duty, "skills/showrunner/SKILL.md duty-9", tokens)
+    _assert_tokens_present(
+        duty, "skills/showrunner/reference/orchestration.md liveness sweep paragraph", tokens
+    )
 
 
 def test_resume_row_two_names_the_liveness_rule():
