@@ -16,10 +16,9 @@ shape of the receipt that read leaves behind — and, below, the register of the
 points at. **When** it is written and what else the vet does are the **showrunner** charter's duty 4
 — read this one at vet time, and do not reconstruct it from memory.
 
-**Why a shape at all.** The spine below was not designed; it is what receipts across two independent
-advisor sessions had **already converged on**, ratified rather than invented. What had *not* travelled
-were the loads a charter added later — and the reason nobody could measure that is the reason this
-file exists: **presence-by-grep cannot tell "not applicable" from "forgotten."** An explicit `None` is
+**Why a shape at all.** The spine below was not designed; it is what independent receipts had
+**already converged on**, ratified rather than invented. What had *not* travelled were the loads a
+charter added later — and the reason nobody could measure that is the reason this file exists: **presence-by-grep cannot tell "not applicable" from "forgotten."** An explicit `None` is
 what makes an absence readable.
 
 **The template is a floor, never a ceiling — most of all for field 2.** The probes are where a vet's
@@ -35,9 +34,8 @@ shape is wrong and the thinking wins.
    see.
    **Select that CI run by workflow name *and* head sha — never `gh run list --limit 1`.** The latest
    run on a branch is whatever workflow happened to fire last, which is not necessarily the one whose
-   green you are claiming: a watcher taking `--limit 1` read a preview-anchor sync, called CI green,
-   and the **owner's** question caught it rather than the advisor's. Name the workflow and pin the
-   sha; a run that does not match both is not evidence about this head. The same selection binds
+   green you are claiming, so `--limit 1` can report another workflow's green as this one's. Name
+   the workflow and pin the sha; a run that does not match both is not evidence about this head. The same selection binds
    **any** CI watch on a head you are about to act on — a vet, a wave watch, a merge train — not only
    the one this receipt records.
 
@@ -131,8 +129,7 @@ shape is wrong and the thinking wins.
    a verification pass whose verdicts come back **uniformly confirming** — every finding
    CONFIRMED, over a large surface — is still a **signal to inspect**, not a clean panel: an
    agreeable verifier and a genuinely sound batch produce the same number, and only reading a
-   sample tells them apart. Record what the rate was and what you did about it. The field flag
-   that named this was **12 of 12 CONFIRMED on a ~10,000-line diff**.
+   sample tells them apart. Record what the rate was and what you did about it.
 7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Under
    `**Dispositions — completed.**`, write one bullet per build-record id, `- FU<n>: <disposition>`.
@@ -151,11 +148,8 @@ shape is wrong and the thinking wins.
    therefore records an **append that already happened**, never a promise to append — **except where
    the collector pointer could not be resolved**: then the receipt carries the item **and** the
    disclosed degradation, and the item keeps **this vet's ordinal as its proposing ordinal** for the
-   later deferred append. Every disposition names its door grading and its venue. Each append carries
-   its door grading for a machinery item — the band, the evidence tier, and the resulting tier the
-   front door recorded — and for a product item the classification and the ratification it rides,
-   since no evidence bar applied to it; each append also carries its venue recommendation, so the
-   owner's batch is one word per item.
+   later deferred append. Every append carries the door grading and venue recommendation that
+   `skills/showrunner/reference/owner-decisions.md` § Craft calls and owner calls defines.
    **Known limit, carried knowingly:** the slot writer checks that the two marker lists agree; it
    trusts each marker as its author's declaration and reads no prose, so the vet reads the prose
    against the marker. Nothing mechanical checks that an append names a door grading and a venue. A
@@ -171,6 +165,14 @@ shape is wrong and the thinking wins.
    place. **Never the future tense** — "I'll file X" is not a disposition.
 8. **Open owner calls at merge.** What the owner must decide before or at the click, each stated as a
    consequence rather than a craft question.
+9. **Lane.** The lane the PR ran — `full`, `light`, or `micro` — read from the issue's recorded lane
+   call (from the PR itself for micro), with a one-line note when the build escalated, naming the
+   lane it moved from and the lane it moved to. It exists so the gardening pass can read misses by
+   lane.
+10. **Misses-log appends.** Each misses-log append this vet made — what it was, and its class:
+    declined-then-escaped, launched-then-regretted, or mis-tiered — or `None`. The misses log's home and classes are
+    `skills/showrunner/reference/owner-decisions.md` § Every grading keeps its scoring, and the
+    misses log.
 
 ## Triggered fields — the artifacts raise them, not your memory
 
@@ -278,8 +280,8 @@ without trusting the receipt's author.
 
 The receipt above is written for **you and the next advisor**. The `## Advisor vet` slot in the PR
 body is written for **the owner**, and they are not the same document. Reproducing the full vet in
-the slot is the failure this section names — a field owner rejected exactly that, as *"the full vet,
-not the owner half."*
+the slot is the failure this section names: the owner half is not the full vet, and a slot that
+reproduces the vet buries what the owner is being asked to accept.
 
 Four elements, in this order:
 
@@ -326,8 +328,8 @@ reach a successful write.
 receipt comment carries the rest. Consequence up, mechanism down — the same rule the PR body's own
 two halves run on.
 
-This register is what survived owner contact and became the standing rule. Write to it, rather than
-to whatever the receipt happens to look like.
+This register is the standing rule. Write to it, rather than to whatever the receipt happens to look
+like.
 
 ## Markers
 
@@ -358,7 +360,7 @@ it:
   and remedy live — follow that, not a marker-keyed rule here.
   **A slot with no marker at all** is read against your own receipt, the same canonical copy duty 4's
   backstop uses: with **no receipt comment** on the PR it is a body written before the builder stamped
-  it (pre-#794) — read it as *not yet vetted*, and stamp the marker yourself when you write; with **a
+  it — read it as *not yet vetted*, and stamp the marker yourself when you write; with **a
   receipt already posted** it is a rewrite that dropped your verdict and the marker together —
   restore the verdict and re-stamp. The other dropped-write state is **marker present, reminder and
   verdict both gone**.
@@ -393,6 +395,8 @@ inspection <what you did>; window: <…>
 <!-- superheroes:pending-proposals -->
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`
 **Open owner calls at merge.** <…> | `None`
+**Lane.** <full | light | micro> <escalated: from → to, if it did>
+**Misses-log appends.** <each append this vet made — what it was, and its class: declined-then-escaped, launched-then-regretted, or mis-tiered> | `None`
 
 <triggered fields, each only when its trigger is present in the artifacts>
 ```
