@@ -1341,43 +1341,21 @@ def _decode_utf8_allow_trailing_truncation(data):
             return None
 
 
-def _has_interior_nul_salt(prefix):
-    """True when a NUL sits between two non-NUL bytes (NUL-salted source)."""
-    for i in range(1, len(prefix) - 1):
-        if prefix[i] == 0 and prefix[i - 1] != 0 and prefix[i + 1] != 0:
-            return True
-    return False
-
-
-def _prefix_looks_like_utf16le_ascii(prefix):
-    """True when ``prefix`` is BOM-less UTF-16LE encoding mostly ASCII text."""
-    if len(prefix) < 2 or len(prefix) % 2 != 0:
-        return False
-    for i in range(0, len(prefix), 2):
-        ch, nul = prefix[i], prefix[i + 1]
-        if nul != 0:
-            return False
-        if ch in (9, 10, 13) or 32 <= ch <= 126:
-            continue
-        return False
-    return True
-
-
 def _looks_like_text_blob_prefix(prefix):
-    """Return whether a sniff-window prefix should be treated as text, not opaque binary."""
+    """Return whether a sniff-window prefix should be treated as text, not opaque binary.
+
+    A prefix is text when it starts with a UTF-16/UTF-32 byte-order mark, or when
+    every NUL byte is removed and the remainder is non-empty UTF-8 (a truncated
+    multi-byte sequence is allowed only at the very end) with no C0 control character
+    other than tab, LF, CR, VT, FF, and ESC. BOM-less UTF-16 ASCII and NUL-salted
+    source are covered by the NUL-stripping rule.
+    """
     if prefix.startswith(
         (b"\xff\xfe", b"\xfe\xff", b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")
     ):
         return True
-    if _prefix_looks_like_utf16le_ascii(prefix):
-        return True
     stripped = prefix.replace(b"\x00", b"")
-    if not stripped or b"\n" not in stripped:
-        return False
-    if not (
-        stripped.startswith(b"#!")
-        or _has_interior_nul_salt(prefix)
-    ):
+    if not stripped:
         return False
     text = _decode_utf8_allow_trailing_truncation(stripped)
     if text is None:

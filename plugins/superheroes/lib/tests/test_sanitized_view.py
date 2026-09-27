@@ -2171,9 +2171,9 @@ def test_review_diff_binary_sections_become_placeholders(tmp_path):
         commit=False,
     )
     for name, data in (
-        ("mod.png", b"a\0b"),
-        ("del.png", b"x\0y"),
-        ("old.png", b"o\0ld"),
+        ("mod.png", b"a\0\x01b"),
+        ("del.png", b"x\0\x01y"),
+        ("old.png", b"o\0\x01ld"),
     ):
         with open(os.path.join(repo, name), "wb") as fh:
             fh.write(data)
@@ -2191,11 +2191,11 @@ def test_review_diff_binary_sections_become_placeholders(tmp_path):
     )
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     with open(os.path.join(repo, "mod.png"), "wb") as fh:
-        fh.write(b"a\0c")
+        fh.write(b"a\0\x01c")
     os.remove(os.path.join(repo, "del.png"))
     _git(repo, "mv", "old.png", "new.png")
     with open(os.path.join(repo, "add.png"), "wb") as fh:
-        fh.write(b"n\0w")
+        fh.write(b"n\0\x01w")
     with open(os.path.join(repo, "t.txt"), "w", encoding="utf-8") as fh:
         fh.write("text head\n")
     _git(repo, "add", "-A")
@@ -2247,7 +2247,7 @@ def test_review_diff_binary_sections_become_placeholders(tmp_path):
 
 
 def test_review_diff_binary_larger_than_sniff_window_is_placeheld(tmp_path):
-    big = b"\0" + (b"x" * 49999)
+    big = b"\0\x01" + (b"x" * 49998)
     repo = _init_repo(tmp_path / "big-binary", files={"z.txt": "z\n"}, commit=False)
     for name in ("a.bin", "b.bin"):
         with open(os.path.join(repo, name), "wb") as fh:
@@ -2266,9 +2266,9 @@ def test_review_diff_binary_larger_than_sniff_window_is_placeheld(tmp_path):
     )
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     with open(os.path.join(repo, "a.bin"), "wb") as fh:
-        fh.write(b"\0" + (b"y" * 49999))
+        fh.write(b"\0\x01" + (b"y" * 49998))
     with open(os.path.join(repo, "b.bin"), "wb") as fh:
-        fh.write(b"\0" + (b"w" * 49999))
+        fh.write(b"\0\x01" + (b"w" * 49998))
     with open(os.path.join(repo, "z.txt"), "w", encoding="utf-8") as fh:
         fh.write("changed\n")
     _git(repo, "add", "-A")
@@ -2315,7 +2315,7 @@ def test_review_diff_binary_mode_change_shows_mode_headers(tmp_path):
     repo = _init_repo(tmp_path / "bin-mode", files={"keep.txt": "k\n"}, commit=False)
     bin_path = os.path.join(repo, "run.bin")
     with open(bin_path, "wb") as fh:
-        fh.write(b"\x00exec-v1\n")
+        fh.write(b"\x00\x01exec-v1\n")
     os.chmod(bin_path, 0o644)
     _git(repo, "add", "-A")
     _git(
@@ -2331,7 +2331,7 @@ def test_review_diff_binary_mode_change_shows_mode_headers(tmp_path):
     )
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     with open(bin_path, "wb") as fh:
-        fh.write(b"\x00exec-v2\n")
+        fh.write(b"\x00\x01exec-v2\n")
     os.chmod(bin_path, 0o755)
     _git(repo, "add", "-A")
     _git(
@@ -2467,6 +2467,113 @@ def test_review_diff_nul_salted_ascii_script_refuses_opaque(tmp_path):
     assert exc.value.detail == "sanitized-view-diff-opaque"
 
 
+def test_review_diff_oneline_nul_shell_change_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "oneline-sh", files={"keep.txt": "k\n"}, commit=False)
+    script = os.path.join(repo, "a.sh")
+    with open(script, "wb") as fh:
+        fh.write(b"echo BEFORE\x00; echo OLD")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(script, "wb") as fh:
+        fh.write(b"echo BEFORE\x00; echo NEW")
+    _git(repo, "add", script)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_added_script_leading_nuls_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "lead-nul", files={"keep.txt": "k\n"}, commit=False)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    script = os.path.join(repo, "run.py")
+    with open(script, "wb") as fh:
+        fh.write(b"\x00\x00import os\n")
+    _git(repo, "add", script)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_added_script_trailing_doubled_nuls_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "trail-nul", files={"keep.txt": "k\n"}, commit=False)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    script = os.path.join(repo, "t.py")
+    with open(script, "wb") as fh:
+        fh.write(b"x = 1\n\x00\x00")
+    _git(repo, "add", script)
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
 def test_review_diff_real_png_and_woff_like_still_placeheld(tmp_path):
     png = _minimal_png()
     woff = _woff_like_blob()
@@ -2595,7 +2702,7 @@ def test_review_diff_binary_path_with_newline_is_json_quoted(tmp_path):
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     try:
         with open(os.path.join(repo, weird), "wb") as fh:
-            fh.write(b"\0x")
+            fh.write(b"\0\x01x")
     except OSError:
         pytest.skip("filesystem refuses newline in path")
     _git(repo, "add", "-A")
@@ -2658,7 +2765,7 @@ def test_filter_patch_sections_opaque_without_predicate_refuses():
 def test_review_diff_blob_read_failure_refuses_diff_failed(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "cat-fail", files={"keep.txt": "k\n"}, commit=False)
     with open(os.path.join(repo, "b.png"), "wb") as fh:
-        fh.write(b"\0x\n")
+        fh.write(b"\0\x01x\n")
     _git(repo, "add", "-A")
     _git(
         repo,
@@ -2673,7 +2780,7 @@ def test_review_diff_blob_read_failure_refuses_diff_failed(tmp_path, monkeypatch
     )
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     with open(os.path.join(repo, "b.png"), "wb") as fh:
-        fh.write(b"\0y\n")
+        fh.write(b"\0\x01y\n")
     _git(repo, "add", "b.png")
     _git(
         repo,
