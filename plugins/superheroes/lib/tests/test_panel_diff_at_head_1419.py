@@ -346,3 +346,78 @@ def test_b4_producer_refuses_live_head(tmp_path):
         rdb.run_git_diff_three_dot(repo, base_sha, None, timeout=10)
     proc = rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=10)
     assert proc.returncode == 0
+
+
+_NON_FULL_OID_CASES = [
+    "HEAD",
+    "@",
+    "HEAD~0",
+    "ORIG_HEAD",
+    "main",
+    "abc1234",
+    "a" * 39,
+    "a" * 41,
+    "a" * 40 + " ",
+    "",
+    None,
+    123,
+]
+
+
+@pytest.mark.parametrize("which", ["base_sha", "head_sha"])
+@pytest.mark.parametrize("bad_ref", _NON_FULL_OID_CASES, ids=lambda v: repr(v))
+def test_v1_explicit_commit_guard_rejects_non_full_oid(tmp_path, which, bad_ref, monkeypatch):
+    repo, base_sha, _ = _init_two_commit_repo(tmp_path)
+    head_sha = _rev_parse(repo)
+    calls = []
+
+    def _record_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("subprocess.run must not be called")
+
+    monkeypatch.setattr(rdb.subprocess, "run", _record_run)
+    kwargs = {"repo_root": repo, "timeout": 10}
+    kwargs["base_sha"] = bad_ref if which == "base_sha" else base_sha
+    kwargs["head_sha"] = bad_ref if which == "head_sha" else head_sha
+    with pytest.raises(ValueError, match="explicit commit"):
+        rdb.run_git_diff_three_dot(**kwargs)
+    assert calls == []
+
+
+def test_v1_explicit_commit_guard_accepts_full_oid_lengths(tmp_path, monkeypatch):
+    repo, base_sha, _ = _init_two_commit_repo(tmp_path)
+    head_sha = _rev_parse(repo)
+    sha256_placeholder = "b" * 64
+    calls = []
+
+    def _fake_run(*args, **kwargs):
+        calls.append(1)
+        class _Proc:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+        return _Proc()
+
+    monkeypatch.setattr(rdb.subprocess, "run", _fake_run)
+    rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=10)
+    rdb.run_git_diff_three_dot(repo, base_sha, sha256_placeholder, timeout=10)
+    assert len(calls) == 2
+
+
+def test_v1_derive_panel_diff_resolves_short_base_ref(tmp_path):
+    repo, base_sha, _ = _init_two_commit_repo(tmp_path)
+    head_sha = _rev_parse(repo)
+    short_base = base_sha[:7]
+    cfg = _cfg(repoRoot=repo, baseRef=short_base, **{RD.FIX_FOLD_HEAD_KEY: head_sha})
+    diff_text, err = RD._derive_panel_diff_at_head(cfg, head_sha)
+    assert err is None
+    assert diff_text == _git_diff_at(repo, base_sha, head_sha)
+
+
+def test_v2_derive_panel_diff_maps_head_value_error(tmp_path):
+    repo, base_sha, _ = _init_two_commit_repo(tmp_path)
+    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
+    diff_text, detail = RD._derive_panel_diff_at_head(cfg, "HEAD")
+    assert diff_text is None
+    assert detail is not None
+    assert "explicit commit" in detail

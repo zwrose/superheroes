@@ -93,6 +93,7 @@ def _synthesis_placeholders(channel="file"):
 def _fixer_placeholders():
     return {
         "FIX_BATCH_PATH": os.path.join(_SESSION, "round-2", "fix-batch.json"),
+        "FIX_BATCH_SHA256": "0" * 64,
         "PROFILE_PATH": "(Project profile not resolved for this project)",
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CWD": _REPO,

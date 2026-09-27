@@ -34,6 +34,7 @@ __all__ = (
     "DISPOSITIONS",
     "FOLLOW_UP_FIELDS",
     "follow_up_shape_fault",
+    "copy_follow_up_field",
     "DISPOSITION_LEDGER_KEY",
     "DISPOSITION_LEDGER_MALFORMED_TOKEN",
     "DispositionLedgerReadFault",
@@ -92,7 +93,9 @@ __all__ = (
     "verify_result_for_head",
     "runner_channel_vendor",
     "RE_EMIT_CMD",
+    "RULE_CMD",
     "ORDERS_SUPERSEDED_OUTCOME",
+    "journal_is_orders_superseded",
     "journal_is_re_emit_orders_superseded",
 )
 
@@ -191,16 +194,23 @@ STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
 JOURNAL_FAULT_FILE = "driver-journal-fault.jsonl"
 RE_EMIT_CMD = "re-emit"
+RULE_CMD = "rule"
 ORDERS_SUPERSEDED_OUTCOME = "orders-superseded"
+_JOURNAL_ORDERS_SUPERSEDED_CMDS = frozenset((RE_EMIT_CMD,))
 META_FILE = "meta.json"
 
 
-def journal_is_re_emit_orders_superseded(event):
-    """True when a journal row commits the re-emit supersession protocol."""
+def journal_is_orders_superseded(event):
+    """True when a journal row commits an orders-superseded protocol (re-emit or rule)."""
     if not isinstance(event, dict):
         return False
-    return (event.get("cmd") == RE_EMIT_CMD
+    return (event.get("cmd") in _JOURNAL_ORDERS_SUPERSEDED_CMDS
             and event.get("outcome") == ORDERS_SUPERSEDED_OUTCOME)
+
+
+def journal_is_re_emit_orders_superseded(event):
+    """Backward-compatible alias for :func:`journal_is_orders_superseded`."""
+    return journal_is_orders_superseded(event)
 CHANNEL_FILE = "file"
 CHANNEL_STDOUT = "stdout"
 HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
@@ -236,6 +246,12 @@ def follow_up_shape_fault(follow_up, *, require_item=True):
     if not isinstance(closure, str) or not closure.strip():
         return ("missing-class-closure", "out-of-scope follow-up lacks class-closure line")
     return None
+
+
+def copy_follow_up_field(source, target):
+    """Copy followUp from source onto target when the key is present (defensive copy)."""
+    if "followUp" in source:
+        target["followUp"] = dict(source["followUp"])
 
 
 DISPOSITION_LEDGER_KEY = "dispositionLedger"

@@ -470,6 +470,18 @@ def test_valid_converged_allows(tmp_path):
     assert result["decision"] == "allow"
 
 
+def test_short_base_sha_in_sidecar_still_recomputes_diff(tmp_path):
+    repo, session, base_sha = _scoped_repo(tmp_path)
+    sidecar_path = os.path.join(_superheroes_dir(repo), hg._SIDECAR_FILE)
+    with open(sidecar_path, encoding="utf-8") as fh:
+        sidecar = json.load(fh)
+    sidecar["baseSha"] = base_sha[:7]
+    with open(sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(sidecar, fh)
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "allow"
+
+
 def test_valid_attested_allows(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     _commit_file(repo, "f.txt", "x\n")
