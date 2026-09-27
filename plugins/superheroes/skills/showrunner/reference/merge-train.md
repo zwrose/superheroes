@@ -46,7 +46,9 @@ follow-up PR once the last lane has merged, and report it in the thread like any
 
 **The post-merge-only red.** A test green on the identical tree pre-merge can go
 **deterministically** red post-merge in CI only — coverage-instrumented runners, for one, can lose
-an assertion race. Close it with a disclosed integration commit on the last open PR's branch.
+an assertion race. While a lane is still open, close it with a disclosed integration commit on the
+last open PR's branch; once the last lane has merged, there is nothing left to absorb into, so
+close it with a disclosed follow-up PR from the failing head instead.
 
 ## Merging a stack
 
