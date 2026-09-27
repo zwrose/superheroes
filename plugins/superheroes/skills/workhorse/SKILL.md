@@ -1,6 +1,6 @@
 ---
 name: workhorse
-description: Use to run the build — Workhorse is the entry point that takes a routed issue all the way to a ready PR — "build this issue", "run the builder". It takes only routed, anchored issues — build-ready builds at once; work still needing discovery or diagnosis is routed back, never elicited in-session. Full lane delegates all implementation to tiered subagents or engines under a shared contract, with test-pilot and multi-model review; light lane — you type, one independent review. It independently re-runs every receipt they claim and hands back a ready PR with dispositions and receipts. Never merges, releases, bumps versions, or wires the board. Not advising the project (that is showrunner).
+description: Use to run the build — "build this issue", "run the builder". Workhorse is the entry point that takes a routed issue all the way to a ready PR; work still needing discovery or diagnosis is routed back, never elicited in-session. Full lane delegates all implementation to tiered subagents or engines under a shared contract; light lane — you type, one independent review. It independently re-runs every receipt they claim. Never merges or releases. Not advising the project (that is showrunner).
 user-invocable: true
 ---
 

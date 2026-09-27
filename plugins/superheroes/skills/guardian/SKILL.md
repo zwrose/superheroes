@@ -1,6 +1,6 @@
 ---
 name: guardian
-description: Use to run the Guardian sweep — a periodic read-only sweep of repo health (duplication, complexity, coupling, dependency and doc freshness, dead code) that surfaces maintainability drift as plain-language consequences with receipts, reporting only what changed since the last sweep. It never edits code, never commits or pushes, and never files issues — it recommends; the advisor triages and consults the owner. Not code review of a change (that is review-code).
+description: Use to run the Guardian sweep — a periodic read-only sweep of repo health (duplication, complexity, coupling, dependency and doc freshness, dead code). Reports maintainability drift since the last sweep as plain-language consequences; it never edits code or files issues. Not code review of a change (that is review-code).
 user-invocable: true
 ---
 

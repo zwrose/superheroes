@@ -1,6 +1,6 @@
 ---
 name: discovery
-description: Use at the START of any new piece of work in a superheroes project — when a fuzzy idea needs to become an owner-approved requirements spec. It OWNS the requirements front-half — the *what*, in plain language. Elicits requirements (incl. significant unhappy paths) with the owner, produces the `spec` definition-doc, or exits through a findings record or a park note. Not the technical *how* (that stays with the build).
+description: Use at the START of any new piece of work in a superheroes project — when a fuzzy idea needs to become an owner-approved requirements spec. It OWNS the requirements front-half, the *what* in plain language. Elicits requirements (incl. significant unhappy paths) with the owner into the `spec` definition-doc. Not the technical *how* (that is the build).
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.

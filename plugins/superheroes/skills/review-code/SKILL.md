@@ -1,6 +1,6 @@
 ---
 name: review-code
-description: Use when reviewing code changes on a local branch or an open pull request before merging — including when you want the review's findings auto-fixed locally.
+description: Use when reviewing code changes on a local branch or an open pull request before merging — including when you want the review's findings auto-fixed locally. Gives a multi-specialist review with a fix-and-re-review loop. Not a whole-repo debt sweep (that is audit-debt).
 user-invocable: true
 ---
 
