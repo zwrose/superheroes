@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Session-contract path and phase constants — leaf module with no round_* imports."""
+import base64
+import binascii
 import hashlib
 import json
+from dataclasses import dataclass
+from typing import Optional
 
 from finding_identity import clamp_title, finding_identity, finding_label, normalize_title
 
@@ -22,10 +26,17 @@ __all__ = (
     "REVIEW_LIST_RESULT_KINDS",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
+    "VERIFIED_HEAD_FIELD",
     "DISPOSITIONS",
     "DISPOSITION_LEDGER_KEY",
+    "DISPOSITION_LEDGER_MALFORMED_TOKEN",
+    "DispositionLedgerReadFault",
+    "read_disposition_ledger",
     "DISPOSITION_LEDGER_OWNER_FIELD",
     "DISPOSITION_LEDGER_OWNER_VALUE",
+    "DISPOSITION_LEDGER_OWNER_ABSENT",
+    "DISPOSITION_LEDGER_OWNER_RECOGNIZED",
+    "DISPOSITION_LEDGER_OWNER_UNRECOGNIZED",
     "disposition_ledger_owner_classification",
     "MERGED_INTO_FIELD",
     "RAISED_ROUND_FIELD",
@@ -49,6 +60,13 @@ __all__ = (
     "minted_identity_key",
     "finding_content_canonical",
     "content_hash_suffix",
+    "HeadContentRead",
+    "classify_head_content_read",
+    "resolve_merged_into_entry",
+    "fix_proof_path",
+    "fix_still_present_at_head",
+    "legacy_disposition_ledger_rows",
+    "verify_result_for_head",
 )
 
 # Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
@@ -86,25 +104,97 @@ HEAD_CONTENT_BLOBS_FILE = "head-content-blobs.json"
 HEAD_CONTENT_BLOBS_SCHEMA = "head-content-blobs/2"
 SEAT_MISSING_SCHEMA = "seat-missing/1"
 FIX_FOLD_HEAD_KEY = "fixFoldHeadSha"
+VERIFIED_HEAD_FIELD = "verifiedHead"
 FINDING_KEY_FIELD = "findingKey"
 
 DISPOSITIONS = ("fixed", "refuted", "out-of-scope")
 DISPOSITION_LEDGER_KEY = "dispositionLedger"
+DISPOSITION_LEDGER_MALFORMED_TOKEN = "disposition-ledger-malformed"
 DISPOSITION_LEDGER_OWNER_FIELD = "dispositionLedgerOwner"
 DISPOSITION_LEDGER_OWNER_VALUE = "ledger"
+DISPOSITION_LEDGER_OWNER_ABSENT = "absent"
+DISPOSITION_LEDGER_OWNER_RECOGNIZED = "recognized"
+DISPOSITION_LEDGER_OWNER_UNRECOGNIZED = "unrecognized"
 MERGED_INTO_FIELD = "mergedInto"
+
+
+@dataclass(frozen=True)
+class DispositionLedgerReadFault:
+    """Malformed dispositionLedger — propagates to certification refusal, never repaired here."""
+    token: str
+    detail: str
+
+
+def read_disposition_ledger(state, required=False):
+    """Pure read of ``dispositionLedger`` — never mutates ``state``.
+
+    Returns shallow-copied rows and ``None``, or ``([], fault)`` when the stored ledger is
+    malformed. An absent key is not malformed unless ``required`` is True (recognized-owner reads)."""
+    if not isinstance(state, dict):
+        if required:
+            return [], DispositionLedgerReadFault(
+                token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+                detail="dispositionLedger key absent when dispositionLedgerOwner is %r"
+                % (DISPOSITION_LEDGER_OWNER_VALUE,),
+            )
+        return [], None
+    if DISPOSITION_LEDGER_KEY not in state:
+        if required:
+            return [], DispositionLedgerReadFault(
+                token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+                detail="dispositionLedger key absent when dispositionLedgerOwner is %r"
+                % (DISPOSITION_LEDGER_OWNER_VALUE,),
+            )
+        return [], None
+    ledger = state[DISPOSITION_LEDGER_KEY]
+    if not isinstance(ledger, list):
+        return [], DispositionLedgerReadFault(
+            token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+            detail="dispositionLedger must be a list when dispositionLedgerOwner is %r"
+            % (DISPOSITION_LEDGER_OWNER_VALUE,),
+        )
+    rows = []
+    for entry in ledger:
+        if not isinstance(entry, dict):
+            return [], DispositionLedgerReadFault(
+                token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+                detail="dispositionLedger row must be an object",
+            )
+        key = finding_identity_key(entry)
+        if not key:
+            return [], DispositionLedgerReadFault(
+                token=DISPOSITION_LEDGER_MALFORMED_TOKEN,
+                detail="dispositionLedger row lacks a finding key",
+            )
+        rows.append(dict(entry))
+    return rows, None
+
+
+def legacy_disposition_ledger_rows(state):
+    """Yield ``(key, row)`` from a legacy (non-owner) ledger — skip malformed rows only."""
+    if not isinstance(state, dict):
+        return
+    ledger = state.get(DISPOSITION_LEDGER_KEY)
+    if not isinstance(ledger, list):
+        return
+    for finding in ledger:
+        if not isinstance(finding, dict):
+            continue
+        key = finding_identity_key(finding)
+        if key:
+            yield key, finding
 
 
 def disposition_ledger_owner_classification(state):
     """Single derivation of the disposition-ledger owner marker — absent, recognized, or unrecognized."""
     if not isinstance(state, dict):
-        return "absent"
+        return DISPOSITION_LEDGER_OWNER_ABSENT
     if DISPOSITION_LEDGER_OWNER_FIELD not in state:
-        return "absent"
+        return DISPOSITION_LEDGER_OWNER_ABSENT
     value = state[DISPOSITION_LEDGER_OWNER_FIELD]
     if value == DISPOSITION_LEDGER_OWNER_VALUE:
-        return "recognized"
-    return "unrecognized"
+        return DISPOSITION_LEDGER_OWNER_RECOGNIZED
+    return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
 RAISED_ROUND_FIELD = "raisedRound"
 DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
@@ -228,3 +318,175 @@ def finding_identity_key(finding):
     if isinstance(key, str) and key:
         return key
     return minted_identity_key(finding)
+
+
+@dataclass(frozen=True)
+class HeadContentRead:
+    """Normalized outcome of a head-content-blobs read — no I/O in this module."""
+    kind: str
+    blobs: Optional[dict] = None
+
+
+def classify_head_content_read(*, absent=False, blobs=None, error=None):
+    """Classify a caller's raw head-content read attempt into ``HeadContentRead``."""
+    if absent:
+        return HeadContentRead(kind="missing")
+    if error is not None:
+        return HeadContentRead(kind="unreadable")
+    if not isinstance(blobs, dict):
+        return HeadContentRead(kind="unreadable")
+    return HeadContentRead(kind="ok", blobs=blobs)
+
+
+def resolve_merged_into_entry(finding, by_key):
+    """Follow mergedInto through by_key; None when the chain does not resolve."""
+    if not isinstance(finding, dict):
+        return finding
+    if not finding.get(MERGED_INTO_FIELD):
+        return finding
+    limit = max(len(by_key), 1)
+    entry = finding
+    visited = set()
+    for _ in range(limit):
+        into = entry.get(MERGED_INTO_FIELD)
+        if not isinstance(into, str) or not into:
+            return None
+        if into in visited:
+            return None
+        visited.add(into)
+        target = by_key.get(into)
+        if target is None:
+            return None
+        if not target.get(MERGED_INTO_FIELD):
+            return target
+        entry = target
+    return None
+
+
+def fix_proof_path(finding, by_key=None):
+    """File path whose head-content proof binds a fixed disposition — representative for merged members."""
+    path = finding.get("file")
+    if by_key is not None and finding.get(MERGED_INTO_FIELD):
+        resolved = resolve_merged_into_entry(finding, by_key)
+        if isinstance(resolved, dict):
+            rep_path = resolved.get("file")
+            if isinstance(rep_path, str) and rep_path:
+                path = rep_path
+    return path
+
+
+def fix_still_present_at_head(finding, receipt, head, read_outcome, by_key=None):
+    """Return ``(binding_failure_token, detail)`` when the fix no longer stands, else ``None``.
+
+    ``head`` and ``read_outcome`` are supplied by the caller; this leaf never reaches for a session."""
+    path = fix_proof_path(finding, by_key)
+    if not isinstance(path, str) or not path:
+        return (
+            "fix-content-missing",
+            "fixed disposition lacks file path for head-content verification",
+        )
+    if not isinstance(head, str) or not head:
+        return (
+            "fix-content-missing",
+            "fixed disposition lacks certified head for content verification",
+        )
+    if read_outcome.kind == "unreadable":
+        return (
+            "fix-content-unreadable",
+            "fixed disposition fix-content read failed on certified head",
+        )
+    if read_outcome.kind == "missing":
+        return (
+            "fix-content-missing",
+            "fixed disposition lacks head-content evidence on certified head",
+        )
+    blobs = read_outcome.blobs
+    if blobs.get("schema") != HEAD_CONTENT_BLOBS_SCHEMA:
+        return (
+            "fix-content-schema-unsupported",
+            "fixed disposition head-content schema is not supported",
+        )
+    reads = blobs.get("reads")
+    if not isinstance(reads, list):
+        reads = []
+    matching = [
+        row
+        for row in reads
+        if isinstance(row, dict)
+        and row.get("headSha") == head
+        and row.get("path") == path
+    ]
+    if not matching:
+        return (
+            "fix-content-missing",
+            "fixed disposition fix is not present in content at the certified head",
+        )
+    row = matching[-1]
+    if row.get("readError") is not None or not row.get("contentDigest"):
+        return (
+            "fix-content-unreadable",
+            "fixed disposition fix-content read failed on certified head",
+        )
+    content_digest = row["contentDigest"]
+    files = blobs.get("files")
+    file_b64 = files.get(path) if isinstance(files, dict) else None
+    if file_b64 is None:
+        return (
+            "fix-content-unreadable",
+            "fixed disposition fix-content read failed on certified head",
+        )
+    try:
+        raw = base64.b64decode(file_b64, validate=True)
+    except (binascii.Error, ValueError):
+        return (
+            "fix-content-unreadable",
+            "fixed disposition fix-content read failed on certified head",
+        )
+    if hashlib.sha256(raw).hexdigest() != content_digest:
+        return (
+            "fix-content-reverted",
+            "fixed disposition fix is not present in content at the certified head",
+        )
+    fix_content_digest = receipt.get("fixContentDigest")
+    if not isinstance(fix_content_digest, str) or not fix_content_digest:
+        return (
+            "fix-content-reverted",
+            "fixed disposition fix is not present in content at the certified head",
+        )
+    if content_digest != fix_content_digest:
+        return (
+            "fix-content-reverted",
+            "fixed disposition fix is not present in content at the certified head",
+        )
+    return None
+
+
+def verify_result_for_head(state, head):
+    """The verify result recorded FOR `head`, or None. The ONE reader of the verified-head fact.
+
+    `_fold_verify` records `verifiedHead` beside `verifyResult` in the round record it writes;
+    this answers "was this head verified, and how" from that record alone. A round record with a
+    `verifyResult` but NO `verifiedHead` reads as NOT VERIFIED (fail-closed) — the verified-head
+    fact is never reconstructed from `verifyResult` plus `fixFoldHead`, which is the class this
+    retires (three passes over that reconstruction each broke a neighbour, #1272 layer 2g)."""
+    if not isinstance(head, str) or not head:
+        return None
+    if not isinstance(state, dict):
+        return None
+    rounds = state.get("rounds")
+    if not isinstance(rounds, dict):
+        return None
+    round_nums = []
+    for key in rounds:
+        try:
+            round_nums.append(int(key))
+        except (TypeError, ValueError):
+            continue
+    for rnd in sorted(round_nums, reverse=True):
+        rec = rounds.get(str(rnd))
+        if not isinstance(rec, dict):
+            continue
+        verified = rec.get(VERIFIED_HEAD_FIELD)
+        if isinstance(verified, str) and verified and verified == head:
+            return rec.get("verifyResult")
+    return None

@@ -75,9 +75,9 @@ def test_unrelated_v3_findings_distinct_ledger_and_certification():
     assert ledger[0]["disposition"] == "refuted"
     assert SC.finding_identity_key(ledger[0]) == key1
 
-    certified, refusal = RC._certification_findings(state)
+    by_key, refusal = RC._certification_findings_by_key(state)
     assert refusal is None
-    cert_keys = {SC.finding_identity_key(f) for f in certified}
+    cert_keys = set(by_key)
     assert key1 in cert_keys
     assert key2 in cert_keys
     assert len(cert_keys) == 2
@@ -242,9 +242,9 @@ def test_separate_batches_clamped_title_collision_merged_distinct_keys_and_certi
     keys = [SC.finding_identity_key(f) for f in state["findings"]]
     assert len(keys) == 2
     assert keys[0] != keys[1]
-    certified, refusal = RC._certification_findings(state)
+    by_key, refusal = RC._certification_findings_by_key(state)
     assert refusal is None
-    cert_keys = {SC.finding_identity_key(f) for f in certified}
+    cert_keys = set(by_key)
     assert keys[0] in cert_keys
     assert keys[1] in cert_keys
     assert len(cert_keys) == 2

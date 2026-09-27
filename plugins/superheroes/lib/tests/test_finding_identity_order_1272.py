@@ -364,8 +364,9 @@ def test_finding_identity_has_one_home_driver_and_certification_agree():
     state = RD.new_state(_cfg())
     RD._set_findings(state, [alpha, beta])
     assert len(state["findings"]) == 2
-    certified, refusal = RC._certification_findings(state)
+    by_key, refusal = RC._certification_findings_by_key(state)
     assert refusal is None
+    certified = list(by_key.values())
     assert len(certified) == 2
     a, b = state["findings"][0], state["findings"][1]
     assert SC.finding_identity_key(a) != SC.finding_identity_key(b)
@@ -376,8 +377,9 @@ def test_finding_identity_has_one_home_driver_and_certification_agree():
     legacy_state = RD.new_state(_cfg())
     legacy_state["findings"] = [dict(alpha_u), dict(beta_u)]
     assert SC.FINDING_KEY_FIELD not in legacy_state["findings"][0]
-    legacy_certified, legacy_refusal = RC._certification_findings(legacy_state)
+    legacy_by_key, legacy_refusal = RC._certification_findings_by_key(legacy_state)
     assert legacy_refusal is None
+    legacy_certified = list(legacy_by_key.values())
     assert len(legacy_certified) == 2
     assert SC.finding_identity_key(alpha_u) != SC.finding_identity_key(beta_u)
     assert RD._finding_key_of(alpha_u) == SC.finding_identity_key(alpha_u)
@@ -458,8 +460,9 @@ def test_durable_skeleton_carries_finding_key_so_resume_keeps_one_identity():
     RD._set_findings(state, compiled)
     state["findings"][0]["disposition"] = "refuted"
     state["_records"] = [RM.summarize_record({"findings": [dict(state["findings"][0])]})]
-    certified, refusal = RC._certification_findings(state)
+    by_key, refusal = RC._certification_findings_by_key(state)
     assert refusal is None
+    certified = list(by_key.values())
     assert len(certified) == 1
     assert certified[0]["disposition"] == "refuted"
 

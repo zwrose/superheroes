@@ -151,7 +151,7 @@ failure refuses `disposition-without-receipt` with the named binding failure:
 | 6 | `reads[]` has a row for `(certified head, path)` | `fix-content-missing` |
 | 7 | Row `readError` is null (read succeeded) | `fix-content-unreadable` |
 | 8 | SHA-256 over `files[path]` decoded bytes equals row `contentDigest` | `fix-content-reverted` |
-| 9 | Row `contentDigest` equals the finding's `dispositionReceipt.fixContentDigest` | `fix-content-reverted` |
+| 9 | Row `contentDigest` at the certified head equals `dispositionReceipt.fixContentDigest` (recorded at fix-fold, preserved through terminal re-bind) | `fix-content-reverted` |
 
 **Residual.** Step 8 refuses a blob whose recorded content does not hash to its recorded digest, but
 a journal-only writer that may not read git **cannot** verify that a read ever happened — a fully

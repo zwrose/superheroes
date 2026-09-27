@@ -357,7 +357,7 @@ def _out_of_scope_follow_up(finding):
 def _certification_findings_by_key(state):
     """Keyed findings for disposition checks — ledger owner uses ledger + live only."""
     classification = session_contract.disposition_ledger_owner_classification(state)
-    if classification == "unrecognized":
+    if classification == session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED:
         value = state.get(session_contract.DISPOSITION_LEDGER_OWNER_FIELD)
         return {}, _refusal(
             "disposition-without-receipt",
@@ -366,34 +366,19 @@ def _certification_findings_by_key(state):
             binding_failure="disposition-ledger-owner-unrecognized",
         )
     by_key = {}
-    if classification == "recognized":
+    if classification == session_contract.DISPOSITION_LEDGER_OWNER_RECOGNIZED:
         # axis: ledger-owned reads take disposition family from the ledger only — _records is not a source
         ledger_by_key = {}
-        ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-        if not isinstance(ledger, list):
+        ledger_rows, ledger_fault = session_contract.read_disposition_ledger(state, required=True)
+        if ledger_fault is not None:
             return {}, _refusal(
                 "disposition-without-receipt",
                 STATE_FILE,
-                "dispositionLedger must be a list when dispositionLedgerOwner is %r"
-                % (session_contract.DISPOSITION_LEDGER_OWNER_VALUE,),
-                binding_failure="disposition-ledger-malformed",
+                ledger_fault.detail,
+                binding_failure=ledger_fault.token,
             )
-        for finding in ledger:
-            if not isinstance(finding, dict):
-                return {}, _refusal(
-                    "disposition-without-receipt",
-                    STATE_FILE,
-                    "dispositionLedger row must be an object",
-                    binding_failure="disposition-ledger-malformed",
-                )
+        for finding in ledger_rows:
             key = _finding_identity_key(finding)
-            if not key:
-                return {}, _refusal(
-                    "disposition-without-receipt",
-                    STATE_FILE,
-                    "dispositionLedger row lacks a finding key",
-                    binding_failure="disposition-ledger-malformed",
-                )
             ledger_by_key[key] = finding
         live_by_key = {}
         for finding in state.get("findings") or []:
@@ -430,13 +415,8 @@ def _certification_findings_by_key(state):
                 )
             by_key[key] = dict(live)
         return by_key, None
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-    if isinstance(ledger, list):
-        for finding in ledger:
-            if isinstance(finding, dict):
-                key = _finding_identity_key(finding)
-                if key:
-                    by_key[key] = finding
+    for key, finding in session_contract.legacy_disposition_ledger_rows(state):
+        by_key[key] = finding
     for rec in state.get("_records") or []:
         if not isinstance(rec, dict):
             continue
@@ -454,37 +434,8 @@ def _certification_findings_by_key(state):
     return by_key, None
 
 
-def _certification_findings(state):
-    """Live open-work plus durable ledger and review-record history for disposition checks."""
-    by_key, refusal = _certification_findings_by_key(state)
-    if refusal is not None:
-        return [], refusal
-    return list(by_key.values()), None
-
-
 def _resolve_merged_into_entry(finding, by_key):
-    """Follow mergedInto through by_key; None when the chain does not resolve."""
-    if not isinstance(finding, dict):
-        return finding
-    if not finding.get(session_contract.MERGED_INTO_FIELD):
-        return finding
-    limit = max(len(by_key), 1)
-    entry = finding
-    visited = set()
-    for _ in range(limit):
-        into = entry.get(session_contract.MERGED_INTO_FIELD)
-        if not isinstance(into, str) or not into:
-            return None
-        if into in visited:
-            return None
-        visited.add(into)
-        target = by_key.get(into)
-        if target is None:
-            return None
-        if not target.get(session_contract.MERGED_INTO_FIELD):
-            return target
-        entry = target
-    return None
+    return session_contract.resolve_merged_into_entry(finding, by_key)
 
 
 def _effective_certification_finding(finding, by_key):
@@ -1073,136 +1024,35 @@ def _envelope_sha256(payload, execution_evidence):
 def _read_head_content_blobs(session_dir):
     path = os.path.join(session_dir, HEAD_CONTENT_BLOBS_FILE)
     if not os.path.exists(path):
-        return None, None
+        return session_contract.classify_head_content_read(absent=True)
     try:
         with open(path, encoding="utf-8") as fh:
             blobs = json.load(fh)
     except (OSError, ValueError) as exc:
-        return None, "fix-content-unreadable: %s" % exc
-    if not isinstance(blobs, dict):
-        return None, "fix-content-unreadable: root is not an object"
-    return blobs, None
+        return session_contract.classify_head_content_read(error=exc)
+    return session_contract.classify_head_content_read(blobs=blobs)
 
 
 def _fix_content_proof_path(finding, by_key=None):
-    """File path whose head-content proof binds a fixed disposition — representative for merged members."""
-    path = finding.get("file")
-    if by_key is not None and finding.get(session_contract.MERGED_INTO_FIELD):
-        resolved = _resolve_merged_into_entry(finding, by_key)
-        if isinstance(resolved, dict):
-            rep_path = resolved.get("file")
-            if isinstance(rep_path, str) and rep_path:
-                path = rep_path
-    return path
+    return session_contract.fix_proof_path(finding, by_key)
 
 
 def _fix_still_present_at_head(ctx, finding, receipt, by_key=None):
     fid = finding.get("id") or finding.get("title") or "finding"
-    path = _fix_content_proof_path(finding, by_key)
-    if not isinstance(path, str) or not path:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition lacks file path for head-content verification",
-            binding_failure="fix-content-missing",
-        )
     head = receipt.get("headSha") or _certified_head_sha(ctx)
-    if not isinstance(head, str) or not head:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition lacks certified head for content verification",
-            binding_failure="fix-content-missing",
-        )
-    blobs, err = _read_head_content_blobs(ctx["session_dir"])
-    if err is not None:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition fix-content read failed on certified head",
-            binding_failure="fix-content-unreadable",
-        )
-    if blobs is None:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition lacks head-content evidence on certified head",
-            binding_failure="fix-content-missing",
-        )
-    if blobs.get("schema") != HEAD_CONTENT_BLOBS_SCHEMA:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition head-content schema is not supported",
-            binding_failure="fix-content-schema-unsupported",
-        )
-    reads = blobs.get("reads")
-    if not isinstance(reads, list):
-        reads = []
-    matching = [
-        row
-        for row in reads
-        if isinstance(row, dict)
-        and row.get("headSha") == head
-        and row.get("path") == path
-    ]
-    if not matching:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition fix is not present in content at the certified head",
-            binding_failure="fix-content-missing",
-        )
-    row = matching[-1]
-    if row.get("readError") is not None or not row.get("contentDigest"):
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition fix-content read failed on certified head",
-            binding_failure="fix-content-unreadable",
-        )
-    content_digest = row["contentDigest"]
-    files = blobs.get("files")
-    file_b64 = files.get(path) if isinstance(files, dict) else None
-    if file_b64 is None:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition fix-content read failed on certified head",
-            binding_failure="fix-content-unreadable",
-        )
-    try:
-        raw = base64.b64decode(file_b64, validate=True)
-    except (binascii.Error, ValueError):
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition fix-content read failed on certified head",
-            binding_failure="fix-content-unreadable",
-        )
-    if hashlib.sha256(raw).hexdigest() != content_digest:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition fix is not present in content at the certified head",
-            binding_failure="fix-content-reverted",
-        )
-    fix_content_digest = receipt.get("fixContentDigest")
-    if not isinstance(fix_content_digest, str) or not fix_content_digest:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition fix is not present in content at the certified head",
-            binding_failure="fix-content-reverted",
-        )
-    if content_digest != fix_content_digest:
-        return _refusal(
-            "disposition-without-receipt",
-            fid,
-            "fixed disposition fix is not present in content at the certified head",
-            binding_failure="fix-content-reverted",
-        )
-    return None
+    read_outcome = _read_head_content_blobs(ctx["session_dir"])
+    binding = session_contract.fix_still_present_at_head(
+        finding, receipt, head, read_outcome, by_key=by_key,
+    )
+    if binding is None:
+        return None
+    token, detail = binding
+    return _refusal(
+        "disposition-without-receipt",
+        fid,
+        detail,
+        binding_failure=token,
+    )
 
 
 def check_unrun_review(ctx):
@@ -1996,6 +1846,7 @@ def _build_receipt_rounds(state, form):
             "seatStatus": rec.get("seatStatus"),
             "blockingCount": rec.get("blockingCount"),
             "verifyResult": rec.get("verifyResult"),
+            "verifiedHead": rec.get("verifiedHead"),
             "audits": rec.get("audits"),
             "auditProvenance": rec.get("auditProvenance"),
             "scopedFinder": rec.get("scopedFinder"),
