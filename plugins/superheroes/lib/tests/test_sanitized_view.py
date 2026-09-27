@@ -1,4 +1,5 @@
 """Tests for sanitized_view — disposable export with agent config stripped."""
+import json
 import os
 import shutil
 import stat
@@ -2078,7 +2079,7 @@ def test_every_git_spawn_wrapper_passes_no_lazy_fetch(monkeypatch, wrapper):
     assert seen["env"]["GIT_NO_LAZY_FETCH"] == "1"
 
 
-def test_review_diff_at_at_in_path_still_refuses_opaque(tmp_path, monkeypatch):
+def test_review_diff_at_at_in_path_binary_is_placeheld(tmp_path):
     repo = str(tmp_path / "at-at-path")
     os.makedirs(repo, exist_ok=True)
     _git(repo, "init", "-q")
@@ -2117,13 +2118,336 @@ def test_review_diff_at_at_in_path_still_refuses_opaque(tmp_path, monkeypatch):
         "-m",
         "change",
     )
-    fake_tmp = str(tmp_path / "tmpdir")
-    os.makedirs(fake_tmp)
-    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert (
+            b'diff --git a/sec@@.txt b/sec@@.txt\n'
+            b'# superheroes: binary file modified: "sec@@.txt" (binary content not shown)\n'
+        ) in patch
+        assert b"changed\n" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def _binary_placeholder_section_bytes(path, kind):
+    header = ("diff --git a/%s b/%s\n" % (path, path)).encode("ascii")
+    line = (
+        b"# superheroes: binary file "
+        + kind.encode("ascii")
+        + b": "
+        + json.dumps(path, ensure_ascii=True).encode("ascii")
+        + b" (binary content not shown)\n"
+    )
+    return header + line
+
+
+def test_review_diff_binary_sections_become_placeholders(tmp_path):
+    repo = _init_repo(
+        tmp_path / "binary-sections",
+        files={"t.txt": "text base\n"},
+        commit=False,
+    )
+    for name, data in (
+        ("mod.png", b"a\0b"),
+        ("del.png", b"x\0y"),
+        ("old.png", b"o\0ld"),
+    ):
+        with open(os.path.join(repo, name), "wb") as fh:
+            fh.write(data)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "mod.png"), "wb") as fh:
+        fh.write(b"a\0c")
+    os.remove(os.path.join(repo, "del.png"))
+    _git(repo, "mv", "old.png", "new.png")
+    with open(os.path.join(repo, "add.png"), "wb") as fh:
+        fh.write(b"n\0w")
+    with open(os.path.join(repo, "t.txt"), "w", encoding="utf-8") as fh:
+        fh.write("text head\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "binary mix",
+    )
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    merge_base = _git(repo, "merge-base", base_sha, head_sha).stdout.strip()
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        for path, kind in (
+            ("add.png", "added"),
+            ("mod.png", "modified"),
+            ("del.png", "deleted"),
+            ("old.png", "deleted"),
+            ("new.png", "added"),
+        ):
+            assert _binary_placeholder_section_bytes(path, kind) in patch
+        assert b"Binary files " not in patch
+        assert b"\0" not in patch
+        t_only = subprocess.run(
+            [
+                *sv._review_diff_argv_prefix(
+                    os.path.realpath(repo), merge_base, head_sha
+                ),
+                "t.txt",
+            ],
+            env=sv._git_env(),
+            capture_output=True,
+            check=True,
+        ).stdout
+        assert t_only in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_binary_larger_than_sniff_window_is_placeheld(tmp_path):
+    big = b"\0" + (b"x" * 49999)
+    repo = _init_repo(tmp_path / "big-binary", files={"z.txt": "z\n"}, commit=False)
+    for name in ("a.bin", "b.bin"):
+        with open(os.path.join(repo, name), "wb") as fh:
+            fh.write(big)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "a.bin"), "wb") as fh:
+        fh.write(b"\0" + (b"y" * 49999))
+    with open(os.path.join(repo, "b.bin"), "wb") as fh:
+        fh.write(b"\0" + (b"w" * 49999))
+    with open(os.path.join(repo, "z.txt"), "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "big",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert _binary_placeholder_section_bytes("a.bin", "modified") in patch
+        assert _binary_placeholder_section_bytes("b.bin", "modified") in patch
+        assert b"changed\n" in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_binary_to_text_change_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "bin-to-text", files={"keep.txt": "k\n"}, commit=False)
+    with open(os.path.join(repo, "mix.dat"), "wb") as fh:
+        fh.write(b"\0bin\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "mix.dat"), "w", encoding="utf-8") as fh:
+        fh.write("plain text\n")
+    _git(repo, "add", "mix.dat")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "text",
+    )
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv.build_sanitized_view(repo, diff_base=base_sha)
     assert exc.value.detail == "sanitized-view-diff-opaque"
-    assert _leftover_view_dirs(fake_tmp) == []
+
+
+def test_review_diff_text_to_binary_change_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "text-to-bin", files={"mix.dat": "plain\n"})
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "mix.dat"), "wb") as fh:
+        fh.write(b"\0bin\n")
+    _git(repo, "add", "mix.dat")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "bin",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_binary_path_with_newline_is_json_quoted(tmp_path):
+    weird = "a\nb.png"
+    repo = str(tmp_path / "newline-path")
+    os.makedirs(repo, exist_ok=True)
+    _git(repo, "init", "-q")
+    with open(os.path.join(repo, "seed.txt"), "w", encoding="utf-8") as fh:
+        fh.write("seed\n")
+    _git(repo, "add", "seed.txt")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "seed",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    try:
+        with open(os.path.join(repo, weird), "wb") as fh:
+            fh.write(b"\0x")
+    except OSError:
+        pytest.skip("filesystem refuses newline in path")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert (
+            b'# superheroes: binary file added: "a\\nb.png" (binary content not shown)\n'
+            in patch
+        )
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_filter_patch_sections_unparseable_binary_section_refuses_unaccounted():
+    sec = b"diff --git a/x b/y\nBinary files a/x and b/y differ\n"
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._filter_patch_sections(sec, lambda _p, _k: True)
+    assert exc.value.detail == "sanitized-view-diff-unaccounted"
+
+
+def test_filter_patch_sections_stripped_binary_is_dropped_not_placeheld():
+    bin_sec = (
+        b"diff --git a/.claude/logo.png b/.claude/logo.png\n"
+        b"Binary files a/.claude/logo.png and b/.claude/logo.png differ\n"
+    )
+    text_sec = (
+        b"diff --git a/keep.txt b/keep.txt\n"
+        b"index 111..222 100644\n"
+        b"--- a/keep.txt\n"
+        b"+++ b/keep.txt\n"
+        b"@@ -1 +1 @@\n"
+        b"-old\n"
+        b"+new\n"
+    )
+    patch = bin_sec + text_sec
+    out = sv._filter_patch_sections(patch, lambda _p, _k: True)
+    assert out == text_sec
+
+
+def test_filter_patch_sections_opaque_without_predicate_refuses():
+    sec = b"diff --git a/x b/x\nBinary files a/x and b/x differ\n"
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv._filter_patch_sections(sec)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_blob_read_failure_refuses_diff_failed(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "cat-fail", files={"keep.txt": "k\n"}, commit=False)
+    with open(os.path.join(repo, "b.png"), "wb") as fh:
+        fh.write(b"\0x\n")
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "b.png"), "wb") as fh:
+        fh.write(b"\0y\n")
+    _git(repo, "add", "b.png")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "chg",
+    )
+
+    def boom(self, oid, started, prefix_bytes):
+        raise sv.SanitizedViewError("sanitized-view-export-failed")
+
+    monkeypatch.setattr(sv._CatFileBatch, "read_blob_prefix", boom)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-failed"
 
 
 def test_review_diff_file_named_like_binary_marker_is_not_opaque(tmp_path):

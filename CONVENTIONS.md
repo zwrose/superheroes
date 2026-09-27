@@ -812,9 +812,11 @@ on every commit-peeling source-repository command, so that half of the guarantee
 the git executable honoring it. Dispatch refuses when
 authoritative ancestry cannot be established, and any shallow-state answer other than exact
 `true`/`false` is itself a refusal; empty directory additions and removals are tree-only and outside
-this contract. Repo-local config overrides remain defence in depth, not the proof of authority. Until a follow-up issue lands, opaque or unaccounted patch content refuses
+this contract. Repo-local config overrides remain defence in depth, not the proof of authority. Opaque or unaccounted patch content refuses
 with `sanitized-view-diff-opaque`, `sanitized-view-diff-unaccounted`, or (for git command failure)
-`sanitized-view-diff-failed`; that result is never a clean review and there is no automatic fallback.
+`sanitized-view-diff-failed`, except that a kept review-patch section git renders as binary becomes a
+placeholder when every present side is a regular-file blob whose first 8000 bytes contain a NUL byte;
+that result is never a clean review and there is no automatic fallback.
 
 **Dispatch vocabulary contract.** Three token shapes stay distinct:
 
