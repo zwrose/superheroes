@@ -445,6 +445,7 @@ above).
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md`: an
      always-present **spine**, plus the fields the PR's own **artifacts** trigger, with every spine
      field **filled or written `None`**. **Read that file at vet time; do not reconstruct the shape from memory.**
+     The spine carries the **lane** the PR ran (field 9) and the **misses-log appends** this vet made, or `None` (field 10).
      The `None` is what makes an absence readable, because
      presence-by-grep cannot tell *not applicable* from *forgotten*. **The template is a floor, never
      a ceiling** — a probes field that reads like a form has hollowed out the one field that cannot
@@ -558,7 +559,7 @@ above).
    every **show it** issue carries the presentation bullet in its DoD and its after-state reached
    the owner before the click, or a disclosure did; every open decision you delivered followed
    `owner-decisions.md`; every closed spec carries the owner's delivery decision.
-6. **Coordinate releases and drive the merge train.** **This duty states the merge policy in full.**
+6. **Coordinate releases and drive the merge train.** **This duty is the merge policy's one full statement**; the covenant, PHILOSOPHY and CONVENTIONS point here.
    **Never merge, release, or
    publish on your own authority:** approval never delegates. **When you cannot tell, ask — park
    rather than presume.**
