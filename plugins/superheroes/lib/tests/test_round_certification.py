@@ -27,6 +27,7 @@ from round_certification_fixtures import (
 )
 
 HEAD = HEAD_SHA
+_CODEX_REVIEW_MODEL = model_registry.matrix_config("reviewer", "codex")[0]
 
 QUALIFICATION_HELPER_CENSUS = (
     "_execution_binding_matches_journal",
@@ -82,7 +83,7 @@ def test_receipt_seat_model_none_when_transport_absent(tmp_path):
         "stdoutBytes": 10,
         "wallSeconds": 1.0,
         "toolCalls": 1,
-        "engineModel": "gpt-5.6-sol",
+        "engineModel": _CODEX_REVIEW_MODEL,
     }
     journal_row = _dispatch_journal_with_binding(
         seat=seat,
@@ -618,7 +619,7 @@ def test_same_family_unresolvable_without_degradations_refuses(tmp_path):
                     "round": "1",
                     "map": {
                         "seats": {
-                            "code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"},
+                            "code-reviewer": {"vendor": "codex", "model": _CODEX_REVIEW_MODEL},
                         },
                     },
                 }
@@ -1111,7 +1112,7 @@ def test_bite_same_family_unresolvable_refuses(tmp_path):
                     "round": "1",
                     "map": {
                         "seats": {
-                            "code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"},
+                            "code-reviewer": {"vendor": "codex", "model": _CODEX_REVIEW_MODEL},
                         },
                     },
                 }
@@ -2681,7 +2682,7 @@ def test_check_unfetched_findings_seat_missing_schema_exempt_from_payload_hash(t
         "seat": "code-reviewer",
         "attempt": 0,
         "vendor": "codex",
-        "model": "gpt-5.6-sol",
+        "model": _CODEX_REVIEW_MODEL,
         "reason": "forfeit",
     }
     with open(path, "w", encoding="utf-8") as fh:
@@ -2710,7 +2711,7 @@ def test_seat_map_cannot_bypass_empty_seat_set_refusal(tmp_path):
                 {
                     "round": "1",
                     "map": {
-                        "seats": {"code-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}},
+                        "seats": {"code-reviewer": {"vendor": "codex", "model": _CODEX_REVIEW_MODEL}},
                     },
                 }
             ]

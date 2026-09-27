@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -229,7 +230,7 @@ def test_cli_decide_location_emits_json(tmp_path):
     env = dict(os.environ, TEST_PILOT_STORE_ROOT=str(tmp_path / "store"))
     lib = os.path.dirname(os.path.abspath(store.__file__))
     out = subprocess.run(
-        ["/usr/bin/python3", os.path.join(lib, "store.py"), "decide-location"],
+        [sys.executable, os.path.join(lib, "store.py"), "decide-location"],
         capture_output=True, text=True, cwd=repo, env=env)
     assert out.returncode == 0
     payload = json.loads(out.stdout)
@@ -243,7 +244,7 @@ def test_cli_decide_location_rejects_stale_interactive_flag(tmp_path):
     lib = os.path.dirname(os.path.abspath(store.__file__))
     for extra in (["--interactive", "true"], ["--interactive=true"]):
         out = subprocess.run(
-            ["/usr/bin/python3", os.path.join(lib, "store.py"), "decide-location"] + extra,
+            [sys.executable, os.path.join(lib, "store.py"), "decide-location"] + extra,
             capture_output=True, text=True, cwd=repo, env=env)
         assert out.returncode != 0
         assert "1136" in out.stderr
@@ -620,7 +621,7 @@ def test_cli_resolve_unreadable_layer_exit_one(tmp_path):
     env = dict(os.environ, TEST_PILOT_STORE_ROOT=root)
     lib = os.path.dirname(os.path.abspath(store.__file__))
     out = subprocess.run(
-        ["/usr/bin/python3", os.path.join(lib, "store.py"), "resolve"],
+        [sys.executable, os.path.join(lib, "store.py"), "resolve"],
         capture_output=True, text=True, cwd=repo, env=env)
     assert out.returncode == 1
     payload = json.loads(out.stdout)

@@ -270,6 +270,40 @@ def _pairs_from_report(report):
     return pairs
 
 
+def _tracked_realpath_set(cwd, tracked):
+    """Realpaths of every censused repo-relative path — robust under symlinked roots."""
+    return {os.path.realpath(os.path.join(cwd, t)) for t in tracked}
+
+
+def _reported_path_in_census(cwd, path, tracked, tracked_realpaths):
+    """True when jscpd's reported path resolves to a censused tracked file."""
+    rel = _repo_rel(cwd, path)
+    if rel in tracked:
+        try:
+            abs_path = os.path.join(cwd, rel)
+        except (TypeError, ValueError):
+            abs_path = path
+    elif os.path.isabs(path):
+        abs_path = path
+    else:
+        return False
+    try:
+        return os.path.realpath(abs_path) in tracked_realpaths
+    except (OSError, ValueError):
+        return False
+
+
+def _first_untracked_reported_path(report, cwd, tracked):
+    """Return a display path for the first duplicate entry path outside the census, or None."""
+    tracked_realpaths = _tracked_realpath_set(cwd, tracked)
+    for path_a, path_b, _j_lines, _is_self, _j_tokens in _pairs_from_report(report):
+        for path in (path_a, path_b):
+            if not _reported_path_in_census(cwd, path, tracked, tracked_realpaths):
+                rel = _repo_rel(cwd, path)
+                return rel if rel else path
+    return None
+
+
 def _dedupe_pairs(report, cwd):
     """Normalize the report's duplicate entries into deduped cross-file pairs.
 
@@ -788,24 +822,16 @@ class DuplicationLens:
         except _ReportContractError as exc:
             return {"candidates": [], "digest": None, **gc.not_collected(str(exc))}
 
+        # jscpd's per-(file, embedded-language) source-unit count — not a file count; telemetry only.
         scanned = report["statistics"]["total"]["sources"]
         tracked_count = len(tracked)
         prior_pairs = {}
         if isinstance(self._prev_digest, dict) and isinstance(
                 self._prev_digest.get("pairs"), dict):
             prior_pairs = self._prev_digest["pairs"]
-        # Zero-scan and over-scan tripwires are stateless (current sweep only). With no prior
-        # pairs, honest sources==0 on a first sweep still collects so scan metadata can
-        # baseline; with prior pairs, zero-scan must not erase them via an empty digest.
-        if scanned > tracked_count:
-            return {
-                "candidates": [],
-                "digest": None,
-                **gc.not_collected(
-                    "jscpd scanned %d files but only %d were in the tracked-file "
-                    "config path list — the census file list was not honored"
-                    % (scanned, tracked_count)),
-            }
+        # Zero-scan tripwire is stateless (current sweep only). With no prior pairs, honest
+        # sources==0 on a first sweep still collects so scan metadata can baseline; with
+        # prior pairs, zero-scan must not erase them via an empty digest.
         if prior_pairs and scanned == 0 and tracked_count > 0:
             return {
                 "candidates": [],
@@ -815,6 +841,20 @@ class DuplicationLens:
                     "or no tracked file is a format jscpd recognizes" % tracked_count),
             }
         scan_ratio = scanned / tracked_count
+
+        # bite-proof axis: an escaped reported path degrades; source-unit count never does.
+        try:
+            escaped = _first_untracked_reported_path(report, cwd, tracked)
+        except _ReportContractError as exc:
+            return {"candidates": [], "digest": None, **gc.not_collected(str(exc))}
+        if escaped is not None:
+            return {
+                "candidates": [],
+                "digest": None,
+                **gc.not_collected(
+                    "jscpd reported a path outside the tracked-file census (%s) — "
+                    "the census file list was not honored" % escaped),
+            }
 
         # Honesty gate: jscpd's summary reports clones but the duplicates detail array
         # is empty — we cannot normalize anything and must NOT read as a clean baseline.
@@ -901,6 +941,9 @@ class DuplicationLens:
             "trackedFilesCensused": len(tracked),
             "jscpdInputMode": "config-file",
             "jscpdFilesScanned": scanned,
+            "censusVerification": (
+                "reported-path membership; jscpd emits no per-file scan list, "
+                "population confined by a file-only config list run from a neutral cwd"),
         }
         return {
             "candidates": capped,
