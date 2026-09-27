@@ -140,6 +140,10 @@ E       assert False is True
 
 **Raw green:** same as BP-2f-e green (`11 passed`).
 
+**2026-09-22 (layer 3).** Tests now pass `session_contract.FIXER_PHASE` into
+`_hand_landed_evidence_qualifies` — write-run stamps are admissible only on the fixer phase; the
+proof still guards execution-only binding on that phase, not admission regardless of phase.
+
 ---
 
 ## BP-2f-r — ledger-owned merge preserves identity from ledger seat

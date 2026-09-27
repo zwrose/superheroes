@@ -6,7 +6,7 @@ You are the fixer for one round of an auto-fix code-review loop.
   priorAudit {round, ruling, reason} — the last audit ruling on this finding (a not-discharged
   ruling names what the auditor still saw) — and gateRuling {round, disposition, reason})
 - Conventions: CLAUDE.md and the project profile ((Project profile not resolved for this project));
-  severity/format from the base rubric (/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1272-3f5292aa7e89b0ea/e27eb96f-ee0c-49d2-870c-1507a21ea6d1/scratchpad/wo-B/plugins/superheroes/rubric/review-base.md)
+  severity/format from the base rubric (${PLUGIN_ROOT}/rubric/review-base.md)
 - Work in the current branch's working tree at /home/user/proj
 - Repo root: /home/user/proj
 - Verify budget: Scoped verify budget for this batch — target files: auth.py. Run the tests that reference those files (select by reading the test files' own text for the target path, never by test-file name) plus the project's static validators, at most once each. The project's full verify command is NOT yours to run inside this attempt — the orchestrator runs it once after the round's fixes land: pytest -q

@@ -994,17 +994,23 @@ The certification receipt is a **superset** of today's `round-receipt.json` fiel
   `null` when `terminalState` is `certified`
 - `seats` — each recorded seat with `provenance` in its own field (`dispatch-observed` or
   `hand-landed`), kept separate from the certification shape
-- `disclosures` — `importantOutOfScope`: every Important finding that took an out-of-scope
-  disposition with a valid follow-up
+- `disclosures` — `{importantOutOfScope: [...], survivingNonBlocking: [...]}`:
+  `importantOutOfScope` for every Important finding that took an out-of-scope disposition with a
+  valid follow-up; `survivingNonBlocking` for surviving Minor or Nit findings without a recorded
+  disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`)
 - `provenanceLabels` — which receipt keys are derived from the journal vs maker-authored
 
 `certificationShape` is the **single field that deliberately differs** from what
 `build_receipt` would write for the same session: **any** hand-landed seat forces
 `audited-chain`, never `full-panel-confirmed` (and any `full-panel*` shape in state is downgraded
 the same way). Before certification, the writer runs the four escape-class checks over loop state,
-including **disposition without a receipt on the head** — every finding must carry a disposition
-and, for `fixed`, a verification receipt on the certified head; Important out-of-scope deferrals
-surface in `disclosures`, not as silent clean.
+including **disposition without a receipt on the head** — Critical and Important findings must
+carry a disposition (Critical refuses with `Critical finding may not take the non-blocking path`,
+Important with `finding has no disposition recorded`); severity outside the closed contract
+refuses; surviving Minor or Nit findings without a disposition disclose in
+`survivingNonBlocking` and are omitted from `findings`; `fixed` requires a verification receipt
+on the certified head; Important out-of-scope deferrals surface in `importantOutOfScope`, not as
+silent clean.
 
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 

@@ -357,6 +357,20 @@ def test_foreign_collision_keys_are_staging_order_independent():
     assert {f[SC.FINDING_KEY_FIELD] for f in state_sa["findings"]} == keys_a
     assert {f[SC.FINDING_KEY_FIELD] for f in state_sb["findings"]} == keys_b
 
+    identical = {
+        "file": "b.py", "line": 10, "title": "bug", "severity": "Important",
+        SC.FINDING_KEY_FIELD: "caller-controlled",
+    }
+    seq_stamped = [
+        dict(identical, raisedSeq=1),
+        dict(identical, raisedSeq=2, dispositionSeq=2),
+    ]
+    state_seq = RD.new_state(_cfg())
+    RD._set_findings(state_seq, seq_stamped)
+    for row in state_seq["findings"]:
+        assert row[SC.FINDING_KEY_FIELD] == "caller-controlled"
+        assert "#" not in row[SC.FINDING_KEY_FIELD]
+
 
 def test_finding_identity_has_one_home_driver_and_certification_agree():
     """T15: two unkeyed long-title siblings stay distinct; driver and certification agree."""

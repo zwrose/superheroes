@@ -43,7 +43,7 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `certificationShape` | Writer override — see certification-shape rule below |
 | `certification` | Loop state's `certification` block |
 | `rounds` | Per-round projection with disclosure channels via `receipt_disclosures` |
-| `findings` | Projected findings with dispositions and disposition proofs. When state carries `dispositionLedgerOwner: "ledger"`, the disposition ledger is the durable owner of record — the writer's finding set is **seeded from the ledger** and every key it holds is graded, with a live row for the same key supplying the graded shape where one is still open. The writer does not yet read the ledger exclusively, so a live row can still supply a disposition family; the exclusive read — with its refusal for a live disposition the ledger does not hold — lands in a later layer. A `mergedInto` entry is graded through its representative; a chain that does not resolve refuses `disposition-without-receipt`. |
+| `findings` | Projected findings with dispositions and disposition proofs. Surviving Minor or Nit findings without a recorded disposition are omitted here and appear in `disclosures.survivingNonBlocking` instead. When state carries `dispositionLedgerOwner: "ledger"`, the disposition ledger is the durable owner of record — the writer's finding set is **seeded from the ledger** and every key it holds is graded, with a live row for the same key supplying the graded shape where one is still open. The writer does not yet read the ledger exclusively, so a live row can still supply a disposition family; the exclusive read — with its refusal for a live disposition the ledger does not hold — lands in a later layer. A `mergedInto` entry is graded through its representative; a chain that does not resolve refuses `disposition-without-receipt`. |
 | `decisions` | Loop decision log |
 | `seatMap` | Union projection from seat-map receipts |
 | `scriptRan` | Journal summary (`invocations`, `byPhase`) |
@@ -53,7 +53,7 @@ A successful certification receipt (`_build_receipt`) carries at minimum:
 | `terminalState` | `certified`, `cap`, or `cannot-certify` |
 | `terminalCause` | `null` when certified; otherwise `{kind, reason}` from the terminal-cause table |
 | `seats` | Per collected seat: `seat`, `phase`, `round`, `attempt`, `provenance` |
-| `disclosures` | `{importantOutOfScope: [...]}` — Important findings with valid out-of-scope follow-up |
+| `disclosures` | `{importantOutOfScope: [...], survivingNonBlocking: [...]}` — `importantOutOfScope`: Important findings with valid out-of-scope follow-up; `survivingNonBlocking`: surviving Minor or Nit findings without a recorded disposition (`findingKey`, `file`, `line`, `severity`, `id`, `title`) |
 | `provenanceLabels` | `{derived: [...], makerAuthored: [...]}` naming which keys are journal-derived |
 
 Optional keys when present in state: `base` (pinned-base metadata), `policyApplied`.
@@ -71,7 +71,7 @@ Four escape classes (`REFUSAL_CLASSES`). Each refusal is `{class, artifact, deta
 | `unrun-review` | A dispatch-observed or hand-landed seat lacks qualifying execution telemetry on the certified head | Seat key or envelope path |
 | `same-family-seat` | The seat map records same-family degradation, or registry lookup finds an undeclared seat in the maker's model family | First offending seat key |
 | `unfetched-findings` | Journal seat never closed; envelope missing or unreadable; journal/envelope hash disagreement; unreadable session/journal/state; orchestrator-fulfilled provenance on receipt | Path, seat key, or state file |
-| `disposition-without-receipt` | Base guard did not run; finding lacks disposition; fixed/refuted/out-of-scope disposition lacks required proof on certified head; Critical out-of-scope | Finding id or `loop-state.json` |
+| `disposition-without-receipt` | Base guard did not run; finding without disposition when severity is Critical (`Critical finding may not take the non-blocking path`) or Important (`finding has no disposition recorded`); severity outside the closed contract; fixed/refuted/out-of-scope disposition lacks required proof on certified head; Critical out-of-scope | Finding id or `loop-state.json` |
 
 A post-shrink escape in any of the four classes is filed as a **misses-log entry on the collector's
 pinned comment**, so the keep-or-retire list reads catches and escapes together.

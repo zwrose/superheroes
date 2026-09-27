@@ -300,7 +300,7 @@ def test_fixer_emission_ignores_lint_triggers_inside_verify_command(tmp_path, mo
     lint = OL.check_text(RD._order_lint_text(order_text, {
         "placeholders": {"VERIFY_BUDGET": budget},
         "verify_command": verify,
-    }), repo, kind="fixer")
+    }), repo, kind="fixer", allow_payload_contract=True)
     assert lint["ok"] is True
 
 
@@ -416,7 +416,14 @@ def test_verify_command_elision_survives_carriage_returns(tmp_path, monkeypatch,
     })
     assert "{item}" not in lint_text
     assert RD.QUOTED_DATA_LINT_ELISION in lint_text
-    assert OL.check_text(lint_text, repo, kind="fixer")["ok"] is True
+    # Grade the lint text with the arguments the fixer emission passes: the plugin root as an
+    # alternate citation root, and the payload contract allowed exactly when the fixer seat's
+    # resolved channel is the file channel (the emission's `host_seat`).
+    cfg = state["config"]
+    row = RD._seat_transport_row(state, RP.P_FIXER, "fixer", 0, cfg, {}, repo, seat_map={})
+    host_seat = RD._seat_channel(RP.P_FIXER, row) == RD.CHANNEL_FILE
+    assert OL.check_text(lint_text, repo, alt_roots=(RD._plugin_resource_root(),), kind="fixer",
+                         allow_payload_contract=host_seat is True)["ok"] is True
 
 
 _CRLF_PLACEHOLDER_GUIDANCE = "Keep the {name} field as the owner wrote it.\r\nSecond line of guidance."

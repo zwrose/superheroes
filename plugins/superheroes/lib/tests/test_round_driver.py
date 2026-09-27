@@ -2104,7 +2104,7 @@ def test_accept_risk_never_dispositions_critical_targets(tmp_path):
     assert ledger[important_key]["disposition"] == "out-of-scope"
     refusal = _stall_cert_refusal(state, tmp_path)
     assert refusal is not None
-    assert refusal["detail"] == "finding has no disposition recorded"
+    assert refusal["detail"] == "Critical finding may not take the non-blocking path"
 
 
 # =============================================================================
