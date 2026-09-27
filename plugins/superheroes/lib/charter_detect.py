@@ -2,7 +2,7 @@
 """Charter detection from session transcripts.
 
 Long-lived superheroes sessions run under one of three charters (showrunner,
-workhorse, or detective), invoked via slash command. Hooks need to know which
+workhorse, or detective), loaded via slash command (COMMAND_CHARTERS). Hooks need to know which
 charter is active without wedging compaction — so detection is best-effort,
 never raises, and reads the append-only JSONL transcript forward from the
 start (charter invocations appear early; a tail window would miss them in long
@@ -17,10 +17,20 @@ MAX_SCAN_BYTES = 200 * 1024 * 1024
 
 CHARTER_NAMES = ("showrunner", "workhorse", "detective")
 
+# The one name-to-charter table: every slash command that loads a charter.
+# The resume and handoff skills load the showrunner charter for their seat.
+COMMAND_CHARTERS = {
+    "showrunner": "showrunner",
+    "showrunner-resume": "showrunner",
+    "showrunner-handoff": "showrunner",
+    "workhorse": "workhorse",
+    "detective": "detective",
+}
+
 _PREFILTER = "/superheroes:"
 _CHARTER_RE = re.compile(
     r"<command-name>\s*/superheroes:(%s)\s*</command-name>"
-    % "|".join(CHARTER_NAMES)
+    % "|".join(re.escape(name) for name in COMMAND_CHARTERS)
 )
 
 
@@ -38,7 +48,7 @@ def _charter_from_record(rec):
     if not isinstance(content, str):
         return None
     m = _CHARTER_RE.search(content)
-    return m.group(1) if m else None
+    return COMMAND_CHARTERS[m.group(1)] if m else None
 
 
 def _breadcrumb(transcript_path, exc):

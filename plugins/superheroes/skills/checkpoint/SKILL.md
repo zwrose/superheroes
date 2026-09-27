@@ -33,11 +33,11 @@ host that does not name one, this step has no equivalent.
 
 Then call `charter_detect.detect_charter(transcript_path)` from the plugin lib. The
 function scans the transcript forward from the start (up to 200 MB), matches user records
-whose message content contains `<command-name>/superheroes:showrunner</command-name>`,
-`<command-name>/superheroes:workhorse</command-name>`, or
-`<command-name>/superheroes:detective</command-name>`, ignores sidechain records, and
-returns the **last** charter name it finds (`"showrunner"`, `"workhorse"`, `"detective"`,
-or `None`; the roster lives in `charter_detect.CHARTER_NAMES`). It never raises — a
+whose message content names a charter-loading command in `<command-name>/superheroes:…</command-name>`
+— `showrunner`, `showrunner-resume`, or `showrunner-handoff` (all the showrunner charter),
+`workhorse`, or `detective` — ignores sidechain records, and returns the **last** charter
+name it finds (`"showrunner"`, `"workhorse"`, `"detective"`, or `None`; the command table
+lives in `charter_detect.COMMAND_CHARTERS`, the roster in `charter_detect.CHARTER_NAMES`). It never raises — a
 missing file, bad JSON line, or any internal error returns `None`.
 
 ```bash
