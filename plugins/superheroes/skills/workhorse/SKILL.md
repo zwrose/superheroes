@@ -646,10 +646,11 @@ on a very large PR.
 
       <!-- advisor: BEFORE writing this slot, read the showrunner charter's vet-receipt reference
            (skills/showrunner/reference/vet-receipt.md inside the superheroes plugin, not this repo).
-           Post the receipt comment FIRST (vet-receipt marker, 8-field spine, explicit None,
-           triggered fields incl. escalation lines), THEN replace this comment with the owner-half
-           register under the advisor-vet marker: the verdict; what was checked, in owner terms;
-           what accepting it means; what is theirs to decide — plus a pointer to the receipt. -->
+           Post the receipt comment FIRST (vet-receipt marker, the spine from that reference,
+           every field filled or None, triggered fields incl. escalation lines), THEN replace this comment
+           with the owner-half register under the advisor-vet marker: the verdict; what was
+           checked, in owner terms; what accepting it means; what is theirs to decide — plus a
+           pointer to the receipt. -->
 
 The advisor makes the **show it** / **say it** / **nothing to see** call when the issue is routed; that
 call is **revisable during the build**. A builder who discovers a perceivable surface mid-build
