@@ -508,8 +508,8 @@ def probe(engine, repo_root=None, run_dir=None, timeout=None, run_engine=None, b
         if os.path.islink(stripped):
             return _refuse(engine, dispatch_outcome.DETAIL_RUN_DIR_IS_SYMLINK, repo_real, seat=seat)
         expected_names = set(_modes_for_engine(engine))
-        # Only engines with nested per-mode subdirectories (currently claude: print/,
-        # background/) have a meaningful "recognized top-level entries" set — for a
+        # Only engines with nested per-mode subdirectories (currently claude: print/)
+        # have a meaningful "recognized top-level entries" set — for a
         # "default"-mode engine the mode dir IS the parent, and its own reuse/nonempty
         # rules are enforced later, per-mode, by the shared dispatch helper.
         if expected_names != {"default"} and os.path.exists(stripped):

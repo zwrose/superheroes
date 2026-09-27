@@ -387,7 +387,6 @@ def test_probe_refuses_parent_run_dir_with_unrecognized_entries(tmp_path, monkey
     )
     assert code == 1
     assert payload["modeLegs"]["print"]["resultProduction"]["detail"] == "run-dir-not-empty-unopened"
-    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "run-dir-not-empty-unopened"
     assert stderr is not None
 
 
@@ -404,65 +403,21 @@ def test_probe_accepts_parent_run_dir_with_only_recognized_mode_subdirs(tmp_path
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / "print").mkdir()
-    (run_dir / "background").mkdir()
     structured = {"result": _native_verdicts_branch()}
     stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
 
     def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         return stdout, False, 0, ""
 
-    fake = FakeRunner([runner, runner], sync_native=False)
+    fake = FakeRunner([runner], sync_native=False)
     payload, code, stderr = CP.probe(
         "claude", repo_root=repo, run_dir=str(run_dir), timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
-    for mode in ("print", "background"):
+    for mode in ("print",):
         assert payload["modeLegs"][mode]["resultProduction"]["detail"] != "run-dir-not-empty-unopened"
 
 
-def test_claude_probe_background_mode_without_native_result_fails_overall(tmp_path, monkeypatch):
-    # NOTE: this drives the injected `run_engine` test seam for BOTH claude modes. The
-    # background runner below never writes a native result file, so this proves the
-    # all-FAILED path for the background leg — it is not a claude happy-path test. See
-    # test_claude_probe_green_as_far_as_the_injected_seam_can_reach below for how far a
-    # green claude probe can be pushed under this harness, and why one leg stays red.
-    home = tmp_path / "home"
-    home.mkdir()
-    (home / ".claude").mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    repo = _repo(tmp_path)
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir, exist_ok=True)
-    structured = {"result": _native_verdicts_branch()}
-    stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
-
-    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        return stdout, False, 0, ""
-
-    fake = FakeRunner([runner, runner], sync_native=False)
-    payload, code, stderr = CP.probe(
-        "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert payload["channel"] == ERC.CHANNEL_NATIVE
-    assert payload["probedModes"] == ["print", "background"]
-    assert set(payload["modeLegs"]) == {"print", "background"}
-    for leg_name in CP._LEG_NAMES:
-        assert payload["modeLegs"]["print"][leg_name]["ok"] is True
-    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
-    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "native-result-missing"
-    assert payload["modeLegs"]["background"]["completionDetection"]["ok"] is True
-    assert payload["modeLegs"]["background"]["progressTelemetry"]["ok"] is False
-    assert payload["modeLegs"]["background"]["progressTelemetry"]["detail"] == "telemetry-absent"
-    assert payload["ok"] is False
-    assert payload["legs"]["resultProduction"]["ok"] is False
-    assert payload["legs"]["resultProduction"]["detail"] == "background: native-result-missing"
-    assert payload["legs"]["completionDetection"]["ok"] is True
-    assert payload["legs"]["progressTelemetry"]["ok"] is False
-    assert payload["legs"]["progressTelemetry"]["detail"] == "background: telemetry-absent"
-    assert code == 1
-    assert stderr is not None
 
 
 def test_claude_probe_green_as_far_as_the_injected_seam_can_reach(tmp_path, monkeypatch):
@@ -509,23 +464,16 @@ def test_claude_probe_green_as_far_as_the_injected_seam_can_reach(tmp_path, monk
     def background_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         return background_stdout, False, 0, ""
 
-    fake = FakeRunner([print_runner, background_runner], sync_native=False)
+    fake = FakeRunner([print_runner], sync_native=False)
     payload, code, stderr = CP.probe(
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
-    assert payload["probedModes"] == ["print", "background"]
+    assert payload["probedModes"] == ["print"]
     for leg_name in CP._LEG_NAMES:
         assert payload["modeLegs"]["print"][leg_name]["ok"] is True, leg_name
-    assert payload["modeLegs"]["background"]["completionDetection"]["ok"] is True
-    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is True
-    assert payload["modeLegs"]["background"]["progressTelemetry"]["ok"] is False
-    assert payload["modeLegs"]["background"]["progressTelemetry"]["detail"] == "telemetry-absent"
-    assert payload["ok"] is False
-    assert payload["legs"]["resultProduction"]["ok"] is True
-    assert payload["legs"]["progressTelemetry"]["ok"] is False
-    assert payload["legs"]["progressTelemetry"]["detail"] == "background: telemetry-absent"
-    assert code == 1
+    assert payload["ok"] is True
+    assert code == 0
 
 
 def test_claude_probe_all_green_both_modes(tmp_path, monkeypatch):
@@ -563,13 +511,13 @@ def test_claude_probe_all_green_both_modes(tmp_path, monkeypatch):
     def background_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         return background_stdout, False, 0, ""
 
-    fake = FakeRunner([print_runner, background_runner], sync_native=False)
+    fake = FakeRunner([print_runner], sync_native=False)
     payload, code, stderr = CP.probe(
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
-    assert payload["probedModes"] == ["print", "background"]
-    for mode in ("print", "background"):
+    assert payload["probedModes"] == ["print"]
+    for mode in ("print",):
         for leg_name in CP._LEG_NAMES:
             assert payload["modeLegs"][mode][leg_name]["ok"] is True, (mode, leg_name)
     for leg_name in CP._LEG_NAMES:
@@ -595,22 +543,17 @@ def test_result_production_fails_on_claude_native_schema_invalid(tmp_path, monke
     def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         return _claude_event_stream(structured_output=structured), False, 0, ""
 
-    fake = FakeRunner([runner, runner], sync_native=False)
+    fake = FakeRunner([runner], sync_native=False)
     payload, code, _stderr = CP.probe(
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
     assert payload["modeLegs"]["print"]["resultProduction"]["ok"] is False
     assert payload["modeLegs"]["print"]["resultProduction"]["detail"] == "native-result-schema-invalid"
-    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
-    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "native-result-missing"
     assert payload["legs"]["resultProduction"]["ok"] is False
-    assert payload["legs"]["resultProduction"]["detail"] == (
-        "print: native-result-schema-invalid; background: native-result-missing"
-    )
+    assert payload["legs"]["resultProduction"]["detail"] == "print: native-result-schema-invalid"
     assert payload["legs"]["completionDetection"]["ok"] is True
-    assert payload["legs"]["progressTelemetry"]["ok"] is False
-    assert payload["legs"]["progressTelemetry"]["detail"] == "background: telemetry-absent"
+    assert payload["legs"]["progressTelemetry"]["ok"] is True
 
 
 def test_claude_telemetry_absent_when_only_the_structured_output_call(tmp_path, monkeypatch):
@@ -634,7 +577,7 @@ def test_claude_telemetry_absent_when_only_the_structured_output_call(tmp_path, 
     def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         return stdout, False, 0, ""
 
-    fake = FakeRunner([runner, runner], sync_native=False)
+    fake = FakeRunner([runner], sync_native=False)
     payload, code, _stderr = CP.probe(
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
@@ -643,10 +586,7 @@ def test_claude_telemetry_absent_when_only_the_structured_output_call(tmp_path, 
     assert payload["modeLegs"]["print"]["progressTelemetry"]["ok"] is False
     assert payload["modeLegs"]["print"]["progressTelemetry"]["detail"] == "telemetry-absent"
     assert payload["legs"]["progressTelemetry"]["ok"] is False
-    assert payload["modeLegs"]["background"]["progressTelemetry"]["ok"] is False
-    assert payload["modeLegs"]["background"]["progressTelemetry"]["detail"] == "telemetry-absent"
-    assert "print: telemetry-absent" in payload["legs"]["progressTelemetry"]["detail"]
-    assert "background: telemetry-absent" in payload["legs"]["progressTelemetry"]["detail"]
+    assert payload["legs"]["progressTelemetry"]["detail"] == "print: telemetry-absent"
 
 
 def test_claude_completion_fails_on_nonzero_exit(tmp_path, monkeypatch):
@@ -658,14 +598,14 @@ def test_claude_completion_fails_on_nonzero_exit(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
-    fake = FakeRunner([("", False, 1, ""), ("", False, 1, "")])
+    fake = FakeRunner([("", False, 1, "")])
     payload, code, _stderr = CP.probe(
         "claude", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
     )
     leg = payload["legs"]["completionDetection"]
     assert leg["ok"] is False
-    assert leg["detail"] == "print: auth-or-config-refusal; background: auth-or-config-refusal"
+    assert leg["detail"] == "print: auth-or-config-refusal"
 
 
 def test_run_grades_three_legs_ok_on_valid_cursor_native_result(tmp_path):
@@ -702,7 +642,7 @@ def test_result_production_fails_on_schema_invalid_native_result(tmp_path):
             fh.write("\n")
         return _codex_event_stream(), False, 0, ""
 
-    fake = FakeRunner([runner, runner], sync_native=False)
+    fake = FakeRunner([runner], sync_native=False)
     payload, code, _stderr = CP.probe(
         "codex", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
@@ -739,7 +679,7 @@ def test_result_production_ok_but_telemetry_fails_when_only_the_result_write(tmp
             fh.write("\n")
         return _cursor_edit_stream(result_path), False, 0, ""
 
-    fake = FakeRunner([runner, runner], sync_native=False)
+    fake = FakeRunner([runner], sync_native=False)
     payload, code, _stderr = CP.probe(
         "cursor", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
@@ -764,7 +704,7 @@ def test_result_production_fails_on_cursor_native_schema_invalid(tmp_path):
             fh.write("\n")
         return _cursor_event_stream(tool_calls=1), False, 0, ""
 
-    fake = FakeRunner([runner, runner], sync_native=False)
+    fake = FakeRunner([runner], sync_native=False)
     payload, code, _stderr = CP.probe(
         "cursor", repo_root=repo, run_dir=run_dir, timeout=30, run_engine=fake,
         build_view=_fake_build_view(tmp_path),
@@ -1237,59 +1177,6 @@ def test_probe_refuses_reused_run_dir_with_folded_result(tmp_path):
     assert payload2["legs"]["resultProduction"]["detail"] == "default: run-dir-reused"
 
 
-def test_claude_probe_refuses_reused_background_before_any_mode_dispatches(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    (home / ".claude").mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    repo = _repo(tmp_path)
-    seed_run = tmp_path / "seed-run"
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    (run_dir / "print").mkdir()
-    structured = {"result": _native_verdicts_branch()}
-    print_stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
-    background_lines = [
-        json.dumps({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use", "id": "tool-0", "name": "Glob", "input": {},
-            }]},
-        }),
-        json.dumps({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use", "id": "so1", "name": "StructuredOutput",
-                "input": {"result": _native_verdicts_branch()},
-            }]},
-        }),
-        json.dumps({"type": "user", "toolEndsTurn": True}),
-    ]
-    background_stdout = "\n".join(background_lines) + "\n"
-
-    def print_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        return print_stdout, False, 0, ""
-
-    def background_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        return background_stdout, False, 0, ""
-
-    seed = FakeRunner([print_runner, background_runner], sync_native=False)
-    payload1, code1, _ = CP.probe(
-        "claude", repo_root=repo, run_dir=str(seed_run), timeout=30, run_engine=seed,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert code1 == 0
-    shutil.copytree(seed_run / "background", run_dir / "background")
-    fake = FakeRunner([(print_stdout, False, 0, "")])
-    payload2, code2, _ = CP.probe(
-        "claude", repo_root=repo, run_dir=str(run_dir), timeout=30, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert len(fake.calls) == 0
-    assert code2 == 1
-    assert payload2["modeLegs"]["print"]["resultProduction"]["detail"] == "run-dir-reused"
-    assert payload2["modeLegs"]["background"]["resultProduction"]["detail"] == "run-dir-reused"
 
 
 def test_probe_run_dir_setup_failure_never_raises(tmp_path, monkeypatch):
@@ -1660,17 +1547,14 @@ def test_codex_probe_record_has_default_mode_legs(tmp_path):
 
 
 def test_derive_flat_legs_mode_failure_propagates_to_flat_view():
-    mode_legs = {
-        "print": _ok_legs(),
-        "background": _ok_legs(),
-    }
-    mode_legs["background"]["progressTelemetry"] = {
+    mode_legs = {"print": _ok_legs()}
+    mode_legs["print"]["progressTelemetry"] = {
         "ok": False, "detail": "telemetry-absent", "evidence": {},
     }
     flat = CP._derive_flat_legs(mode_legs)
     assert flat["resultProduction"]["ok"] is True
     assert flat["progressTelemetry"]["ok"] is False
-    assert flat["progressTelemetry"]["detail"] == "background: telemetry-absent"
+    assert flat["progressTelemetry"]["detail"] == "print: telemetry-absent"
 
 
 def test_validate_probe_record_refuses_empty_mode_legs():
@@ -1682,6 +1566,7 @@ def test_validate_probe_record_refuses_empty_mode_legs():
 
 def test_validate_probe_record_refuses_probed_modes_mode_legs_key_mismatch():
     raw = _probe_result("claude")
+    raw["modeLegs"]["background"] = raw["modeLegs"]["print"]
     raw["probedModes"] = ["print"]
     err = CP._validate_probe_record(raw, "/tmp/claude.json")
     assert err == "probe-result-malformed:/tmp/claude.json"
@@ -1689,11 +1574,11 @@ def test_validate_probe_record_refuses_probed_modes_mode_legs_key_mismatch():
 
 def test_payload_writer_probed_modes_matches_mode_legs_keys():
     seat = _claude_seat()
-    mode_legs = {"print": _ok_legs(), "background": _ok_legs()}
+    mode_legs = {"print": _ok_legs()}
     payload = CP._payload(
         "claude", ERC.channel_for("claude"), seat, "/repo",
         "2026-09-20T00:00:00Z", "2026-09-20T00:00:01Z", 1.0, "/tmp/run",
-        mode_legs, ["print", "background"], [], "lanes",
+        mode_legs, ["print"], [], "lanes",
     )
     assert CP._validate_probe_record(payload, "/tmp/claude.json") is None
 
@@ -1707,13 +1592,13 @@ def test_validate_probe_record_refuses_mode_legs_incomplete_leg_map():
 
 def test_payload_writer_mode_legs_carry_all_leg_names():
     seat = _claude_seat()
-    mode_legs = {"print": _ok_legs(), "background": _ok_legs()}
+    mode_legs = {"print": _ok_legs()}
     payload = CP._payload(
         "claude", ERC.channel_for("claude"), seat, "/repo",
         "2026-09-20T00:00:00Z", "2026-09-20T00:00:01Z", 1.0, "/tmp/run",
-        mode_legs, ["print", "background"], [], "lanes",
+        mode_legs, ["print"], [], "lanes",
     )
-    for mode in ("print", "background"):
+    for mode in ("print",):
         assert set(payload["modeLegs"][mode].keys()) == set(CP._LEG_NAMES)
     assert CP._validate_probe_record(payload, "/tmp/claude.json") is None
 
@@ -1728,7 +1613,7 @@ def test_validate_probe_record_refuses_non_claude_wrong_mode_keys():
 
 def test_validate_probe_record_refuses_flat_legs_disagreeing_with_mode_legs():
     raw = _probe_result("claude")
-    raw["modeLegs"]["background"]["resultProduction"] = {
+    raw["modeLegs"]["print"]["resultProduction"] = {
         "ok": False, "detail": "native-result-missing", "evidence": {},
     }
     # flat legs left claiming ok, ok/failed kept self-consistent so only the
@@ -1739,12 +1624,12 @@ def test_validate_probe_record_refuses_flat_legs_disagreeing_with_mode_legs():
 
 
 def test_derive_flat_legs_records_failing_modes_in_evidence():
-    mode_legs = {"print": _ok_legs(), "background": _ok_legs()}
-    mode_legs["background"]["resultProduction"] = {
+    mode_legs = {"print": _ok_legs()}
+    mode_legs["print"]["resultProduction"] = {
         "ok": False, "detail": "native-result-missing", "evidence": {},
     }
     flat = CP._derive_flat_legs(mode_legs)
-    assert flat["resultProduction"]["evidence"]["failingModes"] == ["background"]
+    assert flat["resultProduction"]["evidence"]["failingModes"] == ["print"]
 
 
 def test_stamp_mode_run_dir_records_run_dir_per_leg():
@@ -1795,12 +1680,9 @@ def test_claude_probe_second_mode_runs_when_first_refuses(tmp_path, monkeypatch)
         build_view=_fake_build_view(tmp_path),
     )
     assert len(fake.calls) >= 2
-    assert payload["probedModes"] == ["print", "background"]
+    assert payload["probedModes"] == ["print"]
     assert payload["modeLegs"]["print"]["completionDetection"]["ok"] is False
     assert payload["modeLegs"]["print"]["completionDetection"]["detail"] == "auth-or-config-refusal"
-    assert payload["modeLegs"]["background"]["completionDetection"]["ok"] is True
-    assert payload["modeLegs"]["background"]["resultProduction"]["ok"] is False
-    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == "native-result-missing"
 
 
 DO = _load("dispatch_outcome", "dispatch_outcome.py")
@@ -1809,7 +1691,6 @@ _COMPLETION_BOUNDARY_CELLS = (
     ("codex", "default"),
     ("cursor", "default"),
     ("claude", "print"),
-    ("claude", "background"),
 )
 _DEADLINE_MONO = 100.0
 _BEFORE_CAP_AT = 50.0
@@ -1912,29 +1793,6 @@ def _claude_print_boundary_runner(envelope):
     return runner
 
 
-def _claude_background_boundary_runner(envelope):
-    background_lines = [
-        json.dumps({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use", "id": "tool-0", "name": "Glob", "input": {},
-            }]},
-        }),
-        json.dumps({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use", "id": "so1", "name": "StructuredOutput",
-                "input": {"result": envelope["result"]},
-            }]},
-        }),
-        json.dumps({"type": "user", "toolEndsTurn": True}),
-    ]
-    stdout = "\n".join(background_lines) + "\n"
-
-    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        return stdout, False, 0, ""
-
-    return runner
 
 
 def _boundary_run_engine(engine, envelope):
@@ -1942,46 +1800,11 @@ def _boundary_run_engine(engine, envelope):
         return _codex_boundary_runner(envelope)
     if engine == "cursor":
         return _cursor_boundary_runner(envelope)
-    print_runner = _claude_print_boundary_runner(envelope)
-    background_runner = _claude_background_boundary_runner(envelope)
-
-    def claude_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        if "--bg" in argv:
-            return background_runner(argv, prompt_bytes, timeout, progress_cb, cwd)
-        return print_runner(argv, prompt_bytes, timeout, progress_cb, cwd)
-
-    return claude_runner
+    return _claude_print_boundary_runner(envelope)
 
 
 def _claude_green_run_engine(envelope):
-    structured = {"result": envelope["result"]}
-    print_stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
-    background_lines = [
-        json.dumps({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use", "id": "tool-0", "name": "Glob", "input": {},
-            }]},
-        }),
-        json.dumps({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use", "id": "so1", "name": "StructuredOutput",
-                "input": {"result": envelope["result"]},
-            }]},
-        }),
-        json.dumps({"type": "user", "toolEndsTurn": True}),
-    ]
-    background_stdout = "\n".join(background_lines) + "\n"
-    print_runner = _claude_print_boundary_runner(envelope)
-    background_runner = _claude_background_boundary_runner(envelope)
-
-    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        if "--bg" in argv:
-            return background_runner(argv, prompt_bytes, timeout, progress_cb, cwd)
-        return print_runner(argv, prompt_bytes, timeout, progress_cb, cwd)
-
-    return runner
+    return _claude_print_boundary_runner(envelope)
 
 
 def _run_probe_completion_boundary(
@@ -2057,7 +1880,6 @@ def _claude_preflight_parent(tmp_path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / "print").mkdir()
-    (run_dir / "background").mkdir()
     return run_dir
 
 
@@ -2101,28 +1923,8 @@ def test_probe_preflight_aborts_when_print_mode_reused_first_in_order(tmp_path, 
     assert CP._modes_for_engine("claude")[0] == "print"
     assert len(calls) == 0
     assert code == 1
-    assert payload["modeLegs"]["background"]["resultProduction"]["detail"] == DO.DETAIL_RUN_DIR_REUSED
 
 
-def test_probe_preflight_aborts_when_background_mode_reused_second_in_order(tmp_path, monkeypatch):
-    # axis: edge 6 — reused second mode (background) blocks print dispatch
-    seed_run = _seed_claude_mode_journal(tmp_path, monkeypatch)
-    run_dir = _claude_preflight_parent(tmp_path)
-    shutil.copytree(os.path.join(seed_run, "background"), run_dir / "background", dirs_exist_ok=True)
-    calls = []
-
-    def recording_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        calls.append(1)
-        return "", False, 0, ""
-
-    payload, code, _ = CP.probe(
-        "claude", repo_root=_repo(tmp_path), run_dir=str(run_dir), timeout=30,
-        run_engine=recording_runner, build_view=_fake_build_view(tmp_path),
-    )
-    assert CP._modes_for_engine("claude")[1] == "background"
-    assert len(calls) == 0
-    assert code == 1
-    assert payload["modeLegs"]["print"]["resultProduction"]["detail"] == DO.DETAIL_RUN_DIR_REUSED
 
 
 def test_probe_preflight_aborts_all_modes_on_setup_error(tmp_path, monkeypatch):
@@ -2131,7 +1933,6 @@ def test_probe_preflight_aborts_all_modes_on_setup_error(tmp_path, monkeypatch):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / "print").write_text("not-a-directory", encoding="utf-8")
-    (run_dir / "background").mkdir()
     calls = []
 
     def recording_runner(argv, prompt_bytes, timeout, progress_cb, cwd):

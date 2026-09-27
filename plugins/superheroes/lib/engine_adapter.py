@@ -49,24 +49,7 @@ REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 # Claude dispatch modes — home is claude_modes.py; engine_adapter re-exports for consumers
 # (CONVENTIONS §11); engine_result_channel re-exports from here.
 MODE_PRINT = claude_modes.MODE_PRINT
-MODE_BACKGROUND = claude_modes.MODE_BACKGROUND
 CLAUDE_MODES = claude_modes.CLAUDE_MODES
-
-# Non-print claude dispatch modes and the engines that support each. Single home for the
-# capability question; engine_result_channel maps supported pairs to delivery mechanics.
-_NON_PRINT_CLAUDE_MODE_ENGINES = {
-    MODE_BACKGROUND: frozenset({"claude"}),
-}
-
-
-def claude_mode_supported(vendor, mode):
-    """True when vendor accepts this claude dispatch mode (print is universal)."""
-    if mode is None or mode == MODE_PRINT:
-        return True
-    allowed = _NON_PRINT_CLAUDE_MODE_ENGINES.get(mode)
-    if allowed is None:
-        return False
-    return vendor in allowed
 
 # Write tail signals graded by _grade_build_report_obj (CONVENTIONS §11).
 WRITE_SIGNAL_ENUM = ("ok", "plan_wrong", "needs_context")
@@ -221,7 +204,6 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "unknown-engine",
     "unknown-claude-tier",
     "unknown-claude-mode",
-    "claude-mode-unsupported",
     "fable-unrunnable",
     "unregistered-engine-model",
     "engine-model-effort-conflict",
@@ -473,12 +455,6 @@ def build_argv_result(seat, role_kind, opts):
                 detail="unknown claude mode %r; accepted modes: %s"
                 % (claude_mode, modes_label),
             )
-        if not claude_mode_supported(vendor, claude_mode):
-            return _refuse(
-                "claude-mode-unsupported",
-                detail="claude mode %r is not supported for engine %s"
-                % (claude_mode, vendor),
-            )
     if claude_tier is not None:
         if not isinstance(claude_tier, str) or claude_tier not in model_registry.known_claude_models():
             return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(claude_tier))
@@ -568,13 +544,10 @@ def build_argv_result(seat, role_kind, opts):
                 "untokenizable",
                 detail=_untokenizable_detail("claude", engine_model, effort),
             )
-        if claude_mode == MODE_BACKGROUND:
-            argv = [CLAUDE_EXECUTABLE, "--bg", "--model", tok, "--effort", effort]
-        else:
-            argv = [
-                CLAUDE_EXECUTABLE, "-p", "--model", tok, "--effort", effort,
-                "--output-format", "stream-json", "--verbose",
-            ]
+        argv = [
+            CLAUDE_EXECUTABLE, "-p", "--model", tok, "--effort", effort,
+            "--output-format", "stream-json", "--verbose",
+        ]
         if is_read:
             argv += ["--restricted"]
         else:
@@ -610,18 +583,6 @@ def claude_builder_argv(token, session_id, prompt):
         CLAUDE_EXECUTABLE, "--model", token, "--session-id", session_id, "-p", prompt,
     ]
     return _ok(argv)
-
-
-def claude_cli_argv(args):
-    """Prefix dispatch-side claude subcommand args. Returns None when invalid. Never raises."""
-    if not isinstance(args, (list, tuple)):
-        return None
-    argv = [CLAUDE_EXECUTABLE]
-    for item in args:
-        if not isinstance(item, str) or not item:
-            return None
-        argv.append(item)
-    return argv
 
 
 def build_argv(seat, role_kind, opts):
@@ -822,34 +783,6 @@ def claude_result_envelope(stdout):
         return None
 
 
-def claude_transcript_result(rows):
-    """Return the input dict of the last StructuredOutput tool_use in transcript rows, or None."""
-    try:
-        if not isinstance(rows, list):
-            return None
-        last_input = None
-        for row in rows:
-            if not isinstance(row, dict) or row.get("type") != "assistant":
-                continue
-            message = row.get("message")
-            if not isinstance(message, dict):
-                continue
-            content = message.get("content")
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if not isinstance(block, dict) or block.get("type") != "tool_use":
-                    continue
-                if block.get("name") != "StructuredOutput":
-                    continue
-                inp = block.get("input")
-                if isinstance(inp, dict):
-                    last_input = inp
-        return last_input
-    except Exception:
-        return None
-
-
 def claude_transcript_tool_calls(rows):
     """Count distinct non-StructuredOutput tool_use ids in transcript rows; int or None."""
     try:
@@ -880,43 +813,6 @@ def claude_transcript_tool_calls(rows):
         if not parsed_any:
             return None
         return len(tool_ids)
-    except Exception:
-        return None
-
-
-def claude_transcript_turn_ended(rows):
-    """True when transcript rows signal turn end via toolEndsTurn or turn_duration."""
-    try:
-        if not isinstance(rows, list):
-            return False
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            if row.get("toolEndsTurn") is True:
-                return True
-            if row.get("type") == "system" and row.get("subtype") == "turn_duration":
-                return True
-        return False
-    except Exception:
-        return False
-
-
-_CLAUDE_LAUNCH_ID_RE = re.compile(r"^backgrounded · ([0-9a-f]{8})$")
-
-
-def claude_launch_id(stdout):
-    """Return the 8-char session id from a background launch acknowledgement line, or None."""
-    try:
-        if not isinstance(stdout, str):
-            return None
-        for line in stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            match = _CLAUDE_LAUNCH_ID_RE.match(line)
-            if match:
-                return match.group(1)
-        return None
     except Exception:
         return None
 

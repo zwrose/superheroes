@@ -13,8 +13,7 @@ in a later layer):
 
 (a) a command string built by assignment or concatenation before it reaches the spawner;
 (b) a helper function that builds and returns argv;
-(c) a vendor-pair tuple returned into a spawner;
-(d) ``_claude_cli`` called through an alias (that one belongs to the stop-home census).
+(c) a vendor-pair tuple returned into a spawner.
 """
 import ast
 import os

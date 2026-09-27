@@ -9,7 +9,7 @@ _LIB = os.path.dirname(_HERE)
 
 
 def test_background_mode_literal_pinned():
-    assert claude_modes.MODE_BACKGROUND == "background"
+    assert claude_modes.RETIRED_MODE_BACKGROUND == "background"
 
 
 def _background_mode_literal_problems(path):

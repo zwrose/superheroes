@@ -3443,56 +3443,10 @@ def test_claude_mode_unknown_refused_before_open_write(tmp_path):
     assert len(fake.calls) == 0
 
 
-def test_claude_mode_unsupported_codex_background_refused_write(tmp_path):
-    fake = FakeRunner([])
-    res = _dispatch_write(
-        tmp_path, fake,
-        seat=_codex_seat(),
-        claude_mode="background",
-    )
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == "claude-mode-unsupported:codex"
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
 
 
-def test_claude_mode_background_write_refused(tmp_path, monkeypatch):
-    _ensure_claude_config_dir(tmp_path, monkeypatch)
-    wt, _main = _linked_worktree(tmp_path)
-    seat = _implementer_claude_seat()
-    fake = FakeRunner([])
-    res = _dispatch_write(
-        tmp_path, fake,
-        cwd=wt,
-        seat=seat,
-        claude_mode="background",
-    )
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == ED.MODE_REFUSAL_CLAUDE_MODE_BACKGROUND_WRITE
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
 
 
-def test_claude_mode_background_write_continuation_refused(tmp_path, monkeypatch):
-    _ensure_claude_config_dir(tmp_path, monkeypatch)
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir = str(tmp_path / "bg-continue")
-    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
-    seat = _implementer_claude_seat()
-    _plant_claude_write_journal_with_claude_mode(
-        tmp_path, run_dir, wt, seat, config_dir=cfg, claude_mode="background",
-    )
-    fake = FakeRunner([])
-    res = _dispatch_write(
-        tmp_path, fake,
-        cwd=wt,
-        run_dir=run_dir,
-        seat=seat,
-        order_id="claude-mode-test",
-    )
-    assert res["detail"] == ED.MODE_REFUSAL_CLAUDE_MODE_BACKGROUND_WRITE
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
 
 
 def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
@@ -3529,38 +3483,11 @@ def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
     assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
 
 
-def test_background_journal_refuses_claude_mode_background_write_before_run_dir_mismatch(
-    tmp_path, monkeypatch,
-):
-    _ensure_claude_config_dir(tmp_path, monkeypatch)
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir = str(tmp_path / "mode-mismatch")
-    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
-    seat = _implementer_claude_seat()
-    planted = _plant_claude_write_journal_with_claude_mode(
-        tmp_path, run_dir, wt, seat, config_dir=cfg, claude_mode="background",
-    )
-    fake = FakeRunner([])
-    res = _dispatch_write(
-        tmp_path, fake,
-        cwd=wt,
-        run_dir=run_dir,
-        seat=seat,
-        order_id="claude-mode-test",
-        claude_mode="print",
-    )
-    assert res["detail"] == ED.MODE_REFUSAL_CLAUDE_MODE_BACKGROUND_WRITE
-    assert res["detail"] != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-    records, _ = ED._journal_read(run_dir)
-    assert len([r for r in records if r.get("kind") == "run-opened"]) == 1
-    assert records[0]["argv"] == planted["argv"]
 
 
 def test_claude_mode_literal_census_pins_write_path_mismatch_gate_reachability():
     # axis: declared claude mode literals pin when write-path run-dir-claude-mode-mismatch becomes reachable
-    assert ERC.CLAUDE_MODES == ("print", "background"), (
-        "a new claude mode makes the write-path run-dir-claude-mode-mismatch gate reachable; "
-        "the gate now needs a real test"
+    assert ERC.CLAUDE_MODES == ("print",), (
+        "a new dispatchable claude mode makes the write-path run-dir-claude-mode-mismatch "
+        "gate reachable; the gate now needs a real test"
     )
