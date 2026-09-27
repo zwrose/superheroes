@@ -26,6 +26,9 @@ Check these in a consuming project before it takes 0.35.0:
   `rulingsLog`.** The certification loop ships through its rulings channel with one disclosed
   fail-open on a malformed `rulingsLog`. See
   [Certification receipt and the rulings channel](#certification-receipt-and-the-rulings-channel).
+- **Accept vet receipt spine fields 9 and 10 in a template or reader of your own.** Every vet
+  receipt now carries **Lane** and **Misses-log appends**. See
+  [Vet receipt spine fields 9 and 10](#vet-receipt-spine-fields-9-and-10).
 
 ### Heartbeat sweep classes
 
@@ -99,8 +102,9 @@ the same rule; replacing it with the new `rubric/covenant.md` is optional.
 
 ### Skill descriptions as pointers
 
-The skill descriptions are reworded as shorter when-to-load pointers: they say when a skill
-applies and leave the mechanism to the skill body. No skill name, command, or
+The skill descriptions are shortened toward when-to-load pointers: each leads with when the skill
+applies, and most of the mechanism moves to the skill body, though some descriptions still
+summarize what the skill does. No skill name, command, or
 `user-invocable` flag changed, so a consuming project has nothing to update.
 
 ### Charters as maps
@@ -111,6 +115,15 @@ gains `intake.md`, `orders.md`, `handback.md`, and `excuses.md`; `skills/showrun
 gains `routing.md`, `vetting.md`, `orchestration.md`, `provisioning.md`, and `excuses.md`;
 `skills/detective/reference/` gains `excuses.md`. Nothing was removed or renamed, and no command or
 path a consuming project calls changed. This is informational.
+
+### Vet receipt spine fields 9 and 10
+
+The vet receipt's always-present spine (`skills/showrunner/reference/vet-receipt.md`) grows from
+eight fields to ten. Field 9, **Lane**, records the lane the PR ran (`full`, `light`, or `micro`),
+with a note when the build escalated. Field 10, **Misses-log appends**, records each misses-log
+append the vet made and its class, or `None`. Like every spine field, each is filled or written as
+`None`. An advisor session reads the new shape from the installed plugin. A project whose own
+template, script, or reader expects exactly eight spine fields must add or accept the two new ones.
 
 ## 0.34.0
 
