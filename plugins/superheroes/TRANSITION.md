@@ -7,6 +7,79 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## 0.35.0
+
+### Before you upgrade
+
+Check these in a consuming project before it takes 0.35.0:
+
+- **Read liveness from the watcher, not the heartbeat sweep.** `heartbeat.py sweep` now classes a
+  record as `terminal`, `nonterminal`, or `unknown`; the `fresh` and `stale` classes are gone, and a
+  script matching them must be updated. See [Heartbeat sweep classes](#heartbeat-sweep-classes).
+- **Update a script that matches an `astra-probe-*` refusal token.** The registration probe's
+  refusal tokens are now `registration-probe-*`, with no alias. See
+  [Registration probe tokens](#registration-probe-tokens).
+- **An adoption launch passes `adopts` to re-occupy its own stack position.** Without it the launch
+  still refuses `layer-position-occupied`; four new refusal tokens come with it. See
+  [Launcher adoption premise](#launcher-adoption-premise).
+- **Accept `survivingNonBlocking` in a certification receipt, and never hand-edit `rulingsLog`.** The
+  certification loop ships through its rulings channel with one disclosed fail-open on a malformed
+  `rulingsLog`. See
+  [Certification receipt and the rulings channel](#certification-receipt-and-the-rulings-channel).
+
+### Heartbeat sweep classes
+
+`heartbeat.py sweep` classes each record as `terminal` (the builder stamped `parked` or
+`handback`), `nonterminal` (a valid record whose state is not terminal — it says nothing about
+liveness), or `unknown`. The `fresh` and `stale` classes are removed, because a builder no longer
+promises a stamp cadence: `stamp --stale-after` is accepted and ignored for older callers, and a
+stamped record's `staleAfterSeconds` is always `LIVENESS_QUIET_WINDOW_SECONDS` (2700). Liveness has
+one signal: `wave_watch.py` raises `lane-stale` when a lane's process is live and its own session
+transcript was not written within that window. A consumer that matched `fresh` or `stale` from the
+sweep must match `nonterminal` for an unended lane and take liveness from `lane-stale`.
+
+### Registration probe tokens
+
+One entry changes on the surface listed under
+[Astra and the codex role pin](#astra-and-the-codex-role-pin):
+
+- `conformance_probe registration-probe` (`astra-probe` still works as a legacy alias of the verb;
+  refusal token `registration-probe-wave-already-attempted` when the same wave is re-attempted with
+  a different run dir). The probe's refusal tokens were renamed from `astra-probe-*` to
+  `registration-probe-*` with no alias: `registration-probe-scale-unreadable`,
+  `registration-probe-ledger-unreadable`, `registration-probe-record-write-failed`,
+  `registration-probe-wave-already-attempted`, `registration-probe-seat-unresolved`, and
+  `registration-probe-claim-unreadable`. A script that matches an old `astra-probe-*` refusal token
+  must be updated.
+
+### Launcher adoption premise
+
+A stacked premise (see [Launcher stacked premise](#launcher-stacked-premise)) may now carry
+`adopts`: the pull request number of the existing member an adoption takes over at its own
+`layerPosition`. `validate_premise` copies it into the stamped premise like every other key.
+
+`launcher.py launch` narrows one refusal and adds four tokens: `layer-position-occupied` when the
+claimed `layerPosition` is already held by an existing member (`layerPosition >= 2` only) and the
+premise's `adopts` does not name that member on the layer below's branch; `adopts-occupant-missing`
+when `adopts` names a pull request but the claimed position is empty;
+`premise-adopts-without-stack`, `premise-adopts-invalid`, and `premise-adopts-bottom-layer` when
+`adopts` lacks the stack pair, is not a positive integer, or is on the bottom layer.
+
+### Certification receipt and the rulings channel
+
+On success, `certification-receipt.json` (see
+[Certification receipt artifact](#certification-receipt-artifact)) carries the `disclosures` block
+with two keys: `importantOutOfScope` for Important out-of-scope deferrals, and
+`survivingNonBlocking` for surviving Minor or Nit findings without disposition. A consumer that
+enumerates the block's keys strictly must accept the new one.
+
+The certification loop ships through layer 4d-2, where rulings reach the round driver as a declared
+input through `round_driver.py rule`. One fail-open ships disclosed: when a session's `rulingsLog`
+is malformed, the driver reads it as empty, so an out-of-scope ruling does not hold and its finding
+can reach the fixer. Only corrupted or hand-edited state reaches it — `rule` itself refuses
+`rulings-log-malformed` rather than write to a malformed log. Record rulings through `rule`; never
+edit `rulingsLog` by hand.
+
 ## 0.34.0
 
 ### Before you upgrade
@@ -66,10 +139,7 @@ never interchanged); `order-mismatch` when the membership read found the stack's
 with the premise (previously folded into `stack-read-unavailable`, so a consumer matching on
 `stack-read-unavailable` for this case must now also match `order-mismatch`);
 `layer-position-occupied` when the claimed `layerPosition` is already held by an existing member
-(`layerPosition >= 2` only) and the premise's `adopts` does not name that member on the layer
-below's branch; `adopts-occupant-missing` when `adopts` names a pull request but the claimed position
-is empty; `premise-adopts-without-stack`, `premise-adopts-invalid`, and `premise-adopts-bottom-layer`
-when `adopts` lacks the stack pair, is not a positive integer, or is on the bottom layer; `premise-dependency-invalid` when `dependency` is present but not a
+(`layerPosition >= 2` only); `premise-dependency-invalid` when `dependency` is present but not a
 positive integer (`bool` is not an integer here); `dependency-closed-unmerged` when the premise
 names a closed, unmerged dependency pull request; `dependency-open-ready-pr` when the premise
 names an open dependency pull request with a READY vet and the resolved base commit is not that pull
@@ -230,14 +300,8 @@ A consumer meets:
 - the `registration-probe` role the registration probe dispatches under — its cell is now
   `gpt-6-sol` at `high`, which has passed; it stays for any model registered
   probe-pending later;
-- `conformance_probe registration-probe` (`astra-probe` still works as a legacy alias of the verb;
-  refusal token `registration-probe-wave-already-attempted` when the same wave is re-attempted with
-  a different run dir). The probe's refusal tokens were renamed from `astra-probe-*` to
-  `registration-probe-*` with no alias: `registration-probe-scale-unreadable`,
-  `registration-probe-ledger-unreadable`, `registration-probe-record-write-failed`,
-  `registration-probe-wave-already-attempted`, `registration-probe-seat-unresolved`, and
-  `registration-probe-claim-unreadable`. A script that matches an old `astra-probe-*` refusal token
-  must be updated;
+- `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
+  wave is re-attempted with a different run dir);
 - pin refusal tokens `pin-probe-pending` (for a future probe-pending model), `pin-role-not-eligible`,
   and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — every
   codex `pilot` pin is refused);
@@ -344,9 +408,8 @@ dispositions.
 At a terminal, the driver now writes a **certification artifact** beside `round-receipt.json`:
 
 - **Success** — `certification-receipt.json`: carries `terminalState`, `terminalCause`, per-seat
-  provenance in `seats`, the `disclosures` block (`importantOutOfScope` for Important out-of-scope
-  deferrals, `survivingNonBlocking` for surviving Minor or Nit findings without disposition), and
-  each finding's disposition plus its disposition proof (`dispositionReceipt` where applicable).
+  provenance in `seats`, the `disclosures` block (`importantOutOfScope`), and each finding's
+  disposition plus its disposition proof (`dispositionReceipt` where applicable).
 - **Refusal** — `certification-refusal.json`: names one of the four escape classes
   (`unrun-review`, `same-family-seat`, `unfetched-findings`, `disposition-without-receipt`) and the
   artifact that failed.
