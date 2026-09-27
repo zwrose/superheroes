@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.35.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.35.0...superheroes-v0.35.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **superheroes:** retire claude's background dispatch mode — print is the only claude mode ([#1507](https://github.com/zwrose/superheroes/issues/1507)) ([ad9c7e8](https://github.com/zwrose/superheroes/commit/ad9c7e89eba4bc6fae9d4df59dc540529004951d))
+* **superheroes:** the order-lint semantic seat is a named read-only agent ([#1510](https://github.com/zwrose/superheroes/issues/1510)) ([a046903](https://github.com/zwrose/superheroes/commit/a04690342b0bcce2b71092930ca993090f21a056))
+* **superheroes:** the size counter recognizes common test-path conventions, not only a tests/ directory ([#1506](https://github.com/zwrose/superheroes/issues/1506)) ([b2426db](https://github.com/zwrose/superheroes/commit/b2426db7fe11996d4fe23ef572301b19fd22b942))
+
 ## [0.35.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.34.0...superheroes-v0.35.0) (2026-09-27)
 
 
