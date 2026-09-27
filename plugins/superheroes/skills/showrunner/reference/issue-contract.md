@@ -120,10 +120,10 @@ Anchor hold, the reported token is the header-form refusal.
 > not claimed as one.
 
 **Invocation:** write the issue body to a file, then run (from a plugin-cache install,
-`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/issue_contract.py" check-build-ready --body-file <path>
 ```
 
@@ -161,10 +161,10 @@ contract, whose one home is [`owner-decisions.md`](owner-decisions.md).
 
 **Intake grading.** Pipe the tier claim as JSON on stdin to `front_door grade` in
 [`../../../lib/front_door.py`](../../../lib/front_door.py) — from a plugin-cache install,
-`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`:
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 echo '<claim-json>' | python3 -B "$ROOT_DIR/lib/front_door.py" grade --cwd <repo> [--root <store>]
 ```
 
@@ -198,15 +198,24 @@ its roadmap, and a project extends it rather than minting a second one.
 1. **At routing, any issue estimated over 1,000 non-test lines carries one of two things**: a
    **stack or layer design** (one concern per layer, merged bottom-up, using the project's
    sanctioned stacking tool) or a **recorded reason a single pull request is right**. The estimate is
-   a routing estimate, never a measurement.
+   a routing estimate, never a measurement. When the design is a stack, its planned layers are
+   filed as sub-issues per
+   [Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue).
 2. **This is a mandatory consideration with a durable trace, never a mandatory split.** A reader who
    takes this for a split rule has misread it.
 3. **The stacking tool is a project configuration item**; its home is the
    [configure profile](../../configure/SKILL.md). Name no specific tool.
-4. Mid-build growth is covered by the existing tripwire at twice the brief's estimate, which lives in
-   the [workhorse charter](../../workhorse/SKILL.md).
+4. Mid-build growth is covered by the size rule in
+   [review-discipline.md](../../../rubric/review-discipline.md#size) § Size.
 5. **The slot is recorded in the issue body beside the lane call and the presentation call**, at the
    same moment the kind label is applied.
+6. **An advisor-launched build order names the advisor session; a light order also carries an
+   estimate.** The order written into a build-ready issue names the advisor session the builder
+   messages at the size step, by the name the host's session listing shows; a build the owner drives
+   interactively has no advisor to name. A light-lane order — which gets no brief — also states its
+   non-test line estimate (§ Size). The issue body is the carrier: a launched builder
+   receives only the command, the issue pointer and the standing rulings, so the launch premise adds
+   nothing here.
 
 ## Machinery, product, and the two kind labels
 

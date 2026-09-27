@@ -83,7 +83,7 @@ _BYTE_PIN_LINES = frozenset({
     "Open no `AskUserQuestion` on any review-code path, for any purpose.",
     "which posted to GitHub and kept its own `AskUserQuestion` review-event gate, was removed (#1121).",
     "**Write the presentation artifact — the only path.** Follow "
-    "`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/headless-presentation.md`. "
+    "`${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/headless-presentation.md`. "
     "Presence is an event, not a state a run can detect — the run never branches on whether a "
     "human is present and never opens a question that could block waiting for an answer. Never "
     "open `AskUserQuestion` on this path or any review-code path.",

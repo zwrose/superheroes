@@ -3,6 +3,7 @@
 - [The vet receipt — shape](#the-vet-receipt--shape)
 - [The spine — always present, filled or `None`](#the-spine--always-present-filled-or-none)
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
+- [Project vet checks](#project-vet-checks)
 - [The `None` convention](#the-none-convention)
 - [The owner-half write — register](#the-owner-half-write--register)
 - [Markers](#markers)
@@ -133,7 +134,15 @@ shape is wrong and the thinking wins.
    sample tells them apart. Record what the rate was and what you did about it. The field flag
    that named this was **12 of 12 CONFIRMED on a ~10,000-line diff**.
 7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
-   this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Then the
+   this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Under
+   `**Dispositions — completed.**`, write one bullet per build-record id, `- FU<n>: <disposition>`.
+   The disposition begins with one of `fixed` (in this PR), `filed #<n>`, `folded into #<n>`,
+   `collector @<pointer>`, `declined` with its revisit trigger, or `info` — e.g. `filed #12`. Then
+   write one marker line with the same ids, `<!-- superheroes:dispositions FU1 FU2 -->`, or
+   `<!-- superheroes:dispositions none -->` only over a `none` build record. Other completed items
+   may follow as prose. The slot writer compares the two markers and refuses the owner-half write
+   when an id has no disposition, when the receipt lists an id the build record lacks, or when
+   `none` sits over a list. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
    close in this session. Every owner call is appended to the collector at vet time,
    unconditionally, so the collector is the complete register by construction; owner attendance
@@ -147,9 +156,10 @@ shape is wrong and the thinking wins.
    front door recorded — and for a product item the classification and the ratification it rides,
    since no evidence bar applied to it; each append also carries its venue recommendation, so the
    owner's batch is one word per item.
-   **Known limit, carried knowingly:** this contract is prose-bound — nothing mechanical checks that
-   a disposition names a door grading and a venue, and a reader who wants to know can only read the
-   receipt. Each pending item carries
+   **Known limit, carried knowingly:** the slot writer checks that the two marker lists agree; it
+   trusts each marker as its author's declaration and reads no prose, so the vet reads the prose
+   against the marker. Nothing mechanical checks that an append names a door grading and a venue. A
+   reader who wants to know that can only read the receipt. Each pending item carries
    **what it is**, **your recommendation** (so the owner's batch pass is one word rather than a
    re-derivation), and **the vet ordinal it was proposed at** — a monotonic integer, one per vet,
    assigned at the vet that proposed the item (the same vet when proposed and appended together; the
@@ -178,13 +188,15 @@ are never holding the inventory in working memory.
 | the body carries **headline before/after numbers** | reproduction, by you, not a restatement |
 | the issue carries a **show it** call | the show-it check (and the timing consequence duty 4 sets out) |
 | the issue carries a **lane call** | the lane-call backstop, **both directions** |
+| the PR carries a **build record** (a full or light build) | the **size-tripwire check** — the build record's size tripwire row against the non-test count at each commit in the PR's history and the build's starting estimate, both as `rubric/review-discipline.md` § Size defines them; a crossed row cites the issue record its form names; a missing row is a finding. The row's forms live in the workhorse charter §11 |
 | a **prior receipt on this PR is being corrected** | a dated correction, **edited in place** — never a superseding comment |
 | the collector holds an item whose **proposing ordinal is two or more below this vet's ordinal** | an **escalation line** naming that item and stating plainly that **the owner batch is not happening** |
 | the vet's evidence includes an **observed-in-the-field failure** — a real incident, a field report, or a reproduction — rather than a hypothetical. | the **revisit-registry scan** — read the project's revisit-trigger registry (the pinned comment on the collector issue) and state whether this vet's evidence fires any recorded revisit trigger, naming the row if it does. Cite the registry's canonical home, `skills/showrunner/reference/owner-decisions.md`. |
 | the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
-| this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR) | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
+| this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR), or for a stacked feature the vet `skills/showrunner/reference/closure.md#when-closure-fires` § When closure fires names | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
 | the build record records a **full-lane** pre-handback review | the **certified-loop check** — the driver's own round receipt, or a skip disclosure citing an open `driver-blocker` issue by number, or a skip disclosure citing an explicit owner direction as a dated record (the venue-citation convention, `skills/showrunner/reference/issue-contract.md` § Anchor resolution; the subordinated owner-directed ending). A citation that is absent, or that names a closed issue, is a finding; whether a cited skip still passes at all is governed by the driver-mandate flip in `rubric/review-discipline.md`, which is the one home for that timing — post-flip, an owner-direction citation is recorded in this receipt **named as the owner's override** of driver-or-park, never as a citation-pass |
 | the build record shows a **full-lane** review **not driven by the certified loop** | the **seat-provenance parity check** — each seat's seat-map assignment, plus a recorded attempt or terminal forfeit on the vendor that seat was assigned; a missing assignment is a finding. A seat that ran off its seat-map assignment with no recorded forfeit on the vendor it was assigned is a finding |
+| the `vet-checks` verb reports `declared: true`, or any non-null `reason` | one receipt line per declared check, and a finding per malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
@@ -198,6 +210,59 @@ is raised by a number the artifacts carry rather than by your memory of having c
 **Known limit, carried knowingly:** a trigger is weaker than a check. A build record that omits a
 sequential-order run raises no field. You read the diff too, so the trigger is a second chance rather
 than the only one — but it is not a guarantee.
+
+## Project vet checks
+
+The `` ```json superheroes-core `` `` block in `core.md` may carry an optional `vetChecks` key: a
+JSON list of objects, each with exactly `name`, `evidence`, and `records` (non-empty strings);
+check names must be unique; `[]` means zero checks. It is the enforcement home for rules whose
+evidence lives in the PR body or a ledger — surfaces review seats cannot read. **This section
+defines the shape only.** Encoding checks is the project's work, done through `configure`.
+
+Example (inside the fence):
+
+```json
+"vetChecks": [
+  {
+    "name": "Example check",
+    "evidence": "PR body · Build record",
+    "records": "what was read from the evidence and what the vet recorded"
+  }
+]
+```
+
+**Malformed reasons** — the authoritative closed set is the module constant
+`VET_CHECKS_MALFORMED_REASONS` in `lib/core_md.py`; each token names which rule of the shape above
+was broken. Malformed entries report as `{"index", "field", "reason"}`; when any entry is malformed,
+`checks` is empty — never a partial list.
+
+**Read verb.** From the project cwd:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/core_md.py" vet-checks --cwd .
+```
+
+It prints one JSON object and exits 0:
+
+`{"declared": bool, "checks": [{"name", "evidence", "records"}, ...], "malformed": [...],
+"reason": null | <token>, "detail": null | str, "behind": bool}`.
+
+The key absent → `declared: false`, `reason: null` (no vet-check lines owed). When `reason` is a
+calibration-read failure token (`core-md-absent`, `repo-root-unavailable`, `core-md-unreadable`,
+`core-md-unparseable`, `multiple-core-blocks`, `duplicate-core-key:<key>`), `declared` is false and
+both lists are empty. `vet-checks-malformed` comes with `declared: true`, the items in `malformed`,
+and `checks` empty.
+
+**How the vet acts on the read.**
+
+- Each well-formed declared check → **one receipt line**: the check's name, what you read from its
+  `evidence`, and what you record per its `records` field.
+- `reason: core-md-absent` → no calibration file, so no vet checks are declared: **one plain
+  receipt line** — **not a finding**.
+- Any other non-null `reason`, or a non-empty `malformed` list → **findings** naming the token or
+  each malformed index — never a silent skip.
+- `declared: false` with `reason: null` → the key is absent; no vet-check lines are owed.
 
 ## The `None` convention
 
@@ -231,13 +296,30 @@ flag belongs **here, in plain language**: what the new behavior is, and that no 
 covers it. It is exactly what the owner is being asked to accept, so it is stated in the owner half
 and not left in the receipt alone.
 
-**Writing the slot is a read-modify-write of a body you did not author — do it safely.** Read the
-body from the repo cwd or with an explicit `-R <owner/repo>`, into a scratch file you will *not*
-push from directly; check the read's exit status and that the file is non-empty and still carries
-the `advisor-vet` and `build-record` markers **before** any `--body-file` push. The failure mode, in
-one clause: a shell redirect truncates the target file *before* `gh` runs, so a `gh` read that fails
-(wrong cwd, no repo context) leaves an empty file that the next `--body-file` pushes as the body —
-observed on PR #1041 (2026-08-16), diagnosed by the detective's first rehearsal.
+**Write the slot through the command, never by hand.** Put the slot text in a file and run:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/vet_slot.py" write --pr <n> --repo <owner/name> --slot-file <path>
+```
+
+The command reads the body and the latest vet receipt and checks the read, a non-empty body, both
+the `advisor-vet` and `build-record` markers, the build record's followups marker, and the
+receipt's dispositions marker. It re-reads the body before the push, writes only between the two
+slot markers, and reads the result back. A refusal names its reason (for example
+`followup-undispositioned`, `disposition-unknown`, `none-over-list`, `markers-invalid`, or
+`read-failed`) with a detail
+that says what was wrong, and writes nothing, except `write-unconfirmed`: the edit call was made (even
+one that failed or timed out) but the readback failed or differed from the pushed body. `check --pr <n> --repo <owner/name>` runs the same
+comparison with no write. The command exists because a hand-rolled write fails silently: a shell
+redirect truncates the target file *before* `gh` runs, so a `gh` read that fails leaves an empty
+file that the next `--body-file` pushes as the body. There is one write path, the command. Re-stamping a dropped
+`advisor-vet` marker, or creating the slot on a pre-contract PR, is the advisor's own hand edit to its
+own slot, made before the command runs. A build record that predates keyed follow-ups is keyed in
+place first: the advisor numbers its existing items FU1.. in order with a class each, adds the
+followups marker line, changes nothing else in the build record, and records that keying edit in
+the receipt; the receipt carries the dispositions marker before the command runs, so the repair can
+reach a successful write.
 
 **Probes, accounting and dispositions are mechanism.** Where they belong in the slot at all they go
 **collapsed inside `<details>`**, below the four elements, never above them; the pointer to the
@@ -304,7 +386,10 @@ Two artifacts, two skeletons. **The receipt comment:**
 **Accounting.** orders <n>, reworks <n>, attribution <…>; parks/refusals <…, each correct?>;
 receipt-integrity catches <…>; panel confirmation rate <rate or `not derivable from the receipt`>,
 inspection <what you did>; window: <…>
-**Dispositions — completed.** <…> | `None`
+**Dispositions — completed.**
+- FU<n>: <disposition: fixed | filed #… | folded into #… | collector @… | declined (trigger) | info> <…>
+<!-- superheroes:dispositions FU<n> … --> | <!-- superheroes:dispositions none -->
+<other completed items, as prose> | `None` (only over a `none` build record)
 <!-- superheroes:pending-proposals -->
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`
 **Open owner calls at merge.** <…> | `None`

@@ -3,7 +3,7 @@ name: discovery
 description: Use at the START of any new piece of work in a superheroes project — when a fuzzy idea needs to become an owner-approved requirements spec. It OWNS the requirements front-half — the *what*, in plain language. Elicits requirements (incl. significant unhappy paths) with the owner, produces the `spec` definition-doc, or exits through a findings record or a park note. Not the technical *how* (that stays with the build).
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Discovery
 
@@ -82,7 +82,7 @@ with what is there."
    occupy. Use the canonical form — the bare script name is not on `PATH`:
 
    ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    ROOT=$(git rev-parse --show-toplevel)
    WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>") \
      || { echo "the-architect: cannot mint the work-item (see message above) — not writing the findings record." >&2; exit 1; }
@@ -362,7 +362,7 @@ If the owner doesn't have or doesn't want to use Claude Design, **don't block** 
 capture the UI/UX as a plain-language description of the key screens and states in
 the spec instead.
 
-**Design-capture peer (host-neutral):** capture the design source using the path appropriate for your host — Claude Design on Claude Code; the host-native design-capture path on Codex (resolve via `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md`). Record *which* source was used in the spec's `## UI / UX` section so the artifact is traceable regardless of host.
+**Design-capture peer (host-neutral):** capture the design source using the path appropriate for your host — Claude Design on Claude Code; the host-native design-capture path on Codex (resolve via `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md`). Record *which* source was used in the spec's `## UI / UX` section so the artifact is traceable regardless of host.
 
 `mcp__visualize__show_widget` (inline SVG/HTML) may help for a quick option
 comparison **on graphical clients only** — it does **not** render in a terminal, so
@@ -502,7 +502,7 @@ in the moment. Weight changes how the approval is scheduled; it never changes wh
   work-item is ready to build:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   ROOT=$(git rev-parse --show-toplevel)
   WORK_ITEM="<work-item>"
   DOC_PATH=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" path \
