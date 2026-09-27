@@ -183,11 +183,13 @@ def live_vendors(config):
     return out
 
 
-def independent_auditor(config, fixer_vendor):
+def independent_auditor(config, fixer_vendor, runner_only=False):
     fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
     if fixer_fam is None:
         return None, None
     for v in live_vendors(config):
+        if runner_only and not session_contract.runner_channel_vendor(v):
+            continue
         if v != fixer_vendor:
             cand_fam = model_registry.family_for("auditor", v)
             if cand_fam is not None and cand_fam != fixer_fam:

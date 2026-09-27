@@ -305,10 +305,9 @@ def test_bite_bp2f_b_submit_preflight_journals_unrecognized_owner(tmp_path):
     assert ok and state is not None
     state["dispositionLedgerOwner"] = "ledger-v2"
     RD.save_state(session_dir, state)
-    n = RD.cmd_next(session_dir)
-    assert n["ok"], n
+    planted_hash = RD.state_hash(state)
     before_state = _session_state_bytes(session_dir)
-    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
+    out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], planted_hash,
                         _panel_artifact())
     assert out["ok"] is False
     assert out["reason"] == RD.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE

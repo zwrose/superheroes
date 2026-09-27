@@ -187,6 +187,9 @@ def certify(session_dir):
     refusal = _validate_receipt_findings(receipt)
     if refusal is not None:
         return None, refusal
+    refusal = _validate_receipt_additions(receipt)
+    if refusal is not None:
+        return None, refusal
     return receipt, None
 
 
@@ -696,8 +699,8 @@ def _orders_manifest_path(session_dir, rnd, phase, attempt):
                         "manifest.a%d.json" % attempt)
 
 
-def _orders_emitted_roster_or_refusal(session_dir, event):
-    """Return (roster, None) when authenticated, or (None, refusal) when unusable."""
+def _verified_orders_manifest(session_dir, event):
+    """Return (manifest, None) when hash-authenticated, or (None, refusal) when unusable."""
     manifest_sha = event.get("manifestSha256")
     phase = event.get("phase")
     rnd = event.get("round")
@@ -742,6 +745,17 @@ def _orders_emitted_roster_or_refusal(session_dir, event):
             manifest_path,
             "orders manifest seats field is not an object",
         )
+    return manifest, None
+
+
+def _orders_emitted_roster_or_refusal(session_dir, event):
+    """Return (roster, None) when authenticated, or (None, refusal) when unusable."""
+    manifest, refusal = _verified_orders_manifest(session_dir, event)
+    if refusal is not None:
+        return None, refusal
+    manifest_path = _orders_manifest_path(
+        session_dir, event.get("round"), event.get("phase"), event.get("attempt"))
+    seats = manifest.get("seats")
     roster = []
     for seat_key, entry in seats.items():
         if not isinstance(entry, dict):
@@ -1265,6 +1279,62 @@ def _runner_recorded_vendor_status(obs, session_dir, seat_entry):
     return "missing"
 
 
+def _envelope_execution_model_field(session_dir, seat_entry):
+    """Return (model_field_present, model_value) from the CAS-bound envelope."""
+    provenance = seat_entry.get("provenance")
+    if provenance not in RECEIPT_PROVENANCE:
+        return False, None
+    seat = seat_entry["seat"]
+    phase = seat_entry["phase"]
+    attempt = seat_entry["attempt"]
+    occurrence = seat_entry.get("occurrence", 0)
+    rnd = seat_entry["round"]
+    env, _path = _load_envelope(
+        session_dir,
+        rnd,
+        phase,
+        seat,
+        attempt,
+        occurrence,
+    )
+    if not isinstance(env, dict):
+        return False, None
+    evidence = env.get("executionEvidence")
+    if not isinstance(evidence, dict) or "model" not in evidence:
+        return False, None
+    return True, evidence.get("model")
+
+
+def _envelope_execution_model(session_dir, seat_entry):
+    present, value = _envelope_execution_model_field(session_dir, seat_entry)
+    if not present:
+        return None
+    return value
+
+
+def _runner_recorded_model(obs, session_dir, seat_entry):
+    """Return the runner-recorded model from the CAS-bound envelope."""
+    return _envelope_execution_model(session_dir, seat_entry)
+
+
+def _journal_envelope_model_refusal(obs, session_dir, seat_entry):
+    if not isinstance(obs, dict) or "model" not in obs:
+        return None
+    journal_model = obs.get("model")
+    envelope_has_model, envelope_model = _envelope_execution_model_field(
+        session_dir, seat_entry
+    )
+    if not envelope_has_model or journal_model != envelope_model:
+        seat = seat_entry["seat"]
+        return _refusal(
+            "unfetched-findings",
+            seat,
+            "journal executionEvidence.model disagrees with stored envelope",
+            binding_failure="journal-envelope-mismatch",
+        )
+    return None
+
+
 def check_seat_independence(ctx):
     # axis: the receipt's independence is read from the record — the declared fixer vendor and each
     # audit seat's runner-recorded vendor — and a record that contradicts itself refuses; a record
@@ -1315,6 +1385,9 @@ def check_seat_independence(ctx):
                 seat,
                 "audit seat %s vendor %r has no registry family" % (seat, vendor),
             )
+        model_refusal = _journal_envelope_model_refusal(obs, session_dir, seat_entry)
+        if model_refusal is not None:
+            return model_refusal
     return None
 
 
@@ -1341,12 +1414,14 @@ def _independence_block(ctx):
             continue
         vendor = vendor_status
         fam = model_registry.family_for("verifier", vendor)
+        model = _runner_recorded_model(obs, ctx["session_dir"], seat_entry)
         audit_seats.append(
             {
                 "seat": seat,
                 "round": rnd,
                 "vendor": vendor,
                 "family": fam,
+                "model": model,
             }
         )
     same_family_seats = [
@@ -1920,6 +1995,25 @@ def _validate_receipt_findings(receipt):
                 fid,
                 "certified receipt finding has unknown disposition %r" % (disposition,),
             )
+    return None
+
+
+def _validate_receipt_additions(receipt):
+    independence = receipt.get("independence") or {}
+    audit_seats = independence.get("auditSeats")
+    if isinstance(audit_seats, list):
+        for entry in audit_seats:
+            if not isinstance(entry, dict):
+                continue
+            model = entry.get("model")
+            if "model" in entry and model is not None:
+                if not isinstance(model, str) or not model:
+                    return _refusal(
+                        "unfetched-findings",
+                        entry.get("seat") or "audit-seat",
+                        "certified receipt independence.auditSeats model must be "
+                        "a non-empty string or null",
+                    )
     return None
 
 

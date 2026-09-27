@@ -49,7 +49,7 @@
   ],
   "dispatch-audits": [
     "You are the fix auditor for one cleared-or-stalled finding target",
-    "You are **never** the fixer's vendor",
+    "When an independent runner-channel vendor is live, you are never the fixer's vendor",
     "Return exactly one audit result for this target",
     "Judge only this one target",
     "Never change the repository, and never claim a run you did not make",

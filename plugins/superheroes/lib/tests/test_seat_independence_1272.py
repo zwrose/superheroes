@@ -148,6 +148,7 @@ def test_receipt_independence_reads_recorded_fixer_vendor_two_vendors(tmp_path):
                 "round": 1,
                 "vendor": "claude",
                 "family": model_registry.family_for("verifier", "claude"),
+                "model": None,
             }
         ],
     }
@@ -217,6 +218,7 @@ def test_audit_seat_same_family_per_runner_record_reads_degraded(tmp_path):
                 "round": 1,
                 "vendor": "claude",
                 "family": model_registry.family_for("verifier", "claude"),
+                "model": None,
             }
         ],
         "sameFamilySeats": [AUDIT_SEAT],

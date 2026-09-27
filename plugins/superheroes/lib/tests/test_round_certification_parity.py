@@ -38,6 +38,11 @@ def _load_state(session_dir):
         return json.load(fh)
 
 
+def _seat_map_for_driver_parity(writer_seat_map):
+    """Writer seatMap matches driver seatMap after R28 host-seat exclusion removal."""
+    return writer_seat_map
+
+
 def _assert_findings_parity(session_dir, driver_findings, cert_findings):
     state = _load_state(session_dir)
     state_rows = [f for f in (state.get("findings") or []) if isinstance(f, dict)]
@@ -61,7 +66,12 @@ def _assert_receipt_parity(session_dir):
     for key in driver_receipt:
         if key in PARITY_FIELD_EXCEPTIONS:
             continue
-        assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+        if key == "seatMap":
+            assert _seat_map_for_driver_parity(cert_receipt["seatMap"]) == driver_receipt[
+                "seatMap"
+            ], "mismatch on key %r" % key
+        else:
+            assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
     _assert_findings_parity(
         session_dir, driver_receipt["findings"], cert_receipt["findings"]
     )
@@ -188,7 +198,12 @@ def test_materialized_state_round_trip_matches_driver_receipt(tmp_path, label, b
         for key in driver_receipt:
             if key in PARITY_FIELD_EXCEPTIONS:
                 continue
-            assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+            if key == "seatMap":
+                assert _seat_map_for_driver_parity(cert_receipt["seatMap"]) == driver_receipt[
+                    "seatMap"
+                ], "mismatch on key %r" % key
+            else:
+                assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
         _assert_findings_parity(
             materialized, driver_receipt["findings"], cert_receipt["findings"]
         )

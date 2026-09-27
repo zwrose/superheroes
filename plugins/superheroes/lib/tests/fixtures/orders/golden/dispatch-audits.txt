@@ -7,12 +7,13 @@ new issues.
   fixer's head diff hunk(s) covering this target.
 - Head diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/head.diff
 - Verification root (read cited files here ONLY): /home/user/proj
-- Severity rubric (the only tiers; calibration): /private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1272-3f5292aa7e89b0ea/e27eb96f-ee0c-49d2-870c-1507a21ea6d1/scratchpad/wo-B/plugins/superheroes/rubric/review-base.md
+- Severity rubric (the only tiers; calibration): ${PLUGIN_ROOT}/rubric/review-base.md
 - Project conventions: CLAUDE.md and the project profile.
 - Target identifier (echo verbatim in your result): finding::auth.py::12
 
 ## Independence
-You are **never** the fixer's vendor. Judge only from the diff, the repo, and the target record.
+When an independent runner-channel vendor is live, you are never the fixer's vendor. Judge only from
+the diff, the repo, and the target record.
 
 ## Your task
 Return exactly one audit result for this target. Judge whether the fix clearly addresses the

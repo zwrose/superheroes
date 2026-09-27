@@ -15,6 +15,11 @@ Review only the hunks named in {{HUNKS_PATH}} at reviewer-deep caliber. Read bou
 (<=800 lines). Apply the diff-scope rule: only flag code in `+` or `-` lines within those
 hunks.
 
+## Seat
+The orchestrator gates and dispatches this seat with `"role":"scoped-finder"` inside the
+four-key `--seat` bundle (`{"vendor":…,"model":…,"effort":…,"role":"scoped-finder"}`),
+never a standalone `--role` flag. The role resolves to the reviewer-deep cells.
+
 ## Diff-scope rule — CRITICAL
 You are reviewing CHANGES MADE BY THIS FIX. Do NOT flag pre-existing issues outside the scoped
 hunks. Only flag code in `+` or `-` lines of the scoped surface.
