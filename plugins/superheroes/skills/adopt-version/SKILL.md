@@ -29,11 +29,20 @@ runs). On Claude Code, call `charter_detect.detect_charter` over the session tra
 checkpoint Step 1 does — a cross-check only. Where the host names no transcript, the seat
 names its own charter from how it was invoked.
 
-Establish the **running version** from the first source that resolves, in order: the
-bootstrap's resolved plugin root in context; the plugin root in this seat's own recent
-commands; a root recorded in the seat's durable state; on Claude Code, the SessionStart
-injection recorded in the session transcript. If none resolves, do not guess — carry the gap
-to step 8 and stop after the brief.
+Establish the **running version** from the first source that resolves, in order: a
+`plugin version taken up: <fromRoot> -> <toRoot>` line this seat itself wrote in its durable
+state (the running root is **toRoot**); the bootstrap's resolved plugin root in context; the
+plugin root in this seat's own recent commands; on Claude Code, the SessionStart injection
+recorded in the session transcript. If none resolves, do not guess — carry the gap to step 8
+and stop after the brief. After compaction, a `plugin version taken up` line this seat wrote
+overrides the injected resolved-roots block and charter-recovery paths; re-read the charter
+from **toRoot** in that line, not from recovery paths that still name the old root.
+
+Name the **host-provided plugin root** — the bootstrap's resolved plugin root in context, or
+on Claude Code the SessionStart injection when the bootstrap block is absent. Before anything
+runs from `NEW_ROOT`, `CACHE_DIR` must equal the parent directory of that host-provided root.
+If `$(dirname "$RUNNING_ROOT")` disagrees, stop and carry the mismatch to step 8 — do not
+trust a root copied from an issue or PR record for this check.
 
 Run `plan` on the new install (role = this seat's charter). The helper, `lib/adopt_version.py`,
 runs from the new version's directory because the running version may predate it.
@@ -114,7 +123,12 @@ named: keep each such run pinned to its old-root dispatcher and run directory un
 reaches a terminal result — never retarget continuation to the new root mid-run. The
 bootstrap's resolved-roots block in context still names the old root — treat it as stale.
 
-**Output:** the new root, stated once.
+Always write one line `plugin version taken up: <fromRoot> -> <toRoot>` into this seat's
+durable state (the advisor's resume point; a builder's or detective's issue or PR record) —
+whatever the `plan` buckets hold. That line outranks the bootstrap block and SessionStart
+injection on the next adoption and after compaction.
+
+**Output:** the new root, stated once, and confirmation the taken-up line was written.
 
 ## Step 6 — Re-run the version-coupled checks
 
