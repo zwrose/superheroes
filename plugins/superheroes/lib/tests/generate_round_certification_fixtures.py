@@ -702,7 +702,8 @@ def build_case05_critical_out_of_scope():
                     "severity": "Critical",
                     "disposition": "out-of-scope",
                     "outOfScopeReason": "accepted risk",
-                    "followUp": {"revisitTrigger": "milestone M2", "classClosure": "none"},
+                    "followUp": {"item": "critical deferral", "revisitTrigger": "milestone M2",
+                                 "classClosure": "none"},
                 }
             ]
         },
@@ -914,7 +915,7 @@ def build_followup_missing_class_closure():
                     "severity": "Important",
                     "disposition": "out-of-scope",
                     "outOfScopeReason": "deferred",
-                    "followUp": {"revisitTrigger": "2026-12-01"},
+                    "followUp": {"item": "deferred work", "revisitTrigger": "2026-12-01"},
                 }
             ]
         },
@@ -940,6 +941,7 @@ def build_followup_class_closure_none():
                     "disposition": "out-of-scope",
                     "outOfScopeReason": "deferred",
                     "followUp": {
+                        "item": "deferred work",
                         "revisitTrigger": "2026-12-01",
                         "classClosure": "none",
                     },
@@ -967,7 +969,7 @@ def build_followup_no_revisit_trigger():
                     "severity": "Important",
                     "disposition": "out-of-scope",
                     "outOfScopeReason": "deferred",
-                    "followUp": {"classClosure": "tracked in issue-42"},
+                    "followUp": {"item": "deferred work", "classClosure": "tracked in issue-42"},
                 }
             ]
         },
@@ -993,6 +995,7 @@ def build_followup_documented_trigger():
                     "disposition": "out-of-scope",
                     "outOfScopeReason": "deferred",
                     "followUp": {
+                        "item": "deferred work",
                         "revisitTrigger": "documented",
                         "classClosure": "none",
                     },

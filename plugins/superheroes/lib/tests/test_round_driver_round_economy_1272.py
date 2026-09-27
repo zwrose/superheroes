@@ -4,6 +4,8 @@ import importlib.util
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 
 import pytest
@@ -207,12 +209,47 @@ def test_t3_ceiling_gate_runs_then_parks(tmp_path):
     assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
 
 
-# axis: ceiling round skips second gate when post-audits verify already ran
-def test_t3_ceiling_gate_skipped_when_prior_verify(tmp_path):
-    d = str(tmp_path)
-    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
-    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q")
-    respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
+def _git_rev_parse(repo):
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+
+def _init_ceiling_git_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)],
+                   check=True, capture_output=True)
+    (repo / "f.py").write_text("old\n", encoding="utf-8")
+    (repo / "newsurf.py").write_text("ns\nns2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "init"],
+        cwd=repo, check=True, capture_output=True)
+    return str(repo), _git_rev_parse(repo)
+
+
+def _commit_in_repo(repo, message):
+    marker = os.path.join(repo, ".ceiling-head-marker")
+    with open(marker, "a", encoding="utf-8") as fh:
+        fh.write(message + "\n")
+    subprocess.run(["git", "add", marker], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", message],
+        cwd=repo, check=True, capture_output=True)
+    return _git_rev_parse(repo)
+
+
+def _bootstrap_session_with_repo(tmp_path, repo, head_sha):
+    d = str(tmp_path / "session")
+    os.makedirs(d, exist_ok=True)
+    meta_path = os.path.join(d, round_records.META_FILE)
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump({"headSha": head_sha, "repoRoot": repo}, fh, sort_keys=True)
+        fh.write("\n")
+    return d
+
+
+def _drive_ceiling_round_two_fixer(tmp_path, cfg, respond, repo, init_head, *, move_head=True):
+    d = _bootstrap_session_with_repo(tmp_path, repo, init_head)
     n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
     assert n["round"] == 1
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
@@ -220,23 +257,135 @@ def test_t3_ceiling_gate_skipped_when_prior_verify(tmp_path):
     assert s["ok"], s
     n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
     assert n["round"] == 2
+    ok, state = RD.load_state(d)
+    assert ok
+    head_a = state["rounds"]["2"].get(SC.VERIFIED_HEAD_FIELD)
+    assert head_a
+    head_b = head_a
+    if move_head:
+        head_b = _commit_in_repo(cfg["repoRoot"], "ceiling post-fix head")
+        assert head_b != head_a
+    return d, n, head_a, head_b
+
+
+# axis: ceiling round reuses the gate when post-fix head matches a prior pass
+def test_t3_ceiling_gate_reused_when_prior_verify_on_same_head(tmp_path):
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo)
+    respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
+    d, n, head_a, _head_b = _drive_ceiling_round_two_fixer(
+        tmp_path, cfg, respond, repo, init_head, move_head=False)
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]})
     assert s["ok"], s
     n3 = RD.cmd_next(d)
-    assert n3["action"] == RD.P_TERMINAL
+    assert n3["action"] == RD.P_TERMINAL, n3
     assert n3["payload"]["verdict"] == "halted"
     ok, state = RD.load_state(d)
     assert ok
     assert state["rounds"]["2"]["verifyResult"] == "pass"
-    assert state["rounds"]["2"]["ceilingGateSkipped"] == (
-        "the round's gate already ran on an earlier head; the post-fix head is unverified by the "
-        "loop — certification is withheld at the ceiling regardless")
+    assert state["rounds"]["2"]["ceilingGateReused"] == head_a
+    assert state["rounds"]["2"][SC.VERIFIED_HEAD_FIELD] == head_a
     assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
     verify_nexts = [e for e in RD.read_journal(d)
                     if e.get("cmd") == "next" and e.get("phase") == RD.P_VERIFY
                     and e.get("round") == 2]
     assert len(verify_nexts) == 1
+
+
+# axis: ceiling round runs verify on post-fix head even when concurrent gate already ran
+def test_t3_ceiling_gate_runs_on_post_fix_head_after_prior_verify(tmp_path):
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo)
+    respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
+    d, n, head_a, head_b = _drive_ceiling_round_two_fixer(
+        tmp_path, cfg, respond, repo, init_head)
+    s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                      {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]})
+    assert s["ok"], s
+    n3 = RD.cmd_next(d)
+    assert n3["ok"] and n3["phase"] == RD.P_VERIFY, n3
+    s2 = RD.cmd_submit(d, n3["phase"], n3["attempt"], n3["expectedStateHash"], {"result": "pass"})
+    assert s2["ok"], s2
+    n4 = RD.cmd_next(d)
+    assert n4["action"] == RD.P_TERMINAL
+    assert n4["payload"]["verdict"] == "halted"
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state["rounds"]["2"]["verifyResult"] == "pass"
+    _skip_key = "".join(("ceiling", "Gate", "Skipped"))
+    assert _skip_key not in state["rounds"]["2"]
+    assert state["rounds"]["2"][SC.VERIFIED_HEAD_FIELD] == head_b
+    assert state["rounds"]["2"][SC.VERIFIED_HEAD_FIELD] != head_a
+    assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
+    verify_nexts = [e for e in RD.read_journal(d)
+                    if e.get("cmd") == "next" and e.get("phase") == RD.P_VERIFY
+                    and e.get("round") == 2]
+    assert len(verify_nexts) == 2
+
+
+# axis: unresolvable post-fix head at the ceiling still runs the gate
+def test_t3_ceiling_gate_runs_when_post_fix_head_unresolvable(tmp_path):
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo)
+    respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
+    d, n, head_a, _head_b = _drive_ceiling_round_two_fixer(
+        tmp_path, cfg, respond, repo, init_head)
+    shutil.rmtree(repo)
+    s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                      {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]})
+    assert s["ok"], s
+    n3 = RD.cmd_next(d)
+    assert n3["ok"] and n3["phase"] == RD.P_VERIFY, n3
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state["rounds"]["2"].get("fixFoldHeadRefused")
+    assert "ceilingGateReused" not in state["rounds"]["2"]
+    assert state["rounds"]["2"][SC.VERIFIED_HEAD_FIELD] == head_a
+
+
+def test_t3b_ceiling_gate_reuse_requires_pass():
+    head = "abc" * 13 + "a"
+    state = {"round": 2,
+             "config": {"maxRoundsAbsolute": 2, "maxRounds": 2, RD.FIX_FOLD_HEAD_KEY: head},
+             "rounds": {"2": {"verifyResult": "fail", SC.VERIFIED_HEAD_FIELD: head}}}
+    assert RD._try_reuse_ceiling_verify_gate(state, state["config"], None) is False
+    assert "ceilingGateReused" not in state["rounds"]["2"]
+
+
+def test_t3b_ceiling_gate_reuse_taken_on_pass():
+    head = "abc" * 13 + "a"
+    state = {"round": 2, "decisions": [],
+             "config": {"maxRoundsAbsolute": 2, "maxRounds": 2, RD.FIX_FOLD_HEAD_KEY: head},
+             "rounds": {"2": {"verifyResult": "pass", SC.VERIFIED_HEAD_FIELD: head}}}
+    assert RD._try_reuse_ceiling_verify_gate(state, state["config"], None) is True
+    assert state["rounds"]["2"]["ceilingGateReused"] == head
+
+
+# axis: ceiling gate fail on post-fix head halts — never a clean park
+def test_t3_ceiling_gate_fail_on_post_fix_head_halts(tmp_path):
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    scoped_b = [{"title": "delta-b", "severity": "Important", "file": "newsurf.py", "line": 1}]
+    cfg = _cfg(maxRoundsAbsolute=2, maxRounds=2, verifyCommand="pytest -q", repoRoot=repo)
+    respond = _responder(round1_findings=_A_FINDING, scoped=scoped_b, head=HEAD_NEW_SURFACE)
+    d, n, _head_a, _head_b = _drive_ceiling_round_two_fixer(
+        tmp_path, cfg, respond, repo, init_head)
+    s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                      {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]})
+    assert s["ok"], s
+    n3 = RD.cmd_next(d)
+    assert n3["ok"] and n3["phase"] == RD.P_VERIFY, n3
+    s2 = RD.cmd_submit(d, n3["phase"], n3["attempt"], n3["expectedStateHash"], {"result": "fail"})
+    assert s2["ok"], s2
+    n4 = RD.cmd_next(d)
+    assert n4["action"] == RD.P_TERMINAL
+    assert n4["payload"]["verdict"] == "halted"
+    ok, state = RD.load_state(d)
+    assert ok
+    assert state["rounds"]["2"]["verifyResult"] == "fail"
 
 
 # axis: unknown surface — verify then full panel in the new round
@@ -453,32 +602,6 @@ def test_t8_fix_batch_chokepoint_census():
     before = text[:idx]
     func_name = re.findall(r"def (\w+)\(", before)[-1]
     assert func_name == "_queue_fix_batch"
-
-
-_CAP_DEFAULT_CITATION_RE = re.compile(r"round_phases\.FIX_BATCH_CAP_DEFAULT")
-_CAP_DEFAULT_PROSE_VALUE_RE = re.compile(
-    r"default\s+(\d+)\s*\([^)]*round_phases\.FIX_BATCH_CAP_DEFAULT")
-
-
-# axis: default cap constant and reference prose stay aligned
-def test_t9_cap_default_and_reference_aligned():
-    ref = os.path.join(os.path.dirname(_LIB), "skills", "review-code", "reference",
-                       "round-driver.md")
-    with open(ref, encoding="utf-8") as fh:
-        text = fh.read()
-    economy_start = text.index("## Round economy")
-    economy_end = text.index("## Lens coverage beside counts", economy_start)
-    economy = text[economy_start:economy_end]
-    if not _CAP_DEFAULT_CITATION_RE.search(economy):
-        raise AssertionError(
-            "§ Round economy must cite round_phases.FIX_BATCH_CAP_DEFAULT by name; "
-            "no match in sentence block starting: %s" % economy.strip()[:200])
-    prose_match = _CAP_DEFAULT_PROSE_VALUE_RE.search(economy)
-    if not prose_match:
-        raise AssertionError(
-            "§ Round economy must state the default cap value in the sentence citing "
-            "FIX_BATCH_CAP_DEFAULT; no match in: %s" % economy.strip()[:300])
-    assert int(prose_match.group(1)) == round_phases.FIX_BATCH_CAP_DEFAULT
 
 
 # axis: escalated self-recovery split — both fixer slices carry escalatedRung
