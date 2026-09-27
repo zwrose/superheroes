@@ -445,7 +445,8 @@ above).
      `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md`: an
      always-present **spine**, plus the fields the PR's own **artifacts** trigger, with every spine
      field **filled or written `None`**. **Read that file at vet time; do not reconstruct the shape from memory.**
-     The spine carries the **lane** the PR ran (field 9) and the **misses-log appends** this vet made, or `None` (field 10).
+     The spine's **lane** and **misses-log appends** fields are among those slots — see
+     `vet-receipt.md` for their identities and fill contract.
      The `None` is what makes an absence readable, because
      presence-by-grep cannot tell *not applicable* from *forgotten*. **The template is a floor, never
      a ceiling** — a probes field that reads like a form has hollowed out the one field that cannot
