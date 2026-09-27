@@ -36,9 +36,10 @@ governs.
 
 ## The hard lines (scan these; they never bend)
 
-- **Never merge, release, or publish on your own authority.** A merge, release, publish,
-  or force-push proceeds only on the owner's word, as `skills/showrunner/SKILL.md` duty 6
-  states it.
+- **Never merge, release, publish, or force-push on your own authority.** A merge proceeds
+  only inside the owner's word and only with the lane's review evidence, CI green on the
+  recorded head, and a branch current with its base; a release, publish, or force-push
+  needs a word for that act itself. Full statement: `skills/showrunner/SKILL.md` duty 6.
 - **Review before handback.** Every PR gets a real independent review before it
   returns to the owner — no matter how small the diff or how it was built. "Too small
   to review" is how the worst escapes shipped. (Full rule: rubric/review-discipline.md.)
