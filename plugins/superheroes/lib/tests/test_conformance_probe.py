@@ -390,6 +390,36 @@ def test_probe_refuses_parent_run_dir_with_unrecognized_entries(tmp_path, monkey
     assert stderr is not None
 
 
+def test_claude_probe_refuses_leftover_background_subdir(tmp_path, monkeypatch):
+    # axis: caller-supplied run_dir with legacy background/ subdir refuses before probe
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = _repo(tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "background").mkdir()
+
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        raise AssertionError("probe must refuse before spawn")
+
+    fake = FakeRunner([runner], sync_native=False)
+    payload, code, stderr = CP.probe(
+        "claude", repo_root=repo, run_dir=str(run_dir), timeout=30, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    dispatch_outcome = _load("dispatch_outcome", "dispatch_outcome.py")
+    assert code == 1
+    assert (
+        payload["modeLegs"]["print"]["resultProduction"]["detail"]
+        == dispatch_outcome.DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED
+    )
+    assert len(fake.calls) == 0
+    assert stderr is not None
+
+
 def test_probe_accepts_parent_run_dir_with_only_recognized_mode_subdirs(tmp_path, monkeypatch):
     # Negative half of the guard above: a parent containing only the recognized print/
     # background/ mode subdirectories (both empty — no prior journal) is NOT refused as
@@ -416,8 +446,6 @@ def test_probe_accepts_parent_run_dir_with_only_recognized_mode_subdirs(tmp_path
     )
     for mode in ("print",):
         assert payload["modeLegs"][mode]["resultProduction"]["detail"] != "run-dir-not-empty-unopened"
-
-
 
 
 def test_claude_probe_green_as_far_as_the_injected_seam_can_reach(tmp_path, monkeypatch):
@@ -476,7 +504,7 @@ def test_claude_probe_green_as_far_as_the_injected_seam_can_reach(tmp_path, monk
     assert code == 0
 
 
-def test_claude_probe_all_green_both_modes(tmp_path, monkeypatch):
+def test_claude_probe_healthy_print_passes(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     (home / ".claude").mkdir()
@@ -487,29 +515,9 @@ def test_claude_probe_all_green_both_modes(tmp_path, monkeypatch):
     os.makedirs(run_dir, exist_ok=True)
     structured = {"result": _native_verdicts_branch()}
     print_stdout = _claude_event_stream(tool_calls=1, structured_output=structured)
-    background_lines = [
-        json.dumps({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use", "id": "tool-0", "name": "Glob", "input": {},
-            }]},
-        }),
-        json.dumps({
-            "type": "assistant",
-            "message": {"content": [{
-                "type": "tool_use", "id": "so1", "name": "StructuredOutput",
-                "input": {"result": _native_verdicts_branch()},
-            }]},
-        }),
-        json.dumps({"type": "user", "toolEndsTurn": True}),
-    ]
-    background_stdout = "\n".join(background_lines) + "\n"
 
     def print_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         return print_stdout, False, 0, ""
-
-    def background_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
-        return background_stdout, False, 0, ""
 
     fake = FakeRunner([print_runner], sync_native=False)
     payload, code, stderr = CP.probe(
@@ -1177,8 +1185,6 @@ def test_probe_refuses_reused_run_dir_with_folded_result(tmp_path):
     assert payload2["legs"]["resultProduction"]["detail"] == "default: run-dir-reused"
 
 
-
-
 def test_probe_run_dir_setup_failure_never_raises(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
 
@@ -1654,7 +1660,22 @@ def test_preflight_entry_refuses_schema_v1_record(tmp_path):
     assert payload["reason"].startswith("probe-result-malformed:")
 
 
-def test_claude_probe_second_mode_runs_when_first_refuses(tmp_path, monkeypatch):
+def test_preflight_entry_refuses_legacy_two_mode_claude_receipt(tmp_path):
+    # axis: preflight rejects probe receipts that still claim print and background
+    repo = _repo(tmp_path)
+    record = _probe_result("claude", repoRoot=repo)
+    print_legs = record["modeLegs"]["print"]
+    record["probedModes"] = ["print", "background"]
+    record["modeLegs"] = {"print": print_legs, "background": dict(print_legs)}
+    paths = _ok_dispatchable_probe_paths(tmp_path, repo, claude=record)
+    payload, code = CP.preflight_entry(
+        repo, paths, calibration_rows=_calibration_rows(),
+    )
+    assert code == 1
+    assert payload["reason"].startswith("probe-result-malformed:")
+
+
+def test_claude_probe_print_refusal_reports_auth_or_config(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     (home / ".claude").mkdir()
@@ -1793,8 +1814,6 @@ def _claude_print_boundary_runner(envelope):
     return runner
 
 
-
-
 def _boundary_run_engine(engine, envelope):
     if engine == "codex":
         return _codex_boundary_runner(envelope)
@@ -1923,8 +1942,6 @@ def test_probe_preflight_aborts_when_print_mode_reused_first_in_order(tmp_path, 
     assert CP._modes_for_engine("claude")[0] == "print"
     assert len(calls) == 0
     assert code == 1
-
-
 
 
 def test_probe_preflight_aborts_all_modes_on_setup_error(tmp_path, monkeypatch):

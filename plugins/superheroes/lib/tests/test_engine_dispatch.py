@@ -14988,8 +14988,6 @@ def _plant_claude_review_journal_with_claude_mode(
     return opened
 
 
-
-
 def test_claude_mode_omitted_records_default_source(tmp_path, monkeypatch):
     _ensure_claude_config_dir(tmp_path, monkeypatch)
     repo_root = _repo(tmp_path)
@@ -15030,6 +15028,156 @@ def test_claude_mode_unknown_refused_before_open(tmp_path):
     assert len(fake.calls) == 0
 
 
+def test_dispatch_review_claude_mode_background_refuses_retired_before_spawn(tmp_path):
+    # axis: entry retired branch refuses background before spawn
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=_repo(tmp_path),
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        claude_mode="background",
+    )
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert len(fake.calls) == 0
+
+
+def test_main_dispatch_review_claude_mode_background_refuses_retired(
+    tmp_path, monkeypatch, capsys,
+):
+    # axis: CLI --claude-mode background reaches entry retired refusal
+    recorder = []
+
+    def _recorder(*args, **kwargs):
+        recorder.append((args, kwargs))
+        raise AssertionError("spawn must not run")
+
+    monkeypatch.setattr(ED, "_run_engine", _recorder)
+    seat = json.dumps(_reviewer_claude_seat())
+    prompt = _valid_prompt(tmp_path)
+    repo_root = _repo(tmp_path)
+    rc = ED.main([
+        "dispatch-review",
+        "--seat", seat,
+        "--prompt-path", prompt,
+        "--repo-root", repo_root,
+        "--claude-mode", "background",
+    ])
+    assert rc == 1
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
+    assert res["attempts"] == 0
+    assert recorder == []
+
+
+@pytest.mark.parametrize("claude_mode", [None, "print"])
+def test_dispatch_review_continuation_of_background_journal_refuses_retired(
+    tmp_path, monkeypatch, claude_mode,
+):
+    # axis: continuation chokepoint refuses journal claudeMode background
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "bg-continuation")
+    repo_root = _repo(tmp_path)
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _reviewer_claude_seat()
+    _plant_claude_review_journal_with_claude_mode(
+        tmp_path, run_dir, repo_root, seat, config_dir=cfg, claude_mode="background",
+    )
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
+    kwargs = {
+        "seat": seat,
+        "prompt_path": _valid_prompt(tmp_path),
+        "repo_root": repo_root,
+        "run_engine": fake,
+        "build_view": _stable_build_view(tmp_path),
+        "run_dir": run_dir,
+        "order_id": "claude-mode-test",
+        "max_wait": 0,
+    }
+    if claude_mode is not None:
+        kwargs["claude_mode"] = claude_mode
+    res = ED.dispatch_review(**kwargs)
+    assert res["detail"] == claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_RETIRED
+    assert res["detail"] != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert len(fake.calls) == 0
+    records, _ = ED._journal_read(run_dir)
+    assert not any(r.get("kind") in ("attempt-started", "engine-started") for r in records)
+
+
+def test_poll_and_abandon_on_legacy_background_journal_do_not_raise(
+    tmp_path, monkeypatch,
+):
+    # axis: legacy background journal records do not break poll or abandon
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    run_dir = str(tmp_path / "legacy-bg-poll")
+    repo_root = _repo(tmp_path)
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _reviewer_claude_seat()
+    _plant_claude_review_journal_with_claude_mode(
+        tmp_path, run_dir, repo_root, seat, config_dir=cfg, claude_mode="background",
+    )
+    launch_id = "abcd1234"
+    session_id = "s1"
+    now = time.time()
+    ED._journal_append(run_dir, {
+        "kind": "background-launched", "attempt": 1, "launchId": launch_id,
+        "bgSessionId": session_id, "at": now,
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-suspended", "attempt": 1, "launchId": launch_id,
+        "bgSessionId": session_id, "wallSeconds": 5, "at": now,
+    })
+    popen_calls = []
+    run_calls = []
+
+    def _record_popen(*args, **kwargs):
+        popen_calls.append((args, kwargs))
+        raise AssertionError("unexpected Popen")
+
+    def _record_run(*args, **kwargs):
+        run_calls.append((args, kwargs))
+        raise AssertionError("unexpected run")
+
+    monkeypatch.setattr(ED.subprocess, "Popen", _record_popen)
+    monkeypatch.setattr(ED.subprocess, "run", _record_run)
+    poll_res = ED.dispatch_poll(run_dir)
+    assert poll_res is not None
+    abandon_res = ED.dispatch_abandon(run_dir)
+    assert abandon_res["terminal"] is True
+    claude_exe = EA.CLAUDE_EXECUTABLE
+    for args, _kwargs in popen_calls + run_calls:
+        argv = args[0] if args else []
+        assert not (argv and argv[0] == claude_exe)
+
+
+def test_claude_print_review_materializes_stdout_result(tmp_path, monkeypatch):
+    # axis: print-mode review still materializes stdout result
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    repo_root = _repo(tmp_path)
+    fake = _ClaudeStdoutFakeRunner([_claude_native_verdicts_runner()])
+    res = ED.dispatch_review(
+        seat=_reviewer_claude_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+        expected_result_kind="verdicts",
+    )
+    assert res["ok"] is True
+    records, _ = ED._journal_read(res["runDir"])
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1)
+    assert ended["stdoutResult"] == "materialized"
+    assert "launchId" not in ended
+    assert "transcriptResult" not in ended
 
 
 def test_run_dir_claude_mode_mismatch_refused(tmp_path, monkeypatch):
@@ -15149,15 +15297,11 @@ def test_stdout_delivery_gate_unresolved_delivery_forfeits(tmp_path, monkeypatch
     assert gate["detail"] == "result-delivery-unresolved"
 
 
-
-
 def test_native_materializer_delivery_census():
     assert ED._NATIVE_MATERIALIZER_DELIVERIES <= ERC.RESULT_DELIVERY_MEMBERS
     assert ED._NATIVE_MATERIALIZER_DELIVERIES == frozenset({
         ERC.RESULT_DELIVERY_STDOUT,
     })
-
-
 
 
 def test_claude_review_json_schema_argv_text_drift_refuses_coherence(tmp_path, monkeypatch):
@@ -15182,8 +15326,6 @@ def test_claude_review_json_schema_argv_text_drift_refuses_coherence(tmp_path, m
     _, err = ED._spawn_argv_coherence(opened, drifted)
     assert err is not None
     assert "spawn argv does not match resolvedInputs snapshot" in err
-
-
 
 
 def _vendor_branch_call_targets(tree, func_name, vendor):
@@ -15780,8 +15922,6 @@ def test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal(
     _assert_completion_keys(ended, structured)
 
 
-
-
 def test_completion_producer_rewrite_keeps_first_digest(tmp_path, monkeypatch):
     """axis: edge 8 — first observation wins; a later rewrite must not replace the digest."""
     first = _native_write_result_json(report="first")
@@ -15965,8 +16105,6 @@ def _review_admission_claude_stdout(tmp_path, monkeypatch, ended, envelope):
     state = ED._journal_state(records)
     state["attempts"][1] = {"ended": ended}
     return run_dir, state
-
-
 
 
 _WRITE_ADMISSION_DELIVERIES = ("argv", "prompt", "stdout")
@@ -16216,8 +16354,6 @@ def test_completion_producer_natural_exit_after_cap_forfeits(tmp_path, monkeypat
     grade = ED._grade_write_attempt(run_dir, state, 1)
     assert grade.get("forfeit") is True
     assert grade.get("detail") == "result-completion-after-deadline"
-
-
 
 
 # --- incremental stdout completion e2e (#1273 WO-B) ---
@@ -17316,10 +17452,6 @@ def test_review_admission_timed_out_complete_before_deadline_admits(
         run_dir, state = _review_admission_claude_transcript(tmp_path, monkeypatch, ended, envelope)
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
-
-
-
-
 
 
 def test_review_terminal_forfeit_surfaces_dropped_cause():

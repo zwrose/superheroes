@@ -3398,13 +3398,16 @@ def _plant_claude_write_journal_with_claude_mode(
     prompt_path = _prompt(tmp_path)
     cwd = os.path.realpath(wt)
     opts = {"cwd": cwd}
-    if claude_mode is not None:
-        opts["claudeMode"] = claude_mode
+    argv_mode = claude_mode
+    if claude_mode == "background":
+        argv_mode = "print"
+    if argv_mode is not None:
+        opts["claudeMode"] = argv_mode
     built = EA.build_argv_result(seat, "build", opts)
     assert built["reason"] is None, built
     argv = built["argv"]
     argv, native_err, native_schema_path = ED._open_native_channel_argv(
-        run_dir, "claude", list(argv), ED.RUN_KIND_WRITE, claude_mode=claude_mode,
+        run_dir, "claude", list(argv), ED.RUN_KIND_WRITE, claude_mode=argv_mode,
     )
     assert native_err is None, native_err
     with open(prompt_path, encoding="utf-8") as fh:
@@ -3443,10 +3446,78 @@ def test_claude_mode_unknown_refused_before_open_write(tmp_path):
     assert len(fake.calls) == 0
 
 
+def test_dispatch_write_claude_mode_background_refuses_retired_before_spawn(tmp_path):
+    # axis: write entry retired branch refuses background before spawn
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    res = _dispatch_write(
+        tmp_path, fake, claude_mode="background", seat=_implementer_claude_seat(),
+    )
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert len(fake.calls) == 0
 
 
+def test_main_dispatch_write_claude_mode_background_refuses_retired(
+    tmp_path, monkeypatch, capsys,
+):
+    # axis: CLI dispatch-write --claude-mode background refuses at entry
+    recorder = []
+
+    def _recorder(*args, **kwargs):
+        recorder.append((args, kwargs))
+        raise AssertionError("spawn must not run")
+
+    monkeypatch.setattr(ED, "_run_engine", _recorder)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-bg-cli")
+    seat = json.dumps(_implementer_claude_seat())
+    prompt = _prompt(tmp_path)
+    rc = ED.main([
+        "dispatch-write",
+        "--seat", seat,
+        "--prompt-path", prompt,
+        "--cwd", wt,
+        "--run-dir", run_dir,
+        "--claude-mode", "background",
+    ])
+    assert rc == 1
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
+    assert res["attempts"] == 0
+    assert recorder == []
 
 
+@pytest.mark.parametrize("claude_mode", [None, "print"])
+def test_dispatch_write_continuation_of_background_journal_refuses_retired(
+    tmp_path, monkeypatch, claude_mode,
+):
+    # axis: write continuation refuses journal claudeMode background
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-bg-continuation")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _implementer_claude_seat()
+    planted = _plant_claude_write_journal_with_claude_mode(
+        tmp_path, run_dir, wt, seat, config_dir=cfg, claude_mode="background",
+    )
+    with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+        fh.write(planted["fedPrompt"])
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    kwargs = {
+        "cwd": wt,
+        "run_dir": run_dir,
+        "seat": seat,
+        "order_id": "claude-mode-test",
+    }
+    if claude_mode is not None:
+        kwargs["claude_mode"] = claude_mode
+    res = _dispatch_write(tmp_path, fake, **kwargs)
+    assert res["detail"] == "run-dir-claude-mode-retired"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
 
 
 def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
@@ -3481,8 +3552,6 @@ def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
     opened = next(r for r in records if r.get("kind") == "run-opened")
     assert opened["argv"] == planted["argv"]
     assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
-
-
 
 
 def test_claude_mode_literal_census_pins_write_path_mismatch_gate_reachability():

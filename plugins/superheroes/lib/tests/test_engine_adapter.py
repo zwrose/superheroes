@@ -658,12 +658,6 @@ def test_build_argv_claude_write_omits_allowed_tools():
     assert "--allowedTools" not in argv
 
 
-
-
-
-
-
-
 def test_build_argv_claude_print_mode_explicit_unchanged():
     for mode in (None, "print"):
         opts = {"claudeMode": mode} if mode is not None else {}
@@ -682,8 +676,6 @@ def test_build_argv_unknown_claude_mode_refuses():
     assert res["reason"] == "unknown-claude-mode"
 
 
-
-
 def test_build_argv_codex_cursor_unchanged_with_claude_mode_none():
     codex = EA.build_argv_result(_seat("codex", "gpt-5.6-sol", "high"), "review", {})
     cursor = EA.build_argv_result(_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {})
@@ -699,22 +691,6 @@ def test_build_argv_codex_cursor_unchanged_with_claude_mode_none():
     ]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_jsonl_dict_line_readers_skip_garbage():
     stream = "not json\n" + json.dumps(["not", "a", "dict"]) + "\n" + json.dumps({
         "type": "assistant",
@@ -723,6 +699,48 @@ def test_jsonl_dict_line_readers_skip_garbage():
     objs = list(EA._iter_jsonl_dict_lines(stream))
     assert len(objs) == 1
     assert objs[0]["type"] == "assistant"
+
+
+def _claude_transcript_fixture_rows():
+    return [
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-read-1",
+                    "name": "Read",
+                    "input": {"path": "foo.py"},
+                }],
+            },
+        },
+        {"type": "user", "toolEndsTurn": True},
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-so-1",
+                    "name": "StructuredOutput",
+                    "input": {"ok": True, "signal": "ok"},
+                }],
+            },
+        },
+    ]
+
+
+def test_claude_transcript_tool_calls_realistic_fixture():
+    # axis: claude_transcript_tool_calls counts only non-StructuredOutput tool uses
+    rows = _claude_transcript_fixture_rows()
+    assert EA.claude_transcript_tool_calls(rows) == 1
+
+
+def test_build_argv_claude_background_mode_refuses_unknown(tmp_path):
+    # axis: build_argv refuses retired background claude mode
+    seat = _seat("claude", "sonnet-5", "high")
+    res = EA.build_argv_result(seat, "review", {"cwd": str(tmp_path), "claudeMode": "background"})
+    assert res["reason"] == "unknown-claude-mode"
+    assert res["argv"] == []
 
 
 def test_registered_engine_models_detail_claude_lists_every_id():
@@ -1606,12 +1624,6 @@ def test_claude_builder_argv_refusal_order_token_before_session_id():
 def test_claude_builder_argv_refusal_order_session_id_before_prompt():
     res = EA.claude_builder_argv("sonnet", "not-a-uuid", "   ")
     assert res["reason"] == "builder-session-id-invalid"
-
-
-
-
-
-
 
 
 def test_build_argv_claude_uses_claude_executable_constant():
