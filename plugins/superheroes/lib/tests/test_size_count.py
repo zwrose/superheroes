@@ -35,11 +35,107 @@ def _commit(root, *paths):
     )
 
 
-def test_is_test_path():
-    assert size_count.is_test_path("a/tests/b.py")
-    assert size_count.is_test_path("tests/x")
-    assert not size_count.is_test_path("contests/x.py")
-    assert not size_count.is_test_path("test_x.py")
+MATCHES = [
+    ("test/integration/x.ts", "dir-test"),
+    ("a/tests/b.py", "dir-tests"),
+    ("src/lib/__tests__/foo.ts", "dir-__tests__"),
+    ("spec/models/user_rb.rb", "dir-spec"),
+    ("e2e/login.ts", "dir-e2e"),
+    ("src/foo.test.ts", "glob-*.test.*"),
+    ("src/foo.spec.tsx", "glob-*.spec.*"),
+    ("lib/test_x.py", "glob-test_*.py"),
+    ("pkg/x_test.py", "glob-*_test.py"),
+    ("pkg/x_test.go", "glob-*_test.go"),
+    ("go/pkg/testdata/golden.txt", "dir-testdata"),
+    ("src/__mocks__/api.ts", "dir-__mocks__"),
+    ("src/__fixtures__/user.json", "dir-__fixtures__"),
+    ("plugins/x/conftest.py", "glob-conftest.py"),
+    ("Tests/x.py", "dir-case-Tests"),
+    ("src/__Mocks__/api.ts", "dir-case-__Mocks__"),
+    ("E2E/login.ts", "dir-case-E2E"),
+]
+
+LOOK_ALIKES = [
+    "docs/testing.md",
+    "lib/contest.py",
+    "contests/x.py",
+    "plugins/superheroes/skills/test-pilot-plan/SKILL.md",
+    "plugins/superheroes/evals/w2-size-tripwire/prompt.md",
+    "plugins/superheroes/eval/lib/run.py",
+    "docs/decisions/specs/x.md",
+    "src/test-utils/render.tsx",
+    "lib/latest.py",
+    "lib/attestation.go",
+    "src/testing.ts",
+    "lib/x_test.rb",
+    "lib/mocks.py",
+    "docs/fixtures.md",
+    "src/testdata.ts",
+    "conftest.py.bak",
+    "fixtures/seed.json",
+    "mocks/client.ts",
+    "src/Foo.Test.ts",
+    "Conftest.py",
+    "lib/myconftest.py",
+    "",
+]
+
+BARE_NAMES = [
+    "test",
+    "tests",
+    "__tests__",
+    "spec",
+    "e2e",
+    "lib/tests",
+    "testdata",
+    "__mocks__",
+    "__fixtures__",
+]
+
+GLOB_DIRS = [
+    "src/widget.test.ts/index.ts",
+    "src/widget.spec.ts/index.ts",
+    "test_dir.py/mod.rb",
+    "src/conftest.py/index.rb",
+]
+
+COUNT_ROWS = [
+    (5, 1, "src/__tests__/a.ts"),
+    (7, 0, "src/foo.test.ts"),
+    (3, 2, "src/app.ts"),
+    (4, 0, "tests"),
+    (2, 0, "src/widget.test.ts/index.ts"),
+]
+
+
+@pytest.mark.parametrize("path,case_id", MATCHES, ids=[m[1] for m in MATCHES])
+def test_is_test_path_matches_each_convention(path, case_id):
+    assert size_count.is_test_path(path)
+
+
+def test_is_test_path_matches_backslash():
+    assert size_count.is_test_path("a\\tests\\b.py")
+
+
+@pytest.mark.parametrize("path", LOOK_ALIKES)
+def test_is_test_path_rejects_look_alikes(path):
+    assert not size_count.is_test_path(path)
+
+
+@pytest.mark.parametrize("path", BARE_NAMES)
+def test_is_test_path_directory_names_never_match_the_file_name(path):
+    assert not size_count.is_test_path(path)
+
+
+@pytest.mark.parametrize("path", GLOB_DIRS)
+def test_is_test_path_globs_never_match_a_directory(path):
+    assert not size_count.is_test_path(path)
+
+
+def test_count_skips_test_paths_and_counts_look_alikes():
+    out = size_count.count(COUNT_ROWS, set())
+    assert out["tripwireCount"] == 11
+    assert out["barCount"] == 9
 
 
 def test_whole_deleted_file_is_listed_not_counted(tmp_path):
