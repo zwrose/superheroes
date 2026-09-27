@@ -7,7 +7,23 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
-## Unreleased
+## 0.34.0
+
+### Before you upgrade
+
+Check these in a consuming project before it takes 0.34.0:
+
+- **Update the Codex CLI to 0.157.0 or later.** The codex default is now `gpt-6-sol`, and the
+  preflight otherwise refuses `codex-cli-too-old`. See
+  [Astra and the codex role pin](#astra-and-the-codex-role-pin).
+- **Move a `gpt-5.6-terra` pin to `gpt-6-sol`.** A pin or config naming `gpt-5.6-terra` now refuses
+  `model-retired`; `gpt-5.6-sol` stays a valid pin. See
+  [Astra and the codex role pin](#astra-and-the-codex-role-pin).
+- **The owner-authority gate is retired.** Merges run on the owner's scoped word under the merge
+  covenant; the hook no longer asks. See [Owner-authority gate retired](#owner-authority-gate-retired).
+- **Dispatch CLIs take `--seat` as four-key JSON.** The old `--engine`, `--model`, `--effort`,
+  `--engine-model`, `--vendor` and `--role` flags refuse. See
+  [Dispatch CLI arguments](#dispatch-cli-arguments).
 
 ### Launcher stacked premise
 
@@ -50,7 +66,10 @@ never interchanged); `order-mismatch` when the membership read found the stack's
 with the premise (previously folded into `stack-read-unavailable`, so a consumer matching on
 `stack-read-unavailable` for this case must now also match `order-mismatch`);
 `layer-position-occupied` when the claimed `layerPosition` is already held by an existing member
-(`layerPosition >= 2` only); `premise-dependency-invalid` when `dependency` is present but not a
+(`layerPosition >= 2` only) and the premise's `adopts` does not name that member on the layer
+below's branch; `adopts-occupant-missing` when `adopts` names a pull request but the claimed position
+is empty; `premise-adopts-without-stack`, `premise-adopts-invalid`, and `premise-adopts-bottom-layer`
+when `adopts` lacks the stack pair, is not a positive integer, or is on the bottom layer; `premise-dependency-invalid` when `dependency` is present but not a
 positive integer (`bool` is not an integer here); `dependency-closed-unmerged` when the premise
 names a closed, unmerged dependency pull request; `dependency-open-ready-pr` when the premise
 names an open dependency pull request with a READY vet and the resolved base commit is not that pull
@@ -85,6 +104,15 @@ between arms is reported once; each new invocation starts without one, so a watc
 whose stack is already complete, or that already carries the idle-seat flag
 (`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` in `lib/wave_watch.py`), reports `stack-state-changed` on its
 first arm.
+
+### `wave_watch.py` loop and run
+
+`run` drops `--max-seconds` and `--interval-seconds` (and the Python `run()` loses `max_seconds`,
+`interval_seconds`, and `sleep`; the old windowed function is `watch_arm()`). `run` returns at once
+— one ledger read and at most one open-PR read, no waiting. `loop` no longer returns on
+`pr-set-changed` or `stack-state-changed`; those are benign wakes passed over and reported at exit.
+Every `loop` result gains `passedOver` and `passedOverCount`; a `loop-already-live` refusal gains
+`liveLoop`. New refusal tokens: `loop-already-live` and `loop-lock-unavailable`.
 
 ### Launcher premise `dependency` field
 
@@ -199,14 +227,28 @@ name. Background mode remains a review-seat mode only (`--claude-mode background
 `gpt-6-astra` is registered as the codex top rung and a valid `reviewer-deep` pin at effort `high`.
 A consumer meets:
 
-- the `registration-probe` role the registration probe dispatches under — today its only cell is
-  Astra (`gpt-6-astra` at `high`), which has passed; it stays for any model registered
+- the `registration-probe` role the registration probe dispatches under — its cell is now
+  `gpt-6-sol` at `high`, which has passed; it stays for any model registered
   probe-pending later;
-- `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
-  wave is re-attempted with a different run dir);
+- `conformance_probe registration-probe` (`astra-probe` still works as a legacy alias of the verb;
+  refusal token `registration-probe-wave-already-attempted` when the same wave is re-attempted with
+  a different run dir). The probe's refusal tokens were renamed from `astra-probe-*` to
+  `registration-probe-*` with no alias: `registration-probe-scale-unreadable`,
+  `registration-probe-ledger-unreadable`, `registration-probe-record-write-failed`,
+  `registration-probe-wave-already-attempted`, `registration-probe-seat-unresolved`, and
+  `registration-probe-claim-unreadable`. A script that matches an old `astra-probe-*` refusal token
+  must be updated;
 - pin refusal tokens `pin-probe-pending` (for a future probe-pending model), `pin-role-not-eligible`,
-  and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — Terra
-  is refused on `reviewer-deep`, and every codex `pilot` pin is refused);
+  and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — every
+  codex `pilot` pin is refused);
+- `model-retired`, refused for any pin or config naming a retired codex model (`gpt-5.6-terra`)
+  at load, at the configure write, and at dispatch validation;
+- `codex-cli-too-old` and `codex-cli-version-unknown`, refused by the preflight and the
+  composition-liveness check when the installed Codex CLI falls short of the registry's floor for
+  the models the codex defaults use, or when its version can't be parsed;
+- `gpt-5.6-sol`, registered pin-only: never a default, ladder rung, peer, or escalation target, but
+  a valid pin for any codex pin role that has a codex cell (reviewer, reviewer-deep, code-fixer,
+  implementer), at that role's own effort;
 - `seat_map compose` flags `--host-model` and `--implementation-engine` and degradations
   `host-model-unknown`, `role-pin-not-live`, `role-pin-not-honorable`;
 - `SUPERHEROES_HOST_MODEL`, exported by the session-start hook from the host payload (empty when
@@ -423,3 +465,11 @@ A runner-journal line that is valid JSON but not an object now counts as interio
 the class `journal-line-not-object`. The launcher's `preflight-failed:<id>` refusal now carries the
 walked `checks`, including the failing entry, so the launch ledger keeps the probe's evidence on
 refusal.
+
+### Owner-authority gate retired
+
+The `PreToolUse` hook `hooks/owner_authority_gate.py` and its classifier `lib/owner_authority.py`
+are gone, so a merge, release, publish, force-push, push-to-default or workflow-run command no
+longer stops at a gate prompt. A project store's `owner-authority-allow.json` is no longer read;
+it can be deleted. Approval is the owner's scoped word in chat, and merges execute inside it under
+the merge covenant (`rubric/covenant.md`, the hard lines).

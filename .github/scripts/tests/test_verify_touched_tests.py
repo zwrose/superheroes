@@ -721,3 +721,9 @@ def test_script_runs_end_to_end_as_a_subprocess(repo):
     )
     assert proc.returncode == 1
     assert _LIB + "/orphan.py" in proc.stderr
+
+
+# Axis: child pytest runs through scripts/pinned-python by default.
+def test_default_python_is_pinned_runner():
+    assert V.DEFAULT_PYTHON.endswith(os.path.join("scripts", "pinned-python"))
+    assert os.path.isfile(V.DEFAULT_PYTHON)

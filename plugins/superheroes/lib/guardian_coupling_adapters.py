@@ -176,6 +176,15 @@ def append_repo_operands(argv, operands):
 
 # --- dependency-cruiser -------------------------------------------------------------
 
+def depcruise_recorded_argv(argv, operand_summary):
+    """Digest-sized provenance argv — operands are summarized after ``--``."""
+    if "--" not in argv:
+        return list(argv)
+    sep = argv.index("--")
+    return list(argv[:sep]) + ["--"] + [operand_summary]
+
+
+# bite-proof axis: argv is fixed flags + tracked operands; --max-depth 1, never a per-file regex.
 def depcruise_argv(targets, bin_path=None):
     """argv for a JSON graph cruise. Always `--no-config`; never `--cache`.
 
@@ -185,12 +194,16 @@ def depcruise_argv(targets, bin_path=None):
 
     Callers MUST pass absolute repo operands (``run_tool`` / ``guardian_tools.invoke``
     run from a neutral cwd with ``targets=()``, so operands live in argv — mirror deps).
+
+    ``--max-depth 1`` with every tracked file as an operand keeps tracked→tracked edges
+    and stops following untracked import chains past the first hop.
     """
     argv = [
         bin_path or DEPCRUISE_BIN,
         "--output-type", "json",
         "--no-config",
         "--ts-pre-compilation-deps",
+        "--max-depth", "1",
         "--do-not-follow", DEPCRUISE_EXCLUDE_RE,
         "--exclude", DEPCRUISE_EXCLUDE_RE,
     ]

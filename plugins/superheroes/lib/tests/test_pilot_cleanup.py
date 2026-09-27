@@ -25,6 +25,7 @@ import pilot_provision as pp  # noqa: E402
 import pilot_cleanup as pc  # noqa: E402
 import pilot_slot  # noqa: E402
 from grandchild_probe import (  # noqa: E402
+    COMPLETION_BUDGET_SECONDS,
     _observed_process_state,
     _wait_for_process_gone,
     cleanup_grandchild_on_exit,
@@ -349,7 +350,7 @@ def test_run_bounded_oversized_stdout(private_tmp):
         cwd=run_cwd,
         env={},
         max_output_bytes=100,
-        timeout_seconds=5,
+        timeout_seconds=COMPLETION_BUDGET_SECONDS,
     )
     assert result["stdoutBytes"] == 100
     assert result["stdoutTruncated"] is True
@@ -3254,18 +3255,20 @@ def test_validate_sentinel_declaration_refuses_nonexistent_argv1_inside_reach_ro
 def test_run_bounded_drains_past_stdout_cap(private_tmp):
     _, run_cwd, bin_dir = _confinement_layout(private_tmp)
     script = os.path.join(bin_dir, "huge.sh")
+    # 300 KiB, far past the 64 KiB pipe buffer, so a runner that stopped draining would block the child; written in 1 KiB chunks so the child's own cost stays negligible under load.
     _write_executable(
         script,
         "#!/bin/sh\n"
+        "chunk=$(printf '%1024s' '')\n"
         "i=0\n"
-        "while [ $i -lt 307200 ]; do printf x; i=$((i+1)); done\n",
+        "while [ $i -lt 300 ]; do printf '%s' \"$chunk\"; i=$((i+1)); done\n",
     )
     result = pc.run_bounded(
         [script],
         cwd=run_cwd,
         env={},
         max_output_bytes=4096,
-        timeout_seconds=30,
+        timeout_seconds=COMPLETION_BUDGET_SECONDS,
     )
     assert result["exit"] == 0
     assert result["timedOut"] is False
