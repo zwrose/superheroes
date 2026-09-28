@@ -29,11 +29,20 @@ runs). On Claude Code, call `charter_detect.detect_charter` over the session tra
 checkpoint Step 1 does — a cross-check only. Where the host names no transcript, the seat
 names its own charter from how it was invoked.
 
-Establish the **running version** from the first source that resolves, in order: the
-bootstrap's resolved plugin root in context; the plugin root in this seat's own recent
-commands; a root recorded in the seat's durable state; on Claude Code, the SessionStart
-injection recorded in the session transcript. If none resolves, do not guess — carry the gap
+Establish the **running version** from the first source that resolves, in order: a
+`plugin version taken up: <fromRoot> -> <toRoot>` line this seat itself wrote in its
+durable state (use `toRoot`); the bootstrap's resolved plugin root in context; the plugin
+root in this seat's own recent commands; on Claude Code, the SessionStart injection
+recorded in the session transcript. After compaction, a taken-up line this seat wrote
+overrides the injected resolved-roots block and charter-recovery paths — re-read the charter
+from `toRoot` when duties need refreshing. If none resolves, do not guess — carry the gap
 to step 8 and stop after the brief.
+
+Before running anything from the new install, set `CACHE_DIR` to the parent directory of the
+host-provided plugin root — the bootstrap's resolved plugin root in context, or on Claude
+Code when the bootstrap block is absent the SessionStart injection's plugin root. That
+`CACHE_DIR` must match `$(dirname "$RUNNING_ROOT")` for whatever source established
+`RUNNING_ROOT`; a mismatch stops and goes to the owner brief at step 8.
 
 Run `plan` on the new install (role = this seat's charter). The helper, `lib/adopt_version.py`,
 runs from the new version's directory because the running version may predate it.
@@ -41,7 +50,7 @@ runs from the new version's directory because the running version may predate it
 ```bash
 RUNNING_ROOT="<absolute path to the running version directory>"
 ROLE="<showrunner|workhorse|detective>"
-CACHE_DIR="$(dirname "$RUNNING_ROOT")"
+CACHE_DIR="<parent of the host-provided plugin root — must equal $(dirname \"$RUNNING_ROOT\")>"
 NEW_ROOT="<CACHE_DIR/the target version: the highest version directory listed in CACHE_DIR, or the version the owner named>"
 python3 -B "$NEW_ROOT/lib/adopt_version.py" plan --role "$ROLE" \
   --from-root "$RUNNING_ROOT" --to "$(basename "$NEW_ROOT")"
@@ -113,6 +122,11 @@ Every absolute path in this seat's commands and launches now uses the new versio
 named: keep each such run pinned to its old-root dispatcher and run directory until that run
 reaches a terminal result — never retarget continuation to the new root mid-run. The
 bootstrap's resolved-roots block in context still names the old root — treat it as stale.
+
+Write one line `plugin version taken up: <fromRoot> -> <toRoot>` into the seat's durable
+state (the advisor's resume point; a builder's or detective's issue or PR record), whatever
+the buckets held in step 3. After compaction, this line overrides the injected resolved-roots
+and charter-recovery paths.
 
 **Output:** the new root, stated once.
 
