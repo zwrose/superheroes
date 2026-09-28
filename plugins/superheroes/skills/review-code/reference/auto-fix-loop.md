@@ -149,7 +149,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
 > | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
 > | `diffBytes` | patch size in bytes |
-> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; undecodable paths, unrecognized spans, unaccounted census entries, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
+> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; undecodable paths, unrecognized spans, and unaccounted census entries **refuse the dispatch** rather than being counted here — opaque review-patch content refuses unless it is a genuine binary blob (placeholder line); opaque content in the configuration-changes file still refuses — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
 > | `configDiffPath` | `SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt`, relative to the view root, when withheld configuration hunks were staged; `null` when nothing was withheld |
 > | `configDiffBytes` | size in bytes of that configuration-changes file; `null` when `configDiffPath` is `null` |
 >
@@ -163,7 +163,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > added or removed in a commit is a tree-only change carrying no file, symlink or gitlink content,
 > `git diff` renders nothing for it either, and it is therefore outside this contract. Opaque or
 > unaccounted content returns a named terminal refusal (`attempts: 0`) that is never interpreted as
-> zero findings or a clean review; there is no automatic fallback.
+> zero findings or a clean review; genuine binary blobs in the review patch appear as placeholder
+> lines instead. There is no automatic fallback.
 >
 > **Diff refusals** (all `attempts: 0`, no token spend), joining the existing `sanitized-view-*`
 > family:
@@ -180,7 +181,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `sanitized-view-diff-config-path-collision` | the review-only configuration-changes file could not be created at its name in the view, or did not read back as written |
 > | `sanitized-view-diff-config-too-large` | the assembled review-only configuration-changes file exceeds its size cap, or patch streaming hits its byte ceiling while those hunks are being generated |
 > | `sanitized-view-diff-failed` | a git subprocess failed while resolving ancestry or generating the patch (spawn error, non-zero exit, timeout) — command failure only |
-> | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
+> | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks — when it is not a genuine binary blob placeholder, or in the configuration-changes file |
 > | `sanitized-view-diff-unaccounted` | a census tree containing the same path more than once, a patch section whose path cannot be decoded, or an unrecognized span in the patch text |
 >
 > **Mode refusals** (all `attempts: 0`, no spawn — not members of the `sanitized-view-*`
