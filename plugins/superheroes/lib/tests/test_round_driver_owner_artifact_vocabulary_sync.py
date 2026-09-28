@@ -6,6 +6,8 @@ Authoritative home:
   - round_driver.JUDGMENT_DISPOSITIONS
   - round_driver.ROUND_PHASE_*_REFUSAL
   - round_driver._owner_artifact_provenance_well_formed
+  - round_driver.OWNER_ARTIFACT_*_REFUSAL
+  - round_driver.POLICY_APPLIED_SOURCE_*
 """
 import json
 import os
@@ -62,6 +64,23 @@ def _parse_refusal_table_reasons(text):
     end = text.index(_REFUSAL_TABLE_END, start)
     chunk = text[start:end]
     return frozenset(re.findall(r"\| `([^`]+)` \|", chunk))
+
+
+def _owner_artifact_refusal_causes():
+    """Every ``OWNER_ARTIFACT_*_REFUSAL`` string constant on ``round_driver``."""
+    return frozenset(
+        val for name, val in vars(RD).items()
+        if name.startswith("OWNER_ARTIFACT_") and name.endswith("_REFUSAL")
+        and isinstance(val, str)
+    )
+
+
+def _policy_applied_sources():
+    """Every ``POLICY_APPLIED_SOURCE_*`` string constant on ``round_driver``."""
+    return frozenset(
+        val for name, val in vars(RD).items()
+        if name.startswith("POLICY_APPLIED_SOURCE_") and isinstance(val, str)
+    )
 
 
 def _round_phase_refusal_causes():
@@ -134,6 +153,22 @@ def test_owner_artifact_provenance_well_formed_rejects_empty_records():
 def test_owner_artifact_provenance_well_formed_rejects_blank_record_entry():
     artifact = _well_formed_provenance_artifact(records=["gate-ruling.json", ""])
     assert not RD._owner_artifact_provenance_well_formed(artifact)
+
+
+def test_owner_artifact_refusal_tokens_present_in_round_driver_doc():
+    """round-driver.md names every OWNER_ARTIFACT_*_REFUSAL token the driver can emit."""
+    text = _read(_REF)
+    missing = sorted(token for token in _owner_artifact_refusal_causes() if token not in text)
+    assert not missing, (
+        "OWNER_ARTIFACT_*_REFUSAL constants missing from round-driver.md: %s" % missing)
+
+
+def test_policy_applied_source_tokens_present_in_round_driver_doc():
+    """round-driver.md names every POLICY_APPLIED_SOURCE_* token the driver can emit."""
+    text = _read(_REF)
+    missing = sorted(token for token in _policy_applied_sources() if token not in text)
+    assert not missing, (
+        "POLICY_APPLIED_SOURCE_* constants missing from round-driver.md: %s" % missing)
 
 
 def test_round_phase_refusal_causes_match_docs():

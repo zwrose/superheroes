@@ -471,9 +471,9 @@ A review prompt that constrains the seat's stdout to a **single JSON object** mu
 real investigation record is a valid, welcome answer**. Without it, the runner's investigation floor
 (`engine_adapter.spot_check_investigated`) forfeits an empty payload as **vacuous** — a
 findings-only prompt that omits the requirement guarantees that forfeit whenever the honest answer
-is no findings. An entry survives the floor only when it is a **repo-relative path to an existing
-regular file** inside the reviewed view; directories, absolute paths, and generated artifacts
-(including the staged diff patch) do not count. Seat-side wording lives in `rubric/review-base.md`
+is no findings. Surviving-path acceptance rules are those enforced by
+`engine_adapter.spot_check_investigated` in `lib/engine_adapter.py`. Seat-side wording lives in
+`rubric/review-base.md`
 ("Findings output format").
 
 Every `dispatch-review` result is a **top-level** object. **Always present:** `ok`, `terminal`,
