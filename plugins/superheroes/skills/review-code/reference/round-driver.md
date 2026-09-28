@@ -225,14 +225,7 @@ resolution is journalled under one of two owner-gate sources: the `policyApplied
 `source: "owner-unattributed"`. Calibration-resolved folds carry `source: "gate-policy"`. Every fold
 also journals `artifactSha256` naming the artifact folded, on the fold's own commit.
 
-**Owner-gate `_provenance` required fields** (authoritative list — drift-tested against
-`round_driver` `OWNER_PROVENANCE_FIELD_SHAPES`):
-
-```text
-ruledBy — non-empty string
-ruledAt — non-empty string
-records — non-empty list of non-empty strings
-```
+**Owner-gate `_provenance` required fields** — see `OWNER_PROVENANCE_FIELD_SHAPES` in `lib/round_driver.py`.
 
 `ruledBy` is the owner who ruled (transcribed, not invented). `ruledAt` is the ISO-8601 time
 the owner ruled (not when the artifact is written). `records` is a non-empty list of URLs of
@@ -278,23 +271,9 @@ token names the seam, not the direction.
 | `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` on a session that has **not** hand-folded yet (**per-attempt** fence — defers when `_submitUsed` is set) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
 | `round-phase-not-pending` | `record-result` / `record-missing` with `--round` and/or `--phase` that do not match the pending slot | re-read `next` and echo the current `round` and `phase` onto the durable-record command |
 
-**Owner-artifact refusal causes** (authoritative list — drift-tested against `round_driver`
-`OWNER_ARTIFACT_*_REFUSAL` constants):
+**Owner-artifact refusal causes** — see the `OWNER_ARTIFACT_*_REFUSAL` constants in `lib/round_driver.py`.
 
-```text
-owner-artifact-terminal
-owner-artifact-unreadable
-owner-artifact-shape
-```
-
-**Policy-applied sources** (authoritative list — drift-tested against `round_driver`
-`POLICY_APPLIED_SOURCE_*` constants):
-
-```text
-gate-policy
-owner-supplied
-owner-unattributed
-```
+**Policy-applied sources** — see the `POLICY_APPLIED_SOURCE_*` constants in `lib/round_driver.py`.
 
 **No dead ends.** Whichever fold path a session has committed to, that path's fold command stays
 legal for the pending phase: `_submitUsed` → hand `submit`; `_advanceUsed` → `advance` (including
@@ -879,30 +858,7 @@ carry an optional `followUp` object (same shape rule as owner gates). A malforme
 disposition is refused as `layer-follow-up-not-allowed` — both also refuse at calibration write.
 The automatic fold records a well-formed optional `followUp`, so a pre-authorized skip can certify.
 
-**Advance gate-policy park detail causes** (authoritative list — drift-tested against
-`round_driver.owner_gate_policy_park_detail_causes()`):
-
-```text
-gate-policy-calibration-unreadable
-gate-policy-calibration-absent
-gate-policy-calibration-refused
-gate-policy-calibration-structurally-ambiguous
-repo-root-unavailable
-gate-policy-judgment-no-findings
-gate-policy-unknown-phase
-gate-policy-park
-gate-policy-no-valid-layer
-gate-policy-judgment-input-not-list
-gate-policy-judgment-row-not-object
-gate-policy-judgment-row-missing-class
-gate-policy-unknown-stall-class
-```
-
-Parameterized (suffix after `:` is diagnostic detail):
-
-```text
-gate-policy-unmatched-class:<findingClass>
-```
+**Advance gate-policy park detail causes** — the exact causes are `owner_gate_policy_park_detail_causes()` in `lib/round_driver.py`; the parameterized form's prefix is `GATE_POLICY_UNMATCHED_CLASS_PREFIX` in the same file, followed by the finding class.
 
 `gate-policy-calibration-unreadable`, `gate-policy-calibration-structurally-ambiguous`, and
 `repo-root-unavailable` may also carry a `: <detail>` suffix when the underlying read failure or
@@ -910,8 +866,7 @@ structural ambiguity has a message.
 
 When the review-gate-policy overlay has ambiguous duplicate keys, `advance` parks with
 `gate.detail` returned verbatim — `duplicate-policy-key:<key>` where `<key>` is the conflicting
-policy key name. The sync test's parameterized fenced block drift-checks only
-`gate-policy-unmatched-class:<findingClass>`; this form is documented here in prose instead.
+policy key name. This form is documented here in prose rather than as a park-detail census entry.
 
 **Ownership boundary (stated narrowly).** The overlay lives on the same ownership surface as
 `enginePreferences` — an honest-agent boundary, **not** a security boundary. No CLI flag can
@@ -1049,9 +1004,9 @@ silent clean.
 
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
-- `schemaVersion` — `2`, `3`, `4`, or `5` (`validate_receipt` accepts all). It is the **state's** version,
+- `schemaVersion` — one of `SUPPORTED_STATE_VERSIONS` in `lib/round_driver.py` (`validate_receipt` accepts all). It is the **state's** version,
   not a constant: a session bootstrapped at v2 still terminates to a v2 receipt, while a fresh session
-  (`STATE_SCHEMA_VERSION` = 5) emits 5. State v5 lands `seat-result/2` envelopes carrying `provenance`
+  emits the current `STATE_SCHEMA_VERSION`. State v5 lands `seat-result/2` envelopes carrying `provenance`
   (required) and `executionEvidence` (optional), bound together by `envelopeSha256`; sessions at v2–v4
   continue to land `seat-result/1`. No stored state field is removed at the bump, so in-flight lanes
   complete on their recorded version.
@@ -1059,11 +1014,10 @@ silent clean.
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
   `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted
-  channel names that fired for the certification shape (`independence`, `base`, `same-family`,
-  `seat-map-violation`, `unproven-liveness`, `seat-pin`, `seat-map-unavailable`))
-- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `verifiedHead` (the head the verify gate ran against, recorded by the verify fold beside its result — absent means the round's verify credits no head), `audits`, `auditProvenance` (`runner-record` | `hand-landed-evidence` | `mixed-evidence` | `collection-manifest` — derived from the adapter's per-seat `provenanceSource` on the durable-record path; `collection-manifest` on a hand `submit` at any version — visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapUnjudgeable`, `seatMapViolations`, `vacuousSeats`, `engagedArtifactSeats`, `canaryUnverified`, `canaryFailed`, `canaryOutcomeFailed`, `canaryPlantUndetected`, `canaryVerified`, `controlProbe`, `adapterProvenance`, `recordOrphansIgnored`, `orderVendorProvenanceGaps`, `priorCommentsUnavailable`, `verifyPasses`, `judgmentDispositions` (owner per-finding judgment dispositions — including free-text guidance on a `fix-with-guidance` ruling, so a resumed run's receipt still shows what the owner instructed), `gateGuidanceRowCarried` (fix-batch row carried the guidance key while the fold recorded none — never rendered as owner guidance), `unverified`, `authorJustifiedDrops`, `compileDrops` (each drop's `reason` is one of `uncited — no file:line`, `line is not an integer` — a non-integer citation is never reported as out of scope; a numeric string is coerced first — `outside the round diff scope`; gap sweep and scoped finder append their drops to the same channel), `selfRecovery`, `stallChoice` (the disclosure-channel names here are drift-pinned to `round_driver.RESUMABLE_DISCLOSURE_CHANNELS` by a test — a channel added to the registry must be added to this line)
+  channel names that fired for the certification shape (the channel names are the `shape_drivers.append(...)` sites in `lib/round_driver.py`))
+- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `verifiedHead` (the head the verify gate ran against, recorded by the verify fold beside its result — absent means the round's verify credits no head), `audits`, `auditProvenance` (`runner-record` | `hand-landed-evidence` | `mixed-evidence` | `collection-manifest` — derived from the adapter's per-seat `provenanceSource` on the durable-record path; `collection-manifest` on a hand `submit` at any version — visible at vet), plus one field per disclosure channel in `RESUMABLE_DISCLOSURE_CHANNELS` (`lib/receipt_disclosures.py`), `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`. `judgmentDispositions` carries owner per-finding judgment dispositions — including free-text guidance on a `fix-with-guidance` ruling, so a resumed run's receipt still shows what the owner instructed. `gateGuidanceRowCarried` records when a fix-batch row carried the guidance key while the fold recorded none — never rendered as owner guidance. Each `compileDrops` entry's `reason` is one of `uncited — no file:line`, `line is not an integer` — a non-integer citation is never reported as out of scope; a numeric string is coerced first — `outside the round diff scope`; gap sweep and scoped finder append their drops to the same channel.
 - `findings` — each row carries `id`; `findingKey` is stamped only when the state's
-  `schemaVersion` is at least `STATE_SCHEMA_VERSION` (5) — receipt schema versions 2–4 omit it
+  `schemaVersion` is at least `STATE_SCHEMA_VERSION` — receipt schema versions 2–4 omit it
 - `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
 **Seat-map storage (#681).** The driver stores each round's submitted seat map as an append-only

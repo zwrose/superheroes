@@ -5,7 +5,7 @@ Guards two owner-ruled riders:
 1. The driver-or-park valve sentence mirrored at the driver's failure/stall guidance anchor
    (`round-driver.md` § Journal and receipt — where journal-fault and receipt-fault stops are
    documented). Home-first pin on the operative valve clause in `rubric/review-discipline.md`
-   (CONVENTIONS §11.2 pattern 2 + §11.3 anti-tautology leg).
+   (a hard-line pin, with the §11.3 anti-tautology leg).
 
 2. The full `seat-result/1` envelope field enumeration in `round-driver.md` § Landing shapes,
    pinned by construction: documented fields must match `round_records.SEAT_RESULT_FIELDS`, and an

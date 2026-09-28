@@ -452,7 +452,7 @@ POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED = "owner-unattributed"
 
 # ONE declaration of the owner-gate ``_provenance`` block: required field → the shape it must satisfy.
 # ``_owner_artifact_provenance_well_formed`` is the only reader; the review-code gate-artifact recipe
-# documents this same set, drift-pinned by a test. Unknown extra keys inside ``_provenance`` are tolerated.
+# documents this same set by citing this constant. Unknown extra keys inside ``_provenance`` are tolerated.
 OWNER_PROVENANCE_FIELD_SHAPES = {
     "ruledBy": "non-empty string",
     "ruledAt": "non-empty string",

@@ -471,16 +471,16 @@ A review prompt that constrains the seat's stdout to a **single JSON object** mu
 real investigation record is a valid, welcome answer**. Without it, the runner's investigation floor
 (`engine_adapter.spot_check_investigated`) forfeits an empty payload as **vacuous** — a
 findings-only prompt that omits the requirement guarantees that forfeit whenever the honest answer
-is no findings. An entry survives the floor only when it is a **repo-relative path to an existing
-regular file** inside the reviewed view; directories, absolute paths, and generated artifacts
-(including the staged diff patch) do not count. Seat-side wording lives in `rubric/review-base.md`
+is no findings. Surviving-path acceptance rules are those enforced by
+`engine_adapter.spot_check_investigated` in `lib/engine_adapter.py`. Seat-side wording lives in
+`rubric/review-base.md`
 ("Findings output format").
 
 Every `dispatch-review` result is a **top-level** object. **Always present:** `ok`, `terminal`,
 `runDir`, and `argv`; on a failure, `reason` (and usually `detail`). On success: **`resultKind`**
-(one of `findings`, `verdicts`, `grouping`, `ruling`) naming the payload, plus **exactly one**
+(one of `REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`) naming the payload, plus **exactly one**
 payload key of that name.
-**`investigated`** is present only when at least one claimed path survives spot-checking; a normal
+**`investigated`** is present only when a claimed path survives the investigation floor (`engine_adapter.spot_check_investigated`); a normal
 `{"verdicts": [...]}` reply omits it. **Outcome-dependent:** `engagement` and `sanitizedView` — do **not** read an
 absent `findings` as "zero findings"; an absent `findings` may mean a different `resultKind`
 instead. An object carrying **more than one** payload key from `REVIEW_RESULT_KINDS` is refused as
@@ -508,10 +508,8 @@ continuation (`--run-dir` naming an existing run),
 invocation also asserts `--mode brief-check` explicitly, which refuses
 `mode-brief-check-with-diff-base` before the journal is read. Full contract — refusals,
 withheld stripped-config paths, investigation-floor rejection — is in `auto-fix-loop.md`.
-The runner accepts **four** result kinds on stdout (`REVIEW_RESULT_KINDS`: `findings`, `verdicts`,
-`grouping`, `ruling`). Every `ok: true` review result carries **`resultKind`** naming exactly one
-payload key of that name; **`investigated`** is attached only when at least one claimed path
-survives spot-checking. **Recognition is not gradeability** — widening what the transport can read
+The runner accepts result kinds on stdout (`REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`). Every `ok: true` review result carries **`resultKind`** naming exactly one
+payload key of that name; **`investigated`** is attached only when a claimed path survives the investigation floor. **Recognition is not gradeability** — widening what the transport can read
 changes nothing about what it will certify: the investigation floor still forfeits an empty
 payload with no surviving `investigated` path for **every** kind including `grouping`, and an
 `--expected-result-kind` mismatch still forfeits. Callers may pin the expected kind via

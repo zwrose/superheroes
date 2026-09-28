@@ -15,7 +15,7 @@
 - [The DoD bar](#the-dod-bar)
 - [Currency](#currency)
 - [The standing NFR vet row](#the-standing-nfr-vet-row)
-- [Vocabulary (drift-tested)](#vocabulary-drift-tested)
+- [Vocabulary](#vocabulary)
 
 # Issue contract
 
@@ -525,37 +525,8 @@ requirements **by name with their fit criteria**:
   positioned everywhere as guidelines with disclosed overrides; *fit criterion:* no charter or
   gate turns either number into a hard block.
 
-## Vocabulary (drift-tested)
+## Vocabulary
 
-The Python module `issue_contract.py` is the authoritative home for these tokens; this list is
-checked against it.
-
-**Slots** (in order):
-
-- `Anchor`
-- `What`
-- `DoD`
-
-The Anchor slot's rendered header form is `Anchor (<kind>):`.
-
-**Anchor kinds** (exactly one per Anchor):
-
-- `spec-section`
-- `receipt`
-- `ruling`
-
-**Refusal reasons** (build-ready marking declined):
-
-- `anchor-slot-missing`
-- `anchor-slot-empty`
-- `anchor-kind-missing`
-- `anchor-kind-unrecognized`
-- `anchor-kind-multiple`
-- `body-unreadable`
-
-**Slot statuses** (per-slot reporting in the JSON result):
-
-- `missing` — the slot header is not present in the body
-- `empty` — the slot header is present but has no content
-- `filled` — the slot header is present and has content
-- `unknown` — the body could not be read (`body-unreadable`); no slot reading was taken
+Slots, the Anchor header form, anchor kinds, build-ready refusal reasons, and slot statuses are
+defined in `lib/issue_contract.py` (`SLOTS`, `ANCHOR_HEADER_FORM`, `ANCHOR_KINDS`, `REFUSALS`,
+`SLOT_STATUSES`).

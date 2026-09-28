@@ -3,7 +3,6 @@ import ast
 import inspect
 import os
 import re
-import sys
 from collections import namedtuple
 
 import pytest
@@ -14,9 +13,6 @@ _TESTS = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_TESTS)
 _PLUGIN_ROOT = os.path.dirname(_LIB)
 _EVAL = os.path.join(_PLUGIN_ROOT, "eval")
-_ROUND_DRIVER_MD = os.path.join(
-    _PLUGIN_ROOT, "skills", "review-code", "reference", "round-driver.md"
-)
 
 _PINNED_SYMBOLS = frozenset({
     "STATE_SCHEMA_VERSION",
@@ -33,10 +29,6 @@ _BEGIN_MARKER = "# --- version spelling: pinned declaration block (BEGIN) ---"
 _END_MARKER = "# --- version spelling: pinned declaration block (END) ---"
 
 _RECEIPT_CERTIFIED_LITERAL_RE = re.compile(r"receipt-certified/\d+")
-_STATE_SCHEMA_PROSE_RE = re.compile(r"\(`STATE_SCHEMA_VERSION`\s*=\s*(\d+)\)")
-_SCHEMA_VERSION_BULLET_RE = re.compile(
-    r"`schemaVersion`\s*—\s*([^(\n]+)"
-)
 
 Finding = namedtuple("Finding", ("relpath", "line", "segment", "leg"))
 
@@ -603,97 +595,6 @@ def _format_findings(findings):
     )
 
 
-def census_prose(doc_text=None):
-    """Return prose-leg mismatch messages (empty when doc matches code)."""
-    if doc_text is None:
-        with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
-            doc_text = fh.read()
-
-    errors = []
-    m = _STATE_SCHEMA_PROSE_RE.search(doc_text)
-    if not m:
-        errors.append(
-            "prose leg: round-driver.md missing (`STATE_SCHEMA_VERSION` = N) parenthetical"
-        )
-    else:
-        doc_state = int(m.group(1))
-        if doc_state != RD.STATE_SCHEMA_VERSION:
-            errors.append(
-                "prose leg: round-driver.md states STATE_SCHEMA_VERSION=%d but "
-                "round_driver.STATE_SCHEMA_VERSION=%d"
-                % (doc_state, RD.STATE_SCHEMA_VERSION)
-            )
-
-    m = _SCHEMA_VERSION_BULLET_RE.search(doc_text)
-    if not m:
-        errors.append(
-            "prose leg: round-driver.md missing schemaVersion supported-version list"
-        )
-    else:
-        doc_supported = {int(v) for v in re.findall(r"`(\d+)`", m.group(1))}
-        if not doc_supported:
-            errors.append(
-                "prose leg: round-driver.md schemaVersion bullet has no backticked versions"
-            )
-            return errors
-        code_supported = set(RD.SUPPORTED_STATE_VERSIONS)
-        missing_from_doc = sorted(code_supported - doc_supported)
-        missing_from_code = sorted(doc_supported - code_supported)
-        if missing_from_doc:
-            errors.append(
-                "prose leg: code SUPPORTED_STATE_VERSIONS %r not stated in round-driver.md "
-                "(missing %s)"
-                % (RD.SUPPORTED_STATE_VERSIONS, ", ".join(str(v) for v in missing_from_doc))
-            )
-        if missing_from_code:
-            errors.append(
-                "prose leg: round-driver.md states receipt schemaVersion %s but code "
-                "SUPPORTED_STATE_VERSIONS=%r"
-                % (sorted(doc_supported), RD.SUPPORTED_STATE_VERSIONS)
-            )
-    return errors
-
-
-def _inject_prose_schema_version_list(doc_text, desired_versions):
-    """Rewrite the schemaVersion bullet's backticked version list for synthetic prose tests."""
-    m = _SCHEMA_VERSION_BULLET_RE.search(doc_text)
-    if not m:
-        pytest.fail(
-            "schemaVersion bullet regex did not match round-driver.md prose"
-        )
-    version_fragment = m.group(1)
-    tokens = list(re.finditer(r"`(\d+)`", version_fragment))
-    if not tokens:
-        pytest.fail(
-            "schemaVersion bullet matched but has no backticked versions"
-        )
-    list_start = tokens[0].start()
-    list_end = tokens[-1].end()
-    style_sample = version_fragment[list_start:list_end]
-    versions = sorted(desired_versions)
-    parts = ["`%d`" % v for v in versions]
-    if len(parts) == 1:
-        new_list = parts[0]
-    else:
-        final_sep = style_sample[tokens[-2].end() - list_start:tokens[-1].start() - list_start]
-        if len(parts) == 2:
-            new_list = parts[0] + final_sep + parts[1]
-        else:
-            mid_sep = style_sample[tokens[0].end() - list_start:tokens[1].start() - list_start]
-            new_list = mid_sep.join(parts[:-1]) + final_sep + parts[-1]
-    new_group = (
-        version_fragment[:list_start]
-        + new_list
-        + version_fragment[list_end:]
-    )
-    new_doc = doc_text[:m.start(1)] + new_group + doc_text[m.end(1):]
-    if new_doc == doc_text:
-        pytest.fail(
-            "prose schemaVersion injection was a no-op; fixture anchor may be stale"
-        )
-    return new_doc
-
-
 def test_spelling_allowlist_reasons_are_non_empty():
     for key, entry in _SPELLING_ALLOWLIST.items():
         assert entry["reason"].strip(), "empty allowlist reason for %r" % (key,)
@@ -712,11 +613,6 @@ def test_state_version_spelling_census():
     assert not unexpected, (
         "hand-spelled state/receipt version sites:\n" + _format_findings(unexpected)
     )
-
-
-def test_state_version_spelling_prose_census():
-    errors = census_prose()
-    assert not errors, "\n".join(errors)
 
 
 def test_synthetic_injection_mod_format():
@@ -834,31 +730,6 @@ def test_synthetic_injection_constant_assignment_outside_block():
         "expected constant-assignment leg on pinned symbol assigned outside "
         "the marker-delimited block"
     )
-
-
-def test_synthetic_injection_prose_doc_has_extra_version():
-    with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
-        real = fh.read()
-    supported = set(RD.SUPPORTED_STATE_VERSIONS)
-    extra = max(supported) + 1
-    injected = _inject_prose_schema_version_list(real, supported | {extra})
-    errors = census_prose(injected)
-    assert any(
-        "states receipt schemaVersion" in e for e in errors
-    ), "expected prose leg error when doc lists a version absent from code"
-
-
-def test_synthetic_injection_prose_doc_missing_code_version():
-    with open(_ROUND_DRIVER_MD, encoding="utf-8") as fh:
-        real = fh.read()
-    supported = sorted(RD.SUPPORTED_STATE_VERSIONS)
-    injected = _inject_prose_schema_version_list(
-        real, supported[:-1],
-    )
-    errors = census_prose(injected)
-    assert any(
-        "not stated in round-driver.md" in e for e in errors
-    ), "expected prose leg error when code version is omitted from doc"
 
 
 def test_synthetic_injection_get_default_binding():

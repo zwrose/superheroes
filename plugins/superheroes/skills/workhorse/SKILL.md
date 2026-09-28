@@ -171,10 +171,9 @@ issue ratified is a follow-up for the advisor, never a silent widening of this d
 **Adoption intake.** A launch that hands you an existing branch instead of a clean base is still an
 intake, with two duties before any work resumes. **First, sweep for work the dead build never
 pushed.** Its worktrees and branches hold commits that no PR list or `gh` query shows. Reconcile
-them against the pushed tip, and adjudicate every piece of residue as **integrated**, **subsumed**,
-or **contested** in your first durable post. Carry the adjudication and its reasoning, not the
-residue itself, and redact anything you quote, and state the redaction, never drop it by
-omission. **Second, treat every claim you inherit as
+them against the pushed tip and record the adjudication § Recovery defines in your first durable
+post, carrying the adjudication and its reasoning, not the residue itself, and redacting anything
+you quote and stating the redaction. **Second, treat every claim you inherit as
 unverified until you re-run it yourself** (§8). A receipt that was claimed is not a receipt that
 was earned. **The resume-or-adopt call is the advisor's, not yours.**
 
@@ -353,7 +352,7 @@ notification chain breaks.
 **Author every order to the six work-order validity rules in `agents/implementer.md`.** They are
 measured-or-marked tool output, fail-closed edges enumerated and echoed back, complete target
 enumeration keyed to the finding, no cosmetic reopen of a verified surface, and a stated shared
-contract for parallel siblings. The sixth is that an order that adds or changes a detector names the bite-proof it expects, as `rubric/bite-proof.md` defines it. Order quality decides more
+contract for parallel siblings. The sixth is the bite-proof rule for an order that adds or changes a detector, as `rubric/bite-proof.md` defines it. Order quality decides more
 rework than implementer execution does, so a well-authored order is your cheapest defect
 prevention. The implementer is the backstop that flags a violating order.
 
@@ -430,13 +429,7 @@ way to recover the maker, and the review seat map's author-family exclusion need
 and the sequencing you assumed are yours. When the world moves under a live order, amend the order.
 An implementer that parks on a stale premise did the right thing.
 
-**Stop before a third rework of one surface.** When you are about to dispatch a third rework of the
-same surface in one build, do not dispatch it, because a third rework of the same surface is the
-tripwire. Mechanical fixes the certified loop applies inside its own rounds do not count. On a lane
-you can affirmatively call converged, stopping and handing the design signal up satisfies it. Refuse
-the fourth patch, name the seam problem, state in the handback that the tripwire fired, and ship the
-remaining minors as disclosed follow-ups. Otherwise, a formal park binds when the lane has not
-converged, and only the owner or the advisor lifts it.
+**Stop before a third rework of one surface.** Do not dispatch a third rework of the same surface in one build; mechanical fixes the certified loop applies inside its own rounds do not count. On a lane you can affirmatively call converged, refuse the fourth patch, name the seam problem, state in the handback that the tripwire fired, and ship the remaining minors as disclosed follow-ups. Otherwise park, and only the owner or the advisor lifts that park.
 
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § The third-rework tripwire when a surface reaches its third rework.**
 
@@ -604,9 +597,7 @@ whether the PR moved after the review. The owner-ratified scope rule (§1) defer
 unrelated to the behavior the diff introduces or worsens. A blocking correctness or security finding
 on that behavior is fixed or honestly parked, never deferred as out of scope.
 
-**Bounded acceptance for prose-contract DoDs.** When the contract under review is prose, the general
-re-review bar never terminates, so the bounded form applies: no new Critical or Important finding in a review round on the final head, after a stated number of rounds, with Minor residuals disclosed. The advisor at vet, or the owner before review begins, states that number of rounds, and it is
-recorded in the PR body or the vet receipt. An unterminating bar can only be abandoned.
+**Bounded acceptance for prose-contract DoDs.** When the contract under review is prose, the bounded form applies, with the round bound that the advisor at vet, or the owner before review begins, states and records in the PR body or the vet receipt.
 
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § Bounded acceptance — prose-contract DoDs when the DoD under review is prose.**
 

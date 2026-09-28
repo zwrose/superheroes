@@ -15,22 +15,14 @@ Verbs:
   a prior arm's successful PR poll is not forgotten on the next arm's timer.
 
 Contract:
-- Refusals (ok=False): batch-invalid, max-total-seconds-invalid,
-  ignore-event-invalid, interval-invalid, max-seconds-invalid, repo-root-invalid,
-  store-unresolvable, ledger-unreadable, internal-error, loop-already-live,
-  loop-lock-unavailable.
-- Events (ok=True): lane-terminal, lane-blocked, builder-exited, stack-state-changed,
-  pr-set-changed, lane-stale, timer.
-- Degradations (non-fatal): ledger-torn-tail, ledger-unreadable,
-  heartbeat-unreadable, pid-probe-uncertain, pr-signal-unavailable,
-  stack-signal-unavailable, lane-never-stamped, pr-signal-never-sampled,
-  log-unwritable, transcript-ambiguous, transcript-unresolved.
+- Refusals (ok=False): the REFUSALS constant.
+- Events (ok=True): the EVENTS constant.
+- Degradations (non-fatal): the DEGRADATIONS constant.
 - gh child env-scrubbing: ambient git/GH routing variables in _GH_SCRUB_VARS
   are stripped via ll.scrub_env before the gh subprocess runs.
 - Deadline-bound polling: no gh poll starts when remaining time is below
   _MIN_PR_POLL_SECONDS; each poll's timeout is min(30.0, remaining).
-- Precedence: lane-terminal (E1) > lane-blocked (E2) > builder-exited (E3) >
-  stack-state-changed (E4) > pr-set-changed (E5) > lane-stale (E6) > timer (E7).
+- Precedence: EVENT_PRECEDENCE, highest first.
 - lane-stale: a started lane whose latest recorded pid is positively live and whose
   own session transcript was not written within LIVENESS_QUIET_WINDOW_SECONDS — a
   wedged builder alive but frozen past the quiet window. A lane whose transcript
