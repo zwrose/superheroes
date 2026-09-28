@@ -123,11 +123,11 @@ the acceptance is the owner's.
 Both outcomes are the design — a failing run does not mean the process is broken; it means the
 default and the alternative both have a sanctioned path.
 
-**A failing end-to-end validation run keeps the spec open by default and mints one repair issue per failure, each anchored to the failing run's record and naming the unmet acceptance criterion it restores; the owner may instead explicitly accept delivery with the failing run disclosed, and either way the cycle ends at an owner decision.**
+**A failing end-to-end validation run keeps the spec open by default and goes to the owner, who chooses repair or acceptance: on repair, one repair issue per failure files, each anchored to the failing run's record and naming the unmet acceptance criterion it restores; the owner may instead explicitly accept delivery with the failing run disclosed; no repair issue files before that decision.**
 
 ### The default — the spec stays open
 
-The spec does **not** close. Each failure produces a **repair issue**, and each repair issue carries
+The spec does **not** close. When the owner chooses repair, each failure produces a **repair issue**, and each carries
 **both**: a receipt anchor pointing at the **failing run's record**, and the **unmet acceptance
 criterion it restores**. The repair issues become children of the spec, so closure re-rides the vet
 of whichever PR closes the **new** last open child — [When closure fires](#when-closure-fires)'s
