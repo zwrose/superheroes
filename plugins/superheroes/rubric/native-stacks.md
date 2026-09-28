@@ -32,10 +32,10 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
 1. **Filing.** Each planned layer is filed as a GitHub sub-issue of the feature issue it breaks
    down, linked natively (`gh issue create --parent <feature>`, or `gh issue edit <feature>
    --add-sub-issue <layer>` for an existing issue). It is filed, and fully wired, when the layer is
-   planned. Linking does not copy the parent's wiring, so set the layer's milestone, project, and
+   planned. A layer sub-issue files without a further owner word, whether the owner approved the stack's shape or the advisor ruled a size split — the one exception to the [filing rule](../skills/showrunner/reference/owner-decisions.md#the-tiers-and-the-filing-rule). Linking does not copy the parent's wiring, so set the layer's milestone, project, and
    labels explicitly to match the parent's. Each layer issue carries its own Anchor, What, and DoD
    (the [issue contract](../skills/showrunner/reference/issue-contract.md)). New scope that a vet or
-   tripwire adds to the feature joins as a new layer sub-issue — see [How a stack
+   tripwire adds to the feature joins as a new layer sub-issue once the owner's word covers that scope — see [How a stack
    merges](#how-a-stack-merges).
 2. **The order's home.** A layer's build order lives at the top of its own sub-issue's body. The
    feature issue carries the stack's plan and state, not each layer's order.

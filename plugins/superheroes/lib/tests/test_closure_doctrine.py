@@ -74,10 +74,11 @@ PIN_DELIVERY_DECISION = (
 )
 
 PIN_FAILING_RUN = (
-    "A failing end-to-end validation run keeps the spec open by default and mints one repair issue "
-    "per failure, each anchored to the failing run's record and naming the unmet acceptance "
-    "criterion it restores; the owner may instead explicitly accept delivery with the failing run "
-    "disclosed, and either way the cycle ends at an owner decision."
+    "A failing end-to-end validation run keeps the spec open by default and goes to the owner, who "
+    "chooses repair or acceptance: on repair, one repair issue per failure files, each anchored to "
+    "the failing run's record and naming the unmet acceptance criterion it restores; the owner may "
+    "instead explicitly accept delivery with the failing run disclosed; no repair issue files before "
+    "that decision."
 )
 
 PIN_ABANDONED_CHILD = (

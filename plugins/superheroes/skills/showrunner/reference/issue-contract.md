@@ -156,7 +156,7 @@ A routed issue that carries the four is gradable at vet without asking anyone wh
 
 The [priority tiers](../../../rubric/glossary.md#priority-tiers) entry defines the tiers. This
 section carries what each tier **commits to**. How a tier is graded — the evidence bar, the grid
-of severity ladder and evidence tier, and the carve-out that lets a P2 file — belongs to the intake
+of severity ladder and evidence tier, and the filing rule every tier obeys — belongs to the intake
 contract, whose one home is [`owner-decisions.md`](owner-decisions.md).
 
 **Intake grading.** Pipe the tier claim as JSON on stdin to `front_door grade` in
@@ -168,7 +168,7 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 echo '<claim-json>' | python3 -B "$ROOT_DIR/lib/front_door.py" grade --cwd <repo> [--root <store>]
 ```
 
-reading the JSON result from stdout. **Only an outcome of `graded` may proceed to filing**; every
+reading the JSON result from stdout. **Only an outcome of `graded` may proceed toward filing**, and filing still waits on the owner's word; every
 other outcome **queues or refuses** — including the named refusal tokens `ladder-unstamped`,
 `band-unknown`, `evidence-argued`, `p0-band-excluded`, and `profile-absent`.
 
@@ -181,10 +181,10 @@ other outcome **queues or refuses** — including the named refusal tokens `ladd
 - **P1, enters the standing budget soon.** The owner's agreement, batched cheaply as a word at a
   walk. **P1s age**: at each [gardening pass](../../../rubric/glossary.md#gardening-pass) each old
   P1 is proposed for promotion, demotion, or decline. **None are immortal.**
-- **P2, should eventually happen.** The one carve-out from *no filing without the owner's word*,
-  granted by the intake contract and exercised only where that contract grants it: the item files on
-  the advisor's authority **only after intake grading returns `graded`**, with its grading recorded,
-  and the evidence bar is what earned that.
+- **P2, should eventually happen.** Graded P2 only after intake grading returns `graded`, with its
+  grading recorded, and the evidence bar is what earned that. Like every tier it files only on the
+  owner's word: the proposal waits on the collector as an owner call carrying its grading
+  ([the filing rule](owner-decisions.md#the-tiers-and-the-filing-rule)).
   Lives in the backlog, out of default views, and drains mostly through folding in.
 - **Declined, below the bar.** A line in the
   [declined registry](../../../rubric/glossary.md#declined-registry) with a named
@@ -279,7 +279,7 @@ the advisor made was material, or was craft, **that example lands in the profile
 half or in the thread. **Nothing checks it**, and a classifier for it is declined at the door.
 
 **What reads it.** The scope exception and the red-train fix in the merge doctrine, the fold rule at
-routing, the craft-versus-product boundary in the P2 carve-out, and the vet's judgment about a
+routing, and the vet's judgment about a
 deviation all turn on "material".
 
 ## Anchor resolution
