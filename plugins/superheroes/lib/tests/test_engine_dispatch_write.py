@@ -3136,6 +3136,167 @@ def test_cursor_write_prompt_and_grading_native(tmp_path):
     assert res["signal"] == "ok"
 
 
+def _dash_free_handoff_base(tmp_path):
+    base = tmp_path / "handoffbase"
+    base.mkdir()
+    return str(base)
+
+
+def _dashdash_run_dir(tmp_path):
+    run_dir = tmp_path / "scratch--dir" / "run"
+    run_dir.mkdir(parents=True)
+    return str(run_dir)
+
+
+def _collapsed_native_write_runner():
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        collapsed = re.sub(r"-{2,}", "-", result_path)
+        native = {
+            "ok": True, "signal": "ok", "report": "Receipt prose.",
+            "evidence": {"testFailed": False, "testPassed": True},
+        }
+        os.makedirs(os.path.dirname(collapsed), exist_ok=True)
+        with open(collapsed, "w", encoding="utf-8") as fh:
+            json.dump(native, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _build_ok_stdout(), False, 0, ""
+    return runner
+
+
+def test_cursor_write_dashdash_injected_seam_ok(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+    fake = FakeRunner([_collapsed_native_write_runner()])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat(),
+    )
+    assert res["ok"] is True
+
+
+def test_stage_prompt_canonical_path_without_dashdash_unchanged(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "plain-run")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat(),
+    )
+    assert res["ok"] is True
+    records, _ = ED._journal_read(run_dir)
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    attempt_prompt = open(started["attemptPromptPath"], encoding="utf-8").read()
+    p = ERC.result_file_path_from_prompt(attempt_prompt)
+    assert p == ED._native_result_path(run_dir, 1)
+    assert list(os.listdir(handoff_base)) == []
+    assert "nativeResultHandoffPath" not in started
+
+
+def test_dashdash_no_safe_base_refuses_before_spawn(tmp_path, monkeypatch):
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: None)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("engine must not run")
+
+    fake = FakeRunner([boom])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat())
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "native-result-path-unsafe"
+
+
+def test_dashdash_symlink_oserror_refuses_before_spawn(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+
+    def deny_symlink(*_args, **_kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(ED.os, "symlink", deny_symlink)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("engine must not run")
+
+    fake = FakeRunner([boom])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat())
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "native-result-path-unsafe"
+
+
+def test_dashdash_link_removed_on_later_staging_refusal(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+    prompt_path = _prompt(tmp_path)
+    seat = _cursor_seat()
+    built = EA.build_argv_result(seat, "build", {"cwd": wt})
+    assert built["reason"] is None, built
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", list(built["argv"]), ED.RUN_KIND_WRITE,
+    )
+    assert native_err is None
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "cursor",
+        "roleKind": "build", "orderId": "occupied-handoff",
+        "argv": argv, "cwd": wt, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    with open(os.path.join(run_dir, "prompt-attempt-1.md"), "w", encoding="utf-8") as fh:
+        fh.write("occupied\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is True
+    assert detail == ""
+    assert fake.calls == []
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "attempt-prompt-occupied"
+    assert list(os.listdir(handoff_base)) == []
+
+
+def test_codex_dashdash_run_dir_creates_no_link(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+    stdout = _build_ok_stdout()
+
+    def codex_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return _finish_codex_write_runner(argv, stdout, prompt_bytes)
+
+    fake = FakeRunner([codex_runner])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_codex_seat())
+    assert res["ok"] is True
+    assert list(os.listdir(handoff_base)) == []
+    argv = fake.calls[0]["argv"]
+    assert "-o" in argv
+    assert argv[argv.index("-o") + 1] == ED._native_result_path(run_dir, 1)
+
+
 def _invalid_native_write_runner():
     def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         result_path = _resolve_native_result_path(argv, prompt_bytes)
