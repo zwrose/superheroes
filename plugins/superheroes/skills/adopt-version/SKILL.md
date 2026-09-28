@@ -75,8 +75,9 @@ When `rubric/covenant.md` changed: re-read it — the copy injected at session s
 and the file on disk governs. When `hooks/` changed: tell the owner at step 8 and treat new
 hook behaviour as absent until a restarted session proves it present.
 
-When only `libs` or `other` changed: read the TRANSITION sections and only the changed
-doctrine pages this seat uses.
+When `libs` or `other` has changes: read the TRANSITION sections and the changed doctrine
+pages this seat uses — even when the charter bucket also changed (charter re-read above does
+not replace reading changed shared doctrine in `other`).
 
 **When a fresh seat is right:** the charter was restructured so heavily that context would
 keep steering on old duty boundaries (whole duties moved or renamed), or context is nearly
@@ -95,8 +96,10 @@ Then run each item of TRANSITION's "Before you upgrade" and one-time steps for e
 version in range — done, or not applicable with the reason. An item that stops, folds, or
 cleans up a process or run is checked against the inventory first and **deferred** when it
 belongs to a live old-root lane (step 7 decides when it runs). An item that needs the owner
-(a sign-in, a configure choice, a permission, a waiver) goes to step 8 — never silently
-skipped.
+(a sign-in, a configure choice, a permission, a waiver) is **owner input** — never silently
+skipped. When any checklist item is still owner input, **stop after step 4** — brief the
+owner with the numbered decisions step 8 requires, and do not run steps 5–7 until every such
+item is resolved; then resume adoption from step 5.
 
 **Output:** the inventory, and one disposition per checklist item — done, not applicable
 (why), deferred (which lane), or owner input.
@@ -104,8 +107,10 @@ skipped.
 ## Step 5 — Switch the plugin root
 
 Every absolute path in this seat's commands and launches now uses the new version directory
-(`toRoot` from `plan`). The bootstrap's resolved-roots block in context still names the old
-root — treat it as stale.
+(`toRoot` from `plan`), **except** commands continuing a live dispatch run the inventory
+named: those stay on the **old** root until that run reaches a terminal result, or the owner
+chooses explicit abandonment in step 8 before you switch that command. The bootstrap's
+resolved-roots block in context still names the old root — treat it as stale.
 
 **Output:** the new root, stated once.
 

@@ -26,7 +26,11 @@ def _refuse(reason, detail):
 
 def _collect(root):
     out, bad = {}, lambda ps: any(p in _SKIP for p in ps)
-    for dp, dns, fns in os.walk(root, followlinks=False):
+
+    def _on_walk_error(err):
+        raise err
+
+    for dp, dns, fns in os.walk(root, followlinks=False, onerror=_on_walk_error):
         rel = os.path.relpath(dp, root)
         parts = rel.replace("\\", "/").split("/") if rel != "." else []
         if bad(parts):
@@ -112,7 +116,10 @@ def _plan(role, cache, from_v, to_v):
         if parsed is None:
             return _refuse("transition-unreadable", "TRANSITION.md missing or unreadable")
         trans, miss = parsed
-        ca, cb = _collect(fr), _collect(tr)
+        try:
+            ca, cb = _collect(fr), _collect(tr)
+        except OSError as exc:
+            return _refuse("version-tree-unreadable", str(exc))
         for k in sorted(set(ca) | set(cb)):
             if k not in ca:
                 kind = "added"
