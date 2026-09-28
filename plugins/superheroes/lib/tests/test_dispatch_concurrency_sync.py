@@ -54,6 +54,14 @@ _CHANNEL_OWNERSHIP_SURFACE_OVERRIDES = {
         "**the builder itself launches**."
     ),
 }
+# Independent third site for the await-dispatches phrase trio — not read from
+# RULING_INVARIANTS — so trimming the pinned tuple cannot evade surface drift checks.
+_AWAIT_DISPATCHES_PHRASE_ORACLE = (
+    "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an "
+    "unwatched run-dir at turn end",
+    "no result dependency, no shared writable worktree, and no shared output path",
+    'Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message.',
+)
 
 
 def _read_plugin(rel):
@@ -103,21 +111,20 @@ def _await_dispatches_phrases():
 
 
 def _canonical_await_dispatches_phrases():
-    """Oracle: pinned invariant substrings must each appear in the ruling text home."""
+    """Oracle: third-site literals must each appear in the ruling text home."""
     ruling_text = LD.RULING_TEXT["await-dispatches"]
-    pinned = LD.RULING_INVARIANTS["await-dispatches"]
     canonical = []
-    for phrase in pinned:
+    for phrase in _AWAIT_DISPATCHES_PHRASE_ORACLE:
         if phrase not in ruling_text:
             raise AssertionError(
-                "await-dispatches invariant phrase missing from "
+                "await-dispatches oracle phrase missing from "
                 f"RULING_TEXT: {phrase!r}"
             )
         canonical.append(phrase)
     normalized = [_normalize_for_line_wrap(p) for p in canonical]
     if len(normalized) != len(set(normalized)):
         raise AssertionError(
-            'RULING_INVARIANTS["await-dispatches"] must not contain duplicate phrases'
+            "await-dispatches phrase oracle must not contain duplicate phrases"
         )
     return tuple(canonical)
 
@@ -236,6 +243,16 @@ def test_launch_doctrine_loads():
     result = LD.load()
     assert result["ok"] is True, (
         f"launch_doctrine.load() refused: reason={result.get('reason')!r}"
+    )
+
+
+def test_ruling_invariants_match_await_dispatches_phrase_oracle():
+    """RULING_INVARIANTS must list every oracle phrase — omission is not self-consistent."""
+    pinned = tuple(_await_dispatches_phrases())
+    oracle = _canonical_await_dispatches_phrases()
+    assert pinned == oracle, (
+        'RULING_INVARIANTS["await-dispatches"] must match the phrase oracle exactly: '
+        f"pinned={pinned!r}, oracle={oracle!r}"
     )
 
 
