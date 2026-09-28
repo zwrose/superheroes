@@ -37,9 +37,7 @@ lane row above, the light lane's measured escalation line, the micro ceiling, an
 tripwire below — is read over **non-test changed lines**
 (the two absolute bars below are the one exception: they count added or
 modified lines only, as stated there):
-additions plus deletions in every file *outside* a `tests/` directory (docs, skill and
-rubric prose, and code all count; test modules and their fixtures do not), taken from
-`git diff --numstat` against the build's base. Test volume
+additions plus deletions in every file that is not test code (docs, skill and rubric prose, and code all count; test modules and their fixtures do not), taken from `git diff --numstat` against the build's base. A file is test code when it sits under a test directory or carries a test file name, by the common conventions (a `tests/`, `test/` or `__tests__/` directory, a `*.test.*` or `test_*.py` file, and the like); `is_test_path` in the plugin's `lib/size_count.py` holds the exact list and is its one home. Test volume
 scales with rigour here — bite-proofs, truth tables, censuses, drift tests — and a size
 line that counted it would push a builder toward fewer tests to stay in-lane, which is
 the wrong pressure. Test volume that signals a *design* problem is the third-rework
