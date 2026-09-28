@@ -4,8 +4,9 @@ are re-typed across the surviving Python libs and schema literals.
 Each guard reads the authoritative home (or, where no single named home exists, pins
 the shared vocabulary across every enumerated copy-holder) and **fails closed** on an
 unparseable literal — so a change to the truth breaks CI in every copy-holder rather
-than letting them silently diverge (the PR #205 class). Per the §11.2 caveat, every
-test enumerates its copy-holders explicitly: a NEW copy must be added here.
+than letting them silently diverge. No new hand-maintained copy is ever added: the surviving
+guards are identifier-presence checks, code-to-code self-consistency, censuses, register-quote
+pins, and the few copies whose home a consumer cannot read or cite, which wait for that home.
 
 Clusters covered (post spine-retirement #468 — execution-spine JS twins
 `showrunner.js` / `build_phase.js` / `model_tier.js` / `engine_pref.js` and the
