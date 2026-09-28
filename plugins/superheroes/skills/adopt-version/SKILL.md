@@ -38,14 +38,18 @@ and stop after the brief.
 
 ### After compaction
 
-Compaction and SessionStart recovery do **not** read this skill. SessionStart recovery
-re-injects the **old** plugin root and an old-root path to re-read the charter SKILL.md from
-that root. **Nothing outside this skill** enforces the taken-up line over that injection — not
-checkpoint, not hooks, not `session_context`. After any compaction, this seat's **first** act
-is to re-run `/superheroes:adopt-version`: it finds the `plugin version taken up` line this
-seat wrote, reports up to date when the running root already matches the host cache directory
-plus **to**, retargets every command to **toRoot**, and re-reads the charter from **toRoot** —
-not from recovery paths that still name the old root.
+Compaction and SessionStart recovery do **not** read this skill. Checkpoint's compact
+command does not invoke or restate this procedure either — no hook, session bootstrap, or
+compaction step loads adopt-version for you. SessionStart recovery re-injects the **old**
+plugin root and an old-root path to re-read the charter SKILL.md from that root.
+**Nothing outside this skill** enforces the taken-up line over that injection. The seat
+meets that obligation only by following this paragraph and the durable
+`plugin version taken up` line (when checkpoint Step 4 part 3 preserved it). After any
+compaction, this seat's **first** act is to re-run `/superheroes:adopt-version`: it finds
+the `plugin version taken up` line this seat wrote, reports up to date when the running root
+already matches the host cache directory plus **to**, retargets every command to **toRoot**,
+and re-reads the charter from **toRoot** — not from recovery paths that still name the old
+root.
 
 Name the **host-provided plugin root** — the bootstrap's resolved plugin root in context, or
 on Claude Code the SessionStart injection when the bootstrap block is absent. Before anything
@@ -69,13 +73,16 @@ A refusal (exit 1, `{"ok":false,"reason":...}`) stops the procedure — report t
 to the owner. When `upToDate: true`, end with a one-line report. Read TRANSITION's section
 for **every** version listed in `transitionSections` (each patch in range counts) from the
 new root (`toRoot`). For each version in `missingTransitionSections`, read that version's
-section in `CHANGELOG.md` at `toRoot` — absence of a TRANSITION section is normal when the
+section in `CHANGELOG.md` at `toRoot`. Absence of a TRANSITION section is normal when the
 release recorded no consumer-visible shape change (TRANSITION adds a section only when a release
-drops, renames, or newly requires an argument, a result key, or a result shape). Record each
-such version as **no TRANSITION section (no consumer-visible change recorded)** unless that
-CHANGELOG section names a removal, rename, breaking change, or a newly required argument,
-result key, or result shape: then mark it **unresolved** (a TRANSITION gap the release should
-cover).
+drops, renames, or newly requires an argument, a result key, or a result shape). When
+`CHANGELOG.md` is missing at `toRoot`, or it has no section for that version, record
+**no TRANSITION section (no consumer-visible change recorded)** — there is no changelog
+evidence to hold on. When the section is present and readable, record the same label unless
+that section names a removal, rename, breaking change, or a newly required argument, result
+key, or result shape: then mark it **unresolved** (a TRANSITION gap the release should cover).
+When `CHANGELOG.md` exists but that version's section cannot be read, mark **unresolved** and
+carry why to step 8.
 
 **Output:** from, to, the in-between versions, TRANSITION sections read, and each
 `missingTransitionSections` entry as either **no TRANSITION section (no consumer-visible change
