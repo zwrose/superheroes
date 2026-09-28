@@ -5387,10 +5387,80 @@ def _fake_signal0_alive(monkeypatch, dead_pids=frozenset(), calls=None):
     return calls
 
 
+def _fake_signal0_kill_eperm(monkeypatch):
+    """Leader signal-0 probe raises EPERM; killpg still succeeds."""
+
+    def fake_kill(pid, sig):
+        raise PermissionError
+
+    def fake_killpg(pid, sig):
+        if sig != 0:
+            raise AssertionError("expected signal 0 only")
+
+    monkeypatch.setattr(ll.os, "kill", fake_kill)
+    monkeypatch.setattr(ll.os, "killpg", fake_killpg)
+
+
 def _started_at(launch_id, ts, attempt=1, pid=_FAKE_BUILDER_PID):
     rec = _started(launch_id, attempt=attempt, pid=pid)
     rec["ts"] = ts
     return rec
+
+
+def test_record_outcome_allows_reused_pid_when_kill_eperm_and_foreign(tmp_path, monkeypatch):
+    # axis: EPERM on leader probe + foreign identity -> outcome records
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "l-eperm-foreign"
+    started_ts = 1000.0
+    _declare(repo, "b-eperm-foreign", 1)
+    ll.reserve(repo, _reserved(launch_id, "b-eperm-foreign", ["a"], repo))
+    started = _started_at(launch_id, started_ts)
+    assert ll.append(repo, started)
+    _fake_signal0_kill_eperm(monkeypatch)
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: {
+            "stat": "SN",
+            "startTs": started_ts + 3600,
+            "command": "claude --model test",
+        },
+    )
+    result = ll.record_outcome(repo, launch_id, "handback", "done")
+    assert result["ok"] is True
+
+
+def test_record_outcome_refuses_when_kill_eperm_and_facts_unreadable(tmp_path, monkeypatch):
+    # axis: EPERM on leader probe + unreadable identity -> fail-closed live
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-eperm-facts-none")
+    _fake_signal0_kill_eperm(monkeypatch)
+    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: None)
+    result = ll.record_outcome(repo, "l-eperm-facts-none", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_record_outcome_refuses_own_builder_when_kill_eperm(tmp_path, monkeypatch):
+    # axis: EPERM on leader probe + matching identity -> terminal-child-live refusal
+    session_id = _SESSION_UUID_OWN
+    repo = _await_exit_lane(
+        tmp_path, monkeypatch, "l-eperm-own", sessionId=session_id,
+    )
+    started_ts = ll.fold(ll.read(repo)["records"])["launches"]["l-eperm-own"]["startedTs"]
+    _fake_signal0_kill_eperm(monkeypatch)
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: {
+            "stat": "SN",
+            "startTs": started_ts - 1,
+            "command": "claude --session-id %s" % session_id,
+        },
+    )
+    result = ll.record_outcome(repo, "l-eperm-own", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
 
 
 def test_record_outcome_allows_reused_pid_by_start_time_sessionless(tmp_path, monkeypatch):
