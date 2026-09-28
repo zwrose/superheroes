@@ -103,7 +103,23 @@ def _await_dispatches_phrases():
 
 
 def _canonical_await_dispatches_phrases():
-    return tuple(_await_dispatches_phrases())
+    """Oracle: pinned invariant substrings must each appear in the ruling text home."""
+    ruling_text = LD.RULING_TEXT["await-dispatches"]
+    pinned = LD.RULING_INVARIANTS["await-dispatches"]
+    canonical = []
+    for phrase in pinned:
+        if phrase not in ruling_text:
+            raise AssertionError(
+                "await-dispatches invariant phrase missing from "
+                f"RULING_TEXT: {phrase!r}"
+            )
+        canonical.append(phrase)
+    normalized = [_normalize_for_line_wrap(p) for p in canonical]
+    if len(normalized) != len(set(normalized)):
+        raise AssertionError(
+            'RULING_INVARIANTS["await-dispatches"] must not contain duplicate phrases'
+        )
+    return tuple(canonical)
 
 
 def _await_dispatches_phrase_label(index):
@@ -122,7 +138,7 @@ def _await_dispatches_index_from_label(label):
 
 def _surface_check_cases():
     cases = []
-    for index, phrase in enumerate(_await_dispatches_phrases()):
+    for index, phrase in enumerate(_canonical_await_dispatches_phrases()):
         cases.append((_await_dispatches_phrase_label(index), phrase))
     cases.append((_CHANNEL_OWNERSHIP_LABEL, _CHANNEL_OWNERSHIP_SENTENCE))
     return tuple(cases)
@@ -133,6 +149,12 @@ _SURFACE_CHECK_CASES = _surface_check_cases()
 
 def _assert_exact_await_dispatches_phrases(phrases):
     canonical = _canonical_await_dispatches_phrases()
+    normalized_phrases = [_normalize_for_line_wrap(p) for p in phrases]
+    if len(normalized_phrases) != len(set(normalized_phrases)):
+        raise AssertionError(
+            'RULING_INVARIANTS["await-dispatches"] must not contain duplicate phrases: '
+            f"{phrases!r}"
+        )
     if len(phrases) != len(canonical):
         raise AssertionError(
             'RULING_INVARIANTS["await-dispatches"] must have exactly '
@@ -311,7 +333,7 @@ def test_assert_exact_await_dispatches_phrases_rejects_grown_tuple():
 def test_assert_exact_await_dispatches_phrases_rejects_duplicate_padded_tuple():
     real_phrases = _canonical_await_dispatches_phrases()
     padded = real_phrases + (real_phrases[0],)
-    with pytest.raises(AssertionError, match="must have exactly"):
+    with pytest.raises(AssertionError, match="must not contain duplicate phrases"):
         _assert_exact_await_dispatches_phrases(padded)
 
 
