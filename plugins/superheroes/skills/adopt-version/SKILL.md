@@ -38,13 +38,14 @@ and stop after the brief.
 
 ### After compaction
 
-SessionStart recovery re-injects the **old** plugin root and tells the seat to re-read its
-charter SKILL.md from that old root. Nothing outside this skill enforces the
-taken-up line over that injection. After any compaction, this seat's **first** act is to
-re-run `/superheroes:adopt-version`: it finds the `plugin version taken up` line this seat
-wrote, ends at `upToDate` when the running root already matches the host cache directory plus
-**to**, retargets every command to that root, and re-reads the charter from it — not from recovery paths that
-still name the old root.
+Compaction and SessionStart recovery do **not** read this skill. SessionStart recovery
+re-injects the **old** plugin root and an old-root path to re-read the charter SKILL.md from
+that root. **Nothing outside this skill** enforces the taken-up line over that injection — not
+checkpoint, not hooks, not `session_context`. After any compaction, this seat's **first** act
+is to re-run `/superheroes:adopt-version`: it finds the `plugin version taken up` line this
+seat wrote, reports up to date when the running root already matches the host cache directory
+plus **to**, retargets every command to **toRoot**, and re-reads the charter from **toRoot** —
+not from recovery paths that still name the old root.
 
 Name the **host-provided plugin root** — the bootstrap's resolved plugin root in context, or
 on Claude Code the SessionStart injection when the bootstrap block is absent. Before anything
@@ -69,9 +70,12 @@ to the owner. When `upToDate: true`, end with a one-line report. Read TRANSITION
 for **every** version listed in `transitionSections` (each patch in range counts) from the
 new root (`toRoot`). For each version in `missingTransitionSections`, read that version's
 section in `CHANGELOG.md` at `toRoot` — absence of a TRANSITION section is normal when the
-release recorded no consumer-visible shape change. Record each such version as **no TRANSITION
-section (no consumer-visible change recorded)** unless the CHANGELOG names a removal, rename,
-or breaking change: then mark it **unresolved** (a TRANSITION gap the release should cover).
+release recorded no consumer-visible shape change (TRANSITION adds a section only when a release
+drops, renames, or newly requires an argument, a result key, or a result shape). Record each
+such version as **no TRANSITION section (no consumer-visible change recorded)** unless that
+CHANGELOG section names a removal, rename, breaking change, or a newly required argument,
+result key, or result shape: then mark it **unresolved** (a TRANSITION gap the release should
+cover).
 
 **Output:** from, to, the in-between versions, TRANSITION sections read, and each
 `missingTransitionSections` entry as either **no TRANSITION section (no consumer-visible change
@@ -179,7 +183,10 @@ When **every** required probe passes, write one line
 this seat's durable state (the showrunner advisor's resume point; a workhorse builder's PR
 build record, or an issue comment before the PR exists; a detective seat keeps it in-session
 and carries it in the diagnosis receipt when it posts one — never as a separate tracker write).
-That line outranks the bootstrap block and SessionStart injection on the next adoption and after
+When a detective seat may run `/superheroes:checkpoint` before that receipt, put this same
+`plugin version taken up` line in checkpoint Step 4's **live-state one-liner** (part 3) so
+compaction preserves it — checkpoint's five parts do not require it on their own. That line
+outranks the bootstrap block and SessionStart injection on the next adoption and after
 compaction.
 
 **Output:** one probe result per engine, any retired owner words, any held ledger kinds, and
