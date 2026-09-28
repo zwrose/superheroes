@@ -274,3 +274,8 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
 6. **The tail end** (owner): ready for vet, then the advisor's vet (craft fixed by the advisor,
    owner calls sent back), then one last tap sheet holding any vet owner calls with approval as
    its final card. Approval and the merge word stay separate acts, as today.
+7. **What adversarial review may add** (owner): the reviewer finds gaps and contradictions but does
+   not add product behaviour. A fix that would add behaviour goes on the owner's remainder sheet
+   with a recommendation. The recommendation is NOT biased toward cutting: each finding is weighed
+   on its merits and against the project's context. Fixes that change no behaviour (wording,
+   consistency) are applied as craft.
