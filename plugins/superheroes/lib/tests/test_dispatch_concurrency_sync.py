@@ -185,7 +185,9 @@ def _literal_for_surface(rel, label):
                 f"phrase(s), need index {index}"
             )
         literal = phrases[index]
-    return _CHANNEL_OWNERSHIP_SURFACE_OVERRIDES.get(rel, literal)
+    if label == _CHANNEL_OWNERSHIP_LABEL:
+        return _CHANNEL_OWNERSHIP_SURFACE_OVERRIDES.get(rel, literal)
+    return literal
 
 
 def _surface_text(rel, label=None):
