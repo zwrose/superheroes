@@ -88,6 +88,13 @@ carry why to step 8.
 `missingTransitionSections` entry as either **no TRANSITION section (no consumer-visible change
 recorded)** or **unresolved** (why).
 
+**Gate before step 2:** Do not run steps 2–7 until every version in
+`missingTransitionSections` has one of those dispositions — each from reading that version's
+section in `CHANGELOG.md` at `toRoot`, or from the missing-file or missing-section rule above.
+Only **unresolved** holds adoption before step 5; **no TRANSITION section (no consumer-visible
+change recorded)** is not a hold (including when `CHANGELOG.md` is absent or has no section for
+that version).
+
 ## Step 2 — Sort the changes
 
 Use the `plan` JSON buckets: `charter`, `covenantHooks`, `libs`, and `other`. Within
@@ -115,8 +122,10 @@ When `libs` changed: for **each** changed module in the `libs` bucket that step 
 called by this seat, read that module from disk under the new root (or its diff against the
 old root) so you know what changed in behaviour you invoke — not only what TRANSITION says
 about interfaces. When `libs` or `other` changed — even when the charter bucket also changed:
-read the TRANSITION sections that apply and every changed doctrine page in `other` this seat
-uses (charter re-read above already covers that seat's reference tree).
+read every TRANSITION section in `transitionSections` (step 1 already dispositioned each
+`missingTransitionSections` version via `CHANGELOG.md` at `toRoot` — do not treat this re-read
+as a substitute for that review) and every changed doctrine page in `other` this seat uses
+(charter re-read above already covers that seat's reference tree).
 
 **When a fresh seat is right:** the charter was restructured so heavily that context would
 keep steering on old duty boundaries (whole duties moved or renamed), or context is nearly
@@ -146,10 +155,11 @@ resolved; then resume adoption from step 5.
 ## Step 5 — Switch the plugin root
 
 Skip this step while step 4 left any owner-input checklist item unresolved, or step 1 left
-any **unresolved** TRANSITION gap. When step 1 left any **unresolved** gap, stop after step 4:
-brief the owner at step 8 with those versions as numbered decisions, and do not run steps 5–7
-until each is resolved (release supplies a section or the owner accepts no action); then resume
-adoption from step 5.
+any **unresolved** TRANSITION gap. **No TRANSITION section (no consumer-visible change
+recorded)** is not a gap — it does not hold step 5 once step 4 is clear. When step 1 left any
+**unresolved** gap, stop after step 4: brief the owner at step 8 with those versions as
+numbered decisions, and do not run steps 5–7 until each is resolved (release supplies a section
+or the owner accepts no action); then resume adoption from step 5.
 
 Every absolute path in this seat's commands and launches now uses the new version directory
 (`toRoot` from `plan`), **except** commands that continue a live dispatch run the inventory
