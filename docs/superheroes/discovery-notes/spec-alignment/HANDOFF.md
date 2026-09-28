@@ -260,3 +260,9 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
 1. **What the "board" is when there's no UI** (owner): any visualization that helps communicate
    the concept. Storyboards of what the user experiences, flow charts and other diagrams all
    count. Open: whether Claude Design is needed for these, or plain HTML artifacts do.
+2. **Medium** (owner): every board is drawn and reviewed as an HTML artifact, carrying the design
+   system files along. Claude Design is a review repository only: the design system still comes
+   from it, and approved boards sync to it once, at approval.
+3. **What the plugin ships** (owner, "perfect"): the approved board's permanent record is a file the
+   project controls, kept with its specs. Syncing to Claude Design is optional, for projects that
+   have it (Codex hosts and other owners may not); the owner's projects turn it on.
