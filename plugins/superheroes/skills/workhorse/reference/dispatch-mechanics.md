@@ -509,8 +509,7 @@ invocation also asserts `--mode brief-check` explicitly, which refuses
 `mode-brief-check-with-diff-base` before the journal is read. Full contract — refusals,
 withheld stripped-config paths, investigation-floor rejection — is in `auto-fix-loop.md`.
 The runner accepts result kinds on stdout (`REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`). Every `ok: true` review result carries **`resultKind`** naming exactly one
-payload key of that name; **`investigated`** is attached only when at least one claimed path
-survives spot-checking. **Recognition is not gradeability** — widening what the transport can read
+payload key of that name; **`investigated`** is attached only when a claimed path survives the investigation floor. **Recognition is not gradeability** — widening what the transport can read
 changes nothing about what it will certify: the investigation floor still forfeits an empty
 payload with no surviving `investigated` path for **every** kind including `grouping`, and an
 `--expected-result-kind` mismatch still forfeits. Callers may pin the expected kind via

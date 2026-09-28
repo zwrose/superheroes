@@ -242,9 +242,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > carries **`reason`** (and usually **`detail`**). On success it also carries **`resultKind`**
 > (one of `REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`) naming the payload, plus **exactly one**
 > payload key of that name.
-> **`investigated`** is present only when at least one claimed path survives the runner's spot-check
-> (resolves inside the sanitized review view and exists on disk); a normal non-empty payload reply
-> omits it. Outcome-dependent keys also include **`engagement`** and
+> **`investigated`** is present only when a claimed path survives the runner's investigation floor (`engine_adapter.spot_check_investigated`); a normal non-empty payload reply omits it. Outcome-dependent keys also include **`engagement`** and
 > **`sanitizedView`**. A consumer must **not** read an absent `findings` as "zero findings" — an
 > absent `findings` may mean a different `resultKind` instead; that is the fail-open reading this
 > subsystem exists to prevent. An object carrying **more than one** payload key from
@@ -262,7 +260,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **Review payload transport.** The runner accepts result kinds on stdout
 > (`REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`). Every
 > `ok: true` review result carries **`resultKind`** naming exactly one payload key of that name;
-> **`investigated`** is attached only when at least one claimed path survives spot-checking.
+> **`investigated`** is attached only when a claimed path survives the investigation floor.
 > **Recognition is not gradeability** — widening what the transport can read changes nothing about
 > what it will certify: the investigation floor still forfeits an empty payload with no surviving
 > `investigated` path for **every** kind including `grouping`, and an `--expected-result-kind`

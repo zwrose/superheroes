@@ -169,7 +169,7 @@ written at consult/triage via `commit-ledger`; the deterministic sweep `finalize
 (`latest.json`), and the vitals trend append (`vitals.jsonl`). The sweep **never commits,
 pushes, edits code, or files issues.**
 
-The dispositions ledger record shape (authoritative home: `guardian_ledger.LEDGER_RECORD_FIELDS`).
+The dispositions ledger record shape is defined in `guardian_ledger.LEDGER_RECORD_FIELDS`.
 The report card grades each lens from adjudicated outcomes (authoritative home:
 `guardian_ledger.OUTCOMES_FOR` / `OUTCOMES_AGAINST`). Vitals tracked each sweep (authoritative home:
 `guardian_vitals.VITALS`) each carry a drift threshold (authoritative home:
