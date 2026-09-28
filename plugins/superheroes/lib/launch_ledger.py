@@ -1243,6 +1243,9 @@ def fold(records):
             if rec["pid"] not in pids:
                 pids.append(rec["pid"])
             info["pids"] = pids
+            pid_started = dict(info.get("pidStartedTs", {}))
+            pid_started[rec["pid"]] = rec["ts"]
+            info["pidStartedTs"] = pid_started
         elif event == "retry":
             pass
         elif event in TERMINAL_EVENTS:
@@ -1536,12 +1539,120 @@ def _started_pids_to_probe(info):
     return []
 
 
-def _child_group_is_live(pid):
+_PS_READ_TIMEOUT_SECONDS = 5.0
+# etime is whole seconds and the started record is written just after spawn.
+_PID_START_TOLERANCE_SECONDS = 5.0
+
+
+def _parse_etime(text):
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    if not text:
+        return None
+    days = 0
+    if "-" in text:
+        day_part, _, time_part = text.partition("-")
+        try:
+            days = int(day_part)
+        except ValueError:
+            return None
+        if days < 0:
+            return None
+    else:
+        time_part = text
+    parts = time_part.split(":")
+    try:
+        if len(parts) == 2:
+            minutes = int(parts[0])
+            seconds = int(parts[1])
+            if minutes < 0 or seconds < 0 or seconds >= 60:
+                return None
+            return days * 86400 + minutes * 60 + seconds
+        if len(parts) == 3:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = int(parts[2])
+            if (
+                hours < 0
+                or minutes < 0
+                or seconds < 0
+                or minutes >= 60
+                or seconds >= 60
+            ):
+                return None
+            return days * 86400 + hours * 3600 + minutes * 60 + seconds
+    except ValueError:
+        return None
+    return None
+
+
+def _read_process_facts(pid):
+    try:
+        result = subprocess.run(
+            [
+                "ps",
+                "-ww",
+                "-p",
+                str(pid),
+                "-o",
+                "stat=",
+                "-o",
+                "etime=",
+                "-o",
+                "command=",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_PS_READ_TIMEOUT_SECONDS,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    line = (result.stdout or "").strip()
+    if not line:
+        return None
+    fields = line.split(None, 2)
+    if len(fields) < 3:
+        return None
+    stat, etime, command = fields[0], fields[1], fields[2]
+    if not command:
+        return None
+    elapsed = _parse_etime(etime)
+    if elapsed is None:
+        return None
+    return {"stat": stat, "startTs": time.time() - elapsed, "command": command}
+
+
+def _pid_is_foreign(pid, started_ts, session_id):
+    facts = _read_process_facts(pid)
+    if facts is None:
+        return False
+    if "Z" in facts["stat"]:
+        return False
+    foreign_start = False
+    same_start = False
+    if isinstance(started_ts, (int, float)) and not isinstance(started_ts, bool):
+        foreign_start = facts["startTs"] > started_ts + _PID_START_TOLERANCE_SECONDS
+        same_start = not foreign_start
+    foreign_session = False
+    same_session = False
+    if isinstance(session_id, str) and session_id:
+        same_session = session_id in facts["command"]
+        foreign_session = not same_session
+    return (foreign_start or foreign_session) and not (same_start or same_session)
+
+
+def _child_group_is_live(pid, *, started_ts, session_id):
     """True when the recorded pid or its process group still has live members.
 
     Signal 0 is an existence probe, never a real signal: this function must never
-    change another process's state. Every uncertain answer is True, because the
-    caller refuses on True — a wrong answer here costs a refusal, not a kill.
+    change another process's state. When the leader pid answers alive, a positive
+    foreign identity read treats the builder as gone; every other uncertain answer
+    is True, because the caller refuses on True — a wrong answer here costs a
+    refusal, not a kill.
     """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
@@ -1554,6 +1665,7 @@ def _child_group_is_live(pid):
     except OSError:
         return True
     deadline = time.monotonic() + settle_seconds
+    foreign_cached = None
     while True:
         proc_alive = False
         group_alive = False
@@ -1575,6 +1687,12 @@ def _child_group_is_live(pid):
             return True
         except OSError:
             return True
+        if proc_alive:
+            if foreign_cached is None:
+                foreign_cached = _pid_is_foreign(pid, started_ts, session_id)
+            if foreign_cached:
+                # A reused leader pid means the old builder's group is gone; skip killpg.
+                return False
         if proc_alive or group_alive:
             if time.monotonic() >= deadline:
                 return True
@@ -1695,7 +1813,11 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
             # One _child_group_is_live per recorded attempt, each with bounded
             # settle — all inside the lock. At most one started per launch today.
             for pid in _started_pids_to_probe(info):
-                if _child_group_is_live(pid):
+                if _child_group_is_live(
+                    pid,
+                    started_ts=info.get("pidStartedTs", {}).get(pid),
+                    session_id=info.get("sessionId"),
+                ):
                     return {
                         "ok": False,
                         "reason": "terminal-child-live:%s" % pid,
@@ -1711,7 +1833,11 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                         "ok": False, "reason": "terminal-repair-unavailable",
                         "kind": None, "outcome": None, "reaped": reaped,
                     }
-                if _child_group_is_live(started_repair["pid"]):
+                if _child_group_is_live(
+                    started_repair["pid"],
+                    started_ts=None,
+                    session_id=info.get("sessionId"),
+                ):
                     return {
                         "ok": False,
                         "reason": "terminal-child-live:%s" % started_repair["pid"],

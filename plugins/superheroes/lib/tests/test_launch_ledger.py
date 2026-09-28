@@ -2166,7 +2166,7 @@ def test_terminalize_refuses_pid_one(tmp_path):
     result = ll.fold(records)
     assert result["ok"] is False
     assert result["reason"] == "fold-bad-field:started:pid"
-    assert ll._child_group_is_live(1) is True
+    assert ll._child_group_is_live(1, started_ts=None, session_id=None) is True
 
 
 def test_terminalize_repair_refuses_a_live_group(tmp_path, monkeypatch):
@@ -2351,7 +2351,9 @@ def test_child_group_is_live_detects_a_non_leader_pid(tmp_path, monkeypatch):
     proc = subprocess.Popen(["sleep", "30"])
     try:
         assert os.getpgid(proc.pid) != proc.pid
-        assert ll._child_group_is_live(proc.pid) is True
+        assert ll._child_group_is_live(
+            proc.pid, started_ts=None, session_id=None,
+        ) is True
 
         repo = _init_repo(tmp_path / "repo")
         _ledger_env(tmp_path, monkeypatch)
@@ -4221,7 +4223,7 @@ def _scripted_liveness(monkeypatch, answers):
     """Script the liveness probe; the last answer repeats. Returns the call log."""
     calls = []
 
-    def fake(pid):
+    def fake(pid, **_identity):
         calls.append(pid)
         return answers[min(len(calls) - 1, len(answers) - 1)]
 
@@ -4365,7 +4367,7 @@ def test_record_outcome_await_exit_survives_a_probe_costlier_than_the_ceiling(
 
     probes = []
 
-    def slow_probe(pid):
+    def slow_probe(pid, **_identity):
         probes.append(pid)
         clock.now += 2.0  # what _child_group_is_live's settle really costs
         return len(probes) < 2
@@ -5351,3 +5353,406 @@ def test_fold_premise_stack_field_invalid_values_fold_to_none():
     assert lane["stack"] is None
     assert lane["layerPosition"] is None
     assert lane["layersPlanned"] is None
+
+
+# --- recorded-pid identity (#1496) --------------------------------------------
+
+
+def _recording_signal_probes(monkeypatch, alive_pids):
+    """Signal-0 probes that record every (pid, sig); alive_pids answer live."""
+    alive = set(alive_pids)
+    signals = []
+
+    def kill(pid, sig):
+        signals.append((pid, sig))
+        if pid not in alive:
+            raise ProcessLookupError(pid)
+
+    def killpg(pid, sig):
+        signals.append((pid, sig))
+        if pid not in alive:
+            raise ProcessLookupError(pid)
+
+    monkeypatch.setattr(ll.os, "kill", kill)
+    monkeypatch.setattr(ll.os, "killpg", killpg)
+    return signals
+
+
+def _identity_lane(tmp_path, monkeypatch, launch_id, started_ts, repo_name="repo", **reserved_extra):
+    repo = _init_repo(tmp_path / repo_name)
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-%s" % launch_id
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo, **reserved_extra))
+    started = _started(launch_id)
+    started["ts"] = started_ts
+    assert ll.append(repo, started)
+    return repo
+
+
+def _facts(start_ts, command, stat="SNs"):
+    return {"stat": stat, "startTs": start_ts, "command": command}
+
+
+def test_record_outcome_allows_reused_pid_by_start_time_sessionless_lane(
+    tmp_path, monkeypatch,
+):
+    # axis: foreign start time with no session arm — probe must not block terminalize
+    started_ts = 1_700_000_000.0
+    repo = _identity_lane(tmp_path, monkeypatch, "l-reuse-start", started_ts)
+    _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(started_ts + 3600, "claude unrelated"),
+    )
+
+    result = ll.record_outcome(repo, "l-reuse-start", "handback", "done")
+
+    assert result["ok"] is True
+    outcomes = [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
+    assert len(outcomes) == 1
+
+
+def test_record_outcome_allows_reused_pid_by_session_id(tmp_path, monkeypatch):
+    # axis: foreign session with a late start time — both arms foreign, no same evidence
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    started_ts = 1_700_000_000.0
+    repo = _identity_lane(
+        tmp_path,
+        monkeypatch,
+        "l-reuse-session",
+        started_ts,
+        sessionId=session_id,
+    )
+    _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(started_ts + 3600, "claude unrelated"),
+    )
+
+    result = ll.record_outcome(repo, "l-reuse-session", "handback", "done")
+
+    assert result["ok"] is True
+
+
+def test_record_outcome_refuses_own_live_builder_with_session(tmp_path, monkeypatch):
+    # axis: matching session and early start — identity must keep the lane live
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    started_ts = 1_700_000_000.0
+    repo = _identity_lane(
+        tmp_path,
+        monkeypatch,
+        "l-own-session",
+        started_ts,
+        sessionId=session_id,
+    )
+    _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(
+            started_ts - 1,
+            "claude --session-id %s" % session_id,
+        ),
+    )
+
+    result = ll.record_outcome(repo, "l-own-session", "handback", "done")
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_record_outcome_refuses_own_live_builder_sessionless(tmp_path, monkeypatch):
+    # axis: early start with no session arm — start arm alone keeps the builder live
+    started_ts = 1_700_000_000.0
+    repo = _identity_lane(tmp_path, monkeypatch, "l-own-start", started_ts)
+    _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(started_ts - 1, "claude builder"),
+    )
+
+    result = ll.record_outcome(repo, "l-own-start", "handback", "done")
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_record_outcome_refuses_when_process_facts_unreadable(tmp_path, monkeypatch):
+    # axis: unreadable identity — uncertain reads live
+    started_ts = 1_700_000_000.0
+    repo = _identity_lane(tmp_path, monkeypatch, "l-unreadable", started_ts)
+    _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: None)
+
+    result = ll.record_outcome(repo, "l-unreadable", "handback", "done")
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_record_outcome_refuses_on_conflicting_identity_arms(tmp_path, monkeypatch):
+    # axis: one arm same and one foreign — conflict must read live
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    started_ts = 1_700_000_000.0
+    repo = _identity_lane(
+        tmp_path,
+        monkeypatch,
+        "l-conflict",
+        started_ts,
+        sessionId=session_id,
+    )
+    _recording_signal_probes(monkeypatch, {999999})
+
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(started_ts, "claude unrelated"),
+    )
+    result_a = ll.record_outcome(repo, "l-conflict", "handback", "done")
+    assert result_a["ok"] is False
+    assert result_a["reason"] == "terminal-child-live:999999"
+
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(
+            started_ts + 3600,
+            "claude --session-id %s" % session_id,
+        ),
+    )
+    result_b = ll.record_outcome(repo, "l-conflict", "handback", "done")
+    assert result_b["ok"] is False
+    assert result_b["reason"] == "terminal-child-live:999999"
+
+
+def test_record_outcome_refuses_zombie_leader_despite_foreign_hints(tmp_path, monkeypatch):
+    # axis: zombie stat — identity stays uncertain even with foreign-looking facts
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    started_ts = 1_700_000_000.0
+    repo = _identity_lane(
+        tmp_path,
+        monkeypatch,
+        "l-zombie",
+        started_ts,
+        sessionId=session_id,
+    )
+    _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(started_ts + 3600, "claude unrelated", stat="Z"),
+    )
+
+    result = ll.record_outcome(repo, "l-zombie", "handback", "done")
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_record_outcome_ignores_reused_earlier_attempt_pid(tmp_path, monkeypatch):
+    # axis: two attempts — only the latest pid must gate terminalize
+    launch_id = "l-two-pids"
+    T = 1_700_000_000.0
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-two"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+    assert ll.append(repo, dict(_started(launch_id, attempt=1, pid=999998), ts=T))
+    assert ll.append(repo, dict(_started(launch_id, attempt=2, pid=999999), ts=T + 100))
+    folded = ll.fold(ll.read(repo)["records"])
+    assert folded["launches"][launch_id]["pidStartedTs"] == {999998: T, 999999: T + 100}
+
+    _recording_signal_probes(monkeypatch, {999998})
+
+    def facts(pid):
+        if pid == 999998:
+            return _facts(T + 50, "claude unrelated")
+        return None
+
+    monkeypatch.setattr(ll, "_read_process_facts", facts)
+
+    result = ll.record_outcome(repo, launch_id, "handback", "done")
+
+    assert result["ok"] is True
+
+
+def test_terminalize_repair_session_arm_alone(tmp_path, monkeypatch):
+    # axis: repair path has no started_ts — session substring is the only identity arm
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    _ledger_env(tmp_path, monkeypatch)
+    repair = {
+        "attempt": 1,
+        "pid": 999999,
+        "logPath": "/tmp/log",
+        "errPath": "/tmp/err",
+    }
+
+    repo_foreign = _init_repo(tmp_path / "repo-foreign")
+    ll.reserve(
+        repo_foreign,
+        _reserved("l-repair-foreign", "b-rf", ["a"], repo_foreign, sessionId=session_id),
+    )
+    _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(time.time(), "claude unrelated"),
+    )
+    foreign = ll.terminalize(
+        repo_foreign,
+        "l-repair-foreign",
+        child_ever_spawned=True,
+        outcome="handback",
+        evidence="done",
+        started_repair=repair,
+    )
+    assert foreign["ok"] is True
+
+    repo_own = _init_repo(tmp_path / "repo-own")
+    ll.reserve(
+        repo_own,
+        _reserved("l-repair-own", "b-ro", ["a"], repo_own, sessionId=session_id),
+    )
+    _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(
+            time.time(),
+            "claude --session-id %s" % session_id,
+        ),
+    )
+    own = ll.terminalize(
+        repo_own,
+        "l-repair-own",
+        child_ever_spawned=True,
+        outcome="handback",
+        evidence="done",
+        started_repair=repair,
+    )
+    assert own["ok"] is False
+    assert own["reason"] == "terminal-child-live:999999"
+
+
+def test_recorded_pid_identity_never_sends_real_signals(tmp_path, monkeypatch):
+    # axis: existence probes stay signal 0 across foreign, own, and unreadable paths
+    log = []
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    started_ts = 1_700_000_000.0
+
+    repo_foreign = _identity_lane(
+        tmp_path, monkeypatch, "l-sig-foreign", started_ts, repo_name="repo-foreign",
+    )
+    sig_foreign = _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(started_ts + 3600, "claude"),
+    )
+    ll.record_outcome(repo_foreign, "l-sig-foreign", "handback", "done")
+    log.extend(sig_foreign)
+
+    repo_own = _identity_lane(
+        tmp_path,
+        monkeypatch,
+        "l-sig-own",
+        started_ts,
+        repo_name="repo-own",
+        sessionId=session_id,
+    )
+    sig_own = _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: _facts(started_ts - 1, "claude --session-id %s" % session_id),
+    )
+    ll.record_outcome(repo_own, "l-sig-own", "handback", "done")
+    log.extend(sig_own)
+
+    repo_unread = _identity_lane(
+        tmp_path, monkeypatch, "l-sig-none", started_ts, repo_name="repo-unread",
+    )
+    sig_unread = _recording_signal_probes(monkeypatch, {999999})
+    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: None)
+    ll.record_outcome(repo_unread, "l-sig-none", "handback", "done")
+    log.extend(sig_unread)
+
+    assert log
+    assert all(sig == 0 for _pid, sig in log)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("03:57", 237),
+        ("01:05:12", 3912),
+        ("3-01:05:12", 263112),
+        ("abc", None),
+        ("1:2:3:4", None),
+        ("", None),
+        ("-01:00", None),
+    ],
+)
+def test_parse_etime(text, expected):
+    # axis: procps etime grammar for identity elapsed seconds
+    assert ll._parse_etime(text) == expected
+
+
+@pytest.mark.parametrize(
+    "run_result",
+    [
+        subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="S\n", stderr=""),
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="S abc cmd\n", stderr=""),
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="S 00:05 \n", stderr=""),
+    ],
+)
+def test_read_process_facts_all_or_nothing_on_bad_ps_output(monkeypatch, run_result):
+    # axis: malformed or empty ps output must not leak partial facts
+    monkeypatch.setattr(ll.subprocess, "run", lambda *args, **kwargs: run_result)
+    assert ll._read_process_facts(424242) is None
+
+
+def test_read_process_facts_parses_well_formed_ps_line(monkeypatch):
+    # axis: a single well-formed ps line yields stat, command, and startTs
+    line = "SNs  03:57 claude --session-id X\n"
+    monkeypatch.setattr(
+        ll.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=line, stderr="",
+        ),
+    )
+    before = time.time()
+    facts = ll._read_process_facts(424242)
+    after = time.time()
+    assert facts is not None
+    assert facts["stat"] == "SNs"
+    assert facts["command"] == "claude --session-id X"
+    assert before - 237 - 2 <= facts["startTs"] <= after - 237 + 2
+
+
+def test_read_process_facts_timeout_returns_none(monkeypatch):
+    # axis: ps timeout is unknown, not an exception to callers
+    monkeypatch.setattr(
+        ll.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(cmd="ps", timeout=5),
+        ),
+    )
+    assert ll._read_process_facts(424242) is None
+
+
+def test_read_process_facts_real_invocation():
+    # axis: live ps on this host — Linux smoke on CI
+    facts = ll._read_process_facts(os.getpid())
+    assert facts is not None
+    assert facts["command"]
+    assert facts["startTs"] <= time.time()
