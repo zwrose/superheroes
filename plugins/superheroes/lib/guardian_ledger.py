@@ -35,8 +35,8 @@ stale splice — so a concurrent owner edit is never deleted. Under the sweep lo
 `_write_locked` retries up to `_WRITE_ATTEMPTS` times; exhaustion returns
 `reason: raced-out` and writes nothing.
 
-**Schema extension — `adjudicatedIn`.** Beyond the ratified §5 record shape
-(`LEDGER_RECORD_FIELDS`), a record carries `adjudicatedIn`: the **sweep id** it was first
+**Schema extension — `ADJUDICATED_IN`.** Beyond the ratified §5 record shape
+(`LEDGER_RECORD_FIELDS`), a record carries the `ADJUDICATED_IN` field: the **sweep id** it was first
 adjudicated in, set once and immutable thereafter. Reason: the report card's "≥3 sweeps"
 evidence floor cannot be computed or audited from `date` alone — two sweeps on the same day
 collapse into one date, and any later state change would rewrite `date` and thereby rewrite

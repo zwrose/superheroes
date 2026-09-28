@@ -37,7 +37,8 @@ requires a child to build or check something is owned by that child**, never lis
 
 | Criterion | Owner | Consumers / notes |
 | --- | --- | --- |
-| FR-1 — removal only on cannot-bite evidence (all four bullets) | **P7** — the cut list is where the policy first executes; every cut carries its evidence | P5 (FR-18a classes; UFR-5 re-run encoding). **FR-26 removals are FR-1's stated exception, not a consumer** — owner-authorized coverage obligations on diagnosis evidence, outside the cannot-bite bar (R17 carve-out). Shared vocabulary bound as R17 |
+| FR-1 — removal only on cannot-bite evidence (first four bullets) | **P7** — the cut list is where the policy first executes; every cut carries its evidence | P5 (FR-18a classes; UFR-5 re-run encoding). **FR-26 removals are FR-1's stated exception, not a consumer** — owner-authorized coverage obligations on diagnosis evidence, outside the cannot-bite bar (R17 carve-out). Shared vocabulary bound as R17 |
+| FR-1 — retired-subject removal (fifth bullet): drift pin deleted with its mirror under the one-home rule, on owner approval and a named edit without cannot-bite evidence | **P7** — same cut-list execution surface as the cannot-bite bullets; the named edit uses R2's form | P5 (UFR-5 vet encoding for the retired-subject bar); FR-17 treats this path like cannot-bite cuts (not bulk removal) |
 | FR-2 — rail definition: **recognition** (the lens flags an undeclared or uninventoried rail by what it tests — FR-18c's arm; the definition itself is spec-resident vocabulary, since a rail *absent from* the inventory must still be recognizable) | **P5** | corrected rounds 1–3: recognition, membership, and lane-derivation are three singly-owned rows |
 | FR-2 — rail definition: **membership** (the inventory, seeded from `rail-census-v3`, is the operational rail set) | **P7** | R3 |
 | FR-2 — rail definition: **lane derivation** (rail lane = the inventory) | **P3a** | R3 |
