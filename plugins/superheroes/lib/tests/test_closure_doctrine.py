@@ -1,6 +1,7 @@
 """Drift guards for showrunner spec-closure doctrine (issue #938).
 
-Enforces: closure.md structure; R8 element-list home; vet-receipt and decomposition seam surfaces.
+Enforces: load-bearing closure rules in closure.md (home-only pins); closure.md structure;
+R8 element-list home; vet-receipt and decomposition seam surfaces.
 """
 # What this file does and does not guard (issue #938).
 #
@@ -41,6 +42,51 @@ def _census_excluded(rel):
         norm.startswith(os.path.normpath(d) + os.sep) for d in _CENSUS_EXCLUDED_DIRS
     )
 
+
+PIN_PRESENT_TENSE = (
+    "The vet that carries the closure receipt is the one whose merge closes the spec's last open "
+    "child, and it knows it is the final vet by the present-tense test: every other child is "
+    "already merged or closed at the moment of this vet."
+)
+
+PIN_SEQUENCING = (
+    "Where more than one candidate closure moment is live — concurrent final vets, or a vet racing "
+    "a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt."
+)
+
+PIN_NO_PR_CLOSE = (
+    "Where the last open child closes without a PR — declined scope — the closure receipt is "
+    "presented to the owner with that close, in the same sitting, and there is still no separate "
+    "closure trigger."
+)
+
+PIN_DELIVERY_DECISION = (
+    "No spec closes without either full delivery accepted or an explicit owner acceptance of "
+    "partial delivery, named as such on the closure receipt with delivered, deferred, and declined "
+    "each named; nothing closes silently incomplete."
+)
+
+PIN_FAILING_RUN = (
+    "A failing end-to-end validation run keeps the spec open by default and mints one repair issue "
+    "per failure, each anchored to the failing run's record and naming the unmet acceptance "
+    "criterion it restores; the owner may instead explicitly accept delivery with the failing run "
+    "disclosed, and either way the cycle ends at an owner decision."
+)
+
+PIN_ABANDONED_CHILD = (
+    "A spec whose child is abandoned — closed unmerged, orphaned, or displaced — is re-planned or "
+    "parked by the advisor rather than left waiting for a closure moment that cannot come; silence "
+    "is not a disposition."
+)
+
+_CLOSURE_HOME_PINS = (
+    PIN_PRESENT_TENSE,
+    PIN_SEQUENCING,
+    PIN_NO_PR_CLOSE,
+    PIN_DELIVERY_DECISION,
+    PIN_FAILING_RUN,
+    PIN_ABANDONED_CHILD,
+)
 
 R8_CLOSURE_RECEIPT_ELEMENTS = (
     "The closure receipt enumerates exactly: coverage map complete; all other children merged "
@@ -114,6 +160,16 @@ def _github_anchor(title):
     slug = title.lower()
     slug = re.sub(r"[^a-z0-9 _\-]", "", slug)
     return slug.replace(" ", "-")
+
+
+def _assert_pinned_present(text, pin, label):
+    if _normalized(pin) not in _normalized(text):
+        raise AssertionError(f"{label}: pinned sentence missing after whitespace normalization")
+
+
+def _assert_pinned_in_home(pin):
+    text = _read_plugin(_CLOSURE_REF)
+    _assert_pinned_present(text, pin, _CLOSURE_REF)
 
 
 def _contents_section(text):
@@ -293,6 +349,25 @@ def _assert_section_names_closure_md(text, heading_title):
         )
 
 
+# --- Load-bearing closure rules (closure.md home) ------------------------------
+
+
+@pytest.mark.parametrize(
+    "pin",
+    _CLOSURE_HOME_PINS,
+    ids=[
+        "present-tense",
+        "sequencing",
+        "no-pr-close",
+        "delivery-decision",
+        "failing-run",
+        "abandoned-child",
+    ],
+)
+def test_closure_rule_present_in_home(pin):
+    _assert_pinned_in_home(pin)
+
+
 # --- closure.md structure ----------------------------------------------------
 
 
@@ -385,6 +460,14 @@ def test_decomposition_single_issue_fast_path_names_closure_md():
 
 
 # --- Negative tests (synthetic strings; no repo mutation) --------------------
+
+
+def test_negative_missing_pinned_sentence():
+    synthetic = "closure.md without the pinned closure sentence."
+    _expect_assertion_error(
+        lambda: _assert_pinned_present(synthetic, PIN_PRESENT_TENSE, "synthetic"),
+        match="pinned sentence missing",
+    )
 
 
 def _assert_h2_headings_match_pinned(text, ref_rel, pinned_headings):
