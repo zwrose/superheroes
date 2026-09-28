@@ -30,8 +30,8 @@ checkpoint Step 1 does — a cross-check only. Where the host names no transcrip
 names its own charter from how it was invoked.
 
 Establish the **running version** from the first source that resolves, in order: a
-`plugin version taken up: <fromRoot> -> <toRoot>` line this seat itself wrote in its durable
-state (the running root is **toRoot**); the bootstrap's resolved plugin root in context; the
+`plugin version taken up: <from> -> <to>` line this seat itself wrote in its durable state
+(the running root is the host cache directory plus **to**); the bootstrap's resolved plugin root in context; the
 plugin root in this seat's own recent commands; on Claude Code, the SessionStart injection
 recorded in the session transcript. If none resolves, do not guess — carry the gap to step 8
 and stop after the brief.
@@ -42,8 +42,8 @@ SessionStart recovery re-injects the **old** plugin root and tells the seat to r
 charter SKILL.md from that old root. Nothing outside this skill enforces the
 taken-up line over that injection. After any compaction, this seat's **first** act is to
 re-run `/superheroes:adopt-version`: it finds the `plugin version taken up` line this seat
-wrote, ends at `upToDate` when the running root already matches **toRoot**, retargets every
-command to **toRoot**, and re-reads the charter from **toRoot** — not from recovery paths that
+wrote, ends at `upToDate` when the running root already matches the host cache directory plus
+**to**, retargets every command to that root, and re-reads the charter from it — not from recovery paths that
 still name the old root.
 
 Name the **host-provided plugin root** — the bootstrap's resolved plugin root in context, or
@@ -67,9 +67,15 @@ python3 -B "$NEW_ROOT/lib/adopt_version.py" plan --role "$ROLE" \
 A refusal (exit 1, `{"ok":false,"reason":...}`) stops the procedure — report the reason token
 to the owner. When `upToDate: true`, end with a one-line report. Read TRANSITION's section
 for **every** version listed in `transitionSections` (each patch in range counts) from the
-new root (`toRoot`). Name any `missingTransitionSections` entries in the owner brief.
+new root (`toRoot`). For each version in `missingTransitionSections`, read that version's
+section in `CHANGELOG.md` at `toRoot` — absence of a TRANSITION section is normal when the
+release recorded no consumer-visible shape change. Record each such version as **no TRANSITION
+section (no consumer-visible change recorded)** unless the CHANGELOG names a removal, rename,
+or breaking change: then mark it **unresolved** (a TRANSITION gap the release should cover).
 
-**Output:** from, to, the in-between versions, and the TRANSITION sections read.
+**Output:** from, to, the in-between versions, TRANSITION sections read, and each
+`missingTransitionSections` entry as either **no TRANSITION section (no consumer-visible change
+recorded)** or **unresolved** (why).
 
 ## Step 2 — Sort the changes
 
@@ -85,8 +91,10 @@ changed.
 When the **charter** bucket is non-empty: re-read the **whole** charter for this seat from
 disk under the new root in one read (not diff hunks — duties triggered by events hide in
 text that looks unchanged), then every changed reference page the charter points to, and
-write one line `adopted <version>: what changed in my duties` into the seat's durable state
-(the advisor's resume point; a builder's or detective's issue or PR record).
+write one line `adopted <version>: what changed in my duties` into this seat's durable state
+(the showrunner advisor's resume point; a workhorse builder's PR build record, or an issue
+comment before the PR exists; a detective seat keeps it in-session and carries it in the
+diagnosis receipt when it posts one — never as a separate tracker write).
 
 When `rubric/covenant.md` changed: re-read it — the copy injected at session start is stale
 and the file on disk governs. When `hooks/` changed: tell the owner at step 8 and treat new
@@ -126,7 +134,11 @@ resolved; then resume adoption from step 5.
 
 ## Step 5 — Switch the plugin root
 
-Skip this step while step 4 left any owner-input checklist item unresolved.
+Skip this step while step 4 left any owner-input checklist item unresolved, or step 1 left
+any **unresolved** TRANSITION gap. When step 1 left any **unresolved** gap, stop after step 4:
+brief the owner at step 8 with those versions as numbered decisions, and do not run steps 5–7
+until each is resolved (release supplies a section or the owner accepts no action); then resume
+adoption from step 5.
 
 Every absolute path in this seat's commands and launches now uses the new version directory
 (`toRoot` from `plan`), **except** commands that continue a live dispatch run the inventory
@@ -163,9 +175,12 @@ and output, leave adoption **pending** (no `plugin version taken up` line), and 
 step 7's new-root lanes until probes pass or the owner rules otherwise.
 
 When **every** required probe passes, write one line
-`plugin version taken up: <fromRoot> -> <toRoot>` into this seat's durable state (the
-advisor's resume point; a builder's or detective's issue or PR record). That line outranks the
-bootstrap block and SessionStart injection on the next adoption and after compaction.
+`plugin version taken up: <from> -> <to>` (versions only — never absolute cache paths) into
+this seat's durable state (the showrunner advisor's resume point; a workhorse builder's PR
+build record, or an issue comment before the PR exists; a detective seat keeps it in-session
+and carries it in the diagnosis receipt when it posts one — never as a separate tracker write).
+That line outranks the bootstrap block and SessionStart injection on the next adoption and after
+compaction.
 
 **Output:** one probe result per engine, any retired owner words, any held ledger kinds, and
 confirmation the taken-up line was written — or the failure that blocked it.
@@ -188,8 +203,9 @@ In chat, plain language: what changed that the owner will notice; what this seat
 its own practice; checklist items done; **inputs needed** — each as a numbered decision with
 its context, options, consequences, and a recommendation per
 `skills/showrunner/reference/owner-decisions.md` (read that page; do not restate its spine);
-and residuals (old-root lanes still running, hooks awaiting a restart, missing TRANSITION
-sections).
+and residuals (old-root lanes still running, hooks awaiting a restart, **unresolved**
+TRANSITION gaps from step 1, and any **no TRANSITION section (no consumer-visible change
+recorded)** entries named for awareness).
 
 **Output:** the brief.
 
