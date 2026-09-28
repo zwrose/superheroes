@@ -33,3 +33,37 @@ Node prefix `C` = `test_is_test_path_matches_each_convention`.
 **Restore receipts:** after the E1–E5 restores, after E6–E10 and after E11–E13, the whole file ran `44 passed` with exit 0 and `git status --porcelain` over `size_count.py` printed nothing.
 
 **Green:** `44 passed` (final run, exit 0).
+
+## Continuation — fixture conventions (E14–E19)
+
+**Head proven:** `f20ea569` plus uncommitted order work on branch `build/1505-fixture-conventions`. After each restore `diff plugins/superheroes/lib/size_count.py /private/tmp/wo1505b-scratch-cmp/size_count.py.post-impl` was empty.
+
+**Provenance:** cursor implementer (`composer-2.5`), WO-1505-B.
+
+**Command** (whole file):
+
+```
+scripts/pinned-python -B -X pycache_prefix=/private/tmp/wo1505b-pyc -m pytest plugins/superheroes/lib/tests/test_size_count.py -q -p no:cacheprovider -rf
+```
+
+Node prefix `C` = `test_is_test_path_matches_each_convention`; `L` = `test_is_test_path_rejects_look_alikes`.
+
+| ID | Guarded element (`size_count.py`) | Axis | Neutralization | Red set (exact) | Decisive red line |
+|---|---|---|---|---|---|
+| E14 | :10 member `testdata` | `testdata` as a directory | drop `"testdata", ` from `TEST_DIR_NAMES` | `C[dir-testdata]` — 1 failed, 63 passed | `assert False` … `is_test_path('go/pkg/testdata/golden.txt')` |
+| E15 | :10 member `__mocks__` | `__mocks__` as a directory | drop `"__mocks__", ` | `C[dir-__mocks__]`, `C[dir-case-__Mocks__]` — 2 failed, 62 passed | `is_test_path('src/__mocks__/api.ts')` → False |
+| E16 | :10 member `__fixtures__` | `__fixtures__` as a directory | drop `"__fixtures__"` | `C[dir-__fixtures__]` — 1 failed, 63 passed | `is_test_path('src/__fixtures__/user.json')` → False |
+| E17 | :17 glob `conftest.py` | pytest conftest file name | delete the `"conftest.py",` line | `C[glob-conftest.py]` — 1 failed, 63 passed | `is_test_path('plugins/x/conftest.py')` → False |
+| E18 | :28 `component.lower()` | directory names case-insensitive | `component.lower() in TEST_DIR_NAMES` → `component in TEST_DIR_NAMES` | `C[dir-case-Tests]`, `C[dir-case-__Mocks__]`, `C[dir-case-E2E]` — 3 failed, 61 passed | `is_test_path('Tests/x.py')` → False |
+| E19 | :31 `fnmatchcase(name, …)` | file-name globs case-sensitive | `fnmatchcase(name, pattern)` → `fnmatchcase(name.lower(), pattern)` | `L[src/Foo.Test.ts]`, `L[Conftest.py]` — 2 failed, 62 passed | `assert not True` … `is_test_path('src/Foo.Test.ts')` |
+
+**Restore receipts (restored lines quoted):**
+
+- E14: `TEST_DIR_NAMES = frozenset({"test", "tests", "__tests__", "spec", "e2e", "testdata", "__mocks__", "__fixtures__"})`
+- E15: re-added `"__mocks__", ` to `TEST_DIR_NAMES`
+- E16: re-added `"__fixtures__"` to `TEST_DIR_NAMES`
+- E17: re-added `"conftest.py",` to `TEST_FILE_GLOBS`
+- E18: `if component.lower() in TEST_DIR_NAMES:`
+- E19: `return any(fnmatch.fnmatchcase(name, pattern) for pattern in TEST_FILE_GLOBS)`
+
+**Green:** `64 passed` (post-E19 restore, exit 0).

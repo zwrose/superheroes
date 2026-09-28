@@ -46,6 +46,13 @@ MATCHES = [
     ("lib/test_x.py", "glob-test_*.py"),
     ("pkg/x_test.py", "glob-*_test.py"),
     ("pkg/x_test.go", "glob-*_test.go"),
+    ("go/pkg/testdata/golden.txt", "dir-testdata"),
+    ("src/__mocks__/api.ts", "dir-__mocks__"),
+    ("src/__fixtures__/user.json", "dir-__fixtures__"),
+    ("plugins/x/conftest.py", "glob-conftest.py"),
+    ("Tests/x.py", "dir-case-Tests"),
+    ("src/__Mocks__/api.ts", "dir-case-__Mocks__"),
+    ("E2E/login.ts", "dir-case-E2E"),
 ]
 
 LOOK_ALIKES = [
@@ -61,15 +68,35 @@ LOOK_ALIKES = [
     "lib/attestation.go",
     "src/testing.ts",
     "lib/x_test.rb",
+    "lib/mocks.py",
+    "docs/fixtures.md",
+    "src/testdata.ts",
+    "conftest.py.bak",
+    "fixtures/seed.json",
+    "mocks/client.ts",
+    "src/Foo.Test.ts",
+    "Conftest.py",
+    "lib/myconftest.py",
     "",
 ]
 
-BARE_NAMES = ["test", "tests", "__tests__", "spec", "e2e", "lib/tests"]
+BARE_NAMES = [
+    "test",
+    "tests",
+    "__tests__",
+    "spec",
+    "e2e",
+    "lib/tests",
+    "testdata",
+    "__mocks__",
+    "__fixtures__",
+]
 
 GLOB_DIRS = [
     "src/widget.test.ts/index.ts",
     "src/widget.spec.ts/index.ts",
     "test_dir.py/mod.rb",
+    "src/conftest.py/index.rb",
 ]
 
 COUNT_ROWS = [
