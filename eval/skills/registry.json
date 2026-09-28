@@ -40,6 +40,11 @@
       "posts a checkbox plan to the PR",
       "Does NOT execute the plan (that is test-pilot-execute)"
     ],
+    "superheroes/adopt-version": [
+      "adopt it in place, no handoff and resume",
+      "runs TRANSITION's checklist",
+      "Not checkpoint or resume"
+    ],
     "superheroes/architect-discovery": [
       "START of any new piece of work in a superheroes project",
       "owner-approved requirements spec",
