@@ -201,3 +201,56 @@ big pictures and few words' several times a day" (Sep 21). Matches the mixed-med
 3. Candidate requirement carried forward: a product-level grounding doc written as decisions,
    constraints and non-goals (not narrative), routed to builders and reviewers.
 4. Run the discovery coverage checklist before the framing gate.
+
+## Session 3 (2026-09-21 to 2026-09-28, local, instance -three)
+
+**The owner-vs-craft line is ratified** item by item in chat; see `OWNER-VS-CRAFT-LINE.md` (clean
+version plus the full rulings log). Binding frame from that walk: this ships in the superheroes
+plugin for any adopting project, and it strengthens the plugin's existing material-consequence
+line rather than adding a second one. "Doubt goes to the owner" stays.
+
+**Direction question left open when the owner went to bed (09-28):** make the spec itself
+reviewable, or stop needing the owner to read it? The owner's worry: a walk written about the
+spec is a translation, and things get lost in translation.
+
+**New input the owner asked to be studied: two weekly-eats discoveries** run in parallel,
+09-25 to 09-28 (#1798 "Need beyond Plans"; #1419 legal terms, Specs A and C), plus the
+advisor seats that vetted their spec PRs. Both converged, independently, on the same practice:
+
+1. Rulings one at a time in chat, then **design before spec**: most product rulings made by
+   looking at drawn frames; the board approved before any spec text is written.
+2. **The board is the owner's truth; the spec is a second copy.** The owner's framing, the same
+   in both sessions: confidence the spec doesn't contradict the board, plus a look at only what
+   the board can't show.
+3. **A tap sheet, not a document:** Aligned / Discuss, a note, a verdict, on a phone. Each round
+   carries only what is unruled or changed, and rounds shrank fast.
+4. **Draw everything drawable.** Drawing the rules the board didn't show caught gaps that two
+   text-only review loops had missed.
+5. **A traceability audit before approval** (the owner asked the same first-principles question
+   in both sessions): every spec statement traced to a frame, a ruling, a confirmed default or a
+   review answer; untraced statements split into owner decisions and craft; only the owner
+   decisions go to the owner. Rules now carry their source tag. This is the provenance filter
+   from session 1, working as a filter the owner never reads.
+6. **The owner applied the ratified line to review itself:** checking that each ruling was
+   written down correctly is agent craft; only the unruled remainder is his.
+7. **Adversarial review rounds added product rules nobody ruled on**; the owner cut most of them
+   when they were shown plainly.
+8. **The advisor's vet** (against the repo and decisions ratified in other specs) found a class
+   of conflict the discovery's own checks could not; both sessions concluded the vet should come
+   before the owner's approval.
+9. Failure modes worth requirements: the spec contradicting the approved board after its own
+   review converged; summary cards silently covering detail; stale cards repeating overturned
+   rulings; rulings recorded only in chat; "approved" ambiguous between board and spec.
+
+**Private records (quote owner sessions; never commit):**
+`~/.claude/wave-logs/spec-alignment-discovery/sessions-study-SYNTHESIS.md` (the synthesis and
+open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' own records at
+`~/.claude/wave-logs/discovery-1798/` and `~/.claude/wave-logs/discovery-1419-record/`.
+
+## Next steps (updated 2026-09-28)
+
+1. Readout of the two-session study to the owner, then resume the one-question-at-a-time
+   dialogue toward a framing. The first question: what the "board" is for a project with no UI.
+2. Remaining open questions, in the synthesis file: the order of vet and approval; what
+   adversarial review may add; the scope of the first work item; cost per spec.
+3. Still owed before the framing gate: the discovery coverage checklist.
