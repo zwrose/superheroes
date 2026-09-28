@@ -25,6 +25,25 @@ def _assert_tokens_present(text, label, tokens):
     assert not missing, "%s missing token(s): %r" % (label, missing)
 
 
+def _conventions_section_15():
+    text = _read_repo("CONVENTIONS.md")
+    m = re.search(r"## 15\. Builder liveness heartbeat.*?(?=\n## 16\.|\Z)", text, re.DOTALL)
+    assert m, "CONVENTIONS §15 not found (renumbered or moved?)"
+    return m.group(0)
+
+
+def test_conventions_section_15_names_heartbeat_identifiers():
+    """§15 names env vars and the quiet-window identifier where builders read them."""
+    section = _conventions_section_15()
+    _assert_tokens_present(
+        section,
+        "CONVENTIONS.md §15",
+        [hb.HEARTBEAT_ROOT_ENV, hb.LAUNCH_ID_ENV, "LIVENESS_QUIET_WINDOW_SECONDS"],
+    )
+    assert "_LAUNCH_ID_RE" in section
+    assert "lib/heartbeat.py" in section
+
+
 def test_wave_watch_doc_cites_the_quiet_window_constant():
     doc = _read_plugin("skills/showrunner/reference/wave-watch.md")
     _assert_tokens_present(

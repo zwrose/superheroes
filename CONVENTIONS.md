@@ -1358,8 +1358,8 @@ canonical ruling record is `LEDGERS.md` §4.
 **Root resolution:** `SUPERHEROES_HEARTBEAT_ROOT` (launcher-exported, already resolved), else
 `launch_ledger.resolve_root()`.
 
-**Lane identity:** `SUPERHEROES_LAUNCH_ID` (launcher-exported) or `--launch-id`; grammar
-`^[A-Za-z0-9_-]{1,64}$`.
+**Lane identity:** `SUPERHEROES_LAUNCH_ID` (launcher-exported) or `--launch-id`; launch-id grammar
+is `_LAUNCH_ID_RE` in `plugins/superheroes/lib/heartbeat.py`.
 
 **Record fields:** `schema` (`1`), `launchId`, `issue`, `state`, `phase`, `lastDispatch`, `ts`,
 `note`.

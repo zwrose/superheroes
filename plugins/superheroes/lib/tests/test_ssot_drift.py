@@ -534,6 +534,60 @@ def _wave_watch_exit_contract_verbs_from_doc(doc):
     return covered
 
 
+def _wave_watch_string_constants_by_prefix(prefix):
+    """Module-level string constants named PREFIX_* — scoped to vocabulary prefixes only."""
+    import wave_watch
+
+    derived = set()
+    for name in dir(wave_watch):
+        if not name.startswith(prefix):
+            continue
+        val = getattr(wave_watch, name)
+        if isinstance(val, str) and val:
+            derived.add(val)
+    return derived
+
+
+def test_wave_watch_vocabulary_registry_self_consistency():
+    """wave_watch EVENT_*/REFUSAL_*/DEGRADATION_* constants match their frozensets; precedence covers EVENTS."""
+    import wave_watch
+
+    derived_events = _wave_watch_string_constants_by_prefix("EVENT_")
+    derived_refusals = _wave_watch_string_constants_by_prefix("REFUSAL_")
+    derived_degradations = _wave_watch_string_constants_by_prefix("DEGRADATION_")
+    home_events = set(wave_watch.EVENTS)
+    home_refusals = set(wave_watch.REFUSALS)
+    home_degradations = set(wave_watch.DEGRADATIONS)
+    assert derived_events == home_events, (
+        "wave_watch EVENT_* constants drift from wave_watch.EVENTS — "
+        "symmetric difference: %r"
+        % sorted(derived_events ^ home_events)
+    )
+    assert derived_refusals == home_refusals, (
+        "wave_watch REFUSAL_* constants drift from wave_watch.REFUSALS — "
+        "symmetric difference: %r"
+        % sorted(derived_refusals ^ home_refusals)
+    )
+    assert derived_degradations == home_degradations, (
+        "wave_watch DEGRADATION_* constants drift from wave_watch.DEGRADATIONS — "
+        "symmetric difference: %r"
+        % sorted(derived_degradations ^ home_degradations)
+    )
+    precedence = list(wave_watch.EVENT_PRECEDENCE)
+    prec_set = set(precedence)
+    assert prec_set == home_events and len(precedence) == len(home_events), (
+        "wave_watch EVENT_PRECEDENCE drift from wave_watch.EVENTS — "
+        "precedence %r (set %r, len %d); EVENTS %r (len %d)"
+        % (
+            precedence,
+            sorted(prec_set),
+            len(precedence),
+            sorted(home_events),
+            len(home_events),
+        )
+    )
+
+
 def test_wave_watch_verbs_in_wave_watch_doc():
     """§11: wave-watch.md documents exactly the CLI subcommands wave_watch.py accepts."""
     home_verbs = _wave_watch_verbs_from_home()
@@ -2044,7 +2098,18 @@ def test_issue_contract_identifiers_in_refusal_table_and_charter_skeleton():
 _REGISTER_CHECK_DOC = "skills/showrunner/reference/register-check.md"
 
 
+def _register_check_string_constants_by_prefix(prefix):
+    """Module-level string constants named PREFIX_* — scoped to vocabulary prefixes only."""
+    import register_check
 
+    derived = set()
+    for name in dir(register_check):
+        if not name.startswith(prefix):
+            continue
+        val = getattr(register_check, name)
+        if isinstance(val, str) and val:
+            derived.add(val)
+    return derived
 
 
 
@@ -2100,6 +2165,40 @@ def _register_check_exit_codes_from_home():
         register_check.EXIT_FAIL: register_check.RESULT_FAIL,
         register_check.EXIT_UNDECIDED: register_check.RESULT_UNDECIDED,
     }
+
+
+def test_register_check_vocabulary_completeness():
+    """Every register_check RESULT_*/KIND_*/UNDECIDED_* constant is in its frozenset."""
+    import register_check
+
+    derived_results = _register_check_string_constants_by_prefix("RESULT_")
+    derived_kinds = _register_check_string_constants_by_prefix("KIND_")
+    derived_undecided = _register_check_string_constants_by_prefix("UNDECIDED_")
+    home_results = set(register_check.RESULTS)
+    home_kinds = set(register_check.FINDING_KINDS)
+    home_undecided = set(register_check.UNDECIDED_REASONS)
+    missing_results = sorted(derived_results - home_results)
+    extra_results = sorted(home_results - derived_results)
+    missing_kinds = sorted(derived_kinds - home_kinds)
+    extra_kinds = sorted(home_kinds - derived_kinds)
+    missing_undecided = sorted(derived_undecided - home_undecided)
+    extra_undecided = sorted(home_undecided - derived_undecided)
+    assert not missing_results and not extra_results, (
+        "register_check RESULT_* constants drift from register_check.RESULTS — "
+        "missing from frozenset: %r; in frozenset but not derived: %r"
+        % (missing_results, extra_results)
+    )
+    assert not missing_kinds and not extra_kinds, (
+        "register_check KIND_* constants drift from register_check.FINDING_KINDS — "
+        "missing from frozenset: %r; in frozenset but not derived: %r"
+        % (missing_kinds, extra_kinds)
+    )
+    assert not missing_undecided and not extra_undecided, (
+        "register_check UNDECIDED_* constants drift from "
+        "register_check.UNDECIDED_REASONS — "
+        "missing from frozenset: %r; in frozenset but not derived: %r"
+        % (missing_undecided, extra_undecided)
+    )
 
 
 def test_register_check_results_table_in_register_check_doc():
