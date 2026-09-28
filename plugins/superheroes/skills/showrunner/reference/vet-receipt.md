@@ -136,12 +136,9 @@ shape is wrong and the thinking wins.
    The disposition begins with one of `fixed` (in this PR), `filed #<n>`, `folded into #<n>`,
    `collector @<pointer>`, `declined` with its revisit trigger, or `info` — e.g. `filed #12`.
    `filed #<n>` stands only when the owner's word for that filing exists, and the bullet names where
-   it was given (e.g. `filed #12 (owner's word: <link>)`), or when the issue is a layer sub-issue
-   whose scope the owner already approved (an owner-approved stack shape or an advisor size split),
-   or when a follow-up stacked as its own layer implements only criteria the owner's word already
-   covers — an owner-approved spec's children, or a replacement child carrying only that child's
-   approved criteria (`skills/showrunner/reference/owner-decisions.md` § The tiers and the filing
-   rule); a follow-up stacked as a new layer that carries scope beyond that approval is
+   it was given (e.g. `filed #12 (owner's word: <link>)`), or when a canonical exception in
+   `skills/showrunner/reference/owner-decisions.md` § The tiers and the filing rule already covers
+   the filing — name which exception applies and where the word was given. Anything else stays
    `collector @<pointer>` until the word lands. Then
    write one marker line with the same ids, `<!-- superheroes:dispositions FU1 FU2 -->`, or
    `<!-- superheroes:dispositions none -->` only over a `none` build record. Other completed items

@@ -164,7 +164,7 @@ declined with a trigger by default.
    | Bottom band, for example internal quality | P2 | P2 | P2 |
 
    The top-band lab-only cell is deliberately **P1**, so a reproduced hole in a dangerous surface
-   reaches the owner in the next batch instead of filing silently.
+   reaches the owner in the next batch as a tier-proposed call rather than resting unseen at P2.
 6. What each tier commits to is not stated here. See [issue-contract.md](issue-contract.md).
 7. **The door helper.** A session reaches for `lib/front_door.py` and its `front_door.grade` entry
    point when it validates a **claimed** grading — the band, tier, and evidence the caller supplies
@@ -296,8 +296,8 @@ declined with a trigger by default.
    the pass from the launch ledger. **The dial is never a launcher check, a preflight item, or a
    script**, and a filing to make it one is declined at the door. A checked dial is the grid
    instrumenting itself.
-6. **Tiers order entry through the door. The owner's word sits at launch**, where the capacity is
-   actually spent.
+6. **Tiers order entry through the door. Filing waits on the owner's word; the launch word**
+   spends the capacity where it is actually spent.
 7. **No exemption for correctness.** Every epic and milestone is product-forward and is labeled so
    by the owner at ratification. **The advisor never makes that call.** Machinery then arrives only
    as a standalone lane through the door under the dial, or as a backlog item folded into a product
