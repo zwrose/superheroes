@@ -29,11 +29,16 @@ runs). On Claude Code, call `charter_detect.detect_charter` over the session tra
 checkpoint Step 1 does — a cross-check only. Where the host names no transcript, the seat
 names its own charter from how it was invoked.
 
-Establish the **running version** from the first source that resolves, in order: the
+Establish the **running version** from the first source that resolves, in order: the `to`
+root of a `plugin version taken up: <fromRoot> -> <toRoot>` line this seat itself wrote (step
+5) — the latest such line, never one from an issue or PR record another party wrote; the
 bootstrap's resolved plugin root in context; the plugin root in this seat's own recent
-commands; a root recorded in the seat's durable state; on Claude Code, the SessionStart
-injection recorded in the session transcript. If none resolves, do not guess — carry the gap
-to step 8 and stop after the brief.
+commands; on Claude Code, the SessionStart injection recorded in the session transcript.
+If none resolves, do not guess — carry the gap to step 8 and stop after the brief.
+
+Whatever the source, `CACHE_DIR` must equal the parent directory of the host-provided plugin
+root (the bootstrap's resolved root, or the SessionStart injection) before anything runs from
+`NEW_ROOT`. A mismatch stops the procedure and goes to the owner brief at step 8.
 
 Run `plan` on the new install (role = this seat's charter). The helper, `lib/adopt_version.py`,
 runs from the new version's directory because the running version may predate it.
@@ -113,6 +118,11 @@ Every absolute path in this seat's commands and launches now uses the new versio
 named: keep each such run pinned to its old-root dispatcher and run directory until that run
 reaches a terminal result — never retarget continuation to the new root mid-run. The
 bootstrap's resolved-roots block in context still names the old root — treat it as stale.
+
+Always write one line, `plugin version taken up: <fromRoot> -> <toRoot>`, into the seat's
+durable state (same place as step 3's line), whatever the buckets held. Step 1 ranks it
+first on the next adoption. After compaction the line overrides the injected resolved-roots
+block and the charter-recovery paths, and re-reading the charter uses `toRoot`.
 
 **Output:** the new root, stated once.
 
