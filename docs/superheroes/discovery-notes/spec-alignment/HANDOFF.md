@@ -279,3 +279,15 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
    with a recommendation. The recommendation is NOT biased toward cutting: each finding is weighed
    on its merits and against the project's context. Fixes that change no behaviour (wording,
    consistency) are applied as craft.
+8. **The end-to-end flow** (owner: "im aligned to this flow"): A start (intake; ground in the
+   who-it's-for home, the ruling ledger, sibling specs and their boards, the as-built product;
+   scope check; consented investigation) → B understand (one question at a time, owner-category
+   only, craft recorded for veto, each ruling into the ledger; framing) → C visualize (journeys or
+   flows first, then open choices side by side, in HTML artifacts; build board approved) → D write
+   and check, agents only (spec from board and rulings with source tags; reviewer finds but does
+   not add; spec-vs-board conformance, board wins; traceability sorting untraced statements into
+   owner vs craft; writing standard) → E tap sheets of the unruled remainder until empty, then
+   "ready for vet" → F spec PR, advisor vet, final tap sheet with approval as its last card, merge
+   word separate → G advisor decomposes, files, wires the board; discovery never does.
+9. **Shape of the work** (owner): durable artifacts for all four pieces (the line, the who-it's-for
+   home, the discovery flow, the ruling ledger) in ONE new-style spec.
