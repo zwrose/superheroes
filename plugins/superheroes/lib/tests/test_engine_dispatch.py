@@ -3436,6 +3436,41 @@ def _dashdash_run_dir(tmp_path):
     return str(run_dir)
 
 
+def test_result_handoff_base_skips_dashed_tempdir_falls_back_to_tmp(
+        tmp_path, monkeypatch,
+):
+    dashed = tmp_path / "t--mp"
+    dashed.mkdir()
+    monkeypatch.setattr(ED.tempfile, "gettempdir", lambda: str(dashed))
+    assert ED._result_handoff_base() == os.path.realpath("/tmp")
+
+
+def test_result_handoff_base_returns_plain_tempdir_when_dash_free(
+        tmp_path, monkeypatch,
+):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setattr(ED.tempfile, "gettempdir", lambda: str(plain))
+    assert ED._result_handoff_base() == os.path.realpath(str(plain))
+
+
+def test_result_handoff_base_returns_none_when_no_safe_candidate(
+        tmp_path, monkeypatch,
+):
+    dashed = tmp_path / "only--dashed"
+    dashed.mkdir()
+    monkeypatch.setattr(ED.tempfile, "gettempdir", lambda: str(dashed))
+    real_realpath = os.path.realpath
+
+    def fake_realpath(path):
+        if path == "/tmp":
+            return str(tmp_path / "also--bad")
+        return real_realpath(path)
+
+    monkeypatch.setattr(ED.os.path, "realpath", fake_realpath)
+    assert ED._result_handoff_base() is None
+
+
 def _cursor_collapsed_native_write_script(native_write):
     return (
         "import json, os, re, sys\n"

@@ -29,6 +29,8 @@ Test files: `D` = `plugins/superheroes/lib/tests/test_engine_dispatch.py`, `W` =
 | E9 | a handed path that still has a dash run refuses before spawn | `if False and re.search(r"-{2,}", handed):` | `W::test_dashdash_handed_path_with_dash_run_refuses` | `assert [{'argv': ['cursor-agent', ...}] == []` |
 | E10 | the injected seam releases the link after `attempt-ended` | the release call at the end of `_execute_injected_attempt` removed | `W::test_cursor_write_dashdash_injected_seam_ok` | `assert ['superheroes-result-9b55ece5d0a907a5'] == []` |
 | E11 | the review grade path threads the handoff path into the engagement count | `_grade_review_attempt` passes `native_result_handoff_path=None` | `D::test_cursor_review_dashdash_run_dir_grades` | `assert 1 == 0` (`res["engagement"]["toolCalls"]`) |
+| E12 | `_result_handoff_base` skips a dashed tempdir and falls back to `/tmp` | drop `not re.search(r"-{2,}", base)` in the candidate loop | `D::test_result_handoff_base_skips_dashed_tempdir_falls_back_to_tmp` | `AssertionError` on `== os.path.realpath("/tmp")` (returns the dashed tempdir) |
+| E13 | `_result_handoff_base` returns `None` when every candidate is unsafe | `return candidates[0]` immediately after building `candidates` (skip `isdir` and dash filter) | `D::test_result_handoff_base_returns_none_when_no_safe_candidate` | `assert None is None` fails (returns a dashed path) |
 
 ## Masking and gaps, stated
 
@@ -38,4 +40,4 @@ Test files: `D` = `plugins/superheroes/lib/tests/test_engine_dispatch.py`, `W` =
 
 ## Green
 
-All 13 nodes above ran green together at `7cfc810b` after the last revert: `13 passed`.
+The original 13 integration nodes ran green together at `7cfc810b` after the last revert (`13 passed`). With E12–E13, add `D::test_result_handoff_base_skips_dashed_tempdir_falls_back_to_tmp`, `D::test_result_handoff_base_returns_plain_tempdir_when_dash_free`, and `D::test_result_handoff_base_returns_none_when_no_safe_candidate` (`16 passed` total).
