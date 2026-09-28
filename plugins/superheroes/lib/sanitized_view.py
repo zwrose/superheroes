@@ -1801,9 +1801,9 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
             mode, obj_type, oid = entry
             if mode not in ("100644", "100755") or obj_type != "blob":
                 return False
-            if cat_batch is None:
-                cat_batch = _CatFileBatch(repo_real)
             try:
+                if cat_batch is None:
+                    cat_batch = _CatFileBatch(repo_real)
                 prefix = cat_batch.read_blob_prefix(
                     oid, started, _BINARY_SNIFF_BYTES
                 )

@@ -17,6 +17,8 @@ if _LIB not in sys.path:
 
 import sanitized_view as sv
 
+PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+
 
 @pytest.fixture(autouse=True)
 def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
@@ -2625,7 +2627,7 @@ def test_review_diff_real_png_and_woff_like_still_placeheld(tmp_path):
 def test_review_diff_binary_to_text_change_refuses_opaque(tmp_path):
     repo = _init_repo(tmp_path / "bin-to-text", files={"keep.txt": "k\n"}, commit=False)
     with open(os.path.join(repo, "mix.dat"), "wb") as fh:
-        fh.write(b"\0bin\n")
+        fh.write(PNG)
     _git(repo, "add", "-A")
     _git(
         repo,
@@ -2662,7 +2664,7 @@ def test_review_diff_text_to_binary_change_refuses_opaque(tmp_path):
     repo = _init_repo(tmp_path / "text-to-bin", files={"mix.dat": "plain\n"})
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     with open(os.path.join(repo, "mix.dat"), "wb") as fh:
-        fh.write(b"\0bin\n")
+        fh.write(PNG)
     _git(repo, "add", "mix.dat")
     _git(
         repo,
@@ -2678,6 +2680,245 @@ def test_review_diff_text_to_binary_change_refuses_opaque(tmp_path):
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv.build_sanitized_view(repo, diff_base=base_sha)
     assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_attribute_forced_nul_free_non_utf8_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "legacy-nul-free", files={"keep.txt": "k\n"}, commit=False)
+    with open(os.path.join(repo, ".gitattributes"), "w", encoding="utf-8") as fh:
+        fh.write("legacy.py -diff\n")
+    legacy_v1 = b"# caf\xe9\nx = 1\n"
+    with open(os.path.join(repo, "legacy.py"), "wb") as fh:
+        fh.write(legacy_v1)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "legacy.py"), "wb") as fh:
+        fh.write(b"# caf\xe9\nx = 2\n")
+    _git(repo, "add", "legacy.py")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "change",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_nul_at_last_window_byte_is_placeheld(tmp_path):
+    repo = _init_repo(tmp_path / "edge-in-window", files={"keep.txt": "k\n"}, commit=False)
+    with open(os.path.join(repo, ".gitattributes"), "w", encoding="utf-8") as fh:
+        fh.write("*.bin -diff\n")
+    _git(repo, "add", ".gitattributes")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "attrs",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    edge = b"\x01" * 7999 + b"\x00"
+    with open(os.path.join(repo, "edge.bin"), "wb") as fh:
+        fh.write(edge)
+    _git(repo, "add", "edge.bin")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add edge",
+    )
+    view = sv.build_sanitized_view(repo, diff_base=base_sha)
+    try:
+        with open(_patch_abs(view), "rb") as fh:
+            patch = fh.read()
+        assert _binary_placeholder_line_bytes("edge.bin", "added") in patch
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
+def test_review_diff_nul_just_past_window_refuses_opaque(tmp_path):
+    repo = _init_repo(tmp_path / "edge-past-window", files={"keep.txt": "k\n"}, commit=False)
+    with open(os.path.join(repo, ".gitattributes"), "w", encoding="utf-8") as fh:
+        fh.write("*.bin -diff\n")
+    _git(repo, "add", ".gitattributes")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "attrs",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    edge = b"\x01" * 8000 + b"\x00"
+    with open(os.path.join(repo, "edge.bin"), "wb") as fh:
+        fh.write(edge)
+    _git(repo, "add", "edge.bin")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "add edge",
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def _review_diff_pic_png_fixture(tmp_path):
+    repo = _init_repo(tmp_path / "pic-png", files={"keep.txt": "k\n"}, commit=False)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "pic.png"), "wb") as fh:
+        fh.write(PNG)
+    _git(repo, "add", "pic.png")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "png",
+    )
+    return repo, base_sha
+
+
+def test_review_diff_binary_side_not_regular_file_refuses_opaque(tmp_path, monkeypatch):
+    repo, base_sha = _review_diff_pic_png_fixture(tmp_path)
+    real_maps = sv._changed_tree_maps
+
+    def wrapped_maps(repo_real, base_s, head_s, started):
+        changed, base_map, head_map = real_maps(repo_real, base_s, head_s, started)
+        entry = head_map.get("pic.png")
+        if entry is not None:
+            mode, obj_type, oid = entry
+            head_map = dict(head_map)
+            head_map["pic.png"] = ("120000", obj_type, oid)
+        return changed, base_map, head_map
+
+    monkeypatch.setattr(sv, "_changed_tree_maps", wrapped_maps)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_binary_side_missing_tree_entry_refuses_opaque(tmp_path, monkeypatch):
+    repo, base_sha = _review_diff_pic_png_fixture(tmp_path)
+    real_maps = sv._changed_tree_maps
+
+    def wrapped_maps(repo_real, base_s, head_s, started):
+        changed, base_map, head_map = real_maps(repo_real, base_s, head_s, started)
+        head_map = dict(head_map)
+        head_map.pop("pic.png", None)
+        return changed, base_map, head_map
+
+    monkeypatch.setattr(sv, "_changed_tree_maps", wrapped_maps)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-opaque"
+
+
+def test_review_diff_catfile_spawn_failure_during_classification_maps_to_diff_failed(
+    tmp_path, monkeypatch
+):
+    repo = _init_repo(tmp_path / "classify-spawn", files={"keep.txt": "k\n"}, commit=False)
+    _git(repo, "add", "-A")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    )
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(repo, "pic.png"), "wb") as fh:
+        fh.write(PNG)
+    _git(repo, "add", "pic.png")
+    _git(
+        repo,
+        "-c",
+        "user.email=test@test.local",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-q",
+        "-m",
+        "png",
+    )
+    during_classification = [False]
+    real_filter = sv._filter_patch_sections
+
+    def filter_with_flag(patch_bytes, predicate):
+        during_classification[0] = True
+        try:
+            return real_filter(patch_bytes, predicate)
+        finally:
+            during_classification[0] = False
+
+    real_init = sv._CatFileBatch.__init__
+
+    def init_with_flag(self, repo_real):
+        if during_classification[0]:
+            raise sv.SanitizedViewError("sanitized-view-export-failed")
+        real_init(self, repo_real)
+
+    monkeypatch.setattr(sv, "_filter_patch_sections", filter_with_flag)
+    monkeypatch.setattr(sv._CatFileBatch, "__init__", init_with_flag)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(repo, diff_base=base_sha)
+    assert exc.value.detail == "sanitized-view-diff-failed"
 
 
 def test_review_diff_binary_path_with_newline_is_json_quoted(tmp_path):
@@ -4548,7 +4789,7 @@ def test_review_diff_ancestry_old_git_shallow_echo_refuses_before_census_or_patc
         raise AssertionError("must not run")
 
     monkeypatch.setattr(sv.subprocess, "run", ancestry_standin)
-    monkeypatch.setattr(sv, "_changed_tree_entries", must_not_run)
+    monkeypatch.setattr(sv, "_changed_tree_maps", must_not_run)
     monkeypatch.setattr(sv, "_batch_review_diff_pathspecs", must_not_run)
     monkeypatch.setattr(sv, "_git_diff_batch_output", must_not_run)
     with pytest.raises(sv.SanitizedViewError) as exc:
@@ -4725,7 +4966,7 @@ def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
 def _stage_review_diff_must_not_reach(monkeypatch):
     called = []
     stub = lambda *a, **k: (called.append(True), (_ for _ in ()).throw(AssertionError("must not run")))[1]
-    for name in ("_authoritative_merge_base", "_changed_tree_entries", "_batch_review_diff_pathspecs", "_git_diff_batch_output"):
+    for name in ("_authoritative_merge_base", "_changed_tree_maps", "_batch_review_diff_pathspecs", "_git_diff_batch_output"):
         monkeypatch.setattr(sv, name, stub)
     return called
 
