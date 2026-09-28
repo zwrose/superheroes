@@ -254,3 +254,9 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
 2. Remaining open questions, in the synthesis file: the order of vet and approval; what
    adversarial review may add; the scope of the first work item; cost per spec.
 3. Still owed before the framing gate: the discovery coverage checklist.
+
+## Session 3 elicitation (2026-09-28, unapproved notes)
+
+1. **What the "board" is when there's no UI** (owner): any visualization that helps communicate
+   the concept. Storyboards of what the user experiences, flow charts and other diagrams all
+   count. Open: whether Claude Design is needed for these, or plain HTML artifacts do.
