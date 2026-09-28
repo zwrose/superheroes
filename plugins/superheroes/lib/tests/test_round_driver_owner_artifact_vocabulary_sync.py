@@ -21,6 +21,10 @@ _REF = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "reference", "round-d
 
 _REFUSAL_TABLE_MARKER = "**Refusal tokens when paths interleave.**"
 _REFUSAL_TABLE_END = "**Owner-artifact refusal causes**"
+_POLICY_APPLIED_SOURCE_NARRATIVE_START = (
+    "resolution is journalled under one of two owner-gate sources"
+)
+_POLICY_APPLIED_SOURCE_NARRATIVE_END = "**Owner-gate `_provenance` required fields**"
 _GATE_ARTIFACT_EXAMPLE_MARKER = (
     "Example `present-judgment` gate artifact (gate shape plus a filled-in `_provenance` block):"
 )
@@ -98,6 +102,18 @@ def _round_phase_refusal_tokens_in_table(text):
     return {token for token in table_tokens if token.startswith("round-phase-")}
 
 
+def _policy_applied_source_narrative_chunk(text):
+    """Owner-gate ``policyApplied.source`` assignment prose (operative copy, not later echoes)."""
+    start = text.index(_POLICY_APPLIED_SOURCE_NARRATIVE_START)
+    end = text.index(_POLICY_APPLIED_SOURCE_NARRATIVE_END, start)
+    return text[start:end]
+
+
+def _assert_driver_constants_present(chunk, label, tokens):
+    missing = sorted(token for token in tokens if token not in chunk)
+    assert not missing, "%s missing from %s: %s" % (label, _REF, missing)
+
+
 def test_gate_artifact_example_dispositions_match_judgment_vocabulary():
     """Worked gate-artifact JSON example dispositions ↔ JUDGMENT_DISPOSITIONS."""
     text = _read(_REF)
@@ -156,19 +172,25 @@ def test_owner_artifact_provenance_well_formed_rejects_blank_record_entry():
 
 
 def test_owner_artifact_refusal_tokens_present_in_round_driver_doc():
-    """round-driver.md names every OWNER_ARTIFACT_*_REFUSAL token the driver can emit."""
+    """Refusal table ↔ OWNER_ARTIFACT_*_REFUSAL constants (identifier presence, not fenced lists)."""
     text = _read(_REF)
-    missing = sorted(token for token in _owner_artifact_refusal_causes() if token not in text)
-    assert not missing, (
-        "OWNER_ARTIFACT_*_REFUSAL constants missing from round-driver.md: %s" % missing)
+    table_reasons = _parse_refusal_table_reasons(text)
+    _assert_driver_constants_present(
+        table_reasons,
+        "OWNER_ARTIFACT_*_REFUSAL",
+        _owner_artifact_refusal_causes(),
+    )
 
 
 def test_policy_applied_source_tokens_present_in_round_driver_doc():
-    """round-driver.md names every POLICY_APPLIED_SOURCE_* token the driver can emit."""
+    """Owner-gate journal prose ↔ POLICY_APPLIED_SOURCE_* constants (identifier presence)."""
     text = _read(_REF)
-    missing = sorted(token for token in _policy_applied_sources() if token not in text)
-    assert not missing, (
-        "POLICY_APPLIED_SOURCE_* constants missing from round-driver.md: %s" % missing)
+    narrative = _policy_applied_source_narrative_chunk(text)
+    _assert_driver_constants_present(
+        narrative,
+        "POLICY_APPLIED_SOURCE_*",
+        _policy_applied_sources(),
+    )
 
 
 def test_round_phase_refusal_causes_match_docs():
