@@ -1,0 +1,14 @@
+{
+  "should_fire": [
+    "a new superheroes version just got installed — adopt it in this seat without a handoff",
+    "I updated the plugin; take up 0.36.0 in this live advisor session",
+    "switch this builder session to the newly installed plugin version",
+    "diff the plugin versions and run the upgrade checklist in this live workhorse seat"
+  ],
+  "should_not_fire": [
+    "run checkpoint before I compact this showrunner session",
+    "pick the advisor seat back up in this new session",
+    "I'm handing the advisor seat over to a new session — prepare this one",
+    "set up superheroes in this project for the first time"
+  ]
+}
