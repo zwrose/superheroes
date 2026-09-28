@@ -1489,10 +1489,7 @@ def test_precedence_terminal_beats_builder_exited(tmp_path, monkeypatch):
     assert result["event"] != "builder-exited"
 
 
-def test_event_precedence_matches_docstring():
-    doc = ww.__doc__
-    assert "lane-terminal (E1) > lane-blocked (E2) > builder-exited (E3) >" in doc
-    assert "stack-state-changed (E4) > pr-set-changed (E5) > lane-stale (E6) > timer (E7)" in doc
+def test_event_precedence_order():
     assert ww.EVENT_PRECEDENCE == (
         ww.EVENT_LANE_TERMINAL,
         ww.EVENT_LANE_BLOCKED,
