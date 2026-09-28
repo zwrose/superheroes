@@ -93,7 +93,7 @@ above).
    that they are unapproved. Silence is not a disposition: an abandoned discovery you have not
    parked is one you have dropped.
 
-   **An abandoned child of a spec is the delivery-side twin of an abandoned discovery.** **A spec whose child is abandoned — closed unmerged, orphaned, or displaced — is re-planned or parked by the advisor rather than left waiting for a closure moment that cannot come; silence is not a disposition.** **Re-plan** repairs the coverage map and files a replacement child, so a closure moment exists again; **park** parks the spec to the owner on the park surface above. Park is one of two branches, never the only one.
+   **An abandoned child of a spec is the delivery-side twin of an abandoned discovery.** **Re-plan** repairs the coverage map and files a replacement child, so a closure moment exists again; **park** parks the spec to the owner on the park surface above. Park is one of two branches, never the only one.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md` when a spec's child is abandoned.**
 
    **The review weight on a completed spec draft is yours to call.** When discovery hands you a
@@ -135,13 +135,8 @@ above).
    **supersedes an earlier ruling**, notify every in-flight build whose Anchor slot cites the
    superseded ruling — at the moment you record the new decision, not afterwards. **The Anchor
    citation is the reverse index:** affected work is located by its Anchor slot, so no rulings ledger
-   exists or ships. A surface that has accumulated rulings may be **absorbed into a spec** by
-   **recorded advisor judgment**, written down when made, and still lands as an owner-stamped
-   amendment to the spec that absorbs it — **no mechanical trigger** causes
-   absorption; there is no count, age, or threshold, and none may be introduced. When a spec
-   reaches five amendments since its last full approval, the **next touch** carries a consolidation
-   re-read and the **owner's** re-stamp — you schedule the re-stamp because only the owner can give
-   it. Doctrine:
+   exists or ships. Absorbing accumulated rulings into a spec, and the consolidation re-read and re-stamp an amended spec owes, follow the spec-content doctrine; you schedule the re-stamp because only the owner can give it.
+   Doctrine:
    `${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md`.
    **Register-embedded copies count as citations too** — also check open epics'
    registers for embedded copies of the superseded ruling, and amend an affected register the same way
@@ -221,9 +216,7 @@ above).
    verified**, and `undecided` blocks exactly like `fail`. Unknown applicability is the same
    **routing gap** as at filing: resolve it before marking the package verified.
 
-   **Decomposition is post-approval work.** Decomposition begins only after the spec is
-   owner-approved: no coverage map, no register, and no child body is drafted against an unapproved
-   spec, and a decomposition artifact dated before its spec's approval is a routing defect. Epic
+   **Decomposition is post-approval work**, as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` defines it. Epic
    machinery activates at **two or more children, never below**; one child takes the single-issue
    fast path.
    **The three artifacts.** A decomposition produces a **coverage map** (every acceptance criterion
@@ -244,9 +237,7 @@ above).
    **A spec contradiction never resolves as a silent spec edit.** A package-read contradiction
    finding resolves as a **package fix**, an **owner-stamped spec amendment**, or a **recorded
    refutation in the audit trail** — those three, and nothing else.
-   **Amendments after approval.** Every post-approval spec amendment is classified `wording` — it
-   changes phrasing and decides nothing a builder could build differently against — or `substantive`,
-   which is everything else and the default whenever the call is ambiguous. The amended artifact and
+   **Amendments after approval.** Every post-approval spec amendment carries the class `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/amendments.md` assigns it. The amended artifact and
    its dated, owner-stamped log entry come first; **unstarted children are mechanically re-injected or
    re-checked against the coverage map, children already building are explicitly notified, and a
    recorded coverage-map re-check runs after every affected spec amendment**; a **substantive**
@@ -343,24 +334,16 @@ above).
      matches the work's current state, and a build-ready issue's Anchor link resolves to the
      approved decision in one hop). **A stale What or DoD fails the spot-check even when the
      anchor link resolves.**
-   - **The standing anchor-coverage row** — at **every** vet, check whether the diff introduces
-     **owner-perceivable new behavior that no approved decision covers**: no spec section and no dated
-     owner ruling, or a citation whose scope does not reach the behavior. This is a **standing row**,
-     graded on every PR, and it is the **only anchor layer that inspects the diff** — the other two
-     grade the issue. When it fires, the verdict **carries the flag in plain language** — what the new
-     behavior is, and that no approved decision covers it — and that flag **reaches the owner in the
-     owner half**, not only in your receipt.
+   - **The standing anchor-coverage row** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The standing anchor-coverage vet row defines it.
    - **The standing NFR row** — at **every** child PR vet in a spec package, grade the three
      package-wide NFRs **by name with their fit criteria**: owner reading load, plain language,
      and guidelines never hardened into gates.
-   - **The standing register row** — A child PR in a package that has a contract register is vetted
-     against one added row: the change conforms to the epic's register, or the drift is disclosed —
-     and undisclosed drift is a blocker, held until it is disclosed or repaired. The row is graded at
+   - **The standing register row** — the row `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` defines. It is graded at
      **every** child PR vet in a package that has a register (and is simply **not applicable** where
      there is none), and a deliberate departure the build **disclosed** is a call to accept or reject,
      while an **undisclosed** one holds the handback.
      **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` when you grade the register row.**
-   - **The closure row** — fires when **this vet is the final one**. **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.** **Where more than one candidate closure moment is live — concurrent final vets, or a vet racing a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt.** **Where the last open child closes without a PR — declined scope — the closure receipt is presented to the owner with that close, in the same sitting, and there is still no separate closure trigger.** Or, for a stacked feature, the vet [When closure fires](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md#when-closure-fires) names. When the row fires, the vet **assembles and carries the closure receipt**.
+   - **The closure row** — fires when **this vet is the final one**; which vet that is, including concurrent final vets, a no-PR close, and the stacked-feature case, is [When closure fires](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md#when-closure-fires). When the row fires, the vet **assembles and carries the closure receipt**.
      **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md` when the closure row fires.**
    - **Trust CI green on the recorded head** — including the suite's receipt per
      `rubric/test-receipt-evidence.md` (run selection per
@@ -540,7 +523,7 @@ above).
    what could not be presented and why, and **reaches the owner before the merge click**.
    **Delivery acceptance is an owner gate in this duty's sense** — it reaches the owner before the
    merge click, presented with the final child's handback — or with the no-PR close — in **one
-   sitting**, never a separate process. **No spec closes without either full delivery accepted or an explicit owner acceptance of partial delivery, named as such on the closure receipt with delivered, deferred, and declined each named; nothing closes silently incomplete.** **A failing end-to-end validation run keeps the spec open by default and mints one repair issue per failure, each anchored to the failing run's record and naming the unmet acceptance criterion it restores; the owner may instead explicitly accept delivery with the failing run disclosed, and either way the cycle ends at an owner decision.** Both outcomes are the design, not a rule plus an exception. The verdict is **advisory** and the acceptance is the **owner's**.
+   sitting**, never a separate process. The verdict is **advisory** and the acceptance is the **owner's**.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/closure.md` when a spec's last child closes or its validation run fails.**
    **Calibration home:** these tests are the **default**; per-owner taste domains belong in the
    **configure profile**.
@@ -696,7 +679,7 @@ above).
 9. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
    preflight**. At dispatch time you stand where the builder stands at its own preflight — about to
    go autonomous on assumptions nobody has exercised — with no equivalent check unless you run it.
-   **Seven checks:** they live in
+   **The checks** live in
    `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/dispatch-preflight.md`, from `engine-auth` to
    `grant-state`. **Read that file at dispatch time.** Its owner-capability check points at the
    owner-involvement taxonomy later in this duty.
