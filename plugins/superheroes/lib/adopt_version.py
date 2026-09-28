@@ -11,6 +11,7 @@ import charter_detect
 
 _VER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _HVER = re.compile(r"^## (\d+\.\d+\.\d+)\s*$")
+_HCHANGELOG = re.compile(r"^## \[?(\d+\.\d+\.\d+)\]?")
 _SKIP = frozenset({"__pycache__", ".in_use", ".orphaned_at"})
 
 def _vt(v):
@@ -103,7 +104,56 @@ def _parse_transition(path, fv, tv, installed):
     if tv not in found and tv not in missing:
         missing.append(tv)
     missing.sort(key=_vt)
-    return sections, missing
+    return sections, missing, found
+
+def _parse_changelog(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = [ln.rstrip("\n") for ln in fh]
+    except OSError:
+        return None
+    fence, found = False, set()
+    for line in lines:
+        if line.strip().startswith("```"):
+            fence = not fence
+            continue
+        if not fence:
+            m = _HCHANGELOG.match(line)
+            if m:
+                found.add(m.group(1))
+    return found
+
+def _crossed(from_v, to_v, inst, trans_found):
+    crossed = set()
+    for v in inst:
+        if _vt(from_v) < _vt(v) <= _vt(to_v):
+            crossed.add(v)
+    for v in trans_found:
+        if _vt(from_v) < _vt(v) <= _vt(to_v):
+            crossed.add(v)
+    crossed.add(to_v)
+    return sorted(crossed, key=_vt)
+
+def _gap_sort_key(entry):
+    if entry["version"] is None:
+        return (0, (0, 0, 0))
+    return (1, _vt(entry["version"]))
+
+def _unresolved_gaps_and_changelog_sections(from_v, to_v, inst, trans_found, to_root, up):
+    if up:
+        return [], []
+    changelog = _parse_changelog(os.path.join(to_root, "CHANGELOG.md"))
+    crossed = _crossed(from_v, to_v, inst, trans_found)
+    if changelog is None:
+        return [{"version": None, "reason": "changelog-unreadable"}], []
+    gaps = [
+        {"version": v, "reason": "no-section"}
+        for v in crossed
+        if v not in trans_found and v not in changelog
+    ]
+    gaps.sort(key=_gap_sort_key)
+    changelog_sections = sorted([v for v in crossed if v in changelog], key=_vt)
+    return gaps, changelog_sections
 
 def _plan(role, cache, from_v, to_v):
     if not os.path.isdir(cache):
@@ -119,12 +169,12 @@ def _plan(role, cache, from_v, to_v):
     fr, tr = os.path.join(cache, from_v), os.path.join(cache, to_v)
     buckets = {k: {"added": [], "removed": [], "changed": []}
                for k in ("charter", "covenantHooks", "libs", "other")}
-    up, trans, miss = from_v == to_v, [], []
+    up, trans, miss, trans_found = from_v == to_v, [], [], set()
     if not up:
         parsed = _parse_transition(os.path.join(tr, "TRANSITION.md"), from_v, to_v, inst)
         if parsed is None:
             return _refuse("transition-unreadable", "TRANSITION.md missing or unreadable")
-        trans, miss = parsed
+        trans, miss, trans_found = parsed
         ca, cb = _collect(fr), _collect(tr)
         if ca is None:
             return _refuse("version-tree-unreadable", f"from version tree unreadable under {fr}")
@@ -142,9 +192,13 @@ def _plan(role, cache, from_v, to_v):
                 kind = "changed"
             buckets[_bucket(k, role)][kind].append(k)
     counts = {k: len(buckets[k]["added"]) + len(buckets[k]["removed"]) + len(buckets[k]["changed"]) for k in buckets}
+    gaps, changelog_sections = _unresolved_gaps_and_changelog_sections(
+        from_v, to_v, inst, trans_found, tr, up,
+    )
     payload = {"ok": True, "role": role, "cacheDir": cache, "from": from_v, "to": to_v, "fromRoot": fr,
                "toRoot": tr, "installed": inst, "upToDate": up, "transitionSections": trans,
-               "missingTransitionSections": miss, "buckets": buckets, "counts": counts}
+               "missingTransitionSections": miss, "unresolvedGaps": gaps,
+               "changelogSections": changelog_sections, "buckets": buckets, "counts": counts}
     sys.stdout.write(json.dumps(payload) + "\n")
     return 0
 
