@@ -33,12 +33,12 @@ This spec sets the owner's verification policy for this repo: what a test must d
 
 ### Retention — a test earns its keep
 
-**FR-1.** The verification policy shall remove a test only on evidence that the test is incapable of failing on a defect in what it claims to prove ("cannot bite") — with one exception, an owner-authorized flake removal under FR-26, which is recorded as an open coverage obligation, not a cut.
+**FR-1.** The verification policy shall remove a test only on evidence that the test is incapable of failing on a defect in what it claims to prove ("cannot bite") — with two exceptions: an owner-authorized flake removal under FR-26, which is recorded as an open coverage obligation, not a cut; and removal of a test whose subject was retired on purpose (the retired-subject acceptance bullet below), on the owner's recorded approval and a named edit, without cannot-bite evidence.
   - *Acceptance (rule):* a test is **shown to bite** by a recorded bite-proof (the thing it claims to prove is deliberately broken and the test goes red) or a recorded mutation kill; the bite-proof discipline is the repo's existing one [cite: plugins/superheroes/rubric/bite-proof.md § The obligation].
   - *Acceptance (rule):* a test is **cannot-bite** (deletion evidence) when it stays green with its subject deliberately broken, or when it is structurally incapable of going red: no assertion about behavior, an assertion whose expected value is computed by the code under test, an assertion only on the call shape of a stub of an internal collaborator, or a mock of the unit under test itself.
   - *Acceptance (rule):* a test that only checks "does not raise" is **suspect, not structural** — it is cannot-bite only when a break-stays-green proof shows it.
   - *Acceptance (rule):* **unassessed tests are retained.** "Unassessed" is never deletion evidence.
-  - *Acceptance (rule):* a test whose **subject was retired on purpose** — a drift pin whose mirrored copy is deleted under the one-home-per-rule doctrine (the reset's Spec A FR-B7; register entries R2 and R3) — is removed together with its subject; the removal carries the owner's recorded approval and a named edit in FR-3's record shape, and cannot-bite evidence does not apply to it.
+  - *Acceptance (rule):* a test whose **subject was retired on purpose** — a drift pin whose mirrored copy is deleted under the one-home-per-rule doctrine (the reset's Spec A FR-B7; the reset register's R2 and R3) — is removed together with its subject; the removal carries the owner's recorded approval and a named edit in FR-3's record shape, and cannot-bite evidence does not apply to it.
 
 **FR-2.** The verification policy shall exempt rails from any retention decision based on how often they have failed.
   - *Acceptance (rule):* a **rail** is a test whose subject is the checked-in tree rather than a tmp fixture — a doc↔code drift test, a census over source files, a manifest/registry consistency check, a guard over a declared invariant, or a test that reads repository configuration and asserts on it.
@@ -119,8 +119,8 @@ This spec sets the owner's verification policy for this repo: what a test must d
 
 ### Deletion and burndown
 
-**FR-14.** The verification policy shall proactively delete only cannot-bite tests (FR-1), each deletion carrying its evidence.
-  - *Acceptance (rule):* a first cut list is produced by the proposed change P7; a deletion without structural or demonstrated cannot-bite evidence is a finding (UFR-5).
+**FR-14.** The verification policy shall proactively delete only cannot-bite tests (FR-1), each deletion carrying its evidence — except a retired-subject removal under FR-1's retired-subject bullet, which carries the owner's recorded approval and a named edit instead.
+  - *Acceptance (rule):* a first cut list is produced by the proposed change P7; a deletion without structural or demonstrated cannot-bite evidence — and without FR-1's retired-subject bar — is a finding (UFR-5).
   - *Acceptance (rule):* cannot-bite evidence is verified the way bite-proofs are: independently re-run at verification, never accepted from the deleting party's own assertion [cite: plugins/superheroes/rubric/bite-proof.md § Who owes what].
 
 **FR-15.** When a builder makes an intentional edit to a test file that is not mechanical-only, the builder shall bring that whole file to standard in the same pull request: no cannot-bite case remains, and no count pin or byte-pinned prose assertion re-states a fact a rail already guards (each such pin is replaced with a read of the authoritative home).
@@ -130,9 +130,9 @@ This spec sets the owner's verification policy for this repo: what a test must d
 **FR-16.** Where a pull request's only changes to a test file are mechanical — a rename, a formatter's output, a codemod, a dependency update — FR-15 shall not apply to that file, and the pull request shall list the file as burndown debt.
   - *Acceptance (rule):* the reviewer verifies mechanical status from the diff; a builder that later edits the file intentionally pays its debt then.
 
-**FR-17.** The verification policy shall defer any bulk removal of **bite-capable** tests — a change whose primary purpose is removing bite-capable tests from files it does not otherwise touch — until the ledger (FR-19) has at least 45 complete ledger days. Cannot-bite deletions carrying FR-14's evidence (the P7 cut list) are not bulk removal and are not deferred by this rule.
+**FR-17.** The verification policy shall defer any bulk removal of **bite-capable** tests — a change whose primary purpose is removing bite-capable tests from files it does not otherwise touch — until the ledger (FR-19) has at least 45 complete ledger days. Cannot-bite deletions carrying FR-14's evidence (the P7 cut list) and retired-subject removals under FR-1's retired-subject bullet are not bulk removal and are not deferred by this rule.
   - *Acceptance (rule):* a complete ledger day is a calendar day the nightly ledger recorded in full; no proposed change carries bulk removal before that checkpoint; the checkpoint is a named item whose first line states the number of complete ledger days available.
-  - *Acceptance (rule):* the checkpoint is decision-only: re-opening bulk removal of bite-capable tests is an owner decision that amends FR-1 by named edit — until such an amendment, FR-1's two grounds remain the only removal paths.
+  - *Acceptance (rule):* the checkpoint is decision-only: re-opening bulk removal of bite-capable tests is an owner decision that amends FR-1 by named edit — until such an amendment, FR-1's three removal paths remain the only removal paths (cannot-bite evidence, FR-26 flake removal, and retired-subject removal with a named edit).
 
 ### Authoring rules — carried by review
 
@@ -231,7 +231,7 @@ These three integrity rules are jointly **FR-18g**: P5 delivers them with FR-18a
 **UFR-4.** If a builder weakens an assertion in, or adds a skip to, a test the ledger lists as flaky, then the review crew shall raise a finding — the lens flags the weakening it sees in the diff; the vet checks the ledger listing (the FR-18 stage rule); in a lane with no vet, the ledger's nightly refresh performs the listing check (UFR-2's fallback), recording a failure as a policy violation — and the change shall not merge until the flake is fixed at its cause.
   - *Acceptance:* Given `test_x` is listed, when a PR loosens its assertion, then the finding names the listing and the PR is blocked.
 
-**UFR-5.** If a builder deletes a test as cannot-bite without the FR-1 evidence in the pull request, or removes or re-lanes a rail-inventory entry without what FR-3's bar requires for that change (evidence plus owner approval for a removal; owner approval for a re-laning), then the review crew shall raise a finding — the lens flags the deletion or de-listing in the diff; the vet checks the body's evidence, the owner's approval where FR-3 requires it, and independently re-runs the evidence (FR-14) — and the change shall not merge.
+**UFR-5.** If a builder deletes a test as cannot-bite without the FR-1 evidence in the pull request — and without FR-1's retired-subject bar when the deletion is a retired-subject removal — or removes or re-lanes a rail-inventory entry without what FR-3's bar requires for that change (cannot-bite evidence plus owner approval for a removal, or for a subject retired on purpose the owner's recorded approval and a named edit; owner approval for a re-laning), then the review crew shall raise a finding — the lens flags the deletion or de-listing in the diff; the vet checks the body's evidence, the owner's approval where FR-3 requires it, and independently re-runs the cannot-bite evidence when that bar applies (FR-14) — and the change shall not merge.
   - *Acceptance (rule):* a change that removes a test or edits the rail inventory is never eligible for a review lane without a vet — whatever its diff size, it takes at least the lane whose vet performs this check, so the independent re-run always has a stage to run at.
   - *Acceptance:* Given a PR removes a test with no bite-proof or structural evidence, when reviewed, then the finding names the test and asks for the evidence.
 

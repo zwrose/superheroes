@@ -33,21 +33,10 @@ _SURFACES = (
     "skills/workhorse/SKILL.md",
 )
 
-_RULING_INVARIANT_LABELS = frozenset({
-    "invariant clause",
-    "independence test",
-    "turn-end sentence",
-})
-
-_RULING_LABEL_TO_INDEX = {
-    "invariant clause": 0,
-    "independence test": 1,
-    "turn-end sentence": 2,
-}
-
 _CHANNEL_OWNERSHIP_SENTENCE = (
     "`await-dispatches` ruling governs the **channel** for dispatches the **builder itself** launches."
 )
+_CHANNEL_OWNERSHIP_LABEL = "channel ownership"
 _CHANNEL_OWNERSHIP_SURFACES = (
     "skills/review-code/reference/auto-fix-loop.md",
     "skills/workhorse/SKILL.md",
@@ -58,8 +47,6 @@ _CHANNEL_OWNERSHIP_SURFACE_OVERRIDES = {
         "**the builder itself launches**."
     ),
 }
-
-_ALL_PHRASE_LABELS = frozenset(_RULING_INVARIANT_LABELS) | {"channel ownership"}
 
 
 def _read_plugin(rel):
@@ -112,15 +99,29 @@ def _canonical_await_dispatches_phrases():
     return tuple(_await_dispatches_phrases())
 
 
-def _ruling_phrase_by_label(label):
-    phrases = _await_dispatches_phrases()
-    index = _RULING_LABEL_TO_INDEX[label]
-    if index >= len(phrases):
-        raise AssertionError(
-            f'{label!r}: RULING_INVARIANTS["await-dispatches"] has only {len(phrases)} '
-            f"phrase(s), need index {index}"
-        )
-    return phrases[index]
+def _await_dispatches_phrase_label(index):
+    return f"await-dispatches[{index}]"
+
+
+def _await_dispatches_index_from_label(label):
+    prefix = "await-dispatches["
+    if not label.startswith(prefix) or not label.endswith("]"):
+        raise AssertionError(f"not an await-dispatches phrase label: {label!r}")
+    index_text = label[len(prefix) : -1]
+    if not index_text.isdigit():
+        raise AssertionError(f"not an await-dispatches phrase label: {label!r}")
+    return int(index_text)
+
+
+def _surface_check_cases():
+    cases = []
+    for index, phrase in enumerate(_await_dispatches_phrases()):
+        cases.append((_await_dispatches_phrase_label(index), phrase))
+    cases.append((_CHANNEL_OWNERSHIP_LABEL, _CHANNEL_OWNERSHIP_SENTENCE))
+    return tuple(cases)
+
+
+_SURFACE_CHECK_CASES = _surface_check_cases()
 
 
 def _assert_exact_await_dispatches_phrases(phrases):
@@ -140,14 +141,6 @@ def _assert_exact_await_dispatches_phrases(phrases):
             f"phrases exactly — found-not-expected: {sorted(found_not_expected)!r}, "
             f"expected-not-found: {sorted(expected_not_found)!r}"
         )
-
-
-def _phrase_for_label(label):
-    if label not in _ALL_PHRASE_LABELS:
-        raise AssertionError(f"unknown phrase label: {label!r}")
-    if label == "channel ownership":
-        return _CHANNEL_OWNERSHIP_SENTENCE
-    return _ruling_phrase_by_label(label)
 
 
 def _workhorse_section7_body():
@@ -181,18 +174,23 @@ def _workhorse_section7_concurrency_region():
 
 
 def _literal_for_surface(rel, label):
-    if label == "channel ownership":
+    if label == _CHANNEL_OWNERSHIP_LABEL:
         literal = _CHANNEL_OWNERSHIP_SENTENCE
-    elif label in _RULING_INVARIANT_LABELS:
-        literal = _ruling_phrase_by_label(label)
     else:
-        raise AssertionError(f"unknown phrase label: {label!r}")
+        index = _await_dispatches_index_from_label(label)
+        phrases = _await_dispatches_phrases()
+        if index >= len(phrases):
+            raise AssertionError(
+                f'{label!r}: RULING_INVARIANTS["await-dispatches"] has only {len(phrases)} '
+                f"phrase(s), need index {index}"
+            )
+        literal = phrases[index]
     return _CHANNEL_OWNERSHIP_SURFACE_OVERRIDES.get(rel, literal)
 
 
 def _surface_text(rel, label=None):
     if rel == "skills/workhorse/SKILL.md":
-        if label == "channel ownership":
+        if label == _CHANNEL_OWNERSHIP_LABEL:
             return _workhorse_section7_body()
         return _workhorse_section7_concurrency_region()
     return _read_plugin(rel)
@@ -209,7 +207,7 @@ def _assert_literal_on_surface(rel, text, literal, label):
 def _assert_literal_on_every_surface(literal, label):
     surfaces = (
         _CHANNEL_OWNERSHIP_SURFACES
-        if label == "channel ownership"
+        if label == _CHANNEL_OWNERSHIP_LABEL
         else _SURFACES
     )
     for rel in surfaces:
@@ -218,70 +216,74 @@ def _assert_literal_on_every_surface(literal, label):
         _assert_literal_on_surface(rel, text, surface_literal, label)
 
 
-@pytest.mark.parametrize("label", sorted(_ALL_PHRASE_LABELS))
-def test_literal_on_every_amended_surface(label):
-    phrase = _phrase_for_label(label)
+@pytest.mark.parametrize(
+    "label,phrase",
+    _SURFACE_CHECK_CASES,
+    ids=[case[0] for case in _SURFACE_CHECK_CASES],
+)
+def test_literal_on_every_amended_surface(label, phrase):
     _assert_literal_on_every_surface(phrase, label)
 
 
-def test_ruling_invariants_pins_all_three_literals():
+def test_ruling_invariants_pins_all_await_dispatches_literals():
     result = LD.load()
     assert result["ok"] is True, (
         f"launch_doctrine.load() refused: reason={result.get('reason')!r}"
     )
+    _assert_exact_await_dispatches_phrases(tuple(_await_dispatches_phrases()))
 
 
 def test_normalize_accepts_whitespace_rewrap():
-    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    invariant_clause = _await_dispatches_phrases()[0]
     rewrapped = invariant_clause.replace("; ", ";\n")
     assert _literal_present(rewrapped, invariant_clause)
 
 
 # Bite: changed word — must not match
 def test_normalize_rejects_changed_word():
-    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    invariant_clause = _await_dispatches_phrases()[0]
     mutated = invariant_clause.replace("unwatched", "watched")
     assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: inserted word — must not match
 def test_normalize_rejects_inserted_word():
-    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    invariant_clause = _await_dispatches_phrases()[0]
     mutated = invariant_clause.replace("never an", "never quite an")
     assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: changed punctuation — must not match
 def test_normalize_rejects_changed_punctuation():
-    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    invariant_clause = _await_dispatches_phrases()[0]
     mutated = invariant_clause.replace(";", ",")
     assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: curly quotes around "wait" — must not match
 def test_normalize_rejects_curly_quotes_around_wait():
-    turn_end = _ruling_phrase_by_label("turn-end sentence")
+    turn_end = _await_dispatches_phrases()[2]
     mutated = turn_end.replace('"wait"', "\u201cwait\u201d")
     assert not _literal_present(mutated, turn_end)
 
 
 # Bite: un-backticked & — must not match
 def test_normalize_rejects_unbackticked_ampersand():
-    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    invariant_clause = _await_dispatches_phrases()[0]
     mutated = invariant_clause.replace("`&`", "&")
     assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: truncated partial literal — must not match
 def test_normalize_rejects_truncated_literal():
-    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    invariant_clause = _await_dispatches_phrases()[0]
     mutated = invariant_clause[: len(invariant_clause) // 2]
     assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: appended suffix — _phrase_equals_literal must reject containment
 def test_phrase_equals_literal_rejects_appended_suffix():
-    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    invariant_clause = _await_dispatches_phrases()[0]
     suffixed = invariant_clause + " except when the owner says otherwise"
     assert not _phrase_equals_literal(suffixed, invariant_clause)
 
