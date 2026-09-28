@@ -90,6 +90,85 @@ def test_missing_transition_sections(capsys, tmp_path):
     )
     assert code == 0
     assert data["missingTransitionSections"] == ["1.1.0", "2.0.0"]
+    assert data["unresolvedGaps"] == [{"version": None, "reason": "changelog-unreadable"}]
+
+
+def test_gap_benign_changelog_section(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _mkver(cache, "1.0.0")
+    _mkver(cache, "2.0.0")
+    (cache / "2.0.0" / "TRANSITION.md").write_text("## 1.0.0\n")
+    (cache / "2.0.0" / "CHANGELOG.md").write_text(
+        "## [2.0.0](https://example.test) (2026-01-01)\n\n* a change\n"
+    )
+    code, data = _plan(
+        capsys, "--role", "workhorse", "--from", "1.0.0", "--to", "2.0.0",
+        "--cache-dir", str(cache),
+    )
+    assert code == 0
+    assert data["missingTransitionSections"] == ["2.0.0"]
+    assert data["unresolvedGaps"] == []
+    assert data["changelogSections"] == ["2.0.0"]
+
+
+def test_gap_hold_no_section_either_file(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    for v in ("1.0.0", "1.5.0", "2.0.0"):
+        _mkver(cache, v)
+    (cache / "2.0.0" / "TRANSITION.md").write_text("## 2.0.0\n")
+    (cache / "2.0.0" / "CHANGELOG.md").write_text(
+        "## [2.0.0](https://example.test) (2026-01-01)\n"
+    )
+    code, data = _plan(
+        capsys, "--role", "workhorse", "--from", "1.0.0", "--to", "2.0.0",
+        "--cache-dir", str(cache),
+    )
+    assert code == 0
+    assert data["unresolvedGaps"] == [{"version": "1.5.0", "reason": "no-section"}]
+    assert data["changelogSections"] == ["2.0.0"]
+
+
+def test_gap_hold_changelog_missing(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _mkver(cache, "1.0.0")
+    _mkver(cache, "2.0.0")
+    (cache / "2.0.0" / "TRANSITION.md").write_text("## 2.0.0\n")
+    code, data = _plan(
+        capsys, "--role", "workhorse", "--from", "1.0.0", "--to", "2.0.0",
+        "--cache-dir", str(cache),
+    )
+    assert code == 0
+    assert data["unresolvedGaps"] == [{"version": None, "reason": "changelog-unreadable"}]
+    assert data["changelogSections"] == []
+
+
+def test_gap_changelog_heading_in_fence_ignored(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _mkver(cache, "1.0.0")
+    _mkver(cache, "2.0.0")
+    (cache / "2.0.0" / "TRANSITION.md").write_text("## 1.0.0\n")
+    (cache / "2.0.0" / "CHANGELOG.md").write_text(
+        "# Changelog\n\n```\n## [2.0.0](https://example.test) (2026-01-01)\n```\n"
+    )
+    code, data = _plan(
+        capsys, "--role", "workhorse", "--from", "1.0.0", "--to", "2.0.0",
+        "--cache-dir", str(cache),
+    )
+    assert code == 0
+    assert data["unresolvedGaps"] == [{"version": "2.0.0", "reason": "no-section"}]
+    assert data["changelogSections"] == []
+
+
+def test_up_to_date_has_no_gaps(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    _mkver(cache, "1.0.0")
+    code, data = _plan(
+        capsys, "--role", "showrunner", "--from-root", str(cache / "1.0.0"),
+    )
+    assert code == 0
+    assert data["upToDate"] is True
+    assert data["unresolvedGaps"] == []
+    assert data["changelogSections"] == []
 
 
 def test_refuse_version_tree_traversal_error(capsys, tmp_path, monkeypatch):

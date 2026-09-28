@@ -38,18 +38,18 @@ and stop after the brief.
 
 ### After compaction
 
-Compaction and SessionStart recovery do **not** read this skill. Checkpoint's compact
-command does not invoke or restate this procedure either — no hook, session bootstrap, or
-compaction step loads adopt-version for you. SessionStart recovery re-injects the **old**
-plugin root and an old-root path to re-read the charter SKILL.md from that root.
-**Nothing outside this skill** enforces the taken-up line over that injection. The seat
-meets that obligation only by following this paragraph and the durable
-`plugin version taken up` line (when checkpoint Step 4 part 3 preserved it). After any
-compaction, this seat's **first** act is to re-run `/superheroes:adopt-version`: it finds
-the `plugin version taken up` line this seat wrote, reports up to date when the running root
-already matches the host cache directory plus **to**, retargets every command to **toRoot**,
-and re-reads the charter from **toRoot** — not from recovery paths that still name the old
-root.
+Compaction and SessionStart recovery do **not** read this skill, and checkpoint's compact
+command does not restate this procedure. On Claude Code 2.1.283, a seat that took up a newer
+version in place and then compacted received a SessionStart bootstrap that named the newly
+installed plugin root and a charter-recovery path under it. That behaviour was observed on
+that harness version and is not guaranteed.
+
+After any compaction, this seat's **first** act is to check the injected plugin root against
+its `plugin version taken up` line (present when checkpoint Step 4 part 3 preserved it). The
+root matches when it is the host cache directory plus the **to** version in that line. When
+it matches, continue on it. Only when it does not match, re-run `/superheroes:adopt-version`
+before acting, retarget every command to **toRoot**, and re-read the charter from **toRoot**,
+not from a recovery path that names another root.
 
 Name the **host-provided plugin root** — the bootstrap's resolved plugin root in context, or
 on Claude Code the SessionStart injection when the bootstrap block is absent. Before anything
@@ -72,28 +72,30 @@ python3 -B "$NEW_ROOT/lib/adopt_version.py" plan --role "$ROLE" \
 A refusal (exit 1, `{"ok":false,"reason":...}`) stops the procedure — report the reason token
 to the owner. When `upToDate: true`, end with a one-line report. Read TRANSITION's section
 for **every** version listed in `transitionSections` (each patch in range counts) from the
-new root (`toRoot`). For each version in `missingTransitionSections`, read that version's
-section in `CHANGELOG.md` at `toRoot`. Absence of a TRANSITION section is normal when the
-release recorded no consumer-visible shape change (TRANSITION adds a section only when a release
-drops, renames, or newly requires an argument, a result key, or a result shape). When
-`CHANGELOG.md` is missing at `toRoot`, or it has no section for that version, record
-**no TRANSITION section (no consumer-visible change recorded)** — there is no changelog
-evidence to hold on. When the section is present and readable, record the same label unless
-that section names a removal, rename, breaking change, or a newly required argument, result
-key, or result shape: then mark it **unresolved** (a TRANSITION gap the release should cover).
-When `CHANGELOG.md` exists but that version's section cannot be read, mark **unresolved** and
-carry why to step 8.
+new root (`toRoot`).
 
-**Output:** from, to, the in-between versions, TRANSITION sections read, and each
-`missingTransitionSections` entry as either **no TRANSITION section (no consumer-visible change
-recorded)** or **unresolved** (why).
+Read `unresolvedGaps` from `plan`. Every entry is **unresolved** and holds adoption before
+step 5. An entry with reason `changelog-unreadable` means `CHANGELOG.md` at `toRoot` is missing
+or unreadable, so no crossed version has recorded evidence. An entry with reason `no-section`
+names a crossed version that has neither a TRANSITION section nor a CHANGELOG section. Take
+each entry to the owner as a numbered input at step 8.
+
+For each version in `missingTransitionSections` that `changelogSections` lists, read that
+version's section in `CHANGELOG.md` at `toRoot`. When the section names a removal, rename,
+breaking change, or newly required argument, result key, result shape, or step, mark that
+version **unresolved** too. Otherwise record **no TRANSITION section (no consumer-visible
+change recorded)**, which does not hold. TRANSITION adds a section only when a release drops,
+renames, or newly requires an argument, a result key, or a result shape, so a readable
+CHANGELOG section that names none of these is the evidence that nothing changed.
+
+**Output:** from, to, the in-between versions, TRANSITION sections read, every `unresolvedGaps`
+entry, and each `missingTransitionSections` version that `changelogSections` lists as either
+**no TRANSITION section (no consumer-visible change recorded)** or **unresolved** (why).
 
 **Gate before step 2:** Do not run steps 2–7 until every version in
-`missingTransitionSections` has one of those dispositions — each from reading that version's
-section in `CHANGELOG.md` at `toRoot`, or from the missing-file or missing-section rule above.
-Only **unresolved** holds adoption before step 5; **no TRANSITION section (no consumer-visible
-change recorded)** is not a hold (including when `CHANGELOG.md` is absent or has no section for
-that version).
+`missingTransitionSections` has a disposition: an `unresolvedGaps` entry, **unresolved** from
+its CHANGELOG section, or **no TRANSITION section (no consumer-visible change recorded)**.
+Any **unresolved** version or `unresolvedGaps` entry holds adoption before step 5.
 
 ## Step 2 — Sort the changes
 
@@ -155,11 +157,13 @@ resolved; then resume adoption from step 5.
 ## Step 5 — Switch the plugin root
 
 Skip this step while step 4 left any owner-input checklist item unresolved, or step 1 left
-any **unresolved** TRANSITION gap. **No TRANSITION section (no consumer-visible change
-recorded)** is not a gap — it does not hold step 5 once step 4 is clear. When step 1 left any
-**unresolved** gap, stop after step 4: brief the owner at step 8 with those versions as
-numbered decisions, and do not run steps 5–7 until each is resolved (release supplies a section
-or the owner accepts no action); then resume adoption from step 5.
+any `unresolvedGaps` entry or CHANGELOG-derived **unresolved** version. **No TRANSITION section
+(no consumer-visible change recorded)** is not a gap when the CHANGELOG section for that
+version was readable and named no consumer-visible change. It does not hold step 5 once
+step 4 is clear. When step 1 left any **unresolved** entry or version, stop after step 4: brief
+the owner at step 8 with each as a numbered decision, and do not run steps 5–7 until each is
+resolved (release supplies a section or the owner accepts no action); then resume adoption
+from step 5.
 
 Every absolute path in this seat's commands and launches now uses the new version directory
 (`toRoot` from `plan`), **except** commands that continue a live dispatch run the inventory
@@ -203,8 +207,8 @@ and carries it in the diagnosis receipt when it posts one — never as a separat
 When a detective seat may run `/superheroes:checkpoint` before that receipt, put this same
 `plugin version taken up` line in checkpoint Step 4's **live-state one-liner** (part 3) so
 compaction preserves it — checkpoint's five parts do not require it on their own. That line
-outranks the bootstrap block and SessionStart injection on the next adoption and after
-compaction.
+decides only when it disagrees with the bootstrap block or SessionStart injection, on the
+next adoption and after compaction.
 
 **Output:** one probe result per engine, any retired owner words, any held ledger kinds, and
 confirmation the taken-up line was written — or the failure that blocked it.
