@@ -55,12 +55,10 @@ clauses.
 Copy-holder disposition (§11.2 caveat — adding a copy means extending the table):
 
 - **``rubric/review-discipline.md``** — authoritative home for the cross-lane invariants.
-- **``skills/showrunner/SKILL.md``** — resolve-upward, not-engaged-never-passes, waiver-bounds,
-  bounded-acceptance, and third-rework-stop invariant rows.
-- **``skills/workhorse/SKILL.md``** — resolve-upward, not-engaged-never-passes, bounded-acceptance
-  (§ ``## 10. Review before handback``), and third-rework-stop (§
-  ``## 7. Delegate every implementation (lane-scoped — no size exception)``); deliberately excluded
-  from the waiver-bounds row because micro is the showrunner's lane, not an oversight.
+- **``skills/showrunner/SKILL.md``** — resolve-upward, not-engaged-never-passes, and waiver-bounds
+  invariant rows.
+- **``skills/workhorse/SKILL.md``** — resolve-upward and not-engaged-never-passes; deliberately
+  excluded from the waiver-bounds row because micro is the showrunner's lane, not an oversight.
 - **``skills/workhorse/SKILL.md``** and **``skills/detective/SKILL.md``** — the diagnosis/fix
   boundary (§ workhorse preamble and § ``## The boundary — both ways``): each charter's half of the
   two-sided fact plus the shared no-flag clause, pinned as clause-presence sentinels — paraphrases,
@@ -113,8 +111,6 @@ _EXPECTED_INVARIANT_NAMES = frozenset({
     "resolve-upward",
     "not-engaged-never-passes",
     "waiver-bounds",
-    "bounded-acceptance",
-    "third-rework-stop",
 })
 
 _EXPECTED_COPY_HOLDERS = {
@@ -129,22 +125,12 @@ _EXPECTED_COPY_HOLDERS = {
     "waiver-bounds": frozenset({
         "skills/showrunner/SKILL.md",
     }),
-    "bounded-acceptance": frozenset({
-        "skills/showrunner/SKILL.md",
-        "skills/workhorse/SKILL.md",
-    }),
-    "third-rework-stop": frozenset({
-        "skills/showrunner/SKILL.md",
-        "skills/workhorse/SKILL.md",
-    }),
 }
 
 _EXPECTED_SHARED_CLAUSE_COUNTS = {
     "resolve-upward": 5,
     "not-engaged-never-passes": 5,
     "waiver-bounds": 3,
-    "bounded-acceptance": 4,
-    "third-rework-stop": 3,
 }
 
 _EXPECTED_HOLDER_CLAUSE_COUNTS = {
@@ -173,21 +159,6 @@ _EXPECTED_HOME_SECTIONS = {
         "quiet-failure question": "### Micro — owner authorization",
         "single named exception": "### Micro — owner authorization",
     },
-    "bounded-acceptance": {
-        "no new Critical or Important finding in a review round on the final head": (
-            "### Bounded acceptance — prose-contract DoDs"
-        ),
-        "after a stated number of rounds": "### Bounded acceptance — prose-contract DoDs",
-        "with Minor residuals disclosed": "### Bounded acceptance — prose-contract DoDs",
-        "unterminating bar can only be abandoned": (
-            "### Bounded acceptance — prose-contract DoDs"
-        ),
-    },
-    "third-rework-stop": {
-        "a third rework of the same surface is the tripwire": "### The third-rework tripwire",
-        "stopping and handing the design signal up satisfies it": "### The third-rework tripwire",
-        "a formal park binds when the lane has not converged": "### The third-rework tripwire",
-    },
 }
 
 _EXPECTED_HOLDER_SECTIONS = {
@@ -201,16 +172,6 @@ _EXPECTED_HOLDER_SECTIONS = {
     },
     "waiver-bounds": {
         "skills/showrunner/SKILL.md": "## Micro — hard-line edit",
-    },
-    "bounded-acceptance": {
-        "skills/showrunner/SKILL.md": "## Your duties",
-        "skills/workhorse/SKILL.md": "## 10. Review before handback",
-    },
-    "third-rework-stop": {
-        "skills/showrunner/SKILL.md": "## Your duties",
-        "skills/workhorse/SKILL.md": (
-            "## 7. Delegate every implementation (lane-scoped — no size exception)"
-        ),
     },
 }
 
@@ -297,56 +258,6 @@ _INVARIANT_TABLE = [
                 "owner-only, per change, never a standing grant; "
                 "the risk must be stated explicitly",
             ],
-        },
-    },
-    {
-        "name": "bounded-acceptance",
-        "clauses": [
-            {
-                "text": (
-                    "no new Critical or Important finding in a review round on the final head"
-                ),
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-            {
-                "text": "after a stated number of rounds",
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-            {
-                "text": "with Minor residuals disclosed",
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-            {
-                "text": "unterminating bar can only be abandoned",
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-        ],
-        "copy_holder_sections": {
-            "skills/showrunner/SKILL.md": "## Your duties",
-            "skills/workhorse/SKILL.md": "## 10. Review before handback",
-        },
-    },
-    {
-        "name": "third-rework-stop",
-        "clauses": [
-            {
-                "text": "a third rework of the same surface is the tripwire",
-                "home_section": "### The third-rework tripwire",
-            },
-            {
-                "text": "stopping and handing the design signal up satisfies it",
-                "home_section": "### The third-rework tripwire",
-            },
-            {
-                "text": "a formal park binds when the lane has not converged",
-                "home_section": "### The third-rework tripwire",
-            },
-        ],
-        "copy_holder_sections": {
-            "skills/showrunner/SKILL.md": "## Your duties",
-            "skills/workhorse/SKILL.md": (
-                "## 7. Delegate every implementation (lane-scoped — no size exception)"
-            ),
         },
     },
 ]

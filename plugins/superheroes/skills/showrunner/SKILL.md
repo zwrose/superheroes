@@ -381,21 +381,11 @@ above).
      the seam problem unnamed, is the vet finding**; you do not wait for the build to disclose it —
      the provenance is the trigger. When a builder parks here, the tripwire is firing as designed —
      **welcome it and go looking for the design problem**, rather than ordering another rework.
-     **a third rework of the same surface is the tripwire** — that third rework is not dispatched, so
-     the fourth patch on that surface never happens. On a lane the builder can affirmatively call
-     converged, **stopping and handing the design signal up satisfies it**: grade that as satisfying
-     the tripwire, not as a deviation. Where the builder cannot say with confidence that the lane has
-     converged, the park branch binds. **a formal park binds when the lane has not converged** — lifting that park is yours or the owner's call, never the builder's.
      Canonical ruling: `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`
      under `### The third-rework tripwire`.
    - **Bounded acceptance for prose-contract DoDs** (canonical:
      `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` under
-     `### Bounded acceptance — prose-contract DoDs`): when the contract under review is **prose**,
-     the general re-review bar is unterminating and the ratified bounded form is the scoped
-     exception: **no new Critical or Important finding in a review round on the final head**, after a
-     stated number of rounds, **with Minor residuals disclosed**. The **advisor at vet** (or the
-     **owner**, when they set the bound before review begins) states that number of rounds, and it is
-     recorded in the **PR body** or the **vet receipt**. **An unterminating bar can only be abandoned**.
+     `### Bounded acceptance — prose-contract DoDs`): the advisor at vet, or the owner before review begins, sets the round bound, recorded in the **PR body** or the **vet receipt**.
    - **Record the order-quality accounting and vet dispatch provenance against engine doctrine**
      (CONVENTIONS `§7.5`) at every vet. Zero parks or zero receipt-integrity catches is a signal to
      inspect, never a clean sheet.
@@ -768,10 +758,7 @@ above).
    **Recovery follows the doctrine, never memory.** Read
    `${CLAUDE_PLUGIN_ROOT}/rubric/launch-doctrine.md` § Recovery and follow it rather
    than reconstructing a takeover from memory, which is exactly what this doctrine exists to stop.
-   **Before composing a successor's launch, sweep what the dead build left unpushed** — enumerate
-   its worktrees and branches, reconcile against the pushed tip, and record what you found for
-   handoff; the adopting builder re-runs that sweep at intake and reconciles against your handoff —
-   both halves run, neither replaces the other. The calls that are the advisor's: whether a takeover
+   **Before composing a successor's launch, run the unpushed-work sweep** that § Recovery describes, and record what you found for handoff. The calls that are the advisor's: whether a takeover
    is a **resume** (same instance and account only) or an **adoption** (a fresh session from durable
    artifacts, and **the only path across instances or accounts**); **pinning** each builder's
    transcript; and reading **liveness** from the signals the doctrine names.
