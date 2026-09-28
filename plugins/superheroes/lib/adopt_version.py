@@ -7,6 +7,8 @@ import os
 import re
 import sys
 
+import charter_detect
+
 _VER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _HVER = re.compile(r"^## (\d+\.\d+\.\d+)\s*$")
 _SKIP = frozenset({"__pycache__", ".in_use", ".orphaned_at"})
@@ -54,8 +56,10 @@ def _collect(root):
     return out
 
 def _bucket(path, role):
-    if path.startswith(f"skills/{role}/"):
-        return "charter"
+    if path.startswith("skills/"):
+        parts = path.split("/")
+        if len(parts) >= 2 and charter_detect.COMMAND_CHARTERS.get(parts[1]) == role:
+            return "charter"
     if path == "rubric/covenant.md" or path.startswith("hooks/"):
         return "covenantHooks"
     if path.startswith(("lib/", "bin/")) and "tests" not in path.split("/"):
@@ -147,7 +151,7 @@ def _plan(role, cache, from_v, to_v):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     p = ap.add_subparsers(dest="cmd", required=True).add_parser("plan")
-    p.add_argument("--role", required=True, choices=["showrunner", "workhorse", "detective"])
+    p.add_argument("--role", required=True, choices=list(charter_detect.CHARTER_NAMES))
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--from-root")
     g.add_argument("--from", dest="from_ver")

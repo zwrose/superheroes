@@ -113,6 +113,28 @@ def test_refuse_version_tree_traversal_error(capsys, tmp_path, monkeypatch):
     assert data["reason"] == "version-tree-unreadable"
 
 
+def test_charter_bucket_uses_command_charters(capsys, tmp_path):
+    cache = tmp_path / "cache"
+    role = "showrunner"
+    fr, tr = cache / "1.0.0", cache / "2.0.0"
+    for sub in ("skills/showrunner-resume", "skills/showrunner-handoff"):
+        os.makedirs(fr / sub, exist_ok=True)
+        os.makedirs(tr / sub, exist_ok=True)
+        (fr / sub / "SKILL.md").write_text("a")
+        (tr / sub / "SKILL.md").write_text("b")
+    trans = "## 2.0.0\n"
+    (fr / "TRANSITION.md").write_text(trans)
+    (tr / "TRANSITION.md").write_text(trans)
+    code, data = _plan(
+        capsys, "--role", role, "--from", "1.0.0", "--to", "2.0.0",
+        "--cache-dir", str(cache),
+    )
+    assert code == 0
+    changed = data["buckets"]["charter"]["changed"]
+    assert "skills/showrunner-resume/SKILL.md" in changed
+    assert "skills/showrunner-handoff/SKILL.md" in changed
+
+
 def test_diff_buckets(capsys, tmp_path):
     cache = tmp_path / "cache"
     role = "showrunner"

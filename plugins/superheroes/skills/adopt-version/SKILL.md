@@ -34,9 +34,17 @@ Establish the **running version** from the first source that resolves, in order:
 state (the running root is **toRoot**); the bootstrap's resolved plugin root in context; the
 plugin root in this seat's own recent commands; on Claude Code, the SessionStart injection
 recorded in the session transcript. If none resolves, do not guess — carry the gap to step 8
-and stop after the brief. After compaction, a `plugin version taken up` line this seat wrote
-overrides the injected resolved-roots block and charter-recovery paths; re-read the charter
-from **toRoot** in that line, not from recovery paths that still name the old root.
+and stop after the brief.
+
+### After compaction
+
+SessionStart recovery re-injects the **old** plugin root and tells the seat to re-read its
+charter SKILL.md from that old root. Nothing outside this skill enforces the
+taken-up line over that injection. After any compaction, this seat's **first** act is to
+re-run `/superheroes:adopt-version`: it finds the `plugin version taken up` line this seat
+wrote, ends at `upToDate` when the running root already matches **toRoot**, retargets every
+command to **toRoot**, and re-reads the charter from **toRoot** — not from recovery paths that
+still name the old root.
 
 Name the **host-provided plugin root** — the bootstrap's resolved plugin root in context, or
 on Claude Code the SessionStart injection when the bootstrap block is absent. Before anything
@@ -84,9 +92,12 @@ When `rubric/covenant.md` changed: re-read it — the copy injected at session s
 and the file on disk governs. When `hooks/` changed: tell the owner at step 8 and treat new
 hook behaviour as absent until a restarted session proves it present.
 
-When `libs` or `other` changed — even when the charter bucket also changed: read the
-TRANSITION sections that apply and every changed doctrine page in `other` this seat uses
-(charter re-read above already covers that seat's reference tree).
+When `libs` changed: for **each** changed module in the `libs` bucket that step 2 marked as
+called by this seat, read that module from disk under the new root (or its diff against the
+old root) so you know what changed in behaviour you invoke — not only what TRANSITION says
+about interfaces. When `libs` or `other` changed — even when the charter bucket also changed:
+read the TRANSITION sections that apply and every changed doctrine page in `other` this seat
+uses (charter re-read above already covers that seat's reference tree).
 
 **When a fresh seat is right:** the charter was restructured so heavily that context would
 keep steering on old duty boundaries (whole duties moved or renamed), or context is nearly
@@ -123,12 +134,11 @@ named: keep each such run pinned to its old-root dispatcher and run directory un
 reaches a terminal result — never retarget continuation to the new root mid-run. The
 bootstrap's resolved-roots block in context still names the old root — treat it as stale.
 
-Always write one line `plugin version taken up: <fromRoot> -> <toRoot>` into this seat's
-durable state (the advisor's resume point; a builder's or detective's issue or PR record) —
-whatever the `plan` buckets hold. That line outranks the bootstrap block and SessionStart
-injection on the next adoption and after compaction.
+Do **not** write `plugin version taken up` yet — step 6 must pass first. Until that line
+exists, treat adoption as **pending**: do not open new dispatch lanes on the new root (step 7
+waits).
 
-**Output:** the new root, stated once, and confirmation the taken-up line was written.
+**Output:** the new root, stated once, and that adoption is pending probe success.
 
 ## Step 6 — Re-run the version-coupled checks
 
@@ -148,7 +158,17 @@ old-version defect retires once its fresh probe passes — name each retirement 
 If TRANSITION names new ledger record kinds, do not write them while old-root lanes are live
 (readers on the old version cannot fold a kind they do not know).
 
-**Output:** one probe result per engine, any retired owner words, any held ledger kinds.
+When **any** required probe fails: stop after step 8 — brief the owner with the failing engine
+and output, leave adoption **pending** (no `plugin version taken up` line), and do not run
+step 7's new-root lanes until probes pass or the owner rules otherwise.
+
+When **every** required probe passes, write one line
+`plugin version taken up: <fromRoot> -> <toRoot>` into this seat's durable state (the
+advisor's resume point; a builder's or detective's issue or PR record). That line outranks the
+bootstrap block and SessionStart injection on the next adoption and after compaction.
+
+**Output:** one probe result per engine, any retired owner words, any held ledger kinds, and
+confirmation the taken-up line was written — or the failure that blocked it.
 
 ## Step 7 — Handle old-root processes
 
