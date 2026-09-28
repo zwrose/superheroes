@@ -9,7 +9,7 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
-### Cursor dash-free native result handoff (#1526)
+### Cursor dash-free native result handoff
 
 - Cursor attempts whose canonical native result path contains a run of two or more dashes (`--`)
   now name a dash-free symlink path to that file in the prompt's result line (the bytes still land
