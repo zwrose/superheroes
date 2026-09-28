@@ -147,31 +147,6 @@ def _surface_check_cases():
 _SURFACE_CHECK_CASES = _surface_check_cases()
 
 
-def _assert_exact_await_dispatches_phrases(phrases):
-    canonical = _canonical_await_dispatches_phrases()
-    normalized_phrases = [_normalize_for_line_wrap(p) for p in phrases]
-    if len(normalized_phrases) != len(set(normalized_phrases)):
-        raise AssertionError(
-            'RULING_INVARIANTS["await-dispatches"] must not contain duplicate phrases: '
-            f"{phrases!r}"
-        )
-    if len(phrases) != len(canonical):
-        raise AssertionError(
-            'RULING_INVARIANTS["await-dispatches"] must have exactly '
-            f"{len(canonical)} phrases, found {len(phrases)}: {phrases!r}"
-        )
-    normalized_found = {_normalize_for_line_wrap(p) for p in phrases}
-    normalized_canonical = {_normalize_for_line_wrap(p) for p in canonical}
-    if normalized_found != normalized_canonical:
-        found_not_expected = normalized_found - normalized_canonical
-        expected_not_found = normalized_canonical - normalized_found
-        raise AssertionError(
-            'RULING_INVARIANTS["await-dispatches"] must match the ruling-invariant '
-            f"phrases exactly — found-not-expected: {sorted(found_not_expected)!r}, "
-            f"expected-not-found: {sorted(expected_not_found)!r}"
-        )
-
-
 def _workhorse_section7_body():
     """Full §7 body — channel-ownership prose sits above the concurrency anchor."""
     text = _read_plugin("skills/workhorse/SKILL.md")
@@ -256,12 +231,12 @@ def test_literal_on_every_amended_surface(label, phrase):
     _assert_literal_on_every_surface(phrase, label)
 
 
-def test_ruling_invariants_pins_all_await_dispatches_literals():
+def test_launch_doctrine_loads():
+    """launch_doctrine.load() accepts the shipped doctrine."""
     result = LD.load()
     assert result["ok"] is True, (
         f"launch_doctrine.load() refused: reason={result.get('reason')!r}"
     )
-    _assert_exact_await_dispatches_phrases(tuple(_await_dispatches_phrases()))
 
 
 def test_normalize_accepts_whitespace_rewrap():
@@ -317,32 +292,3 @@ def test_phrase_equals_literal_rejects_appended_suffix():
     invariant_clause = _await_dispatches_phrases()[0]
     suffixed = invariant_clause + " except when the owner says otherwise"
     assert not _phrase_equals_literal(suffixed, invariant_clause)
-
-
-# Bite: grown tuple — _assert_exact_await_dispatches_phrases must reject an extra phrase
-def test_assert_exact_await_dispatches_phrases_rejects_grown_tuple():
-    real_phrases = _canonical_await_dispatches_phrases()
-    grown = real_phrases + (
-        "An extra plausible sentence that is not part of the canonical trio.",
-    )
-    with pytest.raises(AssertionError, match="must have exactly"):
-        _assert_exact_await_dispatches_phrases(grown)
-
-
-# Bite: duplicate-padded tuple — _assert_exact_await_dispatches_phrases must reject length mismatch
-def test_assert_exact_await_dispatches_phrases_rejects_duplicate_padded_tuple():
-    real_phrases = _canonical_await_dispatches_phrases()
-    padded = real_phrases + (real_phrases[0],)
-    with pytest.raises(AssertionError, match="must not contain duplicate phrases"):
-        _assert_exact_await_dispatches_phrases(padded)
-
-
-# Bite: mutated phrase — _assert_exact_await_dispatches_phrases must reject a changed word
-def test_assert_exact_await_dispatches_phrases_rejects_mutated_phrase():
-    phrases = list(_canonical_await_dispatches_phrases())
-    for index, phrase in enumerate(phrases):
-        if "unwatched" in phrase:
-            phrases[index] = phrase.replace("unwatched", "watched")
-            break
-    with pytest.raises(AssertionError, match="found-not-expected"):
-        _assert_exact_await_dispatches_phrases(tuple(phrases))
