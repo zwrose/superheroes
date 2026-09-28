@@ -271,3 +271,6 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
 5. **Candidate requirement, raised by the owner:** discovery sessions don't understand the whole
    SDLC; they often assume they will decompose issues and wire the board, which is the advisor's
    work. Fix it as part of this discovery: discovery should know where it hands off.
+6. **The tail end** (owner): ready for vet, then the advisor's vet (craft fixed by the advisor,
+   owner calls sent back), then one last tap sheet holding any vet owner calls with approval as
+   its final card. Approval and the merge word stay separate acts, as today.
