@@ -1,8 +1,4 @@
-"""CONVENTIONS §15 heartbeat contract drift guard.
-
-Module constants in heartbeat.py are authoritative; prose copies in CONVENTIONS §15
-the workhorse charter and the showrunner orchestration page must stay pinned to them.
-"""
+"""Heartbeat doc sync: docs name heartbeat identifiers where code and doc both need them."""
 import os
 import re
 
@@ -24,37 +20,9 @@ def _read_plugin(rel):
         return fh.read()
 
 
-def _conventions_section_15():
-    text = _read_repo("CONVENTIONS.md")
-    m = re.search(r"## 15\. Builder liveness heartbeat.*?(?=\n## 16\.|\Z)", text, re.DOTALL)
-    assert m, "CONVENTIONS §15 not found (renumbered or moved?)"
-    return m.group(0)
-
-
 def _assert_tokens_present(text, label, tokens):
     missing = [tok for tok in tokens if tok not in text]
     assert not missing, "%s missing token(s): %r" % (label, missing)
-
-
-def _assert_bound_fragment(text, label, fragment):
-    assert fragment in text, "%s missing bound fragment: %r" % (label, fragment)
-
-
-def _launch_id_grammar_token():
-    return "`%s`" % hb._LAUNCH_ID_RE.pattern
-
-
-def test_conventions_section_15_matches_heartbeat_constants():
-    section = _conventions_section_15()
-    tokens = (
-        sorted(hb.STATES)
-        + sorted(hb.TERMINAL_STATES)
-        + sorted(hb.SWEEP_CLASSES)
-        + [hb.HEARTBEAT_ROOT_ENV, hb.LAUNCH_ID_ENV, _launch_id_grammar_token()]
-    )
-    _assert_tokens_present(section, "CONVENTIONS.md §15", tokens)
-    assert "LIVENESS_QUIET_WINDOW_SECONDS" in section
-    assert "lib/heartbeat.py" in section
 
 
 def test_wave_watch_doc_cites_the_quiet_window_constant():

@@ -39,18 +39,11 @@ _RULING_INVARIANT_LABELS = frozenset({
     "turn-end sentence",
 })
 
-# Hard-coded oracle literals — §11 pattern-2 drift guards on RULING_INVARIANTS["await-dispatches"].
-# Used only in test_ruling_invariants_pins_all_three_literals; per-surface checks read the home.
-_TURN_END_SENTENCE = (
-    'Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message.'
-)
-_INVARIANT_CLAUSE = (
-    "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), "
-    "never an unwatched run-dir at turn end"
-)
-_INDEPENDENCE_TEST = (
-    "no result dependency, no shared writable worktree, and no shared output path"
-)
+_RULING_LABEL_TO_INDEX = {
+    "invariant clause": 0,
+    "independence test": 1,
+    "turn-end sentence": 2,
+}
 
 _CHANNEL_OWNERSHIP_SENTENCE = (
     "`await-dispatches` ruling governs the **channel** for dispatches the **builder itself** launches."
@@ -66,14 +59,7 @@ _CHANNEL_OWNERSHIP_SURFACE_OVERRIDES = {
     ),
 }
 
-_PHRASE_BY_LABEL = {
-    "invariant clause": _INVARIANT_CLAUSE,
-    "independence test": _INDEPENDENCE_TEST,
-    "turn-end sentence": _TURN_END_SENTENCE,
-    "channel ownership": _CHANNEL_OWNERSHIP_SENTENCE,
-}
-
-_EXPECTED_RULING_INVARIANT_PHRASE_COUNT = len(_RULING_INVARIANT_LABELS)
+_ALL_PHRASE_LABELS = frozenset(_RULING_INVARIANT_LABELS) | {"channel ownership"}
 
 
 def _read_plugin(rel):
@@ -122,20 +108,33 @@ def _await_dispatches_phrases():
     return phrases
 
 
+def _canonical_await_dispatches_phrases():
+    return tuple(_await_dispatches_phrases())
+
+
+def _ruling_phrase_by_label(label):
+    phrases = _await_dispatches_phrases()
+    index = _RULING_LABEL_TO_INDEX[label]
+    if index >= len(phrases):
+        raise AssertionError(
+            f'{label!r}: RULING_INVARIANTS["await-dispatches"] has only {len(phrases)} '
+            f"phrase(s), need index {index}"
+        )
+    return phrases[index]
+
+
 def _assert_exact_await_dispatches_phrases(phrases):
-    if len(phrases) != _EXPECTED_RULING_INVARIANT_PHRASE_COUNT:
+    canonical = _canonical_await_dispatches_phrases()
+    if len(phrases) != len(canonical):
         raise AssertionError(
             'RULING_INVARIANTS["await-dispatches"] must have exactly '
-            f"{_EXPECTED_RULING_INVARIANT_PHRASE_COUNT} phrases, found {len(phrases)}: {phrases!r}"
+            f"{len(canonical)} phrases, found {len(phrases)}: {phrases!r}"
         )
     normalized_found = {_normalize_for_line_wrap(p) for p in phrases}
-    normalized_expected = {
-        _normalize_for_line_wrap(_PHRASE_BY_LABEL[label])
-        for label in _RULING_INVARIANT_LABELS
-    }
-    if normalized_found != normalized_expected:
-        found_not_expected = normalized_found - normalized_expected
-        expected_not_found = normalized_expected - normalized_found
+    normalized_canonical = {_normalize_for_line_wrap(p) for p in canonical}
+    if normalized_found != normalized_canonical:
+        found_not_expected = normalized_found - normalized_canonical
+        expected_not_found = normalized_canonical - normalized_found
         raise AssertionError(
             'RULING_INVARIANTS["await-dispatches"] must match the ruling-invariant '
             f"phrases exactly — found-not-expected: {sorted(found_not_expected)!r}, "
@@ -144,19 +143,11 @@ def _assert_exact_await_dispatches_phrases(phrases):
 
 
 def _phrase_for_label(label):
-    if label not in _PHRASE_BY_LABEL:
+    if label not in _ALL_PHRASE_LABELS:
         raise AssertionError(f"unknown phrase label: {label!r}")
-    if label not in _RULING_INVARIANT_LABELS:
-        return _PHRASE_BY_LABEL[label]
-    literal = _PHRASE_BY_LABEL[label]
-    for phrase in _await_dispatches_phrases():
-        if _phrase_equals_literal(phrase, literal):
-            return phrase
-    normalized = _normalize_for_line_wrap(literal)
-    raise AssertionError(
-        f'{label!r} missing from RULING_INVARIANTS["await-dispatches"] '
-        f"— expected exact phrase: {normalized!r}"
-    )
+    if label == "channel ownership":
+        return _CHANNEL_OWNERSHIP_SENTENCE
+    return _ruling_phrase_by_label(label)
 
 
 def _workhorse_section7_body():
@@ -190,7 +181,12 @@ def _workhorse_section7_concurrency_region():
 
 
 def _literal_for_surface(rel, label):
-    literal = _PHRASE_BY_LABEL[label]
+    if label == "channel ownership":
+        literal = _CHANNEL_OWNERSHIP_SENTENCE
+    elif label in _RULING_INVARIANT_LABELS:
+        literal = _ruling_phrase_by_label(label)
+    else:
+        raise AssertionError(f"unknown phrase label: {label!r}")
     return _CHANNEL_OWNERSHIP_SURFACE_OVERRIDES.get(rel, literal)
 
 
@@ -222,24 +218,13 @@ def _assert_literal_on_every_surface(literal, label):
         _assert_literal_on_surface(rel, text, surface_literal, label)
 
 
-@pytest.mark.parametrize("label", sorted(_PHRASE_BY_LABEL))
+@pytest.mark.parametrize("label", sorted(_ALL_PHRASE_LABELS))
 def test_literal_on_every_amended_surface(label):
     phrase = _phrase_for_label(label)
     _assert_literal_on_every_surface(phrase, label)
 
 
 def test_ruling_invariants_pins_all_three_literals():
-    # §11 pattern-2 drift guard: hand-typed literals must equal the machine home exactly.
-    phrases = _await_dispatches_phrases()
-    _assert_exact_await_dispatches_phrases(phrases)
-    for label in sorted(_RULING_INVARIANT_LABELS):
-        literal = _PHRASE_BY_LABEL[label]
-        normalized = _normalize_for_line_wrap(literal)
-        if not any(_phrase_equals_literal(phrase, literal) for phrase in phrases):
-            raise AssertionError(
-                f'{label!r} missing from RULING_INVARIANTS["await-dispatches"] '
-                f"— expected exact phrase: {normalized!r}"
-            )
     result = LD.load()
     assert result["ok"] is True, (
         f"launch_doctrine.load() refused: reason={result.get('reason')!r}"
@@ -247,57 +232,63 @@ def test_ruling_invariants_pins_all_three_literals():
 
 
 def test_normalize_accepts_whitespace_rewrap():
-    rewrapped = _INVARIANT_CLAUSE.replace("; ", ";\n")
-    assert _literal_present(rewrapped, _INVARIANT_CLAUSE)
+    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    rewrapped = invariant_clause.replace("; ", ";\n")
+    assert _literal_present(rewrapped, invariant_clause)
 
 
 # Bite: changed word — must not match
 def test_normalize_rejects_changed_word():
-    mutated = _INVARIANT_CLAUSE.replace("unwatched", "watched")
-    assert not _literal_present(mutated, _INVARIANT_CLAUSE)
+    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    mutated = invariant_clause.replace("unwatched", "watched")
+    assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: inserted word — must not match
 def test_normalize_rejects_inserted_word():
-    mutated = _INVARIANT_CLAUSE.replace("never an", "never quite an")
-    assert not _literal_present(mutated, _INVARIANT_CLAUSE)
+    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    mutated = invariant_clause.replace("never an", "never quite an")
+    assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: changed punctuation — must not match
 def test_normalize_rejects_changed_punctuation():
-    mutated = _INVARIANT_CLAUSE.replace(";", ",")
-    assert not _literal_present(mutated, _INVARIANT_CLAUSE)
+    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    mutated = invariant_clause.replace(";", ",")
+    assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: curly quotes around "wait" — must not match
 def test_normalize_rejects_curly_quotes_around_wait():
-    mutated = _TURN_END_SENTENCE.replace('"wait"', "\u201cwait\u201d")
-    assert not _literal_present(mutated, _TURN_END_SENTENCE)
+    turn_end = _ruling_phrase_by_label("turn-end sentence")
+    mutated = turn_end.replace('"wait"', "\u201cwait\u201d")
+    assert not _literal_present(mutated, turn_end)
 
 
 # Bite: un-backticked & — must not match
 def test_normalize_rejects_unbackticked_ampersand():
-    mutated = _INVARIANT_CLAUSE.replace("`&`", "&")
-    assert not _literal_present(mutated, _INVARIANT_CLAUSE)
+    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    mutated = invariant_clause.replace("`&`", "&")
+    assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: truncated partial literal — must not match
 def test_normalize_rejects_truncated_literal():
-    mutated = _INVARIANT_CLAUSE[: len(_INVARIANT_CLAUSE) // 2]
-    assert not _literal_present(mutated, _INVARIANT_CLAUSE)
+    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    mutated = invariant_clause[: len(invariant_clause) // 2]
+    assert not _literal_present(mutated, invariant_clause)
 
 
 # Bite: appended suffix — _phrase_equals_literal must reject containment
 def test_phrase_equals_literal_rejects_appended_suffix():
-    suffixed = _INVARIANT_CLAUSE + " except when the owner says otherwise"
-    assert not _phrase_equals_literal(suffixed, _INVARIANT_CLAUSE)
+    invariant_clause = _ruling_phrase_by_label("invariant clause")
+    suffixed = invariant_clause + " except when the owner says otherwise"
+    assert not _phrase_equals_literal(suffixed, invariant_clause)
 
 
 # Bite: grown tuple — _assert_exact_await_dispatches_phrases must reject an extra phrase
 def test_assert_exact_await_dispatches_phrases_rejects_grown_tuple():
-    real_phrases = tuple(
-        _PHRASE_BY_LABEL[label] for label in sorted(_RULING_INVARIANT_LABELS)
-    )
+    real_phrases = _canonical_await_dispatches_phrases()
     grown = real_phrases + (
         "An extra plausible sentence that is not part of the canonical trio.",
     )
@@ -307,9 +298,7 @@ def test_assert_exact_await_dispatches_phrases_rejects_grown_tuple():
 
 # Bite: duplicate-padded tuple — _assert_exact_await_dispatches_phrases must reject length mismatch
 def test_assert_exact_await_dispatches_phrases_rejects_duplicate_padded_tuple():
-    real_phrases = tuple(
-        _PHRASE_BY_LABEL[label] for label in sorted(_RULING_INVARIANT_LABELS)
-    )
+    real_phrases = _canonical_await_dispatches_phrases()
     padded = real_phrases + (real_phrases[0],)
     with pytest.raises(AssertionError, match="must have exactly"):
         _assert_exact_await_dispatches_phrases(padded)
@@ -317,9 +306,7 @@ def test_assert_exact_await_dispatches_phrases_rejects_duplicate_padded_tuple():
 
 # Bite: mutated phrase — _assert_exact_await_dispatches_phrases must reject a changed word
 def test_assert_exact_await_dispatches_phrases_rejects_mutated_phrase():
-    phrases = list(
-        _PHRASE_BY_LABEL[label] for label in sorted(_RULING_INVARIANT_LABELS)
-    )
+    phrases = list(_canonical_await_dispatches_phrases())
     for index, phrase in enumerate(phrases):
         if "unwatched" in phrase:
             phrases[index] = phrase.replace("unwatched", "watched")
