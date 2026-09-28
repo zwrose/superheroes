@@ -229,6 +229,21 @@ the mechanical sync check** (the register-quote check of
 [Verbatim injection into child bodies](#verbatim-injection-into-child-bodies), run per
 register-consuming child), with **no new hunting**.
 
+**The filing dry-run.** The pass also dry-runs the package's filing against the branch head, before
+the package goes to the owner for its merge word. Split out every body the filing will create: each
+child body, the epic body, and every planned layer body (a child whose Size row plans a stack needs
+one per layer, as `rubric/native-stacks.md` § Each layer is a sub-issue files them). Run each
+body through `issue_contract.py check-build-ready`, and each register-consuming one through the
+register-check above with `--register-copy worktree`, because the branch's register is not on main
+yet. Then confirm that every owner ruling the package or its PR body says is drafted in is present
+in the files, with no State line still calling it open. **Record the output in a `Filing dry-run`
+section of the audit trail**, beside the verification pass's record, since the writer verbs carry
+no field for it: each body's check result, and where each claimed ruling sits. A missing body, a
+build-ready result that is not `ok: true` (that check always exits zero, so read `ok`, never the
+exit), a register-check that does not pass, or a ruling not found is a failed verification, and
+the package is not verified. A filing agent would refuse the same gap later, after the merge word
+was already spent.
+
 A fix that **fails** verification returns its parts to unreviewed and they are re-read before
 filing. **The ceiling is the backstop, not the exit mechanism** — exhausting it parks.
 
