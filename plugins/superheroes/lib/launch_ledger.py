@@ -1633,9 +1633,11 @@ def _child_group_is_live(pid, *, started_ts, session_id):
     """True when the recorded pid or its process group still has live members.
 
     Signal 0 is an existence probe, never a real signal: this function must never
-    change another process's state. When the leader pid still exists, identity is
-    checked once (``ps`` only) so a reused pid cannot block terminalization forever.
-    Every uncertain identity answer stays True, because the caller refuses on True.
+    change another process's state. When the leader pid still exists — including a
+    pid that answers ``PermissionError`` because it belongs to another uid — identity
+    is checked once (``ps`` only), before the group probe, so a reused pid cannot block
+    terminalization forever. Every uncertain identity answer stays True, because the
+    caller refuses on True; a ``PermissionError`` on a non-foreign leader returns True.
     """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
@@ -1652,14 +1654,24 @@ def _child_group_is_live(pid, *, started_ts, session_id):
     while True:
         proc_alive = False
         group_alive = False
+        kill_denied = False
         try:
             os.kill(pid, 0)
             proc_alive = True
         except ProcessLookupError:
             pass
         except PermissionError:
-            return True
+            # The pid exists under another uid: a live leader whose identity is still checked.
+            proc_alive = True
+            kill_denied = True
         except OSError:
+            return True
+        if proc_alive and not foreign_checked:
+            foreign_checked = True
+            if _pid_is_foreign(pid, started_ts, session_id):
+                # A reused leader pid means the old builder's group is gone; skip killpg.
+                return False
+        if kill_denied:
             return True
         try:
             os.killpg(pid, 0)
@@ -1671,11 +1683,6 @@ def _child_group_is_live(pid, *, started_ts, session_id):
         except OSError:
             return True
         if proc_alive or group_alive:
-            if proc_alive and not foreign_checked:
-                foreign_checked = True
-                if _pid_is_foreign(pid, started_ts, session_id):
-                    # A reused leader pid means the old builder's group is gone; skip killpg.
-                    return False
             if time.monotonic() >= deadline:
                 return True
             time.sleep(0.05)

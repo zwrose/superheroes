@@ -5491,6 +5491,71 @@ def test_record_outcome_refuses_when_process_facts_unreadable(tmp_path, monkeypa
     assert result["reason"] == "terminal-child-live:999999"
 
 
+def _fake_signal0_permission_denied(monkeypatch):
+    """``os.kill`` answers PermissionError (the pid exists under another uid)."""
+    calls = []
+
+    def fake_kill(pid, sig):
+        calls.append(("kill", pid, sig))
+        raise PermissionError
+
+    def fake_killpg(pid, sig):
+        calls.append(("killpg", pid, sig))
+        raise PermissionError
+
+    monkeypatch.setattr(ll.os, "kill", fake_kill)
+    monkeypatch.setattr(ll.os, "killpg", fake_killpg)
+    return calls
+
+
+def test_record_outcome_allows_foreign_uid_reused_pid_when_permission_denied(tmp_path, monkeypatch):
+    # axis: os.kill PermissionError + positively foreign identity -> not live
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-perm-foreign")
+    started_ts = ll.fold(ll.read(repo)["records"])["launches"]["l-perm-foreign"]["startedTs"]
+    calls = _fake_signal0_permission_denied(monkeypatch)
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: {
+            "stat": "SN",
+            "startTs": started_ts + 3600,
+            "command": "claude --model test",
+        },
+    )
+    result = ll.record_outcome(repo, "l-perm-foreign", "handback", "done")
+    assert result["ok"] is True
+    assert all(sig == 0 for _, _, sig in calls)
+
+
+def test_record_outcome_refuses_permission_denied_pid_when_facts_unreadable(tmp_path, monkeypatch):
+    # axis: os.kill PermissionError + unreadable identity -> fail-closed live
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-perm-none")
+    _fake_signal0_permission_denied(monkeypatch)
+    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: None)
+    result = ll.record_outcome(repo, "l-perm-none", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_record_outcome_refuses_permission_denied_pid_when_identity_matches(tmp_path, monkeypatch):
+    # axis: os.kill PermissionError + same-process identity -> live refusal
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-perm-own")
+    started_ts = ll.fold(ll.read(repo)["records"])["launches"]["l-perm-own"]["startedTs"]
+    _fake_signal0_permission_denied(monkeypatch)
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: {
+            "stat": "SN",
+            "startTs": started_ts - 1,
+            "command": "claude --model test",
+        },
+    )
+    result = ll.record_outcome(repo, "l-perm-own", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
 def test_record_outcome_refuses_on_conflicting_identity_arms(tmp_path, monkeypatch):
     # axis: one arm says same, the other foreign -> stay live (both orderings)
     session_id = _SESSION_UUID_CONFLICT
