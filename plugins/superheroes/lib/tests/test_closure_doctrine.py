@@ -1,7 +1,6 @@
 """Drift guards for showrunner spec-closure doctrine (issue #938).
 
-Enforces: pinned sentences in both doctrine homes; closure.md structure; R8 element-list
-home; vet-receipt and decomposition seam surfaces.
+Enforces: closure.md structure; R8 element-list home; vet-receipt and decomposition seam surfaces.
 """
 # What this file does and does not guard (issue #938).
 #
@@ -20,7 +19,6 @@ import pytest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 
-_SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
 _CLOSURE_REF = "skills/showrunner/reference/closure.md"
 _VET_RECEIPT_REF = "skills/showrunner/reference/vet-receipt.md"
 _DECOMPOSITION_REF = "skills/showrunner/reference/decomposition.md"
@@ -43,48 +41,6 @@ def _census_excluded(rel):
         norm.startswith(os.path.normpath(d) + os.sep) for d in _CENSUS_EXCLUDED_DIRS
     )
 
-
-_DUTY_1_START = "1. **Think at the project level.**"
-_DUTY_2_START = "2. **Board hygiene — file and wire.**"
-_DUTY_4_START = "4. **Vet PRs from artifacts, never narratives.**"
-_DUTY_5_START = "5. **Decide what reaches the owner before the merge click.**"
-_DUTY_6_START = "6. **Coordinate releases and drive the merge train.**"
-
-PIN_PRESENT_TENSE = (
-    "The vet that carries the closure receipt is the one whose merge closes the spec's last open "
-    "child, and it knows it is the final vet by the present-tense test: every other child is "
-    "already merged or closed at the moment of this vet."
-)
-
-PIN_SEQUENCING = (
-    "Where more than one candidate closure moment is live — concurrent final vets, or a vet racing "
-    "a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt."
-)
-
-PIN_NO_PR_CLOSE = (
-    "Where the last open child closes without a PR — declined scope — the closure receipt is "
-    "presented to the owner with that close, in the same sitting, and there is still no separate "
-    "closure trigger."
-)
-
-PIN_DELIVERY_DECISION = (
-    "No spec closes without either full delivery accepted or an explicit owner acceptance of "
-    "partial delivery, named as such on the closure receipt with delivered, deferred, and declined "
-    "each named; nothing closes silently incomplete."
-)
-
-PIN_FAILING_RUN = (
-    "A failing end-to-end validation run keeps the spec open by default and mints one repair issue "
-    "per failure, each anchored to the failing run's record and naming the unmet acceptance "
-    "criterion it restores; the owner may instead explicitly accept delivery with the failing run "
-    "disclosed, and either way the cycle ends at an owner decision."
-)
-
-PIN_ABANDONED_CHILD = (
-    "A spec whose child is abandoned — closed unmerged, orphaned, or displaced — is re-planned or "
-    "parked by the advisor rather than left waiting for a closure moment that cannot come; silence "
-    "is not a disposition."
-)
 
 R8_CLOSURE_RECEIPT_ELEMENTS = (
     "The closure receipt enumerates exactly: coverage map complete; all other children merged "
@@ -158,48 +114,6 @@ def _github_anchor(title):
     slug = title.lower()
     slug = re.sub(r"[^a-z0-9 _\-]", "", slug)
     return slug.replace(" ", "-")
-
-
-def _extract_duty_slice(text, start_marker, end_marker, label):
-    """Slice between numbered duty headings; raises if a boundary is missing or duplicated."""
-    lines = text.splitlines()
-    start_indices = [
-        i for i, line in enumerate(lines) if line.strip().startswith(start_marker)
-    ]
-    end_indices = [
-        i for i, line in enumerate(lines) if line.strip().startswith(end_marker)
-    ]
-    if len(start_indices) != 1:
-        raise RuntimeError(
-            f"{label}: start {start_marker!r} found {len(start_indices)} times (expected 1)"
-        )
-    if len(end_indices) != 1:
-        raise RuntimeError(
-            f"{label}: end {end_marker!r} found {len(end_indices)} times (expected 1)"
-        )
-    start = start_indices[0]
-    end = end_indices[0]
-    if end <= start:
-        raise RuntimeError(f"{label}: end precedes start")
-    return "\n".join(lines[start:end])
-
-
-def _assert_pinned_present(text, pin, label):
-    if _normalized(pin) not in _normalized(text):
-        raise AssertionError(f"{label}: pinned sentence missing after whitespace normalization")
-
-
-def _assert_pinned_in_both_homes(pin, ref_rel, charter_duty_slice):
-    ref_text = _read_plugin(ref_rel)
-    _assert_pinned_present(ref_text, pin, ref_rel)
-    charter_text = _read_plugin(_SHOWRUNNER_CHARTER)
-    duty_text = _extract_duty_slice(
-        charter_text,
-        charter_duty_slice[0],
-        charter_duty_slice[1],
-        _SHOWRUNNER_CHARTER,
-    )
-    _assert_pinned_present(duty_text, pin, f"{_SHOWRUNNER_CHARTER} duty slice")
 
 
 def _contents_section(text):
@@ -379,57 +293,6 @@ def _assert_section_names_closure_md(text, heading_title):
         )
 
 
-# --- Pinned sentences in both homes ------------------------------------------
-
-
-def test_pin_present_tense_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_PRESENT_TENSE,
-        _CLOSURE_REF,
-        (_DUTY_4_START, _DUTY_5_START),
-    )
-
-
-def test_pin_sequencing_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_SEQUENCING,
-        _CLOSURE_REF,
-        (_DUTY_4_START, _DUTY_5_START),
-    )
-
-
-def test_pin_no_pr_close_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_NO_PR_CLOSE,
-        _CLOSURE_REF,
-        (_DUTY_4_START, _DUTY_5_START),
-    )
-
-
-def test_pin_delivery_decision_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_DELIVERY_DECISION,
-        _CLOSURE_REF,
-        (_DUTY_5_START, _DUTY_6_START),
-    )
-
-
-def test_pin_failing_run_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_FAILING_RUN,
-        _CLOSURE_REF,
-        (_DUTY_5_START, _DUTY_6_START),
-    )
-
-
-def test_pin_abandoned_child_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_ABANDONED_CHILD,
-        _CLOSURE_REF,
-        (_DUTY_1_START, _DUTY_2_START),
-    )
-
-
 # --- closure.md structure ----------------------------------------------------
 
 
@@ -522,60 +385,6 @@ def test_decomposition_single_issue_fast_path_names_closure_md():
 
 
 # --- Negative tests (synthetic strings; no repo mutation) --------------------
-
-
-def test_negative_missing_pinned_sentence():
-    synthetic = "Charter without the pinned closure sentence."
-    _expect_assertion_error(
-        lambda: _assert_pinned_present(synthetic, PIN_PRESENT_TENSE, "synthetic"),
-        match="pinned sentence missing",
-    )
-
-
-def test_negative_pinned_sentence_outside_duty_slice():
-    synthetic = "\n".join([
-        _DUTY_4_START,
-        "Duty four without the pin.",
-        _DUTY_5_START,
-        PIN_PRESENT_TENSE,
-        _DUTY_6_START,
-    ])
-    duty4 = _extract_duty_slice(
-        synthetic, _DUTY_4_START, _DUTY_5_START, "synthetic"
-    )
-    _expect_assertion_error(
-        lambda: _assert_pinned_present(duty4, PIN_PRESENT_TENSE, "synthetic duty-4"),
-        match="pinned sentence missing",
-    )
-
-
-def test_negative_duty_boundary_duplicate_raises():
-    synthetic = "\n".join([
-        _DUTY_4_START,
-        _DUTY_4_START,
-        _DUTY_5_START,
-    ])
-    _expect_error(
-        lambda: _extract_duty_slice(
-            synthetic, _DUTY_4_START, _DUTY_5_START, "synthetic"
-        ),
-        RuntimeError,
-        match="found 2 times",
-    )
-
-
-def test_negative_duty_boundary_missing_raises():
-    synthetic = "\n".join([
-        "Preamble without duty four.",
-        _DUTY_5_START,
-    ])
-    _expect_error(
-        lambda: _extract_duty_slice(
-            synthetic, _DUTY_4_START, _DUTY_5_START, "synthetic"
-        ),
-        RuntimeError,
-        match="found 0 times",
-    )
 
 
 def _assert_h2_headings_match_pinned(text, ref_rel, pinned_headings):

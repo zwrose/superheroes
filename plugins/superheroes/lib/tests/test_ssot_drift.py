@@ -4,8 +4,9 @@ are re-typed across the surviving Python libs and schema literals.
 Each guard reads the authoritative home (or, where no single named home exists, pins
 the shared vocabulary across every enumerated copy-holder) and **fails closed** on an
 unparseable literal — so a change to the truth breaks CI in every copy-holder rather
-than letting them silently diverge (the PR #205 class). Per the §11.2 caveat, every
-test enumerates its copy-holders explicitly: a NEW copy must be added here.
+than letting them silently diverge. No new hand-maintained copy is ever added: the surviving
+guards are identifier-presence checks, code-to-code self-consistency, censuses, register-quote
+pins, and the few copies whose home a consumer cannot read or cite, which wait for that home.
 
 Clusters covered (post spine-retirement #468 — execution-spine JS twins
 `showrunner.js` / `build_phase.js` / `model_tier.js` / `engine_pref.js` and the
@@ -1499,22 +1500,6 @@ _PREFLIGHT_ENUM_ITEM = re.compile(
 )
 _PREFLIGHT_CHECK_ID = re.compile(r"`([a-z][-a-z0-9]*)`")
 
-_NUMBER_WORDS = {
-    "zero": 0,
-    "one": 1,
-    "two": 2,
-    "three": 3,
-    "four": 4,
-    "five": 5,
-    "six": 6,
-    "seven": 7,
-    "eight": 8,
-    "nine": 9,
-    "ten": 10,
-    "eleven": 11,
-    "twelve": 12,
-}
-
 def _preflight_charter_block(text):
     begin = text.find(_PREFLIGHT_CHARTER_BEGIN)
     end = text.find(_PREFLIGHT_CHARTER_END)
@@ -1596,30 +1581,6 @@ def test_preflight_enum_form_ids_catches_stale_inline_citation():
     stale = enum_form_ids - home_ids
     with pytest.raises(AssertionError):
         assert not stale
-
-
-def test_showrunner_preflight_count_prose_matches_home():
-    """Duty 9's check-count word in showrunner/SKILL.md tracks dispatch-preflight.md's enumeration."""
-    import launch_doctrine as ld
-
-    home_text = _read("skills/showrunner/reference/dispatch-preflight.md")
-    parsed = ld.charter_checks(home_text)
-    assert parsed["ok"], parsed.get("reason")
-    check_count = len(parsed["checks"])
-    duty = _showrunner_orchestration_duty()
-
-    eight_match = re.search(r"\*\*([A-Za-z]+)\s+checks:\*\*", duty)
-    assert eight_match, (
-        "showrunner/SKILL.md duty 9 missing '<Word> checks:' count prose (moved or reworded?)"
-    )
-    eight_word = eight_match.group(1).lower()
-    assert eight_word in _NUMBER_WORDS, (
-        "showrunner/SKILL.md duty 9 uses unknown check-count word %r" % eight_word
-    )
-    assert _NUMBER_WORDS[eight_word] == check_count, (
-        "showrunner/SKILL.md duty 9 says %r checks but dispatch-preflight.md enumerates %d"
-        % (eight_word, check_count)
-    )
 
 
 def test_stamp_instructions_name_the_body_marker_specifically():
@@ -2779,30 +2740,6 @@ def _showrunner_repair_anchor_stop_paragraph():
     return m.group(0)
 
 
-def _showrunner_anchor_coverage_bullet():
-    text = _read("skills/showrunner/SKILL.md")
-    lines = text.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        if line.startswith("   - **The standing anchor-coverage row**"):
-            start = i
-            break
-    assert start is not None, (
-        "showrunner/SKILL.md: standing anchor-coverage row bullet not found "
-        "(moved or reworded?)"
-    )
-    collected = [lines[start]]
-    for j in range(start + 1, len(lines)):
-        if lines[j].startswith("   - "):
-            break
-        collected.append(lines[j])
-    bullet = "\n".join(collected)
-    assert bullet.strip(), (
-        "showrunner/SKILL.md: standing anchor-coverage row bullet is empty"
-    )
-    return bullet
-
-
 def test_anchor_resolution_bullets_complete_in_home():
     # axis: whitespace-normalized equality of the three resolution bullets across copies
     _anchor_resolution_bullets(
@@ -2875,39 +2812,6 @@ def test_anchor_stop_and_repair_is_two_sided():
             "issue-contract.md ## Anchor resolution missing %r "
             "(moved or reworded?)" % phrase
         )
-
-
-def test_standing_anchor_coverage_row_is_standing_not_conditional():
-    # axis: every-PR grading — conditional vet wording is the silent-omission failure
-    bullet = _showrunner_anchor_coverage_bullet()
-    bullet_norm = _anchor_whitespace_normalize(bullet)
-    assert _anchor_whitespace_normalize("at **every** vet") in bullet_norm, (
-        "showrunner duty-4 bullet missing at-every-vet clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("only anchor layer that inspects the diff") in bullet_norm, (
-        "showrunner duty-4 bullet missing diff-inspection clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("reaches the owner in the owner half") in bullet_norm, (
-        "showrunner duty-4 bullet missing owner-half delivery clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("not only in your receipt") in bullet_norm, (
-        "showrunner duty-4 bullet missing not-only-receipt clause (moved or reworded?)"
-    )
-
-    home_section = _issue_contract_section("## The standing anchor-coverage vet row")
-    home_norm = _anchor_whitespace_normalize(home_section)
-    assert _anchor_whitespace_normalize("graded on every PR") in home_norm, (
-        "issue-contract.md standing anchor-coverage section missing "
-        "graded-on-every-PR clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("reaches the owner in the owner half") in home_norm, (
-        "issue-contract.md standing anchor-coverage section missing "
-        "owner-half delivery clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("not only in the advisor's own receipt") in home_norm, (
-        "issue-contract.md standing anchor-coverage section missing "
-        "not-only-receipt clause (moved or reworded?)"
-    )
 
 
 def test_anchor_recorded_at_filing_clause_in_showrunner_charter():
