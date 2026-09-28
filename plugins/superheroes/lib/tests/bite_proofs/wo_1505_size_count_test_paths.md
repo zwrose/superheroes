@@ -33,3 +33,28 @@ Node prefix `C` = `test_is_test_path_matches_each_convention`.
 **Restore receipts:** after the E1–E5 restores, after E6–E10 and after E11–E13, the whole file ran `44 passed` with exit 0 and `git status --porcelain` over `size_count.py` printed nothing.
 
 **Green:** `44 passed` (final run, exit 0).
+
+## Continuation — fixture conventions (E14–E19)
+
+**Head:** `f20ea569` plus uncommitted order work (WO-1505-B, cursor `composer-2.5` order dispatched by workhorse; carried out in a session with no shell).
+
+**Unrunnable here.** The implementer session had no shell tool (`Bash` rejected as "No such tool available"), so no pytest run was made: no red, no green, no restore receipt exists for E14–E19. The table below records only the declared guarded elements and the neutralizations the order names, each **not run**. The orchestrator's own re-run of the bite-proof supplies the red and green halves.
+
+**Command** (not run; whole file each time):
+
+```
+scripts/pinned-python -B -X pycache_prefix=/private/tmp/wo1505b-pyc -m pytest plugins/superheroes/lib/tests/test_size_count.py -q -p no:cacheprovider -rf
+```
+
+Node prefix `C` = `test_is_test_path_matches_each_convention`; `L` = `test_is_test_path_rejects_look_alikes`.
+
+| ID | Guarded element (`size_count.py`) | Axis | Neutralization (not run) | Expected red set | Red / restore / green |
+|---|---|---|---|---|---|
+| E14 | `TEST_DIR_NAMES` member `testdata` | `testdata` as a directory | drop `"testdata", ` | `C[dir-testdata]` | not run |
+| E15 | member `__mocks__` | `__mocks__` as a directory | drop `"__mocks__", ` | `C[dir-__mocks__]`, `C[dir-case-__Mocks__]` | not run |
+| E16 | member `__fixtures__` | `__fixtures__` as a directory | drop `, "__fixtures__"` | `C[dir-__fixtures__]` | not run |
+| E17 | glob `conftest.py` | pytest conftest file | delete the `"conftest.py",` line | `C[glob-conftest.py]` | not run |
+| E18 | `component.lower()` | directory names match case-insensitively | `component.lower() in TEST_DIR_NAMES` → `component in TEST_DIR_NAMES` | `C[dir-case-Tests]`, `C[dir-case-__Mocks__]`, `C[dir-case-E2E]` | not run |
+| E19 | `fnmatchcase(name, pattern)` | file-name globs stay case-sensitive | `fnmatchcase(name, pattern)` → `fnmatchcase(name.lower(), pattern)` | `L[src/Foo.Test.ts]`, `L[Conftest.py]` | not run |
+
+**Restore receipts:** none; no neutralization was applied, so `size_count.py` was never edited beyond the order's implementation.

@@ -6,14 +6,15 @@ import json
 import subprocess
 import sys
 
-# Axis: a path is test code iff a directory component is a TEST_DIR_NAMES member or the file name matches a TEST_FILE_GLOBS glob; the one home of the size rule's test-path list (rubric/review-discipline.md § Size).
-TEST_DIR_NAMES = frozenset({"test", "tests", "__tests__", "spec", "e2e"})
+# Axis: a path is test code iff a directory component (case-insensitive) is a TEST_DIR_NAMES member or the file name matches a TEST_FILE_GLOBS glob (case-sensitive); the one home of the size rule's test-path list (rubric/review-discipline.md § Size).
+TEST_DIR_NAMES = frozenset({"test", "tests", "__tests__", "spec", "e2e", "testdata", "__mocks__", "__fixtures__"})
 TEST_FILE_GLOBS = (
     "*.test.*",
     "*.spec.*",
     "test_*.py",
     "*_test.py",
     "*_test.go",
+    "conftest.py",
 )
 
 
@@ -25,7 +26,7 @@ def is_test_path(path):
         return False
     name = parts[-1]
     for component in parts[:-1]:
-        if component in TEST_DIR_NAMES:
+        if component.lower() in TEST_DIR_NAMES:
             return True
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in TEST_FILE_GLOBS)
 
