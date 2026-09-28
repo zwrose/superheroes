@@ -32,6 +32,13 @@ _SURFACES = (
     "skills/review-code/reference/round-driver.md",
     "skills/workhorse/SKILL.md",
 )
+# auto-fix-loop.md carries only the channel-ownership sentence and points at the ruling's home.
+_RULING_PHRASE_SURFACES = tuple(
+    rel for rel in _SURFACES if rel != "skills/review-code/reference/auto-fix-loop.md"
+)
+assert len(_RULING_PHRASE_SURFACES) == 3, (
+    f"_RULING_PHRASE_SURFACES must have exactly 3 entries, got {len(_RULING_PHRASE_SURFACES)}"
+)
 
 _CHANNEL_OWNERSHIP_SENTENCE = (
     "`await-dispatches` ruling governs the **channel** for dispatches the **builder itself** launches."
@@ -210,7 +217,7 @@ def _assert_literal_on_every_surface(literal, label):
     surfaces = (
         _CHANNEL_OWNERSHIP_SURFACES
         if label == _CHANNEL_OWNERSHIP_LABEL
-        else _SURFACES
+        else _RULING_PHRASE_SURFACES
     )
     for rel in surfaces:
         surface_literal = _literal_for_surface(rel, label)

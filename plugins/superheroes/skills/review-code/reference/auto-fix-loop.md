@@ -610,9 +610,6 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >    composes **no** per-dispatch watchdog. The builder's
 >    `await-dispatches` ruling governs the **channel** for dispatches **the builder itself launches**.
 >    Timeout contract stays the skill's; channel duty attaches to what the builder launches.
->    **This changes a batch's shape, never its invariant:** in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end.
->    Independent dispatches require no result dependency, no shared writable worktree, and no shared output path.
->    Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message.
 > 4. **The native-shape limitation disclosure is retired for runner-dispatched and claude-native
 >    seats**, not blanket. The **hand-rolled engine fallback** below does not follow the native shape
 >    (`--run-dir`, `--max-wait`, originating-verb continuation) — a round that used it **still owes
