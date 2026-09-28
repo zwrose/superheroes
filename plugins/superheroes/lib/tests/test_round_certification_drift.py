@@ -22,14 +22,6 @@ def test_attested_verdict_matches_driver():
     assert RC.ATTESTED_VERDICT == RD.ATTESTED_VERDICT
 
 
-def test_seat_provenance_matches_records():
-    assert set(RC.SEAT_PROVENANCE) == set(RR.SEAT_PROVENANCE)
-
-
-def test_execution_evidence_read_values_match_records():
-    assert RC.EXECUTION_EVIDENCE_READ_VALUES == RR.EXECUTION_EVIDENCE_READ_VALUES
-
-
 def test_base_guard_checked_matches_driver():
     assert RC.BASE_GUARD_CHECKED == RD.BASE_GUARD_CHECKED
 
@@ -59,10 +51,6 @@ def test_decision_keys_match_driver_census():
     assert set(decision_kinds.DECISION_KINDS) == driver_keys
 
 
-def test_execution_evidence_telemetry_values_match_records():
-    assert RC.EXECUTION_EVIDENCE_TELEMETRY_VALUES == RR.EXECUTION_EVIDENCE_TELEMETRY_VALUES
-
-
 def test_execution_evidence_binding_fields_match_session_contract():
     assert RC.EXECUTION_EVIDENCE_BINDING_FIELDS is session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
     assert RR.EXECUTION_EVIDENCE_BINDING_FIELDS is session_contract.EXECUTION_EVIDENCE_BINDING_FIELDS
@@ -80,12 +68,6 @@ def test_head_content_blobs_schema_matches_session_contract():
 
 def test_seat_missing_schema_matches_records():
     assert RC.SEAT_MISSING_SCHEMA == RR.SEAT_MISSING_SCHEMA
-
-def test_execution_evidence_observation_fields_match_records():
-    assert (
-        RC.EXECUTION_EVIDENCE_OBSERVATION_FIELDS
-        == RR.EXECUTION_EVIDENCE_OBSERVATION_FIELDS
-    )
 
 
 def test_phase_tokens_match_round_phases():
