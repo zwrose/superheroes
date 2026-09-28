@@ -110,6 +110,25 @@ def test_gap_benign_changelog_section(capsys, tmp_path):
     assert data["changelogSections"] == ["2.0.0"]
 
 
+def test_changelog_only_intermediate_not_installed(capsys, tmp_path):
+    """Intermediate in CHANGELOG but not cached must still appear in changelogSections."""
+    cache = tmp_path / "cache"
+    _mkver(cache, "0.32.0")
+    _mkver(cache, "0.35.1")
+    (cache / "0.35.1" / "TRANSITION.md").write_text("## 0.35.1\n")
+    (cache / "0.35.1" / "CHANGELOG.md").write_text(
+        "## [0.35.1](https://example.test) (2026-01-01)\n"
+        "## [0.33.0](https://example.test) (2026-01-01)\n"
+    )
+    code, data = _plan(
+        capsys, "--role", "workhorse", "--from", "0.32.0", "--to", "0.35.1",
+        "--cache-dir", str(cache),
+    )
+    assert code == 0
+    assert "0.33.0" in data["changelogSections"]
+    assert data["unresolvedGaps"] == []
+
+
 def test_gap_hold_no_section_either_file(capsys, tmp_path):
     cache = tmp_path / "cache"
     _mkver(cache, "1.0.0")

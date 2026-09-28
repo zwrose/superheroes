@@ -65,7 +65,12 @@ python3 -B "$NEW_ROOT/lib/adopt_version.py" plan --role "$ROLE" \
 ```
 
 A refusal (exit 1, `{"ok":false,"reason":...}`) stops the procedure — report the reason token
-to the owner. When `upToDate: true`, end with a one-line report. Read TRANSITION's section
+to the owner. When `upToDate: true` and this seat's durable state has no `outstanding:` lines
+from a prior partial adoption, end with a one-line report. When `upToDate: true` but durable
+state still lists `outstanding: <deferred checklist item> (lane <id>)` for a deferred step-4
+item or a live old-root inventory entry, do not stop — run step 7 for each outstanding item
+first, record each done (remove its `outstanding:` line), and only then report up to date.
+Read TRANSITION's section
 for **every** version listed in `transitionSections` (each patch in range counts) from the
 new root (`toRoot`). Read `unresolvedGaps` from `plan`: every entry is **unresolved** and
 holds adoption before step 5 — carry each to the owner as a numbered input at step 8. For
@@ -195,16 +200,25 @@ and carries it in the diagnosis receipt when it posts one — never as a separat
 When a detective seat may run `/superheroes:checkpoint` before that receipt, put this same
 `plugin version taken up` line in checkpoint Step 4's **live-state one-liner** (part 3) so
 compaction preserves it — checkpoint's five parts do not require it on their own. That line decides the running root when it disagrees with the bootstrap block or SessionStart
-injection on the next adoption and after compaction.
+injection on the next adoption and after compaction. New lanes must not wait on long
+old-root lanes — write the taken-up line once probes pass. In the **same** durable record,
+also write one `outstanding: <deferred checklist item> (lane <id>)` line per step-4 deferred
+item and per old-root inventory entry still live; a later invocation that finds outstanding
+lines runs step 7 for them before treating adoption as finished.
 
-**Output:** one probe result per engine, any retired owner words, any held ledger kinds, and
-confirmation the taken-up line was written — or the failure that blocked it.
+**Output:** one probe result per engine, any retired owner words, any held ledger kinds, the
+taken-up line when written, each `outstanding:` line recorded, — or the failure that blocked
+the taken-up line.
 
 ## Step 7 — Handle old-root processes
 
 Live builders finish on the old root and are vetted against the doctrine they ran under. New
 lanes launch on the new root. Watch loops armed from the old root are re-armed on the new
 root after their lanes end — never killed. Run step 4's deferred items as each lane ends.
+When this seat resumes with `outstanding:` lines in durable state (including after step 1
+would otherwise report up to date), drain each listed item here first — same dispositions as
+a normal step 7 — then remove its `outstanding:` line and record the inventory entry or
+checklist item done before reporting adoption complete.
 
 While long old-root lanes run, name the cleanup risk: the old version directory may be marked
 `.orphaned_at` and removed under a running builder. For a lane that stops, read
@@ -228,6 +242,12 @@ recorded)** entries named for awareness).
 
 When this seat is the showrunner charter and the release is cut and installed, relay adoption
 notes to each consumer project's advisor. Their memory is separate from this seat's — the
-relay carries the steps themselves, not a pointer to this seat's notes.
+relay carries the steps themselves, not a pointer to this seat's notes. On a host whose tool
+map names no way to message another live session this seat did not spawn (Codex, per
+`codex-tools.md`), use an **owner relay** instead of a direct advisor message: put the full
+adoption notes — carrying the steps themselves — in step 8's brief as a numbered input asking
+the owner to deliver them to each consumer project's advisor, and record the relay as
+**owner-delivered** rather than **done**. On hosts that can message another session, relay
+directly as above.
 
-**Output:** one relay per consumer project, or `no consumers`.
+**Output:** one relay per consumer project (**done** or **owner-delivered**), or `no consumers`.

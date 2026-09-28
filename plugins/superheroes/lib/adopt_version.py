@@ -123,13 +123,17 @@ def _parse_changelog(path):
                 found.add(m.group(1))
     return found
 
-def _crossed_versions(from_v, to_v, installed, trans_sections):
+def _crossed_versions(from_v, to_v, installed, trans_sections, changelog_versions=None):
     crossed = set()
     for v in installed:
         if _vt(from_v) < _vt(v) <= _vt(to_v):
             crossed.add(v)
     for s in trans_sections:
         crossed.add(s["version"])
+    if changelog_versions:
+        for v in changelog_versions:
+            if _vt(from_v) < _vt(v) <= _vt(to_v):
+                crossed.add(v)
     crossed.add(to_v)
     return sorted(crossed, key=_vt)
 
@@ -137,7 +141,7 @@ def _gap_keys(from_v, to_v, installed, trans, changelog_versions):
     if changelog_versions is None:
         return [{"version": None, "reason": "changelog-unreadable"}], []
     trans_vers = {s["version"] for s in trans}
-    crossed = _crossed_versions(from_v, to_v, installed, trans)
+    crossed = _crossed_versions(from_v, to_v, installed, trans, changelog_versions)
     gaps = [{"version": v, "reason": "no-section"}
             for v in crossed if v not in trans_vers and v not in changelog_versions]
     gaps.sort(key=lambda e: _vt(e["version"]))
