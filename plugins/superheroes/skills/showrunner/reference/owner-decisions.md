@@ -725,7 +725,7 @@ consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by 
 the cost named — Recommendation: b — …. Empty sections stated empty, never dropped.
 
 **Residual disposition:** machinery: the front door evidence bar first, before any venue (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) — an item that fails the bar is declined with a revisit trigger; past the bar → venue ladder (continue → fold → file, bundled by surface); product: never takes the bar — owner ratification, same venue ladder; a product decline is an owner call.
-**Call:** at a craft call the advisor executes and records for veto — the standing order is always on, at every hour, attended or not; at an owner call the owner's word via the collector; every new filing is an owner call, whatever its tier, except the layer sub-issues of a stack and what an owner word already approved; doubt upward.
+**Call:** at a craft call the advisor executes and records for veto — the standing order is always on, at every hour, attended or not; at an owner call the owner's word via the collector; every new filing is an owner call, whatever its tier, except the layer sub-issues of an approved stack shape or a size split, and what an owner word already approved; a new-scope layer waits for the word; doubt upward.
 **Follow-up on live work:** first match decides — above the material line, or a child past three
 lanes → file its own issue; else a new surface → stack a layer; else same surface and below the
 line → fold into the child; the gardening record carries both counts.

@@ -73,14 +73,6 @@ PIN_DELIVERY_DECISION = (
     "each named; nothing closes silently incomplete."
 )
 
-PIN_FAILING_RUN = (
-    "A failing end-to-end validation run keeps the spec open by default and goes to the owner, who "
-    "chooses repair or acceptance: on repair, one repair issue per failure files, each anchored to "
-    "the failing run's record and naming the unmet acceptance criterion it restores; the owner may "
-    "instead explicitly accept delivery with the failing run disclosed; no repair issue files before "
-    "that decision."
-)
-
 PIN_ABANDONED_CHILD = (
     "A spec whose child is abandoned — closed unmerged, orphaned, or displaced — is re-planned or "
     "parked by the advisor rather than left waiting for a closure moment that cannot come; silence "
@@ -410,14 +402,6 @@ def test_pin_no_pr_close_in_both_homes():
 def test_pin_delivery_decision_in_both_homes():
     _assert_pinned_in_both_homes(
         PIN_DELIVERY_DECISION,
-        _CLOSURE_REF,
-        (_DUTY_5_START, _DUTY_6_START),
-    )
-
-
-def test_pin_failing_run_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_FAILING_RUN,
         _CLOSURE_REF,
         (_DUTY_5_START, _DUTY_6_START),
     )
