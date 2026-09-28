@@ -5,7 +5,7 @@
 - [The per-item spine](#the-per-item-spine)
 - [The front door](#the-front-door)
 - [The grid and its two instruments](#the-grid-and-its-two-instruments)
-- [The tiers and the P2 carve-out](#the-tiers-and-the-p2-carve-out)
+- [The tiers and the filing rule](#the-tiers-and-the-filing-rule)
 - [Every grading keeps its scoring, and the misses log](#every-grading-keeps-its-scoring-and-the-misses-log)
 - [The declined registry and its triggers](#the-declined-registry-and-its-triggers)
 - [The launch door](#the-launch-door)
@@ -164,7 +164,7 @@ declined with a trigger by default.
    | Bottom band, for example internal quality | P2 | P2 | P2 |
 
    The top-band lab-only cell is deliberately **P1**, so a reproduced hole in a dangerous surface
-   reaches the owner in the next batch instead of filing silently.
+   reaches the owner in the next batch as a tier-proposed call rather than resting unseen at P2.
 6. What each tier commits to is not stated here. See [issue-contract.md](issue-contract.md).
 7. **The door helper.** A session reaches for `lib/front_door.py` and its `front_door.grade` entry
    point when it validates a **claimed** grading — the band, tier, and evidence the caller supplies
@@ -179,29 +179,42 @@ declined with a trigger by default.
    and `argued` — are coarser than the grid's evidence tiers, so the tier a session records on the
    item comes from the grid, not from what the helper was handed.
 
-## The tiers and the P2 carve-out
+## The tiers and the filing rule
 
 1. **A P1 or P0 grade waits on the owner's word to hold that tier.** A cleared item may rest at P2
-   with no owner involvement. An item graded P1 or P0 whose word has not landed is **tier-proposed**,
-   not P2. It is not filed. It waits on the collector as a tier-proposed entry, and it is counted
+   without a tier word. An item graded P1 or P0 whose word has not landed is **tier-proposed**,
+   not P2. It waits on the collector as a tier-proposed entry, and it is counted
    in the gardening record's [pending-words line](../../../rubric/glossary.md#pending-words-line). A
    P1 waits for the next walk's batch. **A P0 never waits for a walk**. The advisor raises it to
    the owner at once, through whatever channel reaches them, ahead of any batch. The most severe
    grades must not rest in the least visible state while they wait.
-2. **The P2 carve-out.** This amends the standing filing rule in this same file. **A filing whose
-   item clears the evidence bar and grades P2 may be filed by the advisor**, with the grading
-   record on the item. **The advisor is the only grantee**. Any other session routes through the
-   collector exactly as before. Everything else about the standing contract holds. Owner calls above
-   P2 still bind. The owner-absent collector still appends. The append-always clause still binds.
-   The venue ladder still applies.
+2. **Every new filing waits on the owner's word, at every tier.** No session files a new issue on
+   its own authority, and a P2 grade does not change that: the tier says what the item commits to,
+   never who may file it. An item the door grades P2 lands on the collector as an **owner call
+   carrying its grading** — band, evidence tier, and resulting tier — and it files when the owner's
+   word for that filing lands. The word is recorded where the owner gave it. Everything else about
+   the standing contract holds: the owner-absent collector still appends, the append-always clause
+   still binds, and the venue ladder still applies.
 
-   **Venue-3 filings are always owner calls.** A new issue spends board attention, a commitment call by definition, even when its content is craft, except a machinery filing that clears the evidence bar and grades P2, which the advisor may file with the grading record on the item.
+   **Venue-3 filings are always owner calls.** A new issue spends board attention, a commitment
+   call by definition, even when its content is craft.
 
-3. **The no-ladder rider, stated as a fail direction.** **The carve-out is inactive in a project
-   with no stamped severity ladder.** With no ladder there is no band to cite, so no P0 or P1 can
-   be claimed and no item can be graded P2 through the door. Cleared items **queue at the door for
-   the owner's word** and nothing files. Missing configuration fails closed for anything that would
-   expand authority.
+   **The one exception: layer sub-issues of a stack.** Filing the layer sub-issues of a stack is
+   board wiring, not a new filing, and needs no further word — whether the owner approved the
+   stack's shape or the advisor ruled a size split, recorded on the issue for the owner's veto. How
+   a layer files and wires is in
+   [Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue). A layer
+   that carries scope the owner has not approved is a new filing, and its scope waits for the word.
+
+   **A word already given covers what it approved.** An owner-approved spec is the word for the
+   children that allocate it, so they file without a further word. A replacement for an abandoned
+   child that carries only that child's approved criteria files the same way; anything beyond them
+   waits for the word. A repair issue for a failing validation run files at the owner's decision to
+   repair ([closure.md](closure.md)).
+3. **The no-ladder rider, stated as a fail direction.** With no stamped severity ladder there is no
+   band to cite, so no P0 or P1 can be claimed and no item can be graded P2 through the door.
+   Cleared items **queue at the door for the owner's word**. Missing configuration fails closed for
+   anything that would expand authority.
 4. For the tier vocabulary, see [issue-contract.md](issue-contract.md).
 
 ## Every grading keeps its scoring, and the misses log
@@ -253,7 +266,7 @@ declined with a trigger by default.
 
 ## The launch door
 
-1. **Filing is cheap. Launching is the guarded act.** The budget is [N](../../../rubric/glossary.md#n)
+1. **Filing waits on the owner's word; launching spends the capacity.** The budget is [N](../../../rubric/glossary.md#n)
    machinery lanes in flight at once, counted by the advisor at the launch word. A lane is in flight
    until its outcome is recorded, which the launch doctrine already requires. **That is the whole of
    the slot accounting.**
@@ -283,8 +296,8 @@ declined with a trigger by default.
    the pass from the launch ledger. **The dial is never a launcher check, a preflight item, or a
    script**, and a filing to make it one is declined at the door. A checked dial is the grid
    instrumenting itself.
-6. **Tiers order entry through the door. The owner's word sits at launch**, where the capacity is
-   actually spent.
+6. **Tiers order entry through the door. Filing waits on the owner's word; the launch word**
+   spends the capacity where it is actually spent.
 7. **No exemption for correctness.** Every epic and milestone is product-forward and is labeled so
    by the owner at ratification. **The advisor never makes that call.** Machinery then arrives only
    as a standalone lane through the door under the dial, or as a backlog item folded into a product
@@ -367,7 +380,7 @@ finding, a follow-up idea, or a hardening proposal.
 
 Residuals that once carried a separate disposition test now route through the door's one decision:
 classify the item's kind as machinery or product, apply the evidence bar and the grid where the kind
-requires it, then apply the resulting tier's owner-word or filing rule. Each legacy class is walked on
+requires it, then apply the resulting tier's owner-word rule and the [filing rule](#the-tiers-and-the-filing-rule). Each legacy class is walked on
 its own — none inherits another class's verdict. A **venue-1 continuation** is machinery that cleared
 the bar, graded on the grid, and whose cheapest venue is continuing in-lane; the door yields a craft
 call. A **craft decline** is machinery the bar or grid declined with a trigger; the door yields a
@@ -519,8 +532,8 @@ advisor run together to keep calibration honest.
    sweep in the pass and triage its report in the same sitting**. **Sweep and triage are one duty**. If
    the sitting ends before triage is recorded, the record carries the untriaged report as a pending item
    and **the staleness clock does not reset**. The sweep needs no owner word. **Filing from it goes
-   through the front door like anything else**. A P2 files on the advisor's authority. Higher tiers
-   wait for a word. **Nothing reads guardian staleness between passes.**
+   through the front door like anything else**. Every filing from it,
+   P2 included, waits for the owner's word. **Nothing reads guardian staleness between passes.**
 7. **Classify the window's red continuous-integration runs and fix pull requests** by the verification
    policy's classes: own broken test, real catch, infrastructure, flake, and escape. **Credit each real
    catch to the test file that caught it.** **One rate comes out of it: the escape rate**, escapes over
@@ -712,7 +725,7 @@ consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by 
 the cost named — Recommendation: b — …. Empty sections stated empty, never dropped.
 
 **Residual disposition:** machinery: the front door evidence bar first, before any venue (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) — an item that fails the bar is declined with a revisit trigger; past the bar → venue ladder (continue → fold → file, bundled by surface); product: never takes the bar — owner ratification, same venue ladder; a product decline is an owner call.
-**Call:** at a craft call the advisor executes and records for veto — the standing order is always on, at every hour, attended or not; at an owner call the owner's word via the collector; a filing whose item clears the evidence bar and grades P2 is the advisor's, and every other filing is an owner call; doubt upward.
+**Call:** at a craft call the advisor executes and records for veto — the standing order is always on, at every hour, attended or not; at an owner call the owner's word via the collector; every new filing is an owner call, whatever its tier, except the layer sub-issues of an approved stack shape or a size split, and what an owner word already approved; a new-scope layer waits for the word; doubt upward.
 **Follow-up on live work:** first match decides — above the material line, or a child past three
 lanes → file its own issue; else a new surface → stack a layer; else same surface and below the
 line → fold into the child; the gardening record carries both counts.
