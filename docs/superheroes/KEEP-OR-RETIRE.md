@@ -2059,7 +2059,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 #### S25 — adopt-version skill
 
 - **Component.** Not a census row. The `adopt-version` skill front door and its helper
-  `lib/adopt_version.py` (new).
+  `lib/adopt_version.py`.
 - **Start date.** 2026-09-27.
 - **Condition.** Usage-based, 60 days: recorded runs of the command at a plugin upgrade. On
   firing, a proposal to the owner at a gardening pass.
