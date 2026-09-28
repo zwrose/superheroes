@@ -74,7 +74,7 @@ coverage map allocates criteria; this file binds contracts.
 *Producer:* filing-time rule
 *Consumers:* P3b, P2, P8
 
-**R17 — One cannot-bite vocabulary, one re-run bar.** Cannot-bite evidence is one shared vocabulary (FR-1's grounds: the structural classes, break-stays-green demonstration, no-raise-is-suspect, unassessed-is-retained) with one shared bar (FR-14: independently re-run at verification, never accepted from the deleting party): P7's cuts carry it and P5's UFR-5 encoding checks it. FR-26 removals are explicitly outside this contract — FR-1's one named exception: owner-authorized, grounded in re-runnable diagnosis evidence, recorded as an open coverage obligation with a restore-by date, never a cut. The spec is the vocabulary's home; no child restates it.
+**R17 — One cannot-bite vocabulary, one re-run bar.** Cannot-bite evidence is one shared vocabulary (FR-1's grounds: the structural classes, break-stays-green demonstration, no-raise-is-suspect, unassessed-is-retained) with one shared bar (FR-14: independently re-run at verification, never accepted from the deleting party): P7's cuts carry it and P5's UFR-5 encoding checks it. FR-1's two named exceptions sit outside this contract — never a cut on the cannot-bite vocabulary: (1) FR-26 flake removal — owner-authorized, grounded in re-runnable diagnosis evidence, recorded as an open coverage obligation with a restore-by date; (2) retired-subject removal under FR-1's retired-subject bullet — the owner's recorded approval and a named edit (R2's form), without cannot-bite evidence, with P5 encoding the UFR-5 vet bar for that path. The spec is the vocabulary's home; no child restates it.
 *Producer:* the spec
 *Consumers:* P7, P5
 

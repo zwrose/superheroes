@@ -1,6 +1,6 @@
 """§11 drift guard: review-code path tables ↔ round_records / round_driver builders.
 
-Copy-holders (CONVENTIONS §11.2):
+Doc surfaces whose path tables name each builder's output (identifier presence where code and doc both need it):
   - plugins/superheroes/skills/review-code/SKILL.md — emitted-order path table
   - plugins/superheroes/skills/review-code/reference/round-driver.md — order + landing +
     durable-record tables

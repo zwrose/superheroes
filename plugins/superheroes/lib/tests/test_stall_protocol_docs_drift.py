@@ -1,5 +1,5 @@
-"""Stall-protocol drift guard: `round_phases` is authoritative, both hand-maintained doc copies
-must follow (#1037 rider).
+"""Stall-protocol vocabulary presence: `round_phases` is authoritative, and both docs that describe
+the stall menu must name every live choice.
 
 The stall menu is described in TWO places a reader can reach independently — the review-code
 SKILL.md loop step and `reference/round-driver.md`'s phase table — and neither is generated from the

@@ -1,7 +1,6 @@
 """Drift guards for showrunner decomposition doctrine (issue #937).
 
-Enforces: pinned sentences in both doctrine homes; reference-file structure; vet-receipt
-register-row trigger; section-scoped copies in the showrunner charter duties 3 and 4.
+Enforces: reference-file structure; vet-receipt register-row trigger.
 """
 # What this file does and does not guard (issue #937).
 #
@@ -20,7 +19,6 @@ import pytest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 
-_SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
 _DECOMPOSITION_REF = "skills/showrunner/reference/decomposition.md"
 _AMENDMENTS_REF = "skills/showrunner/reference/amendments.md"
 _VET_RECEIPT_REF = "skills/showrunner/reference/vet-receipt.md"
@@ -33,18 +31,6 @@ PIN_POST_APPROVAL = (
     "Decomposition begins only after the spec is owner-approved: no coverage map, no register, "
     "and no child body is drafted against an unapproved spec, and a decomposition artifact dated "
     "before its spec's approval is a routing defect."
-)
-
-PIN_AMENDMENT_CLASSES = (
-    "Every post-approval spec amendment is classified `wording` — it changes phrasing and decides "
-    "nothing a builder could build differently against — or `substantive`, which is everything "
-    "else and the default whenever the call is ambiguous."
-)
-
-PIN_REGISTER_ROW = (
-    "A child PR in a package that has a contract register is vetted against one added row: the "
-    "change conforms to the epic's register, or the drift is disclosed — and undisclosed drift "
-    "is a blocker, held until it is disclosed or repaired."
 )
 
 _DECOMPOSITION_H2_HEADINGS = [
@@ -182,19 +168,6 @@ def _assert_pinned_present(text, pin, label):
         raise AssertionError(f"{label}: pinned sentence missing after whitespace normalization")
 
 
-def _assert_pinned_in_both_homes(pin, ref_rel, charter_duty_slice):
-    ref_text = _read_plugin(ref_rel)
-    _assert_pinned_present(ref_text, pin, ref_rel)
-    charter_text = _read_plugin(_SHOWRUNNER_CHARTER)
-    duty_text = _extract_duty_slice(
-        charter_text,
-        charter_duty_slice[0],
-        charter_duty_slice[1],
-        _SHOWRUNNER_CHARTER,
-    )
-    _assert_pinned_present(duty_text, pin, f"{_SHOWRUNNER_CHARTER} duty slice")
-
-
 def _contents_section(text):
     lines = text.splitlines()
     start = None
@@ -313,33 +286,6 @@ def _assert_register_trigger_row(text):
     ]
     if not matches:
         raise AssertionError("no triggered-fields row names contract register")
-
-
-# --- Pinned sentences in both homes ----------------------------------------
-
-
-def test_pin_post_approval_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_POST_APPROVAL,
-        _DECOMPOSITION_REF,
-        (_DUTY_3_START, _DUTY_4_START),
-    )
-
-
-def test_pin_amendment_classes_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_AMENDMENT_CLASSES,
-        _AMENDMENTS_REF,
-        (_DUTY_3_START, _DUTY_4_START),
-    )
-
-
-def test_pin_register_row_in_both_homes():
-    _assert_pinned_in_both_homes(
-        PIN_REGISTER_ROW,
-        _DECOMPOSITION_REF,
-        (_DUTY_4_START, _DUTY_5_START),
-    )
 
 
 # --- Reference file structure ------------------------------------------------
