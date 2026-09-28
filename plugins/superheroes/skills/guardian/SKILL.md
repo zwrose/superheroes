@@ -156,8 +156,7 @@ consult/triage. `configure`'s one-screen view surfaces cadence,
 coverage, and benched lenses (CONVENTIONS §2.1).
 
 **Ledger outcomes (report card).** Adjudicated dispositions count toward each lens's
-actionability mix: `filed`, `verified-fixed`, `accepted`, and `reopened` count for;
-`triaged-out` and `declined` count against. A lens under the actionability bar — once it
+actionability mix; which outcomes count for and against is `OUTCOMES_FOR` / `OUTCOMES_AGAINST` in `lib/guardian_ledger.py`. A lens under the actionability bar — once it
 has enough adjudicated findings across enough sweeps — is benched (see CONVENTIONS §2.1).
 
 ## The lens contract
