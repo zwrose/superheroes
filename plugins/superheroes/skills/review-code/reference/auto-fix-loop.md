@@ -49,7 +49,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > findings file. Panel seats emit `{"findings": [...], "investigated": [...]}`; verifier seats emit
 > `{"verdicts": [...], "investigated": [...]}`; synthesis judges emit `{"grouping": [...]}`; fix
 > auditors emit `{id, ruling, reason}`. The graded result carries **`resultKind`** (one of
-> `findings`, `verdicts`, `grouping`, `ruling`) naming which payload key survived. A non-empty
+> `REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`) naming which payload key survived. A non-empty
 > payload succeeds without `investigated`; only an **empty** payload needs a surviving
 > `investigated` path (see below). **Findings-only prompt authoring** (caller side): cite
 > `skills/workhorse/reference/dispatch-mechanics.md` § *Findings-only review prompts* — a prompt
@@ -59,9 +59,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > dispatch prompt's `## Output` block names the seat's channel — this block is how the runner grades
 > what the rubric already specified. `engine_adapter.parse_result` scans stdout for the **last
 > top-level JSON value**, so incidental trailing prose after a valid object is tolerated. An **empty**
-> `findings` array is accepted as *clean* **only** when `investigated` lists at least one path that
-> survives the runner's spot-check (the path must resolve inside the sanitized review view root and
-> exist on disk). A seat that returns empty findings with no verifiable `investigated` record is a
+> `findings` array is accepted as *clean* **only** when its `investigated` list survives the
+> runner's investigation floor (`engine_adapter.spot_check_investigated` in `lib/engine_adapter.py`).
+> A seat that returns empty findings with no verifiable `investigated` record is a
 > **vacuous forfeit** — a named cause (`reason: "vacuous"` from `dispatch-review`): treated as a seat
 > that **never ran**, not as a clean review; the orchestrator submits the folded seat with
 > `vacuous: true` (or `reason: "vacuous"`). Engine telemetry (token spend, tool calls, wall time) is
@@ -240,7 +240,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **Result shape — top-level, no wrapper.** Every `dispatch-review` result object carries
 > **`ok`**, **`terminal`**, **`runDir`**, **`argv`**, and **`mode`** at the top level. On a failure it also
 > carries **`reason`** (and usually **`detail`**). On success it also carries **`resultKind`**
-> (one of `findings`, `verdicts`, `grouping`, `ruling`) naming the payload, plus **exactly one**
+> (one of `REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`) naming the payload, plus **exactly one**
 > payload key of that name.
 > **`investigated`** is present only when at least one claimed path survives the runner's spot-check
 > (resolves inside the sanitized review view and exists on disk); a normal non-empty payload reply
@@ -259,8 +259,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > forfeit carries no `findings`/`investigated`. There is no `result` wrapper; parsing
 > `result.findings` reads nothing.
 >
-> **Review payload transport.** The runner accepts **four** result kinds on stdout
-> (`REVIEW_RESULT_KINDS`: `findings`, `verdicts`, `grouping`, `ruling`). Every
+> **Review payload transport.** The runner accepts result kinds on stdout
+> (`REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`). Every
 > `ok: true` review result carries **`resultKind`** naming exactly one payload key of that name;
 > **`investigated`** is attached only when at least one claimed path survives spot-checking.
 > **Recognition is not gradeability** — widening what the transport can read changes nothing about

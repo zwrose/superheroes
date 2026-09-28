@@ -172,10 +172,8 @@ lane still fires** and **that same event for every other lane still fires**. Sup
 actionability only. A suppressed lane appears under `alsoObserved` **when some other event fires on
 that result** — but a `timer` result carries no `alsoObserved` at all, so a lane whose only signal is
 suppressed is invisible in that arm's output. Use `--log` to keep sight of a suppressed lane across
-a long arm chain. Only the four **lane-keyed** events are suppressible: `lane-terminal`,
-`lane-blocked`, `builder-exited`, `lane-stale`.
-`pr-set-changed`, `stack-state-changed`, and `timer` are not per-lane suppressible; naming
-them is a refusal (`ignore-event-invalid`).
+a long arm chain. Only the lane-keyed events in `_SUPPRESSIBLE_EVENTS` (`lib/wave_watch.py`) are
+suppressible; naming any other event is a refusal (`ignore-event-invalid`).
 A malformed pair is a refusal (`ignore-event-invalid`), never a silent drop.
 
 **Pattern — the exception, not the routine:** when `loop` wakes you on an event you have **verified**
@@ -273,19 +271,9 @@ The watcher prints **one JSON line on stdout**; **exit 0 on an event, exit 1 on 
 A `loop` exits on the first unsuppressed lane-ending event; a `run` returns the first due
 unsuppressed event.
 
-**Events** (`ok=True`):
+**Events** (`ok=True`): see `EVENTS` in `lib/wave_watch.py`. `run` never reports `pr-set-changed`, and `run` returns `timer` when nothing else is due.
 
-- `lane-terminal`
-- `lane-blocked`
-- `builder-exited`
-- `stack-state-changed`
-- `pr-set-changed` — never reported by `run`
-- `lane-stale`
-- `timer` — `run` returns it when nothing else is due
-
-**Precedence**, highest first:
-
-`lane-terminal` > `lane-blocked` > `builder-exited` > `stack-state-changed` > `pr-set-changed` > `lane-stale` > `timer`
+**Precedence**, highest first: see `EVENT_PRECEDENCE` in `lib/wave_watch.py`.
 
 When an event fires, co-occurring lower-precedence lane signals from the same interval ride along
 under `alsoObserved` (launch ids only) — read it, or you will act on one lane and miss its
@@ -363,19 +351,7 @@ watcher does not act on either — read them when a lane you are watching hits a
 the later lander rebases onto the moved base (the `base-moved` standing ruling) and keeps its lane
 branch-current as `merge-train.md` requires. That is the accepted cost, not a wedge.
 
-**Refusals** (exit 1, `ok=False`):
-
-- `batch-invalid`
-- `interval-invalid`
-- `max-seconds-invalid`
-- `max-total-seconds-invalid`
-- `ignore-event-invalid`
-- `repo-root-invalid`
-- `store-unresolvable`
-- `ledger-unreadable`
-- `internal-error`
-- `loop-already-live`
-- `loop-lock-unavailable`
+**Refusals** (exit 1, `ok=False`): see `REFUSALS` in `lib/wave_watch.py`.
 
 The pre-loop validations (`batch-invalid`, `interval-invalid`, `max-seconds-invalid`,
 `max-total-seconds-invalid`, `ignore-event-invalid`, `repo-root-invalid`, `store-unresolvable`,
@@ -386,24 +362,15 @@ top-level exception handler wrapping all of `run()` — including the pre-loop v
 fire before the watch loop ever runs; neither `ledger-unreadable` on the deadline path nor
 `internal-error` is guaranteed at arm time.
 
-**Non-fatal degradations** that ride on a result:
+**Non-fatal degradations** that ride on a result: see `DEGRADATIONS` in `lib/wave_watch.py`.
 
-- `ledger-torn-tail`
-- `ledger-unreadable`
-- `heartbeat-unreadable`
-- `pid-probe-uncertain`
-- `pr-signal-unavailable`
-- `stack-signal-unavailable` — stack membership for one or more changed PRs could not be
-  read before the watcher's deadline; grouping is partial and `ungrouped` carries what
-  could not be resolved
+Notes beyond the token name:
+
+- `stack-signal-unavailable` — stack membership for one or more changed PRs could not be read before the watcher's deadline; grouping is partial and `ungrouped` carries what could not be resolved
 - `lane-never-stamped` (`loop` only — not reported by `run`)
 - `pr-signal-never-sampled` (`loop` only — not reported by `run`)
-- `log-unwritable`
-- `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is
-  ambiguous and the lane alerts rather than being suppressed
-- `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or
-  bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so
-  the lane alerts without the watcher being able to tell a cold transcript from an unread one
+- `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
+- `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.

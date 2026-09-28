@@ -478,9 +478,9 @@ regular file** inside the reviewed view; directories, absolute paths, and genera
 
 Every `dispatch-review` result is a **top-level** object. **Always present:** `ok`, `terminal`,
 `runDir`, and `argv`; on a failure, `reason` (and usually `detail`). On success: **`resultKind`**
-(one of `findings`, `verdicts`, `grouping`, `ruling`) naming the payload, plus **exactly one**
+(one of `REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`) naming the payload, plus **exactly one**
 payload key of that name.
-**`investigated`** is present only when at least one claimed path survives spot-checking; a normal
+**`investigated`** is present only when a claimed path survives the investigation floor (`engine_adapter.spot_check_investigated`); a normal
 `{"verdicts": [...]}` reply omits it. **Outcome-dependent:** `engagement` and `sanitizedView` — do **not** read an
 absent `findings` as "zero findings"; an absent `findings` may mean a different `resultKind`
 instead. An object carrying **more than one** payload key from `REVIEW_RESULT_KINDS` is refused as
@@ -508,8 +508,7 @@ continuation (`--run-dir` naming an existing run),
 invocation also asserts `--mode brief-check` explicitly, which refuses
 `mode-brief-check-with-diff-base` before the journal is read. Full contract — refusals,
 withheld stripped-config paths, investigation-floor rejection — is in `auto-fix-loop.md`.
-The runner accepts **four** result kinds on stdout (`REVIEW_RESULT_KINDS`: `findings`, `verdicts`,
-`grouping`, `ruling`). Every `ok: true` review result carries **`resultKind`** naming exactly one
+The runner accepts result kinds on stdout (`REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`). Every `ok: true` review result carries **`resultKind`** naming exactly one
 payload key of that name; **`investigated`** is attached only when at least one claimed path
 survives spot-checking. **Recognition is not gradeability** — widening what the transport can read
 changes nothing about what it will certify: the investigation floor still forfeits an empty

@@ -183,8 +183,7 @@ or redacted** path into the brief and the PR — not the raw absolute `readError
 paths and git stderr). Never substitute defaulted engine/model rows, because the preferences were
 never read.
 
-The `run` and `compose-liveness` subcommands also emit a top-level `configRead` object —
-`{status, reason, readError}` — recording whether the **core.md** read succeeded for that
+The `run` and `compose-liveness` subcommands also emit a top-level `configRead` object (its fields are `CONFIG_READ_FIELDS` in `lib/preflight_probe.py`) — recording whether the **core.md** read succeeded for that
 invocation. Model tiers are read separately by each consumer and are **not** covered by
 `configRead`. Distinguish three cases for `crossVendorEngines` in the same output: **configured**
 (the list was derived from the project's engine preferences because the read succeeded), **selected**

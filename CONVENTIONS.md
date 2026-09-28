@@ -169,13 +169,9 @@ written at consult/triage via `commit-ledger`; the deterministic sweep `finalize
 (`latest.json`), and the vitals trend append (`vitals.jsonl`). The sweep **never commits,
 pushes, edits code, or files issues.**
 
-The dispositions ledger record shape (authoritative home: `guardian_ledger.LEDGER_RECORD_FIELDS`)
-carries `id`, `disposition`, `date`, `issue`, `metricAtDisposition`, `reason`, and
-`reraiseWhen`. The report card grades each lens from adjudicated outcomes: `filed`,
-`verified-fixed`, `accepted`, and `reopened` count for; `triaged-out` and `declined` count
-against (authoritative home: `guardian_ledger.OUTCOMES_FOR` / `OUTCOMES_AGAINST`). Vitals
-tracked each sweep (`locTotal`, `fileCount`, `duplicationPercent`, `todoCount`, `majorsBehind`,
-`vulnCount`, `couplingEdges`, `suiteRuntimeSeconds`, `suiteTestCount`, `suiteSkipped`; authoritative home:
+The dispositions ledger record shape (authoritative home: `guardian_ledger.LEDGER_RECORD_FIELDS`).
+The report card grades each lens from adjudicated outcomes (authoritative home:
+`guardian_ledger.OUTCOMES_FOR` / `OUTCOMES_AGAINST`). Vitals tracked each sweep (authoritative home:
 `guardian_vitals.VITALS`) each carry a drift threshold (authoritative home:
 `guardian_vitals.DRIFT_THRESHOLDS`).
 
@@ -822,8 +818,8 @@ with `sanitized-view-diff-opaque`, `sanitized-view-diff-unaccounted`, or (for gi
    (e.g. `cursor-grok-4.6` with `xhigh`).
 2. **Composed dispatch tokens** — what `dispatch_token` emits and the engine CLI argv carries
    (e.g. `cursor-grok-4.6-xhigh`).
-3. **Family keys** — independence accounting only (`anthropic` / `openai` / `xai`);
-   not a dispatch input.
+3. **Family keys** — independence accounting only (per-model `family` field in
+   `plugins/superheroes/lib/model_registry.py`); not a dispatch input.
 
 `model_registry.resolve_dispatch` is the single seam that converts a registry id, a composed
 token, or the seat default into a concrete `(model_id, effort, dispatch_token)` triple;
@@ -1082,28 +1078,15 @@ the affected copy until it is updated to match. Separately, the runtime
 leg may run a subset, but only of sanctioned seats — an unsanctioned `--dimensions` input is
 dropped, never widening or corrupting the roster.
 
-*Worked example 3 — the issue-contract vocabulary.* The three slot names and their order
-(`Anchor (<kind>):`, `What:`, `DoD:`), the three anchor-kind tokens, and the six build-ready
-refusal-reason tokens (`anchor-slot-missing`, `anchor-slot-empty`, `anchor-kind-missing`,
-`anchor-kind-unrecognized`, `anchor-kind-multiple`, `body-unreadable`) are a cross-boundary fact: they are stated in
-`plugins/superheroes/lib/issue_contract.py` and restated in
-`plugins/superheroes/skills/showrunner/reference/issue-contract.md`. The authoritative home
-is the Python module — exactly as `citation_validator.py`'s `CITATION_RE` is the home for
-the citation grammar. The reference doc's `## Vocabulary (drift-tested)` section is
-drift-tested against the module by `lib/tests/test_ssot_drift.py`; that reader **fails
-closed** — if it parses nothing (heading renamed, block reformatted) it raises rather than
-passing vacuously.
+*Worked example 3 — the issue-contract vocabulary (retired).* The authoritative home is
+`plugins/superheroes/lib/issue_contract.py`. The reference doc's `## Vocabulary` section now
+points at that module and keeps no hand-maintained copy, so no drift test remains for the retired
+enumeration.
 
-*Worked example 4 — the register-check vocabulary.* The three result tokens (`pass`, `fail`,
-`undecided`), the three finding-kind tokens (`text-drift`, `missing-quote`, `unknown-entry`),
-the eight undecided-reason tokens (`register-unreadable`, `body-unreadable`, `register-empty`,
-`register-malformed`, `body-malformed`, `child-unrecognized`, `usage`, `internal-error`), the three exit codes
-(`0`, `1`, `2`), and the schema token (`register-check/1`) are a cross-boundary fact: they are
-stated in `plugins/superheroes/lib/register_check.py` and restated in
-`plugins/superheroes/skills/showrunner/reference/register-check.md`. The authoritative home is
-the Python module. The reference doc's `## Vocabulary (drift-tested)` section is drift-tested
-against the module by `lib/tests/test_ssot_drift.py`; that reader **fails closed** — if it parses
-nothing (heading renamed, list reformatted) it raises rather than passing vacuously.
+*Worked example 4 — the register-check vocabulary (retired).* The authoritative home is
+`plugins/superheroes/lib/register_check.py`. The reference doc's `## Vocabulary` section now points
+at that module and keeps no hand-maintained copy, so no drift test remains for the retired
+enumeration.
 
 *Worked example 5 — the anchor resolution tests.* The three per-kind anchor resolution tests
 (`spec-section`, `receipt`, `ruling`) are a cross-boundary fact: they are **operative text** in
@@ -1143,8 +1126,8 @@ enumerating drift test must name every known copy-holder (a comment listing them
 single runtime home is cheap to read, Pattern 1 sidesteps this failure mode entirely.
 
 (The phase-list example that originally anchored this pattern retired with the execution
-spine, #478 — its files no longer exist; the two worked examples above are its live
-successors.)
+spine, #478 — its files no longer exist; worked examples 5 and 6 below carry the live
+copy-and-drift pattern forward.)
 
 ### 11.3 Test corollary — a contract test must read the home, never restate it
 
@@ -1360,8 +1343,7 @@ canonical ruling record is `LEDGERS.md` §4.
 
 > **Cross-boundary contract** (§11). The builder stamps lane endings and blockers; liveness is one
 > shared rule in `lib/wave_watch.py`. `plugins/superheroes/lib/heartbeat.py`'s module constants are
-> **authoritative** for the heartbeat; prose copies in charters and this section are pinned by a drift
-> test.
+> **authoritative** for the heartbeat.
 
 **Producer:** the workhorse builder (`skills/workhorse/SKILL.md` — stamp duty in §7).
 **Consumers:** the showrunner's scheduled liveness sweep (`skills/showrunner/SKILL.md` duty 9);
@@ -1381,11 +1363,9 @@ canonical ruling record is `LEDGERS.md` §4.
 **`lastDispatch` sub-schema** (optional; `null` when absent): `kind`, `engine`, `model`, `runId`
 (non-empty strings), `startedAt` (non-empty ISO-8601 UTC string, e.g. `2026-08-01T14:00:00Z`).
 
-**States:** `working`, `awaiting-dispatch`, `blocked`, `parked`, `handback`. **Terminal:**
-`parked`, `handback`.
-
-**Sweep classes:** `terminal`, `nonterminal`, `unknown`. `nonterminal` means a valid stamp in a
-non-terminal state and says nothing about liveness.
+**States**, **terminal states**, and **sweep classes** are defined in `plugins/superheroes/lib/heartbeat.py`
+(`STATES`, `TERMINAL_STATES`, `SWEEP_CLASSES`). `nonterminal` means a valid stamp in a non-terminal
+state and says nothing about liveness.
 
 **Verbs:** `stamp`, `read`, `sweep`.
 
