@@ -172,7 +172,8 @@ issue ratified is a follow-up for the advisor, never a silent widening of this d
 intake, with two duties before any work resumes. **First, sweep for work the dead build never
 pushed.** Its worktrees and branches hold commits that no PR list or `gh` query shows. Reconcile
 them against the pushed tip and record the adjudication § Recovery defines in your first durable
-post, redacting anything you quote and stating the redaction. **Second, treat every claim you inherit as
+post, carrying the adjudication and its reasoning, not the residue itself, and redacting anything
+you quote and stating the redaction. **Second, treat every claim you inherit as
 unverified until you re-run it yourself** (§8). A receipt that was claimed is not a receipt that
 was earned. **The resume-or-adopt call is the advisor's, not yours.**
 
@@ -428,7 +429,7 @@ way to recover the maker, and the review seat map's author-family exclusion need
 and the sequencing you assumed are yours. When the world moves under a live order, amend the order.
 An implementer that parks on a stale premise did the right thing.
 
-**Stop before a third rework of one surface.** Do not dispatch a third rework of the same surface in one build; mechanical fixes the certified loop applies inside its own rounds do not count. Refuse the fourth patch, name the seam problem, state in the handback that the tripwire fired, and ship the remaining minors as disclosed follow-ups.
+**Stop before a third rework of one surface.** Do not dispatch a third rework of the same surface in one build; mechanical fixes the certified loop applies inside its own rounds do not count. On a lane you can affirmatively call converged, refuse the fourth patch, name the seam problem, state in the handback that the tripwire fired, and ship the remaining minors as disclosed follow-ups. Otherwise park, and only the owner or the advisor lifts that park.
 
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md` § The third-rework tripwire when a surface reaches its third rework.**
 

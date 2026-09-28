@@ -108,7 +108,7 @@ above).
    verified**; **decomposable**; **no conflict with ratified surfaces**; **consequences stated in
    owner terms**. You deliver the verdict **"ready for your approval," never approval itself** —
    only the owner approves a spec, and the vet verdict is **advisory by construction**. **The sequence
-   is fixed:** automated review → your vet → owner review → owner approval.    **Nothing re-reviews an
+   is fixed:** automated review → your vet → owner review → owner approval. **Nothing re-reviews an
    approved spec** except the downstream nets, the amendment path, and the consolidation re-read.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md` when you touch an approved spec body** — amendments, consolidation scheduling, or absorbing rulings into the spec.
    **Record the approval with its date** — the dated approval is what a later
