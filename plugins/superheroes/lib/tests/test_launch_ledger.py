@@ -5436,12 +5436,21 @@ def test_record_outcome_allows_reused_pid_when_kill_eperm_and_foreign(tmp_path, 
 
 def test_record_outcome_refuses_when_kill_eperm_and_facts_unreadable(tmp_path, monkeypatch):
     # axis: EPERM on leader probe + unreadable identity -> fail-closed live
-    repo = _await_exit_lane(tmp_path, monkeypatch, "l-eperm-facts-none")
+    repo = _await_exit_lane(
+        tmp_path, monkeypatch, "l-eperm-facts-none", sessionId=_SESSION_UUID,
+    )
     _fake_signal0_kill_eperm(monkeypatch)
-    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: None)
+    facts_calls = []
+
+    def unreadable_facts(pid):
+        facts_calls.append(pid)
+        return None
+
+    monkeypatch.setattr(ll, "_read_process_facts", unreadable_facts)
     result = ll.record_outcome(repo, "l-eperm-facts-none", "handback", "done")
     assert result["ok"] is False
     assert result["reason"] == "terminal-child-live:999999"
+    assert facts_calls
 
 
 def test_record_outcome_refuses_own_builder_when_kill_eperm(tmp_path, monkeypatch):
@@ -5581,12 +5590,21 @@ def test_record_outcome_refuses_own_live_builder_sessionless_after_clock_step(
 
 def test_record_outcome_refuses_when_process_facts_unreadable(tmp_path, monkeypatch):
     # axis: unreadable identity -> fail-closed live
-    repo = _await_exit_lane(tmp_path, monkeypatch, "l-facts-none")
+    repo = _await_exit_lane(
+        tmp_path, monkeypatch, "l-facts-none", sessionId=_SESSION_UUID,
+    )
     _fake_signal0_alive(monkeypatch)
-    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: None)
+    facts_calls = []
+
+    def unreadable_facts(pid):
+        facts_calls.append(pid)
+        return None
+
+    monkeypatch.setattr(ll, "_read_process_facts", unreadable_facts)
     result = ll.record_outcome(repo, "l-facts-none", "handback", "done")
     assert result["ok"] is False
     assert result["reason"] == "terminal-child-live:999999"
+    assert facts_calls
 
 
 def test_record_outcome_refuses_on_conflicting_identity_arms(tmp_path, monkeypatch):
@@ -5785,8 +5803,8 @@ def test_child_group_is_live_never_sends_real_signals(tmp_path, monkeypatch):
     )
     ll.record_outcome(repo2, "l-sig-3", "handback", "done")
 
-    # T5-like: unreadable facts
-    repo3 = lane(tmp_path / "repo-sig-5", "l-sig-5")
+    # T5-like: unreadable facts on a session lane
+    repo3 = lane(tmp_path / "repo-sig-5", "l-sig-5", sessionId=session_id)
     track_and_patch(facts=lambda pid: None)
     ll.record_outcome(repo3, "l-sig-5", "handback", "done")
 
