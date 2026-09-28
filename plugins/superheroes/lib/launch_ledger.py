@@ -1540,9 +1540,7 @@ def _started_pids_to_probe(info):
 
 
 _PID_START_TOLERANCE_SECONDS = 5.0  # etime is whole seconds; started is written just after spawn
-# On Linux etime is boot-clock based; a forward wall-clock step shifts the estimate — with no
-# session id to cross-check, only a start more than an hour after the lane started reads foreign.
-_PID_START_TOLERANCE_SESSIONLESS_SECONDS = 3600.0
+# No recorded session id: no identity check (live pid reads live); etime on Linux is boot-relative.
 _PS_READ_TIMEOUT_SECONDS = 5.0
 
 
@@ -1611,7 +1609,9 @@ def _read_process_facts(pid):
 
 
 def _pid_is_foreign(pid, started_ts, session_id):
-    """True only on positive evidence that ``pid`` is not this lane's builder."""
+    """True only with a non-empty session id and positive foreign evidence; sessionless lanes skip."""
+    if not isinstance(session_id, str) or not session_id:
+        return False
     facts = _read_process_facts(pid)
     if facts is None:
         return False
@@ -1621,10 +1621,7 @@ def _pid_is_foreign(pid, started_ts, session_id):
     foreign_start = False
     same_start = False
     if isinstance(started_ts, (int, float)) and not isinstance(started_ts, bool):
-        if isinstance(session_id, str) and session_id:
-            start_tolerance = _PID_START_TOLERANCE_SECONDS
-        else:
-            start_tolerance = _PID_START_TOLERANCE_SESSIONLESS_SECONDS
+        start_tolerance = _PID_START_TOLERANCE_SECONDS
         foreign_start = facts["startTs"] > started_ts + start_tolerance
         same_start = not foreign_start
 
