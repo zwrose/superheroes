@@ -6401,7 +6401,7 @@ def _parse_review_attempt(run_dir_real, state, attempt):
             engagement = _review_attempt_engagement(
                 engine, stdout, stderr_tail, elapsed, stdout_bytes,
                 native_result_path=slot.get("nativeResultPath"),
-        native_result_handoff_path=slot.get("nativeResultHandoffPath"))
+                native_result_handoff_path=slot.get("nativeResultHandoffPath"))
             echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
             admitted = _admit_native_review_result(
                 run_dir_real, attempt, opened, engagement, echo_nonce)

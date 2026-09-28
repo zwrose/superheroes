@@ -3482,7 +3482,7 @@ def test_cursor_write_dashdash_run_dir_real_child_grades_collapsed_writer(
     records, _ = ED._journal_read(run_dir)
     state = ED._journal_state(records)
     grade = ED._grade_write_attempt(run_dir, state, 1)
-    assert grade["ok"] is True
+    assert grade.get("ok") is True, grade
 
 
 def test_cursor_review_dashdash_run_dir_grades(tmp_path, monkeypatch):
@@ -3491,7 +3491,7 @@ def test_cursor_review_dashdash_run_dir_grades(tmp_path, monkeypatch):
     repo_root = _repo(tmp_path)
     run_dir = _dashdash_run_dir(tmp_path)
 
-    def collapsed_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+    def review_collapsed_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         result_path = _resolve_native_result_path(argv, prompt_bytes)
         collapsed = re.sub(r"-{2,}", "-", result_path)
         branch = _native_review_branch("findings")
@@ -3499,18 +3499,18 @@ def test_cursor_review_dashdash_run_dir_grades(tmp_path, monkeypatch):
         with open(collapsed, "w", encoding="utf-8") as fh:
             json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
             fh.write("\n")
-        return _cursor_stream_with_tool_calls(0), False, 0, ""
+        return _cursor_edit_tool_call_stream(result_path), False, 0, ""
 
     res = ED.dispatch_review(
         seat=_reviewer_cursor_seat(),
         prompt_path=_valid_prompt(tmp_path),
         repo_root=repo_root,
-        run_engine=FakeRunner([collapsed_runner]),
+        run_engine=FakeRunner([review_collapsed_runner, review_collapsed_runner]),
         build_view=_fake_build_view(tmp_path),
         run_dir=run_dir,
     )
-    assert res["ok"] is True
-    assert res.get("detail") != "native-result-missing"
+    assert res.get("detail") is None and res["ok"] is True, res
+    assert res["engagement"]["toolCalls"] == 0
 
 
 def test_stage_prompt_names_dash_free_handoff_path(tmp_path, monkeypatch):

@@ -3169,11 +3169,18 @@ def test_cursor_write_dashdash_injected_seam_ok(tmp_path, monkeypatch):
     monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
     wt, _main = _linked_worktree(tmp_path)
     run_dir = _dashdash_run_dir(tmp_path)
-    fake = FakeRunner([_collapsed_native_write_runner()])
+    fake = _PreservingNativeWriteFakeRunner([
+        _collapsed_native_write_runner(),
+        _collapsed_native_write_runner(),
+    ])
     res = _dispatch_write(
         tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat(),
     )
-    assert res["ok"] is True
+    assert res.get("ok") is True, res
+    records, _ = ED._journal_read(run_dir)
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    assert started.get("nativeResultHandoffPath")
+    assert list(os.listdir(handoff_base)) == []
 
 
 def test_stage_prompt_canonical_path_without_dashdash_unchanged(tmp_path, monkeypatch):
@@ -3212,6 +3219,28 @@ def test_dashdash_no_safe_base_refuses_before_spawn(tmp_path, monkeypatch):
         if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
     )
     assert ended["refusal"] == "native-result-path-unsafe"
+
+
+def test_dashdash_handed_path_with_dash_run_refuses(tmp_path, monkeypatch):
+    bad_base = tmp_path / "bad--base"
+    bad_base.mkdir()
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: str(bad_base))
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("engine must not run")
+
+    fake = FakeRunner([boom])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat())
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "native-result-path-unsafe"
+    assert list(os.listdir(bad_base)) == []
 
 
 def test_dashdash_symlink_oserror_refuses_before_spawn(tmp_path, monkeypatch):
@@ -3284,6 +3313,14 @@ def test_codex_dashdash_run_dir_creates_no_link(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = _dashdash_run_dir(tmp_path)
     stdout = _build_ok_stdout()
+    symlink_calls = []
+    real_symlink = ED.os.symlink
+
+    def symlink_spy(src, dst, *args, **kwargs):
+        symlink_calls.append((src, dst))
+        return real_symlink(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(ED.os, "symlink", symlink_spy)
 
     def codex_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         return _finish_codex_write_runner(argv, stdout, prompt_bytes)
@@ -3295,6 +3332,12 @@ def test_codex_dashdash_run_dir_creates_no_link(tmp_path, monkeypatch):
     argv = fake.calls[0]["argv"]
     assert "-o" in argv
     assert argv[argv.index("-o") + 1] == ED._native_result_path(run_dir, 1)
+    records, _ = ED._journal_read(run_dir)
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    assert "nativeResultHandoffPath" not in started
+    handoff_prefix = handoff_base if handoff_base.endswith(os.sep) else handoff_base + os.sep
+    for _src, dst in symlink_calls:
+        assert not (dst == handoff_base or dst.startswith(handoff_prefix))
 
 
 def _invalid_native_write_runner():
