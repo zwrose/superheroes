@@ -266,3 +266,8 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
 3. **What the plugin ships** (owner, "perfect"): the approved board's permanent record is a file the
    project controls, kept with its specs. Syncing to Claude Design is optional, for projects that
    have it (Codex hosts and other owners may not); the owner's projects turn it on.
+4. **Vet before approval** (owner): yes, but the workflow must feel natural. Discovery drives toward
+   the owner agreeing the spec is *ready for vet*, not toward approval.
+5. **Candidate requirement, raised by the owner:** discovery sessions don't understand the whole
+   SDLC; they often assume they will decompose issues and wire the board, which is the advisor's
+   work. Fix it as part of this discovery: discovery should know where it hands off.
