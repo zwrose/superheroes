@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.36.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.35.1...superheroes-v0.36.0) (2026-09-29)
+
+
+### Features
+
+* **superheroes:** adopt a newly installed plugin version in the live session ([#1515](https://github.com/zwrose/superheroes/issues/1515)) ([ac9dfca](https://github.com/zwrose/superheroes/commit/ac9dfcaf174fc5fcf7c07e1f5294f9e7288b332e))
+
+
+### Bug Fixes
+
+* **superheroes:** a binary file in a reviewed diff becomes a placeholder in the sanitized view, never a refusal ([#1525](https://github.com/zwrose/superheroes/issues/1525)) ([38b00e4](https://github.com/zwrose/superheroes/commit/38b00e4de11b2cbb8e73e25d0d65d3795281573b))
+* **superheroes:** every new issue filing needs the owner's word ([#1522](https://github.com/zwrose/superheroes/issues/1522)) ([dd51b4b](https://github.com/zwrose/superheroes/commit/dd51b4b49e60ac661f033374a13dab8a757005a8))
+* **superheroes:** hand cursor a dash-free result path so a collapsed "--" never loses the result ([#1531](https://github.com/zwrose/superheroes/issues/1531)) ([3f363da](https://github.com/zwrose/superheroes/commit/3f363da9e483858ef22da574705986dc36340c02))
+* **superheroes:** record-outcome confirms a live pid is the lane's own builder before refusing terminal-child-live ([#1521](https://github.com/zwrose/superheroes/issues/1521)) ([b35b8b6](https://github.com/zwrose/superheroes/commit/b35b8b6f114595d04775e1e26d207cde5ac6c2ce))
+
+
+### Chores
+
+* **superheroes:** retire lib-homed legacy drift pins and amend the verification-strategy removal basis (C19 layer 1) ([#1516](https://github.com/zwrose/superheroes/issues/1516)) ([24d1c12](https://github.com/zwrose/superheroes/commit/24d1c120d0bc43c73be6eef945a1fc9799b35fd9))
+* **superheroes:** retire the charters' restated doctrine and their drift pins (C19 layer 2) ([#1523](https://github.com/zwrose/superheroes/issues/1523)) ([077c6bd](https://github.com/zwrose/superheroes/commit/077c6bd7b4864488ccdbdcdbab70a4e577310908))
+
 ## [0.35.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.35.0...superheroes-v0.35.1) (2026-09-27)
 
 
