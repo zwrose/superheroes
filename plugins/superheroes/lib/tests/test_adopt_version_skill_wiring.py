@@ -78,10 +78,10 @@ def _skill_body_without_fences(text):
 
 
 def test_e5_doctrine_paths_resolve_and_helper_cited():
-    """E5 — backtick doctrine paths resolve; lib/adopt_version.py cited but not required on disk."""
+    """E5 — backtick doctrine paths resolve; lib/adopt_version.py is cited in prose and resolves."""
     text = _read_skill_md()
     assert "lib/adopt_version.py" in text, (
-        "E5: SKILL.md must cite lib/adopt_version.py (WO-A deliverable — not required on disk here)"
+        "E5: SKILL.md must cite lib/adopt_version.py"
     )
     prose = _skill_body_without_fences(text)
     paths = []
@@ -90,9 +90,10 @@ def test_e5_doctrine_paths_resolve_and_helper_cited():
         if any(path.startswith(p) for p in _DOCTRINE_PREFIXES):
             paths.append(path.split("#", 1)[0])
     assert paths, "E5: expected at least one guarded doctrine path in backticks"
+    assert "lib/adopt_version.py" in paths, (
+        "E5: SKILL.md prose (outside fences) must cite lib/adopt_version.py in backticks"
+    )
     for path in paths:
-        if path == "lib/adopt_version.py":
-            continue
         full = os.path.join(_PLUGIN, path)
         assert os.path.isfile(full), f"E5: doctrine path does not resolve: {path!r}"
 

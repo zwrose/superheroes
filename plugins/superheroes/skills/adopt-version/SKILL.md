@@ -8,7 +8,7 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 # adopt-version — take up a new plugin version in the live seat
 
-The harness already reloads skills and agents into a live session when a newer plugin
+On Claude Code, the host already reloads skills and agents into a live session when a newer plugin
 installs. What goes stale is what **this seat** still holds: charter and reference text
 already read into context, absolute plugin-root paths baked into commands and launches, and
 results or processes tied to the old version directory. This skill adopts the new version
@@ -35,15 +35,16 @@ commands; a root recorded in the seat's durable state; on Claude Code, the Sessi
 injection recorded in the session transcript. If none resolves, do not guess — carry the gap
 to step 8 and stop after the brief.
 
-Run `plan` on the new install (role = this seat's charter):
+Run `plan` on the new install (role = this seat's charter). The helper, `lib/adopt_version.py`,
+runs from the new version's directory because the running version may predate it:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 RUNNING_ROOT="<absolute path to the running version directory>"
-CACHE_DIR="<directory holding installed version trees>"
-TO_VERSION="<target X.Y.Z or empty for newest>"
-python3 -B "$ROOT_DIR/lib/adopt_version.py" plan --role workhorse \
-  --from-root "$RUNNING_ROOT" --cache-dir "$CACHE_DIR" ${TO_VERSION:+--to "$TO_VERSION"}
+ROLE="<showrunner|workhorse|detective>"
+CACHE_DIR="$(dirname "$RUNNING_ROOT")"
+NEW_ROOT="<CACHE_DIR/the target version: the highest version directory listed in CACHE_DIR, or the version the owner named>"
+python3 -B "$NEW_ROOT/lib/adopt_version.py" plan --role "$ROLE" \
+  --from-root "$RUNNING_ROOT" --to "$(basename "$NEW_ROOT")"
 ```
 
 A refusal (exit 1, `{"ok":false,"reason":...}`) stops the procedure — report the reason token
@@ -110,16 +111,17 @@ root — treat it as stale.
 
 ## Step 6 — Re-run the version-coupled checks
 
-On the new root, run the conformance probe for each dispatchable engine the wave preflight
-uses:
+On the new root, run the conformance probe:
 
 ```bash
 ROOT_DIR="<toRoot from plan>"
-RUN_DIR="<fresh empty directory>"
-python3 -B "$ROOT_DIR/lib/conformance_probe.py" run --engine cursor --run-dir "$RUN_DIR"
+ENGINE="<engine>"
+RUN_DIR="<fresh empty directory, one per engine>"
+python3 -B "$ROOT_DIR/lib/conformance_probe.py" run --engine "$ENGINE" --run-dir "$RUN_DIR"
 ```
 
-Repeat for every dispatchable engine. An owner word that existed only because of an
+Run it once for each engine this seat dispatches through; an advisor seat runs it for every
+dispatchable engine (`codex`, `cursor`, `claude`), as the wave preflight does. An owner word that existed only because of an
 old-version defect retires once its fresh probe passes — name each retirement in the brief.
 If TRANSITION names new ledger record kinds, do not write them while old-root lanes are live
 (readers on the old version cannot fold a kind they do not know).

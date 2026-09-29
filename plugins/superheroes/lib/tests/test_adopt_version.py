@@ -19,7 +19,7 @@ def _mkver(cache, ver):
 
 
 def _plan(capsys, *argv):
-    code = av.main(["adopt_version.py", "plan", *argv])
+    code = av.main(["plan", *argv])
     out = capsys.readouterr().out.strip()
     return code, json.loads(out) if out else None
 
@@ -267,7 +267,7 @@ def test_refuse_transition_unreadable(capsys, tmp_path):
 
 def test_bad_role_exit_2():
     with pytest.raises(SystemExit) as exc:
-        av.main(["adopt_version.py", "plan", "--role", "nope", "--from-root", "/tmp/x"])
+        av.main(["plan", "--role", "nope", "--from-root", "/tmp/x"])
     assert exc.value.code == 2
 
 
