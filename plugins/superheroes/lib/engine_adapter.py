@@ -941,6 +941,118 @@ def _cursor_shell_call_delivers_excluded_path(
     return False
 
 
+_CMD_LINE_LIMIT = 1024 * 1024
+_CMD_HEAD_KEEP = 4096
+_CMD_TAIL_KEEP = 512
+_CMD_MAX_OPEN = 10000
+_CMD_MAX_CLOSED = 100000
+_CMD_HEAD_RE = re.compile(
+    rb'^\{"type":"tool_call","subtype":"(started|completed)","call_id":"([^"]*)",'
+    rb'"tool_call":\{"([A-Za-z0-9_]+)"')
+_CMD_TAIL_RE = re.compile(rb'"timestamp_ms":(\d+)\}\s*$')
+
+
+def _union_seconds(intervals):
+    total = 0.0
+    cur_s = cur_e = None
+    for s, e in sorted(intervals):
+        if cur_e is None or s > cur_e:
+            if cur_e is not None:
+                total += cur_e - cur_s
+            cur_s, cur_e = s, e
+        elif e > cur_e:
+            cur_e = e
+    if cur_e is not None:
+        total += cur_e - cur_s
+    return total
+
+
+def cursor_command_time(stdout_path, end_epoch_ms):
+    """Measured tool-call time of a cursor stream-json stdout file; dict or None. Never raises.
+
+    Streams the file in binary (bounded lines; over-long lines classified by head and tail), pairs
+    started/completed by call_id, and totals the UNION of call intervals so parallel calls are not
+    counted twice. None when the file is missing or unreadable."""
+    try:
+        open_calls = {}
+        closed = []
+        untimed = unparsed = 0
+        with open(stdout_path, "rb") as fh:
+            while True:
+                raw = fh.readline(_CMD_LINE_LIMIT)
+                if not raw:
+                    break
+                if len(raw) >= _CMD_LINE_LIMIT and not raw.endswith(b"\n"):
+                    head = raw[:_CMD_HEAD_KEEP]
+                    tail = raw[-_CMD_TAIL_KEEP:]
+                    while True:
+                        chunk = fh.readline(_CMD_LINE_LIMIT)
+                        if not chunk:
+                            break
+                        tail = (tail + chunk)[-_CMD_TAIL_KEEP:]
+                        if chunk.endswith(b"\n"):
+                            break
+                    hm = _CMD_HEAD_RE.match(head)
+                    tm = _CMD_TAIL_RE.search(tail)
+                    if not (hm and tm):
+                        unparsed += 1
+                        continue
+                    subtype, cid, tool = (
+                        hm.group(1).decode("ascii"), hm.group(2).decode("utf-8", "replace"),
+                        hm.group(3).decode("ascii"))
+                    ts = int(tm.group(1))
+                else:
+                    if b'"tool_call"' not in raw:
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except ValueError:
+                        unparsed += 1
+                        continue
+                    if not isinstance(obj, dict) or obj.get("type") != "tool_call":
+                        continue
+                    subtype = obj.get("subtype")
+                    cid = obj.get("call_id")
+                    tc = obj.get("tool_call")
+                    tool = next(iter(tc), None) if isinstance(tc, dict) and tc else None
+                    ts = obj.get("timestamp_ms")
+                    if isinstance(ts, bool) or not isinstance(ts, int):
+                        ts = None
+                    if subtype not in ("started", "completed") or not isinstance(cid, str):
+                        untimed += 1
+                        continue
+                if ts is None:
+                    untimed += 1
+                    continue
+                if subtype == "started":
+                    if cid in open_calls:
+                        continue
+                    if len(open_calls) >= _CMD_MAX_OPEN:
+                        untimed += 1
+                        continue
+                    open_calls[cid] = (ts, tool)
+                else:
+                    began = open_calls.pop(cid, None)
+                    if began is None or len(closed) >= _CMD_MAX_CLOSED:
+                        untimed += 1
+                        continue
+                    closed.append((began[0], max(ts, began[0]), began[1] or tool))
+        end_ms = int(end_epoch_ms)
+        for start_ms, tool in open_calls.values():
+            closed.append((start_ms, max(end_ms, start_ms), tool))
+        return {
+            "source": "cursor-stream-json",
+            "toolSeconds": round(_union_seconds([(s, e) for s, e, _t in closed]) / 1000.0, 1),
+            "shellSeconds": round(_union_seconds(
+                [(s, e) for s, e, t in closed if t == "shellToolCall"]) / 1000.0, 1),
+            "openCalls": len(open_calls),
+            "untimedCalls": untimed,
+            "unparsedLines": unparsed,
+        }
+    except Exception:
+        return None
+
+
 def cursor_tool_calls(stdout, exclude_paths=()):
     """Count distinct tool_call call_ids in a cursor stream-json stdout; int or None. Never raises.
 

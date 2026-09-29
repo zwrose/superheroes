@@ -1369,9 +1369,26 @@ def _journal_path(run_dir_real):
     return os.path.join(root, digest, JOURNAL_NAME)
 
 
+def _host_load_sample():
+    """Host 1/5/15-minute load average as three floats; None where the OS cannot give it."""
+    try:
+        return [round(v, 2) for v in os.getloadavg()]
+    except (OSError, AttributeError):
+        return None
+
+
 def _journal_append(run_dir_real, record):
-    """Append one JSON line; flush + fsync. False on OSError; never raises."""
+    """Append one JSON line; flush + fsync. False on OSError; never raises.
+
+    Chokepoint (#1467): every attempt-ended record carries hostLoadAtOpen, hostLoadAtEnd and
+    commandTime; absent keys default here, on a copy, so no producer can omit them."""
     path = _journal_path(run_dir_real)
+    if isinstance(record, dict) and record.get("kind") == "attempt-ended":
+        record = dict(record)
+        if "hostLoadAtEnd" not in record:
+            record["hostLoadAtEnd"] = _host_load_sample()
+        record.setdefault("hostLoadAtOpen", None)
+        record.setdefault("commandTime", None)
     try:
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         line = json.dumps(record, separators=(",", ":")) + "\n"
@@ -1481,6 +1498,8 @@ def _journal_state(records):
                 slot["enginePgid"] = rec.get("enginePgid")
                 if "attemptPromptPath" in rec:
                     slot["attemptPromptPath"] = rec.get("attemptPromptPath")
+                if "hostLoadAtOpen" in rec:
+                    slot["hostLoadAtOpen"] = rec.get("hostLoadAtOpen")
                 if "attemptPromptSha256" in rec:
                     slot["attemptPromptSha256"] = rec.get("attemptPromptSha256")
                 if "nativeResultPath" in rec:
@@ -3467,9 +3486,11 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         return
 
     pgid = proc.pid
+    host_load_open = _host_load_sample()
     engine_started = {
         "kind": "engine-started", "attempt": attempt,
         "enginePgid": pgid, "at": time.time(),
+        "hostLoadAtOpen": host_load_open,
     }
     if native_result_path is not None:
         engine_started["nativeResultPath"] = native_result_path
@@ -3491,6 +3512,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             "kind": "attempt-ended", "attempt": attempt,
             "exit": 127, "timedOut": False, "signal": None,
             "refusal": "journal-append-failed", "at": time.time(),
+            "hostLoadAtOpen": host_load_open,
         })
         _release_result_handoff(handoff_path, run_dir_real)
         return
@@ -3584,6 +3606,9 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         stdout_completion_obs.get("event"),
         stdout_completion_obs,
     )
+    command_time = None
+    if opened.get("engine") == "cursor":
+        command_time = engine_adapter.cursor_command_time(stdout_path, time.time() * 1000)
     _, stdout_observed, stdout_rewrite_failed = _cap_file_tail(
         stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
     )
@@ -3601,6 +3626,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "wallSeconds": round(elapsed, 1),
         "capSeconds": timeout,
         "dispatchPath": dispatch_path,
+        "hostLoadAtOpen": host_load_open,
+        "commandTime": command_time,
     }
     _apply_completion_stamp(
         ended_record, engine_result_channel.deadline_stamp(start + timeout),
@@ -3709,9 +3736,11 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "childPid": os.getpid(), "at": time.time(),
     }):
         return False, "journal-append-failed"
+    host_load_open = _host_load_sample()
     engine_started = {
         "kind": "engine-started", "attempt": attempt,
         "enginePgid": os.getpid(), "at": time.time(),
+        "hostLoadAtOpen": host_load_open,
     }
     if native_result_path is not None:
         engine_started["nativeResultPath"] = native_result_path
@@ -3744,6 +3773,9 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     except OSError:
         pass
 
+    command_time = None
+    if opened.get("engine") == "cursor":
+        command_time = engine_adapter.cursor_command_time(stdout_path, time.time() * 1000)
     completion_stamp = None
     stdout_event = None
     try:
@@ -3790,6 +3822,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "silenceSeconds": None,
         "activityStream": None,
         "activitySource": "injected-seam",
+        "hostLoadAtOpen": host_load_open,
+        "commandTime": command_time,
     }
     if stdout_result is not None:
         ended["stdoutResult"] = stdout_result
@@ -4900,6 +4934,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     "kind": "attempt-ended", "attempt": att,
                     "exit": None, "timedOut": False, "signal": None,
                     "refusal": "attempt-died-unrecorded", "at": time.time(),
+                    "hostLoadAtOpen": slot.get("hostLoadAtOpen"),
                 }
                 records, _corrupt = _journal_read(run_dir_real)
                 recheck = _journal_state(records)
