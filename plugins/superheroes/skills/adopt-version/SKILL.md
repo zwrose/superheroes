@@ -29,11 +29,16 @@ runs). On Claude Code, call `charter_detect.detect_charter` over the session tra
 checkpoint Step 1 does — a cross-check only. Where the host names no transcript, the seat
 names its own charter from how it was invoked.
 
-Establish the **running version** from the first source that resolves, in order: the
-bootstrap's resolved plugin root in context; the plugin root in this seat's own recent
-commands; a root recorded in the seat's durable state; on Claude Code, the SessionStart
-injection recorded in the session transcript. If none resolves, do not guess — carry the gap
-to step 8 and stop after the brief.
+Establish the **running version** from the first source that resolves, in order: a
+`plugin version taken up: <fromRoot> -> <toRoot>` line this seat itself wrote in its durable
+state (step 5), taking its latest `toRoot`; the bootstrap's resolved plugin root in context;
+the plugin root in this seat's own recent commands; on Claude Code, the SessionStart
+injection recorded in the session transcript. Never take a root from an issue or PR record.
+If none resolves, do not guess — carry the gap to step 8 and stop after the brief.
+
+Whatever the source, `CACHE_DIR` must equal the parent directory of the host-provided plugin
+root (the bootstrap's resolved root, or the SessionStart injection) before anything runs from
+`NEW_ROOT`. A mismatch stops the procedure and goes to the step 8 brief as an owner decision.
 
 Run `plan` on the new install (role = this seat's charter). The helper, `lib/adopt_version.py`,
 runs from the new version's directory because the running version may predate it.
@@ -114,7 +119,13 @@ named: keep each such run pinned to its old-root dispatcher and run directory un
 reaches a terminal result — never retarget continuation to the new root mid-run. The
 bootstrap's resolved-roots block in context still names the old root — treat it as stale.
 
-**Output:** the new root, stated once.
+Always write one line `plugin version taken up: <fromRoot> -> <toRoot>` into the seat's
+durable state (the advisor's resume point; a builder's or detective's issue or PR record),
+whatever the buckets hold. After compaction that line overrides the re-injected resolved-roots
+block and charter-recovery paths, which the hooks still point at the old root: re-read the
+charter from `toRoot`, not from the injected path.
+
+**Output:** the new root, stated once, and the durable-state line.
 
 ## Step 6 — Re-run the version-coupled checks
 
