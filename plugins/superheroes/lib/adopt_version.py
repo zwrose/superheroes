@@ -26,7 +26,9 @@ def _refuse(reason, detail):
 
 def _collect(root):
     out, bad = {}, lambda ps: any(p in _SKIP for p in ps)
-    for dp, dns, fns in os.walk(root, followlinks=False):
+    def _raise(err):
+        raise err
+    for dp, dns, fns in os.walk(root, followlinks=False, onerror=_raise):
         rel = os.path.relpath(dp, root)
         parts = rel.replace("\\", "/").split("/") if rel != "." else []
         if bad(parts):
@@ -112,18 +114,21 @@ def _plan(role, cache, from_v, to_v):
         if parsed is None:
             return _refuse("transition-unreadable", "TRANSITION.md missing or unreadable")
         trans, miss = parsed
-        ca, cb = _collect(fr), _collect(tr)
-        for k in sorted(set(ca) | set(cb)):
-            if k not in ca:
-                kind = "added"
-            elif k not in cb:
-                kind = "removed"
-            else:
-                ak, bk = ca[k], cb[k]
-                if ak[0] == bk[0] and (ak[0] == "link" and ak[1] == bk[1] or ak[0] == "file" and filecmp.cmp(ak[1], bk[1], shallow=False)):
-                    continue
-                kind = "changed"
-            buckets[_bucket(k, role)][kind].append(k)
+        try:
+            ca, cb = _collect(fr), _collect(tr)
+            for k in sorted(set(ca) | set(cb)):
+                if k not in ca:
+                    kind = "added"
+                elif k not in cb:
+                    kind = "removed"
+                else:
+                    ak, bk = ca[k], cb[k]
+                    if ak[0] == bk[0] and (ak[0] == "link" and ak[1] == bk[1] or ak[0] == "file" and filecmp.cmp(ak[1], bk[1], shallow=False)):
+                        continue
+                    kind = "changed"
+                buckets[_bucket(k, role)][kind].append(k)
+        except OSError as err:
+            return _refuse("tree-unreadable", f"version tree unreadable: {err}")
     counts = {k: len(buckets[k]["added"]) + len(buckets[k]["removed"]) + len(buckets[k]["changed"]) for k in buckets}
     payload = {"ok": True, "role": role, "cacheDir": cache, "from": from_v, "to": to_v, "fromRoot": fr,
                "toRoot": tr, "installed": inst, "upToDate": up, "transitionSections": trans,

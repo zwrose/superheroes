@@ -75,8 +75,9 @@ When `rubric/covenant.md` changed: re-read it — the copy injected at session s
 and the file on disk governs. When `hooks/` changed: tell the owner at step 8 and treat new
 hook behaviour as absent until a restarted session proves it present.
 
-When only `libs` or `other` changed: read the TRANSITION sections and only the changed
-doctrine pages this seat uses.
+Whatever the charter bucket holds, when `libs` or `other` changed: read the TRANSITION
+sections and every changed doctrine page this seat uses (a shared rubric page counts) — a
+charter change never excuses skipping a changed rubric page.
 
 **When a fresh seat is right:** the charter was restructured so heavily that context would
 keep steering on old duty boundaries (whole duties moved or renamed), or context is nearly
@@ -96,16 +97,21 @@ version in range — done, or not applicable with the reason. An item that stops
 cleans up a process or run is checked against the inventory first and **deferred** when it
 belongs to a live old-root lane (step 7 decides when it runs). An item that needs the owner
 (a sign-in, a configure choice, a permission, a waiver) goes to step 8 — never silently
-skipped.
+skipped. While any item is awaiting owner input, **stop before step 5**: brief the owner now
+(step 8's shape, inputs needed first) and resume at step 5 once the item is resolved — the
+root does not switch, and no new lane launches, on an unmet prerequisite.
 
 **Output:** the inventory, and one disposition per checklist item — done, not applicable
-(why), deferred (which lane), or owner input.
+(why), deferred (which lane), or owner input (adoption stopped here until resolved).
 
 ## Step 5 — Switch the plugin root
 
-Every absolute path in this seat's commands and launches now uses the new version directory
-(`toRoot` from `plan`). The bootstrap's resolved-roots block in context still names the old
-root — treat it as stale.
+Every absolute path in this seat's new commands and launches now uses the new version directory
+(`toRoot` from `plan`). The one exception: a command that continues a live old-root dispatch
+run (`dispatch-review`, `dispatch-write`) stays on the old root's command, on the same run
+directory, until that run reaches a terminal result — the new dispatcher can refuse a run the
+old one opened (for example `run-dir-claude-mode-retired`). The bootstrap's resolved-roots
+block in context still names the old root — treat it as stale.
 
 **Output:** the new root, stated once.
 
@@ -133,7 +139,9 @@ If TRANSITION names new ledger record kinds, do not write them while old-root la
 
 Live builders finish on the old root and are vetted against the doctrine they ran under. New
 lanes launch on the new root. Watch loops armed from the old root are re-armed on the new
-root after their lanes end — never killed. Run step 4's deferred items as each lane ends.
+root after their lanes end — never killed. Live dispatch runs finish through their old-root
+command (step 5's exception), never migrated mid-run. Run step 4's deferred items as each
+lane ends.
 
 While long old-root lanes run, name the cleanup risk: the old version directory may be marked
 `.orphaned_at` and removed under a running builder. For a lane that stops, read

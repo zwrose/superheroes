@@ -148,6 +148,31 @@ def test_diff_buckets(capsys, tmp_path):
     assert b["libs"]["changed"] == ["bin/y"]
 
 
+def test_traversal_failure_refuses_instead_of_partial_plan(capsys, tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    fr, tr = cache / "1.0.0", cache / "2.0.0"
+    for root in (fr, tr):
+        os.makedirs(root / "skills" / "showrunner", exist_ok=True)
+        (root / "skills" / "showrunner" / "SKILL.md").write_text("a" if root == fr else "b")
+        (root / "TRANSITION.md").write_text("## 2.0.0\n")
+    real_scandir = os.scandir
+
+    def flaky_scandir(path="."):
+        if os.fspath(path).endswith(os.path.join("skills", "showrunner")):
+            raise PermissionError(13, "injected", os.fspath(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", flaky_scandir)
+    code, data = _plan(
+        capsys, "--role", "showrunner", "--from", "1.0.0", "--to", "2.0.0",
+        "--cache-dir", str(cache),
+    )
+    assert code == 1
+    assert data["ok"] is False
+    assert data["reason"] == "tree-unreadable"
+    assert "buckets" not in data
+
+
 def test_ignore_skip_components(capsys, tmp_path):
     cache = tmp_path / "cache"
     fr, tr = cache / "1.0.0", cache / "2.0.0"
