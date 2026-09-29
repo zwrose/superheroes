@@ -14,6 +14,7 @@ import re
 import stat as _stat
 import subprocess
 import sys
+import time
 import uuid
 from collections import namedtuple
 
@@ -939,6 +940,149 @@ def _cursor_shell_call_delivers_excluded_path(
     except Exception:
         pass
     return False
+
+
+_CMD_LINE_LIMIT = 1024 * 1024
+_CMD_HEAD_KEEP = 4096
+_CMD_TAIL_KEEP = 512
+_CMD_MAX_OPEN = 10000
+_CMD_MAX_CLOSED = 100000
+# Bounded scan for cursor_command_time on uncapped on-disk stdout (#1467 / #563 class).
+CURSOR_COMMAND_TIME_MAX_BYTES = 64 * 1024 * 1024
+CURSOR_COMMAND_TIME_MAX_SECONDS = 5.0
+_CMD_OVERLONG_SUBTYPE_RE = re.compile(rb'"subtype":"(started|completed)"')
+_CMD_OVERLONG_CALL_ID_RE = re.compile(rb'"call_id":"([^"]*)"')
+_CMD_OVERLONG_TOOL_RE = re.compile(rb'"tool_call":\{"([A-Za-z0-9_]+)"')
+_CMD_TAIL_RE = re.compile(rb'"timestamp_ms":(\d+)\}\s*$')
+
+
+def _cursor_overlong_tool_call(head, tail):
+    """Classify an over-1 MiB tool_call line by head/tail snippets; field order agnostic."""
+    if b'"type":"tool_call"' not in head and b'"type": "tool_call"' not in head:
+        return None
+    sm = _CMD_OVERLONG_SUBTYPE_RE.search(head)
+    cm = _CMD_OVERLONG_CALL_ID_RE.search(head)
+    tm_tool = _CMD_OVERLONG_TOOL_RE.search(head)
+    tm_ts = _CMD_TAIL_RE.search(tail)
+    if not (sm and cm and tm_tool and tm_ts):
+        return None
+    return (
+        sm.group(1).decode("ascii"),
+        cm.group(1).decode("utf-8", "replace"),
+        tm_tool.group(1).decode("ascii"),
+        int(tm_ts.group(1)),
+    )
+
+
+def _union_seconds(intervals):
+    total = 0.0
+    cur_s = cur_e = None
+    for s, e in sorted(intervals):
+        if cur_e is None or s > cur_e:
+            if cur_e is not None:
+                total += cur_e - cur_s
+            cur_s, cur_e = s, e
+        elif e > cur_e:
+            cur_e = e
+    if cur_e is not None:
+        total += cur_e - cur_s
+    return total
+
+
+def cursor_command_time(stdout_path, end_epoch_ms):
+    """Measured tool-call time of a cursor stream-json stdout file; dict or None. Never raises.
+
+    Streams the file in binary (bounded lines; over-long lines classified by head and tail), pairs
+    started/completed by call_id, and totals the UNION of call intervals so parallel calls are not
+    counted twice. None when the file is missing or unreadable."""
+    try:
+        open_calls = {}
+        closed = []
+        untimed = unparsed = 0
+        complete = True
+        bytes_read = 0
+        deadline = time.monotonic() + CURSOR_COMMAND_TIME_MAX_SECONDS
+        with open(stdout_path, "rb") as fh:
+            while True:
+                if bytes_read >= CURSOR_COMMAND_TIME_MAX_BYTES or time.monotonic() >= deadline:
+                    complete = False
+                    break
+                raw = fh.readline(_CMD_LINE_LIMIT)
+                if not raw:
+                    break
+                bytes_read += len(raw)
+                if len(raw) >= _CMD_LINE_LIMIT and not raw.endswith(b"\n"):
+                    head = raw[:_CMD_HEAD_KEEP]
+                    tail = raw[-_CMD_TAIL_KEEP:]
+                    while True:
+                        if bytes_read >= CURSOR_COMMAND_TIME_MAX_BYTES or time.monotonic() >= deadline:
+                            complete = False
+                            break
+                        chunk = fh.readline(_CMD_LINE_LIMIT)
+                        if not chunk:
+                            break
+                        bytes_read += len(chunk)
+                        tail = (tail + chunk)[-_CMD_TAIL_KEEP:]
+                        if chunk.endswith(b"\n"):
+                            break
+                    if not complete:
+                        break
+                    parsed = _cursor_overlong_tool_call(head, tail)
+                    if parsed is None:
+                        unparsed += 1
+                        continue
+                    subtype, cid, tool, ts = parsed
+                else:
+                    if b'"tool_call"' not in raw:
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except ValueError:
+                        unparsed += 1
+                        continue
+                    if not isinstance(obj, dict) or obj.get("type") != "tool_call":
+                        continue
+                    subtype = obj.get("subtype")
+                    cid = obj.get("call_id")
+                    tc = obj.get("tool_call")
+                    tool = next(iter(tc), None) if isinstance(tc, dict) and tc else None
+                    ts = obj.get("timestamp_ms")
+                    if isinstance(ts, bool) or not isinstance(ts, int):
+                        ts = None
+                    if subtype not in ("started", "completed") or not isinstance(cid, str):
+                        untimed += 1
+                        continue
+                if ts is None:
+                    untimed += 1
+                    continue
+                if subtype == "started":
+                    if cid in open_calls:
+                        continue
+                    if len(open_calls) >= _CMD_MAX_OPEN:
+                        untimed += 1
+                        continue
+                    open_calls[cid] = (ts, tool)
+                else:
+                    began = open_calls.pop(cid, None)
+                    if began is None or len(closed) >= _CMD_MAX_CLOSED:
+                        untimed += 1
+                        continue
+                    closed.append((began[0], max(ts, began[0]), began[1] or tool))
+        end_ms = int(end_epoch_ms)
+        for start_ms, tool in open_calls.values():
+            closed.append((start_ms, max(end_ms, start_ms), tool))
+        return {
+            "source": "cursor-stream-json",
+            "toolSeconds": round(_union_seconds([(s, e) for s, e, _t in closed]) / 1000.0, 1),
+            "shellSeconds": round(_union_seconds(
+                [(s, e) for s, e, t in closed if t == "shellToolCall"]) / 1000.0, 1),
+            "openCalls": len(open_calls),
+            "untimedCalls": untimed,
+            "unparsedLines": unparsed,
+            "complete": complete,
+        }
+    except Exception:
+        return None
 
 
 def cursor_tool_calls(stdout, exclude_paths=()):
