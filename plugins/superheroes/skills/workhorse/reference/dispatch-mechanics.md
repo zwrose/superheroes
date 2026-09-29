@@ -366,7 +366,7 @@ the adapter refusals `unregistered-engine-model`,
 Completion is engine-owned and recorded as a monotonic instant, not inferred from process exit or
 file mtime: each attempt-ended record carries `resultCompleteAt`, `resultCompleteEpoch`, and
 `resultCompleteSha256` (a digest of the payload complete at that instant). **Codex and cursor**
-stamp the first moment the result file parses as complete JSON; **claude print** stamps when the
+stamp the latest result-file content that parses as complete JSON and was observed stable at or before the wall-cap deadline, at the instant it was fully read; content first seen after the deadline never replaces an earlier stamp; **claude print** stamps when the
 poll loop first observes a complete `{"type":"result"}` line on stdout — each poll advances an
 incremental read, with one final drain after the process is reaped — and later materialization to
 the result path is not the completion time; a final line with no trailing newline is complete only
@@ -843,7 +843,7 @@ on-disk work already complete and correct.
 (`worktree-dirtied-by-attempt`): no admissible result is graded — `attemptDetail` names why (for
 example `native-result-missing`) — and a partial landing can lack its tests. Split long write
 orders into smaller ones. After any write forfeit, verify the declared paths yourself — that each
-is present and that its tests exist and run — before you re-order. Never retry a forfeit blind.
+is present and that its tests exist and run — before you re-order; the forfeit's `dirtiedPaths` lists the paths whose git status changed and the paths the attempt committed (an edit to a file already dirty at open whose status did not change is not listed). Never retry a forfeit blind.
 
 **Inspect the worktree before discarding or re-dispatching** — "inspect the diff" alone is not a
 decision rule:

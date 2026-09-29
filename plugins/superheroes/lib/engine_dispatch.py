@@ -2057,6 +2057,97 @@ def _baseline_head_sha_readable(baseline):
     return bool(_BASE_SHA_OBJECT_ID_RE.match(head_sha.strip()))
 
 
+def _baseline_effective_excluded_roots(baseline, cwd_real, timeout=None):
+    """Baseline excludedRoots plus live foreign-leased roots, kept only when strictly inside cwd."""
+    roots = set(baseline.get("excludedRoots") or [])
+    live = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+    if live is not None:
+        roots |= live
+    # Axis: the strict-inside-cwd invariant is enforced where it is load-bearing, because persisted roots arrive from disk and are not trustworthy.
+    return {
+        r for r in roots
+        if isinstance(r, str) and r.startswith(cwd_real + os.sep)
+    }
+
+
+MAX_DIRTIED_PATHS = 200
+
+
+def _worktree_dirtied_paths(baseline, cwd_real, timeout=None):
+    """Name the paths a write attempt changed. Never raises.
+
+    Returns {"status": "ok", "paths", "headMoved", "truncated"} or
+    {"status": "indeterminate", "reason": token}. Baseline validity mirrors
+    _worktree_dirt_verdict, so ok is never reported from a baseline the verdict refuses.
+    A path already dirty at open whose status did not change is not listed.
+    """
+    def indeterminate(reason):
+        return {"status": "indeterminate", "reason": reason}
+
+    try:
+        if not isinstance(baseline, dict):
+            return indeterminate("baseline-not-a-dict")
+        if not _baseline_head_sha_readable(baseline):
+            return indeterminate("baseline-head-unreadable")
+        if "entriesVersion" not in baseline:
+            return indeterminate("baseline-entries-version-missing")
+        if baseline.get("entriesVersion") != BASELINE_ENTRIES_VERSION:
+            return indeterminate("baseline-entries-version-unknown")
+        if baseline.get("entriesOverflow"):
+            return indeterminate("baseline-entries-overflow")
+        entries_before = baseline.get("entries")
+        if not isinstance(entries_before, list) or not all(
+            isinstance(e, list) and len(e) >= 1 and all(isinstance(p, str) for p in e)
+            for e in entries_before
+        ):
+            return indeterminate("baseline-entries-malformed")
+        try:
+            head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return indeterminate("git-rev-parse-timeout")
+        if head.returncode != 0:
+            return indeterminate("git-rev-parse-failed")
+        current_head = (head.stdout or "").strip()
+        entries_after = _worktree_entry_set(cwd_real, timeout=timeout)
+        if entries_after is None:
+            return indeterminate("git-status-unreadable")
+        roots = _baseline_effective_excluded_roots(baseline, cwd_real, timeout=timeout)
+        before = _filter_entry_list(entries_before, cwd_real, roots)
+        after = _filter_entry_list(entries_after, cwd_real, roots)
+        entry_key = lambda record: json.dumps(record, ensure_ascii=False, sort_keys=False)
+        keys_before = {entry_key(r) for r in before}
+        keys_after = {entry_key(r) for r in after}
+        paths = set()
+        for record in before + after:
+            key = entry_key(record)
+            if (key in keys_before) != (key in keys_after):
+                paths.update(record[1:])
+        head_moved = current_head != baseline["headSha"].strip()
+        if head_moved:
+            try:
+                diff = _git_scrubbed_bytes(
+                    cwd_real, "diff", "--name-only", "--no-renames", "-z",
+                    baseline["headSha"].strip(), "HEAD", timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                return indeterminate("git-diff-timeout")
+            if diff.returncode != 0:
+                return indeterminate("git-diff-failed")
+            for raw in (diff.stdout or b"").split(b"\0"):
+                if raw:
+                    paths.add(raw.decode("utf-8", errors="surrogateescape"))
+        ordered = sorted(paths)
+        truncated = len(ordered) > MAX_DIRTIED_PATHS
+        return {
+            "status": "ok",
+            "paths": ordered[:MAX_DIRTIED_PATHS],
+            "headMoved": head_moved,
+            "truncated": truncated,
+        }
+    except Exception:  # never raises: an unforeseen failure is an honest indeterminate
+        return indeterminate("unexpected-error")
+
+
 def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
     """Return True if dirtied, False if clean, None if unreadable (fail-closed)."""
     if not isinstance(baseline, dict):
@@ -2087,15 +2178,7 @@ def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
         entries_after = _worktree_entry_set(cwd_real, timeout=timeout)
         if entries_after is None:
             return None
-        roots = set(baseline.get("excludedRoots") or [])
-        live = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
-        if live is not None:
-            roots |= live
-        # Axis: the strict-inside-cwd invariant is enforced where it is load-bearing, because persisted roots arrive from disk and are not trustworthy.
-        roots = {
-            r for r in roots
-            if isinstance(r, str) and r.startswith(cwd_real + os.sep)
-        }
+        roots = _baseline_effective_excluded_roots(baseline, cwd_real, timeout=timeout)
         before = _filter_entry_list(entries_before, cwd_real, roots)
         after = _filter_entry_list(entries_after, cwd_real, roots)
         entry_key = lambda record: json.dumps(record, ensure_ascii=False, sort_keys=False)
@@ -3186,48 +3269,56 @@ def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
 
 
 def _observe_native_file_completion(
-        obs_state, run_dir_real, attempt, *, terminal=False,
+        obs_state, run_dir_real, attempt, *, terminal=False, deadline_mono=None,
 ):
-    """Stamp argv/prompt delivery completion on first stable file plateau. Never raises."""
-    if obs_state.get("stamp") is not None:
-        return
+    """Hold the digest of the latest native result content observed stable at or before
+    the attempt's monotonic deadline, stamped after that content was fully read; content
+    first observed after the deadline never replaces an existing stamp. Never raises."""
     result_path = _native_result_path(run_dir_real, attempt)
     if result_path is None:
         return
     try:
-        # Producer-side size guard only — not on WO-C's admission-path census.
-        size = os.path.getsize(result_path)
+        # Producer-side stat only — not on WO-C's admission-path census.
+        st = os.stat(result_path)
+        sig = (st.st_size, st.st_mtime_ns, st.st_ino)
     except OSError:
         return
-    if size == 0:
+    if sig[0] == 0:
         return
-    prev = obs_state.get("prev_size", 0)
     if not terminal:
-        if prev == 0:
-            obs_state["prev_size"] = size
+        prev_sig = obs_state.get("prev_sig")
+        obs_state["prev_sig"] = sig
+        if prev_sig != sig:
             return
-        if size != prev:
-            obs_state["prev_size"] = size
-            obs_state.pop("parse_failed_at_size", None)
-            return
-        if obs_state.get("parse_failed_at_size") == size:
-            return
-    elif size != prev:
-        obs_state["prev_size"] = size
-        obs_state.pop("parse_failed_at_size", None)
+    if sig == obs_state.get("digested_sig") or sig == obs_state.get("parse_failed_sig"):
+        return
     obj, detail = _read_native_result_file(result_path)
     if detail or not isinstance(obj, dict):
-        obs_state["parse_failed_at_size"] = size
+        obs_state["parse_failed_sig"] = sig
         return
     digest = engine_result_channel.canonical_payload_digest(_scrub_native_payload(obj))
-    stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
+    # axis: the instant is sampled AFTER the read and digest, so a read that straddles the
+    # deadline is judged by when its content was fully in hand.
+    now = time.monotonic()
+    obs_state["digested_sig"] = sig
+    held = obs_state.get("stamp")
+    if held is not None:
+        if held.get(engine_result_channel.FIELD_RESULT_COMPLETE_SHA256) == digest:
+            return
+        if not (
+            isinstance(deadline_mono, (int, float))
+            and not isinstance(deadline_mono, bool)
+            and now <= deadline_mono
+        ):
+            return
+    stamp = engine_result_channel.completion_stamp(now, digest)
     if stamp is not None:
         obs_state["stamp"] = stamp
 
 
 def _observe_attempt_completions(
         delivery, stdout_obs, native_obs, run_dir_real, attempt, stdout_path,
-        *, terminal=False,
+        *, terminal=False, deadline_mono=None,
 ):
     """Poll-loop observation hook for stdout and native-file deliveries. Never raises."""
     if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
@@ -3238,6 +3329,7 @@ def _observe_attempt_completions(
     ):
         _observe_native_file_completion(
             native_obs, run_dir_real, attempt, terminal=terminal,
+            deadline_mono=deadline_mono,
         )
 
 
@@ -3434,11 +3526,11 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "poisoned": False,
         "drop_cause": None,
     }
-    native_completion_obs = {"stamp": None, "prev_size": 0}
+    native_completion_obs = {"stamp": None, "prev_sig": None}
     while True:
         _observe_attempt_completions(
             delivery, stdout_completion_obs, native_completion_obs,
-            run_dir_real, attempt, stdout_path,
+            run_dir_real, attempt, stdout_path, deadline_mono=start + timeout,
         )
         rc = proc.poll()
         now = time.monotonic()
@@ -3470,7 +3562,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         time.sleep(_ATTEMPT_POLL_INTERVAL)
     _observe_attempt_completions(
         delivery, stdout_completion_obs, native_completion_obs,
-        run_dir_real, attempt, stdout_path,
+        run_dir_real, attempt, stdout_path, deadline_mono=start + timeout,
     )
     _terminate_process_group(pgid)
     try:
@@ -3480,6 +3572,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     _observe_attempt_completions(
         delivery, stdout_completion_obs, native_completion_obs,
         run_dir_real, attempt, stdout_path, terminal=True,
+        deadline_mono=start + timeout,
     )
     stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
     last_activity_at, silence_seconds, activity_stream = _fold_stream_activity(
@@ -4568,6 +4661,11 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
     }
     if attempt_detail:
         terminal["attemptDetail"] = attempt_detail
+    opened = (state or {}).get("opened") or {}
+    terminal["dirtiedPaths"] = _worktree_dirtied_paths(
+        opened.get("worktreeBaseline"), opened.get("cwd") or "",
+        timeout=ITEM_EVIDENCE_TIMEOUT,
+    )
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
