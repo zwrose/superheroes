@@ -5491,6 +5491,66 @@ def test_record_outcome_refuses_when_process_facts_unreadable(tmp_path, monkeypa
     assert result["reason"] == "terminal-child-live:999999"
 
 
+def _fake_kill_permission_error(monkeypatch):
+    """The leader probe hits EPERM: the pid exists under another uid."""
+
+    def fake_kill(pid, sig):
+        raise PermissionError
+
+    def fake_killpg(pid, sig):
+        raise PermissionError
+
+    monkeypatch.setattr(ll.os, "kill", fake_kill)
+    monkeypatch.setattr(ll.os, "killpg", fake_killpg)
+
+
+def test_record_outcome_allows_reused_pid_owned_by_another_uid(tmp_path, monkeypatch):
+    # axis: EPERM on the leader probe + foreign facts -> identity check still runs, outcome records
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-eperm-foreign")
+    started_ts = ll.fold(ll.read(repo)["records"])["launches"]["l-eperm-foreign"]["startedTs"]
+    _fake_kill_permission_error(monkeypatch)
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: {
+            "stat": "Ss",
+            "startTs": started_ts + 3600,
+            "command": "/usr/sbin/some-root-daemon",
+        },
+    )
+    result = ll.record_outcome(repo, "l-eperm-foreign", "handback", "done")
+    assert result["ok"] is True
+
+
+def test_record_outcome_refuses_eperm_pid_when_facts_unreadable(tmp_path, monkeypatch):
+    # axis: EPERM on the leader probe + unreadable identity -> fail-closed live
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-eperm-none")
+    _fake_kill_permission_error(monkeypatch)
+    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: None)
+    result = ll.record_outcome(repo, "l-eperm-none", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_record_outcome_refuses_eperm_pid_when_facts_same_process(tmp_path, monkeypatch):
+    # axis: EPERM on the leader probe + facts matching the builder -> live refusal
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-eperm-own")
+    started_ts = ll.fold(ll.read(repo)["records"])["launches"]["l-eperm-own"]["startedTs"]
+    _fake_kill_permission_error(monkeypatch)
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: {
+            "stat": "SN",
+            "startTs": started_ts - 1,
+            "command": "claude --model test",
+        },
+    )
+    result = ll.record_outcome(repo, "l-eperm-own", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
 def test_record_outcome_refuses_on_conflicting_identity_arms(tmp_path, monkeypatch):
     # axis: one arm says same, the other foreign -> stay live (both orderings)
     session_id = _SESSION_UUID_CONFLICT
