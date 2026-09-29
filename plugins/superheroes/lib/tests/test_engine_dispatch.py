@@ -16209,8 +16209,8 @@ def test_completion_producer_stdout_trailing_non_result_line_stamps_at_terminal(
     _assert_completion_keys(ended, structured)
 
 
-def test_completion_producer_rewrite_keeps_first_digest(tmp_path, monkeypatch):
-    """axis: edge 8 — first observation wins; a later rewrite must not replace the digest."""
+def test_completion_producer_rewrite_before_deadline_takes_latest_digest(tmp_path, monkeypatch):
+    """axis: a rewrite observed before the deadline replaces the digest (#1467)."""
     first = _native_write_result_json(report="first")
     second = _native_write_result_json(report="second rewritten")
     script = (
@@ -16231,12 +16231,11 @@ def test_completion_producer_rewrite_keeps_first_digest(tmp_path, monkeypatch):
         % (first, second)
     )
     run_dir, state, ended = _run_codex_native_write_timeout_script(
-        tmp_path, monkeypatch, script, timeout=2,
+        tmp_path, monkeypatch, script, timeout=6,
     )
-    first_payload = json.loads(first)
-    _assert_completion_keys(ended, first_payload)
+    _assert_completion_keys(ended, json.loads(second))
     assert ended[ERC.FIELD_RESULT_COMPLETE_SHA256] != ERC.canonical_payload_digest(
-        json.loads(second),
+        json.loads(first),
     )
 
 

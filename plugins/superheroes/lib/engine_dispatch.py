@@ -3222,13 +3222,11 @@ def _observe_native_file_completion(
     if held is not None:
         if held.get(engine_result_channel.FIELD_RESULT_COMPLETE_SHA256) == digest:
             return
-        if (
+        if not (
             isinstance(deadline_mono, (int, float))
             and not isinstance(deadline_mono, bool)
             and now <= deadline_mono
         ):
-            pass
-        else:
             return
     stamp = engine_result_channel.completion_stamp(now, digest)
     if stamp is not None:
