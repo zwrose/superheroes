@@ -291,3 +291,9 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
    word separate → G advisor decomposes, files, wires the board; discovery never does.
 9. **Shape of the work** (owner): durable artifacts for all four pieces (the line, the who-it's-for
    home, the discovery flow, the ruling ledger) in ONE new-style spec.
+10. **Framing feedback** (owner, 09-28):
+    - A project with no "who it's for / what it's for" yet: discovery strongly recommends setting it
+      up with the advisor before proceeding (a strong recommendation, not a silent default).
+    - The ruling ledger and source tags + traceability: agreed in concept, with a binding
+      constraint: no complex or overbuilt machinery.
+    - Asked: what is the future of review-spec in this flow? (open)
