@@ -299,3 +299,9 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
     - Asked: what is the future of review-spec in this flow? (open)
 11. **review-spec** (owner): fine to retire the separate callable skill. The shape of the review
     cycle is to be defined with the owner up front, in this discovery.
+12. **Review cycle, part 1 (checks)** (owner): gap review is one check; board match, traceability
+    and faithfulness combine into one source check run in both directions (spec statement to
+    source; ruling or frame to spec). Pending: whether the retired skill's other lenses are covered.
+13. **Candidate requirement, raised by the owner:** avoid very long specs. Length is a trigger to
+    split a spec, with a heuristic for splitting specs the way the plugin now splits work into
+    stacks.
