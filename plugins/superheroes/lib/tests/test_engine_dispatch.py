@@ -3424,6 +3424,227 @@ def test_run_engine_files_caps_under_live_writer_stdout_and_stderr(tmp_path, mon
     assert grade["ok"] is True
 
 
+def _dash_free_handoff_base(tmp_path):
+    base = tmp_path / "handoffbase"
+    base.mkdir()
+    return str(base)
+
+
+def _dashdash_run_dir(tmp_path):
+    run_dir = tmp_path / "scratch--dir" / "run"
+    run_dir.mkdir(parents=True)
+    return str(run_dir)
+
+
+def test_result_handoff_base_skips_dashed_tempdir_falls_back_to_tmp(
+        tmp_path, monkeypatch,
+):
+    dashed = tmp_path / "t--mp"
+    dashed.mkdir()
+    monkeypatch.setattr(ED.tempfile, "gettempdir", lambda: str(dashed))
+    assert ED._result_handoff_base() == os.path.realpath("/tmp")
+
+
+def test_result_handoff_base_returns_plain_tempdir_when_dash_free(
+        tmp_path, monkeypatch,
+):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setattr(ED.tempfile, "gettempdir", lambda: str(plain))
+    assert ED._result_handoff_base() == os.path.realpath(str(plain))
+
+
+def test_result_handoff_base_returns_none_when_no_safe_candidate(
+        tmp_path, monkeypatch,
+):
+    dashed = tmp_path / "only--dashed"
+    dashed.mkdir()
+    monkeypatch.setattr(ED.tempfile, "gettempdir", lambda: str(dashed))
+    real_realpath = os.path.realpath
+
+    def fake_realpath(path):
+        if path == "/tmp":
+            return str(tmp_path / "also--bad")
+        return real_realpath(path)
+
+    monkeypatch.setattr(ED.os.path, "realpath", fake_realpath)
+    assert ED._result_handoff_base() is None
+
+
+def _cursor_collapsed_native_write_script(native_write):
+    return (
+        "import json, os, re, sys\n"
+        "_stdin = sys.stdin.read()\n"
+        "_prefix = %r\n"
+        "_path = None\n"
+        "for _line in _stdin.splitlines():\n"
+        "    if _line.startswith(_prefix):\n"
+        "        _path = _line[len(_prefix):].strip()\n"
+        "        break\n"
+        "if _path:\n"
+        "    _path = re.sub(r'-{2,}', '-', _path)\n"
+        "    os.makedirs(os.path.dirname(_path), exist_ok=True)\n"
+        "    open(_path, 'w', encoding='utf-8').write(%r + '\\n')\n"
+        % (ERC.RESULT_FILE_LINE_PREFIX, native_write)
+    )
+
+
+def test_cursor_write_dashdash_run_dir_real_child_grades_collapsed_writer(
+        tmp_path, monkeypatch,
+):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    run_dir = _dashdash_run_dir(tmp_path)
+    native_write = json.dumps({
+        "ok": True, "signal": "ok", "report": "receipt",
+        "evidence": {"testFailed": False, "testPassed": True},
+    })
+    script = _cursor_collapsed_native_write_script(native_write)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    argv = _journal_cursor_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_cursor(monkeypatch, tmp_path, script)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    grade = ED._grade_write_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True, grade
+
+
+def test_cursor_review_dashdash_run_dir_grades(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    repo_root = _repo(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+
+    def review_collapsed_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        collapsed = re.sub(r"-{2,}", "-", result_path)
+        branch = _native_review_branch("findings")
+        os.makedirs(os.path.dirname(collapsed), exist_ok=True)
+        with open(collapsed, "w", encoding="utf-8") as fh:
+            json.dump(_wrap_native_review_result(branch), fh, separators=(",", ":"))
+            fh.write("\n")
+        return _cursor_edit_tool_call_stream(result_path), False, 0, ""
+
+    res = ED.dispatch_review(
+        seat=_reviewer_cursor_seat(),
+        prompt_path=_valid_prompt(tmp_path),
+        repo_root=repo_root,
+        run_engine=FakeRunner([review_collapsed_runner, review_collapsed_runner]),
+        build_view=_fake_build_view(tmp_path),
+        run_dir=run_dir,
+    )
+    assert res.get("detail") is None and res["ok"] is True, res
+    assert res["engagement"]["toolCalls"] == 0
+
+
+def test_stage_prompt_names_dash_free_handoff_path(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    real_release = ED._release_result_handoff
+    monkeypatch.setattr(ED, "_release_result_handoff", lambda _h, _r: None)
+    run_dir = _dashdash_run_dir(tmp_path)
+    script = "import sys\nsys.stdin.read()\n"
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    argv = _journal_cursor_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_cursor(monkeypatch, tmp_path, script)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
+    )
+    records, _ = ED._journal_read(run_dir)
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    handoff = started["nativeResultHandoffPath"]
+    attempt_prompt = open(started["attemptPromptPath"], encoding="utf-8").read()
+    p = ERC.result_file_path_from_prompt(attempt_prompt)
+    assert re.search(r"-{2,}", p) is None
+    assert p.startswith(handoff_base)
+    assert "superheroes-result-" in p
+    assert os.path.realpath(os.path.dirname(p)) == os.path.realpath(run_dir)
+    assert handoff == p
+    real_release(handoff, run_dir)
+
+
+def test_dashdash_link_released_after_attempt(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    run_dir = _dashdash_run_dir(tmp_path)
+    native_write = json.dumps({
+        "ok": True, "signal": "ok", "report": "receipt",
+        "evidence": {"testFailed": False, "testPassed": True},
+    })
+    script = _cursor_collapsed_native_write_script(native_write)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    seat = _cursor_seat(role=_WRITE_ROLE)
+    argv = _journal_cursor_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    _install_fake_cursor(monkeypatch, tmp_path, script)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.01)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30, os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert list(os.listdir(handoff_base)) == []
+
+
+def test_release_leaves_foreign_link(tmp_path):
+    handoff_base = tmp_path / "handoffbase"
+    handoff_base.mkdir()
+    foreign_target = tmp_path / "elsewhere"
+    foreign_target.mkdir()
+    link = handoff_base / "superheroes-result-deadbeef"
+    os.symlink(str(foreign_target), str(link))
+    handoff_path = str(link / "native-result-1.json")
+    run_dir = str(tmp_path / "scratch--dir" / "run")
+    os.makedirs(run_dir)
+    ED._release_result_handoff(handoff_path, run_dir)
+    assert link.is_symlink()
+
+    regular = handoff_base / "not-a-link"
+    regular.write_text("x", encoding="utf-8")
+    ED._release_result_handoff(str(regular / "native-result-1.json"), run_dir)
+    assert regular.is_file()
+
+
+def test_cursor_engagement_excludes_handoff_path(tmp_path):
+    handoff = str(
+        tmp_path / "handoffbase" / "superheroes-result-abc" / "native-result-1.json",
+    )
+    stdout = _cursor_edit_tool_call_stream(handoff)
+    with_handoff = ED._review_attempt_engagement(
+        "cursor", stdout, "", 1.0, 100,
+        native_result_path="/run/native-result-1.json",
+        native_result_handoff_path=handoff,
+    )
+    assert with_handoff["toolCalls"] == 0
+    without_handoff = ED._review_attempt_engagement(
+        "cursor", stdout, "", 1.0, 100,
+        native_result_path="/run/native-result-1.json",
+    )
+    assert without_handoff["toolCalls"] == 1
+
+
 def test_run_engine_files_caps_only_after_terminate_on_timeout(tmp_path, monkeypatch):
     """On timeout, _cap_file_tail must not run until after _terminate_process_group."""
     run_dir = str(tmp_path / "run")
@@ -13763,12 +13984,13 @@ def test_stage_attempt_prompt_refuses_prompt_tampered(tmp_path):
         "resolvedInputs": _spawn_gate_resolved_inputs(seat),
     }
     result_path = ED._native_result_path(run_dir, 1)
-    staged_path, prompt_sha, refusal = ED._stage_attempt_prompt(
+    staged_path, prompt_sha, refusal, _handoff = ED._stage_attempt_prompt(
         run_dir, 1, opened, result_path,
     )
     assert staged_path is None
     assert prompt_sha is None
     assert refusal == "prompt-tampered"
+    assert _handoff is None
 
 
 @pytest.mark.parametrize("schema_arm", ["absent", "directory", "symlink"])

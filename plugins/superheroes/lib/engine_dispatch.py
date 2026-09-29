@@ -577,10 +577,53 @@ def _spawn_native_result_argv(run_dir_real, attempt, opened, spawn_argv):
     return True, argv_out, result_path, None
 
 
+def _result_handoff_base():
+    """First dash-free existing directory among realpath(tempdir) and realpath(/tmp)."""
+    candidates = []
+    try:
+        candidates.append(os.path.realpath(tempfile.gettempdir()))
+    except OSError:
+        pass
+    try:
+        candidates.append(os.path.realpath("/tmp"))
+    except OSError:
+        pass
+    seen = set()
+    for base in candidates:
+        if base in seen:
+            continue
+        seen.add(base)
+        if os.path.isdir(base) and not re.search(r"-{2,}", base):
+            return base
+    return None
+
+
+def _release_result_handoff(handoff_path, run_dir_real):
+    """Remove the per-attempt run-dir symlink when it still points at run_dir_real. Never raises."""
+    if not handoff_path:
+        return
+    try:
+        link = os.path.dirname(handoff_path)
+        st = os.lstat(link)
+        if not stat.S_ISLNK(st.st_mode):
+            return
+        if os.readlink(link) != run_dir_real:
+            return
+        os.unlink(link)
+    except OSError:
+        pass
+
+
 def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
     """Stage per-attempt prompt with typed-file contract when delivery is prompt.
 
-    Returns (prompt_path, sha256_or_None, refusal)."""
+    Returns (prompt_path, sha256_or_None, refusal, handoff_path_or_None)."""
+    handoff_path = None
+
+    def _refuse(token):
+        _release_result_handoff(handoff_path, run_dir_real)
+        return None, None, token, None
+
     try:
         delivery = engine_result_channel.result_delivery(
             opened.get("engine"), opened.get("claudeMode"),
@@ -588,33 +631,62 @@ def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
     except Exception:
         delivery = None
     if result_path is None or delivery != engine_result_channel.RESULT_DELIVERY_PROMPT:
-        return opened["promptPath"], None, None
+        return opened["promptPath"], None, None, None
     try:
         with open(opened["promptPath"], "rb") as fh:
             prompt_bytes = fh.read()
     except OSError:
-        return None, None, "prompt-unreadable"
+        return None, None, "prompt-unreadable", None
     bound_sha = opened.get("stagedPromptSha256")
     if bound_sha is not None:
         if hashlib.sha256(prompt_bytes).hexdigest() != bound_sha:
-            return None, None, "prompt-tampered"
+            return None, None, "prompt-tampered", None
     staged = prompt_bytes.decode("utf-8", errors="ignore")
     schema_path = opened.get("nativeSchemaPath")
     if not schema_path:
-        return None, None, "native-schema-unreadable"
+        return None, None, "native-schema-unreadable", None
     try:
         st = os.lstat(schema_path)
         if not stat.S_ISREG(st.st_mode):
-            return None, None, "native-schema-unreadable"
+            return None, None, "native-schema-unreadable", None
     except OSError:
-        return None, None, "native-schema-unreadable"
+        return None, None, "native-schema-unreadable", None
     try:
         with open(schema_path, "r", encoding="utf-8") as fh:
             schema_text = fh.read()
     except OSError:
-        return None, None, "native-schema-unreadable"
+        return None, None, "native-schema-unreadable", None
+    contract_path = result_path
+    if re.search(r"-{2,}", result_path):
+        base = _result_handoff_base()
+        if base is None:
+            return None, None, "native-result-path-unsafe", None
+        link = None
+        for _ in range(3):
+            candidate = os.path.join(
+                base, "superheroes-result-" + secrets.token_hex(8),
+            )
+            try:
+                os.symlink(run_dir_real, candidate)
+                link = candidate
+                break
+            except FileExistsError:
+                continue
+            except OSError:
+                return None, None, "native-result-path-unsafe", None
+        if link is None:
+            return None, None, "native-result-path-unsafe", None
+        handed = os.path.join(link, os.path.basename(result_path))
+        if re.search(r"-{2,}", handed):
+            try:
+                os.unlink(link)
+            except OSError:
+                pass
+            return None, None, "native-result-path-unsafe", None
+        contract_path = handed
+        handoff_path = handed
     contract = engine_result_channel.file_result_contract(
-        schema_text.rstrip("\n"), result_path,
+        schema_text.rstrip("\n"), contract_path,
         opened.get("runKind", RUN_KIND_REVIEW),
     )
     if staged and not staged.endswith("\n"):
@@ -627,21 +699,21 @@ def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
     except FileNotFoundError:
         pass
     except OSError:
-        return None, None, "attempt-prompt-unwritable"
+        return _refuse("attempt-prompt-unwritable")
     else:
-        return None, None, "attempt-prompt-occupied"
+        return _refuse("attempt-prompt-occupied")
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
-        return None, None, "attempt-prompt-occupied"
+        return _refuse("attempt-prompt-occupied")
     except OSError:
-        return None, None, "attempt-prompt-unwritable"
+        return _refuse("attempt-prompt-unwritable")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(content)
     except OSError:
-        return None, None, "attempt-prompt-unwritable"
-    return path, hashlib.sha256(content.encode("utf-8")).hexdigest(), None
+        return _refuse("attempt-prompt-unwritable")
+    return path, hashlib.sha256(content.encode("utf-8")).hexdigest(), None, handoff_path
 
 
 def _open_native_channel_argv(
@@ -1413,6 +1485,8 @@ def _journal_state(records):
                     slot["attemptPromptSha256"] = rec.get("attemptPromptSha256")
                 if "nativeResultPath" in rec:
                     slot["nativeResultPath"] = rec.get("nativeResultPath")
+                if "nativeResultHandoffPath" in rec:
+                    slot["nativeResultHandoffPath"] = rec.get("nativeResultHandoffPath")
         elif kind == "attempt-ended":
             att = rec.get("attempt")
             if att is not None:
@@ -3247,7 +3321,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if not ok_prep:
         _journal_prep_refusal(run_dir_real, attempt, prep_refusal)
         return
-    staged_path, prompt_sha, prompt_refusal = _stage_attempt_prompt(
+    staged_path, prompt_sha, prompt_refusal, handoff_path = _stage_attempt_prompt(
         run_dir_real, attempt, opened, native_result_path,
     )
     if prompt_refusal:
@@ -3258,6 +3332,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         # axis: spawn-time configDir must still be a directory — open-time record is not enough.
         if not isinstance(cfg, str) or not cfg or not os.path.isdir(cfg):
             _journal_prep_refusal(run_dir_real, attempt, "config-dir-unusable:not-a-directory")
+            _release_result_handoff(handoff_path, run_dir_real)
             return
     prompt_path = staged_path
     argv, recorded = _derive_and_record_spawn_argv(
@@ -3269,6 +3344,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             "exit": 127, "timedOut": False, "signal": None,
             "refusal": "journal-append-failed", "at": time.time(),
         })
+        _release_result_handoff(handoff_path, run_dir_real)
         return
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
@@ -3295,6 +3371,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             "exit": 127, "timedOut": False, "signal": None,
             "refusal": ("spawn-failed: %s" % exc)[:_STDERR_TAIL], "at": time.time(),
         })
+        _release_result_handoff(handoff_path, run_dir_real)
         return
 
     pgid = proc.pid
@@ -3304,6 +3381,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     }
     if native_result_path is not None:
         engine_started["nativeResultPath"] = native_result_path
+    if handoff_path is not None:
+        engine_started["nativeResultHandoffPath"] = handoff_path
     if staged_path != opened["promptPath"]:
         engine_started["attemptPromptPath"] = staged_path
         if prompt_sha is not None:
@@ -3321,6 +3400,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             "exit": 127, "timedOut": False, "signal": None,
             "refusal": "journal-append-failed", "at": time.time(),
         })
+        _release_result_handoff(handoff_path, run_dir_real)
         return
 
     try:
@@ -3462,6 +3542,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if drop_cause is not None:
         ended_record["stdoutResultDropped"] = drop_cause
     _journal_append(run_dir_real, ended_record)
+    _release_result_handoff(handoff_path, run_dir_real)
 
 
 def _attempt_timeout(opened, attempt):
@@ -3504,7 +3585,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         if not _journal_prep_refusal(run_dir_real, attempt, prep_refusal):
             return False, "journal-append-failed"
         return True, ""
-    staged_path, prompt_sha, prompt_refusal = _stage_attempt_prompt(
+    staged_path, prompt_sha, prompt_refusal, handoff_path = _stage_attempt_prompt(
         run_dir_real, attempt, opened, native_result_path,
     )
     if prompt_refusal:
@@ -3520,6 +3601,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
     if not recorded:
         # axis: spawnArgv append failed — run_engine not invoked, attempt ends journal-append-failed.
+        _release_result_handoff(handoff_path, run_dir_real)
         return False, "journal-append-failed"
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
@@ -3540,11 +3622,14 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     }
     if native_result_path is not None:
         engine_started["nativeResultPath"] = native_result_path
+    if handoff_path is not None:
+        engine_started["nativeResultHandoffPath"] = handoff_path
     if staged_path != opened["promptPath"]:
         engine_started["attemptPromptPath"] = staged_path
         if prompt_sha is not None:
             engine_started["attemptPromptSha256"] = prompt_sha
     if not _journal_append(run_dir_real, engine_started):
+        _release_result_handoff(handoff_path, run_dir_real)
         return False, "journal-append-failed"
 
     def cb(elapsed, stdout_bytes, stderr_bytes=0, _a=attempt):
@@ -3620,6 +3705,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     _apply_completion_stamp(ended, engine_result_channel.deadline_stamp(t0 + timeout))
     _apply_completion_stamp(ended, completion_stamp)
     _journal_append(run_dir_real, ended)
+    _release_result_handoff(handoff_path, run_dir_real)
     return True, ""
 
 
@@ -3800,6 +3886,7 @@ def _review_attempt_engagement(
     cwd="",
     view_meta=None,
     native_result_path=None,
+    native_result_handoff_path=None,
 ):
     """Shared engine signals and engagement.read grading decision. Never raises.
 
@@ -3815,9 +3902,12 @@ def _review_attempt_engagement(
             source = "codex-events" if tool_calls is not None else "none"
         elif engine == "cursor":
             tokens = None
-            exclude = ()
+            exclude_paths = []
             if isinstance(native_result_path, str):
-                exclude = (native_result_path,)
+                exclude_paths.append(native_result_path)
+            if isinstance(native_result_handoff_path, str):
+                exclude_paths.append(native_result_handoff_path)
+            exclude = tuple(exclude_paths)
             tool_calls = engine_adapter.cursor_tool_calls(stdout, exclude_paths=exclude)
             source = "cursor-stream" if tool_calls is not None else "none"
         elif engine == "claude":
@@ -4368,7 +4458,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
     engagement = _review_attempt_engagement(
         engine, stdout, stderr_tail, elapsed, stdout_bytes,
-        native_result_path=slot.get("nativeResultPath"))
+        native_result_path=slot.get("nativeResultPath"),
+        native_result_handoff_path=slot.get("nativeResultHandoffPath"))
 
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         return _grade_native_review_attempt(
@@ -6309,7 +6400,8 @@ def _parse_review_attempt(run_dir_real, state, attempt):
             stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
             engagement = _review_attempt_engagement(
                 engine, stdout, stderr_tail, elapsed, stdout_bytes,
-                native_result_path=slot.get("nativeResultPath"))
+                native_result_path=slot.get("nativeResultPath"),
+                native_result_handoff_path=slot.get("nativeResultHandoffPath"))
             echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
             admitted = _admit_native_review_result(
                 run_dir_real, attempt, opened, engagement, echo_nonce)
@@ -6421,7 +6513,8 @@ def _observation_from_attempt(run_dir_real, state, attempt):
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
     engagement = _review_attempt_engagement(
         engine, stdout, stderr_tail, elapsed, stdout_bytes,
-        native_result_path=slot.get("nativeResultPath"))
+        native_result_path=slot.get("nativeResultPath"),
+        native_result_handoff_path=slot.get("nativeResultHandoffPath"))
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         if opened.get("runKind") == RUN_KIND_WRITE:
             return _engagement_with_read(engagement)

@@ -343,6 +343,9 @@ end), and a timed-out attempt refuses when those deadline fields are missing or 
 when completion is strictly after the cap — exactly at the cap admits,
 `result-completion-payload-mismatch` when the admitted payload is not the one the stamp was taken
 over). Cursor adds attempt-prompt refusals:
+`native-result-path-unsafe` (when the result path contains a run of two or more dashes the runner
+hands cursor a dash-free symlink to the run dir instead, and refuses the attempt before spawn when
+it cannot make one),
 `attempt-prompt-occupied` (any pre-existing entry at the attempt-prompt path — file, symlink,
 dangling symlink, directory — the engine learns the run dir from the result path, so a first attempt
 could plant the second's), `attempt-prompt-unwritable`, and `prompt-tampered` (the staged source

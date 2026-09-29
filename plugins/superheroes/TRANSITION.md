@@ -7,6 +7,20 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Cursor dash-free native result handoff
+
+- Cursor attempts whose canonical native result path contains a run of two or more dashes (`--`)
+  now name a dash-free symlink path to that file in the prompt's result line (the bytes still land
+  in the run directory at the canonical path).
+- The `engine-started` journal record may carry `nativeResultHandoffPath` alongside
+  `nativeResultPath` when that handoff is used.
+- A new pre-spawn refusal token `native-result-path-unsafe` may appear on cursor attempts when the
+  runner cannot create a safe handoff path.
+- A killed or interrupted attempt can leave a dangling `superheroes-result-*` symlink in the temp
+  directory; deleting it is safe.
+
 ## 0.35.1
 
 ### Claude background dispatch mode retired
