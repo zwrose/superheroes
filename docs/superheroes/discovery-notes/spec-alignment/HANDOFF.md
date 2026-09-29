@@ -305,3 +305,9 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
 13. **Candidate requirement, raised by the owner:** avoid very long specs. Length is a trigger to
     split a spec, with a heuristic for splitting specs the way the plugin now splits work into
     stacks.
+14. **Review cycle, part 1 (lenses), settled** (owner): three checks.
+    - **Gap review:** clarity, testability, failure modes, contradictions, plus safety and access.
+    - **Source check, both directions:** board match, traceability, faithfulness, plus scope (is it
+      one piece; is anything in it not this piece's, or not sourced).
+    - **Grounding:** claims about the repo checked against the repo, as its own third lens in
+      discovery (not left to the advisor's vet); the existing citation script keeps running.
