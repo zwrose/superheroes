@@ -157,3 +157,31 @@ E             +  use gpt-6-sol
 ```
 - Restore: inverse edit. Restore receipt (line 74): `_RETIRED_MODELS: dict[str, dict[str, str]] = {"codex": {"gpt-5.6-terra": "gpt-6.1-sol"}}`
 - Green: `.  [100%]` / `1 passed in 0.38s`
+
+## WO-3
+
+Same procedure (single node `plugins/superheroes/lib/tests/test_ssot_drift.py::test_complete_codex_policy_single_sourced`, `-q -p no:cacheprovider`). Neutralization is a targeted substitution of every `gpt-6.1-sol` with the unregistered `gpt-6.9-sol` in one document; restore is the inverse substitution. Detector unedited. Red captures below are the last 15 lines of the run (the tail was taken with `tail -15`; disclosed, not the full log). The test stops at the first failing document, so each red names the neutralized document and its first assertion only.
+
+### D1-CONVENTIONS
+
+- Guarded element and axis: `CONVENTIONS.md` names `gpt-6.1-sol` (2 occurrences).
+- Neutralization: `gpt-6.1-sol` -> `gpt-6.9-sol` in `CONVENTIONS.md`.
+- Red: `E           AssertionError: ../../CONVENTIONS.md missing registered Codex model IDs: {'gpt-6.1-sol'}` / `1 failed in 0.18s`
+- Restore: inverse substitution; `gpt-6.1-sol` count back to 2. Restore receipt (line 631): `(`model-retired: gpt-5.6-terra is retired; use gpt-6.1-sol`), never falling back silently. A one-run preflight pin wins over the`
+- Green: `.  [100%]` / `1 passed in 1.26s`
+
+### D1-set-up
+
+- Guarded element and axis: `skills/configure/reference/set-up.md` names `gpt-6.1-sol` (1 occurrence).
+- Neutralization: `gpt-6.1-sol` -> `gpt-6.9-sol` in that file.
+- Red: `E           AssertionError: skills/configure/reference/set-up.md missing registered Codex model IDs: {'gpt-6.1-sol'}` / `1 failed in 0.19s`
+- Restore: inverse substitution; count back to 1. Restore receipt (line 250): `A Codex pin may name `gpt-6.1-sol` (the default), the pin-only `gpt-5.6-sol` or `gpt-6-sol` ...`
+- Green: `.  [100%]` / `1 passed in 0.16s`
+
+### D1-view-and-tune
+
+- Guarded element and axis: `skills/configure/reference/view-and-tune.md` names `gpt-6.1-sol` (3 occurrences).
+- Neutralization: `gpt-6.1-sol` -> `gpt-6.9-sol` in that file.
+- Red: `E           AssertionError: skills/configure/reference/view-and-tune.md missing registered Codex model IDs: {'gpt-6.1-sol'}` / `1 failed in 0.17s`
+- Restore: inverse substitution; count back to 3. Restore receipt (line 206): `model IDs are `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for`
+- Green: `.  [100%]` / `1 passed in 0.14s`
