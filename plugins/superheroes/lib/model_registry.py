@@ -30,6 +30,14 @@ _MODELS: dict[str, dict[str, dict]] = {
             "override_only": False,
             "min_cli": "0.157.0",
         },
+        "gpt-6.1-sol": {
+            "family": "openai",
+            "dispatch": "gpt-6.1-sol",
+            "override_only": False,
+            "min_cli": "0.159.0",
+            "efforts": ("low", "medium", "high", "xhigh", "max"),
+            "registration": "probe-pending",
+        },
         "gpt-6-astra": {
             "family": "openai",
             "dispatch": "gpt-6-astra",
@@ -143,7 +151,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     },
     "registration-probe": {
         "claude": None,
-        "codex": ("gpt-6-sol", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": None,
     },
 }

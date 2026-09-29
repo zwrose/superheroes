@@ -158,7 +158,7 @@ def test_model_family():
 
 def test_derivation_helpers():
     assert MR.known_claude_models() == ("haiku", "sonnet", "opus", "fable")
-    assert MR.codex_models() == ("gpt-5.6-sol", "gpt-6-sol", "gpt-6-astra")
+    assert MR.codex_models() == ("gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra")
     assert MR.codex_model_strength() == (
         "gpt-5.6-sol",
         "gpt-6-sol",
@@ -681,9 +681,9 @@ def test_registered_astra_on_reviewer_deep_allowlist_and_probe_role_admits():
         ("gpt-6-astra", "high"),
         ("gpt-5.6-sol", "xhigh"),
     )
-    # registration-probe is not a codex pin role, so no pin-only model is appended; its cell now
-    # sits at the head of the (no-longer-probe-pending) ladder, so its allowlist is the full ladder.
-    assert MR.allowlist("registration-probe", "codex") == MR.ladder("codex")
+    # registration-probe is not a codex pin role, so no pin-only model is appended; its cell sits on
+    # a probe-pending model, so its allowlist is that cell alone.
+    assert MR.allowlist("registration-probe", "codex") == (("gpt-6.1-sol", "high"),)
     assert MR.ladder("codex")[-1] == ("gpt-6-astra", "high")
     assert MR.codex_effort_for_kind("review") == MR.matrix_config("reviewer", "codex")[1]
     r = MR.resolve_dispatch("registration-probe", "codex")
@@ -920,12 +920,17 @@ def test_i3_reviewer_deep_pin_sol_resolves_xhigh_others_resolve_high():
 
 def test_i3_codex_model_strength_pin_only_first_then_ladder_order():
     assert MR.codex_model_strength() == ("gpt-5.6-sol", "gpt-6-sol", "gpt-6-astra")
-    assert set(MR.codex_models()) <= set(MR.codex_model_strength())
+    # a probe-pending row is selectable nowhere, so it has no strength rank until it leaves probe-pending
+    assert {
+        m
+        for m in MR.codex_models()
+        if MR._MODELS["codex"][m].get("registration") != "probe-pending"
+    } <= set(MR.codex_model_strength())
 
 
-# bite-axis: codex_min_cli() reports gpt-6-sol's own min_cli as the registry floor
-def test_i4_codex_min_cli_returns_gpt6_sol_floor():
-    assert MR.codex_min_cli() == ("0.157.0", "gpt-6-sol")
+# bite-axis: codex_min_cli() reports gpt-6.1-sol's own min_cli as the registry floor
+def test_i4_codex_min_cli_returns_gpt61_sol_floor():
+    assert MR.codex_min_cli() == ("0.159.0", "gpt-6.1-sol")
 
 
 # bite-axis: codex_min_cli() compares min_cli versions numerically, not lexically as strings
@@ -935,9 +940,10 @@ def test_i4_codex_min_cli_compares_numerically_not_as_a_string(monkeypatch):
     models = copy.deepcopy(MR._MODELS)
     models["codex"]["gpt-6-astra"] = dict(models["codex"]["gpt-6-astra"], min_cli="0.99.0")
     monkeypatch.setattr(MR, "_MODELS", models)
-    assert MR.codex_min_cli() == ("0.157.0", "gpt-6-sol")
+    assert MR.codex_min_cli() == ("0.159.0", "gpt-6.1-sol")
 
     models2 = copy.deepcopy(models)
+    models2["codex"]["gpt-6.1-sol"] = dict(models2["codex"]["gpt-6.1-sol"], min_cli="0.9.0")
     models2["codex"]["gpt-6-sol"] = dict(models2["codex"]["gpt-6-sol"], min_cli="0.9.0")
     monkeypatch.setattr(MR, "_MODELS", models2)
     assert MR.codex_min_cli() == ("0.99.0", "gpt-6-astra")
@@ -949,3 +955,27 @@ def test_i4_codex_min_cli_none_when_no_reachable_model_declares_one(monkeypatch)
         rec.pop("min_cli", None)
     monkeypatch.setattr(MR, "_MODELS", models)
     assert MR.codex_min_cli() is None
+
+
+# bite-axis: the probe-pending gate keeps gpt-6.1-sol off every ladder rung, every non-probe role allowlist and every pin
+def test_gpt61_sol_probe_pending_reaches_only_the_registration_probe_role():
+    assert MR.matrix_config("registration-probe", "codex") == ("gpt-6.1-sol", "high")
+    assert all(model != "gpt-6.1-sol" for model, _effort in MR.ladder("codex"))
+    for role in MR.roles():
+        if role == "registration-probe":
+            continue
+        assert all(model != "gpt-6.1-sol" for model, _effort in MR.allowlist(role, "codex")), role
+    ok, reason = MR.codex_pin_verdict("reviewer", "gpt-6.1-sol")
+    assert ok is False
+    assert reason.startswith("pin-probe-pending:")
+
+
+# bite-axis: the gpt-6.1-sol efforts tuple refuses `none` and admits only its published efforts (max override-gated)
+def test_gpt61_sol_refuses_effort_none_and_accepts_its_published_efforts():
+    ok, reason = MR.validate_config("codex", "gpt-6.1-sol", "none")
+    assert ok is False
+    assert "none" in reason
+    for e in ("low", "medium", "high", "xhigh"):
+        assert MR.validate_config("codex", "gpt-6.1-sol", e) == (True, None)
+    assert MR.validate_config("codex", "gpt-6.1-sol", "max")[0] is False
+    assert MR.validate_config("codex", "gpt-6.1-sol", "max", allow_override_only=True) == (True, None)

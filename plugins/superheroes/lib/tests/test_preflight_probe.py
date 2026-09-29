@@ -260,6 +260,21 @@ def test_codex_cli_floor_probe_below_floor_refused():
     assert below in result["detail"]
 
 
+# bite-axis: the gpt-6.1-sol floor literal 0.159.0 — a 0.158.0 CLI is refused with the spelled-out detail, a 0.159.0 CLI passes
+def test_codex_cli_floor_probe_gpt61_sol_floor_literal():
+    def _run_below(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="codex-cli 0.158.0\n", stderr="")
+
+    def _run_at(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="codex-cli 0.159.0\n", stderr="")
+
+    assert pp.codex_cli_floor_probe(run=_run_below)["detail"] == (
+        "codex-cli-too-old: codex-cli 0.158.0 is older than 0.159.0, the minimum for gpt-6.1-sol; "
+        "upgrade the Codex CLI to 0.159.0 or later"
+    )
+    assert pp.codex_cli_floor_probe(run=_run_at) is None
+
+
 # bite-axis: codex_cli_floor_probe compares versions NUMERICALLY, never as a bare string — a
 # CLI that is numerically below the floor but lexically greater (e.g. "0.99.0" vs "0.157.0",
 # where "9" > "1" at the first differing character) must still be refused. This is the same
