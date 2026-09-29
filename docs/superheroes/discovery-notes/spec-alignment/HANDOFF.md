@@ -313,3 +313,8 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
       discovery (not left to the advisor's vet); the existing citation script keeps running.
     The advisor's vet can lean on the grounding check and focus on conflicts with other approved
     specs.
+15. **Review cycle, part 2 (who reviews)** (owner): each check is an independent reviewer from a
+    different model family than the author, the three in parallel, the same reviewer continuing
+    across rounds (confirms last round's fixes, then looks for new problems). The spec reviewer
+    is its own configurable tier, separate from the code-review tiers (the owner's setup: Astra
+    for specs, Sol still the deep-tier code reviewer). No model is hardcoded in the plugin.
