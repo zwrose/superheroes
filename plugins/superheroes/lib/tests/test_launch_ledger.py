@@ -5423,7 +5423,7 @@ def test_record_outcome_allows_reused_pid_when_kill_eperm_and_foreign(tmp_path, 
         "_read_process_facts",
         lambda pid: {
             "stat": "SN",
-            "startTs": started_ts + 3600,
+            "startTs": started_ts + 86400,
             "command": "claude --model test",
         },
     )
@@ -5479,7 +5479,7 @@ def test_record_outcome_allows_reused_pid_by_start_time_sessionless(tmp_path, mo
         "_read_process_facts",
         lambda pid: {
             "stat": "SN",
-            "startTs": started_ts + 3600,
+            "startTs": started_ts + 86400,
             "command": "claude --model test",
         },
     )
@@ -5487,6 +5487,25 @@ def test_record_outcome_allows_reused_pid_by_start_time_sessionless(tmp_path, mo
     assert result["ok"] is True
     outcomes = [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
     assert len(outcomes) == 1
+
+
+def test_record_outcome_refuses_sessionless_own_builder_after_clock_step(tmp_path, monkeypatch):
+    # axis: a 10-minute forward clock step on a sessionless lane must not read as a foreign pid
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-clock-step")
+    started_ts = ll.fold(ll.read(repo)["records"])["launches"]["l-clock-step"]["startedTs"]
+    _fake_signal0_alive(monkeypatch)
+    monkeypatch.setattr(
+        ll,
+        "_read_process_facts",
+        lambda pid: {
+            "stat": "SN",
+            "startTs": started_ts + 600,
+            "command": "claude --model test",
+        },
+    )
+    result = ll.record_outcome(repo, "l-clock-step", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
 
 
 def test_record_outcome_allows_reused_pid_by_session_id(tmp_path, monkeypatch):
@@ -5731,7 +5750,7 @@ def test_child_group_is_live_never_sends_real_signals(tmp_path, monkeypatch):
     track_and_patch(
         facts=lambda pid: {
             "stat": "SN",
-            "startTs": started_ts + 3600,
+            "startTs": started_ts + 86400,
             "command": "claude",
         },
     )
@@ -5797,17 +5816,21 @@ def test_read_process_facts_all_or_nothing(monkeypatch):
     monkeypatch.setattr(ll.subprocess, "run", lambda *a, **k: run_result(0, "S 00:05 "))
     assert ll._read_process_facts(pid) is None
 
-    before = time.time()
-    monkeypatch.setattr(
-        ll.subprocess,
-        "run",
-        lambda *a, **k: run_result(0, "SNs  03:57 claude --session-id X"),
-    )
+    # The clock is read before ps runs: the fake ps advances the (fixed) clock, and
+    # startTs must come from the earlier read.
+    clock = {"now": 1_000_000.0}
+    monkeypatch.setattr(ll.time, "time", lambda: clock["now"])
+
+    def ps_after_clock_advance(*a, **k):
+        clock["now"] += 30.0
+        return run_result(0, "SNs  03:57 claude --session-id X")
+
+    monkeypatch.setattr(ll.subprocess, "run", ps_after_clock_advance)
     facts = ll._read_process_facts(pid)
     assert facts is not None
     assert facts["stat"] == "SNs"
     assert facts["command"] == "claude --session-id X"
-    assert before - 237 - 2 <= facts["startTs"] <= time.time()
+    assert facts["startTs"] == 1_000_000.0 - 237
 
     def raise_timeout(*a, **k):
         raise subprocess.TimeoutExpired(cmd="ps", timeout=5)
