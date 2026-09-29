@@ -4698,6 +4698,7 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
     opened = (state or {}).get("opened") or {}
     terminal["dirtiedPaths"] = _worktree_dirtied_paths(
         opened.get("worktreeBaseline"), opened.get("cwd") or "",
+        timeout=ITEM_EVIDENCE_TIMEOUT,
     )
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
