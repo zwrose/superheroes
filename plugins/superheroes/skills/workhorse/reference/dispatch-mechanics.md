@@ -843,7 +843,7 @@ on-disk work already complete and correct.
 (`worktree-dirtied-by-attempt`): no admissible result is graded — `attemptDetail` names why (for
 example `native-result-missing`) — and a partial landing can lack its tests. Split long write
 orders into smaller ones. After any write forfeit, verify the declared paths yourself — that each
-is present and that its tests exist and run — before you re-order. Never retry a forfeit blind.
+is present and that its tests exist and run — before you re-order; the forfeit's `dirtiedPaths` lists the paths whose git status changed and the paths the attempt committed (an edit to a file already dirty at open whose status did not change is not listed). Never retry a forfeit blind.
 
 **Inspect the worktree before discarding or re-dispatching** — "inspect the diff" alone is not a
 decision rule:
