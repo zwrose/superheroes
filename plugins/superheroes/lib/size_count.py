@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """PR size counters: tripwire vs bar, with whole-file deletions listed (#1447). stdlib only."""
 import argparse
+import fnmatch
 import json
 import subprocess
 import sys
 
+# Axis: a path is test code iff a directory component is a TEST_DIR_NAMES member or the file name matches a TEST_FILE_GLOBS glob; the one home of the size rule's test-path list (rubric/review-discipline.md § Size).
+TEST_DIR_NAMES = frozenset({"test", "tests", "__tests__", "spec", "e2e"})
+TEST_FILE_GLOBS = ("*.test.*", "*.spec.*", "test_*.py", "*_test.py", "*_test.go")
+
 
 def is_test_path(path):
-    """True when ``path`` has a ``tests`` directory component."""
-    return "tests" in path.replace("\\", "/").split("/")
+    """True when a directory component of ``path`` is in ``TEST_DIR_NAMES`` or its file name matches ``TEST_FILE_GLOBS``."""
+    *dirs, name = path.replace("\\", "/").split("/")
+    if any(part in TEST_DIR_NAMES for part in dirs):
+        return True
+    return any(fnmatch.fnmatchcase(name, glob) for glob in TEST_FILE_GLOBS)
 
 
 def count(numstat_rows, deleted_paths, bar_exclude=()):
