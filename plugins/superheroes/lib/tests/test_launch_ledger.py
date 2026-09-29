@@ -2166,7 +2166,7 @@ def test_terminalize_refuses_pid_one(tmp_path):
     result = ll.fold(records)
     assert result["ok"] is False
     assert result["reason"] == "fold-bad-field:started:pid"
-    assert ll._child_group_is_live(1) is True
+    assert ll._child_group_is_live(1, started_ts=None, session_id=None) is True
 
 
 def test_terminalize_repair_refuses_a_live_group(tmp_path, monkeypatch):
@@ -2351,7 +2351,7 @@ def test_child_group_is_live_detects_a_non_leader_pid(tmp_path, monkeypatch):
     proc = subprocess.Popen(["sleep", "30"])
     try:
         assert os.getpgid(proc.pid) != proc.pid
-        assert ll._child_group_is_live(proc.pid) is True
+        assert ll._child_group_is_live(proc.pid, started_ts=None, session_id=None) is True
 
         repo = _init_repo(tmp_path / "repo")
         _ledger_env(tmp_path, monkeypatch)
@@ -4221,7 +4221,7 @@ def _scripted_liveness(monkeypatch, answers):
     """Script the liveness probe; the last answer repeats. Returns the call log."""
     calls = []
 
-    def fake(pid):
+    def fake(pid, **_identity):
         calls.append(pid)
         return answers[min(len(calls) - 1, len(answers) - 1)]
 
@@ -4365,7 +4365,7 @@ def test_record_outcome_await_exit_survives_a_probe_costlier_than_the_ceiling(
 
     probes = []
 
-    def slow_probe(pid):
+    def slow_probe(pid, **_identity):
         probes.append(pid)
         clock.now += 2.0  # what _child_group_is_live's settle really costs
         return len(probes) < 2
@@ -5351,3 +5351,257 @@ def test_fold_premise_stack_field_invalid_values_fold_to_none():
     assert lane["stack"] is None
     assert lane["layerPosition"] is None
     assert lane["layersPlanned"] is None
+
+
+# --- reused recorded pid (#1496) ---------------------------------------------
+
+_SESSION = "71a6efbc-27ca-4ab3-ba24-93d536dc4dad"
+
+
+def _pid_alive_fakes(monkeypatch, dead=()):
+    """Make every fake pid read alive (except `dead`), recording each (pid, sig) sent."""
+    sent = []
+
+    def fake_kill(pid, sig):
+        sent.append((pid, sig))
+        if pid in dead:
+            raise ProcessLookupError(pid)
+
+    def fake_killpg(pid, sig):
+        sent.append((pid, sig))
+        if pid in dead:
+            raise ProcessLookupError(pid)
+
+    monkeypatch.setattr(ll.os, "kill", fake_kill)
+    monkeypatch.setattr(ll.os, "killpg", fake_killpg)
+    return sent
+
+
+def _facts(start_ts, command="claude --model opus", stat="SNs"):
+    return {"stat": stat, "startTs": start_ts, "command": command}
+
+
+def _started_ts(repo, launch_id):
+    return ll.fold(ll.read(repo)["records"])["launches"][launch_id]["startedTs"]
+
+
+def _reused_pid_lane(tmp_path, monkeypatch, launch_id, facts_for, **reserved_extra):
+    """A lane whose recorded pid 999999 reads alive; `facts_for(started_ts)` gives the facts."""
+    repo = _await_exit_lane(tmp_path, monkeypatch, launch_id, **reserved_extra)
+    sent = _pid_alive_fakes(monkeypatch)
+    facts = facts_for(_started_ts(repo, launch_id))
+    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: facts)
+    return repo, sent
+
+
+def _outcomes(repo):
+    return [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
+
+
+def test_reused_pid_by_start_time_sessionless_lane_records_the_outcome(tmp_path, monkeypatch):
+    # axis: start arm alone decides when the lane has no session id
+    repo, sent = _reused_pid_lane(
+        tmp_path, monkeypatch, "l-reuse-start", lambda ts: _facts(ts + 3600),
+    )
+    result = ll.record_outcome(repo, "l-reuse-start", "handback", "done")
+    assert result["ok"] is True, result["reason"]
+    assert len(_outcomes(repo)) == 1
+    assert sent and all(sig == 0 for _pid, sig in sent)
+
+
+def test_reused_pid_by_session_id_records_the_outcome(tmp_path, monkeypatch):
+    # axis: session arm decides — start far after the record, command lacks the id
+    repo, _sent = _reused_pid_lane(
+        tmp_path, monkeypatch, "l-reuse-session", lambda ts: _facts(ts + 3600),
+        sessionId=_SESSION,
+    )
+    result = ll.record_outcome(repo, "l-reuse-session", "handback", "done")
+    assert result["ok"] is True, result["reason"]
+    assert len(_outcomes(repo)) == 1
+
+
+def test_own_live_builder_with_session_still_refuses(tmp_path, monkeypatch):
+    # axis: both arms say same — the real builder stays a refusal
+    repo, sent = _reused_pid_lane(
+        tmp_path, monkeypatch, "l-own-session",
+        lambda ts: _facts(ts - 1, command="claude --session-id %s -p x" % _SESSION),
+        sessionId=_SESSION,
+    )
+    result = ll.record_outcome(repo, "l-own-session", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+    assert all(sig == 0 for _pid, sig in sent)
+
+
+def test_own_live_builder_sessionless_still_refuses(tmp_path, monkeypatch):
+    # axis: start arm says same and no session arm applies
+    repo, _sent = _reused_pid_lane(
+        tmp_path, monkeypatch, "l-own-sessionless", lambda ts: _facts(ts - 1),
+    )
+    result = ll.record_outcome(repo, "l-own-sessionless", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_unreadable_process_identity_still_refuses(tmp_path, monkeypatch):
+    # axis: unknown reads live — an unreadable ps never frees the lane
+    repo, sent = _reused_pid_lane(
+        tmp_path, monkeypatch, "l-unknown", lambda ts: None, sessionId=_SESSION,
+    )
+    result = ll.record_outcome(repo, "l-unknown", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+    assert all(sig == 0 for _pid, sig in sent)
+
+
+def test_conflicting_identity_arms_still_refuse(tmp_path, monkeypatch):
+    # axis: an arm saying same overrides an arm saying foreign, in both directions
+    repo, _sent = _reused_pid_lane(
+        tmp_path, monkeypatch, "l-conflict-a", lambda ts: _facts(ts - 1),
+        sessionId=_SESSION,
+    )
+    result = ll.record_outcome(repo, "l-conflict-a", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+    repo, _sent = _reused_pid_lane(
+        tmp_path / "b", monkeypatch, "l-conflict-b",
+        lambda ts: _facts(ts + 3600, command="claude --session-id %s" % _SESSION),
+        sessionId=_SESSION,
+    )
+    result = ll.record_outcome(repo, "l-conflict-b", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_zombie_pid_still_refuses(tmp_path, monkeypatch):
+    # axis: a zombie leader can anchor the builder's live group — unknown, not foreign
+    repo, _sent = _reused_pid_lane(
+        tmp_path, monkeypatch, "l-zombie", lambda ts: _facts(ts + 3600, stat="Z"),
+        sessionId=_SESSION,
+    )
+    result = ll.record_outcome(repo, "l-zombie", "handback", "done")
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+def test_earlier_attempt_pid_reused_does_not_block_a_finished_lane(tmp_path, monkeypatch):
+    # axis: each pid is judged against its OWN started record, not the launch's latest
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _declare(repo, "b-two", 1)
+    ll.reserve(repo, _reserved("l-two", "b-two", ["a"], repo))
+    base = time.time() - 1000.0
+    first = _started("l-two", attempt=1, pid=999998)
+    first["ts"] = base
+    second = _started("l-two", attempt=2, pid=999999)
+    second["ts"] = base + 100.0
+    assert ll.append(repo, first)
+    assert ll.append(repo, second)
+
+    launch = ll.fold(ll.read(repo)["records"])["launches"]["l-two"]
+    assert launch["pidStartedTs"] == {999998: base, 999999: base + 100.0}
+
+    _pid_alive_fakes(monkeypatch, dead=(999999,))
+    facts = {999998: _facts(base + 50.0 + 3600.0)}
+    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: facts.get(pid))
+
+    result = ll.record_outcome(repo, "l-two", "handback", "done")
+    assert result["ok"] is True, result["reason"]
+    assert len(_outcomes(repo)) == 1
+
+
+def _repair_lane(tmp_path, monkeypatch, facts):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _declare(repo, "b-repair", 1)
+    ll.reserve(repo, _reserved("l-repair", "b-repair", ["a"], repo, sessionId=_SESSION))
+    _pid_alive_fakes(monkeypatch)
+    monkeypatch.setattr(ll, "_read_process_facts", lambda pid: facts)
+    return repo
+
+
+def _repair(repo):
+    return ll.terminalize(
+        repo, "l-repair", child_ever_spawned=True,
+        started_repair={"attempt": 1, "pid": 999999, "logPath": "/tmp/log", "errPath": "/tmp/err"},
+        reason="test", evidence="test", stage="test", outcome="handback",
+    )
+
+
+def test_repair_site_session_arm_alone_decides(tmp_path, monkeypatch):
+    # axis: the repair site has no started record, so only the session arm can apply
+    repo = _repair_lane(tmp_path, monkeypatch, _facts(time.time(), command="vim notes"))
+    result = _repair(repo)
+    assert result["ok"] is True, result["reason"]
+
+
+def test_repair_site_own_session_still_refuses(tmp_path, monkeypatch):
+    # axis: the repair site refuses when the command carries the lane's session id
+    repo = _repair_lane(
+        tmp_path, monkeypatch, _facts(time.time(), command="claude --session-id %s" % _SESSION),
+    )
+    result = _repair(repo)
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("03:57", 237),
+    ("01:05:12", 3912),
+    ("3-01:05:12", 263112),
+    ("abc", None),
+    ("1:2:3:4", None),
+    ("", None),
+    ("-01:00", None),
+])
+def test_parse_etime(text, expected):
+    # axis: the [[dd-]hh:]mm:ss grammar, everything else unparseable
+    assert ll._parse_etime(text) == expected
+
+
+def _fake_ps(monkeypatch, returncode=0, stdout="", exc=None):
+    def run(*_args, **_kwargs):
+        if exc is not None:
+            raise exc
+        return subprocess.CompletedProcess(_args, returncode, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(ll.subprocess, "run", run)
+
+
+@pytest.mark.parametrize("returncode,stdout", [
+    (1, ""),
+    (0, ""),
+    (0, "S\n"),
+    (0, "S abc cmd\n"),
+    (0, "S 00:05 \n"),
+])
+def test_read_process_facts_is_all_or_nothing(monkeypatch, returncode, stdout):
+    # axis: any missing or unparseable part reads as unknown, never a partial dict
+    _fake_ps(monkeypatch, returncode=returncode, stdout=stdout)
+    assert ll._read_process_facts(999999) is None
+
+
+def test_read_process_facts_timeout_is_unknown(monkeypatch):
+    # axis: a hung or missing ps reads as unknown
+    _fake_ps(monkeypatch, exc=subprocess.TimeoutExpired(cmd="ps", timeout=5))
+    assert ll._read_process_facts(999999) is None
+    _fake_ps(monkeypatch, exc=FileNotFoundError("ps"))
+    assert ll._read_process_facts(999999) is None
+
+
+def test_read_process_facts_parses_a_live_line(monkeypatch):
+    # axis: the measured macOS shape parses into stat, command, and a start ts
+    _fake_ps(monkeypatch, stdout="SNs  03:57 claude --session-id X\n")
+    facts = ll._read_process_facts(999999)
+    assert facts["stat"] == "SNs"
+    assert facts["command"] == "claude --session-id X"
+    assert abs(facts["startTs"] - (time.time() - 237)) < 2.0
+
+
+def test_read_process_facts_real_ps_reads_this_process():
+    # axis: the real ps invocation works on this host (the Linux smoke on CI)
+    facts = ll._read_process_facts(os.getpid())
+    assert facts is not None
+    assert facts["command"]
+    assert facts["startTs"] <= time.time()

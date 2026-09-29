@@ -1243,6 +1243,11 @@ def fold(records):
             if rec["pid"] not in pids:
                 pids.append(rec["pid"])
             info["pids"] = pids
+            # The latest started ts per pid — the identity check needs the ts of the
+            # record that names THIS pid, not just the launch's latest attempt.
+            pid_started = dict(info.get("pidStartedTs", {}))
+            pid_started[rec["pid"]] = rec["ts"]
+            info["pidStartedTs"] = pid_started
         elif event == "retry":
             pass
         elif event in TERMINAL_EVENTS:
@@ -1536,12 +1541,101 @@ def _started_pids_to_probe(info):
     return []
 
 
-def _child_group_is_live(pid):
+# ps etime is whole seconds, and the `started` record is written just after spawn, so
+# the real builder's start precedes it; 5 s absorbs rounding and small clock adjustments.
+_PID_START_TOLERANCE_SECONDS = 5.0
+_PS_TIMEOUT_SECONDS = 5
+
+
+def _parse_etime(text):
+    """Seconds from a ps ``etime`` (``[[dd-]hh:]mm:ss``), or None when malformed."""
+    if not isinstance(text, str):
+        return None
+    days = 0
+    rest = text
+    if "-" in rest:
+        day_text, _, rest = rest.partition("-")
+        if not day_text.isascii() or not day_text.isdigit():
+            return None
+        days = int(day_text)
+    parts = rest.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    for part in parts:
+        if not part.isascii() or not part.isdigit():
+            return None
+    numbers = [int(part) for part in parts]
+    if len(numbers) == 2:
+        hours, minutes, seconds = 0, numbers[0], numbers[1]
+    else:
+        hours, minutes, seconds = numbers
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def _read_process_facts(pid):
+    """What ``ps`` says about a live pid, or None when any part of it is unknown.
+
+    Returns ``{"stat", "startTs", "command"}``. Read-only: ``ps`` never signals.
+    All-or-nothing — a partial read is unknown, and unknown is never foreign.
+    """
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "stat=", "-o", "etime=", "-o", "command="],
+            capture_output=True, text=True, timeout=_PS_TIMEOUT_SECONDS,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        if result.returncode != 0:
+            return None
+        lines = result.stdout.strip().splitlines()
+        if not lines:
+            return None
+        fields = lines[0].strip().split(None, 2)
+        if len(fields) < 3:
+            return None
+        stat_text, etime_text, command = fields[0], fields[1], fields[2].strip()
+        elapsed = _parse_etime(etime_text)
+        if elapsed is None or not command:
+            return None
+        return {"stat": stat_text, "startTs": time.time() - elapsed, "command": command}
+    except Exception:
+        return None
+
+
+def _pid_is_foreign(pid, started_ts, session_id):
+    """True only on positive evidence that a live pid is not the lane's own builder.
+
+    Two arms, each used only when it has something to compare: the process began after
+    the lane's recorded start, and the lane's session id is missing from its command
+    line. Foreign needs one arm to say so and no arm to say same; anything unreadable,
+    a zombie, or no applicable arm is unknown, and unknown is not foreign.
+    """
+    facts = _read_process_facts(pid)
+    if facts is None:
+        return False
+    if "Z" in facts["stat"]:
+        return False
+    foreign_start = same_start = False
+    if isinstance(started_ts, (int, float)) and not isinstance(started_ts, bool):
+        foreign_start = facts["startTs"] > started_ts + _PID_START_TOLERANCE_SECONDS
+        same_start = not foreign_start
+    foreign_session = same_session = False
+    if isinstance(session_id, str) and session_id:
+        same_session = session_id in facts["command"]
+        foreign_session = not same_session
+    return (foreign_start or foreign_session) and not (same_start or same_session)
+
+
+def _child_group_is_live(pid, *, started_ts, session_id):
     """True when the recorded pid or its process group still has live members.
 
     Signal 0 is an existence probe, never a real signal: this function must never
     change another process's state. Every uncertain answer is True, because the
     caller refuses on True — a wrong answer here costs a refusal, not a kill.
+
+    The one False for a live pid: the OS reused the recorded pid for an unrelated
+    process, which ``_pid_is_foreign`` shows from the process's own start time and
+    command line. ``started_ts`` and ``session_id`` are required so no caller can
+    skip the check; pass None for what the lane never recorded.
     """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
@@ -1554,6 +1648,7 @@ def _child_group_is_live(pid):
     except OSError:
         return True
     deadline = time.monotonic() + settle_seconds
+    foreign = None
     while True:
         proc_alive = False
         group_alive = False
@@ -1566,6 +1661,13 @@ def _child_group_is_live(pid):
             return True
         except OSError:
             return True
+        if proc_alive:
+            if foreign is None:
+                foreign = _pid_is_foreign(pid, started_ts, session_id)
+            if foreign:
+                # The OS never hands out a pid still in use as a process-group id, so a
+                # reused leader pid means the old builder's group is gone too.
+                return False
         try:
             os.killpg(pid, 0)
             group_alive = True
@@ -1695,7 +1797,11 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
             # One _child_group_is_live per recorded attempt, each with bounded
             # settle — all inside the lock. At most one started per launch today.
             for pid in _started_pids_to_probe(info):
-                if _child_group_is_live(pid):
+                if _child_group_is_live(
+                    pid,
+                    started_ts=info.get("pidStartedTs", {}).get(pid),
+                    session_id=info.get("sessionId"),
+                ):
                     return {
                         "ok": False,
                         "reason": "terminal-child-live:%s" % pid,
@@ -1711,7 +1817,12 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                         "ok": False, "reason": "terminal-repair-unavailable",
                         "kind": None, "outcome": None, "reaped": reaped,
                     }
-                if _child_group_is_live(started_repair["pid"]):
+                # No started record exists yet for this pid, so only the session arm applies.
+                if _child_group_is_live(
+                    started_repair["pid"],
+                    started_ts=None,
+                    session_id=info.get("sessionId"),
+                ):
                     return {
                         "ok": False,
                         "reason": "terminal-child-live:%s" % started_repair["pid"],
