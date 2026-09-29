@@ -297,3 +297,5 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
     - The ruling ledger and source tags + traceability: agreed in concept, with a binding
       constraint: no complex or overbuilt machinery.
     - Asked: what is the future of review-spec in this flow? (open)
+11. **review-spec** (owner): fine to retire the separate callable skill. The shape of the review
+    cycle is to be defined with the owner up front, in this discovery.
