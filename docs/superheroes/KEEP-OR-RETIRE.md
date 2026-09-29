@@ -2056,6 +2056,20 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   before the salvage paths retired, not to work around a current host property. S2's
   `harness-limit` tag describes the retired salvage paths themselves.
 
+#### S25 — adopt-version skill
+
+- **Component.** Not a census row. The `adopt-version` skill front door and its helper
+  `lib/adopt_version.py` (new) — the command that takes up a newly installed plugin version in a
+  live charter seat (`plugins/superheroes/skills/adopt-version/SKILL.md`).
+- **Start date.** 2026-09-27.
+- **Condition.** Usage-based, 60 days: recorded runs of the command at a plugin upgrade. On firing, a
+  proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — a live session keeps the charter text, plugin root, and results it
+  already holds when a new version installs.
+
 
 ## The workaround-marker inventory
 
