@@ -2057,6 +2057,97 @@ def _baseline_head_sha_readable(baseline):
     return bool(_BASE_SHA_OBJECT_ID_RE.match(head_sha.strip()))
 
 
+def _baseline_effective_excluded_roots(baseline, cwd_real, timeout=None):
+    """Baseline excludedRoots plus live foreign-leased roots, kept only when strictly inside cwd."""
+    roots = set(baseline.get("excludedRoots") or [])
+    live = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+    if live is not None:
+        roots |= live
+    # Axis: the strict-inside-cwd invariant is enforced where it is load-bearing, because persisted roots arrive from disk and are not trustworthy.
+    return {
+        r for r in roots
+        if isinstance(r, str) and r.startswith(cwd_real + os.sep)
+    }
+
+
+MAX_DIRTIED_PATHS = 200
+
+
+def _worktree_dirtied_paths(baseline, cwd_real, timeout=None):
+    """Name the paths a write attempt changed. Never raises.
+
+    Returns {"status": "ok", "paths", "headMoved", "truncated"} or
+    {"status": "indeterminate", "reason": token}. Baseline validity mirrors
+    _worktree_dirt_verdict, so ok is never reported from a baseline the verdict refuses.
+    A path already dirty at open whose status did not change is not listed.
+    """
+    def indeterminate(reason):
+        return {"status": "indeterminate", "reason": reason}
+
+    try:
+        if not isinstance(baseline, dict):
+            return indeterminate("baseline-not-a-dict")
+        if not _baseline_head_sha_readable(baseline):
+            return indeterminate("baseline-head-unreadable")
+        if "entriesVersion" not in baseline:
+            return indeterminate("baseline-entries-version-missing")
+        if baseline.get("entriesVersion") != BASELINE_ENTRIES_VERSION:
+            return indeterminate("baseline-entries-version-unknown")
+        if baseline.get("entriesOverflow"):
+            return indeterminate("baseline-entries-overflow")
+        entries_before = baseline.get("entries")
+        if not isinstance(entries_before, list) or not all(
+            isinstance(e, list) and len(e) >= 1 and all(isinstance(p, str) for p in e)
+            for e in entries_before
+        ):
+            return indeterminate("baseline-entries-malformed")
+        try:
+            head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return indeterminate("git-rev-parse-timeout")
+        if head.returncode != 0:
+            return indeterminate("git-rev-parse-failed")
+        current_head = (head.stdout or "").strip()
+        entries_after = _worktree_entry_set(cwd_real, timeout=timeout)
+        if entries_after is None:
+            return indeterminate("git-status-unreadable")
+        roots = _baseline_effective_excluded_roots(baseline, cwd_real, timeout=timeout)
+        before = _filter_entry_list(entries_before, cwd_real, roots)
+        after = _filter_entry_list(entries_after, cwd_real, roots)
+        entry_key = lambda record: json.dumps(record, ensure_ascii=False, sort_keys=False)
+        keys_before = {entry_key(r) for r in before}
+        keys_after = {entry_key(r) for r in after}
+        paths = set()
+        for record in before + after:
+            key = entry_key(record)
+            if (key in keys_before) != (key in keys_after):
+                paths.update(record[1:])
+        head_moved = current_head != baseline["headSha"].strip()
+        if head_moved:
+            try:
+                diff = _git_scrubbed_bytes(
+                    cwd_real, "diff", "--name-only", "-z",
+                    baseline["headSha"].strip(), "HEAD", timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                return indeterminate("git-diff-timeout")
+            if diff.returncode != 0:
+                return indeterminate("git-diff-failed")
+            for raw in (diff.stdout or b"").split(b"\0"):
+                if raw:
+                    paths.add(raw.decode("utf-8", errors="surrogateescape"))
+        ordered = sorted(paths)
+        truncated = len(ordered) > MAX_DIRTIED_PATHS
+        return {
+            "status": "ok",
+            "paths": ordered[:MAX_DIRTIED_PATHS],
+            "headMoved": head_moved,
+            "truncated": truncated,
+        }
+    except Exception:  # never raises: an unforeseen failure is an honest indeterminate
+        return indeterminate("unexpected-error")
+
+
 def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
     """Return True if dirtied, False if clean, None if unreadable (fail-closed)."""
     if not isinstance(baseline, dict):
@@ -2087,15 +2178,7 @@ def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
         entries_after = _worktree_entry_set(cwd_real, timeout=timeout)
         if entries_after is None:
             return None
-        roots = set(baseline.get("excludedRoots") or [])
-        live = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
-        if live is not None:
-            roots |= live
-        # Axis: the strict-inside-cwd invariant is enforced where it is load-bearing, because persisted roots arrive from disk and are not trustworthy.
-        roots = {
-            r for r in roots
-            if isinstance(r, str) and r.startswith(cwd_real + os.sep)
-        }
+        roots = _baseline_effective_excluded_roots(baseline, cwd_real, timeout=timeout)
         before = _filter_entry_list(entries_before, cwd_real, roots)
         after = _filter_entry_list(entries_after, cwd_real, roots)
         entry_key = lambda record: json.dumps(record, ensure_ascii=False, sort_keys=False)
@@ -4578,6 +4661,10 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
     }
     if attempt_detail:
         terminal["attemptDetail"] = attempt_detail
+    opened = (state or {}).get("opened") or {}
+    terminal["dirtiedPaths"] = _worktree_dirtied_paths(
+        opened.get("worktreeBaseline"), opened.get("cwd") or "",
+    )
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
