@@ -335,3 +335,9 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
     presented, plus the changes in items 10-17. Cost note given: three reviewers for up to four
     rounds plus drawing agents per spec, traded for less owner time and fewer late vet findings.
     Next: this work's own board, drawn per the new flow (HTML artifact), then the spec from it.
+19. **This work's board, drawn** (2026-09-28): https://claude.ai/artifact/FDiMfa95mWjEPCaT64d5pf
+    (Design-type HTML artifact on the -three account). Eight artboards: start here, the flow,
+    the review cycle, the owner-vs-craft line, two tap-sheet mocks, source tags and the ledger,
+    and the plugin's moments drawn as conversation. Not yet approved. Local source:
+    this session's scratchpad `board/project/` (copy it into the record at approval).
+    Open for the owner: the spec-split trigger.
