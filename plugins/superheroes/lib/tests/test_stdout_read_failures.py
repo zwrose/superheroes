@@ -291,11 +291,11 @@ def test_stdout_bytes_changed_reports_dropped_cause(tmp_path, monkeypatch):
 
     def observe_with_tamper(
             delivery, stdout_obs, native_obs, run_dir_real, attempt, stdout_path,
-            *, terminal=False,
+            *, terminal=False, deadline_mono=None,
     ):
         real_observe_attempt(
             delivery, stdout_obs, native_obs, run_dir_real, attempt, stdout_path,
-            terminal=terminal,
+            terminal=terminal, deadline_mono=deadline_mono,
         )
         if (
             terminal
