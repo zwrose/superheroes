@@ -164,6 +164,18 @@ def test_t5_rename_lists_both_endpoints(tmp_path):
     assert got["paths"] == ["README.md", "RENAMED.md"]
 
 
+def test_t5_committed_rename_lists_both_endpoints(tmp_path):
+    repo = _repo(tmp_path)
+    baseline = ED._worktree_baseline(repo)
+    _git(repo, "mv", "README.md", "RENAMED.md")
+    _git(repo, "commit", "-qm", "attempt rename commit")
+    got = ED._worktree_dirtied_paths(baseline, repo)
+    assert got["status"] == "ok"
+    assert got["headMoved"] is True
+    assert "README.md" in got["paths"]
+    assert "RENAMED.md" in got["paths"]
+
+
 def test_t5_more_than_200_paths_is_capped_and_truncated(tmp_path):
     repo = _repo(tmp_path)
     baseline = ED._worktree_baseline(repo)

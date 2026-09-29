@@ -2126,7 +2126,7 @@ def _worktree_dirtied_paths(baseline, cwd_real, timeout=None):
         if head_moved:
             try:
                 diff = _git_scrubbed_bytes(
-                    cwd_real, "diff", "--name-only", "-z",
+                    cwd_real, "diff", "--name-only", "--no-renames", "-z",
                     baseline["headSha"].strip(), "HEAD", timeout=timeout,
                 )
             except subprocess.TimeoutExpired:
