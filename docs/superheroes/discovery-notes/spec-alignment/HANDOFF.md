@@ -329,3 +329,9 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
     spec, or duplicates a queued item. A decline the reviewer still contests next round goes to
     the owner's queue. Every decline is listed, folded away, on the final sheet. After each set
     of owner rulings the three checks re-run on the changed parts.
+17. **Review cycle, part 5 (progress visibility):** handed back to the build as craft (owner: "do we
+    even need to specify anything here?"). The owner-relevant parts are already settled.
+18. **FRAMING APPROVED** (owner, 2026-09-28: "approved, start the board"). The framing brief as
+    presented, plus the changes in items 10-17. Cost note given: three reviewers for up to four
+    rounds plus drawing agents per spec, traded for less owner time and fewer late vet findings.
+    Next: this work's own board, drawn per the new flow (HTML artifact), then the spec from it.
