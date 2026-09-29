@@ -33,3 +33,39 @@ Node prefix `C` = `test_is_test_path_matches_each_convention`.
 **Restore receipts:** after the E1–E5 restores, after E6–E10 and after E11–E13, the whole file ran `44 passed` with exit 0 and `git status --porcelain` over `size_count.py` printed nothing.
 
 **Green:** `44 passed` (final run, exit 0).
+
+## Continuation — fixture conventions (E14–E19)
+
+Per-element bite-proof for the extended `test_size_count.py` detectors over `plugins/superheroes/lib/size_count.py` (WO-1505-B: `testdata`, `__mocks__`, `__fixtures__`, `conftest.py`, case-insensitive directory components). For each element the production code was neutralized with one targeted edit, the whole test file ran, and the edit was reverted by the inverse edit. The detectors were unedited throughout.
+
+**Head proven:** `f20ea569` plus the uncommitted order work (the widened list and the extended tests), in the build worktree. After each restore `size_count.py` was compared against a copy saved before the first neutralization (`diff` printed nothing, `IDENTICAL-TO-SAVED`); after the last restore `git diff` over `size_count.py` also equalled the saved post-implementation diff (`DIFF-IDENTICAL`).
+
+**Provenance:** the implementer ran these proofs (cursor `composer-2.5`, dispatched by the Workhorse orchestrator, Claude Opus 5.5).
+
+**Command** (whole file, so the red set per element is visible, not only the named node):
+
+```
+scripts/pinned-python -B -X pycache_prefix=/private/tmp/wo1505b-pyc -m pytest plugins/superheroes/lib/tests/test_size_count.py -q -p no:cacheprovider -rf
+```
+
+Node prefix `C` = `test_is_test_path_matches_each_convention`; `R` = `test_is_test_path_rejects_look_alikes`.
+
+| ID | Guarded element (`size_count.py`, line numbers post-order) | Axis | Neutralization | Red set (exact) | Decisive red line |
+|---|---|---|---|---|---|
+| E14 | :10 `TEST_DIR_NAMES` member `testdata` | `testdata` as a directory | `"e2e", "testdata", "__mocks__"` → `"e2e", "__mocks__"` | `C[dir-testdata]` — 1 failed, 63 passed | `assert False` … `is_test_path('go/pkg/testdata/golden.txt')` |
+| E15 | :10 member `__mocks__` | `__mocks__` as a directory (exact case and via `.lower()`) | `"testdata", "__mocks__", "__fixtures__"` → `"testdata", "__fixtures__"` | `C[dir-__mocks__]`, `C[dir-case-__Mocks__]` — 2 failed, 62 passed | `is_test_path('src/__mocks__/api.ts')` → False; `is_test_path('src/__Mocks__/api.ts')` → False |
+| E16 | :10 member `__fixtures__` | `__fixtures__` as a directory | `"__mocks__", "__fixtures__"})` → `"__mocks__"})` | `C[dir-__fixtures__]` — 1 failed, 63 passed | `is_test_path('src/__fixtures__/user.json')` → False |
+| E17 | :17 glob `conftest.py` | pytest conftest file name | delete the `"conftest.py",` line | `C[glob-conftest.py]` — 1 failed, 63 passed | `is_test_path('plugins/x/conftest.py')` → False |
+| E18 | :29 directory case-insensitivity | directory components compare case-insensitively | `component.lower() in TEST_DIR_NAMES` → `component in TEST_DIR_NAMES` | `C[dir-case-Tests]`, `C[dir-case-__Mocks__]`, `C[dir-case-E2E]` — 3 failed, 61 passed | `is_test_path('Tests/x.py')`, `is_test_path('src/__Mocks__/api.ts')`, `is_test_path('E2E/login.ts')` → False |
+| E19 | :31 globs stay case-sensitive | file-name globs never match case-insensitively | `fnmatch.fnmatchcase(name, pattern)` → `fnmatch.fnmatchcase(name.lower(), pattern)` | `R[src/Foo.Test.ts]`, `R[Conftest.py]` — 2 failed, 62 passed | `assert not True` … `is_test_path('src/Foo.Test.ts')`, `is_test_path('Conftest.py')` |
+
+**Restore receipts:** after each of E14–E19 the inverse edit was applied and `diff plugins/superheroes/lib/size_count.py /private/tmp/wo1505b-scratch-sh3/size_count.post-impl.py` printed nothing. Restored lines quoted back after the last restore:
+
+```
+10:TEST_DIR_NAMES = frozenset({"test", "tests", "__tests__", "spec", "e2e", "testdata", "__mocks__", "__fixtures__"})
+17:    "conftest.py",
+29:        if component.lower() in TEST_DIR_NAMES:
+31:    return any(fnmatch.fnmatchcase(name, pattern) for pattern in TEST_FILE_GLOBS)
+```
+
+**Green:** after every restore the whole file ran `64 passed` with exit 0.
