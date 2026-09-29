@@ -3776,8 +3776,6 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         pass
 
     command_time = None
-    if opened.get("engine") == "cursor":
-        command_time = engine_adapter.cursor_command_time(stdout_path, time.time() * 1000)
     completion_stamp = None
     stdout_event = None
     try:
@@ -3797,6 +3795,8 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
                 time.monotonic(),
                 engine_result_channel.canonical_payload_digest(inj_payload),
             )
+    if opened.get("engine") == "cursor":
+        command_time = engine_adapter.cursor_command_time(stdout_path, time.time() * 1000)
 
     stdout_result = _materialize_stdout_result(
         run_dir_real, attempt, opened, stdout_path, stdout_event,
