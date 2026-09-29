@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import time as time_mod
 import tracemalloc
 
 import pytest
@@ -132,6 +133,19 @@ def test_t3_overlong_completed_line_classified_by_head_and_tail(tmp_path):
     assert ct["toolSeconds"] == 3.0
     assert ct["shellSeconds"] == 3.0
     assert ct["unparsedLines"] == 0
+    assert ct["complete"] is True
+
+
+def test_t3_overlong_completed_call_id_before_subtype(tmp_path):
+    big = ('{"type":"tool_call","call_id":"a","subtype":"completed","tool_call":{"shellToolCall":'
+           '{"args":{"command":"' + "x" * (2 * 1024 * 1024) + '"}}},"timestamp_ms":4000}\n')
+    text = _event("started", "a", "shellToolCall", 1000) + big
+    ct = EA.cursor_command_time(_write(tmp_path, text), 9999)
+    assert ct["toolSeconds"] == 3.0
+    assert ct["shellSeconds"] == 3.0
+    assert ct["unparsedLines"] == 0
+    assert ct["openCalls"] == 0
+    assert ct["complete"] is True
 
 
 def test_t3_unmatched_completed_and_missing_timestamp(tmp_path):
@@ -180,6 +194,57 @@ def test_t4_stream_over_capture_cap_bounded_memory(tmp_path):
     assert ct["shellSeconds"] == 3.0
     assert ct["unparsedLines"] == 1
     assert peak < 16 * 1024 * 1024
+    assert ct["complete"] is True
+
+
+def test_cursor_command_time_byte_budget_returns_incomplete(tmp_path):
+    path = str(tmp_path / "over-byte-budget.stdout")
+    with open(path, "wb") as fh:
+        fh.write(_event("started", "a", "shellToolCall", 1000).encode("utf-8"))
+        fh.write(b"p" * (EA.CURSOR_COMMAND_TIME_MAX_BYTES + 4096))
+        fh.write(_event("completed", "a", "shellToolCall", 5000).encode("utf-8"))
+    assert os.path.getsize(path) > EA.CURSOR_COMMAND_TIME_MAX_BYTES
+    t0 = time_mod.monotonic()
+    ct = EA.cursor_command_time(path, 9999)
+    assert time_mod.monotonic() - t0 < 3.0
+    assert ct["complete"] is False
+
+
+def test_host_load_at_end_sampled_before_command_time_parse(tmp_path, monkeypatch):
+    ted = _load_module("ted_host_load_order", "test_engine_dispatch.py")
+    order = []
+    real_load = ED._host_load_sample
+    real_ct = ED.engine_adapter.cursor_command_time
+
+    def track_load():
+        order.append("hostLoadAtEnd")
+        return real_load()
+
+    def track_ct(path, end_ms):
+        order.append("commandTime")
+        return real_ct(path, end_ms)
+
+    monkeypatch.setattr(ED, "_host_load_sample", track_load)
+    monkeypatch.setattr(ED.engine_adapter, "cursor_command_time", track_ct)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    prompt_path = os.path.join(run_dir, "prompt.txt")
+    open(prompt_path, "w").write("go\n")
+    script = "import sys\nsys.stdout.write(%r)\n" % _stream(_OVERLAP_EVENTS)
+    seat = E2E._cursor_seat()
+    argv = ted._journal_cursor_run_for_engine_files(
+        run_dir, prompt_path, seat=seat, role_kind="build", run_kind=ED.RUN_KIND_WRITE,
+    )
+    ted._install_fake_cursor(monkeypatch, tmp_path, script)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.05)
+    ED._run_engine_files(
+        run_dir, 1, argv, run_dir,
+        prompt_path, stdout_path, stderr_path, 30,
+        os.path.join(run_dir, "progress.jsonl"),
+    )
+    assert order.index("hostLoadAtEnd") < order.index("commandTime")
 
 
 # --- T5 synthesized attempt-died-unrecorded ----------------------------------

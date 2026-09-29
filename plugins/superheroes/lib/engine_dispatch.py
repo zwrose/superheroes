@@ -3606,6 +3606,9 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         stdout_completion_obs.get("event"),
         stdout_completion_obs,
     )
+    returncode = proc.returncode
+    elapsed = time.monotonic() - start
+    host_load_end = _host_load_sample()
     command_time = None
     if opened.get("engine") == "cursor":
         command_time = engine_adapter.cursor_command_time(stdout_path, time.time() * 1000)
@@ -3615,8 +3618,6 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     _, stderr_observed, _stderr_rewrite_failed = _cap_file_tail(
         stderr_path, MAX_STDERR_CAPTURE, CAP_STREAM_STDERR,
     )
-    returncode = proc.returncode
-    elapsed = time.monotonic() - start
     ended_record = {
         "kind": "attempt-ended", "attempt": attempt,
         "exit": returncode, "timedOut": timed_out,
@@ -3627,6 +3628,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "capSeconds": timeout,
         "dispatchPath": dispatch_path,
         "hostLoadAtOpen": host_load_open,
+        "hostLoadAtEnd": host_load_end,
         "commandTime": command_time,
     }
     _apply_completion_stamp(

@@ -14,6 +14,7 @@ import re
 import stat as _stat
 import subprocess
 import sys
+import time
 import uuid
 from collections import namedtuple
 
@@ -946,10 +947,31 @@ _CMD_HEAD_KEEP = 4096
 _CMD_TAIL_KEEP = 512
 _CMD_MAX_OPEN = 10000
 _CMD_MAX_CLOSED = 100000
-_CMD_HEAD_RE = re.compile(
-    rb'^\{"type":"tool_call","subtype":"(started|completed)","call_id":"([^"]*)",'
-    rb'"tool_call":\{"([A-Za-z0-9_]+)"')
+# Bounded scan for cursor_command_time on uncapped on-disk stdout (#1467 / #563 class).
+CURSOR_COMMAND_TIME_MAX_BYTES = 64 * 1024 * 1024
+CURSOR_COMMAND_TIME_MAX_SECONDS = 5.0
+_CMD_OVERLONG_SUBTYPE_RE = re.compile(rb'"subtype":"(started|completed)"')
+_CMD_OVERLONG_CALL_ID_RE = re.compile(rb'"call_id":"([^"]*)"')
+_CMD_OVERLONG_TOOL_RE = re.compile(rb'"tool_call":\{"([A-Za-z0-9_]+)"')
 _CMD_TAIL_RE = re.compile(rb'"timestamp_ms":(\d+)\}\s*$')
+
+
+def _cursor_overlong_tool_call(head, tail):
+    """Classify an over-1 MiB tool_call line by head/tail snippets; field order agnostic."""
+    if b'"type":"tool_call"' not in head and b'"type": "tool_call"' not in head:
+        return None
+    sm = _CMD_OVERLONG_SUBTYPE_RE.search(head)
+    cm = _CMD_OVERLONG_CALL_ID_RE.search(head)
+    tm_tool = _CMD_OVERLONG_TOOL_RE.search(head)
+    tm_ts = _CMD_TAIL_RE.search(tail)
+    if not (sm and cm and tm_tool and tm_ts):
+        return None
+    return (
+        sm.group(1).decode("ascii"),
+        cm.group(1).decode("utf-8", "replace"),
+        tm_tool.group(1).decode("ascii"),
+        int(tm_ts.group(1)),
+    )
 
 
 def _union_seconds(intervals):
@@ -977,30 +999,39 @@ def cursor_command_time(stdout_path, end_epoch_ms):
         open_calls = {}
         closed = []
         untimed = unparsed = 0
+        complete = True
+        bytes_read = 0
+        deadline = time.monotonic() + CURSOR_COMMAND_TIME_MAX_SECONDS
         with open(stdout_path, "rb") as fh:
             while True:
+                if bytes_read >= CURSOR_COMMAND_TIME_MAX_BYTES or time.monotonic() >= deadline:
+                    complete = False
+                    break
                 raw = fh.readline(_CMD_LINE_LIMIT)
                 if not raw:
                     break
+                bytes_read += len(raw)
                 if len(raw) >= _CMD_LINE_LIMIT and not raw.endswith(b"\n"):
                     head = raw[:_CMD_HEAD_KEEP]
                     tail = raw[-_CMD_TAIL_KEEP:]
                     while True:
+                        if bytes_read >= CURSOR_COMMAND_TIME_MAX_BYTES or time.monotonic() >= deadline:
+                            complete = False
+                            break
                         chunk = fh.readline(_CMD_LINE_LIMIT)
                         if not chunk:
                             break
+                        bytes_read += len(chunk)
                         tail = (tail + chunk)[-_CMD_TAIL_KEEP:]
                         if chunk.endswith(b"\n"):
                             break
-                    hm = _CMD_HEAD_RE.match(head)
-                    tm = _CMD_TAIL_RE.search(tail)
-                    if not (hm and tm):
+                    if not complete:
+                        break
+                    parsed = _cursor_overlong_tool_call(head, tail)
+                    if parsed is None:
                         unparsed += 1
                         continue
-                    subtype, cid, tool = (
-                        hm.group(1).decode("ascii"), hm.group(2).decode("utf-8", "replace"),
-                        hm.group(3).decode("ascii"))
-                    ts = int(tm.group(1))
+                    subtype, cid, tool, ts = parsed
                 else:
                     if b'"tool_call"' not in raw:
                         continue
@@ -1048,6 +1079,7 @@ def cursor_command_time(stdout_path, end_epoch_ms):
             "openCalls": len(open_calls),
             "untimedCalls": untimed,
             "unparsedLines": unparsed,
+            "complete": complete,
         }
     except Exception:
         return None
