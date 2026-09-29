@@ -1540,6 +1540,10 @@ def _started_pids_to_probe(info):
 
 
 _PID_START_TOLERANCE_SECONDS = 5.0  # etime is whole seconds; started is written just after spawn
+# On Linux etime is boot-clock based, so a forward wall-clock step shifts the estimated start;
+# with no session id to cross-check, only a start more than an hour after the lane started reads
+# foreign. A pid reused within that hour still refuses, which is the fail-closed direction.
+_PID_START_TOLERANCE_SESSIONLESS_SECONDS = 3600.0
 _PS_READ_TIMEOUT_SECONDS = 5.0
 
 
@@ -1580,6 +1584,7 @@ def _read_process_facts(pid):
     try:
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             return None
+        now = time.time()  # read before ps so its latency biases toward same-process
         result = subprocess.run(
             ["ps", "-ww", "-p", str(pid), "-o", "stat=", "-o", "etime=", "-o", "command="],
             capture_output=True,
@@ -1601,7 +1606,7 @@ def _read_process_facts(pid):
         elapsed = _parse_etime(etime)
         if elapsed is None:
             return None
-        return {"stat": stat, "startTs": time.time() - elapsed, "command": command}
+        return {"stat": stat, "startTs": now - elapsed, "command": command}
     except Exception:
         return None
 
@@ -1614,15 +1619,21 @@ def _pid_is_foreign(pid, started_ts, session_id):
     if "Z" in facts["stat"]:
         return False
 
+    has_session = isinstance(session_id, str) and bool(session_id)
+    tolerance = (
+        _PID_START_TOLERANCE_SECONDS if has_session
+        else _PID_START_TOLERANCE_SESSIONLESS_SECONDS
+    )
+
     foreign_start = False
     same_start = False
     if isinstance(started_ts, (int, float)) and not isinstance(started_ts, bool):
-        foreign_start = facts["startTs"] > started_ts + _PID_START_TOLERANCE_SECONDS
+        foreign_start = facts["startTs"] > started_ts + tolerance
         same_start = not foreign_start
 
     foreign_session = False
     same_session = False
-    if isinstance(session_id, str) and session_id:
+    if has_session:
         same_session = session_id in facts["command"]
         foreign_session = not same_session
 
@@ -1635,8 +1646,9 @@ def _child_group_is_live(pid, *, started_ts, session_id):
     Signal 0 is an existence probe, never a real signal: this function must never
     change another process's state. When the leader pid still exists (including
     ``PermissionError`` on ``os.kill``, which means another uid owns the pid),
-    identity is checked once (``ps`` only) before any fail-closed live return so a
-    reused pid cannot block terminalization forever. Every uncertain identity answer
+    identity is checked once (one ``ps`` read, bounded by ``_PS_READ_TIMEOUT_SECONDS``)
+    before any fail-closed live return so a reused pid cannot block terminalization
+    forever. Every uncertain identity answer
     stays True, because the caller refuses on True.
     """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
@@ -1972,8 +1984,9 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     The ceiling bounds **how long this waits between attempts**, not the whole
     call: it is a sleep budget spent from the first live-child refusal onward.
     Two consequences worth knowing before picking a number. A live-child probe
-    settles for a couple of seconds before it answers, so wall-clock time runs to
-    the ceiling *plus* one probe per attempt -- a 5 s ceiling against a child that
+    settles for a couple of seconds and reads process identity once through ``ps``
+    (bounded by ``_PS_READ_TIMEOUT_SECONDS``) before it answers, so wall-clock time
+    runs to the ceiling *plus* one probe per attempt -- a 5 s ceiling against a child that
     never exits takes about 5 s of sleep and two probes. And because the budget is
     spent rather than compared against a clock, a ceiling shorter than one probe
     still buys a re-attempt instead of silently becoming a no-op.
