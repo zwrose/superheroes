@@ -5414,7 +5414,10 @@ def test_record_outcome_allows_reused_pid_when_kill_eperm_and_foreign(tmp_path, 
     launch_id = "l-eperm-foreign"
     started_ts = 1000.0
     _declare(repo, "b-eperm-foreign", 1)
-    ll.reserve(repo, _reserved(launch_id, "b-eperm-foreign", ["a"], repo))
+    ll.reserve(
+        repo,
+        _reserved(launch_id, "b-eperm-foreign", ["a"], repo, sessionId=_SESSION_UUID_FOREIGN),
+    )
     started = _started_at(launch_id, started_ts)
     assert ll.append(repo, started)
     _fake_signal0_kill_eperm(monkeypatch)
@@ -5463,8 +5466,8 @@ def test_record_outcome_refuses_own_builder_when_kill_eperm(tmp_path, monkeypatc
     assert result["reason"] == "terminal-child-live:999999"
 
 
-def test_record_outcome_allows_reused_pid_by_start_time_sessionless(tmp_path, monkeypatch):
-    # axis: foreign start time on a sessionless lane -> not live for terminalization
+def test_record_outcome_refuses_reused_pid_on_sessionless_lane(tmp_path, monkeypatch):
+    # axis: sessionless lane gets no identity check -> reused pid still refuses (fail-closed)
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     launch_id = "l-reused-start"
@@ -5474,19 +5477,23 @@ def test_record_outcome_allows_reused_pid_by_start_time_sessionless(tmp_path, mo
     started = _started_at(launch_id, started_ts)
     assert ll.append(repo, started)
     _fake_signal0_alive(monkeypatch)
-    monkeypatch.setattr(
-        ll,
-        "_read_process_facts",
-        lambda pid: {
+    facts_calls = []
+
+    def facts_recording_call(pid):
+        facts_calls.append(pid)
+        return {
             "stat": "SN",
             "startTs": started_ts + 86400,
             "command": "claude --model test",
-        },
-    )
+        }
+
+    monkeypatch.setattr(ll, "_read_process_facts", facts_recording_call)
     result = ll.record_outcome(repo, launch_id, "handback", "done")
-    assert result["ok"] is True
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
     outcomes = [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
-    assert len(outcomes) == 1
+    assert len(outcomes) == 0
+    assert facts_calls == []
 
 
 def test_record_outcome_allows_reused_pid_by_session_id(tmp_path, monkeypatch):
@@ -5554,7 +5561,7 @@ def test_record_outcome_refuses_own_live_builder_sessionless(tmp_path, monkeypat
 def test_record_outcome_refuses_own_live_builder_sessionless_after_clock_step(
     tmp_path, monkeypatch,
 ):
-    # axis: modest forward start estimate on sessionless lane -> still live refusal
+    # axis: sessionless lane, large forward clock step -> still live refusal
     repo = _await_exit_lane(tmp_path, monkeypatch, "l-own-clock-step")
     started_ts = ll.fold(ll.read(repo)["records"])["launches"]["l-own-clock-step"]["startedTs"]
     _fake_signal0_alive(monkeypatch)
@@ -5563,7 +5570,7 @@ def test_record_outcome_refuses_own_live_builder_sessionless_after_clock_step(
         "_read_process_facts",
         lambda pid: {
             "stat": "SN",
-            "startTs": started_ts + 600,
+            "startTs": started_ts + 86400,
             "command": "claude --model test",
         },
     )
@@ -5642,7 +5649,10 @@ def test_record_outcome_ignores_reused_earlier_attempt_pid(tmp_path, monkeypatch
     launch_id = "l-two-attempts"
     t0 = 2000.0
     _declare(repo, "b-two", 1)
-    ll.reserve(repo, _reserved(launch_id, "b-two", ["a"], repo))
+    ll.reserve(
+        repo,
+        _reserved(launch_id, "b-two", ["a"], repo, sessionId=_SESSION_UUID_FOREIGN),
+    )
     assert ll.append(repo, _started_at(launch_id, t0, attempt=1, pid=_FAKE_BUILDER_PID_EARLIER))
     assert ll.append(
         repo,
@@ -5659,7 +5669,7 @@ def test_record_outcome_ignores_reused_earlier_attempt_pid(tmp_path, monkeypatch
         if pid == _FAKE_BUILDER_PID_EARLIER:
             return {
                 "stat": "SN",
-                "startTs": t0 + 86400,
+                "startTs": t0 + 50,
                 "command": "claude --model test",
             }
         return None
@@ -5746,9 +5756,12 @@ def test_child_group_is_live_never_sends_real_signals(tmp_path, monkeypatch):
         assert ll.append(repo, started)
         return repo
 
-    # T1-like: foreign start, sessionless
+    # T1-like: foreign start and session
     started_ts = 3000.0
-    repo = lane(tmp_path / "repo-sig-1", "l-sig-1", started_rec=_started_at("l-sig-1", started_ts))
+    repo = lane(
+        tmp_path / "repo-sig-1", "l-sig-1", started_rec=_started_at("l-sig-1", started_ts),
+        sessionId=session_id,
+    )
     track_and_patch(
         facts=lambda pid: {
             "stat": "SN",
