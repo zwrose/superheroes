@@ -318,3 +318,14 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
     across rounds (confirms last round's fixes, then looks for new problems). The spec reviewer
     is its own configurable tier, separate from the code-review tiers (the owner's setup: Astra
     for specs, Sol still the deep-tier code reviewer). No model is hardcoded in the plugin.
+16. **Review cycle, parts 3-4 (rounds; who fixes)** (owner: the walkthrough "generally seems ok";
+    declines "that works"): rounds run automatically, no owner go-ahead between rounds, until all
+    three checks are clean apart from items already in the owner's queue, or a cap of 4 rounds;
+    findings still open at the cap join the owner's queue marked unsettled. Each finding goes to
+    one of three piles: craft (discovery fixes it); the owner's (a fix that adds behaviour, an
+    unsourced product decision, two conflicting rulings; left open and queued); or declined.
+    A decline is allowed only for five reasons, each citing its proof: the finding is wrong
+    (spec line), outside the threat model (entry), asks for implementation, belongs to another
+    spec, or duplicates a queued item. A decline the reviewer still contests next round goes to
+    the owner's queue. Every decline is listed, folded away, on the final sheet. After each set
+    of owner rulings the three checks re-run on the changed parts.
