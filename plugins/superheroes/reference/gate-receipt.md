@@ -28,13 +28,13 @@ A receipt is one JSON object, encoded as UTF-8. Every field is a named top-level
 | `result` | string | Required | `"pass"`, `"fail"`, or `"error"` (the gate itself could not complete). A project may emit other values. See the reading rules. |
 | `attempt` | integer ≥ 1 | Optional | Which run this is for the same source state, counting from 1. |
 | `priorRed` | `true`, `false`, or `"unknown"` | Optional | Whether an earlier attempt on the same source state was red. `false` means the history was read and held no red. `"unknown"` means it could not be read. |
-| `priorRedTests` | array of strings | Optional | The tests that failed in the earlier red attempt or attempts. |
+| `priorRedTests` | array of strings | Optional | The tests that failed in the earlier red attempt or attempts, each named in the same form as a `testsSkipped` entry's `testFile` (a test file path). |
 | `wallTimeMs` | integer ≥ 0 | Optional | The run's wall-clock time in milliseconds. |
 | `machine` | string | Optional | Identifies the machine or CI runner that ran the gate. Opaque to readers. |
 | `policyVersion` | string | Optional | The version of the project's lane-classification or selection policy the run used. |
 | `wouldHaveSkipped` | array of `{"lane": string, "reason": string}` | Optional | In an observation mode that runs everything, the lanes selection would have skipped. |
 | `interpreter` | string | Optional | The interpreter or runtime version the run actually executed on. |
-| `testsSkipped` | object | Optional | The tests not run, as one of four shapes keyed by `kind`. `{"kind": "inline", "count": <int>, "tests": [{"testFile": string, "reason": string}]}`. `{"kind": "by-reference", "count": <int>, "artifact": <string locating the full list>, "digest": <string>}`. `{"kind": "not-applicable", "reason": string}`. `{"kind": "unavailable", "reason": string}`. |
+| `testsSkipped` | object | Optional | The tests not run, as one of four shapes keyed by `kind`. `{"kind": "inline", "count": <int>, "tests": [{"testFile": string, "reason": string}]}`. `{"kind": "by-reference", "count": <int>, "artifact": <string locating the full list>, "digest": <string>}`. `{"kind": "not-applicable", "reason": string}`. `{"kind": "unavailable", "reason": string}`. In `inline` and `by-reference`, `count` is an integer ≥ 0 equal to the number of skipped tests. In `inline`, `count` equals the number of entries in `tests`, and a mismatch makes the receipt malformed. In `by-reference`, `digest` is the lowercase hex SHA-256 of the full list as the artifact stores it. |
 
 ## Reading rules
 
@@ -43,7 +43,7 @@ A receipt is one JSON object, encoded as UTF-8. Every field is a named top-level
 - An absent optional field means unknown. A reader never treats it as a first attempt, as no earlier red, or as zero, and never fills it in for a measurement. A measurement over receipts counts receipts missing the field as missing.
 - A `source` of kind `"unavailable"` attests no source state, even when `result` is `"pass"`.
 - A reader that meets a `schema` value other than `"gate-receipt/1"` does not read it as this format. It treats the object as no receipt and says which value it found.
-- A value of the wrong type in a known field makes the receipt malformed. The reader treats it as no receipt and says which field.
+- A value of the wrong type in a known field, or a value outside its stated bound or rule (for example an `attempt` of 0, or an `inline` count that disagrees with `tests`), makes the receipt malformed. The reader treats it as no receipt and says which field.
 - An emitter never gives a `tree` source an id that equals a commit id. A reader that finds the two equal treats the `source` as malformed.
 
 ## Versions
@@ -79,7 +79,7 @@ What a receipt proves about tests is the question of `rubric/test-receipt-eviden
   "result": "pass",
   "attempt": 2,
   "priorRed": true,
-  "priorRedTests": ["tests/test_parse.py::test_empty_input"],
+  "priorRedTests": ["tests/test_parse.py"],
   "wallTimeMs": 41250,
   "machine": "runner-07",
   "mode": "full"
