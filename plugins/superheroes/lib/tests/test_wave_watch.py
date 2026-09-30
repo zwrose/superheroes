@@ -923,8 +923,11 @@ def test_loop_missing_ledger_at_arm_refuses_with_arms_and_ledger_path(
     store_root = _ledger_env(tmp_path, monkeypatch)
     _precreate_repo_store_dir(repo, store_root)
     expected_path = ll.ledger_path(repo)["path"]
+    clock = [0.0]
     result = ww.loop(
-        repo, "batch-982", max_seconds=5, interval_seconds=1, gh_run=_noop_gh_run,
+        repo, "batch-982", max_seconds=5, interval_seconds=1, max_total_seconds=3,
+        monotonic=_with_loop_budget(lambda: clock[0]),
+        sleep=lambda d: clock.__setitem__(0, clock[0] + d), gh_run=_noop_gh_run,
     )
     assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
