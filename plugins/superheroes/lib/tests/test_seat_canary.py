@@ -1294,11 +1294,11 @@ def test_planted_location_parses_real_fixture():
 
 
 def test_plant_range_tracks_the_fixture(monkeypatch):
-    original = "@@ -12,8 +12,5 @@"
+    original = "@@ -12,5 +12,5 @@"
     assert SC.CANARY_FIXTURE_PROMPT.count(original) == 1
     monkeypatch.setattr(
         SC, "CANARY_FIXTURE_PROMPT",
-        SC.CANARY_FIXTURE_PROMPT.replace(original, "@@ -40,8 +40,5 @@"))
+        SC.CANARY_FIXTURE_PROMPT.replace(original, "@@ -40,5 +40,5 @@"))
     assert SC._detected_plant([_crit(line=15)]) is False
     assert SC._detected_plant([_crit(line=44)]) is True
     assert SC._detected_plant([_crit(line=40)]) is True
@@ -1313,3 +1313,30 @@ def test_plant_parse_miss_fails_closed(monkeypatch):
     assert SC._planted_location(SC.CANARY_FIXTURE_PROMPT) is None
     assert SC._detected_plant([_crit(line=15)]) is False
     assert SC._detected_plant([_CAPTURE_3]) is True
+
+
+def test_plant_hunk_count_mismatch_fails_closed(monkeypatch):
+    original = "@@ -12,5 +12,5 @@"
+    assert SC.CANARY_FIXTURE_PROMPT.count(original) == 1
+    base = SC.CANARY_FIXTURE_PROMPT
+    for bad in ("@@ -12,5 +12,10 @@", "@@ -12,5 +12,4 @@"):
+        monkeypatch.setattr(SC, "CANARY_FIXTURE_PROMPT", base.replace(original, bad))
+        assert SC._planted_location(SC.CANARY_FIXTURE_PROMPT) is None, bad
+        assert SC._detected_plant([_crit(line=15)]) is False, bad
+        named = _crit(line=15, body="verify_submission returns True on the error path.")
+        assert SC._detected_plant([named]) is True, bad
+
+
+def test_plant_file_tracks_the_fixture_header(monkeypatch):
+    moved = "lib/moved.py"
+    header = "+++ b/" + _PLANTED
+    assert SC.CANARY_FIXTURE_PROMPT.count(header) == 1
+    monkeypatch.setattr(
+        SC, "CANARY_FIXTURE_PROMPT",
+        SC.CANARY_FIXTURE_PROMPT.replace(header, "+++ b/" + moved))
+    assert SC._detected_plant([_crit(file=_PLANTED, line=15)]) is False
+    assert SC._detected_plant([_crit(file=moved, line=15)]) is True
+
+
+def test_fixture_hunk_is_well_formed():
+    assert "@@ -12,5 +12,5 @@" in SC.CANARY_FIXTURE_PROMPT

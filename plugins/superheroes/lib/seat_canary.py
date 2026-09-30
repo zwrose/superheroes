@@ -39,7 +39,7 @@ Review ONLY this diff hunk:
 ```diff
 --- a/lib/gate.py
 +++ b/lib/gate.py
-@@ -12,8 +12,5 @@ def verify_submission(receipt):
+@@ -12,5 +12,5 @@ def verify_submission(receipt):
      try:
          ok = validate_receipt_signature(receipt)
      except Exception:
