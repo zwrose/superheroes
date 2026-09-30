@@ -356,7 +356,10 @@ branch-current as `merge-train.md` requires. That is the accepted cost, not a we
 The pre-loop validations (`batch-invalid`, `interval-invalid`, `max-seconds-invalid`,
 `max-total-seconds-invalid`, `ignore-event-invalid`, `repo-root-invalid`, `store-unresolvable`,
 `loop-already-live`, `loop-lock-unavailable`) refuse immediately — re-arming without fixing the cause
-just refuses again. A `loop-already-live` refusal carries `liveLoop`. `ledger-unreadable` can also
+just refuses again. A `loop-already-live` refusal carries `liveLoop`. `ledger-unreadable` also
+refuses at arm time when the ledger file is absent or unreadable at the resolved root — for example a
+takeover seat armed with a different ledger root — and every `ledger-unreadable` refusal carries
+`ledgerPath`, the path the watcher read. It can also
 arrive on the deadline path after the full `--max-seconds` window. `internal-error` comes from the
 top-level exception handler wrapping all of `run()` — including the pre-loop validations — so it can
 fire before the watch loop ever runs; neither `ledger-unreadable` on the deadline path nor

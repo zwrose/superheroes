@@ -7,6 +7,13 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Wave watch: a missing launch ledger refuses
+
+- An arm against a resolved ledger root whose ledger file does not exist now refuses `ledger-unreadable` instead of returning a clean `timer`. A ledger file that exists but holds no records stays clean.
+- Every `ledger-unreadable` refusal from `run`, `watch_arm` and `loop` now carries `ledgerPath`, the path the watcher read.
+
 ## 0.37.0
 
 ### Before you upgrade

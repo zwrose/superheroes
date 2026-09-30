@@ -48,10 +48,16 @@ def _init_repo(tmp_path):
     return str(tmp_path)
 
 
-def _ledger_env(tmp_path, monkeypatch):
+def _ledger_env(tmp_path, monkeypatch, repo=None):
     root = str(tmp_path / "ledger-root")
     os.makedirs(root, mode=0o700, exist_ok=True)
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, root)
+    if repo is not None:
+        _precreate_repo_store_dir(repo, root)
+        path = ll.ledger_path(repo)["path"]
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+        os.close(fd)
+        assert ll.read(repo)["state"] == "ok"
     return root
 
 
@@ -248,7 +254,7 @@ def test_unclocked_arm_runs_to_its_deadline_on_the_virtual_clock(
     tmp_path, monkeypatch, watcher_clock,
 ):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=5, interval_seconds=1, gh_run=_noop_gh_run,
     )
@@ -283,7 +289,7 @@ def test_arm_whose_sleep_never_advances_fails_promptly_and_says_why(
     monkeypatch.setattr(watcher_clock, "sleep", lambda duration: None)
     monkeypatch.setattr(ww.time, "sleep", watcher_clock.sleep)
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=5, interval_seconds=1, gh_run=_noop_gh_run,
     )
@@ -609,7 +615,7 @@ def test_suppressed_terminal_lane_polls_prs_for_pr_set_changed(tmp_path, monkeyp
 
 def test_event_e4_pr_set_changed(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     calls = []
 
     pr_sets = [{1, 2}, {1, 3}]
@@ -638,7 +644,7 @@ def test_event_e4_pr_set_changed(tmp_path, monkeypatch):
 
 def test_event_e5_timer(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
@@ -885,15 +891,113 @@ def test_unrecognized_ledger_state_refuses_on_first_interval(tmp_path, monkeypat
     assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
 
 
-def test_missing_ledger_never_observed_emits_timer(tmp_path, monkeypatch):
+def test_missing_ledger_at_arm_refuses_with_ledger_path(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    expected_path = ll.ledger_path(repo)["path"]
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert result["ledgerPath"] == expected_path
+
+
+def test_run_missing_ledger_at_arm_refuses_with_ledger_path(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    expected_path = ll.ledger_path(repo)["path"]
+    assert not os.path.exists(expected_path)
+    result = ww.run(repo, "batch-982", gh_run=_noop_gh_run)
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert result["ledgerPath"] == expected_path
+
+
+def test_loop_missing_ledger_at_arm_refuses_with_arms_and_ledger_path(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    expected_path = ll.ledger_path(repo)["path"]
+    result = ww.loop(
+        repo, "batch-982", max_seconds=5, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert result["arms"] == 1
+    assert result["ledgerPath"] == expected_path
+
+
+def test_missing_ledger_mid_arm_degrades_next_firing(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
+    real_read = ll.read
+    calls = [0]
+    clock = [0.0]
+
+    def flaky_read(*args, **kwargs):
+        calls[0] += 1
+        if calls[0] == 2:
+            return {"state": "missing", "records": []}
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(ww.ll, "read", flaky_read)
+    result = ww.watch_arm(
+        repo, "batch-982", max_seconds=3, interval_seconds=1,
+        monotonic=_with_loop_budget(lambda: clock[0]),
+        sleep=lambda d: clock.__setitem__(0, clock[0] + d), gh_run=_noop_gh_run,
+    )
+    assert calls[0] >= 2
     assert result["ok"] is True
-    assert result["event"] == "timer"
-    assert "reason" not in result
+    assert ww.DEGRADATION_LEDGER_UNREADABLE in result["degraded"]
+
+
+def test_missing_ledger_at_deadline_after_store_removed_keeps_arm_time_ledger_path(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
+    expected_path = ll.ledger_path(repo)["path"]
+    real_read = ll.read
+    calls = [0]
+    clock = [0.0]
+
+    def vanishing_read(*args, **kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return real_read(*args, **kwargs)
+        return {"state": "missing", "records": []}
+
+    monkeypatch.setattr(ww.ll, "read", vanishing_read)
+    result = ww.watch_arm(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        monotonic=_with_loop_budget(lambda: clock[0]),
+        sleep=lambda d: clock.__setitem__(0, clock[0] + d), gh_run=_noop_gh_run,
+    )
+    assert calls[0] >= 2
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert result["ledgerPath"] == expected_path
+
+
+def test_zero_byte_ledger_is_clean_for_run_and_watch_arm(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
+    for result in (
+        ww.watch_arm(
+            repo, "batch-982", max_seconds=1, interval_seconds=1,
+            gh_run=_noop_gh_run,
+        ),
+        ww.run(repo, "batch-982", gh_run=_noop_gh_run),
+    ):
+        assert result["ok"] is True
+        assert result["event"] == "timer"
+        assert ww.DEGRADATION_LEDGER_TORN_TAIL not in result.get("degraded", [])
+        assert ww.DEGRADATION_LEDGER_UNREADABLE not in result.get("degraded", [])
 
 
 def test_observed_then_missing_refuses_at_deadline(tmp_path, monkeypatch):
@@ -936,6 +1040,7 @@ def test_observed_then_missing_refuses_at_deadline(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert result["ledgerPath"] == ll.ledger_path(repo)["path"]
 
 
 def test_deadline_blind_on_final_read_refuses_not_timer(tmp_path, monkeypatch):
@@ -972,6 +1077,7 @@ def test_deadline_blind_on_final_read_refuses_not_timer(tmp_path, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert result["ledgerPath"] == ll.ledger_path(repo)["path"]
 
 
 # --- lane-stale (INV-2) -------------------------------------------------------
@@ -1451,7 +1557,7 @@ def test_acceptance_heartbeat_flip(tmp_path, monkeypatch):
 
 def test_acceptance_pr_set_change_mocked_gh(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     seen = [0]
 
     def gh_run(argv, **kwargs):
@@ -1473,7 +1579,7 @@ def test_acceptance_pr_set_change_mocked_gh(tmp_path, monkeypatch):
 
 def test_acceptance_timer(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=10, gh_run=_noop_gh_run,
     )
@@ -1652,7 +1758,7 @@ def test_retried_lane_old_pid_dead_latest_live_no_event(tmp_path, monkeypatch):
 
 def test_pr_identical_set_no_event(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
 
     def gh_run(argv, **kwargs):
         body = [{"number": 1}, {"number": 2}]
@@ -1668,7 +1774,7 @@ def test_pr_identical_set_no_event(tmp_path, monkeypatch):
 
 def test_pr_same_tick_open_close_fires(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     sets = [{1, 2}, {1, 3}]
     idx = [0]
 
@@ -1692,7 +1798,7 @@ def test_pr_same_tick_open_close_fires(tmp_path, monkeypatch):
 
 def test_gh_exception_adds_degradation_no_event(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
 
     def gh_run(argv, **kwargs):
         raise OSError("gh missing")
@@ -1706,7 +1812,7 @@ def test_gh_exception_adds_degradation_no_event(tmp_path, monkeypatch):
 
 def test_gh_nonzero_exit_adds_degradation_no_event(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
 
     def gh_run(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 1, stdout="", stderr="fail")
@@ -1720,7 +1826,7 @@ def test_gh_nonzero_exit_adds_degradation_no_event(tmp_path, monkeypatch):
 
 def test_gh_bad_json_adds_degradation_no_event(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
 
     def gh_run(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 0, stdout="not-json", stderr="")
@@ -1734,7 +1840,7 @@ def test_gh_bad_json_adds_degradation_no_event(tmp_path, monkeypatch):
 
 def test_gh_first_failure_then_success_baselines(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     calls = [0]
 
     def gh_run(argv, **kwargs):
@@ -1759,7 +1865,7 @@ def test_gh_first_failure_then_success_baselines(tmp_path, monkeypatch):
 
 def test_deadline_timer_without_overshoot(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     clock = [100.0]
     sleeps = []
 
@@ -1782,7 +1888,7 @@ def test_deadline_timer_without_overshoot(tmp_path, monkeypatch):
 
 def test_max_seconds_shorter_than_interval_evaluates_once_then_timer(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     clock = [0.0]
 
     def mono():
@@ -1849,7 +1955,7 @@ def test_read_only_no_store_files_changed(tmp_path, monkeypatch):
 
 def test_gh_child_receives_supplied_env(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     custom_env = dict(os.environ)
     custom_env["WW_TEST_MARKER"] = "reaches-gh-child"
     seen = []
@@ -1898,7 +2004,7 @@ _SCRUB_PROBE_VALUES = {
 @pytest.mark.parametrize("var", _EXPECTED_SCRUBBED)
 def test_gh_child_env_scrubs_routing_var(tmp_path, monkeypatch, var):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     custom_env = dict(os.environ)
     custom_env[var] = _SCRUB_PROBE_VALUES.get(var, "/definitely/not/right")
     seen = []
@@ -1919,7 +2025,7 @@ def test_gh_child_env_scrubs_routing_var(tmp_path, monkeypatch, var):
 def test_gh_child_env_preserves_auth_vars(tmp_path, monkeypatch):
     """GH_TOKEN / GH_CONFIG_DIR must survive the scrub — stripping them breaks gh auth."""
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     custom_env = dict(os.environ)
     custom_env["GH_TOKEN"] = "test-token-value"
     custom_env["GH_CONFIG_DIR"] = "/some/config/dir"
@@ -1940,7 +2046,7 @@ def test_gh_child_env_preserves_auth_vars(tmp_path, monkeypatch):
 
 def test_at_deadline_skips_gh_no_degradation(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     calls = []
     mono_calls = [0]
 
@@ -1965,7 +2071,7 @@ def test_at_deadline_skips_gh_no_degradation(tmp_path, monkeypatch):
 
 def test_pr_change_after_deadline_not_returned(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     clock = [0.0]
     calls = [0]
 
@@ -1996,7 +2102,7 @@ def test_pr_change_after_deadline_not_returned(tmp_path, monkeypatch):
 
 def test_gh_timeout_never_exceeds_remaining(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     clock = [0.0]
     timeouts = []
 
@@ -2025,7 +2131,7 @@ def test_gh_timeout_never_exceeds_remaining(tmp_path, monkeypatch):
 def test_first_tick_slow_scans_skip_gh_poll_without_overrun(tmp_path, monkeypatch):
     """First-tick scans must not inflate poll budget when remaining is sub-floor."""
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     max_seconds = 2
     scan_cost = 1.95
     clock = [0.0]
@@ -2062,7 +2168,7 @@ def test_first_tick_slow_scans_skip_gh_poll_without_overrun(tmp_path, monkeypatc
 
 def test_gh_poll_budget_computed_after_scans(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     clock = [0.0]
     scan_cost = 1.5
     timeouts = []
@@ -2093,7 +2199,7 @@ def test_gh_poll_budget_computed_after_scans(tmp_path, monkeypatch):
 
 def test_gh_timeout_ceiling_thirty_when_remaining_large(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     clock = [0.0]
     timeouts = []
 
@@ -2118,7 +2224,7 @@ def test_gh_timeout_ceiling_thirty_when_remaining_large(tmp_path, monkeypatch):
 def test_gh_poll_spacing_skips_missed_ticks(tmp_path, monkeypatch):
     """Missed ticks must not replay back-to-back; spacing comes from the scheduler."""
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     clock = [0.0]
     gh_starts = []
     interval_seconds = 3
@@ -2152,7 +2258,7 @@ def test_gh_poll_spacing_skips_missed_ticks(tmp_path, monkeypatch):
 
 def test_sub_floor_remaining_skips_gh_no_pr_degradation(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     calls = []
     clock = [0.0]
     timeouts = []
@@ -2183,7 +2289,7 @@ def test_sub_floor_remaining_skips_gh_no_pr_degradation(tmp_path, monkeypatch):
 
 def test_all_skipped_gh_polls_add_pr_signal_never_sampled(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     calls = []
     mono_calls = [0]
 
@@ -2222,7 +2328,7 @@ def test_cli_refusal_exit_one(tmp_path):
 
 def test_cli_event_exit_zero(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     proc = _run_cli([
         "run", "--repo-root", repo, "--batch", "batch-982",
     ], env=_fake_gh_cli_env(tmp_path))
@@ -2517,7 +2623,7 @@ def test_loop_threads_pr_state_across_arm_boundary(tmp_path, monkeypatch):
 
 def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     arm = [0]
     real_run = ww.watch_arm
     clock = [0.0]
@@ -2572,7 +2678,7 @@ def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatc
 def test_run_explicit_none_cells_start_fresh_each_call(tmp_path, monkeypatch):
     """Explicit None must allocate fresh cells per call, same as omitting them."""
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     common = dict(max_seconds=3, interval_seconds=1, gh_run=_noop_gh_run)
     ww.watch_arm(repo, "batch-982", **common)
     omitted = ww.watch_arm(repo, "batch-982", **common)
@@ -2794,7 +2900,7 @@ def test_ignore_event_cli_repeatable_and_last_colon_split(tmp_path, monkeypatch)
 
 def test_loop_log_one_json_line_per_timer_arm(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     log_path = str(tmp_path / "watch.log")
     clock = [0.0]
 
@@ -2829,7 +2935,7 @@ def test_loop_log_one_json_line_per_timer_arm(tmp_path, monkeypatch):
 
 def test_loop_log_write_failure_adds_degradation_and_continues(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     log_path = str(tmp_path / "watch.log")
     clock = [0.0]
     writes = [0]
@@ -2878,7 +2984,7 @@ def test_loop_log_write_failure_adds_degradation_and_continues(tmp_path, monkeyp
 
 def test_loop_log_non_regular_file_refuses_write(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     log_path = str(tmp_path / "watch.log")
     os.symlink("/dev/null", log_path)
     clock = [0.0]
@@ -3222,7 +3328,7 @@ def test_run_is_one_shot_against_quiet_live_lane(tmp_path, monkeypatch):
 
 def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     pr_sets = [{1}, {1, 2}, {1, 2, 3}, {1, 2, 3}]
     arm = [0]
     real_run = ww.watch_arm
@@ -3755,7 +3861,7 @@ def test_loop_benign_non_timer_writes_log_line(tmp_path, monkeypatch):
 
 def test_run_slow_gh_returns_without_waiting(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     clock = [0.0]
 
     def mono():
@@ -3790,7 +3896,7 @@ def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch, capsy
     # is a real child with a real timeout, so the arm is long enough (virtually
     # free) that the poll gets the 30-second gh ceiling rather than a 2-second one.
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     shim_dir = tmp_path / "gh-shim"
     shim_dir.mkdir()
     marker = shim_dir / "gh-called"
@@ -4805,7 +4911,7 @@ def _run_pr_set_changed(
     tmp_path, monkeypatch, pr_sets, membership_reader, *, max_seconds=5,
 ):
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     return ww.watch_arm(
         repo,
         "batch-982",
@@ -5018,7 +5124,7 @@ def test_pr_set_changed_exhausted_deadline_stops_walk_no_reader_after(
         return mono[0]
 
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     result = ww.watch_arm(
         repo,
         "batch-982",
@@ -5052,7 +5158,7 @@ def test_pr_set_changed_membership_read_timeout_bounded_by_remaining(
         return mono[0]
 
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     result = ww.watch_arm(
         repo,
         "batch-982",
@@ -5174,7 +5280,7 @@ def test_pr_set_changed_whole_membership_read_bounded_by_watcher_remaining_budge
         return mono[0]
 
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     result = ww.watch_arm(
         repo,
         "batch-982",
@@ -5206,7 +5312,7 @@ def test_pr_set_changed_slow_read_refusal_degrades_without_partial_stack(
         return {"ok": False, "reason": sc.REASON_STACK_UNREADABLE}
 
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     result = ww.watch_arm(
         repo,
         "batch-982",
@@ -5251,7 +5357,7 @@ def test_pr_set_changed_real_read_membership_whole_read_bounded_by_watcher_budge
 
     mono = [1000.0]
     repo = _init_repo(tmp_path / "repo")
-    _ledger_env(tmp_path, monkeypatch)
+    _ledger_env(tmp_path, monkeypatch, repo=repo)
     result = ww.watch_arm(
         repo,
         "batch-982",
@@ -7066,7 +7172,7 @@ def test_pr_set_changed_removed_pr_grouped_like_added(tmp_path, monkeypatch):
 def test_gh_scrub_removes_routing_vars_and_ledger_root(tmp_path, monkeypatch):
     # axis: gh child env removes _GH_SCRUB_VARS plus ledger root; unrelated var stays
     repo = _init_repo(tmp_path / "repo")
-    store_root = _ledger_env(tmp_path, monkeypatch)
+    store_root = _ledger_env(tmp_path, monkeypatch, repo=repo)
     custom_env = dict(os.environ)
     custom_env[ll.LEDGER_ROOT_ENV] = store_root
     custom_env["WW_UNRELATED_KEEP"] = "present"
