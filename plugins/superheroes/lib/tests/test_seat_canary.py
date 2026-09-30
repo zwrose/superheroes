@@ -1260,9 +1260,10 @@ def test_plant_negatives_and_boundaries():
     assert SC._detected_plant([_crit(line=30)]) is False
     assert SC._detected_plant([_crit(severity="Important")]) is False
     assert SC._detected_plant([_crit(line=12)]) is True
-    assert SC._detected_plant([_crit(line=21)]) is True
+    assert SC._detected_plant([_crit(line=16)]) is True
+    assert SC._detected_plant([_crit(line=21)]) is False
     assert SC._detected_plant([_crit(line=11)]) is False
-    assert SC._detected_plant([_crit(line=22)]) is False
+    assert SC._detected_plant([_crit(line=17)]) is False
 
 
 def test_plant_fail_closed_edges():
@@ -1289,19 +1290,19 @@ def test_plant_fail_closed_edges():
 
 
 def test_planted_location_parses_real_fixture():
-    assert SC._planted_location(SC.CANARY_FIXTURE_PROMPT) == (_PLANTED, 12, 21)
+    assert SC._planted_location(SC.CANARY_FIXTURE_PROMPT) == (_PLANTED, 12, 16)
 
 
 def test_plant_range_tracks_the_fixture(monkeypatch):
-    original = "@@ -12,8 +12,10 @@"
+    original = "@@ -12,8 +12,5 @@"
     assert SC.CANARY_FIXTURE_PROMPT.count(original) == 1
     monkeypatch.setattr(
         SC, "CANARY_FIXTURE_PROMPT",
-        SC.CANARY_FIXTURE_PROMPT.replace(original, "@@ -40,8 +40,10 @@"))
+        SC.CANARY_FIXTURE_PROMPT.replace(original, "@@ -40,8 +40,5 @@"))
     assert SC._detected_plant([_crit(line=15)]) is False
-    assert SC._detected_plant([_crit(line=45)]) is True
-    assert SC._detected_plant([_crit(line=49)]) is True
-    assert SC._detected_plant([_crit(line=50)]) is False
+    assert SC._detected_plant([_crit(line=44)]) is True
+    assert SC._detected_plant([_crit(line=40)]) is True
+    assert SC._detected_plant([_crit(line=45)]) is False
 
 
 def test_plant_parse_miss_fails_closed(monkeypatch):

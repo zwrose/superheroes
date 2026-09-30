@@ -39,7 +39,7 @@ Review ONLY this diff hunk:
 ```diff
 --- a/lib/gate.py
 +++ b/lib/gate.py
-@@ -12,8 +12,10 @@ def verify_submission(receipt):
+@@ -12,8 +12,5 @@ def verify_submission(receipt):
      try:
          ok = validate_receipt_signature(receipt)
      except Exception:
@@ -188,9 +188,38 @@ _PLANT_FILE_RE = re.compile(r"^\+\+\+ b/(\S+)\s*$", re.MULTILINE)
 _PLANT_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 
 
+def _new_side_lines_in_hunk(prompt_text, hunk_m):
+    """Count new-side lines in the first hunk body after ``hunk_m`` (space or ``+`` prefixes only)."""
+    if not hunk_m:
+        return None
+    tail = (prompt_text or "")[hunk_m.end():]
+    if not tail.startswith("\n"):
+        # Optional copy of the first hunk line may ride on the ``@@`` header; not a body line here.
+        nl = tail.find("\n")
+        if nl == -1:
+            return 0
+        tail = tail[nl + 1:]
+    count = 0
+    for line in tail.splitlines():
+        if not line:
+            break
+        if line.startswith(" "):
+            count += 1
+        elif line.startswith("+") and not line.startswith("+++"):
+            count += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            continue
+        elif line.startswith("\\"):
+            continue
+        else:
+            break
+    return count
+
+
 def _planted_location(prompt_text):
     """Return ``(path, first, last)`` parsed from the fixture's first ``+++ b/`` header and first
-    hunk header (new-side range), or ``None`` when either is missing or the new-side count is 0."""
+    hunk header (new-side range), or ``None`` when either is missing, the new-side count is 0, or
+    the header's new-side count disagrees with the displayed hunk body."""
     file_m = _PLANT_FILE_RE.search(prompt_text or "")
     hunk_m = _PLANT_HUNK_RE.search(prompt_text or "")
     if not file_m or not hunk_m:
@@ -198,6 +227,9 @@ def _planted_location(prompt_text):
     first = int(hunk_m.group(1))
     count = 1 if hunk_m.group(2) is None else int(hunk_m.group(2))
     if count == 0:
+        return None
+    displayed = _new_side_lines_in_hunk(prompt_text, hunk_m)
+    if displayed is None or displayed != count:
         return None
     return file_m.group(1), first, first + count - 1
 
