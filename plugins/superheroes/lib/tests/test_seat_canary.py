@@ -1195,3 +1195,148 @@ def test_sm2_1269_tier_override_below_default_resolves():
     resolved = SC._resolve_canary_identity("code-reviewer", cell)
     assert resolved["ok"] is True
     assert resolved["tier"] == "reviewer"
+
+
+# --- #1543: a Critical on the planted file, inside the planted hunk, credits the plant ---
+
+_PLANTED = "lib/gate.py"
+_OTHER = "lib/other.py"
+
+
+def _crit(file=_PLANTED, line=15, severity="Critical", title="Fails open on error",
+          body="The except path permits the submission."):
+    return {"severity": severity, "file": file, "line": line, "title": title, "body": body}
+
+
+_CAPTURE_1 = {
+    "severity": "Critical", "file": _PLANTED, "line": 16,
+    "title": "Receipt verification errors permit unverified submissions",
+    "body": "Returning True when validate_receipt_signature raises bypasses signature "
+            "verification and permits the submission. …",
+}
+_CAPTURE_2 = {
+    "severity": "Critical", "file": _PLANTED, "line": 15,
+    "title": "Signature verification errors permit submission",
+    "body": "Any exception from validate_receipt_signature(receipt) now returns True, "
+            "permitting submission without successful signature verification. …",
+}
+# The issue did not quote capture 3's body; it named verify_submission.
+_CAPTURE_3 = {
+    "severity": "Critical", "file": _PLANTED, "line": 15,
+    "title": "Receipt verification fails open when validation raises",
+    "body": "verify_submission returns True on the error path.",
+}
+
+
+def test_captured_findings_are_detected():
+    for cap in (_CAPTURE_1, _CAPTURE_2):
+        blob = cap["file"] + cap["title"] + cap["body"]
+        assert SC.PLANT_MARKER not in blob
+        assert SC._detected_plant([cap]) is True
+    assert SC._detected_plant([_CAPTURE_3]) is True
+    stripped = dict(_CAPTURE_3, body="the except path returns True")
+    assert SC._detected_plant([stripped]) is True
+
+
+def test_captured_findings_end_to_end_run_canary():
+    def dispatch(**kwargs):
+        return _base_dispatch_result(
+            findings=[dict(_CAPTURE_1, id="p1"), dict(_CAPTURE_2, id="p2")],
+            investigated=["lib/gate.py"],
+            engagement={"tokens": 10, "toolCalls": 1, "stdoutBytes": 1, "wallSeconds": 1.0},
+        )
+
+    out = SC.run_canary(
+        "code-reviewer",
+        _seat_config("codex", _PIN_MODEL, "xhigh"),
+        repo_root="/r", dispatch=dispatch,
+    )
+    assert out["detectedPlant"] is True
+    assert out["outcome"] == CO.OUTCOME_OK
+
+
+def test_plant_negatives_and_boundaries():
+    assert SC._detected_plant([_crit(file=_OTHER, line=15)]) is False
+    assert SC._detected_plant([_crit(line=30)]) is False
+    assert SC._detected_plant([_crit(severity="Important")]) is False
+    assert SC._detected_plant([_crit(line=12)]) is True
+    assert SC._detected_plant([_crit(line=16)]) is True
+    assert SC._detected_plant([_crit(line=21)]) is False
+    assert SC._detected_plant([_crit(line=11)]) is False
+    assert SC._detected_plant([_crit(line=17)]) is False
+
+
+def test_plant_fail_closed_edges():
+    assert SC._detected_plant([_crit(file="  " + _PLANTED + " ")]) is True
+    assert SC._detected_plant([_crit(file="b/" + _PLANTED)]) is False
+    assert SC._detected_plant([_crit(file="./" + _PLANTED)]) is False
+    assert SC._detected_plant([_crit(file=None)]) is False
+    assert SC._detected_plant([_crit(line="15")]) is True
+    assert SC._detected_plant([_crit(line=" 15 ")]) is True
+    for bad in (True, 15.0, None, "15a", -3, 0):
+        assert SC._detected_plant([_crit(line=bad)]) is False, bad
+    no_line = _crit()
+    del no_line["line"]
+    assert SC._detected_plant([no_line]) is False
+    assert SC._detected_plant([_crit(severity="critical")]) is True
+    assert SC._detected_plant([_crit(severity=" Critical ")]) is True
+    assert SC._detected_plant([_crit(severity=None)]) is False
+    assert SC._detected_plant([_crit(severity=5)]) is False
+    for sev in ("Minor", "Nit"):
+        assert SC._detected_plant([_crit(severity=sev)]) is False
+    assert SC._detected_plant(["not a dict", None, 3, _crit()]) is True
+    assert SC._detected_plant(["not a dict", None, 3]) is False
+    assert SC._detected_plant(None) is False
+
+
+def test_planted_location_parses_real_fixture():
+    assert SC._planted_location(SC.CANARY_FIXTURE_PROMPT) == (_PLANTED, 12, 16)
+
+
+def test_plant_range_tracks_the_fixture(monkeypatch):
+    original = "@@ -12,5 +12,5 @@"
+    assert SC.CANARY_FIXTURE_PROMPT.count(original) == 1
+    monkeypatch.setattr(
+        SC, "CANARY_FIXTURE_PROMPT",
+        SC.CANARY_FIXTURE_PROMPT.replace(original, "@@ -40,5 +40,5 @@"))
+    assert SC._detected_plant([_crit(line=15)]) is False
+    assert SC._detected_plant([_crit(line=44)]) is True
+    assert SC._detected_plant([_crit(line=40)]) is True
+    assert SC._detected_plant([_crit(line=45)]) is False
+
+
+def test_plant_parse_miss_fails_closed(monkeypatch):
+    lines = SC.CANARY_FIXTURE_PROMPT.split("\n")
+    kept = [ln for ln in lines if not ln.startswith("@@ ")]
+    assert len(kept) == len(lines) - 1
+    monkeypatch.setattr(SC, "CANARY_FIXTURE_PROMPT", "\n".join(kept))
+    assert SC._planted_location(SC.CANARY_FIXTURE_PROMPT) is None
+    assert SC._detected_plant([_crit(line=15)]) is False
+    assert SC._detected_plant([_CAPTURE_3]) is True
+
+
+def test_plant_hunk_count_mismatch_fails_closed(monkeypatch):
+    original = "@@ -12,5 +12,5 @@"
+    assert SC.CANARY_FIXTURE_PROMPT.count(original) == 1
+    base = SC.CANARY_FIXTURE_PROMPT
+    for bad in ("@@ -12,5 +12,10 @@", "@@ -12,5 +12,4 @@"):
+        monkeypatch.setattr(SC, "CANARY_FIXTURE_PROMPT", base.replace(original, bad))
+        assert SC._planted_location(SC.CANARY_FIXTURE_PROMPT) is None, bad
+        assert SC._detected_plant([_crit(line=15)]) is False, bad
+        named = _crit(line=15, body="verify_submission returns True on the error path.")
+        assert SC._detected_plant([named]) is True, bad
+
+
+def test_plant_file_tracks_the_fixture_header(monkeypatch):
+    moved = "lib/moved.py"
+    header = "+++ b/" + _PLANTED
+    assert SC.CANARY_FIXTURE_PROMPT.count(header) == 1
+    monkeypatch.setattr(
+        SC, "CANARY_FIXTURE_PROMPT",
+        SC.CANARY_FIXTURE_PROMPT.replace(header, "+++ b/" + moved))
+    assert SC._detected_plant([_crit(file=_PLANTED, line=15)]) is False
+    assert SC._detected_plant([_crit(file=moved, line=15)]) is True
+
+
+def test_fixture_hunk_is_well_formed():
+    assert "@@ -12,5 +12,5 @@" in SC.CANARY_FIXTURE_PROMPT

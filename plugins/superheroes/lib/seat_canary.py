@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Planted-defect control probe (#668): dispatch a known-bad fixture through the real seat path
 and score two axes — engagement (requires investigation evidence in `investigated`) and plant
-detection (whether the planted defect was named in findings). stdlib only; does not raise from dispatch()."""
+detection (whether a finding names the planted defect's marker, or is a Critical on the planted
+file at a line inside the planted hunk). stdlib only; does not raise from dispatch()."""
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -20,6 +22,7 @@ import model_registry  # noqa: E402
 import review_findings_schema  # noqa: E402
 import seat_bundle  # noqa: E402
 import seat_map  # noqa: E402
+import session_contract  # noqa: E402
 
 PLANT_MARKER = "verify_submission"
 
@@ -36,7 +39,7 @@ Review ONLY this diff hunk:
 ```diff
 --- a/lib/gate.py
 +++ b/lib/gate.py
-@@ -12,8 +12,10 @@ def verify_submission(receipt):
+@@ -12,5 +12,5 @@ def verify_submission(receipt):
      try:
          ok = validate_receipt_signature(receipt)
      except Exception:
@@ -181,13 +184,77 @@ def _finding_fields(f):
     )
 
 
+_PLANT_FILE_RE = re.compile(r"^\+\+\+ b/(\S+)\s*$", re.MULTILINE)
+_PLANT_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+
+
+def _new_side_lines_in_hunk(prompt_text, hunk_m):
+    """Count new-side lines in the first hunk body after ``hunk_m`` (space or ``+`` prefixes only)."""
+    if not hunk_m:
+        return None
+    tail = (prompt_text or "")[hunk_m.end():]
+    if not tail.startswith("\n"):
+        # Optional copy of the first hunk line may ride on the ``@@`` header; not a body line here.
+        nl = tail.find("\n")
+        if nl == -1:
+            return 0
+        tail = tail[nl + 1:]
+    count = 0
+    for line in tail.splitlines():
+        if not line:
+            break
+        if line.startswith(" "):
+            count += 1
+        elif line.startswith("+") and not line.startswith("+++"):
+            count += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            continue
+        elif line.startswith("\\"):
+            continue
+        else:
+            break
+    return count
+
+
+def _planted_location(prompt_text):
+    """Return ``(path, first, last)`` parsed from the fixture's first ``+++ b/`` header and first
+    hunk header (new-side range), or ``None`` when either is missing, the new-side count is 0, or
+    the header's new-side count disagrees with the displayed hunk body."""
+    file_m = _PLANT_FILE_RE.search(prompt_text or "")
+    hunk_m = _PLANT_HUNK_RE.search(prompt_text or "")
+    if not file_m or not hunk_m:
+        return None
+    first = int(hunk_m.group(1))
+    count = 1 if hunk_m.group(2) is None else int(hunk_m.group(2))
+    if count == 0:
+        return None
+    displayed = _new_side_lines_in_hunk(prompt_text, hunk_m)
+    if displayed is None or displayed != count:
+        return None
+    return file_m.group(1), first, first + count - 1
+
+
 def _detected_plant(findings):
-    # Whether any returned finding *names* PLANT_MARKER in file/title/body — a model can score
-    # True by echoing the symbol from the fixture. Recorded and drives the outcome axis via
-    # canary_outcome.classify; never drives the engaged/liveness axis.
+    # Two ways to score True, recorded and driving the outcome axis via canary_outcome.classify;
+    # never drives the engaged/liveness axis. (A) a finding names PLANT_MARKER in file/title/body.
+    # (B) one finding is Critical (severity, case/whitespace-tolerant), on exactly the planted file,
+    # at a line inside the planted hunk's new-side range; all derived from CANARY_FIXTURE_PROMPT
+    # at call time. Axis (B) bites on: file equality, line in range, Critical severity.
+    location = _planted_location(CANARY_FIXTURE_PROMPT)
     for f in findings or []:
         file_s, title_s, body_s = _finding_fields(f)
         if PLANT_MARKER in file_s or PLANT_MARKER in title_s or PLANT_MARKER in body_s:
+            return True
+        if location is None or not isinstance(f, dict):
+            continue
+        path, first, last = location
+        if file_s.strip() != path:
+            continue
+        ok, n = session_contract.coerce_line(f.get("line"))
+        if not (ok and first <= n <= last):
+            continue
+        sev = f.get("severity")
+        if isinstance(sev, str) and sev.strip().lower() == "critical":
             return True
     return False
 
