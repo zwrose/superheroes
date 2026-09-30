@@ -2427,7 +2427,7 @@ def test_loop_accumulates_degraded_from_discarded_timer_arms(tmp_path, monkeypat
     assert violations == []
 
 
-def test_loop_threads_ledger_observed_across_arms(tmp_path, monkeypatch):
+def test_loop_threads_state_cells_across_arms(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     store_root = _ledger_env(tmp_path, monkeypatch)
     _precreate_repo_store_dir(repo, store_root)
@@ -2578,7 +2578,7 @@ def test_run_explicit_none_cells_start_fresh_each_call(tmp_path, monkeypatch):
     omitted = ww.watch_arm(repo, "batch-982", **common)
     explicit_none = ww.watch_arm(
         repo, "batch-982",
-        ledger_observed=None, pr_state=None, pr_sampled=None,
+        pr_state=None, pr_sampled=None,
         **common,
     )
     assert omitted == explicit_none
@@ -3252,7 +3252,6 @@ def test_loop_two_distinct_pr_set_changes_passed_over(tmp_path, monkeypatch):
                 interval_seconds=1,
                 monotonic=mono,
                 sleep=fake_sleep,
-                ledger_observed=kwargs.get("ledger_observed"),
                 pr_state=kwargs.get("pr_state"),
                 stack_state=kwargs.get("stack_state"),
                 pr_sampled=kwargs.get("pr_sampled"),
@@ -5714,9 +5713,8 @@ def test_layers_planned_read_from_terminal_launch(tmp_path, monkeypatch):
         ],
     )
     degraded = set()
-    ledger_observed = [False]
     batch_lanes, live_lanes, ledger_readable = ww._derive_batch_lanes(
-        repo, "batch-982", None, degraded, set(), ledger_observed,
+        repo, "batch-982", None, degraded, set(),
     )
     assert ledger_readable
     assert batch_lanes["lane-live"]["layersPlanned"] is None
@@ -6608,9 +6606,8 @@ def test_ignore_launch_stack_snapshot_reads_terminal_layers_planned(
         ],
     )
     degraded = set()
-    ledger_observed = [False]
     batch_lanes, live_lanes, ledger_readable = ww._derive_batch_lanes(
-        repo, "batch-982", None, degraded, ("lane-term",), ledger_observed,
+        repo, "batch-982", None, degraded, ("lane-term",),
     )
     assert ledger_readable
     assert "lane-term" in batch_lanes
