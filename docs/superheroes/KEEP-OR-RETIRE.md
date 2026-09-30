@@ -1339,9 +1339,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   `registration: "probe-pending"`, and re-arms each time a new model is registered that way; with
   no row pending it costs nothing. Citation-based, 45 days, for a proposal at a gardening pass: vet
   or incident receipts citing a registration that went wrong because of, or despite, the gate.
-- **Last demonstrated benefit.** GPT-6 Sol was registered through the probe on 2026-09-25 (wave
-  `gpt6sol-1435-2026-09-25`, outcome pass; issue #1435, PR #1442); Astra before it on 2026-09-23
-  (wave `c14-l3b2-r5-2026-09-23`, PR #1382).
+- **Last demonstrated benefit.** GPT-6.1 Sol was registered through the probe on 2026-09-29
+  (wave `gpt61sol-1540-2026-09-29`, outcome pass; issue #1540); GPT-6 Sol before it on 2026-09-25
+  (wave `gpt6sol-1435-2026-09-25`, outcome pass; issue #1435, PR #1442); Astra before it on
+  2026-09-23 (wave `c14-l3b2-r5-2026-09-23`, PR #1382).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires (owner ruled keep at the 2026-09-25 gardening pass).
 - **Notes.** structural — gates pin eligibility and general dispatch while a row is probe-pending;
