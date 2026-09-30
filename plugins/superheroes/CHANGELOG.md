@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.37.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.36.0...superheroes-v0.37.0) (2026-09-30)
+
+
+### Features
+
+* **superheroes:** GPT-6.1 Sol becomes the codex default; GPT-6 Sol stays as a pin ([#1542](https://github.com/zwrose/superheroes/issues/1542)) ([95cb23f](https://github.com/zwrose/superheroes/commit/95cb23fefedbeab0d3c42e2646be5ac08256390b))
+* **superheroes:** record host load and command time on every engine attempt ([#1538](https://github.com/zwrose/superheroes/issues/1538)) ([94d9f84](https://github.com/zwrose/superheroes/commit/94d9f8474ac14707ce63f174ca4a35a78666ebd3))
+
+
+### Bug Fixes
+
+* **superheroes:** admit a result file rewritten before the deadline, and name dirtied paths on a dirty-tree forfeit ([#1537](https://github.com/zwrose/superheroes/issues/1537)) ([401ac1a](https://github.com/zwrose/superheroes/commit/401ac1a3a73b17cf9aee1d1b0ac42068b617db66))
+* **superheroes:** count common test-support directories as test code in the size counter ([#1545](https://github.com/zwrose/superheroes/issues/1545)) ([9819e44](https://github.com/zwrose/superheroes/commit/9819e44e6c778f1efa93c8fe7679ee700f72d9a7))
+* **superheroes:** the control probe credits a Critical on the planted code, not only a finding that names the function ([#1549](https://github.com/zwrose/superheroes/issues/1549)) ([7460da7](https://github.com/zwrose/superheroes/commit/7460da75ee5e521807d30ca8811b95c480cb80de))
+
 ## [0.36.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.35.1...superheroes-v0.36.0) (2026-09-29)
 
 
