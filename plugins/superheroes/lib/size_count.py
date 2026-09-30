@@ -7,7 +7,11 @@ import subprocess
 import sys
 
 # Axis: a path is test code iff a directory component (case-insensitive) is a TEST_DIR_NAMES member or the file name (case-sensitive globs) matches TEST_FILE_GLOBS; the one home of the size rule's test-path list (rubric/review-discipline.md § Size).
-TEST_DIR_NAMES = frozenset({"test", "tests", "__tests__", "spec", "e2e", "testdata", "__mocks__", "__fixtures__"})
+TEST_DIR_NAMES = frozenset({
+    "test", "tests", "__tests__", "spec", "e2e", "testdata", "__mocks__", "__fixtures__",
+    # Test-support directories: hand-written doubles and helpers (#1544).
+    "test-utils", "test_utils", "testutils", "test-helpers", "test_helpers", "test-support",
+})
 TEST_FILE_GLOBS = (
     "*.test.*",
     "*.spec.*",

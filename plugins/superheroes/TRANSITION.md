@@ -15,6 +15,10 @@ belongs to and lists every change with its replacement.
 - A `worktree-dirtied-by-attempt` forfeit now carries `dirtiedPaths`: `status`, `paths`, `headMoved` and `truncated`, or `status: indeterminate` with a `reason`. It lists paths whose git status changed plus paths the attempt committed. An edit to a file already dirty at open whose status did not change is not listed.
 - Every `attempt-ended` journal record now carries `hostLoadAtOpen`, `hostLoadAtEnd` (1/5/15-minute load, or `null`) and `commandTime` (cursor stream tool and shell seconds, or `null`), and `engine-started` carries `hostLoadAtOpen`. The 900 s default timeout is unchanged.
 
+### Size counter: test-support directories
+
+- The size counter (`lib/size_count.py`) now treats files under a `test-utils`, `test_utils`, `testutils`, `test-helpers`, `test_helpers` or `test-support` directory (any case) as test code, so hand-written test doubles there no longer count toward the non-test size.
+
 ## 0.36.0
 
 ### Cursor dash-free native result handoff
