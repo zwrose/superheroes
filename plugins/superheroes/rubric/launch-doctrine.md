@@ -181,6 +181,13 @@ loses the lane's stack membership.
 asserting tests passed, a PR body asserting a panel ran, or a comment asserting a gate was probed
 are **inputs, not receipts** — adopt the artifacts, re-earn the claims.
 
+### Arm the watcher on the launching seat's ledger
+
+A takeover seat that arms `wave_watch` over a batch it did not launch carries the launching seat's
+`SUPERHEROES_LAUNCH_LEDGER_ROOT`, or locates the real ledger before arming. The default root sits
+under each seat's own temp directory, so a takeover seat's default can resolve to a store with no
+ledger. The watcher then refuses `ledger-unreadable` and names the `ledgerPath` it read.
+
 ### Sweep for unpushed work before adopting
 
 A dead build leaves work **no PR list and no** `gh` query will show: commits made in its worktree
