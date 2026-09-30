@@ -975,12 +975,23 @@ def test_missing_ledger_at_deadline_after_store_removed_keeps_arm_time_ledger_pa
             return real_read(*args, **kwargs)
         return {"state": "missing", "records": []}
 
+    real_ledger_path = ll.ledger_path
+    path_calls = [0]
+
+    def losing_ledger_path(*args, **kwargs):
+        path_calls[0] += 1
+        if path_calls[0] == 1:
+            return real_ledger_path(*args, **kwargs)
+        return {"ok": False, "path": None, "reason": "ledger-root-unusable"}
+
     monkeypatch.setattr(ww.ll, "read", vanishing_read)
+    monkeypatch.setattr(ww.ll, "ledger_path", losing_ledger_path)
     result = ww.watch_arm(
         repo, "batch-982", max_seconds=1, interval_seconds=1,
         monotonic=_with_loop_budget(lambda: clock[0]),
         sleep=lambda d: clock.__setitem__(0, clock[0] + d), gh_run=_noop_gh_run,
     )
+    assert path_calls[0] >= 1
     assert calls[0] >= 2
     assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
