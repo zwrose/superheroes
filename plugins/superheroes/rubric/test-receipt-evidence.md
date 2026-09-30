@@ -14,3 +14,7 @@ For test-pass claims, look for a **successful** CI conclusion for the named work
 head sha (with evidence it runs the claimed tests) or the build's **ordered suite run** with the
 command, raw output, and successful exit/pass summary. A failed, cancelled, or skipped CI run — or a
 suite run ending in failures — does not ground the claim.
+
+## Structured gate receipts
+
+A project's verify command may also emit a structured receipt. The format's one home is `reference/gate-receipt.md`. The receipt's `result` is still not a test receipt unless the project's own policy says what it ran.
