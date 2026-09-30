@@ -9,6 +9,16 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Before you upgrade
+
+- **Update the Codex CLI to 0.159.0 or later.** The codex default is now `gpt-6.1-sol` (GPT-6.1
+  Sol) in every codex seat, at each seat's existing effort. An older CLI is refused at preflight
+  with `codex-cli-too-old`, before any codex seat runs; Codex CLI 0.158.0 and older cannot dispatch
+  `gpt-6.1-sol` under a ChatGPT account.
+- **A `gpt-6-sol` pin keeps working.** `gpt-6-sol` is now pin-only, like `gpt-5.6-sol`: a pin runs
+  it at the pinned role's own effort, and no default names it. A `gpt-5.6-terra` pin is still
+  refused, and the refusal now names `gpt-6.1-sol` as the replacement.
+
 ### Engine dispatch: result rewrites, dirtied paths, attempt telemetry
 
 - A native result file rewritten with different valid content before the deadline is now admitted. The completion stamp follows the latest content observed at or before the deadline. Content first seen after the deadline still forfeits `result-completion-payload-mismatch`.
