@@ -53,6 +53,13 @@ MATCHES = [
     ("Tests/x.py", "dir-case-Tests"),
     ("src/__Mocks__/api.ts", "dir-case-__Mocks__"),
     ("E2E/login.ts", "dir-case-E2E"),
+    ("src/test-utils/fake-realtime.ts", "dir-test-utils"),
+    ("pkg/test_utils/fakes.py", "dir-test_utils"),
+    ("pkg/testutils/fakes.go", "dir-testutils"),
+    ("src/test-helpers/render.tsx", "dir-test-helpers"),
+    ("pkg/test_helpers/builders.py", "dir-test_helpers"),
+    ("src/test-support/seed.ts", "dir-test-support"),
+    ("src/Test-Utils/render.tsx", "dir-case-Test-Utils"),
 ]
 
 LOOK_ALIKES = [
@@ -63,7 +70,10 @@ LOOK_ALIKES = [
     "plugins/superheroes/evals/w2-size-tripwire/prompt.md",
     "plugins/superheroes/eval/lib/run.py",
     "docs/decisions/specs/x.md",
-    "src/test-utils/render.tsx",
+    "src/testimonials/x.ts",
+    "src/test-utilsx/x.ts",
+    "src/my-test-utils/x.ts",
+    "src/test-utils.ts",
     "lib/latest.py",
     "lib/attestation.go",
     "src/testing.ts",
@@ -90,6 +100,8 @@ BARE_NAMES = [
     "testdata",
     "__mocks__",
     "__fixtures__",
+    "src/test-utils",
+    "test_helpers",
 ]
 
 GLOB_DIRS = [

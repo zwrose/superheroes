@@ -158,10 +158,11 @@ def test_model_family():
 
 def test_derivation_helpers():
     assert MR.known_claude_models() == ("haiku", "sonnet", "opus", "fable")
-    assert MR.codex_models() == ("gpt-5.6-sol", "gpt-6-sol", "gpt-6-astra")
+    assert MR.codex_models() == ("gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra")
     assert MR.codex_model_strength() == (
         "gpt-5.6-sol",
         "gpt-6-sol",
+        "gpt-6.1-sol",
         "gpt-6-astra",
     )
     assert MR.codex_pin_roles() == (
@@ -200,9 +201,9 @@ def test_codex_effort_for_kind():
 def test_codex_peer_for_claude_tier():
     with pytest.raises(ValueError, match="fable"):
         MR.codex_peer_for_claude_tier("fable")
-    assert MR.codex_peer_for_claude_tier("opus") == "gpt-6-sol"
-    assert MR.codex_peer_for_claude_tier("sonnet") == "gpt-6-sol"
-    assert MR.codex_peer_for_claude_tier("bogus") == "gpt-6-sol"
+    assert MR.codex_peer_for_claude_tier("opus") == "gpt-6.1-sol"
+    assert MR.codex_peer_for_claude_tier("sonnet") == "gpt-6.1-sol"
+    assert MR.codex_peer_for_claude_tier("bogus") == "gpt-6.1-sol"
 
 
 def test_validate_config_cases():
@@ -393,7 +394,7 @@ def test_resolve_dispatch_reviewer_deep_cursor_registry_id():
 
 
 def test_resolve_dispatch_codex_lowest_rung():
-    r = MR.resolve_dispatch("reviewer", "codex", "gpt-6-sol")
+    r = MR.resolve_dispatch("reviewer", "codex", "gpt-6.1-sol")
     assert r["ok"] is True
     assert r["effort"] == "high"
     assert r["effort_source"] == "resolved-lowest-rung"
@@ -646,9 +647,9 @@ def _matrix_cell_after_legacy_translate(vendor, cell):
 
 # axis: reviewer-deep, reviewer, and verifier matrix cells at the live registry match the pre-child
 # head baseline for claude/cursor. The codex cells for these three roles were DELIBERATELY moved
-# onto gpt-6-sol by #1435 WO-2 (the terra retirement) — that is the designed effect of this order,
-# not drift — so codex is pinned to its new default directly instead of compared to the pre-terra
-# baseline.
+# onto gpt-6-sol by #1435 WO-2 (the terra retirement) and then onto gpt-6.1-sol by #1540 — that is
+# the designed effect of those orders, not drift — so codex is pinned to its new default directly
+# instead of compared to the pre-terra baseline.
 def test_matrix_cells_reviewer_roles_unchanged_at_base():
     base = _load_model_registry_at_sha(_PRE_CHILD_HEAD)
     compared = 0
@@ -660,9 +661,9 @@ def test_matrix_cells_reviewer_roles_unchanged_at_base():
                 _matrix_cell_after_legacy_translate(vendor, baseline)
             )
             compared += 1
-    assert MR.matrix_config("reviewer", "codex") == ("gpt-6-sol", "high")
-    assert MR.matrix_config("reviewer-deep", "codex") == ("gpt-6-sol", "xhigh")
-    assert MR.matrix_config("verifier", "codex") == ("gpt-6-sol", "high")
+    assert MR.matrix_config("reviewer", "codex") == ("gpt-6.1-sol", "high")
+    assert MR.matrix_config("reviewer-deep", "codex") == ("gpt-6.1-sol", "xhigh")
+    assert MR.matrix_config("verifier", "codex") == ("gpt-6.1-sol", "high")
     compared += 3
     assert compared == 9
 
@@ -680,9 +681,10 @@ def test_registered_astra_on_reviewer_deep_allowlist_and_probe_role_admits():
         MR.matrix_config("reviewer-deep", "codex"),
         ("gpt-6-astra", "high"),
         ("gpt-5.6-sol", "xhigh"),
+        ("gpt-6-sol", "xhigh"),
     )
-    # registration-probe is not a codex pin role, so no pin-only model is appended; its cell now
-    # sits at the head of the (no-longer-probe-pending) ladder, so its allowlist is the full ladder.
+    # registration-probe is not a codex pin role, so no pin-only model is appended; its cell sits at
+    # the head of the ladder, so its allowlist is the full ladder.
     assert MR.allowlist("registration-probe", "codex") == MR.ladder("codex")
     assert MR.ladder("codex")[-1] == ("gpt-6-astra", "high")
     assert MR.codex_effort_for_kind("review") == MR.matrix_config("reviewer", "codex")[1]
@@ -698,8 +700,8 @@ def test_registered_astra_accepted_on_reviewer_deep_explicit_dispatch():
     assert r["effort_source"] == "resolved-unique"
 
 
-def test_escalate_from_gpt6_sol_xhigh_returns_registered_astra():
-    result = MR.escalate("codex", "gpt-6-sol", "xhigh")
+def test_escalate_from_gpt61_sol_xhigh_returns_registered_astra():
+    result = MR.escalate("codex", "gpt-6.1-sol", "xhigh")
     assert result == ("codex", "gpt-6-astra", "high")
 
 
@@ -709,6 +711,7 @@ def test_planted_probe_pending_astra_hidden_from_ladder_and_allowlist(monkeypatc
     assert MR.allowlist("reviewer-deep", "codex") == (
         MR.matrix_config("reviewer-deep", "codex"),
         ("gpt-5.6-sol", "xhigh"),
+        ("gpt-6-sol", "xhigh"),
     )
 
 
@@ -784,7 +787,7 @@ def test_pin_judges_agree_writer_guard_and_composer(monkeypatch, registry_state)
         assert ok is False
         assert reason.startswith("pin-probe-pending:")
         model, effort, info = SM._cell("reviewer-deep", "codex", {"reviewer-deep": "gpt-6-astra"})
-        assert (model, effort) == ("gpt-6-sol", "xhigh")
+        assert (model, effort) == ("gpt-6.1-sol", "xhigh")
         assert info["honored"] is False
     else:
         assert carve_out_count == len(MR.codex_pin_roles()) - 1
@@ -818,15 +821,15 @@ def test_host_family_table():
 
 # --- #1435 WO-2: the switch — I1..I4 ------------------------------------------------------------
 
-_RETIRED_TERRA_REASON = "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
+_RETIRED_TERRA_REASON = "model-retired: gpt-5.6-terra is retired; use gpt-6.1-sol"
 
 
 # bite-axis: no unpinned surface (matrix cell, ladder rung, or Claude peer) ever names a retired or pin-only codex model
 def test_i1_no_default_surface_names_a_retired_or_pin_only_model():
     """I1: no codex matrix cell, no raw ladder rung, and no peer value names gpt-5.6-terra
-    (retired) or gpt-5.6-sol (pin-only)."""
+    (retired) or gpt-5.6-sol / gpt-6-sol (pin-only)."""
     banned = set(MR.pin_only_models("codex")) | set(MR._RETIRED_MODELS.get("codex", {}))
-    assert banned == {"gpt-5.6-sol", "gpt-5.6-terra"}
+    assert banned == {"gpt-5.6-sol", "gpt-6-sol", "gpt-5.6-terra"}
     for role in MR.roles():
         for vendor in MR.vendors():
             cell = MR.matrix_config(role, vendor)
@@ -876,16 +879,29 @@ def test_i2_retired_terra_named_even_on_a_role_with_no_sanctioned_model():
     assert resolved["reason"] == _RETIRED_TERRA_REASON
 
 
-# bite-axis: pin-only gpt-5.6-sol is appended to the allowlist after the ladder slice, at the cell's own effort
+# bite-axis: pin-only gpt-5.6-sol and gpt-6-sol are appended to the allowlist after the ladder slice, at the cell's own effort
 def test_i3_pin_only_sol_appended_after_ladder_slice_at_cell_effort():
     for role in MR.codex_pin_roles():
         cell = MR.matrix_config(role, "codex")
         allowed = MR.allowlist(role, "codex")
         if cell is None:
-            assert all(m != "gpt-5.6-sol" for m, _ in allowed)
+            assert all(m not in ("gpt-5.6-sol", "gpt-6-sol") for m, _ in allowed)
             continue
         _model, effort = cell
-        assert allowed[-1] == ("gpt-5.6-sol", effort)
+        assert allowed[-2:] == (("gpt-5.6-sol", effort), ("gpt-6-sol", effort))
+
+
+# bite-axis: a gpt-6-sol pin stays resolvable on every codex pin role that has a cell, at that cell's effort, and stays refused on a role with no cell
+def test_gpt6_sol_pin_resolves_at_each_codex_pin_roles_cell_effort():
+    assert MR.pin_only_models("codex") == ("gpt-5.6-sol", "gpt-6-sol")
+    for role in ("reviewer", "reviewer-deep", "code-fixer", "implementer"):
+        assert MR.codex_pin_verdict(role, "gpt-6-sol") == (True, None), role
+        r = MR.resolve_dispatch(role, "codex", "gpt-6-sol", None)
+        assert r["ok"] is True, role
+        assert r["effort"] == MR.matrix_config(role, "codex")[1], role
+    ok, reason = MR.codex_pin_verdict("pilot", "gpt-6-sol")
+    assert ok is False
+    assert reason.startswith("pin-not-on-allowlist:")
 
 
 # bite-axis: pin-only gpt-5.6-sol never appears in the raw ladder, any matrix cell, or an escalate() result
@@ -919,13 +935,13 @@ def test_i3_reviewer_deep_pin_sol_resolves_xhigh_others_resolve_high():
 
 
 def test_i3_codex_model_strength_pin_only_first_then_ladder_order():
-    assert MR.codex_model_strength() == ("gpt-5.6-sol", "gpt-6-sol", "gpt-6-astra")
+    assert MR.codex_model_strength() == ("gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra")
     assert set(MR.codex_models()) <= set(MR.codex_model_strength())
 
 
-# bite-axis: codex_min_cli() reports gpt-6-sol's own min_cli as the registry floor
-def test_i4_codex_min_cli_returns_gpt6_sol_floor():
-    assert MR.codex_min_cli() == ("0.157.0", "gpt-6-sol")
+# bite-axis: codex_min_cli() reports gpt-6.1-sol's own min_cli as the registry floor
+def test_i4_codex_min_cli_returns_gpt61_sol_floor():
+    assert MR.codex_min_cli() == ("0.159.0", "gpt-6.1-sol")
 
 
 # bite-axis: codex_min_cli() compares min_cli versions numerically, not lexically as strings
@@ -935,9 +951,10 @@ def test_i4_codex_min_cli_compares_numerically_not_as_a_string(monkeypatch):
     models = copy.deepcopy(MR._MODELS)
     models["codex"]["gpt-6-astra"] = dict(models["codex"]["gpt-6-astra"], min_cli="0.99.0")
     monkeypatch.setattr(MR, "_MODELS", models)
-    assert MR.codex_min_cli() == ("0.157.0", "gpt-6-sol")
+    assert MR.codex_min_cli() == ("0.159.0", "gpt-6.1-sol")
 
     models2 = copy.deepcopy(models)
+    models2["codex"]["gpt-6.1-sol"] = dict(models2["codex"]["gpt-6.1-sol"], min_cli="0.9.0")
     models2["codex"]["gpt-6-sol"] = dict(models2["codex"]["gpt-6-sol"], min_cli="0.9.0")
     monkeypatch.setattr(MR, "_MODELS", models2)
     assert MR.codex_min_cli() == ("0.99.0", "gpt-6-astra")
@@ -949,3 +966,14 @@ def test_i4_codex_min_cli_none_when_no_reachable_model_declares_one(monkeypatch)
         rec.pop("min_cli", None)
     monkeypatch.setattr(MR, "_MODELS", models)
     assert MR.codex_min_cli() is None
+
+
+# bite-axis: the gpt-6.1-sol efforts tuple refuses `none` and admits only its published efforts (max override-gated)
+def test_gpt61_sol_refuses_effort_none_and_accepts_its_published_efforts():
+    ok, reason = MR.validate_config("codex", "gpt-6.1-sol", "none")
+    assert ok is False
+    assert "none" in reason
+    for e in ("low", "medium", "high", "xhigh"):
+        assert MR.validate_config("codex", "gpt-6.1-sol", e) == (True, None)
+    assert MR.validate_config("codex", "gpt-6.1-sol", "max")[0] is False
+    assert MR.validate_config("codex", "gpt-6.1-sol", "max", allow_override_only=True) == (True, None)

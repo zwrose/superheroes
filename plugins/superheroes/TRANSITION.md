@@ -9,6 +9,16 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Before you upgrade
+
+- **Update the Codex CLI to 0.159.0 or later.** The codex default is now `gpt-6.1-sol` (GPT-6.1
+  Sol) in every codex seat, at each seat's existing effort. An older CLI is refused at preflight
+  with `codex-cli-too-old`, before any codex seat runs; Codex CLI 0.158.0 and older cannot dispatch
+  `gpt-6.1-sol` under a ChatGPT account.
+- **A `gpt-6-sol` pin keeps working.** `gpt-6-sol` is now pin-only, like `gpt-5.6-sol`: a pin runs
+  it at the pinned role's own effort, and no default names it. A `gpt-5.6-terra` pin is still
+  refused, and the refusal now names `gpt-6.1-sol` as the replacement.
+
 ### Control probe: plant detection
 
 - The planted-defect control probe counts a Critical finding on the planted file at a line inside the planted hunk as catching the plant, alongside a finding that names `verify_submission`; a finding on another file, outside the hunk, or below Critical does not count.
@@ -18,6 +28,10 @@ belongs to and lists every change with its replacement.
 - A native result file rewritten with different valid content before the deadline is now admitted. The completion stamp follows the latest content observed at or before the deadline. Content first seen after the deadline still forfeits `result-completion-payload-mismatch`.
 - A `worktree-dirtied-by-attempt` forfeit now carries `dirtiedPaths`: `status`, `paths`, `headMoved` and `truncated`, or `status: indeterminate` with a `reason`. It lists paths whose git status changed plus paths the attempt committed. An edit to a file already dirty at open whose status did not change is not listed.
 - Every `attempt-ended` journal record now carries `hostLoadAtOpen`, `hostLoadAtEnd` (1/5/15-minute load, or `null`) and `commandTime` (cursor stream tool and shell seconds, or `null`), and `engine-started` carries `hostLoadAtOpen`. The 900 s default timeout is unchanged.
+
+### Size counter: test-support directories
+
+- The size counter (`lib/size_count.py`) now treats files under a `test-utils`, `test_utils`, `testutils`, `test-helpers`, `test_helpers` or `test-support` directory (any case) as test code, so hand-written test doubles there no longer count toward the non-test size.
 
 ## 0.36.0
 

@@ -2822,7 +2822,7 @@ def test_write_engine_pref_pins_refuses_retired_codex_model_both_keys_byte_ident
     assert res["action"] == "refused"
     assert res["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
     assert res["detail"]["reviewer"] == (
-        "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
+        "model-retired: gpt-5.6-terra is retired; use gpt-6.1-sol"
     )
     assert open(path, encoding="utf-8").read() == before
 
@@ -2833,7 +2833,7 @@ def test_write_engine_pref_pins_refuses_retired_codex_model_both_keys_byte_ident
     assert res2["action"] == "refused"
     assert res2["reason"].startswith(CM.ENGINE_PINS_REASON_INVALID + ":")
     assert res2["detail"]["security-reviewer"] == (
-        "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
+        "model-retired: gpt-5.6-terra is retired; use gpt-6.1-sol"
     )
     assert open(path, encoding="utf-8").read() == before
 

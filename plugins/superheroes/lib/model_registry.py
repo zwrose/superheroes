@@ -29,6 +29,14 @@ _MODELS: dict[str, dict[str, dict]] = {
             "dispatch": "gpt-6-sol",
             "override_only": False,
             "min_cli": "0.157.0",
+            "pin_only": True,
+        },
+        "gpt-6.1-sol": {
+            "family": "openai",
+            "dispatch": "gpt-6.1-sol",
+            "override_only": False,
+            "min_cli": "0.159.0",
+            "efforts": ("low", "medium", "high", "xhigh", "max"),
         },
         "gpt-6-astra": {
             "family": "openai",
@@ -63,7 +71,7 @@ _MODELS: dict[str, dict[str, dict]] = {
 
 # Retired codex models: the replacement each name maps to. The ONE home for the retirement fact —
 # retired_model_reason() is the ONE function that builds the refusal reason from it.
-_RETIRED_MODELS: dict[str, dict[str, str]] = {"codex": {"gpt-5.6-terra": "gpt-6-sol"}}
+_RETIRED_MODELS: dict[str, dict[str, str]] = {"codex": {"gpt-5.6-terra": "gpt-6.1-sol"}}
 
 _EFFORT_ENUM: dict[str, tuple[str, ...]] = {
     "claude": ("low", "medium", "high", "xhigh"),
@@ -80,8 +88,8 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
         ("opus-5.5", "xhigh"),
     ),
     "codex": (
-        ("gpt-6-sol", "high"),
-        ("gpt-6-sol", "xhigh"),
+        ("gpt-6.1-sol", "high"),
+        ("gpt-6.1-sol", "xhigh"),
         ("gpt-6-astra", "high"),
     ),
     "cursor": (
@@ -93,37 +101,37 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
 _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     "implementer": {
         "claude": ("sonnet-5", "high"),
-        "codex": ("gpt-6-sol", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("composer-2.5", None),
     },
     "code-fixer": {
         "claude": ("sonnet-5", "high"),
-        "codex": ("gpt-6-sol", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("composer-2.5", None),
     },
     "doc-reviser": {
         "claude": ("opus-5.5", "high"),
-        "codex": ("gpt-6-sol", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer": {
         "claude": ("sonnet-5", "high"),
-        "codex": ("gpt-6-sol", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer-deep": {
         "claude": ("opus-5.5", "xhigh"),
-        "codex": ("gpt-6-sol", "xhigh"),
+        "codex": ("gpt-6.1-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "verifier": {
         "claude": ("opus-5.5", "high"),
-        "codex": ("gpt-6-sol", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "brief-check": {
         "claude": ("opus-5.5", "xhigh"),
-        "codex": ("gpt-6-sol", "xhigh"),
+        "codex": ("gpt-6.1-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "synthesis": {
@@ -143,7 +151,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     },
     "registration-probe": {
         "claude": None,
-        "codex": ("gpt-6-sol", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": None,
     },
 }
@@ -310,9 +318,9 @@ _MODEL_TIER_ROLES = (
 _CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "code-fixer", "implementer", "pilot")
 
 _CODEX_PEER_BY_CLAUDE = {
-    "sonnet": "gpt-6-sol",
-    "opus": "gpt-6-sol",
-    "haiku": "gpt-6-sol",
+    "sonnet": "gpt-6.1-sol",
+    "opus": "gpt-6.1-sol",
+    "haiku": "gpt-6.1-sol",
 }
 
 _COMPOSER_MODEL = "composer-2.5"

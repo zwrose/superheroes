@@ -1577,7 +1577,7 @@ def test_normalize_seat_pin_map_vendor_only_and_empty_model_rejected():
 
 # --- #1435 WO-2: I2c/I2e — retired codex model refused everywhere a model is named by config ----
 
-_RETIRED_TERRA_REASON = "model-retired: gpt-5.6-terra is retired; use gpt-6-sol"
+_RETIRED_TERRA_REASON = "model-retired: gpt-5.6-terra is retired; use gpt-6.1-sol"
 
 
 # bite-axis: normalize_seat_pin_map refuses a codex seat pin naming retired gpt-5.6-terra, but leaves a non-codex vendor naming the same string untouched
