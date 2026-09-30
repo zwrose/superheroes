@@ -9,8 +9,7 @@ Verbs:
 - loop: re-arms watch_arm internally, passes over benign events, and exits only
   on lane-ending events, refusals, or its ceiling; refuses a second live loop on
   the batch. loop owns one set of state
-  cells (ledger_observed, pr_state, stack_state, pr_sampled) threaded through every arm so
-  store loss across an arm boundary is not mistaken for benign pre-arm silence,
+  cells (pr_state, stack_state, pr_sampled) threaded through every arm so
   PR deltas across an arm boundary are not absorbed into a fresh baseline, and
   a prior arm's successful PR poll is not forgotten on the next arm's timer.
 
@@ -48,8 +47,9 @@ Contract:
   transcript under that instance's root), else the watcher's env root (the
   CLAUDE_CONFIG_DIR override outright, else ~/.claude). A symlinked entry is never
   followed.
-- Observed latch: once the ledger has returned ok or tornTail, a subsequent
-  missing read is blind (store loss), not benign pre-arm silence.
+- A ledger file that is absent reads as blind, exactly like an unreadable one: at the
+  first tick of an arm it refuses ledger-unreadable, mid-arm it degrades the next firing,
+  and at the deadline it refuses. Every ledger-unreadable refusal carries ledgerPath.
 - When a lane's heartbeat is unreadable its higher-precedence E1/E2 state is
   UNKNOWN, so a lower-precedence event may be reported for it and the
   heartbeat-unreadable degradation token discloses that uncertainty.
@@ -326,6 +326,12 @@ def _refusal(reason, batch_id, *, arms=None):
     return result
 
 
+def _with_ledger_path(result, ledger_path):
+    if result.get("reason") == REFUSAL_LEDGER_UNREADABLE:
+        result["ledgerPath"] = ledger_path
+    return result
+
+
 def _valid_positive_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
@@ -419,20 +425,17 @@ def _build_also_observed(
 
 
 def _derive_batch_lanes(
-    repo_root, batch_id, env, degraded, ignore_launch_ids, ledger_observed,
+    repo_root, batch_id, env, degraded, ignore_launch_ids,
 ):
     read_result = ll.read(repo_root, env=env)
     state = read_result["state"]
     if state in ("ok", "tornTail"):
-        ledger_observed[0] = True
         if state == "tornTail":
             degraded.add(DEGRADATION_LEDGER_TORN_TAIL)
         records = read_result["records"]
     elif state == "missing":
-        if ledger_observed[0]:
-            degraded.add(DEGRADATION_LEDGER_UNREADABLE)
-            return {}, {}, False
-        records = []
+        degraded.add(DEGRADATION_LEDGER_UNREADABLE)
+        return {}, {}, False
     elif state in ("unreadable", "interiorCorrupt"):
         degraded.add(DEGRADATION_LEDGER_UNREADABLE)
         return {}, {}, False
@@ -1551,7 +1554,6 @@ def _evaluate_tick(
     monotonic,
     degraded,
     ignore_launch_ids,
-    ledger_observed,
     pr_state,
     stack_state,
     pr_sampled,
@@ -1560,7 +1562,6 @@ def _evaluate_tick(
 ):
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded, ignore_launch_ids,
-        ledger_observed,
     )
 
     if first_tick[0] and not ledger_readable:
@@ -1660,13 +1661,12 @@ def _timer_at_deadline(
     env,
     degraded,
     ignore_launch_ids,
-    ledger_observed,
     pr_sampled,
     add_window_degradations,
 ):
     _batch_lanes, live_lanes, deadline_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded,
-        ignore_launch_ids, ledger_observed,
+        ignore_launch_ids,
     )
     if not deadline_readable:
         return _refusal(REFUSAL_LEDGER_UNREADABLE, batch_id)
@@ -1751,7 +1751,6 @@ def watch_arm(
     sleep=None,
     ignore_launch_ids=(),
     ignore_events=(),
-    ledger_observed=None,
     pr_state=None,
     stack_state=None,
     pr_sampled=None,
@@ -1789,9 +1788,8 @@ def watch_arm(
         ledger_path_result = ll.ledger_path(repo_root, env=env)
         if not ledger_path_result["ok"]:
             return _refusal(REFUSAL_STORE_UNRESOLVABLE, batch_id)
+        resolved_ledger_path = ledger_path_result["path"]
 
-        if ledger_observed is None:
-            ledger_observed = [False]
         if pr_state is None:
             pr_state = [None]
         if stack_state is None:
@@ -1817,7 +1815,6 @@ def watch_arm(
                 monotonic=monotonic,
                 degraded=degraded,
                 ignore_launch_ids=ignore_launch_ids,
-                ledger_observed=ledger_observed,
                 pr_state=pr_state,
                 stack_state=stack_state,
                 pr_sampled=pr_sampled,
@@ -1825,19 +1822,18 @@ def watch_arm(
                 ignore_set=ignore_set,
             )
             if tick_result is not None:
-                return tick_result
+                return _with_ledger_path(tick_result, resolved_ledger_path)
 
             if monotonic() >= deadline:
-                return _timer_at_deadline(
+                return _with_ledger_path(_timer_at_deadline(
                     repo_root,
                     batch_id,
                     env=env,
                     degraded=degraded,
                     ignore_launch_ids=ignore_launch_ids,
-                    ledger_observed=ledger_observed,
                     pr_sampled=pr_sampled,
                     add_window_degradations=True,
-                )
+                ), resolved_ledger_path)
 
             tick = max(
                 tick + 1,
@@ -1891,8 +1887,8 @@ def run(
         ledger_path_result = ll.ledger_path(repo_root, env=env)
         if not ledger_path_result["ok"]:
             return _refusal(REFUSAL_STORE_UNRESOLVABLE, batch_id)
+        resolved_ledger_path = ledger_path_result["path"]
 
-        ledger_observed = [False]
         pr_state = [None]
         stack_state = [None]
         pr_sampled = [False]
@@ -1913,7 +1909,6 @@ def run(
             monotonic=monotonic,
             degraded=degraded,
             ignore_launch_ids=ignore_launch_ids,
-            ledger_observed=ledger_observed,
             pr_state=pr_state,
             stack_state=stack_state,
             pr_sampled=pr_sampled,
@@ -1921,7 +1916,7 @@ def run(
             ignore_set=ignore_set,
         )
         if tick_result is not None:
-            return tick_result
+            return _with_ledger_path(tick_result, resolved_ledger_path)
 
         return _event_result(
             EVENT_TIMER,
@@ -2014,7 +2009,6 @@ def loop(
         if lock_refusal is not None:
             return lock_refusal
 
-        ledger_observed = [False]
         pr_state = [None]
         stack_state = [None]
         pr_sampled = [False]
@@ -2069,7 +2063,6 @@ def loop(
                 membership_reader=membership_reader,
                 ignore_launch_ids=ignore_launch_ids,
                 ignore_events=ignore_events,
-                ledger_observed=ledger_observed,
                 pr_state=pr_state,
                 stack_state=stack_state,
                 pr_sampled=pr_sampled,
