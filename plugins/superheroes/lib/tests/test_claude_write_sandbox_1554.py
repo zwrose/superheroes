@@ -215,10 +215,14 @@ def test_resolver_linked_worktree_roots_and_denies(tmp_path):
     common = os.path.join(main_real, ".git")
     assert os.path.realpath(git_dir) != common
     assert sandbox["writeRoots"] == [wt_real, os.path.realpath(git_dir), common]
+    git_dir_real = os.path.realpath(git_dir)
     assert sandbox["denyWrite"] == [
+        os.path.join(wt_real, ".git"),
         os.path.join(common, "hooks"),
         os.path.join(common, "config"),
-        os.path.join(os.path.realpath(git_dir), "config.worktree"),
+        os.path.join(git_dir_real, "config.worktree"),
+        os.path.join(git_dir_real, "commondir"),
+        os.path.join(git_dir_real, "gitdir"),
     ]
     assert sandbox["uvCacheDir"] is None  # autouse fixture pins uv absent (E5)
 

@@ -1382,6 +1382,19 @@ def main(argv):
                     "constraint": "host-model-unknown",
                     "reason": reason,
                 })
+            elif (
+                impl_engine == "claude"
+                and host_fam != author_family
+            ):
+                family_degradations.append({
+                    "constraint": "maker-family-split",
+                    "reason": (
+                        "author family is %s (claude implementation engine) but "
+                        "review-code's native fixer on this host writes as %s, which "
+                        "the panel does not exclude"
+                        % (author_family, host_fam)
+                    ),
+                })
 
         live_cells = None
         live_cells_source = None

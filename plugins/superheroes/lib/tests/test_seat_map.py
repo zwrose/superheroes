@@ -3793,6 +3793,32 @@ def test_cli_compose_claude_impl_openai_host_author_is_anthropic(capsys):
     assert not any(
         d["constraint"] == "host-model-unknown" for d in receipt["degradations"]
     )
+    splits = [d for d in receipt["degradations"] if d["constraint"] == "maker-family-split"]
+    assert len(splits) == 1
+    assert "openai" in splits[0]["reason"]
+
+
+def test_cli_compose_claude_impl_anthropic_host_no_maker_family_split(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "claude",
+            "--host-model",
+            "claude-opus-5",
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authorFamily"] == "anthropic"
+    assert not any(
+        d["constraint"] == "maker-family-split" for d in receipt["degradations"]
+    )
 
 
 def test_cli_compose_cursor_impl_openai_host_author_is_xai(capsys):
