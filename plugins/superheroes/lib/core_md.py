@@ -107,6 +107,29 @@ VET_CHECKS_MALFORMED_REASONS = (
     VET_CHECKS_MALFORMED_FIELD_NOT_STRING,
     VET_CHECKS_MALFORMED_DUPLICATE_NAME,
 )
+SANDBOX_ACCESS_KEY = "sandboxAccess"
+SANDBOX_ACCESS_FIELDS = ("allowedDomains", "localPorts", "localSockets", "extraWritePaths")
+SANDBOX_ACCESS_REASON_MALFORMED = "sandbox-access-malformed"
+SANDBOX_ACCESS_REASON_INPUT_UNPARSEABLE = "sandbox-access-input-unparseable"
+SANDBOX_ACCESS_REASON_ROUND_TRIP = "sandbox-access-round-trip-refused"
+SANDBOX_ACCESS_MALFORMED_NOT_AN_OBJECT = "sandbox-access-not-an-object"
+SANDBOX_ACCESS_MALFORMED_UNKNOWN_FIELD = "sandbox-access-unknown-field"
+SANDBOX_ACCESS_MALFORMED_NOT_A_LIST = "sandbox-access-not-a-list"
+SANDBOX_ACCESS_MALFORMED_DOMAIN_INVALID = "sandbox-access-domain-invalid"
+SANDBOX_ACCESS_MALFORMED_NOT_A_BOOL = "sandbox-access-not-a-bool"
+SANDBOX_ACCESS_MALFORMED_PATH_NOT_ABSOLUTE = "sandbox-access-path-not-absolute"
+SANDBOX_ACCESS_MALFORMED_PATH_IS_ROOT = "sandbox-access-path-is-root"
+_SANDBOX_ACCEPTED_OBJECT = (
+    "an object with any of the keys allowedDomains, localPorts, localSockets, extraWritePaths")
+_SANDBOX_ACCEPTED_DOMAIN_LIST = "a list of hostnames, such as [\"pypi.org\", \"*.example.com\"]"
+_SANDBOX_ACCEPTED_PATH_LIST = "a list of absolute paths"
+_SANDBOX_ACCEPTED_DOMAIN = (
+    "a bare hostname such as pypi.org, or a subdomain wildcard such as *.example.com "
+    "— no scheme, path, port, or bare *")
+_SANDBOX_ACCEPTED_BOOL = "true or false"
+_SANDBOX_ACCEPTED_PATH = "an absolute path such as /Users/me/Library/Caches/ms-playwright"
+_SANDBOX_ACCEPTED_PATH_BELOW_ROOT = "an absolute path below / — the whole filesystem is never writable"
+_SANDBOX_HOSTNAME = re.compile(r"[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*")
 THREAT_MODEL_REASON_ROUND_TRIP = "threat-model-round-trip-refused"
 GUARDIAN_CADENCE_REASON_LAYER_ABSENT = "guardian-layer-absent"
 GUARDIAN_CADENCE_REASON_NO_FENCE = "guardian-config-fence-absent"
@@ -172,6 +195,82 @@ def validate_vet_checks(value):
     return items
 
 
+def sandbox_access_all_off():
+    """The sandbox-access value with every option off — the default when the key is absent."""
+    return {"allowedDomains": [], "localPorts": False, "localSockets": False,
+            "extraWritePaths": []}
+
+
+def _sandbox_domain_ok(entry):
+    if not isinstance(entry, str) or not entry:
+        return False
+    if entry.startswith("*."):
+        rest = entry[2:]
+        return bool(_SANDBOX_HOSTNAME.fullmatch(rest)) and "." in rest
+    return bool(_SANDBOX_HOSTNAME.fullmatch(entry))
+
+
+def validate_sandbox_access(value):
+    """Return malformed-item dicts for a sandboxAccess value; empty list means valid. Never
+    raises. Every item carries ``accepted`` — the named refusal stating the accepted shape."""
+    def item(field, index, reason, accepted):
+        return {"field": field, "index": index, "reason": reason, "accepted": accepted}
+
+    if not isinstance(value, dict):
+        return [item(None, None, SANDBOX_ACCESS_MALFORMED_NOT_AN_OBJECT,
+                     _SANDBOX_ACCEPTED_OBJECT)]
+    items = []
+    for key in value:
+        if key not in SANDBOX_ACCESS_FIELDS:
+            items.append(item(key, None, SANDBOX_ACCESS_MALFORMED_UNKNOWN_FIELD,
+                              _SANDBOX_ACCEPTED_OBJECT))
+    if "allowedDomains" in value:
+        domains = value["allowedDomains"]
+        if not isinstance(domains, list):
+            items.append(item("allowedDomains", None, SANDBOX_ACCESS_MALFORMED_NOT_A_LIST,
+                              _SANDBOX_ACCEPTED_DOMAIN_LIST))
+        else:
+            for index, entry in enumerate(domains):
+                if not _sandbox_domain_ok(entry):
+                    items.append(item("allowedDomains", index,
+                                      SANDBOX_ACCESS_MALFORMED_DOMAIN_INVALID,
+                                      _SANDBOX_ACCEPTED_DOMAIN))
+    for flag in ("localPorts", "localSockets"):
+        if flag in value and type(value[flag]) is not bool:
+            items.append(item(flag, None, SANDBOX_ACCESS_MALFORMED_NOT_A_BOOL,
+                              _SANDBOX_ACCEPTED_BOOL))
+    if "extraWritePaths" in value:
+        paths = value["extraWritePaths"]
+        if not isinstance(paths, list):
+            items.append(item("extraWritePaths", None, SANDBOX_ACCESS_MALFORMED_NOT_A_LIST,
+                              _SANDBOX_ACCEPTED_PATH_LIST))
+        else:
+            for index, entry in enumerate(paths):
+                if not isinstance(entry, str) or not os.path.isabs(entry):
+                    items.append(item("extraWritePaths", index,
+                                      SANDBOX_ACCESS_MALFORMED_PATH_NOT_ABSOLUTE,
+                                      _SANDBOX_ACCEPTED_PATH))
+                # normpath keeps a leading "//" as-is, so root is "every character a slash"
+                elif not os.path.normpath(entry).strip("/"):
+                    items.append(item("extraWritePaths", index,
+                                      SANDBOX_ACCESS_MALFORMED_PATH_IS_ROOT,
+                                      _SANDBOX_ACCEPTED_PATH_BELOW_ROOT))
+    return items
+
+
+def normalize_sandbox_access(value):
+    """The full four-key dict for a VALID sandboxAccess value: missing keys take the all-off
+    value, domains and normalized paths are deduped preserving order."""
+    out = sandbox_access_all_off()
+    for key in SANDBOX_ACCESS_FIELDS:
+        if key in value:
+            out[key] = copy.deepcopy(value[key])
+    out["allowedDomains"] = list(dict.fromkeys(out["allowedDomains"]))
+    out["extraWritePaths"] = list(dict.fromkeys(
+        os.path.normpath(path) for path in out["extraWritePaths"]))
+    return out
+
+
 def render_core(facts, status, created, updated):
     """Render the §2.2 core.md: provenance comment + prose sections + the json block."""
     block = {
@@ -191,6 +290,8 @@ def render_core(facts, status, created, updated):
         block[DECLARED_DEPENDENCIES_KEY] = dict(declared_deps)
     if VET_CHECKS_KEY in facts:
         block[VET_CHECKS_KEY] = copy.deepcopy(facts[VET_CHECKS_KEY])
+    if SANDBOX_ACCESS_KEY in facts:
+        block[SANDBOX_ACCESS_KEY] = copy.deepcopy(facts[SANDBOX_ACCESS_KEY])
     show_it = (facts.get("showItSurface") or "").strip()
     show_it_block = ""
     if show_it:
@@ -285,6 +386,8 @@ def parse_core(text):
     }
     if VET_CHECKS_KEY in block:
         out[VET_CHECKS_KEY] = copy.deepcopy(block[VET_CHECKS_KEY])
+    if SANDBOX_ACCESS_KEY in block:
+        out[SANDBOX_ACCESS_KEY] = copy.deepcopy(block[SANDBOX_ACCESS_KEY])
     return out
 
 
@@ -528,6 +631,8 @@ def read(cwd, root=None):
     }
     if VET_CHECKS_KEY in facts:
         out[VET_CHECKS_KEY] = facts[VET_CHECKS_KEY]
+    if SANDBOX_ACCESS_KEY in facts:
+        out[SANDBOX_ACCESS_KEY] = facts[SANDBOX_ACCESS_KEY]
     return out
 
 
@@ -1888,6 +1993,119 @@ def clear_vet_checks(cwd, *, root=None):
     return result
 
 
+def read_sandbox_access(cwd, root=None):
+    """Read the ``sandboxAccess`` json key from core.md. Never raises. An absent key (or an
+    absent core.md) reads as every option off; every other failure carries ``access`` None."""
+    base = {
+        "declared": False,
+        "access": None,
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": False,
+    }
+    try:
+        path = core_path(cwd, root)
+    except RepoRootUnavailable:
+        return dict(base, reason="repo-root-unavailable")
+
+    structural = _structural_refusal_at_path(path)
+    if structural is not None:
+        if structural.startswith("%s:" % DUPLICATE_CORE_KEY_REASON):
+            reason = structural
+            detail = None
+        else:
+            reason = structural.split(":", 1)[0]
+            detail = structural
+        return dict(base, reason=reason, detail=detail)
+
+    cls = _classify_core_md_at_path(path)
+    if cls.status == CONFIG_ABSENT:
+        return dict(base, reason="core-md-absent", access=sandbox_access_all_off())
+    if cls.status == CONFIG_UNREADABLE:
+        reason = "core-md-unreadable"
+        detail = cls.detail
+        try:
+            with open(path, encoding="utf-8") as fh:
+                probe = fh.read()
+            if parse_core(probe) is None:
+                reason = "core-md-unparseable"
+        except (OSError, UnicodeDecodeError):
+            pass
+        return dict(base, reason=reason, detail=detail)
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return dict(
+            base,
+            reason="core-md-unreadable",
+            detail=gate_refusal_detail(exc, at=path),
+        )
+
+    facts = parse_core(text)
+    if facts is None:
+        return dict(
+            base,
+            reason="core-md-unparseable",
+            detail="corrupt or unreadable core.md at %s" % path,
+        )
+
+    behind = facts["schemaVersion"] > SCHEMA_VERSION
+    if SANDBOX_ACCESS_KEY not in facts:
+        return dict(base, access=sandbox_access_all_off(), behind=behind)
+
+    raw = facts[SANDBOX_ACCESS_KEY]
+    malformed = validate_sandbox_access(raw)
+    if malformed:
+        return dict(
+            base,
+            declared=True,
+            malformed=malformed,
+            reason=SANDBOX_ACCESS_REASON_MALFORMED,
+            behind=behind,
+        )
+    return dict(base, declared=True, access=normalize_sandbox_access(raw), behind=behind)
+
+
+def write_sandbox_access(cwd, access, *, root=None):
+    """Lock-guarded surgical write of ``sandboxAccess`` only. Never raises."""
+    malformed = validate_sandbox_access(access)
+    if malformed:
+        return {
+            "action": "refused",
+            "reason": SANDBOX_ACCESS_REASON_MALFORMED,
+            "malformed": malformed,
+        }
+    return _write_json_block_key(
+        cwd,
+        SANDBOX_ACCESS_KEY,
+        normalize_sandbox_access(access),
+        root=root,
+        not_a_mapping_reason=SANDBOX_ACCESS_REASON_MALFORMED,
+        round_trip_reason=SANDBOX_ACCESS_REASON_ROUND_TRIP,
+        require_mapping=False,
+    )
+
+
+def clear_sandbox_access(cwd, *, root=None):
+    """Remove the ``sandboxAccess`` key from core.md. Never raises."""
+    result = _write_json_block_key(
+        cwd,
+        SANDBOX_ACCESS_KEY,
+        None,
+        root=root,
+        not_a_mapping_reason=SANDBOX_ACCESS_REASON_MALFORMED,
+        round_trip_reason=SANDBOX_ACCESS_REASON_ROUND_TRIP,
+        require_mapping=False,
+        remove_key=True,
+    )
+    if result.get("action") in ("written", "noop"):
+        return dict(result, cleared=True)
+    return result
+
+
 _THREAT_MODEL_HEADING = re.compile(r"^\s*##\s+Threat model\s*$", re.IGNORECASE)
 
 
@@ -2387,6 +2605,8 @@ def confirm(cwd, *, root=None, now=None):
                 DECLARED_DEPENDENCIES_KEY)}
             if VET_CHECKS_KEY in existing:
                 facts[VET_CHECKS_KEY] = existing[VET_CHECKS_KEY]
+            if SANDBOX_ACCESS_KEY in existing:
+                facts[SANDBOX_ACCESS_KEY] = existing[SANDBOX_ACCESS_KEY]
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),
@@ -2521,6 +2741,17 @@ def main(argv):
         "--clear",
         action="store_true",
         help="remove vetChecks from core.md (explicit clear; empty stdin is refused)",
+    )
+    sa = sub.add_parser("sandbox-access")
+    sa.add_argument("--cwd", default=".")
+    sa.add_argument("--root", default=None)
+    wsa = sub.add_parser("write-sandbox-access")
+    wsa.add_argument("--cwd", default=".")
+    wsa.add_argument("--root", default=None)
+    wsa.add_argument(
+        "--clear",
+        action="store_true",
+        help="remove sandboxAccess from core.md (explicit clear; empty stdin is refused)",
     )
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
@@ -2756,6 +2987,59 @@ def main(argv):
                     sys.stdout.write(json.dumps(out, indent=2) + "\n")
                     return 0
                 out = write_vet_checks(args.cwd, checks, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "sandbox-access":
+        try:
+            out = read_sandbox_access(args.cwd, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {
+                "declared": False,
+                "access": None,
+                "malformed": [],
+                "reason": "repo-root-unavailable",
+                "detail": gate_refusal_detail(exc),
+                "behind": False,
+            }
+        except Exception:
+            out = {
+                "declared": False,
+                "access": None,
+                "malformed": [],
+                "reason": "core-md-unreadable",
+                "detail": None,
+                "behind": False,
+            }
+    elif args.cmd == "write-sandbox-access":
+        try:
+            if args.clear:
+                out = clear_sandbox_access(args.cwd, root=args.root)
+            else:
+                raw = sys.stdin.read()
+                if raw.strip() == "":
+                    out = {"action": "refused", "reason": SANDBOX_ACCESS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                try:
+                    access, duplicate_key = _json_loads_rejecting_duplicate_keys(raw.strip())
+                except TypeError:
+                    access, duplicate_key = None, None
+                if duplicate_key is not None:
+                    out = {
+                        "action": "refused",
+                        "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key),
+                    }
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if access is None:
+                    out = {"action": "refused", "reason": SANDBOX_ACCESS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                out = write_sandbox_access(args.cwd, access, root=args.root)
         except RepoRootUnavailable as exc:
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,
