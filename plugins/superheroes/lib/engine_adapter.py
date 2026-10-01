@@ -201,6 +201,8 @@ def REVIEW_RESULT_CONTRACT(expected_result_kind=None):
 
 REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE = "sandbox-roots-unresolvable"
 REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE = "sandbox-uv-cache-unresolvable"
+REFUSAL_SANDBOX_ACCESS_MALFORMED = "sandbox-access-malformed"
+REFUSAL_SANDBOX_ACCESS_UNREADABLE = "sandbox-access-unreadable"
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
@@ -219,6 +221,8 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "sandbox-process-listing-unavailable",
     REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE,
     REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE,
+    REFUSAL_SANDBOX_ACCESS_MALFORMED,
+    REFUSAL_SANDBOX_ACCESS_UNREADABLE,
 })
 
 REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
@@ -244,7 +248,28 @@ def claude_write_sandbox_valid(sandbox):
     uv_cache = sandbox.get("uvCacheDir")
     if uv_cache is not None and not _abs_str(uv_cache):
         return False
-    return True
+    return _sandbox_access_valid(sandbox.get("access"))
+
+
+_SANDBOX_ACCESS_KEYS = frozenset({
+    "allowedDomains", "localPorts", "localSocketDirs", "extraWritePaths",
+})
+
+
+def _sandbox_access_valid(access):
+    """The journaled ``access`` object (#1562): absent or None is all-off, a pre-field run."""
+    if access is None:
+        return True
+    if not isinstance(access, dict) or set(access) != _SANDBOX_ACCESS_KEYS:
+        return False
+    domains = access["allowedDomains"]
+    if not isinstance(domains, list) or not all(isinstance(d, str) and d for d in domains):
+        return False
+    for key in ("localSocketDirs", "extraWritePaths"):
+        paths = access[key]
+        if not isinstance(paths, list) or not all(_abs_str(p) for p in paths):
+            return False
+    return type(access["localPorts"]) is bool
 
 
 def claude_write_sandbox_settings(sandbox):
@@ -252,11 +277,21 @@ def claude_write_sandbox_settings(sandbox):
 
     Pure: built only from the journaled ``sandbox`` dict, never the ambient environment."""
     uv_cache = sandbox.get("uvCacheDir")
-    env = {"UV_OFFLINE": "1"}
+    access = sandbox.get("access") or {}
+    domains = access.get("allowedDomains") or []
+    socket_dirs = access.get("localSocketDirs") or []
+    extra_paths = access.get("extraWritePaths") or []
+    env = {} if domains else {"UV_OFFLINE": "1"}
     allow_write = list(sandbox["writeRoots"])
     if uv_cache is not None:
         env["UV_CACHE_DIR"] = uv_cache
         allow_write.append(uv_cache)
+    allow_write.extend(extra_paths)
+    network = {"allowedDomains": list(domains), "strictAllowlist": True}
+    if access.get("localPorts"):
+        network["allowLocalBinding"] = True
+    if socket_dirs:
+        network["allowUnixSockets"] = list(socket_dirs)
     obj = {
         "env": env,
         "permissions": {"deny": ["WebFetch", "WebSearch"]},
@@ -265,7 +300,7 @@ def claude_write_sandbox_settings(sandbox):
             "failIfUnavailable": True,
             "autoAllowBashIfSandboxed": True,
             "allowUnsandboxedCommands": False,
-            "network": {"allowedDomains": [], "strictAllowlist": True},
+            "network": network,
             "filesystem": {"allowWrite": allow_write, "denyWrite": list(sandbox["denyWrite"])},
         },
     }

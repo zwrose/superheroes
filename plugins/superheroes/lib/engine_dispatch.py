@@ -42,6 +42,7 @@ if _LIB_DIR not in sys.path:
 import claude_modes  # noqa: E402  claude dispatch-mode vocabulary (#1504)
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import config_dir  # noqa: E402  claude config root resolution (#1273)
+import core_md  # noqa: E402  sandboxAccess calibration read, once at run open (#1562)
 import dispatch_guard  # noqa: E402  model allowlist gate (#600, #1269 WO-B)
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
@@ -1718,10 +1719,39 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
         if uv_proc.returncode != 0 or not out:
             return None, engine_adapter.REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE
         uv_cache_dir = os.path.realpath(os.path.join(cwd_real, out))
+    # The sandboxAccess calibration is read here and only here (#1562); continuations and spawns
+    # use the journaled value.
+    try:
+        read = core_md.read_sandbox_access(cwd_real)
+        calibrated = read["access"]
+        reason = read["reason"]
+    except Exception:
+        return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
+    if calibrated is None:
+        if reason == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
+            return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
+        return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
+    socket_dirs = []
+    if calibrated["localSockets"]:
+        if not hasattr(os, "getuid"):
+            return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
+        socket_dirs.append(os.path.realpath(os.path.join(
+            os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp", "claude-%d" % os.getuid())))
+    extra_write_paths = []
+    for extra in calibrated["extraWritePaths"]:
+        extra = os.path.realpath(extra)
+        if extra not in extra_write_paths:
+            extra_write_paths.append(extra)
     return {
         "writeRoots": write_roots,
         "denyWrite": deny_write,
         "uvCacheDir": uv_cache_dir,
+        "access": {
+            "allowedDomains": list(calibrated["allowedDomains"]),
+            "localPorts": calibrated["localPorts"],
+            "localSocketDirs": socket_dirs,
+            "extraWritePaths": extra_write_paths,
+        },
     }, None
 
 
