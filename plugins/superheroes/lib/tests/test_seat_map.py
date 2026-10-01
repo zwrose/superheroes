@@ -3795,7 +3795,45 @@ def test_cli_compose_claude_impl_openai_host_author_is_anthropic(capsys):
     )
     splits = [d for d in receipt["degradations"] if d["constraint"] == "maker-family-split"]
     assert len(splits) == 1
+    assert "anthropic" in splits[0]["reason"]
     assert "openai" in splits[0]["reason"]
+    maker_seats = set(SM.LENS_SEATS) | {SM.GROUNDING_SEAT}
+    for seat in maker_seats:
+        fam = receipt["seats"][seat]["family"]
+        assert fam not in ("anthropic", "openai"), (seat, fam)
+
+
+def test_build_extra_maker_family_falls_back_and_discloses():
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        ["claude", "codex"],
+        "anthropic",
+        "openai",
+        1,
+        extra_maker_families=frozenset({"openai"}),
+    )
+    for seat in SM.LENS_SEATS:
+        assert m["seats"][seat]["family"] == "openai"
+    secondary = [
+        d for d in m["degradations"] if d.get("constraint") == "secondary-maker-seated"
+    ]
+    assert secondary
+
+
+def test_build_extra_maker_families_default_unchanged():
+    for seed in range(21):
+        base = SM.build(
+            SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", seed
+        )
+        with_extra = SM.build(
+            SM.PANEL_ROSTER,
+            THREE_VENDORS,
+            "anthropic",
+            "openai",
+            seed,
+            extra_maker_families=None,
+        )
+        assert base == with_extra
 
 
 def test_cli_compose_claude_impl_anthropic_host_no_maker_family_split(capsys):
