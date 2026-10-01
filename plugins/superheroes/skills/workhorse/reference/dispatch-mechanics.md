@@ -742,24 +742,45 @@ implementer path and not review-code's in-place fixer path.
 A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inline `--settings`.
 
 - **Allowed:** writes to the build worktree, its git dir, the shared git common dir, and the uv
-  cache. **Blocked:** the network (no allowed domains), writes to the common dir's `hooks` and
-  `config` and the worktree's `config.worktree`, WebFetch and WebSearch, and any command outside
-  the sandbox. If the sandbox cannot start, the run fails instead of running unsandboxed.
+  cache. **Blocked:** the network (unless `sandboxAccess` opens it), writes to the common dir's
+  `hooks` and `config` and the worktree's `config.worktree`, WebFetch and WebSearch, and any command
+  outside the sandbox. If the sandbox cannot start, the run fails instead of running unsandboxed.
 - **Settings files:** `--restricted` ignores user, project, and local settings and confines
   Write and Edit to the working directory.
-- **uv is offline** (`UV_OFFLINE=1`): the order's Python dependencies must already be in the uv
-  cache, or the install fails.
+- **uv is offline** (`UV_OFFLINE=1`) unless `allowedDomains` is non-empty: the order's Python
+  dependencies must already be in the uv cache, or the install fails.
+- **Project access options.** A project opens access through `sandboxAccess` in its calibration, set
+  through configure's view-and-tune (`skills/configure/reference/view-and-tune.md` § 2). Four options,
+  each off by default: `allowedDomains` reaches those hosts (`sandbox.network.allowedDomains`, still
+  under `strictAllowlist`); `localPorts` allows listening and connecting on loopback, including a bind
+  on 0.0.0.0 (`sandbox.network.allowLocalBinding`); `localSockets` allows Unix-domain sockets under
+  the sandbox's per-user temp dir and nothing else, so no Docker socket
+  (`sandbox.network.allowUnixSockets`); `extraWritePaths` adds writable roots
+  (`sandbox.filesystem.allowWrite`). The deny list (the git hooks, the git config files, the worktree
+  identity files) wins over any extra path.
 - **Roots freeze at open.** The writable roots are resolved once at run open and journaled as
-  `claudeWriteSandbox` in the run-opened record; continuations and spawns reuse them. A run opened
-  without them refuses `engine-config:sandbox-roots-missing`. A root that cannot be resolved
-  refuses at open, with nothing opened: `engine-config:sandbox-roots-unresolvable` or
-  `engine-config:sandbox-uv-cache-unresolvable`.
+  `claudeWriteSandbox` in the run-opened record; continuations and spawns reuse them. The access
+  options are read once at open and journaled with the roots as `claudeWriteSandbox.access`, so a
+  calibration edit mid-run does not change a running run's sandbox; a run opened without that field
+  reads as all off. A run opened without the roots refuses `engine-config:sandbox-roots-missing`. A
+  root that cannot be resolved refuses at open, with nothing opened:
+  `engine-config:sandbox-roots-unresolvable` or `engine-config:sandbox-uv-cache-unresolvable`. So does
+  a `sandboxAccess` the open cannot use: `engine-config:sandbox-access-malformed`, or
+  `engine-config:sandbox-access-unreadable` when a `core.md` that exists cannot be read, parsed, or
+  resolved (an absent `core.md` is all off). `localPorts` and `localSockets` are macOS-only: the
+  sandbox runtime forwards `allowLocalBinding` and `allowUnixSockets` to its macOS wrapper and not
+  its Linux one, so on any other host an open that asks for either refuses
+  `engine-config:sandbox-access-unsupported-platform` rather than recording a grant nothing honors.
+  An `extraWritePaths` entry that resolves to `/` through a symlink refuses
+  `engine-config:sandbox-access-malformed`.
 - **`ps` is blocked** inside the sandbox (measured on macOS). Pass `--requires-process-listing`
   when the order's own verification lists processes, for example a test that shells out to `ps`;
   a claude write then refuses `engine-config:sandbox-process-listing-unavailable` before any run
   opens. Codex and cursor ignore the flag.
 - **Temp-dir residual:** the sandbox's per-user temp dir stays writable (a platform default,
-  measured as `/tmp/claude-<uid>`), and other Claude sessions' scratch can live there.
+  measured as `/tmp/claude-<uid>`), and other Claude sessions' scratch can live there. The
+  `localSockets` grant follows Claude Code 2.1.284's own rule for that dir: `CLAUDE_CODE_TMPDIR`
+  when it is at most 44 bytes, otherwise `/tmp`; the grant is never widened to bare `/tmp`.
 - **Command friction:** a compound line the harness cannot auto-approve (`cmd; echo "exit=$?"`, a
   heredoc) is denied in print mode and the engine retries simpler. Plain `a && b` chains run.
 

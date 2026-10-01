@@ -612,7 +612,10 @@ degrade and not a post-hoc result check.
 **Build-engine contract.** A builder's implementer orders (the Workhorse charter,
 `agents/implementer.md`) dispatch through the supervised write runner on the calibrated
 implementation engine: `claude` runs the sandboxed Claude write channel, codex and cursor
-their own CLIs. The same implementer template is inlined verbatim (minus its frontmatter)
+their own CLIs. The Claude write sandbox is offline by default, and a project may open four kinds of
+access (network domains, loopback ports, Unix sockets in the sandbox's temp dir, extra writable
+paths) through `sandboxAccess` in its calibration, set through configure; see
+`skills/workhorse/reference/dispatch-mechanics.md` § The claude write sandbox. The same implementer template is inlined verbatim (minus its frontmatter)
 for every engine, so all paths carry identical instructions by construction.
 `review-code`'s panel seats route the same way, resolved via `engine_adapter.py`. The
 engine axis is orthogonal to the model tier: `model_tier` still governs *which Claude

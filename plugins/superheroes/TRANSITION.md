@@ -7,6 +7,17 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Claude write sandbox: four access options, offline by default
+
+- The sandbox is still offline by default. A project without `sandboxAccess` sees byte-identical sandbox settings.
+- A new top-level key, `sandboxAccess`, in `core.md`'s `superheroes-core` JSON block opens access. It has four optional fields: `allowedDomains` (a list of hostnames), `localPorts` (true or false), `localSockets` (true or false), and `extraWritePaths` (a list of absolute paths). A missing key, a missing field, or an absent `core.md` is all off. Set it through configure's view-and-tune; `configure_view.render` shows a `### Sandbox access` block.
+- The run-opened record gains `claudeWriteSandbox.access`, the resolved values read once at open. Continuations and spawns reuse it, so a calibration edit does not change a running run. A run opened by 0.38.0 has no such field and continues as all off.
+- Two new open-time refusals, each opening nothing: `engine-config:sandbox-access-malformed`, and `engine-config:sandbox-access-unreadable` for a `core.md` that exists but cannot be read, parsed, or resolved. An absent `core.md` is all off, not a refusal.
+- Malformed values are refused when the calibration is read, each item naming its field, its reason, and the accepted shape. The reason tokens are `sandbox-access-not-an-object`, `sandbox-access-unknown-field` (a misspelled key is refused, never ignored), `sandbox-access-not-a-list`, `sandbox-access-domain-invalid`, `sandbox-access-not-a-bool`, `sandbox-access-path-not-absolute`, and `sandbox-access-path-is-root`.
+- The profile schema version is unchanged, so an older plugin that re-calibrates from scratch can drop the `sandboxAccess` key.
+
 ## 0.38.0
 
 ### Before you upgrade
