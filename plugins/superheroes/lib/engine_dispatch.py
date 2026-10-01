@@ -1657,7 +1657,12 @@ def _run_live_evidence(state):
 
 def _git_scrubbed(cwd, *args, timeout=None):
     return subprocess.run(
-        ["git", "-C", cwd, *args],
+        [
+            "git", "-C", cwd,
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "core.fsmonitor=",
+            *args,
+        ],
         capture_output=True, text=True,
         env=launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,)),
         timeout=timeout,
@@ -1676,12 +1681,12 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
             timeout=timeout,
         )
     except (subprocess.TimeoutExpired, OSError):
-        return None, "sandbox-roots-unresolvable"
+        return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
     if proc.returncode != 0:
-        return None, "sandbox-roots-unresolvable"
+        return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
     lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
     if len(lines) != 2 or not all(os.path.isabs(ln) for ln in lines):
-        return None, "sandbox-roots-unresolvable"
+        return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
     git_dir = os.path.realpath(lines[0])
     git_common_dir = os.path.realpath(lines[1])
     write_roots = []
@@ -1690,9 +1695,12 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
             write_roots.append(root)
     deny_write = []
     for denied in (
+        os.path.join(cwd_real, ".git"),
         os.path.join(git_common_dir, "hooks"),
         os.path.join(git_common_dir, "config"),
         os.path.join(git_dir, "config.worktree"),
+        os.path.join(git_dir, "commondir"),
+        os.path.join(git_dir, "gitdir"),
     ):
         if denied not in deny_write:
             deny_write.append(denied)
@@ -1705,10 +1713,10 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
                 timeout=timeout,
             )
         except (subprocess.TimeoutExpired, OSError):
-            return None, "sandbox-uv-cache-unresolvable"
+            return None, engine_adapter.REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE
         out = (uv_proc.stdout or "").strip()
         if uv_proc.returncode != 0 or not out:
-            return None, "sandbox-uv-cache-unresolvable"
+            return None, engine_adapter.REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE
         uv_cache_dir = os.path.realpath(out)
     return {
         "writeRoots": write_roots,
@@ -1720,7 +1728,12 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
 def _git_scrubbed_bytes(cwd, *args, timeout=None):
     """Byte-exact git for the dirt probe: pathnames are bytes, and no channel may rewrite them."""
     return subprocess.run(
-        ["git", "-C", cwd, *args],
+        [
+            "git", "-C", cwd,
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "core.fsmonitor=",
+            *args,
+        ],
         capture_output=True,
         env=launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,)),
         timeout=timeout,

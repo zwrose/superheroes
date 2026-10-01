@@ -199,6 +199,9 @@ def REVIEW_RESULT_CONTRACT(expected_result_kind=None):
     return "\n".join(lines) + "\n"
 
 
+REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE = "sandbox-roots-unresolvable"
+REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE = "sandbox-uv-cache-unresolvable"
+
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
 BUILD_ARGV_REFUSAL_TOKENS = frozenset({
@@ -214,8 +217,8 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "builder-session-id-invalid",
     "sandbox-roots-missing",
     "sandbox-process-listing-unavailable",
-    "sandbox-roots-unresolvable",
-    "sandbox-uv-cache-unresolvable",
+    REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE,
+    REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE,
 })
 
 REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
