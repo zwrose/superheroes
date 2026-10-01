@@ -13,7 +13,7 @@ VENDORS = ("claude", "codex", "cursor")
 _MODELS: dict[str, dict[str, dict]] = {
     "claude": {
         "haiku-4.5": {"family": "anthropic", "dispatch": "haiku", "override_only": False},
-        "sonnet-5": {"family": "anthropic", "dispatch": "sonnet", "override_only": False},
+        "sonnet-5.5": {"family": "anthropic", "dispatch": "sonnet", "override_only": False},
         "opus-5.5": {"family": "anthropic", "dispatch": "opus", "override_only": False},
         "fable-5.1": {"family": "anthropic", "dispatch": "fable", "override_only": True},
     },
@@ -83,7 +83,7 @@ OVERRIDE_ONLY_EFFORTS: dict[str, tuple[str, ...]] = {"codex": ("max",)}
 _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
     "claude": (
         ("haiku-4.5", "medium"),
-        ("sonnet-5", "high"),
+        ("sonnet-5.5", "high"),
         ("opus-5.5", "high"),
         ("opus-5.5", "xhigh"),
     ),
@@ -100,12 +100,12 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
 
 _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     "implementer": {
-        "claude": ("sonnet-5", "high"),
+        "claude": ("sonnet-5.5", "high"),
         "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("composer-2.5", None),
     },
     "code-fixer": {
-        "claude": ("sonnet-5", "high"),
+        "claude": ("sonnet-5.5", "high"),
         "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("composer-2.5", None),
     },
@@ -115,7 +115,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer": {
-        "claude": ("sonnet-5", "high"),
+        "claude": ("sonnet-5.5", "high"),
         "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
@@ -145,7 +145,7 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": None,
     },
     "pilot": {
-        "claude": ("sonnet-5", "high"),
+        "claude": ("sonnet-5.5", "high"),
         "codex": None,
         "cursor": None,
     },
@@ -290,11 +290,11 @@ _HOST_MODEL_PREFIX_FAMILY = (("claude-", "anthropic"), ("gpt-", "openai"))
 #
 # Probed live with `claude -p --model <alias>`; re-run and re-stamp on a harness upgrade.
 CLAUDE_ALIAS_RESOLUTION = {
-    "harness": "claude-code/2.1.280",
-    "verified": "2026-09-23",
+    "harness": "claude-code/2.1.284",
+    "verified": "2026-10-01",
     "resolved": {
         "haiku": "claude-haiku-4-5-20251001",
-        "sonnet": "claude-sonnet-5",
+        "sonnet": "claude-sonnet-5-5",
         "opus": "claude-opus-5-5",
         "fable": "claude-fable-5-1",
     },

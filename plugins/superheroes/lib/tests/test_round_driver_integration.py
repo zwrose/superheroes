@@ -83,7 +83,7 @@ REVIEWED_DIFF = "".join(_section(p, "gamma") for p in FILES)
 HEAD_DIFF = ("".join(_section(p, "gamma-fixed" if p == FIXED_FILE else "gamma") for p in FILES)
              + _section(NEW_SURFACE_FILE, "fresh"))
 
-SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
                       for dim in round_driver.DIMENSIONS}}
 FINDING_SEAT = "code-reviewer"
 _FAKE_GIT_HEAD = "a" * 40
@@ -212,7 +212,7 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0, evidence_read="
         "seat": seat,
         "attempt": pend["attempt"],
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": manifest_sha,
         "orderSha256": order_sha,
         "manifestSha256": manifest_sha,
@@ -246,7 +246,7 @@ def _record(session_dir, seat, occurrence=0):
 
 def _write_dispatch_manifest(session_dir, pend, slots, vendor_for):
     """The ORCHESTRATOR's out-of-band dispatch manifest — the ONLY provenance the adapter trusts."""
-    manifest = {seat: {"vendor": vendor_for(seat), "model": "sonnet-5", "engine": "claude"}
+    manifest = {seat: {"vendor": vendor_for(seat), "model": "sonnet-5.5", "engine": "claude"}
                 for seat, _occurrence in slots}
     round_records.atomic_write_json(
         round_records.dispatch_manifest_path(session_dir, pend["round"], pend["phase"],
@@ -739,7 +739,7 @@ def _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence=
         "seat": seat,
         "attempt": pend["attempt"],
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": manifest_sha,
         "orderSha256": order_sha,
         "manifestSha256": manifest_sha,

@@ -237,7 +237,7 @@ def test_validate_config_cases():
 
 
 def test_dispatch_token():
-    assert MR.dispatch_token("claude", "sonnet-5") == "sonnet"
+    assert MR.dispatch_token("claude", "sonnet-5.5") == "sonnet"
     assert MR.dispatch_token("codex", "gpt-5.6-sol") == "gpt-5.6-sol"
     assert MR.dispatch_token("cursor", "composer-2.5") == "composer-2.5"
     assert MR.dispatch_token("cursor", "cursor-grok-4.6", "xhigh") == "cursor-grok-4.6-xhigh"
@@ -252,7 +252,7 @@ def test_dispatch_token():
 
 
 def test_escalate():
-    assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-5.5", "high")
+    assert MR.escalate("claude", "sonnet-5.5", "high") == ("claude", "opus-5.5", "high")
     assert MR.escalate("cursor", "cursor-grok-4.6", "xhigh") == ("claude", "haiku-4.5", "medium")
     assert MR.escalate("claude", "fable-5.1", "high") is None
 
@@ -295,7 +295,7 @@ def test_allowlist():
         ("cursor-grok-4.6", "xhigh"),
     )
     impl_claude = MR.allowlist("implementer", "claude")
-    assert impl_claude[0] == ("sonnet-5", "high")
+    assert impl_claude[0] == ("sonnet-5.5", "high")
     assert ("haiku-4.5", "medium") not in impl_claude
     assert MR.allowlist("synthesis", "codex") == ()
 
@@ -505,7 +505,7 @@ def test_continuation_refuses_legacy_claude_label_mismatch():
     assert ED._continuation_seat_mismatch(opened, seat) == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
     seat_diff = {
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "effort": "xhigh",
         "role": "reviewer-deep",
     }
@@ -515,6 +515,39 @@ def test_continuation_refuses_legacy_claude_label_mismatch():
 # axis: legacy claude model ids stay unregistered and honored nowhere
 def test_legacy_claude_model_ids_stay_unregistered():
     assert MR.validate_config("claude", "opus-5", "xhigh")[0] is False
+
+
+# axis: the legacy sonnet-5 label has no registry row (#1554)
+def test_legacy_sonnet_5_label_stays_unregistered():
+    assert MR.validate_config("claude", "sonnet-5", "high")[0] is False
+
+
+# axis: a journaled run under the legacy sonnet-5 label is refused, never translated (#1554)
+def test_continuation_refuses_legacy_sonnet_label():
+    ED = _load_engine_dispatch()
+    opened = {
+        "resolvedInputs": {
+            "engine": "claude",
+            "model": "sonnet-5",
+            "effort": "high",
+            "role": "implementer",
+        }
+    }
+    seat = {
+        "vendor": "claude",
+        "model": "sonnet-5.5",
+        "effort": "high",
+        "role": "implementer",
+    }
+    assert ED._continuation_seat_mismatch(opened, seat) == ED.SEAT_REFUSAL_RUN_DIR_MISMATCH
+
+
+# axis: the sonnet dispatch token still resolves to the renamed registry id (#1554)
+def test_sonnet_dispatch_token_resolves_to_sonnet_5_5():
+    r = MR.resolve_dispatch("implementer", "claude")
+    assert r["ok"] is True
+    assert r["model_id"] == "sonnet-5.5"
+    assert r["dispatch_token"] == "sonnet"
 
 
 def test_auditor_and_code_fixer_families_match_per_vendor():
@@ -633,7 +666,11 @@ def _load_model_registry_at_sha(sha):
     return mod
 
 
-_LEGACY_MATRIX_MODEL_IDS = {"opus-5": "opus-5.5", "fable-5": "fable-5.1"}
+_LEGACY_MATRIX_MODEL_IDS = {
+    "opus-5": "opus-5.5",
+    "fable-5": "fable-5.1",
+    "sonnet-5": "sonnet-5.5",
+}
 
 
 def _matrix_cell_after_legacy_translate(vendor, cell):

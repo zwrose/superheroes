@@ -334,7 +334,7 @@ def _seats_without_maker_collision(maker_family):
                 cfg = dict(anthropic_cfg)
                 if seat == "grounding-seat":
                     cfg["tier"] = "reviewer"
-                    cfg["model"] = "sonnet-5"
+                    cfg["model"] = "sonnet-5.5"
                     cfg["effort"] = "high"
                 overrides[seat] = cfg
     elif maker_family == "openai":
@@ -363,7 +363,7 @@ def test_verify_grounding_maker_family_violation():
     seats = _full_seats_template()
     seats["grounding-seat"] = {
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "effort": "high",
         "tier": "reviewer",
         "family": "anthropic",
@@ -380,7 +380,7 @@ def test_verify_strong_tier_violation():
     seats = _full_seats_template()
     seats["security-reviewer"] = {
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "effort": "high",
         "tier": "reviewer",
         "family": "anthropic",
@@ -1471,7 +1471,7 @@ def test_unexcused_e5_pinned_seat_excuses_strong_tier_via_pin():
         seats[seat] = dict(seats["premortem-reviewer"])
         if seat == "grounding-seat":
             seats[seat]["tier"] = "reviewer"
-            seats[seat]["model"] = "sonnet-5"
+            seats[seat]["model"] = "sonnet-5.5"
             seats[seat]["effort"] = "high"
     receipt = {
         "seats": seats,
@@ -1618,7 +1618,7 @@ def test_unexcused_strong_tier_stands_when_reviewer_deep_available():
     seats = _full_seats_template()
     seats["security-reviewer"] = {
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "effort": "high",
         "tier": "reviewer",
         "family": "anthropic",
@@ -1657,7 +1657,7 @@ def test_unexcused_critical_diversity_pin_not_causal_f3a():
         cfg = dict(anthropic_cfg)
         if s == "grounding-seat":
             cfg["tier"] = "reviewer"
-            cfg["model"] = "sonnet-5"
+            cfg["model"] = "sonnet-5.5"
             cfg["effort"] = "high"
         seats[s] = cfg
     seats["security-reviewer"]["source"] = "pinned"
@@ -2420,7 +2420,7 @@ def test_inv1_no_assertion_by_omission():
     seats = _full_seats_template()
     seats["security-reviewer"] = {
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "effort": "high",
         "tier": "reviewer",
         "family": "anthropic",
@@ -2444,7 +2444,7 @@ def test_inv2_monotone_union():
     seats = _full_seats_template()
     seats["security-reviewer"] = {
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "effort": "high",
         "tier": "reviewer",
         "family": "anthropic",
@@ -2544,7 +2544,7 @@ def test_inv5_derived_undeclared_is_unexcusable():
     seats = _full_seats_template()
     seats["architecture-reviewer"] = {
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "effort": "high",
         "tier": "reviewer",
         "family": "anthropic",
@@ -2667,7 +2667,7 @@ def _all_claude_roster_seats():
         cfg = dict(anthropic_cfg)
         if seat == "grounding-seat":
             cfg["tier"] = "reviewer"
-            cfg["model"] = "sonnet-5"
+            cfg["model"] = "sonnet-5.5"
             cfg["effort"] = "high"
         seats[seat] = cfg
     return seats
@@ -2731,7 +2731,7 @@ def test_inv16_a_no_author_family_basis():
 @pytest.mark.parametrize("seat", ["test-reviewer", "grounding-seat"])
 def test_inv16_c_unresolvable_vendor_violation_unexcused(seat):
     tier = "reviewer" if seat == "grounding-seat" else "reviewer-deep"
-    model = "sonnet-5" if seat == "grounding-seat" else "opus-5.5"
+    model = "sonnet-5.5" if seat == "grounding-seat" else "opus-5.5"
     effort = "high" if seat == "grounding-seat" else "xhigh"
     seats = _full_seats_template()
     seats[seat] = {

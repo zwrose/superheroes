@@ -38,7 +38,7 @@ RC = RD.round_commit
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
 
-SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
                       for dim in RD.DIMENSIONS}}
 
 
@@ -185,7 +185,7 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
     "seat": seat,
     "attempt": pend["attempt"],
     "vendor": "claude",
-    "model": "sonnet-5",
+    "model": "sonnet-5.5",
     "dispatchRef": manifest_sha,
     "orderSha256": order_sha,
     "manifestSha256": manifest_sha,
@@ -533,7 +533,7 @@ def _dispatch_observed_land(session_dir, seat, payload=None, pend=None, **over):
     "seat": seat,
     "attempt": pend["attempt"],
     "vendor": "claude",
-    "model": "sonnet-5",
+    "model": "sonnet-5.5",
     "dispatchRef": manifest_sha,
     "orderSha256": order_sha,
     "manifestSha256": manifest_sha,

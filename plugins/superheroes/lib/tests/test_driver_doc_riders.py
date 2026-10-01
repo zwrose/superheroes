@@ -147,7 +147,7 @@ def _build_envelope_from_fields(fields, payload=None):
         "seat": SEAT,
         "attempt": 1,
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": "dispatch-abc",
         "orderSha256": RR.NOT_EMITTED,
         "manifestSha256": RR.NOT_EMITTED,

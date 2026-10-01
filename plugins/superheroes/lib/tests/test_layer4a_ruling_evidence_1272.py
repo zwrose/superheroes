@@ -66,7 +66,7 @@ def _stub_dispatch_observed_land(session_dir, state, pend, seat, payload=None, o
         "seat": seat,
         "attempt": pend["attempt"],
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": manifest_sha,
         "orderSha256": order_sha,
         "manifestSha256": manifest_sha,

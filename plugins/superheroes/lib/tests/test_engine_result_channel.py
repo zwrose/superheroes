@@ -503,7 +503,7 @@ def test_every_dispatchable_vendor_has_channel_delivery_pin_and_argv():
     matrix_cells = {
         "codex": MR.matrix_config("reviewer", "codex"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
-        "claude": ("sonnet-5", "high"),
+        "claude": ("sonnet-5.5", "high"),
     }
     for vendor in EA.BUILD_ARGV_VENDORS:
         assert ERC.channel_for(vendor) == ERC.CHANNEL_NATIVE

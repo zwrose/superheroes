@@ -26,7 +26,7 @@ import seat_map_receipts  # noqa: E402
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
-SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
                       for dim in round_driver.DIMENSIONS}}
 
 
@@ -265,7 +265,7 @@ def _signature_params(fn):
 
 
 _EFFECTIVE_SEAT_MAP_SENTINEL = {
-    "seats": {"sentinel-seat": {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}},
+    "seats": {"sentinel-seat": {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}},
     "_resolution_pin": True,
 }
 

@@ -242,7 +242,7 @@ def test_structured_triple_success_all_vendors():
 
     r_claude = DG.validate("reviewer", "claude", "sonnet")
     _assert_success_triple(r_claude)
-    assert r_claude["model_id"] == "sonnet-5"
+    assert r_claude["model_id"] == "sonnet-5.5"
     assert r_claude["effort"] == "high"
     assert r_claude["dispatch_token"] == "sonnet"
 

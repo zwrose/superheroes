@@ -117,7 +117,7 @@ MAX_CONFIRMATIONS = review_round_policy.MAX_CONFIRMATIONS
 # Claude-ladder rung for self-recovery escalation — not owner-configurable.
 # escalate() returns None (no escalation recorded) when the fixer vendor's ladder
 # does not contain this pair (codex/cursor ladders omit it).
-_SELF_RECOVERY_FIXER_MODEL = "sonnet-5"
+_SELF_RECOVERY_FIXER_MODEL = "sonnet-5.5"
 _SELF_RECOVERY_FIXER_EFFORT = "high"
 
 # Fold-owned guidance record key inside judgmentDispositions entries (dispatch-fixer.md).
