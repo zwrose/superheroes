@@ -509,6 +509,7 @@ def build(
     live_cells: list | None = None,
     live_cells_source: str | None = None,
     codex_role_pins: dict[str, str] | None = None,
+    extra_maker_families: frozenset[str] | None = None,
 ) -> dict:
     degradations: list[dict[str, str]] = []
     tier_degraded_seats: set[str] = set()
@@ -687,9 +688,33 @@ def build(
         # fills with the maker family and the collapse is DISCLOSED — never silently clean, and
         # never an empty seat that falls through to the seat-unfilled backfill.
         if author_family and seat in MAKER_EXCLUDED_SEATS and eligible:
-            non_maker = [cfg for cfg in eligible if cfg["family"] != author_family]
+            excluded_makers = {author_family}
+            if extra_maker_families:
+                excluded_makers |= extra_maker_families
+            non_maker = [cfg for cfg in eligible if cfg["family"] not in excluded_makers]
             if non_maker:
                 eligible = non_maker
+            elif extra_maker_families:
+                author_only = [
+                    cfg for cfg in eligible if cfg["family"] != author_family
+                ]
+                if author_only:
+                    eligible = author_only
+                    for cfg in eligible:
+                        fam = cfg["family"]
+                        if fam in extra_maker_families:
+                            degradations.append({
+                                "constraint": "secondary-maker-seated",
+                                "seat": seat,
+                                "reason": (
+                                    "seat %s carries the secondary maker family %s: "
+                                    "no other family is live"
+                                    % (seat, fam)
+                                ),
+                            })
+                            break
+                else:
+                    same_family_seats.add(seat)
             else:
                 same_family_seats.add(seat)
 
@@ -754,6 +779,18 @@ def build(
                     "constraint": "pin-breaks-constraint",
                     "seat": pin_seat,
                     "reason": "pinned seat %s carries the maker family %s" % (pin_seat, author_family),
+                })
+            if (
+                pin_seat in MAKER_EXCLUDED_SEATS
+                and extra_maker_families
+                and fam in extra_maker_families
+            ):
+                pinned_maker_seats.add(pin_seat)
+                degradations.append({
+                    "constraint": "pin-breaks-constraint",
+                    "seat": pin_seat,
+                    "reason": "pinned seat %s carries the secondary maker family %s"
+                    % (pin_seat, fam),
                 })
             eligible_by_seat[pin_seat] = [
                 {
@@ -1366,31 +1403,50 @@ def main(argv):
             host_fam = model_registry.host_family(host_model)
             impl_engine = args.implementation_engine
             claude_host_fam = model_registry.family_for("code-fixer", "claude")
-            if impl_engine == "claude":
-                author_family = host_fam or claude_host_fam
-            else:
-                author_family = model_registry.family_for("code-fixer", impl_engine)
-                if author_family is None:
-                    print("author-family-unresolved:%s" % impl_engine, file=sys.stderr)
-                    return 1
+            author_family = model_registry.family_for("code-fixer", impl_engine)
+            if author_family is None:
+                print("author-family-unresolved:%s" % impl_engine, file=sys.stderr)
+                return 1
             narrative_family = host_fam or claude_host_fam
             if host_fam is None:
-                if impl_engine == "claude":
-                    reason = (
-                        "host model unknown — the author and narrative families fell back to "
-                        "the claude host's family (%s)" % claude_host_fam
-                    )
-                else:
-                    reason = (
-                        "host model unknown — the narrative family fell back to the claude "
-                        "host's family (%s); the author family is the %s implementation "
-                        "engine's (%s)"
-                        % (claude_host_fam, impl_engine, author_family)
-                    )
+                reason = (
+                    "host model unknown — the narrative family fell back to the claude "
+                    "host's family (%s); the author family is the %s implementation "
+                    "engine's (%s)"
+                    % (claude_host_fam, impl_engine, author_family)
+                )
                 family_degradations.append({
                     "constraint": "host-model-unknown",
                     "reason": reason,
                 })
+            elif (
+                impl_engine == "claude"
+                and host_fam is not None
+                and host_fam != author_family
+            ):
+                family_degradations.append({
+                    "constraint": "maker-family-split",
+                    "reason": (
+                        "author family is %s (claude implementation engine) but "
+                        "review-code's native fixer on this host writes as %s; "
+                        "the host family is excluded from the panel as a second "
+                        "maker family"
+                        % (author_family, host_fam)
+                    ),
+                })
+
+        extra_maker_families: frozenset[str] | None = None
+        if args.implementation_engine is not None:
+            impl_engine = args.implementation_engine
+            host_model = args.host_model if args.host_model is not None else ""
+            host_fam_for_extra = model_registry.host_family(host_model)
+            if (
+                impl_engine == "claude"
+                and host_fam_for_extra is not None
+                and author_family is not None
+                and host_fam_for_extra != author_family
+            ):
+                extra_maker_families = frozenset({host_fam_for_extra})
 
         live_cells = None
         live_cells_source = None
@@ -1419,17 +1475,22 @@ def main(argv):
                 )
             )
         seed = seed_from(args.pr_number, args.head_sha)
+        build_kwargs: dict = {
+            "pins": pins,
+            "liveness_pin_scoped": liveness_pin_scoped,
+            "live_cells": live_cells,
+            "live_cells_source": live_cells_source,
+            "codex_role_pins": codex_role_pins or None,
+        }
+        if extra_maker_families is not None:
+            build_kwargs["extra_maker_families"] = extra_maker_families
         sm = build(
             PANEL_ROSTER,
             live,
             author_family,
             narrative_family,
             seed,
-            pins=pins,
-            liveness_pin_scoped=liveness_pin_scoped,
-            live_cells=live_cells,
-            live_cells_source=live_cells_source,
-            codex_role_pins=codex_role_pins or None,
+            **build_kwargs,
         )
         if family_degradations:
             sm["degradations"] = list(sm.get("degradations", [])) + family_degradations
