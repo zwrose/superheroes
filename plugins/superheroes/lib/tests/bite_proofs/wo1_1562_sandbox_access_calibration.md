@@ -40,3 +40,15 @@ Token literals are spelled out as strings in the tests (and `test_literal_pins` 
 
 - **G8 and `//`.** The order says `//` normalizes to `/`. Measured on the pinned interpreter: `os.path.normpath("//")` is `"//"` (POSIX keeps exactly two leading slashes). The root check is therefore `not os.path.normpath(entry).strip("/")`, which refuses `/`, `//`, `/.`, `///`, `/..` and `/a/..`. Neutralizing G8 should redden every form in `test_validate_path_is_root`.
 - **G20 chokepoint.** The same carry-forward is also covered at `parse_core` / `render_core` (`test_carry_forward_parse_render_round_trip`) and `read` (`test_carry_forward_read_exposes_raw`). Those are extra detectors beyond the declared set and have no proof of their own.
+
+## G21 — `read_sandbox_access` repo-root-unavailable branch (WO-1b, #1564)
+
+**Status: `Unrunnable here`.** No neutralization was applied and no red or green was observed; this entry carries no raw captures and no restore receipts. Nothing in it is a claim that a run happened.
+
+- **Guarded element and axis.** The `except RepoRootUnavailable:` branch of `read_sandbox_access` in `plugins/superheroes/lib/core_md.py` (refusal: an unresolvable repo root reads as `access` None, reason `repo-root-unavailable`, never as all-off).
+- **Detector.** `T::test_read_repo_root_unavailable`, repaired in WO-1b so its fixture monkeypatches `CM.core_path` to raise `CM.RepoRootUnavailable("no root")` (the prior fixture, a path under `tmp_path`, never raised and read `core-md-absent`).
+- **Planned neutralization.** An Edit making that branch return `dict(base, reason="repo-root-unavailable", access=sandbox_access_all_off())`. Expected red: `assert got["access"] is None`. Restore: the inverse Edit, then the green run.
+- **What refused the run.** The harness returned `This command requires approval` for the single-node command and did not execute it, as it did for the whole-file command:
+  `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-501/superheroes-pyc-1562d -m pytest plugins/superheroes/lib/tests/test_sandbox_access_calibration_1562.py::test_read_repo_root_unavailable -q`
+  Because no run could be observed, the neutralization was not applied.
+- **Who owns the outstanding receipt.** The orchestrator, at verification.
