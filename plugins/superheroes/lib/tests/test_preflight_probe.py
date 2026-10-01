@@ -2365,6 +2365,13 @@ def test_review_cross_vendor_engines_keeps_a_named_engine_whose_cli_is_missing()
         {"implementation": "cursor"}, which=_which_resolving())
 
 
+def test_review_cross_vendor_engines_all_claude_project_gets_an_installed_engine():
+    assert pp.review_cross_vendor_engines(
+        {"briefCheck": "claude"}, which=_which_resolving("cursor-agent")) == ["cursor"]
+    assert pp.review_cross_vendor_engines(
+        {"briefCheck": "claude"}, which=_which_resolving()) == []
+
+
 def test_compose_liveness_probes_an_installed_engine_no_role_names(tmp_path, monkeypatch, capsys):
     import liveness_cache
 
