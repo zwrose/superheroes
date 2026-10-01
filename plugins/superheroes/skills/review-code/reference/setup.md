@@ -177,11 +177,12 @@ VERIFY_JSON=$(python3 -B "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null) || V
 VERIFY_CMD=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyCommand // empty')
 VERIFY_MODE=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyMode // empty')
 REFUSAL=$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.remedy // empty')
+[ "$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.reason // empty')" = "verify-command-malformed" ] && { echo "$REFUSAL" >&2; exit 1; }
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
 ```
 
 `{baseRef}` in the calibrated command is the pinned base commit: the substitution runs in SKILL.md's base-resolution block, after `$BASE_REF` is validated (never here — this block runs before the base is pinned), and only when `$BASE_REF` is a full 40- or 64-hex object id; otherwise the token stays in place and the gate's own unresolvable-ref refusal is the loud failure. The driver binds the same token in its `run-verify` payload (`round_driver._verify_command`).
 
-When `REFUSAL` is non-empty, `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate — there is no verify command and no implied test receipt. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation. For what grounds a test-pass claim versus a verify receipt, read `rubric/test-receipt-evidence.md`.
+A `verify-command-malformed` refusal halts the review: `core.md`'s `verifyCommand` is present but not a non-empty string, so quote the remedy and stop — never run the review unverified on it. Any other non-empty `REFUSAL` means `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate — there is no verify command and no implied test receipt. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation. For what grounds a test-pass claim versus a verify receipt, read `rubric/test-receipt-evidence.md`.
 
 **Refresh dispatch paths before specialists.** Re-run the `calibration_resolve.py` jq block above once after bootstrap.

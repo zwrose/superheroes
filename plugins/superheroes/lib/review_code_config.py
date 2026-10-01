@@ -84,6 +84,10 @@ def resolve(cwd, root=None):
             }
         elif shared and shared.get("verifyCommand"):
             verify = shared["verifyCommand"]
+    except core_md.VerifyCommandMalformed as exc:
+        # #1331: surfaced, never swallowed into the profile fallback — setup halts on this reason.
+        refusal = {"reason": exc.reason, "paths": [], "remedy": str(exc)}
+        verify = "none"
     except Exception:
         verify = None
     try:
