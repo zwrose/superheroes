@@ -2106,6 +2106,31 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   2026-09-18), so the one reader is the only place a wrong type can be caught before a gate reads
   it as "no verify command".
 
+#### S27 — Claude write channel: the Bash allow gate and the `.cc-writes` sweep
+
+- **Component.** Not a census row. In `plugins/superheroes/lib/engine_adapter.py`,
+  `claude_write_sandbox_settings` emits `permissions.allow: ["Bash"]` only when the journaled
+  `managedPolicyPresent` is false. In `plugins/superheroes/lib/engine_dispatch.py`,
+  `_managed_policy_present` (fail-closed presence of on-disk managed policy, frozen at open) and
+  `_sweep_cc_writes` / `_fold_cc_writes_sweep` (the fold-time staging-dir sweep). Each part is
+  workaround-marked (#1569). Cost: a filesystem walk at every claude write fold, and a permission
+  grant whose safety rests on the sandbox staying mandatory.
+- **Start date.** 2026-10-01.
+- **Condition.** Citation-based, 45 days: build records or vet receipts citing an implementer
+  refusal "requires approval" on the claude write channel, or `.claude/.cc-writes` residue in a
+  worktree after a folded run. Either is a regression signal, not a retirement signal. Retirement:
+  when either workaround marker's delete-when condition is observed on the Claude Code version the
+  channel runs, a proposal to the owner at a gardening pass to remove that part.
+- **Last demonstrated benefit.** A live claude write run ran `-X pycache_prefix` pytest, `FOO=1`,
+  and `$?` shapes with no refusal, with network, outside-root writes, and git-hooks writes still
+  denied. The same fold removed `.claude/.cc-writes` at the worktree root and at
+  `plugins/superheroes/` (#1569 PR build record).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — both parts exist because of Claude Code 2.1.284 behaviour (the auto-allow
+  gap; staging dirs created under the shell cwd); observed on the anthropic family's sandboxed
+  implementer.
+
 
 ## The workaround-marker inventory
 
@@ -2131,6 +2156,14 @@ file, returns exactly that set.
   configuration items has shipped; then the version is raised with the new literal pinned in the
   tests rather than referenced from the constant. (Lands with the configuration-items child; the
   tree carries this marker once that child merges.)
+- `plugins/superheroes/lib/engine_adapter.py` — the claude write channel allows Bash outright
+  because the harness's sandbox auto-allow misses command shapes its safety check flags (python
+  `-X`, env-var prefixes, `$?`). **delete-when:** `autoAllowBashIfSandboxed` auto-approves every
+  sandboxed command shape on the Claude Code version the channel runs.
+- `plugins/superheroes/lib/engine_dispatch.py` — the fold sweeps empty `.claude/.cc-writes`
+  atomic-write staging dirs Claude Code creates in the worktree outside the sandbox. **delete-when:**
+  the Claude Code version the channel runs no longer creates `.claude/.cc-writes` under the shell's
+  working directory (or lets the staging dir be relocated outside the worktree).
 - `plugins/superheroes/lib/hostinfo.py` — OS-specific boot-id reads to corroborate a recorded pid
   belongs to this boot. **delete-when:** the host exposes a stable per-boot identity without
   OS-specific parsing.

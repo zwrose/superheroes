@@ -780,9 +780,26 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
 - **Temp-dir residual:** the sandbox's per-user temp dir stays writable (a platform default,
   measured as `/tmp/claude-<uid>`), and other Claude sessions' scratch can live there. The
   `localSockets` grant follows Claude Code 2.1.284's own rule for that dir: `CLAUDE_CODE_TMPDIR`
-  when it is at most 44 bytes, otherwise `/tmp`; the grant is never widened to bare `/tmp`.
-- **Command friction:** a compound line the harness cannot auto-approve (`cmd; echo "exit=$?"`, a
-  heredoc) is denied in print mode and the engine retries simpler. Plain `a && b` chains run.
+  when the whole per-user path `<CLAUDE_CODE_TMPDIR>/claude-<uid>` is at most 44 bytes, otherwise
+  `/tmp`; the grant is never widened to bare `/tmp`.
+- **Bash is allowed outright, and the sandbox confines it.** The settings carry
+  `permissions.allow: ["Bash"]`, because the sandbox auto-allow alone leaves some shapes needing
+  approval, which print mode denies: python `-X` flags (the pinned gate command's
+  `-X pycache_prefix=…`), env-var prefixes such as `FOO=1 cmd`, and `$?`. With the allow, every
+  shape runs, still inside the sandbox (`allowUnsandboxedCommands: false`). The exception is a host
+  with managed Claude Code policy on disk (`managed-settings.json` or a non-empty
+  `managed-settings.d` under the platform's managed dir, or the macOS managed-preferences plist).
+  Managed policy can exclude commands from the sandbox, and the allow would approve them unattended,
+  so there the allow is left out and those shapes stay denied. The reading is frozen at open as
+  `claudeWriteSandbox.managedPolicyPresent`; a location that cannot be read counts as present, and a
+  run opened without the field gets no allow. Server-delivered managed settings are not on disk and
+  are not seen.
+- **Staging-dir residue is swept at fold.** Claude Code creates an empty `.claude/.cc-writes`
+  under each directory the shell works in, outside the sandbox. When a claude write run folds, the
+  runner removes every empty `.claude/.cc-writes` in the worktree, and its `.claude` parent when
+  that is then empty. Removal never follows a symlink, never enters `.git` or another device, and
+  stops at a 10-second budget. The folded result reports it as `ccWritesSweep`
+  (`removed`, `incomplete`, `error`). An abandoned run is not swept.
 
 ### Write-report contract
 

@@ -9,6 +9,12 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Claude write channel: implementers can run their own tests
+
+- Sandboxed Claude implementers now run every command shape the sandbox confines. Before, python `-X` flags (including the pinned gate command `scripts/pinned-python -B -X pycache_prefix=… -m pytest …`), env-var prefixes such as `FOO=1 cmd`, and `; echo "exit=$?"` were refused with "This command requires approval", and implementers handed back untested work. The sandbox still denies the network, writes outside the build roots, and writes to the git hooks and config.
+- Exception: on a host with managed Claude Code policy on disk (`managed-settings.json`, a non-empty `managed-settings.d`, or on macOS the managed-preferences plist), the channel keeps the old behaviour, and those shapes are still refused. Managed policy can exclude commands from the sandbox, and the channel never approves such a command unattended. The run-opened record gains `claudeWriteSandbox.managedPolicyPresent`. A run opened by 0.38.0 has no such field and continues with the old behaviour.
+- The channel no longer leaves empty `.claude/.cc-writes` directories in the build worktree. They are swept when the run folds, and the folded result gains `ccWritesSweep`. A run that is abandoned rather than folded can still leave them.
+
 ### Claude write sandbox: four access options, offline by default
 
 - The sandbox is still offline by default. A project without `sandboxAccess` sees byte-identical sandbox settings.
