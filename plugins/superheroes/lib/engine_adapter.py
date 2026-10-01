@@ -212,11 +212,61 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "untokenizable",
     "builder-prompt-missing",
     "builder-session-id-invalid",
+    "sandbox-roots-missing",
+    "sandbox-process-listing-unavailable",
+    "sandbox-roots-unresolvable",
+    "sandbox-uv-cache-unresolvable",
 })
 
 REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
 REFUSAL_BUILDER_SESSION_ID_INVALID = "builder-session-id-invalid"
 CLAUDE_EXECUTABLE = "claude"
+CLAUDE_WRITE_TOOLS = "Bash,Edit,Write,Read,Grep,Glob"
+
+
+def _abs_str(value):
+    return isinstance(value, str) and os.path.isabs(value)
+
+
+def claude_write_sandbox_valid(sandbox):
+    """True when ``sandbox`` is a well-formed journaled claude write sandbox dict (#1554)."""
+    if not isinstance(sandbox, dict):
+        return False
+    roots = sandbox.get("writeRoots")
+    if not isinstance(roots, list) or not roots or not all(_abs_str(r) for r in roots):
+        return False
+    deny = sandbox.get("denyWrite")
+    if not isinstance(deny, list) or not all(_abs_str(d) for d in deny):
+        return False
+    uv_cache = sandbox.get("uvCacheDir")
+    if uv_cache is not None and not _abs_str(uv_cache):
+        return False
+    return True
+
+
+def claude_write_sandbox_settings(sandbox):
+    """The inline ``--settings`` JSON for the claude write channel's sandboxed shell (#1554).
+
+    Pure: built only from the journaled ``sandbox`` dict, never the ambient environment."""
+    uv_cache = sandbox.get("uvCacheDir")
+    env = {"UV_OFFLINE": "1"}
+    allow_write = list(sandbox["writeRoots"])
+    if uv_cache is not None:
+        env["UV_CACHE_DIR"] = uv_cache
+        allow_write.append(uv_cache)
+    obj = {
+        "env": env,
+        "permissions": {"deny": ["WebFetch", "WebSearch"]},
+        "sandbox": {
+            "enabled": True,
+            "failIfUnavailable": True,
+            "autoAllowBashIfSandboxed": True,
+            "allowUnsandboxedCommands": False,
+            "network": {"allowedDomains": [], "strictAllowlist": True},
+            "filesystem": {"allowWrite": allow_write, "denyWrite": list(sandbox["denyWrite"])},
+        },
+    }
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
 def _refuse(reason, *, detail=None):
@@ -524,6 +574,19 @@ def build_argv_result(seat, role_kind, opts):
         ]
         return _ok(argv)
     if vendor == "claude":
+        if not is_read:
+            if opts.get("requiresProcessListing") is True:
+                return _refuse(
+                    "sandbox-process-listing-unavailable",
+                    detail="the claude write channel runs a sandboxed shell that denies "
+                           "process listing (ps)",
+                )
+            if not claude_write_sandbox_valid(opts.get("claudeWriteSandbox")):
+                return _refuse(
+                    "sandbox-roots-missing",
+                    detail="a claude write needs journaled sandbox roots "
+                           "(claudeWriteSandbox) resolved at run open",
+                )
         engine_model, _source, refusal_reason, refusal_detail = _resolve_engine_model_pin(
             vendor, model_id, claude_tier,
         )
@@ -552,7 +615,12 @@ def build_argv_result(seat, role_kind, opts):
         if is_read:
             argv += ["--restricted"]
         else:
-            argv += ["--permission-mode", "acceptEdits", "--restricted"]
+            argv += [
+                "--permission-mode", "acceptEdits", "--restricted",
+                "--tools", CLAUDE_WRITE_TOOLS,
+                "--strict-mcp-config",
+                "--settings", claude_write_sandbox_settings(opts["claudeWriteSandbox"]),
+            ]
         return _ok(argv)
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
 

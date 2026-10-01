@@ -644,18 +644,36 @@ def test_build_argv_claude_review_exact_shape():
     ]
 
 
+_CLAUDE_WRITE_SANDBOX = {
+    "writeRoots": ["/work/wt", "/work/main/.git/worktrees/wt", "/work/main/.git"],
+    "denyWrite": ["/work/main/.git/hooks", "/work/main/.git/config",
+                  "/work/main/.git/worktrees/wt/config.worktree"],
+    "uvCacheDir": None,
+}
+
+
 def test_build_argv_claude_write_exact_shape():
-    argv = EA.build_argv(_seat("claude", "sonnet-5.5", "high"), "build", {})
+    argv = EA.build_argv(
+        _seat("claude", "sonnet-5.5", "high"), "build",
+        {"claudeWriteSandbox": _CLAUDE_WRITE_SANDBOX},
+    )
     assert argv == [
         "claude", "-p", "--model", "sonnet", "--effort", "high",
         "--output-format", "stream-json", "--verbose",
         "--permission-mode", "acceptEdits", "--restricted",
+        "--tools", "Bash,Edit,Write,Read,Grep,Glob",
+        "--strict-mcp-config",
+        "--settings", EA.claude_write_sandbox_settings(_CLAUDE_WRITE_SANDBOX),
     ]
 
 
 def test_build_argv_claude_write_omits_allowed_tools():
-    argv = EA.build_argv(_seat("claude", "sonnet-5.5", "high"), "build", {})
+    argv = EA.build_argv(
+        _seat("claude", "sonnet-5.5", "high"), "build",
+        {"claudeWriteSandbox": _CLAUDE_WRITE_SANDBOX},
+    )
     assert "--allowedTools" not in argv
+    assert "--tools" in argv
 
 
 def test_build_argv_claude_print_mode_explicit_unchanged():

@@ -53,6 +53,11 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
     journal_root = str(tmp_path / "dispatch-journal-root")
     os.makedirs(journal_root, exist_ok=True)
     monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
+    # #1554: the claude write sandbox resolver probes `uv`; pin it absent for determinism.
+    real_which = ED.shutil.which
+    monkeypatch.setattr(
+        ED.shutil, "which", lambda cmd, *a, **k: None if cmd == "uv" else real_which(cmd, *a, **k),
+    )
     yield
 
 
@@ -3518,7 +3523,10 @@ def test_claude_write_open_records_native_channel_and_config_dir(tmp_path, monke
     with open(opened["nativeSchemaPath"], encoding="utf-8") as fh:
         schema_text = fh.read().rstrip("\n")
     assert opened["argv"][-2:] == ["--json-schema", schema_text]
-    built = EA.build_argv_result(seat, "build", {"cwd": opened["cwd"]})
+    built = EA.build_argv_result(
+        seat, "build",
+        {"cwd": opened["cwd"], "claudeWriteSandbox": opened["claudeWriteSandbox"]},
+    )
     assert opened["argv"][:-2] == built["argv"]
 
 
@@ -3607,6 +3615,9 @@ def _plant_claude_write_journal_with_claude_mode(
         argv_mode = "print"
     if argv_mode is not None:
         opts["claudeMode"] = argv_mode
+    sandbox, sandbox_refusal = ED._resolve_claude_write_sandbox(cwd, timeout=None)
+    assert sandbox_refusal is None, sandbox_refusal
+    opts["claudeWriteSandbox"] = sandbox
     built = EA.build_argv_result(seat, "build", opts)
     assert built["reason"] is None, built
     argv = built["argv"]
@@ -3626,6 +3637,7 @@ def _plant_claude_write_journal_with_claude_mode(
         "viewPath": None, "baseSha": "abc",
         "channel": ERC.CHANNEL_NATIVE,
         "configDir": config_dir,
+        "claudeWriteSandbox": sandbox,
         "fedPrompt": content,
         "supervisorPid": 1, "at": time.time(),
         "resolvedInputs": _spawn_gate_resolved_inputs(seat),

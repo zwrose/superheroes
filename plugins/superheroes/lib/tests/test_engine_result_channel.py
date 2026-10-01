@@ -511,7 +511,12 @@ def test_every_dispatchable_vendor_has_channel_delivery_pin_and_argv():
         model_id, effort = matrix_cells[vendor]
         seat = {"vendor": vendor, "model": model_id, "effort": effort}
         for role_kind in ("review", "build"):
-            res = EA.build_argv_result(seat, role_kind, {})
+            opts = {}
+            if vendor == "claude" and role_kind == "build":
+                opts["claudeWriteSandbox"] = {
+                    "writeRoots": ["/sandbox/wt"], "denyWrite": [], "uvCacheDir": None,
+                }
+            res = EA.build_argv_result(seat, role_kind, opts)
             assert res["reason"] is None, (vendor, role_kind, res)
 
 
