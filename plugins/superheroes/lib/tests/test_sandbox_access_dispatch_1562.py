@@ -289,14 +289,24 @@ def test_no_getuid_with_local_sockets_is_unreadable(tmp_path, monkeypatch):
 
 
 def test_continuation_uses_journaled_access_not_core_md(tmp_path, monkeypatch):
+    calls = []
+    real_read = core_md.read_sandbox_access
+
+    def spy_read(*args, **kwargs):
+        calls.append(args)
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(ED.core_md, "read_sandbox_access", spy_read)
     wt, run_dir, first, fake = _open_with_core(
         tmp_path, monkeypatch, _core_text({"localPorts": True}))
+    assert len(calls) == 1
     _opened_settings(run_dir, fake)
     assert _settings_of(first["argv"])["sandbox"]["network"]["allowLocalBinding"] is True
     # the calibration changes after open; a continuation must not notice
     _write_core(wt, _core_text({"localPorts": False, "allowedDomains": ["example.org"]}))
     second = _dispatch_write(tmp_path, _ClaudeStdoutWriteFakeRunner([_claude_write_runner()]),
                              cwd=wt, run_dir=run_dir, seat=_implementer_claude_seat())
+    assert len(calls) == 1, "a continuation re-read the sandboxAccess calibration"
     settings = _settings_of(second["argv"])
     assert settings["sandbox"]["network"]["allowLocalBinding"] is True
     assert settings["sandbox"]["network"]["allowedDomains"] == []
