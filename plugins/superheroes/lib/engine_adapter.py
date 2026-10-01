@@ -309,9 +309,19 @@ def claude_write_sandbox_settings(sandbox):
         network["allowLocalBinding"] = True
     if socket_dirs:
         network["allowUnixSockets"] = list(socket_dirs)
+    permissions = {"deny": ["WebFetch", "WebSearch"]}
+    # WORKAROUND: the harness's sandbox auto-allow misses command shapes its safety check flags
+    # (python `-X`, env-var prefixes, `$?`), so the write channel allows Bash outright and lets
+    # the sandbox confine it.
+    # delete-when: `autoAllowBashIfSandboxed` auto-approves every sandboxed command shape on the
+    # Claude Code version the channel runs.
+    # axis: the allow is gated on the frozen `managedPolicyPresent is False`; absent or any other
+    # value emits none, so managed `excludedCommands` stay permission-gated.
+    if sandbox.get("managedPolicyPresent") is False:
+        permissions["allow"] = ["Bash"]
     obj = {
         "env": env,
-        "permissions": {"deny": ["WebFetch", "WebSearch"]},
+        "permissions": permissions,
         "sandbox": {
             "enabled": True,
             "failIfUnavailable": True,
