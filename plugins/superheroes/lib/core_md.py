@@ -497,10 +497,7 @@ def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
     structural = _gate_structural_refusal(cwd=cwd, root=root, profile_path=profile_path)
     if structural is not None:
         return ReviewGatePolicyGate(CONFIG_STRUCTURAL_AMBIGUITY, None, structural)
-    try:
-        facts = parse_core(text)
-    except VerifyCommandMalformed as exc:
-        return ReviewGatePolicyGate(CONFIG_UNREADABLE, None, "%s at %s" % (exc, path))
+    facts = parse_core(text)  # a verifyCommand refusal is already UNREADABLE via the gate above
     if facts is None:
         return ReviewGatePolicyGate(
             CONFIG_UNREADABLE,
