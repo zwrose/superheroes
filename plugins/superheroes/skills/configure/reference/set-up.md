@@ -8,6 +8,7 @@
 - §4.5 — Engine preferences — per-role defaults (FR-11/12/13/14)
 - §4.6 — Project-configuration dependencies and kind labels
 - §4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
+- §4.8 — Sandbox access for the claude implementer — all off by default
 - §5 — Secrets stay out of shared calibration (NFR)
 - Recovering an interrupted set-up (UFR-7)
 
@@ -331,6 +332,13 @@ carrier. A skipped offer still completes set-up; it is not persisted as a hero d
 remains available on the view-and-tune menu.
 
 <!-- /decision-point: id=configure-setup-claude-md-section -->
+
+## 4.8 — Sandbox access for the claude implementer — all off by default
+
+Set-up writes nothing for sandbox access. The claude implementer's sandbox is fully offline by
+default: no network, no loopback, no extra sockets, and writes confined to the run's roots. When an
+order's verification needs one of those, the owner opens it later through the view-and-tune path,
+which holds the commands (`skills/configure/reference/view-and-tune.md` § 2).
 
 ## 5 — Secrets stay out of shared calibration (NFR)
 
