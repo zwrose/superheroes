@@ -395,3 +395,22 @@ def test_unified_layer_bare_key_nudge_ack(tmp_path, capsys):
     rc2, res2 = run(str(layer), "review-crew@0.1.0", 3, root, env, capsys)
     assert rc2 == 0
     assert res2["nudge_acked"] is True
+
+
+@pytest.mark.parametrize("layout", ["unified", "legacy"])
+def test_malformed_core_verify_command_is_reported_not_swallowed(layout, tmp_path, capsys):
+    # #1331: both doctor branches report the named refusal; neither reads it as "no command".
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    _write_core_md(root, 7)
+    if layout == "unified":
+        profile = tmp_path / "review-crew.md"
+        profile.write_text(
+            "<!-- review-crew: schemaVersion=1 status=confirmed created=2026-01-01 "
+            "updated=2026-01-01 rubric-version=2 nudge-ack={} -->\n\n## Focus hints\n- code: x\n")
+        profile = str(profile)
+    else:
+        profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"])
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert res["ok"] is False
+    assert res["message"].startswith("verify-command-malformed: ")

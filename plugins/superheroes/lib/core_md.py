@@ -140,6 +140,14 @@ GATE_POLICY_REASON_INPUT_UNPARSEABLE = "gate-policy-input-unparseable"
 GATE_POLICY_REASON_NOT_A_MAPPING = "gate-policy-not-a-mapping"
 GATE_POLICY_REASON_INVALID = "gate-policy-invalid"
 GATE_POLICY_REASON_ROUND_TRIP = "gate-policy-round-trip-refused"
+VERIFY_COMMAND_REASON_MALFORMED = "verify-command-malformed"
+
+
+class VerifyCommandMalformed(Exception):
+    """Named refusal (#1331): a present verifyCommand that is not a non-empty string. Raised by
+    parse_core, the one reader, so no caller can mistake a typo for "no verify command"."""
+    reason = VERIFY_COMMAND_REASON_MALFORMED
+
 
 CoreGateConfig = collections.namedtuple("CoreGateConfig", "prefs status detail")
 ReviewGatePolicyGate = collections.namedtuple(
@@ -332,10 +340,22 @@ def _section(text, heading):
     return "\n".join(out).strip()
 
 
+def _checked_verify_command(raw):
+    """A verifyCommand is a non-empty, non-whitespace string, or null/absent for none. Any other
+    value raises VerifyCommandMalformed — refused, never normalised to "none" (#1331).
+    Axis: refusal of a present value by its type and its content, never by key presence."""
+    if raw is None or (isinstance(raw, str) and raw.strip()):
+        return raw
+    raise VerifyCommandMalformed(
+        "%s: core.md verifyCommand must be a non-empty string, or null for none; found %s %s"
+        % (VERIFY_COMMAND_REASON_MALFORMED, type(raw).__name__, json.dumps(raw)))
+
+
 def parse_core(text):
     """Parse a core.md document → the fact dict, or None when the json block is
     missing/corrupt (UFR-1 — never a half-read value). verifyCommand+stackTags are
-    authoritative from the json block; threatModel+patterns come from prose."""
+    authoritative from the json block; threatModel+patterns come from prose. A wrong-typed,
+    empty, or whitespace-only verifyCommand raises VerifyCommandMalformed."""
     mb = _JSON_BLOCK.search(text or "")
     if not mb:
         return None
@@ -371,7 +391,7 @@ def parse_core(text):
     out = {
         "schemaVersion": int(block["schemaVersion"]),
         "status": status,
-        "verifyCommand": block.get("verifyCommand"),
+        "verifyCommand": _checked_verify_command(block.get("verifyCommand")),
         "stackTags": list(tags) if isinstance(tags, list) else [],
         "enginePreferences": dict(prefs) if isinstance(prefs, dict) else {},
         "reviewGatePolicy": dict(overlay) if isinstance(overlay, dict) else None,
@@ -479,7 +499,10 @@ def _classify_core_md_at_path(path):
             "UTF-8 decode failed at %s: %s" % (path, exc),
         )
 
-    facts = parse_core(text)
+    try:
+        facts = parse_core(text)
+    except VerifyCommandMalformed as exc:
+        return CoreGateConfig({}, CONFIG_UNREADABLE, "%s at %s" % (exc, path))
     if facts is None:
         return CoreGateConfig(
             {},
@@ -577,7 +600,7 @@ def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
     structural = _gate_structural_refusal(cwd=cwd, root=root, profile_path=profile_path)
     if structural is not None:
         return ReviewGatePolicyGate(CONFIG_STRUCTURAL_AMBIGUITY, None, structural)
-    facts = parse_core(text)
+    facts = parse_core(text)  # a verifyCommand refusal is already UNREADABLE via the gate above
     if facts is None:
         return ReviewGatePolicyGate(
             CONFIG_UNREADABLE,
@@ -1892,8 +1915,8 @@ def read_vet_checks(cwd, root=None):
                 probe = fh.read()
             if parse_core(probe) is None:
                 reason = "core-md-unparseable"
-        except (OSError, UnicodeDecodeError):
-            pass
+        except (OSError, UnicodeDecodeError, VerifyCommandMalformed):
+            pass  # a verifyCommand refusal keeps the classifier's named detail (#1331)
         return dict(base, reason=reason, detail=detail)
 
     try:
@@ -2757,6 +2780,9 @@ def main(argv):
     if args.cmd == "resolve":
         try:
             rec = read(args.cwd, args.root)
+        except VerifyCommandMalformed as exc:  # #1331: named and non-zero, never "no command"
+            sys.stdout.write(json.dumps(gate_refusal(exc.reason, str(exc))) + "\n")
+            return 1
         except Exception:  # fail-open like review_store.py — never crash a consumer
             rec = None
         out = {"verifyCommand": rec["verifyCommand"] if rec else None,

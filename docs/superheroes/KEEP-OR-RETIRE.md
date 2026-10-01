@@ -2084,6 +2084,28 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** `harness-limit` — a live session keeps the charter text, plugin root, and results
   it already holds when a new version installs.
 
+#### S26 — `verifyCommand` type check at `core_md.parse_core`
+
+- **Component.** Not a census row. `core_md._checked_verify_command` and its named refusal
+  `VerifyCommandMalformed` (`verify-command-malformed`), raised by `parse_core` for a present
+  `verifyCommand` that is not a non-empty, non-whitespace string, plus the halt on that reason in
+  `skills/review-code/reference/setup.md` and its surfacing in `review_code_config.resolve`
+  (#1331). Cost: one more refusal every `core.md` reader can meet, and one malformed field
+  refuses every read of the calibration until it is fixed.
+- **Start date.** 2026-10-01.
+- **Condition.** Citation-based, 45 days: vet or incident receipts citing the
+  `verify-command-malformed` refusal, or a quiet verify skip it failed to catch. It is a
+  fail-closed deterrent, so zero citations is not a reason to retire it. Retirement: when
+  `parse_core` validates the whole `superheroes-core` json block against a declared schema, or a
+  write verb owns the field and refuses bad values at write time, a proposal to the owner at a
+  gardening pass to retire this bespoke check in favour of that one.
+- **Last demonstrated benefit.** unknown.
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — the verify command is hand-edited (the owner declined a write verb on
+  2026-09-18), so the one reader is the only place a wrong type can be caught before a gate reads
+  it as "no verify command".
+
 
 ## The workaround-marker inventory
 

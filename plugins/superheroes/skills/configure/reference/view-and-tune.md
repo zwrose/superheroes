@@ -40,8 +40,11 @@ calibration (FR-18).
 Present, inline beneath the view, the things the owner can change — each routed to the **smallest**
 action that owns it, leaving the rest of the calibration untouched:
 
-- **Change a single discrete field** (the verify command, the threat model) → a focused guided edit
-  through `core_md`.
+- **Change the verify command** → there is no write verb for it: edit `verifyCommand` in the
+  calibration file's `superheroes-core` json block directly (a non-empty string, or `null` for
+  none), then run the view again and confirm it reads back. A wrong-typed, empty, or
+  whitespace-only value is refused by name (`verify-command-malformed`) on every read until fixed.
+- **Change the threat model** → `core_md.write_threat_model`, which replaces only that section.
 - **Change one project-configuration item** → write only that item's home through `project_config`.
   Show the current value from the view first, then pipe the new value on stdin. A refusal is
   reported to the owner and never worked around.
