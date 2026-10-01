@@ -111,6 +111,14 @@ def test_core_resolve_cli_refuses_by_name_and_exits_nonzero(tmp_path, capsys):
     assert "verifyCommand" not in out
 
 
+def test_vet_checks_cli_keeps_the_named_refusal_detail(tmp_path, capsys):
+    repo = init_calibrated_repo(tmp_path, verify_command=[])
+    cm.main(["vet-checks", "--cwd", repo, "--root", str(tmp_path / "store")])
+    out = json.loads(capsys.readouterr().out)
+    assert out["reason"] == "core-md-unreadable"
+    assert out["detail"].startswith(REFUSAL_TOKEN + ": ")
+
+
 def test_configure_view_refuses_instead_of_showing_none(tmp_path):
     repo = init_calibrated_repo(tmp_path, verify_command=0)
     with pytest.raises(cm.VerifyCommandMalformed, match=REFUSAL_TOKEN):

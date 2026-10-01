@@ -1810,8 +1810,8 @@ def read_vet_checks(cwd, root=None):
                 probe = fh.read()
             if parse_core(probe) is None:
                 reason = "core-md-unparseable"
-        except (OSError, UnicodeDecodeError):
-            pass
+        except (OSError, UnicodeDecodeError, VerifyCommandMalformed):
+            pass  # a verifyCommand refusal keeps the classifier's named detail (#1331)
         return dict(base, reason=reason, detail=detail)
 
     try:
