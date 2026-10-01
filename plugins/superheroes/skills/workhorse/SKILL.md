@@ -376,9 +376,9 @@ judgment, so "this fix is tiny" is no reason to type in a full-lane build. Every
 order goes to an implementer under the one implementer template,
 `${CLAUDE_PLUGIN_ROOT}/agents/implementer.md`:
 
-- **Claude subagent** → dispatch the template as-is.
-- **External engine** (codex or cursor CLI) → inline `agents/implementer.md`, minus its frontmatter,
-  verbatim into the dispatch prompt.
+Every implementer order goes through `dispatch-write` on the engine the project's calibrated
+implementation engine names, `claude` included (`claude` runs the sandboxed Claude write channel);
+inline `agents/implementer.md`, minus its frontmatter, verbatim into the dispatch prompt.
 
 **Cited paths in every dispatched seat resolve in the build's own worktree** when the cited file is
 part of the change. `${CLAUDE_PLUGIN_ROOT}` resolves to the installed cache and would hand an

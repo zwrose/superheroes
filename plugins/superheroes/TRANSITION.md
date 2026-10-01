@@ -30,6 +30,13 @@ belongs to and lists every change with its replacement.
 - A run journaled under `sonnet-5` is refused at continuation (`run-dir-seat-mismatch`). Open a fresh dispatch, the same rule the earlier `opus-5` to `opus-5.5` rename followed.
 - The `sonnet` dispatch token is unchanged.
 
+### Implementer routing: claude means the sandboxed channel
+
+- `enginePreferences.implementation: claude`, which is also the default when it is unset, now sends implementer orders through `dispatch-write --engine claude`, the sandboxed channel. Before, `claude` meant a native Claude subagent.
+- What changes for an unconfigured project: implementers move from native subagents with network access to a sandboxed Claude CLI with no network, offline uv, and `ps` blocked, and every order now leaves a runner journal and `--expect-item` grading.
+- To keep cursor or codex as the implementer, set `implementation` to that engine; nothing else changes for those projects.
+- `seat_map compose --implementation-engine claude` now reads author family `anthropic` whatever the host model; before, it took the host's family.
+
 ## 0.37.0
 
 ### Before you upgrade
