@@ -730,7 +730,7 @@ disabled, and these limits are not owner-configurable through `enginePreferences
 **(vendor, model, effort)** cells are live for the panel is **gated, cached, and pin-scoped**. It
 runs only on panel-dispatching entries; a compose within the TTL rides a **short-TTL
 machine-readable liveness receipt** instead of re-probing (the workhorse intake preflight can seed
-it); and only **pin-reachable** models are probed. There is no longer a receipt-only entry to
+it); and only **pin-reachable** models are probed. The vendors composition considers are every cross-vendor engine whose CLI is installed plus any a calibration role names, so review independence does not depend on which engine an unrelated role (implementation, brief-check, pilot) names. There is no longer a receipt-only entry to
 select — the `cache-only` probe mode that reused a receipt or fell open to the host model lost its last
 caller when `--post` was removed (#1121) and was reaped in #1138. The **fail-direction is unchanged**: a probe failure still
 drops **that cell** loudly (disclosed degradation), not the whole vendor; the cache only ever skips

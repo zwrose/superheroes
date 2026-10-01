@@ -2348,6 +2348,50 @@ def test_compose_liveness_readable_core_no_unreadable_note(tmp_path, monkeypatch
     assert unread_notes == []
 
 
+def _which_resolving(*binaries):
+    return lambda name: "/stub/" + name if name in binaries else None
+
+
+def test_review_cross_vendor_engines_unions_role_named_with_installed():
+    prefs = {"reviewer": "codex", "implementation": "claude"}
+    assert pp.review_cross_vendor_engines(
+        prefs, which=_which_resolving("codex", "cursor-agent")) == ["codex", "cursor"]
+    assert pp.review_cross_vendor_engines(
+        "not-a-dict", which=_which_resolving("cursor-agent")) == ["codex", "cursor"]
+
+
+def test_review_cross_vendor_engines_keeps_a_named_engine_whose_cli_is_missing():
+    assert "cursor" in pp.review_cross_vendor_engines(
+        {"implementation": "cursor"}, which=_which_resolving())
+
+
+def test_compose_liveness_probes_an_installed_engine_no_role_names(tmp_path, monkeypatch, capsys):
+    import liveness_cache
+
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    cache_file = tmp_path / "state" / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+    monkeypatch.setattr(pp, "readout_config", lambda cwd=None, root=None: {
+        "prefs": {"reviewer": "codex", "implementation": "claude"},
+        "status": core_md.CONFIG_OK, "reason": None, "readError": None,
+    })
+    monkeypatch.setattr(pp.engine_detect.shutil, "which",
+                        lambda name: "/stub/" + name if name == "cursor-agent" else None)
+    captured = {}
+
+    def capture_live_vendors(configured_vendors, *args, **kwargs):
+        captured["configured_vendors"] = configured_vendors
+        return (["claude"], [], {}, [], "probed", {
+            "servedFromCache": False, "probedAt": None, "remainingTtl": None})
+
+    monkeypatch.setattr(pp, "live_vendors_for_composition", capture_live_vendors)
+
+    assert pp.main(["preflight_probe.py", "compose-liveness", "--cwd", repo]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "cursor" in payload["crossVendorEngines"]
+    assert "cursor" in captured["configured_vendors"]
+
+
 def test_compose_liveness_configured_engines_come_from_the_snapshot(tmp_path, monkeypatch, capsys):
     import liveness_cache
 
@@ -2361,6 +2405,8 @@ def test_compose_liveness_configured_engines_come_from_the_snapshot(tmp_path, mo
         "status": core_md.CONFIG_OK, "reason": None, "readError": None,
     }
     monkeypatch.setattr(pp, "readout_config", lambda cwd=None, root=None: distinctive_snapshot)
+
+    monkeypatch.setattr(pp.engine_detect.shutil, "which", lambda name: None)  # no engine reads as installed
 
     poison_msg = "compose-liveness must use the snapshot, not an independent core.md read"
 

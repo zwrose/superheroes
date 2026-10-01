@@ -117,3 +117,16 @@ def test_main_no_engine_prints_both_engines_matrix(monkeypatch, capsys):
     assert out["cursor"]["ok"] is False and out["cursor"]["cause"] == "not_installed"
     assert out["cursor"]["remediation"]           # every not-ready engine carries remediation
     assert rc == 0                                 # at least one engine ready -> exit 0
+
+
+# --- installed_engines ----------------------------------------------------------------------
+
+def _which_resolving(*binaries):
+    return lambda name: "/stub/" + name if name in binaries else None
+
+
+def test_installed_engines_returns_only_engines_whose_binary_resolves():
+    assert ED.installed_engines(which=_which_resolving("cursor-agent")) == ["cursor"]
+    assert ED.installed_engines(which=_which_resolving("codex")) == ["codex"]
+    assert ED.installed_engines(which=_which_resolving("codex", "cursor-agent")) == ["codex", "cursor"]
+    assert ED.installed_engines(which=_which_resolving()) == []
