@@ -106,10 +106,11 @@ def _write_core(wt, text):
         fh.write(text)
 
 
-def _open_with_core(tmp_path, monkeypatch, core):
+def _open_with_core(tmp_path, monkeypatch, core, **kw):
     """Open a claude write through the 1554 harness with ``core`` written into the worktree first.
 
-    ``core`` is core.md text, ``None`` (no core.md), or a callable ``(wt, main) -> text``."""
+    ``core`` is core.md text, ``None`` (no core.md), or a callable ``(wt, main) -> text``;
+    ``kw`` is forwarded to the dispatch (e.g. ``max_wait=0`` to leave the run unfinished)."""
     real_linked_worktree = S1554._linked_worktree
 
     def linked_worktree_with_core(tp):
@@ -120,7 +121,7 @@ def _open_with_core(tmp_path, monkeypatch, core):
         return wt, main
 
     monkeypatch.setattr(S1554, "_linked_worktree", linked_worktree_with_core)
-    return _open_claude_write(tmp_path, monkeypatch)
+    return _open_claude_write(tmp_path, monkeypatch, **kw)
 
 
 def _no_run_opened(run_dir):
@@ -499,21 +500,25 @@ def test_continuation_uses_journaled_access_not_core_md(tmp_path, monkeypatch):
         return real_read(*args, **kwargs)
 
     monkeypatch.setattr(ED.core_md, "read_sandbox_access", spy_read)
+    # max_wait=0 leaves the run open and unspawned, so the second dispatch is the one that spawns
     wt, run_dir, first, fake = _open_with_core(
-        tmp_path, monkeypatch, _core_text({"localPorts": True}))
+        tmp_path, monkeypatch, _core_text({"localPorts": True}), max_wait=0)
     assert len(calls) == 1
-    _opened_settings(run_dir, fake)
-    assert _settings_of(first["argv"])["sandbox"]["network"]["allowLocalBinding"] is True
+    assert fake.calls == []
+    assert not any(r.get("kind") == "run-folded" for r in ED._journal_read(run_dir)[0])
+    opened = _write_opened_record(run_dir)
+    assert _settings_of(opened["argv"])["sandbox"]["network"]["allowLocalBinding"] is True
     # the calibration changes after open; a continuation must not notice
     _write_core(wt, _core_text({"localPorts": False, "allowedDomains": ["example.org"]}))
-    second = _dispatch_write(tmp_path, _ClaudeStdoutWriteFakeRunner([_claude_write_runner()]),
-                             cwd=wt, run_dir=run_dir, seat=_implementer_claude_seat())
+    resumed = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    _dispatch_write(tmp_path, resumed, cwd=wt, run_dir=run_dir, seat=_implementer_claude_seat())
     assert len(calls) == 1, "a continuation re-read the sandboxAccess calibration"
-    settings = _settings_of(second["argv"])
+    assert len(resumed.calls) == 1
+    settings = _settings_of(resumed.calls[0]["argv"])
     assert settings["sandbox"]["network"]["allowLocalBinding"] is True
     assert settings["sandbox"]["network"]["allowedDomains"] == []
     assert settings["env"]["UV_OFFLINE"] == "1"
-    assert second["argv"] == first["argv"]
+    assert resumed.calls[0]["argv"] == opened["argv"]
     assert _write_opened_record(run_dir)["claudeWriteSandbox"]["access"] == {
         "allowedDomains": [], "localPorts": True, "localSocketDirs": [], "extraWritePaths": [],
     }
