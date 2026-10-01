@@ -269,6 +269,24 @@ def test_resolver_uv_present_resolves_cache_dir(tmp_path, monkeypatch):
     assert sandbox["uvCacheDir"] == os.path.realpath(cache)
 
 
+def test_resolver_uv_relative_cache_dir_against_worktree_cwd(tmp_path, monkeypatch):
+    """Relative `uv cache dir` output is resolved against cwd_real, not the dispatcher cwd."""
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    rel = "rel-uv-cache"
+    cache_expected = os.path.join(wt_real, rel)
+    os.makedirs(cache_expected, exist_ok=True)
+    _fake_uv(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_UV_CACHE", rel)
+    other_cwd = str(tmp_path / "dispatcher-cwd")
+    os.makedirs(other_cwd)
+    monkeypatch.chdir(other_cwd)
+    sandbox, refusal = ED._resolve_claude_write_sandbox(wt_real, timeout=30)
+    assert refusal is None
+    assert sandbox["uvCacheDir"] == os.path.realpath(cache_expected)
+    assert sandbox["uvCacheDir"] != os.path.realpath(os.path.join(other_cwd, rel))
+
+
 def test_resolver_uv_present_but_cache_dir_fails_refuses(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     _fake_uv(tmp_path, monkeypatch)

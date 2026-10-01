@@ -1717,7 +1717,7 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
         out = (uv_proc.stdout or "").strip()
         if uv_proc.returncode != 0 or not out:
             return None, engine_adapter.REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE
-        uv_cache_dir = os.path.realpath(out)
+        uv_cache_dir = os.path.realpath(os.path.join(cwd_real, out))
     return {
         "writeRoots": write_roots,
         "denyWrite": deny_write,
