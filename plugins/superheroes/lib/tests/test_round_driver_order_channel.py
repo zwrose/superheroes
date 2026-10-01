@@ -72,7 +72,7 @@ def _mixed_seat_map():
         if dim == ENGINE_SEAT:
             seats[dim] = {"vendor": "codex", "model": "gpt-5.1-codex-max", "engine": "codex"}
         else:
-            seats[dim] = {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+            seats[dim] = {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
     return {"seats": seats}
 
 

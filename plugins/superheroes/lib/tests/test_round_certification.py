@@ -520,7 +520,7 @@ def test_check_same_family_seat_refuses(tmp_path):
                 {
                     "round": "1",
                     "map": {
-                        "seats": {"code-reviewer": {"vendor": "claude", "model": "sonnet-5"}},
+                        "seats": {"code-reviewer": {"vendor": "claude", "model": "sonnet-5.5"}},
                         "degradations": [
                             {
                                 "constraint": "same-family",
@@ -560,7 +560,7 @@ def test_same_family_declared_degradation_refuses(tmp_path, with_seats_entry):
         ],
     }
     if with_seats_entry:
-        seat_map["seats"] = {"code-reviewer": {"vendor": "claude", "model": "sonnet-5"}}
+        seat_map["seats"] = {"code-reviewer": {"vendor": "claude", "model": "sonnet-5.5"}}
     session_dir = write_session(
         tmp_path,
         state={
@@ -591,7 +591,7 @@ def test_same_family_declared_degradation_refuses_malformed_vendor(tmp_path, ven
                 {
                     "round": "1",
                     "map": {
-                        "seats": {"code-reviewer": {"vendor": vendor, "model": "sonnet-5"}},
+                        "seats": {"code-reviewer": {"vendor": vendor, "model": "sonnet-5.5"}},
                         "degradations": [
                             {
                                 "constraint": "same-family",
@@ -673,7 +673,7 @@ def test_same_family_additive_undeclared_matching_family_refuses(tmp_path):
                     "round": "1",
                     "map": {
                         "seats": {
-                            "code-reviewer": {"vendor": "claude", "model": "sonnet-5"},
+                            "code-reviewer": {"vendor": "claude", "model": "sonnet-5.5"},
                         },
                     },
                 }

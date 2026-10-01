@@ -14573,8 +14573,16 @@ def _stable_build_view(tmp_path):
     return build_view
 
 
+_CLAUDE_WRITE_SANDBOX = {
+    "writeRoots": ["/sandbox/wt"], "denyWrite": ["/sandbox/wt/.git/hooks"], "uvCacheDir": None,
+}
+
+
 def _claude_argv_for_run(seat, role_kind, cwd):
-    built = EA.build_argv_result(seat, role_kind, {"cwd": cwd})
+    opts = {"cwd": cwd}
+    if role_kind == "build":
+        opts["claudeWriteSandbox"] = _CLAUDE_WRITE_SANDBOX  # #1554: journaled at open
+    built = EA.build_argv_result(seat, role_kind, opts)
     assert built["reason"] is None, built
     return built["argv"]
 
@@ -15746,6 +15754,7 @@ def _journal_claude_stdout_write_run_for_engine_files(tmp_path, run_dir, prompt_
         "argv": argv, "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
+        "claudeWriteSandbox": _CLAUDE_WRITE_SANDBOX,
         "supervisorPid": 1, "at": time.time(),
         "resolvedInputs": _spawn_gate_resolved_inputs(seat),
     }
@@ -16333,6 +16342,7 @@ def _write_admission_claude_stdout(tmp_path, monkeypatch, ended, payload):
         "argv": argv, "cwd": run_dir, "timeout": 30, "retryTimeout": 30,
         "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
         "channel": ERC.CHANNEL_NATIVE, "configDir": cfg,
+        "claudeWriteSandbox": _CLAUDE_WRITE_SANDBOX,
         "supervisorPid": 1, "at": time.time(),
         "resolvedInputs": _spawn_gate_resolved_inputs(seat),
     }

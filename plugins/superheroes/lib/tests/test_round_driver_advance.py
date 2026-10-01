@@ -74,7 +74,7 @@ V2_STATE = {
 }
 V2_STATE_HASH_BEFORE_723 = "e39a8e3163d24fb114d1ac95d8e7c9bfbea2d0baef1240a4f7c9c33e85ca780a"
 
-SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
                       for dim in RD.DIMENSIONS}}
 
 
@@ -296,7 +296,7 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
         "seat": seat,
         "attempt": pend["attempt"],
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": manifest_sha,
         "orderSha256": order_sha,
         "manifestSha256": manifest_sha,
@@ -926,7 +926,7 @@ def test_record_result_refuses_bare_payload_fault(tmp_path, adapters):
         "seat": "code-reviewer",
         "attempt": pend["attempt"],
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": manifest_sha,
         "orderSha256": order_sha,
         "manifestSha256": manifest_sha,

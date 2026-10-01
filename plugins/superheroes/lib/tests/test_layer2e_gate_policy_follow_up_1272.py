@@ -24,7 +24,7 @@ _fake_git = _TDI._fake_git
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
-SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
                       for dim in ("architecture-reviewer", "code-reviewer", "security-reviewer",
                                   "test-reviewer", "premortem-reviewer")}}
 

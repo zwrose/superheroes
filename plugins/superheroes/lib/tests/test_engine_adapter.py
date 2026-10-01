@@ -637,31 +637,49 @@ def test_build_argv_result_fail_closed_edges():
 
 
 def test_build_argv_claude_review_exact_shape():
-    argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "review", {})
+    argv = EA.build_argv(_seat("claude", "sonnet-5.5", "high"), "review", {})
     assert argv == [
         "claude", "-p", "--model", "sonnet", "--effort", "high",
         "--output-format", "stream-json", "--verbose", "--restricted",
     ]
 
 
+_CLAUDE_WRITE_SANDBOX = {
+    "writeRoots": ["/work/wt", "/work/main/.git/worktrees/wt", "/work/main/.git"],
+    "denyWrite": ["/work/main/.git/hooks", "/work/main/.git/config",
+                  "/work/main/.git/worktrees/wt/config.worktree"],
+    "uvCacheDir": None,
+}
+
+
 def test_build_argv_claude_write_exact_shape():
-    argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "build", {})
+    argv = EA.build_argv(
+        _seat("claude", "sonnet-5.5", "high"), "build",
+        {"claudeWriteSandbox": _CLAUDE_WRITE_SANDBOX},
+    )
     assert argv == [
         "claude", "-p", "--model", "sonnet", "--effort", "high",
         "--output-format", "stream-json", "--verbose",
         "--permission-mode", "acceptEdits", "--restricted",
+        "--tools", "Bash,Edit,Write,Read,Grep,Glob",
+        "--strict-mcp-config",
+        "--settings", EA.claude_write_sandbox_settings(_CLAUDE_WRITE_SANDBOX),
     ]
 
 
 def test_build_argv_claude_write_omits_allowed_tools():
-    argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "build", {})
+    argv = EA.build_argv(
+        _seat("claude", "sonnet-5.5", "high"), "build",
+        {"claudeWriteSandbox": _CLAUDE_WRITE_SANDBOX},
+    )
     assert "--allowedTools" not in argv
+    assert "--tools" in argv
 
 
 def test_build_argv_claude_print_mode_explicit_unchanged():
     for mode in (None, "print"):
         opts = {"claudeMode": mode} if mode is not None else {}
-        argv = EA.build_argv(_seat("claude", "sonnet-5", "high"), "review", opts)
+        argv = EA.build_argv(_seat("claude", "sonnet-5.5", "high"), "review", opts)
         assert argv == [
             "claude", "-p", "--model", "sonnet", "--effort", "high",
             "--output-format", "stream-json", "--verbose", "--restricted",
@@ -669,10 +687,10 @@ def test_build_argv_claude_print_mode_explicit_unchanged():
 
 
 def test_build_argv_unknown_claude_mode_refuses():
-    res = EA.build_argv_result(_seat("claude", "sonnet-5", "high"), "review", {"claudeMode": 123})
+    res = EA.build_argv_result(_seat("claude", "sonnet-5.5", "high"), "review", {"claudeMode": 123})
     assert res["reason"] == "unknown-claude-mode"
     assert "accepted modes: print" in res["detail"]
-    res = EA.build_argv_result(_seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "printt"})
+    res = EA.build_argv_result(_seat("claude", "sonnet-5.5", "high"), "review", {"claudeMode": "printt"})
     assert res["reason"] == "unknown-claude-mode"
 
 
@@ -737,7 +755,7 @@ def test_claude_transcript_tool_calls_realistic_fixture():
 
 def test_build_argv_claude_background_mode_refuses_unknown(tmp_path):
     # axis: build_argv refuses retired background claude mode
-    seat = _seat("claude", "sonnet-5", "high")
+    seat = _seat("claude", "sonnet-5.5", "high")
     res = EA.build_argv_result(seat, "review", {"cwd": str(tmp_path), "claudeMode": "background"})
     assert res["reason"] == "unknown-claude-mode"
     assert res["argv"] == []
@@ -764,13 +782,13 @@ def test_build_argv_claude_fail_closed_edges():
     res = EA.build_argv_result(_seat("claude", "gpt-5.6-sol", "high"), "review", {})
     assert res["reason"] == "unregistered-engine-model"
     # 4 effort None or off-enum → invalid-model-effort with claude enum
-    res = EA.build_argv_result(_seat("claude", "sonnet-5", None), "review", {})
+    res = EA.build_argv_result(_seat("claude", "sonnet-5.5", None), "review", {})
     assert res["reason"] == "invalid-model-effort"
     assert "low" in res["detail"] and "xhigh" in res["detail"]
-    res = EA.build_argv_result(_seat("claude", "sonnet-5", "max"), "review", {})
+    res = EA.build_argv_result(_seat("claude", "sonnet-5.5", "max"), "review", {})
     assert res["reason"] == "invalid-model-effort"
     # 5 unknown claude tier in opts → unknown-claude-tier (unchanged)
-    res = EA.build_argv_result(_seat("claude", "sonnet-5", "high"), "review", {"model": "bogus"})
+    res = EA.build_argv_result(_seat("claude", "sonnet-5.5", "high"), "review", {"model": "bogus"})
     assert res["reason"] == "unknown-claude-tier"
 
 
@@ -842,8 +860,8 @@ def test_build_argv_matches_build_argv_result_argv():
         (_seat("cursor", "composer-2.5", "high"), "build", {}),
         (_seat("cursor", "cursor-grok-4.6", "xhigh"), "review", {}),
         (_seat("cursor", "composer-2.5", None), "review", {"model": "opus"}),
-        (_seat("claude", "sonnet-5", "high"), "review", {}),
-        (_seat("claude", "sonnet-5", "high"), "build", {}),
+        (_seat("claude", "sonnet-5.5", "high"), "review", {}),
+        (_seat("claude", "sonnet-5.5", "high"), "build", {}),
         (_seat("bogus", None, "high"), "review", {}),
     ]
     for seat, role, opts in samples:
@@ -942,7 +960,7 @@ def test_build_argv_cli_unclassified_role_refused(capsys):
     rc = EA.main([
         "build-argv",
         "--seat",
-        _seat_json("claude", "sonnet-5", "high", "pilot"),
+        _seat_json("claude", "sonnet-5.5", "high", "pilot"),
         "--run-kind",
         "review",
     ])
@@ -1628,7 +1646,7 @@ def test_claude_builder_argv_refusal_order_session_id_before_prompt():
 
 def test_build_argv_claude_uses_claude_executable_constant():
     res = EA.build_argv_result(
-        _seat("claude", "sonnet-5", "high"), "review", {"claudeMode": "print"},
+        _seat("claude", "sonnet-5.5", "high"), "review", {"claudeMode": "print"},
     )
     assert res["argv"][0] == EA.CLAUDE_EXECUTABLE
 

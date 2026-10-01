@@ -14,6 +14,22 @@ belongs to and lists every change with its replacement.
 - An arm against a resolved ledger root whose ledger file does not exist now refuses `ledger-unreadable` instead of returning a clean `timer`. A ledger file that exists but holds no records stays clean.
 - Every `ledger-unreadable` refusal from `run`, `watch_arm` and `loop` now carries `ledgerPath`, the path the watcher read.
 
+### Claude write channel: a sandboxed shell
+
+- The claude write argv is now `claude -p --model <tok> --effort <effort> --output-format stream-json --verbose --permission-mode acceptEdits --restricted --tools Bash,Edit,Write,Read,Grep,Glob --strict-mcp-config --settings <inline JSON>`, then `--json-schema` at run-open. It replaces the edit-only argv with no shell. The review argv is unchanged.
+- The run-opened record gains `claudeWriteSandbox`, the writable roots resolved once at open. Read it there; continuations and spawns reuse it.
+- Four new refusals: `engine-config:sandbox-roots-missing`, `engine-config:sandbox-roots-unresolvable`, `engine-config:sandbox-uv-cache-unresolvable`, and `engine-config:sandbox-process-listing-unavailable`. The two `-unresolvable` refusals open nothing.
+- `dispatch-write` gains `--requires-process-listing`. Pass it when the order's verification lists processes; a claude write then refuses `engine-config:sandbox-process-listing-unavailable` before any run opens. Codex and cursor ignore it.
+- A claude write run opened by an older plugin cannot be continued: it refuses `engine-config:sandbox-roots-missing`. Open a fresh dispatch.
+- Sandbox limits: the network is off, uv runs offline (`UV_OFFLINE=1`, so dependencies must already be in the uv cache), `ps` is blocked, and the sandbox's per-user temp dir stays writable (`/tmp/claude-<uid>`), where other Claude sessions' scratch can live.
+
+### Registry: the sonnet row is sonnet-5.5
+
+- The registry id `sonnet-5` is now `sonnet-5.5`, and the alias record reads `sonnet → claude-sonnet-5-5` (harness 2.1.284).
+- A pin or config naming `sonnet-5` is refused as unregistered. Name `sonnet-5.5`.
+- A run journaled under `sonnet-5` is refused at continuation (`run-dir-seat-mismatch`). Open a fresh dispatch, the same rule the earlier `opus-5` to `opus-5.5` rename followed.
+- The `sonnet` dispatch token is unchanged.
+
 ## 0.37.0
 
 ### Before you upgrade

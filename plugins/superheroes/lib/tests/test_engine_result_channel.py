@@ -503,7 +503,7 @@ def test_every_dispatchable_vendor_has_channel_delivery_pin_and_argv():
     matrix_cells = {
         "codex": MR.matrix_config("reviewer", "codex"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
-        "claude": ("sonnet-5", "high"),
+        "claude": ("sonnet-5.5", "high"),
     }
     for vendor in EA.BUILD_ARGV_VENDORS:
         assert ERC.channel_for(vendor) == ERC.CHANNEL_NATIVE
@@ -511,7 +511,12 @@ def test_every_dispatchable_vendor_has_channel_delivery_pin_and_argv():
         model_id, effort = matrix_cells[vendor]
         seat = {"vendor": vendor, "model": model_id, "effort": effort}
         for role_kind in ("review", "build"):
-            res = EA.build_argv_result(seat, role_kind, {})
+            opts = {}
+            if vendor == "claude" and role_kind == "build":
+                opts["claudeWriteSandbox"] = {
+                    "writeRoots": ["/sandbox/wt"], "denyWrite": [], "uvCacheDir": None,
+                }
+            res = EA.build_argv_result(seat, role_kind, opts)
             assert res["reason"] is None, (vendor, role_kind, res)
 
 

@@ -26,6 +26,7 @@ import os
 import posixpath
 import re
 import secrets
+import shutil
 import signal
 import stat
 import subprocess
@@ -770,6 +771,8 @@ def _canonical_spawn_argv(opened):
     claude_mode = opened.get("claudeMode")
     if claude_mode is not None:
         opts["claudeMode"] = claude_mode
+    if opened.get("claudeWriteSandbox") is not None:
+        opts["claudeWriteSandbox"] = opened["claudeWriteSandbox"]
     built = engine_adapter.build_argv_result(seat, role_kind, opts)
     if built.get("reason") is not None:
         return None, "engine-config:%s" % built["reason"]
@@ -1654,17 +1657,83 @@ def _run_live_evidence(state):
 
 def _git_scrubbed(cwd, *args, timeout=None):
     return subprocess.run(
-        ["git", "-C", cwd, *args],
+        [
+            "git", "-C", cwd,
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "core.fsmonitor=",
+            *args,
+        ],
         capture_output=True, text=True,
         env=launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,)),
         timeout=timeout,
     )
 
 
+def _resolve_claude_write_sandbox(cwd_real, *, timeout):
+    """Resolve the claude write channel's sandbox inputs ONCE, at run open (#1554).
+
+    Returns (sandbox_dict, None) or (None, refusal_token). The dict is journaled in the
+    run-opened record and reused verbatim on every continuation and spawn — never re-derived
+    from the ambient environment."""
+    try:
+        proc = _git_scrubbed(
+            cwd_real, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir",
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
+    if proc.returncode != 0:
+        return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    if len(lines) != 2 or not all(os.path.isabs(ln) for ln in lines):
+        return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
+    git_dir = os.path.realpath(lines[0])
+    git_common_dir = os.path.realpath(lines[1])
+    write_roots = []
+    for root in (cwd_real, git_dir, git_common_dir):
+        if root not in write_roots:
+            write_roots.append(root)
+    deny_write = []
+    for denied in (
+        os.path.join(cwd_real, ".git"),
+        os.path.join(git_common_dir, "hooks"),
+        os.path.join(git_common_dir, "config"),
+        os.path.join(git_dir, "config.worktree"),
+        os.path.join(git_dir, "commondir"),
+        os.path.join(git_dir, "gitdir"),
+    ):
+        if denied not in deny_write:
+            deny_write.append(denied)
+    uv_cache_dir = None
+    uv_path = shutil.which("uv")
+    if uv_path is not None:
+        try:
+            uv_proc = subprocess.run(
+                [uv_path, "cache", "dir"], cwd=cwd_real, capture_output=True, text=True,
+                timeout=timeout,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None, engine_adapter.REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE
+        out = (uv_proc.stdout or "").strip()
+        if uv_proc.returncode != 0 or not out:
+            return None, engine_adapter.REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE
+        uv_cache_dir = os.path.realpath(os.path.join(cwd_real, out))
+    return {
+        "writeRoots": write_roots,
+        "denyWrite": deny_write,
+        "uvCacheDir": uv_cache_dir,
+    }, None
+
+
 def _git_scrubbed_bytes(cwd, *args, timeout=None):
     """Byte-exact git for the dirt probe: pathnames are bytes, and no channel may rewrite them."""
     return subprocess.run(
-        ["git", "-C", cwd, *args],
+        [
+            "git", "-C", cwd,
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "core.fsmonitor=",
+            *args,
+        ],
         capture_output=True,
         env=launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,)),
         timeout=timeout,
@@ -5915,7 +5984,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
                     repo_root=None, expected_items=None, baseline_dirty=None,
-                    sibling_baseline=None, resolved_inputs=None, claude_mode=None):
+                    sibling_baseline=None, resolved_inputs=None, claude_mode=None,
+                    claude_write_sandbox=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -6003,6 +6073,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         record["nativeSchemaPath"] = native_schema_path
     if cfg is not None:
         record["configDir"] = cfg
+    if claude_write_sandbox is not None:
+        record["claudeWriteSandbox"] = claude_write_sandbox
     effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
     if effective_nonce is not None:
         record["echoNonce"] = effective_nonce
@@ -6017,7 +6089,8 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                    order_id=None, base_sha=None, timeout=_PARAM_UNSET,
                    retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
                    run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, claude_mode=None,
-                   expected_items=None, expected_items_file=None, **kwargs):
+                   expected_items=None, expected_items_file=None,
+                   requires_process_listing=False, **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -6089,6 +6162,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             run_dir_supplied=run_dir_supplied, max_wait=max_wait,
             max_wait_source=max_wait_source, claude_mode=claude_mode,
             expected_items=expected_items, expected_items_file=expected_items_file,
+            requires_process_listing=requires_process_listing,
         )
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -6113,7 +6187,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          run_engine=_run_engine, run_dir=None, run_dir_supplied=False,
                          max_wait=None, max_wait_source=resolved_inputs_vocab.DEFAULT,
                          claude_mode=None, expected_items=None,
-                         expected_items_file=None):
+                         expected_items_file=None, requires_process_listing=False):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
     role = seat["role"]
@@ -6203,6 +6277,27 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
         opts = {"cwd": cwd_real}
         if resolved_claude_mode["claudeMode"] is not None:
             opts["claudeMode"] = resolved_claude_mode["claudeMode"]
+        if requires_process_listing:
+            opts["requiresProcessListing"] = True
+        # The claude write sandbox is resolved once at open and journaled; a continuation
+        # reuses the journaled value and never re-derives it from the environment (#1554).
+        claude_write_sandbox = None
+        if engine == "claude":
+            if opened is not None:
+                claude_write_sandbox = opened.get("claudeWriteSandbox")
+            elif not requires_process_listing:
+                claude_write_sandbox, sandbox_refusal = _resolve_claude_write_sandbox(
+                    cwd_real, timeout=preflight_timeout,
+                )
+                if sandbox_refusal is not None:
+                    return _write_preflight_terminal(
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": "engine-config:%s" % sandbox_refusal,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=[],
+                    )
+            if claude_write_sandbox is not None:
+                opts["claudeWriteSandbox"] = claude_write_sandbox
         built = engine_adapter.build_argv_result(seat, role_kind, opts)
         if built["reason"] is not None:
             return _write_preflight_terminal(
@@ -6425,6 +6520,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 sibling_baseline=sibling_baseline,
                 resolved_inputs=resolved_inputs,
                 claude_mode=resolved_claude_mode["claudeMode"],
+                claude_write_sandbox=claude_write_sandbox,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
@@ -7033,6 +7129,9 @@ def build_parser():
     cc.add_argument(w, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
                     choices=claude_modes.CLAUDE_MODE_INPUTS,
                     help=_CLAUDE_MODE_HELP)
+    cc.add_argument(w, "--requires-process-listing", contract="boolean-flag",
+                    help="declare the order needs process listing (ps); a claude write "
+                         "refuses sandbox-process-listing-unavailable before any run opens")
 
     p = sub.add_parser("dispatch-poll")
     cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)
@@ -7088,7 +7187,8 @@ def main(argv):
                                  progress_path=args.progress_file,
                                  claude_mode=args.claude_mode,
                                  expected_items=args.expect_item,
-                                 expected_items_file=args.expect_items_file)
+                                 expected_items_file=args.expect_items_file,
+                                 requires_process_listing=args.requires_process_listing)
             classification = dispatch_outcome.classify_dispatch_result(res)
         elif args.cmd == "dispatch-poll":
             res, classification = _dispatch_poll_impl(args.run_dir)

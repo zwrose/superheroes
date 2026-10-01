@@ -103,6 +103,10 @@ The engine-config refusal tokens name a refused argv build. The `build-argv` CLI
 - `engine-model-effort-conflict`
 - `fable-unrunnable`
 - `invalid-model-effort`
+- `sandbox-process-listing-unavailable`
+- `sandbox-roots-missing`
+- `sandbox-roots-unresolvable`
+- `sandbox-uv-cache-unresolvable`
 - `unknown-claude-mode`
 - `unknown-claude-tier`
 - `unknown-engine`
@@ -150,6 +154,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--expect-item` | no | `free-text` | none |  |
 | `--expect-items-file` | no | `free-text` | none |  |
 | `--claude-mode` | no | `choices:print,background` | none | print only; background is retired and refuses claude-mode-retired before spawn |
+| `--requires-process-listing` | no | `boolean-flag` | False | declare the order needs process listing (ps); a claude write refuses sandbox-process-listing-unavailable before any run opens |
 
 #### `engine_dispatch.py dispatch-review`
 

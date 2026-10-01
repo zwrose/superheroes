@@ -506,7 +506,7 @@ def test_claude_vendor_passes_dispatch_chokepoint_for_on_allowlist_cell(verb):
     # axis: claude is now in BUILD_ARGV_VENDORS — passes vendor gate (#1273 WO-A)
     role = _REVIEW_ROLE if verb == "dispatch-review" else _WRITE_ROLE
     resolved = SB.resolve_entry(
-        _seat_json("claude", "sonnet-5", "high", role),
+        _seat_json("claude", "sonnet-5.5", "high", role),
         verb=verb,
     )
     assert resolved["ok"] is True
@@ -658,7 +658,7 @@ def test_build_argv_vendors_public_name_matches_dispatchable_set(monkeypatch):
     assert set(EA.BUILD_ARGV_VENDORS) == {"codex", "cursor", "claude"}
     monkeypatch.setattr(EA, "BUILD_ARGV_VENDORS", ("codex", "cursor"))
     resolved = SB.resolve_entry(
-        _seat_json("claude", "sonnet-5", "high", _REVIEW_ROLE),
+        _seat_json("claude", "sonnet-5.5", "high", _REVIEW_ROLE),
         verb="dispatch-review",
     )
     assert resolved["ok"] is False

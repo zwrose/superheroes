@@ -2010,7 +2010,7 @@ def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
 
 
 def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
-    """#608 review contrast: known claude fixer at default sonnet-5/high has a next ladder rung."""
+    """#608 review contrast: known claude fixer at default sonnet-5.5/high has a next ladder rung."""
     state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
     RD._handle_stall(state, state["config"], _STALL_BREAKER)
     assert state["selfRecovered"] is True
