@@ -472,6 +472,20 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   instructions is a boundary no model strength removes; the retired defenses assumed an untrusted
   repository, which the plugin no longer reviews.
 
+#### C7 — Claude write sandbox access gate
+
+- **Component.** The `sandboxAccess` calibration validator and the open-time refusals
+  (`sandbox-access-malformed`, `sandbox-access-unreadable`), which keep a misspelled or unreadable
+  option from silently doing nothing. It costs one calibration read per claude write open.
+- **Start date.** 2026-10-01.
+- **Condition.** Citation-based, 45 days: vet, dispatch, or configure receipts citing a
+  `sandbox-access-*` refusal. On firing, a proposal to the owner at a gardening pass.
+- **Last demonstrated benefit.** unknown (new).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** structural — a fail-closed gate's zero count may mean it works, and an option that
+  silently does nothing is a property of the system, not a model quirk.
+
 ### D. Certified review loop
 
 #### D1 — Round driver core
