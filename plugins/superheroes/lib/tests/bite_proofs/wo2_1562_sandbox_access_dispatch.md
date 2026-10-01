@@ -42,7 +42,12 @@ Each neutralization was a targeted Edit in `engine_adapter.py` or `engine_dispat
 - Result as first written (`G11-red.txt`, line 2): `1 passed in 1.48s`. **The detector did not go red under its neutralization.** FAILED count: 0. The test asserted only on the returned and journaled argv, and that argv comes from the journal whether or not the calibration was re-read.
 - Contrast: the sibling `test_continuation_uses_journaled_sandbox_not_environment` in `plugins/superheroes/lib/tests/test_claude_write_sandbox_1554.py` goes red under the same neutralization, because it spies on `ED._resolve_claude_write_sandbox` and asserts the call count stays 1 (`a continuation re-resolved the sandbox`, `assert 2 == 1`).
 - Fix (WO-2b, order-authorized test change): the test now spies on `core_md.read_sandbox_access`, the calibration read itself, through `monkeypatch.setattr(ED.core_md, "read_sandbox_access", ...)`; the spy appends to a `calls` list and delegates to the real function. It asserts `len(calls) == 1` after the open and `len(calls) == 1, "a continuation re-read the sandboxAccess calibration"` after the continuation `_dispatch_write`. Every earlier assertion is kept.
-- G11 post-fix: pending orchestrator re-run
+- G11 post-fix, orchestrator receipt. Neutralization: the G11 one already recorded above, restored by the inverse Edit.
+  - Red (`G11-postfix-red.txt`, in the `bp` subdirectory of the orchestrator scratchpad). First two `E ` lines:
+    `E       AssertionError: a continuation re-read the sandboxAccess calibration`
+    `E       assert 2 == 1`
+    FAILED count: 1.
+  - Green (`L2-green2.txt`, same directory): `27 passed in 2.17s`.
 
 ### G12 domains (mapping)
 

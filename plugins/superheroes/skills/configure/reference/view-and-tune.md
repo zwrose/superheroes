@@ -201,17 +201,14 @@ action that owns it, leaving the rest of the calibration untouched:
   `vet-checks-round-trip-refused`. The command exits 0 either way, so check `action`, not exit
   status. List shape: `skills/showrunner/reference/vet-receipt.md` § Project vet checks.
 
-- **Record sandbox access for the claude implementer** → write **only** the `sandboxAccess` key in
+- **Open sandbox access for the claude implementer** → write **only** the `sandboxAccess` key in
   `core.md`'s JSON block, leaving every other key untouched. Every field is optional and a missing
-  field is off. `allowedDomains` names hosts, `localPorts` is loopback listen/connect,
-  `localSockets` is Unix-domain sockets in the sandbox's per-user temp dir, and `extraWritePaths`
-  lists writable paths; the deny list (the git hooks, the git config files, the worktree identity
-  files) is meant to still win over any extra path. **Saved, not yet applied:** this layer only
-  stores and displays the value. Dispatch does not read `sandboxAccess` yet — a claude write run
-  still opens with the network closed and only the existing writable roots and uv cache, whatever is
-  saved here — and `dispatch-mechanics.md` § The claude write sandbox has no mapping for these
-  fields. Tell the owner the saved access is inactive until the dispatch layer consumes it; do not
-  promise it applies to the next run.
+  field is off. `allowedDomains` lets sandboxed commands reach those hosts; `localPorts` allows
+  listening and connecting on loopback, including a bind on 0.0.0.0; `localSockets` allows
+  Unix-domain sockets in the sandbox's per-user temp dir; `extraWritePaths` adds writable paths, and
+  the deny list (the git hooks, the git config files, the worktree identity files) still wins over
+  any extra path. The Claude Code setting each one maps to is in
+  `skills/workhorse/reference/dispatch-mechanics.md` § The claude write sandbox.
   Show the current value from the view's **Sandbox access** block first. Stdin carries a JSON
   object; empty stdin is refused (use `--clear` to remove the key):
 
@@ -241,8 +238,10 @@ action that owns it, leaving the rest of the calibration untouched:
   carries `malformed` for the owner to fix, each item naming its field, its reason, and the accepted
   shape. Refusal reasons also include `sandbox-access-input-unparseable`, `duplicate-core-key:<key>`,
   `core-md-absent`, `core-md-unparseable`, and `sandbox-access-round-trip-refused`. The command exits
-  0 either way, so check `action`, not exit status. A saved value changes no run's access today
-  (see **Saved, not yet applied** above).
+  0 either way, so check `action`, not exit status. A claude write run reads the value once when it
+  opens, so a run already open keeps the access it opened with and an edit applies to the next run.
+  A malformed saved value refuses the next claude write open with
+  `engine-config:sandbox-access-malformed`.
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
