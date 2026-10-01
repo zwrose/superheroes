@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.38.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.37.0...superheroes-v0.38.0) (2026-10-01)
+
+
+### Features
+
+* **superheroes:** a sandboxed-shell Claude write channel and the sonnet-5.5 registry id ([#1554](https://github.com/zwrose/superheroes/issues/1554) layer 1) ([#1557](https://github.com/zwrose/superheroes/issues/1557)) ([c6ab58b](https://github.com/zwrose/superheroes/commit/c6ab58ba228c3033317868ae0573bac3f7b1a8eb))
+* **superheroes:** add the gate-receipt/1 schema reference ([#1551](https://github.com/zwrose/superheroes/issues/1551)) ([b95a56b](https://github.com/zwrose/superheroes/commit/b95a56b40a1b3c46e7dfc52f77766b671b297ef6))
+* **superheroes:** the implementer is one calibration setting, and the seat map excludes both makers ([#1554](https://github.com/zwrose/superheroes/issues/1554) layer 2) ([#1558](https://github.com/zwrose/superheroes/issues/1558)) ([e746195](https://github.com/zwrose/superheroes/commit/e7461957e8b5293919e551fe709fa07883812497))
+
+
+### Bug Fixes
+
+* **superheroes:** wave_watch refuses a missing launch ledger instead of reporting clean ([#1552](https://github.com/zwrose/superheroes/issues/1552)) ([77515eb](https://github.com/zwrose/superheroes/commit/77515eb40815de7fc837792170f5f62d51736288))
+
 ## [0.37.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.36.0...superheroes-v0.37.0) (2026-09-30)
 
 
