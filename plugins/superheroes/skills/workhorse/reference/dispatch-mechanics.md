@@ -303,9 +303,9 @@ enabled --output-format stream-json` for both roles (`--mode plan` is gone: plan
 the file). Builder lanes are not dispatched through this runner — the launcher starts them as
 `claude -p` sessions whose command comes from `engine_adapter.claude_builder_argv`. **Claude** receives `--json-schema <declared schema JSON>` on argv at
 run-open and the prompt on stdin under `claude -p --model <tok> --effort <effort> --output-format stream-json
---verbose`, plus `--restricted` for review or `--permission-mode acceptEdits --restricted`
-for write; a claude write dispatch is edit-only inside the run cwd because no OS sandbox is
-available through this CLI, so an order needing to run commands does not route to claude today.
+--verbose`, plus `--restricted` for review; for write the argv adds `--permission-mode acceptEdits
+--restricted --tools Bash,Edit,Write,Read,Grep,Glob --strict-mcp-config --settings <inline JSON>`
+before `--json-schema`, which gives the engine a sandboxed shell (see § The claude write sandbox).
 The runner materializes the `structured_output` from the last `{"type":"result"}` event
 on stdout to `<run-dir>/native-result-<n>.json` at attempt end. `attempt-ended.stdoutResult`
 records `materialized`, `absent`, `error`, or `occupied` — only `materialized` is loaded;
@@ -736,6 +736,32 @@ runner owns the bound — its per-attempt timeout, journal, and bounded slice �
 separate per-dispatch watchdog** on top of it. **`cwd` must be a linked build worktree** — a primary
 checkout is refused (`cwd-primary-checkout`) — which is exactly why this is the workhorse's
 implementer path and not review-code's in-place fixer path.
+
+### The claude write sandbox
+
+A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inline `--settings`.
+
+- **Allowed:** writes to the build worktree, its git dir, the shared git common dir, and the uv
+  cache. **Blocked:** the network (no allowed domains), writes to the common dir's `hooks` and
+  `config` and the worktree's `config.worktree`, WebFetch and WebSearch, and any command outside
+  the sandbox. If the sandbox cannot start, the run fails instead of running unsandboxed.
+- **Settings files:** `--restricted` ignores user, project, and local settings and confines
+  Write and Edit to the working directory.
+- **uv is offline** (`UV_OFFLINE=1`): the order's Python dependencies must already be in the uv
+  cache, or the install fails.
+- **Roots freeze at open.** The writable roots are resolved once at run open and journaled as
+  `claudeWriteSandbox` in the run-opened record; continuations and spawns reuse them. A run opened
+  without them refuses `engine-config:sandbox-roots-missing`. A root that cannot be resolved
+  refuses at open, with nothing opened: `engine-config:sandbox-roots-unresolvable` or
+  `engine-config:sandbox-uv-cache-unresolvable`.
+- **`ps` is blocked** inside the sandbox (measured on macOS). Pass `--requires-process-listing`
+  when the order's own verification lists processes, for example a test that shells out to `ps`;
+  a claude write then refuses `engine-config:sandbox-process-listing-unavailable` before any run
+  opens. Codex and cursor ignore the flag.
+- **Temp-dir residual:** the sandbox's per-user temp dir stays writable (a platform default,
+  measured as `/tmp/claude-<uid>`), and other Claude sessions' scratch can live there.
+- **Command friction:** a compound line the harness cannot auto-approve (`cmd; echo "exit=$?"`, a
+  heredoc) is denied in print mode and the engine retries simpler. Plain `a && b` chains run.
 
 ### Write-report contract
 
