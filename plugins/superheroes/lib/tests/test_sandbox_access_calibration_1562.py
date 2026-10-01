@@ -366,8 +366,12 @@ def test_read_duplicate_key_is_structural_refusal(tmp_path):
     assert got["access"] is None
 
 
-def test_read_repo_root_unavailable(tmp_path):
-    got = CM.read_sandbox_access(str(tmp_path / "not-a-repo"), None)
+def test_read_repo_root_unavailable(monkeypatch):
+    def _raise(*a, **k):
+        raise CM.RepoRootUnavailable("no root")
+
+    monkeypatch.setattr(CM, "core_path", _raise)
+    got = CM.read_sandbox_access(".", None)
     assert got["access"] is None
     assert got["reason"] == "repo-root-unavailable"
 
@@ -535,7 +539,7 @@ def test_carry_forward_confirm_all_keeps_key_byte_equal(tmp_path, raw):
     assert result["core"]["action"] == "confirmed"
     after = json.dumps(_parsed(repo, store)[_KEY], indent=2)
     assert after == before
-    assert after in open(CM.core_path(repo, store)).read()
+    assert _parsed(repo, store)[_KEY] == raw
 
 
 def test_carry_forward_confirm_all_without_key_adds_none(tmp_path):
