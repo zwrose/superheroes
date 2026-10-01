@@ -609,10 +609,11 @@ A **configuration gate** is a third, distinct control: an invalid engine×tier c
 is refused at configure/calibration time and cannot be saved — not an engine-selection
 degrade and not a post-hoc result check.
 
-**Build-engine contract.** A builder's implementer subagents (the Workhorse charter,
-`agents/implementer.md`) may run on an external engine instead of a Claude subagent: the
-same implementer template is inlined verbatim (minus its frontmatter) into the external
-dispatch prompt, so both paths carry identical instructions by construction.
+**Build-engine contract.** A builder's implementer orders (the Workhorse charter,
+`agents/implementer.md`) dispatch through the supervised write runner on the calibrated
+implementation engine: `claude` runs the sandboxed Claude write channel, codex and cursor
+their own CLIs. The same implementer template is inlined verbatim (minus its frontmatter)
+for every engine, so all paths carry identical instructions by construction.
 `review-code`'s panel seats route the same way, resolved via `engine_adapter.py`. The
 engine axis is orthogonal to the model tier: `model_tier` still governs *which Claude
 model* runs when the engine is `claude`; when the engine is external,

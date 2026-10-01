@@ -679,7 +679,7 @@ foreign contract's rules at brief time would have cost minutes.
 
 ## Supervised write dispatch
 
-The sanctioned way to dispatch a long-running **external implementer** is the supervised runner. For
+The sanctioned way to dispatch every implementer order, on whichever engine the calibration names, `claude` included, is the supervised runner. For
 the full CLI argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
 
 ```bash

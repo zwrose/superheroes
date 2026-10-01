@@ -3577,10 +3577,8 @@ def test_cli_compose_host_model_unknown_degrades(capsys):
         d for d in receipt["degradations"] if d["constraint"] == "host-model-unknown"
     ]
     assert len(host_unknown) == 1
-    assert (
-        "the author and narrative families fell back to the claude host's family (anthropic)"
-        in host_unknown[0]["reason"]
-    )
+    assert "claude" in host_unknown[0]["reason"]
+    assert "the claude implementation engine's (anthropic)" in host_unknown[0]["reason"]
     assert all(
         seat_cfg.get("family") != "anthropic"
         for seat_cfg in receipt["seats"].values()
@@ -3771,6 +3769,51 @@ def test_cli_compose_claude_impl_unknown_host_exits_zero(capsys):
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["authorFamily"] == "anthropic"
     assert any(d["constraint"] == "host-model-unknown" for d in receipt["degradations"])
+
+
+def test_cli_compose_claude_impl_openai_host_author_is_anthropic(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "claude",
+            "--host-model",
+            "gpt-6.1-sol",
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authorFamily"] == "anthropic"
+    assert receipt["narrativeFamily"] == "openai"
+    assert not any(
+        d["constraint"] == "host-model-unknown" for d in receipt["degradations"]
+    )
+
+
+def test_cli_compose_cursor_impl_openai_host_author_is_xai(capsys):
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--implementation-engine",
+            "cursor",
+            "--host-model",
+            "gpt-6.1-sol",
+            "--pr-number",
+            "1273",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authorFamily"] == "xai"
+    assert receipt["narrativeFamily"] == "openai"
 
 
 def test_cli_compose_family_flags_conflict(capsys):

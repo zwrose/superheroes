@@ -1366,27 +1366,18 @@ def main(argv):
             host_fam = model_registry.host_family(host_model)
             impl_engine = args.implementation_engine
             claude_host_fam = model_registry.family_for("code-fixer", "claude")
-            if impl_engine == "claude":
-                author_family = host_fam or claude_host_fam
-            else:
-                author_family = model_registry.family_for("code-fixer", impl_engine)
-                if author_family is None:
-                    print("author-family-unresolved:%s" % impl_engine, file=sys.stderr)
-                    return 1
+            author_family = model_registry.family_for("code-fixer", impl_engine)
+            if author_family is None:
+                print("author-family-unresolved:%s" % impl_engine, file=sys.stderr)
+                return 1
             narrative_family = host_fam or claude_host_fam
             if host_fam is None:
-                if impl_engine == "claude":
-                    reason = (
-                        "host model unknown — the author and narrative families fell back to "
-                        "the claude host's family (%s)" % claude_host_fam
-                    )
-                else:
-                    reason = (
-                        "host model unknown — the narrative family fell back to the claude "
-                        "host's family (%s); the author family is the %s implementation "
-                        "engine's (%s)"
-                        % (claude_host_fam, impl_engine, author_family)
-                    )
+                reason = (
+                    "host model unknown — the narrative family fell back to the claude "
+                    "host's family (%s); the author family is the %s implementation "
+                    "engine's (%s)"
+                    % (claude_host_fam, impl_engine, author_family)
+                )
                 family_degradations.append({
                     "constraint": "host-model-unknown",
                     "reason": reason,
