@@ -26,7 +26,8 @@ print(configure_view.render('.'))"
 
 One plain-text screen, top to bottom: the project's core facts (including the **Show-it surface**
 declaration when present and the declared **Vet checks** block with any malformed or unreadable
-calibration flagged), the **Dispatch calibration** (the
+calibration flagged), the **Sandbox access** block (`all off (offline)` when nothing is set, with any
+malformed or unreadable value flagged), the **Dispatch calibration** (the
 effective engine + model for every v2 dispatch role) and its Codex model-pin detail, each hero's
 layer, the pinned patterns, and the **Model tiers** block — "here is everything superheroes knows
 about this project," not a list of files. Any current staleness/drift is shown as a **single,
@@ -199,6 +200,45 @@ action that owns it, leaving the rest of the calibration untouched:
   `duplicate-core-key:<key>`, `core-md-absent`, `core-md-unparseable`, and
   `vet-checks-round-trip-refused`. The command exits 0 either way, so check `action`, not exit
   status. List shape: `skills/showrunner/reference/vet-receipt.md` § Project vet checks.
+
+- **Open sandbox access for the claude implementer** → write **only** the `sandboxAccess` key in
+  `core.md`'s JSON block, leaving every other key untouched. Every field is optional and a missing
+  field is off. `allowedDomains` lets sandboxed commands reach those hosts, `localPorts` allows
+  listening and connecting on loopback, `localSockets` allows Unix-domain sockets in the sandbox's
+  per-user temp dir, and `extraWritePaths` adds writable paths; the deny list (the git hooks, the git
+  config files, the worktree identity files) still wins over any extra path. The mapping to Claude
+  Code settings is in `skills/workhorse/reference/dispatch-mechanics.md` § The claude write sandbox.
+  Show the current value from the view's **Sandbox access** block first. Stdin carries a JSON
+  object; empty stdin is refused (use `--clear` to remove the key):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' '{"allowedDomains":["pypi.org"],"localPorts":true,"localSockets":true,"extraWritePaths":["/Users/me/Library/Caches/ms-playwright"]}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-sandbox-access --cwd .
+  ```
+
+  To clear:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" write-sandbox-access --cwd . --clear
+  ```
+
+  To read the saved value:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" sandbox-access --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-sandbox-access` returns `{action, reason?,
+  malformed?}`. Only `written` or `noop` means the object was saved — surface any other `action`
+  (`refused`, `deferred`, `behind`) to the owner with its `reason`; refusal `sandbox-access-malformed`
+  carries `malformed` for the owner to fix, each item naming its field, its reason, and the accepted
+  shape. Refusal reasons also include `sandbox-access-input-unparseable`, `duplicate-core-key:<key>`,
+  `core-md-absent`, `core-md-unparseable`, and `sandbox-access-round-trip-refused`. The command exits
+  0 either way, so check `action`, not exit status. A run already open keeps the access it opened
+  with; the edit applies to the next run.
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
