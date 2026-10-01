@@ -1708,6 +1708,46 @@ def _git_routing_scrubbed_environ():
         os.environ.update(saved)
 
 
+def _managed_policy_locations():
+    """The on-disk managed (policy) settings locations, as (path, kind) pairs, for this platform."""
+    if sys.platform == "darwin":
+        return (
+            ("/Library/Application Support/ClaudeCode/managed-settings.json", "file"),
+            ("/Library/Application Support/ClaudeCode/managed-settings.d", "dir"),
+            ("/Library/Managed Preferences/com.anthropic.claudecode.plist", "file"),
+        )
+    return (
+        ("/etc/claude-code/managed-settings.json", "file"),
+        ("/etc/claude-code/managed-settings.d", "dir"),
+    )
+
+
+def _managed_policy_location_present(path, kind):
+    # axis: only a location proven absent counts as absent; an unreadable one counts as present.
+    try:
+        mode = os.lstat(path).st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    if kind == "file":
+        return True
+    if not stat.S_ISDIR(mode):
+        return True
+    try:
+        return bool(os.listdir(path))
+    except OSError:
+        return True
+
+
+def _managed_policy_present():
+    """True when any managed-policy location exists or cannot be read (#1569); frozen at open."""
+    return any(
+        _managed_policy_location_present(path, kind)
+        for path, kind in _managed_policy_locations()
+    )
+
+
 def _resolve_claude_write_sandbox(cwd_real, *, timeout):
     """Resolve the claude write channel's sandbox inputs ONCE, at run open (#1554).
 
@@ -1802,6 +1842,7 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
         "writeRoots": write_roots,
         "denyWrite": deny_write,
         "uvCacheDir": uv_cache_dir,
+        "managedPolicyPresent": _managed_policy_present(),
         "access": {
             "allowedDomains": list(calibrated["allowedDomains"]),
             "localPorts": calibrated["localPorts"],

@@ -2106,6 +2106,27 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   2026-09-18), so the one reader is the only place a wrong type can be caught before a gate reads
   it as "no verify command".
 
+#### S27 — Claude write channel: the Bash allow gate
+
+- **Component.** Not a census row. In `plugins/superheroes/lib/engine_adapter.py`,
+  `claude_write_sandbox_settings` emits `permissions.allow: ["Bash"]` only when the journaled
+  `managedPolicyPresent` is false; in `plugins/superheroes/lib/engine_dispatch.py`,
+  `_managed_policy_present` (fail-closed presence of on-disk managed policy, frozen at open).
+  Workaround-marked (#1569). Cost: a permission grant whose safety rests on the sandbox staying
+  mandatory.
+- **Start date.** 2026-10-01.
+- **Condition.** Citation-based, 45 days: build records or vet receipts citing an implementer
+  refusal "requires approval" on the claude write channel. That is a regression signal, not a
+  retirement signal. Retirement: when the workaround marker's delete-when condition is observed on
+  the Claude Code version the channel runs, a proposal to the owner at a gardening pass to remove it.
+- **Last demonstrated benefit.** A live claude write run ran `-X pycache_prefix` pytest, `FOO=1`,
+  and `$?` shapes with no refusal, with network, outside-root writes, and git-hooks writes still
+  denied (#1569 PR build record).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — it exists because of Claude Code 2.1.284 behaviour (the auto-allow
+  gap); observed on the anthropic family's sandboxed implementer.
+
 
 ## The workaround-marker inventory
 
@@ -2131,6 +2152,10 @@ file, returns exactly that set.
   configuration items has shipped; then the version is raised with the new literal pinned in the
   tests rather than referenced from the constant. (Lands with the configuration-items child; the
   tree carries this marker once that child merges.)
+- `plugins/superheroes/lib/engine_adapter.py` — the claude write channel allows Bash outright
+  because the harness's sandbox auto-allow misses command shapes its safety check flags (`-X` on
+  a Python call, env-var prefixes, `$?`). **delete-when:** `autoAllowBashIfSandboxed` auto-approves every
+  sandboxed command shape on the Claude Code version the channel runs.
 - `plugins/superheroes/lib/hostinfo.py` — OS-specific boot-id reads to corroborate a recorded pid
   belongs to this boot. **delete-when:** the host exposes a stable per-boot identity without
   OS-specific parsing.
