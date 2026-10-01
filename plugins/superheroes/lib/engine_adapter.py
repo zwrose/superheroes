@@ -237,6 +237,16 @@ def _abs_str(value):
     return isinstance(value, str) and os.path.isabs(value)
 
 
+# The sandbox runtime reads an allowWrite entry as a glob, and a trailing `/**` strips to the
+# directory (to `/` when nothing remains), so a glob spelling can widen a grant past its literal path.
+_SANDBOX_GLOB_CHARS = frozenset("*?[]{}")
+
+
+def sandbox_path_has_glob(path):
+    """True when ``path`` carries a character the sandbox runtime would read as a glob."""
+    return any(ch in _SANDBOX_GLOB_CHARS for ch in path)
+
+
 def claude_write_sandbox_valid(sandbox):
     """True when ``sandbox`` is a well-formed journaled claude write sandbox dict (#1554)."""
     if not isinstance(sandbox, dict):
@@ -249,6 +259,9 @@ def claude_write_sandbox_valid(sandbox):
         return False
     uv_cache = sandbox.get("uvCacheDir")
     if uv_cache is not None and not _abs_str(uv_cache):
+        return False
+    tmp_base = sandbox.get("claudeTmpBase")
+    if tmp_base is not None and not _abs_str(tmp_base):
         return False
     return _sandbox_access_valid(sandbox.get("access"))
 
@@ -271,6 +284,8 @@ def _sandbox_access_valid(access):
         paths = access[key]
         if not isinstance(paths, list) or not all(_abs_str(p) for p in paths):
             return False
+    if any(sandbox_path_has_glob(p) for p in access["extraWritePaths"]):
+        return False
     return type(access["localPorts"]) is bool
 
 

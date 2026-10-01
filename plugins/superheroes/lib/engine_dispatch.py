@@ -19,6 +19,7 @@ status files are advisory evidence for supervisor decisions only. Never raises t
 (CONVENTIONS §7.5: engine *selection* fails open; a completed external *result* fails closed.)
 """
 import argparse
+import contextlib
 import glob
 import hashlib
 import json
@@ -920,6 +921,13 @@ def _claude_child_env(opened, base=None):
     if isinstance(cfg, str) and cfg:
         env["CLAUDE_CONFIG_DIR"] = cfg
         pins["CLAUDE_CONFIG_DIR"] = cfg
+    # the journaled socket grant names a directory under this base; a recovering invocation's own
+    # CLAUDE_CODE_TMPDIR must not move the shell's $TMPDIR away from it
+    sandbox = opened.get("claudeWriteSandbox")
+    tmp_base = sandbox.get("claudeTmpBase") if isinstance(sandbox, dict) else None
+    if isinstance(tmp_base, str) and tmp_base:
+        env["CLAUDE_CODE_TMPDIR"] = tmp_base
+        pins["CLAUDE_CODE_TMPDIR"] = tmp_base
     seat = _seat_dict_from_resolved_snapshot(opened.get("resolvedInputs"))
     effort = seat.get("effort") if isinstance(seat, dict) else None
     if isinstance(effort, str) and effort:
@@ -1675,14 +1683,29 @@ def _git_scrubbed(cwd, *args, timeout=None):
 # receives neither, so a run opened there would record local access that is never granted.
 _LOCAL_ACCESS_PLATFORM = "darwin"
 
-# Claude Code 2.1.284 builds the sandboxed shell's temp base from CLAUDE_CODE_TMPDIR (else /tmp)
-# only when that base is at most this many UTF-8 bytes; a longer base falls back to /tmp. Mirrors
-# the 2.1.284 binary's temp-dir rule (LS()/EWo()/n7n=44); the per-user dir is <base>/claude-<uid>.
+# Claude Code 2.1.284 builds the sandboxed shell's per-user temp dir, <base>/claude-<uid>, from
+# CLAUDE_CODE_TMPDIR (else /tmp) only when that whole path is at most this many UTF-8 bytes; a
+# longer one falls back to /tmp/claude-<uid>. Mirrors the 2.1.284 binary's sandboxed-shell rule
+# (ASe(), n7n=44); its EWo() helper measures the base alone and is not the rule the shell uses.
 _CLAUDE_CODE_TMPDIR_MAX_BYTES = 44
 
 
 def _host_platform():
     return sys.platform
+
+
+@contextlib.contextmanager
+def _git_routing_scrubbed_environ():
+    """Hide the ambient Git routing variables from callees that read ``os.environ`` themselves.
+
+    The calibration read resolves its repository through store_core, whose Git subprocess copies
+    the ambient environment; the sandbox-root lookup beside it is scrubbed, and the two must name
+    the same repository."""
+    saved = {k: os.environ.pop(k) for k in _GIT_ROUTING_VARS if k in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
 
 
 def _resolve_claude_write_sandbox(cwd_real, *, timeout):
@@ -1737,7 +1760,8 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
     # The sandboxAccess calibration is read here and only here (#1562); continuations and spawns
     # use the journaled value.
     try:
-        read = core_md.read_sandbox_access(cwd_real)
+        with _git_routing_scrubbed_environ():
+            read = core_md.read_sandbox_access(cwd_real)
         calibrated = read["access"]
         reason = read["reason"]
     except Exception:
@@ -1750,24 +1774,31 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
             and _host_platform() != _LOCAL_ACCESS_PLATFORM:
         return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM
     socket_dirs = []
+    tmp_base = None
     if calibrated["localSockets"]:
         if not hasattr(os, "getuid"):
             return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
-        # the sandboxed shell's TMPDIR, not the CLI's internal temp dir: an override longer than
-        # the CLI's limit is ignored there, so a socket grant under it would never match
+        # the sandboxed shell's TMPDIR, not the CLI's internal temp dir: a per-user path longer
+        # than the CLI's limit is ignored there, so a socket grant under it would never match
         tmp_base = os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp"
-        if len(tmp_base.encode("utf-8", "surrogateescape")) > _CLAUDE_CODE_TMPDIR_MAX_BYTES:
+        user_dir = os.path.join(tmp_base, "claude-%d" % os.getuid())
+        if len(user_dir.encode("utf-8", "surrogateescape")) > _CLAUDE_CODE_TMPDIR_MAX_BYTES:
             tmp_base = "/tmp"
-        socket_dirs.append(os.path.realpath(os.path.join(tmp_base, "claude-%d" % os.getuid())))
+            user_dir = os.path.join(tmp_base, "claude-%d" % os.getuid())
+        socket_dirs.append(os.path.realpath(user_dir))
     extra_write_paths = []
-    for extra in calibrated["extraWritePaths"]:
-        extra = os.path.realpath(extra)
+    for configured in calibrated["extraWritePaths"]:
+        extra = os.path.realpath(configured)
         # calibration refuses a root spelling, but a symlink to / only resolves to root here
         if not extra.strip("/"):
             return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
+        # the runtime reads an allowWrite entry as a glob: `/**` would grant the whole filesystem
+        if engine_adapter.sandbox_path_has_glob(configured) \
+                or engine_adapter.sandbox_path_has_glob(extra):
+            return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
         if extra not in extra_write_paths:
             extra_write_paths.append(extra)
-    return {
+    sandbox = {
         "writeRoots": write_roots,
         "denyWrite": deny_write,
         "uvCacheDir": uv_cache_dir,
@@ -1777,7 +1808,11 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
             "localSocketDirs": socket_dirs,
             "extraWritePaths": extra_write_paths,
         },
-    }, None
+    }
+    if tmp_base is not None:
+        # frozen with the socket grant: every spawn pins it as the child's CLAUDE_CODE_TMPDIR
+        sandbox["claudeTmpBase"] = tmp_base
+    return sandbox, None
 
 
 def _git_scrubbed_bytes(cwd, *args, timeout=None):

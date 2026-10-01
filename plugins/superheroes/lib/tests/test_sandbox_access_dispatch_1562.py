@@ -261,24 +261,123 @@ def test_local_socket_dir_limit_is_44_bytes():
     assert ED._CLAUDE_CODE_TMPDIR_MAX_BYTES == 44
 
 
-def test_local_socket_dir_uses_a_short_override(tmp_path, monkeypatch):
-    override = "/" + "a" * 43  # exactly 44 bytes: still honored
-    assert len(override.encode()) == 44
+def _override_with_user_dir_bytes(total, filler="a"):
+    """A /-rooted override whose <override>/claude-<uid> path is exactly ``total`` UTF-8 bytes."""
+    suffix = len(("/claude-%d" % os.getuid()).encode())
+    room = total - suffix - 1  # the leading "/"
+    unit = len(filler.encode())
+    # an odd remainder is padded with one ASCII byte so multi-byte filler still lands exactly
+    return "/" + filler * (room // unit) + "a" * (room % unit)
+
+
+def test_local_socket_dir_uses_an_override_whose_user_dir_fits(tmp_path, monkeypatch):
+    override = _override_with_user_dir_bytes(44)  # the whole per-user path is 44 bytes: honored
+    assert len(os.path.join(override, "claude-%d" % os.getuid()).encode()) == 44
     assert _socket_dirs_for(tmp_path, monkeypatch, override) == [
         os.path.realpath(os.path.join(override, "claude-%d" % os.getuid()))]
 
 
-@pytest.mark.parametrize("override", [
-    pytest.param("/" + "a" * 44, id="45-bytes"),
-    pytest.param("/" + "\u00e9" * 22, id="45-bytes-in-23-characters"),
+@pytest.mark.parametrize("filler", [
+    pytest.param("a", id="45-bytes"),
+    pytest.param("\u00e9", id="45-bytes-in-fewer-characters"),
 ])
-def test_local_socket_dir_falls_back_to_tmp_past_the_limit(tmp_path, monkeypatch, override):
-    assert len(override.encode()) == 45
+def test_local_socket_dir_falls_back_to_tmp_past_the_limit(tmp_path, monkeypatch, filler):
+    # a base well under 44 bytes whose per-user path is 45: the shell ignores it
+    override = _override_with_user_dir_bytes(45, filler)
+    assert len(os.path.join(override, "claude-%d" % os.getuid()).encode()) == 45
+    assert len(override.encode()) < 44
     assert _socket_dirs_for(tmp_path, monkeypatch, override) == [_tmp_claude_uid_dir()]
 
 
 def test_local_socket_dir_unset_override_is_tmp(tmp_path, monkeypatch):
     assert _socket_dirs_for(tmp_path, monkeypatch, None) == [_tmp_claude_uid_dir()]
+
+
+# --- the temp base is frozen with the socket grant ---------------------------------------------
+
+
+def _sandbox_for(tmp_path, monkeypatch, override, block=None):
+    wt, _main = _linked_worktree(tmp_path)
+    _write_core(wt, _core_text(block or {"localSockets": True}))
+    if override is not None:
+        monkeypatch.setenv("CLAUDE_CODE_TMPDIR", override)
+    sandbox, refusal = ED._resolve_claude_write_sandbox(os.path.realpath(wt), timeout=30)
+    assert refusal is None
+    return sandbox
+
+
+@pytest.mark.parametrize("override, expected", [
+    pytest.param("/tmp/cc-tmp", "/tmp/cc-tmp", id="honored-override"),
+    pytest.param(None, "/tmp", id="unset-pins-tmp"),
+    pytest.param("/" + "a" * 60, "/tmp", id="too-long-override-pins-tmp"),
+])
+def test_resolved_sandbox_journals_the_effective_temp_base(tmp_path, monkeypatch, override,
+                                                           expected):
+    assert _sandbox_for(tmp_path, monkeypatch, override)["claudeTmpBase"] == expected
+
+
+def test_sandbox_without_local_sockets_journals_no_temp_base(tmp_path, monkeypatch):
+    sandbox = _sandbox_for(tmp_path, monkeypatch, "/tmp/cc-tmp", {"localPorts": True})
+    assert "claudeTmpBase" not in sandbox
+
+
+@pytest.mark.parametrize("recovering", [
+    pytest.param(None, id="recovering-env-unset"),
+    pytest.param("/tmp/b", id="recovering-env-different"),
+])
+def test_claude_child_env_pins_the_journaled_temp_base(recovering):
+    opened = {"engine": "claude", "claudeWriteSandbox": dict(_SANDBOX, claudeTmpBase="/tmp/a")}
+    base = {} if recovering is None else {"CLAUDE_CODE_TMPDIR": recovering}
+    env, pins = ED._claude_child_env(opened, base=base)
+    assert env["CLAUDE_CODE_TMPDIR"] == "/tmp/a"
+    assert pins["CLAUDE_CODE_TMPDIR"] == "/tmp/a"
+
+
+def test_claude_child_env_without_a_journaled_temp_base_leaves_the_environment():
+    opened = {"engine": "claude", "claudeWriteSandbox": dict(_SANDBOX)}
+    env, pins = ED._claude_child_env(opened, base={"CLAUDE_CODE_TMPDIR": "/tmp/b"})
+    assert env["CLAUDE_CODE_TMPDIR"] == "/tmp/b"
+    assert "CLAUDE_CODE_TMPDIR" not in pins
+
+
+@pytest.mark.parametrize("bad", ["rel/base", 7, ""])
+def test_journaled_temp_base_must_be_absolute(bad):
+    assert EA.claude_write_sandbox_valid(dict(_SANDBOX, claudeTmpBase=bad)) is False
+    assert EA.claude_write_sandbox_valid(dict(_SANDBOX, claudeTmpBase="/tmp")) is True
+
+
+# --- the calibration read ignores ambient Git routing -----------------------------------------
+
+
+def test_calibration_read_ignores_ambient_git_routing(tmp_path, monkeypatch):
+    wt, main = _linked_worktree(tmp_path)
+    _write_core(wt, _core_text({"allowedDomains": ["pypi.org"]}))
+    other = tmp_path / "other-checkout"
+    other.mkdir()
+    monkeypatch.setenv("GIT_DIR", os.path.join(main, ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    sandbox, refusal = ED._resolve_claude_write_sandbox(os.path.realpath(wt), timeout=30)
+    assert refusal is None
+    assert sandbox["access"]["allowedDomains"] == ["pypi.org"]
+    # the ambient variables are restored for the caller
+    assert os.environ["GIT_DIR"] == os.path.join(main, ".git")
+    assert os.environ["GIT_WORK_TREE"] == str(other)
+
+
+def test_calibration_read_sees_no_git_routing_variables(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    seen = {}
+    real_read = core_md.read_sandbox_access
+
+    def spy_read(*args, **kwargs):
+        seen.update({k: os.environ.get(k) for k in ED._GIT_ROUTING_VARS})
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(ED.core_md, "read_sandbox_access", spy_read)
+    monkeypatch.setenv("GIT_DIR", "/nonexistent/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/nonexistent")
+    ED._resolve_claude_write_sandbox(os.path.realpath(wt), timeout=30)
+    assert seen and set(seen.values()) == {None}
 
 
 # --- T6, T7: refusals before anything opens (G9, G10) -----------------------------------------
@@ -331,6 +430,33 @@ def test_extra_write_path_resolving_to_root_refuses_before_open(tmp_path, monkey
     assert res["attempts"] == 0
     assert fake.calls == []
     assert _no_run_opened(run_dir)
+
+
+@pytest.mark.parametrize("spelling", [
+    pytest.param("/**", id="root-glob"),
+    pytest.param("/*", id="root-star"),
+    pytest.param("{cache}/**", id="subtree-glob"),
+    pytest.param("{cache}/[ab]", id="bracket-class"),
+    pytest.param("{cache}/a?", id="question-mark"),
+    pytest.param("{cache}/{{a,b}}", id="brace-alternation"),
+])
+def test_extra_write_path_glob_refuses_before_open(tmp_path, monkeypatch, spelling):
+    path = spelling.format(cache=str(tmp_path / "cache"))
+    wt, run_dir, res, fake = _open_with_core(
+        tmp_path, monkeypatch, _core_text({"extraWritePaths": [path]}))
+    assert res["detail"] == "engine-config:sandbox-access-malformed"
+    assert res["attempts"] == 0
+    assert fake.calls == []
+    assert _no_run_opened(run_dir)
+
+
+@pytest.mark.parametrize("glob_path", ["/**", "/x/cache/*", "/x/[a]", "/x/a?", "/x/{a,b}"])
+def test_access_validity_rejects_a_glob_extra_write_path(glob_path):
+    sandbox = dict(_SANDBOX, access=dict(_VALID_ACCESS, extraWritePaths=[glob_path]))
+    assert EA.claude_write_sandbox_valid(sandbox) is False
+    res = _write_argv(sandbox)
+    assert res["reason"] == "sandbox-roots-missing"
+    assert res["argv"] == []
 
 
 def test_absent_core_md_opens_as_all_off(tmp_path, monkeypatch):
