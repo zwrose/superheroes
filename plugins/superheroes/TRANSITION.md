@@ -7,7 +7,13 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
-## Unreleased
+## 0.38.0
+
+### Before you upgrade
+
+- **A project with no implementer setting now gets the sandboxed Claude implementer.** `enginePreferences.implementation` unset (or `claude`) now runs implementer orders through the sandboxed Claude write channel: no network, offline uv, `ps` blocked. Orders whose verification needs the network, uncached Python dependencies or `ps` fail or are refused up front. To use another engine, set `implementation` to `cursor` or `codex` before upgrading.
+- **Rename `sonnet-5` pins to `sonnet-5.5`.** A pin or config naming `sonnet-5` is refused as unregistered.
+- **Finish or abandon in-flight claude write runs first.** A claude write run opened by an older plugin, or one journaled under `sonnet-5`, cannot be continued; open a fresh dispatch.
 
 ### Wave watch: a missing launch ledger refuses
 
@@ -36,6 +42,7 @@ belongs to and lists every change with its replacement.
 - What changes for an unconfigured project: implementers move from native subagents with network access to a sandboxed Claude CLI with no network, offline uv, and `ps` blocked, and every order now leaves a runner journal and `--expect-item` grading.
 - To keep cursor or codex as the implementer, set `implementation` to that engine; nothing else changes for those projects.
 - `seat_map compose --implementation-engine claude` now reads author family `anthropic` whatever the host model; before, it took the host's family.
+- On a known non-Claude host with a claude implementer, the host's family is also excluded from the lens and grounding seats, because review-code's native fixer writes as the host family (degradation `maker-family-split`; `secondary-maker-seated` when no other family is live). Two known limits ship open, owner-accepted: the diversity check still counts the excluded host family as available, so a correct single-family panel is flagged `critical-diversity` (F1); and certification does not refuse a `secondary-maker-seated` seat (F2). Claude hosts are unaffected.
 
 ## 0.37.0
 
