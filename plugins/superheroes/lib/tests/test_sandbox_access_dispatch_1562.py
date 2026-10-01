@@ -14,6 +14,9 @@ Detector axes (bite-proof):
 - test_continuation_* — journal reuse: a continuation never re-reads core.md
 - test_access_validity_* — journal validity: a malformed journaled access refuses
 - test_deny_write_* — deny wins: extraWritePaths never narrow denyWrite
+- test_*_unsupported_platform_* — refusal: local access on a host that cannot grant it
+- test_extra_write_path_resolving_to_root_* — refusal: an alias of / never reaches allowWrite
+- test_local_socket_dir_* — mapping: the grant follows the CLI's own temp-dir rule
 """
 import os
 
@@ -77,6 +80,8 @@ def _pin_store_root(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store)
     monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_TMPDIR", raising=False)
+    # local access is macOS-only; the tests that exercise it must not depend on the host running them
+    monkeypatch.setattr(ED, "_host_platform", lambda: "darwin")
 
 
 # --- harness: a core.md in the linked worktree the open resolves from ------------------------
@@ -203,12 +208,12 @@ def test_local_ports_drives_through_open(tmp_path, monkeypatch):
 
 
 def test_local_sockets_drives_through_open(tmp_path, monkeypatch):
-    cc_tmp = os.path.join(os.path.realpath(str(tmp_path)), "cc-tmp")
+    cc_tmp = "/tmp/cc-tmp"  # short enough for the CLI to honor
     monkeypatch.setenv("CLAUDE_CODE_TMPDIR", cc_tmp)
     wt, run_dir, _res, fake = _open_with_core(
         tmp_path, monkeypatch, _core_text({"localSockets": True}))
     opened, settings = _opened_settings(run_dir, fake)
-    expected = os.path.join(cc_tmp, "claude-%d" % os.getuid())
+    expected = os.path.realpath(os.path.join(cc_tmp, "claude-%d" % os.getuid()))
     assert settings["sandbox"]["network"]["allowUnixSockets"] == [expected]
     assert opened["claudeWriteSandbox"]["access"]["localSocketDirs"] == [expected]
     _assert_options(opened, settings, sockets=[expected])
@@ -237,6 +242,45 @@ def test_local_socket_dir_defaults_to_tmp(tmp_path):
         os.path.join(os.path.realpath("/tmp"), "claude-%d" % os.getuid())]
 
 
+def _socket_dirs_for(tmp_path, monkeypatch, override):
+    wt, _main = _linked_worktree(tmp_path)
+    _write_core(wt, _core_text({"localSockets": True}))
+    if override is not None:
+        monkeypatch.setenv("CLAUDE_CODE_TMPDIR", override)
+    sandbox, refusal = ED._resolve_claude_write_sandbox(os.path.realpath(wt), timeout=30)
+    assert refusal is None
+    return sandbox["access"]["localSocketDirs"]
+
+
+def _tmp_claude_uid_dir():
+    return os.path.realpath(os.path.join("/tmp", "claude-%d" % os.getuid()))
+
+
+def test_local_socket_dir_limit_is_44_bytes():
+    # pinned as a literal: the Claude Code 2.1.284 rule this mirrors (rubric/bite-proof.md)
+    assert ED._CLAUDE_CODE_TMPDIR_MAX_BYTES == 44
+
+
+def test_local_socket_dir_uses_a_short_override(tmp_path, monkeypatch):
+    override = "/" + "a" * 43  # exactly 44 bytes: still honored
+    assert len(override.encode()) == 44
+    assert _socket_dirs_for(tmp_path, monkeypatch, override) == [
+        os.path.realpath(os.path.join(override, "claude-%d" % os.getuid()))]
+
+
+@pytest.mark.parametrize("override", [
+    pytest.param("/" + "a" * 44, id="45-bytes"),
+    pytest.param("/" + "\u00e9" * 22, id="45-bytes-in-23-characters"),
+])
+def test_local_socket_dir_falls_back_to_tmp_past_the_limit(tmp_path, monkeypatch, override):
+    assert len(override.encode()) == 45
+    assert _socket_dirs_for(tmp_path, monkeypatch, override) == [_tmp_claude_uid_dir()]
+
+
+def test_local_socket_dir_unset_override_is_tmp(tmp_path, monkeypatch):
+    assert _socket_dirs_for(tmp_path, monkeypatch, None) == [_tmp_claude_uid_dir()]
+
+
 # --- T6, T7: refusals before anything opens (G9, G10) -----------------------------------------
 
 
@@ -252,6 +296,38 @@ def test_malformed_calibration_refuses_before_open(tmp_path, monkeypatch):
 def test_unreadable_calibration_refuses_before_open(tmp_path, monkeypatch):
     wt, run_dir, res, fake = _open_with_core(tmp_path, monkeypatch, _corrupt_core_text())
     assert res["detail"] == "engine-config:sandbox-access-unreadable"
+    assert res["attempts"] == 0
+    assert fake.calls == []
+    assert _no_run_opened(run_dir)
+
+
+@pytest.mark.parametrize("block", [
+    pytest.param({"localPorts": True}, id="local-ports"),
+    pytest.param({"localSockets": True}, id="local-sockets"),
+])
+def test_local_access_on_unsupported_platform_refuses_before_open(tmp_path, monkeypatch, block):
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    wt, run_dir, res, fake = _open_with_core(tmp_path, monkeypatch, _core_text(block))
+    assert res["detail"] == "engine-config:sandbox-access-unsupported-platform"
+    assert res["attempts"] == 0
+    assert fake.calls == []
+    assert _no_run_opened(run_dir)
+
+
+def test_non_local_access_on_unsupported_platform_still_opens(tmp_path, monkeypatch):
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    wt, run_dir, res, fake = _open_with_core(
+        tmp_path, monkeypatch, _core_text({"allowedDomains": ["pypi.org"]}))
+    opened, settings = _opened_settings(run_dir, fake)
+    _assert_options(opened, settings, domains=["pypi.org"])
+
+
+def test_extra_write_path_resolving_to_root_refuses_before_open(tmp_path, monkeypatch):
+    root_alias = tmp_path / "root-alias"
+    root_alias.symlink_to("/")
+    wt, run_dir, res, fake = _open_with_core(
+        tmp_path, monkeypatch, _core_text({"extraWritePaths": [str(root_alias)]}))
+    assert res["detail"] == "engine-config:sandbox-access-malformed"
     assert res["attempts"] == 0
     assert fake.calls == []
     assert _no_run_opened(run_dir)
@@ -377,3 +453,4 @@ def test_deny_write_is_never_filtered_by_extra_write_paths(tmp_path, monkeypatch
 def test_refusal_tokens_registered():
     assert "sandbox-access-malformed" in EA.BUILD_ARGV_REFUSAL_TOKENS
     assert "sandbox-access-unreadable" in EA.BUILD_ARGV_REFUSAL_TOKENS
+    assert "sandbox-access-unsupported-platform" in EA.BUILD_ARGV_REFUSAL_TOKENS

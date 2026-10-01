@@ -105,6 +105,7 @@ The engine-config refusal tokens name a refused argv build. The `build-argv` CLI
 - `invalid-model-effort`
 - `sandbox-access-malformed`
 - `sandbox-access-unreadable`
+- `sandbox-access-unsupported-platform`
 - `sandbox-process-listing-unavailable`
 - `sandbox-roots-missing`
 - `sandbox-roots-unresolvable`

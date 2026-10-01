@@ -767,13 +767,20 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   `engine-config:sandbox-roots-unresolvable` or `engine-config:sandbox-uv-cache-unresolvable`. So does
   a `sandboxAccess` the open cannot use: `engine-config:sandbox-access-malformed`, or
   `engine-config:sandbox-access-unreadable` when a `core.md` that exists cannot be read, parsed, or
-  resolved (an absent `core.md` is all off).
+  resolved (an absent `core.md` is all off). `localPorts` and `localSockets` are macOS-only: the
+  sandbox runtime forwards `allowLocalBinding` and `allowUnixSockets` to its macOS wrapper and not
+  its Linux one, so on any other host an open that asks for either refuses
+  `engine-config:sandbox-access-unsupported-platform` rather than recording a grant nothing honors.
+  An `extraWritePaths` entry that resolves to `/` through a symlink refuses
+  `engine-config:sandbox-access-malformed`.
 - **`ps` is blocked** inside the sandbox (measured on macOS). Pass `--requires-process-listing`
   when the order's own verification lists processes, for example a test that shells out to `ps`;
   a claude write then refuses `engine-config:sandbox-process-listing-unavailable` before any run
   opens. Codex and cursor ignore the flag.
 - **Temp-dir residual:** the sandbox's per-user temp dir stays writable (a platform default,
-  measured as `/tmp/claude-<uid>`), and other Claude sessions' scratch can live there.
+  measured as `/tmp/claude-<uid>`), and other Claude sessions' scratch can live there. The
+  `localSockets` grant follows Claude Code 2.1.284's own rule for that dir: `CLAUDE_CODE_TMPDIR`
+  when it is at most 44 bytes, otherwise `/tmp`; the grant is never widened to bare `/tmp`.
 - **Command friction:** a compound line the harness cannot auto-approve (`cmd; echo "exit=$?"`, a
   heredoc) is denied in print mode and the engine retries simpler. Plain `a && b` chains run.
 

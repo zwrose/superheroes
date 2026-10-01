@@ -203,6 +203,7 @@ REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE = "sandbox-roots-unresolvable"
 REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE = "sandbox-uv-cache-unresolvable"
 REFUSAL_SANDBOX_ACCESS_MALFORMED = "sandbox-access-malformed"
 REFUSAL_SANDBOX_ACCESS_UNREADABLE = "sandbox-access-unreadable"
+REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM = "sandbox-access-unsupported-platform"
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
@@ -223,6 +224,7 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE,
     REFUSAL_SANDBOX_ACCESS_MALFORMED,
     REFUSAL_SANDBOX_ACCESS_UNREADABLE,
+    REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM,
 })
 
 REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"

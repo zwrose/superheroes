@@ -1670,6 +1670,21 @@ def _git_scrubbed(cwd, *args, timeout=None):
     )
 
 
+# The platform whose sandbox runtime honors network.allowLocalBinding and network.allowUnixSockets.
+# The upstream sandbox runtime forwards both settings to its macOS wrapper only; its Linux wrapper
+# receives neither, so a run opened there would record local access that is never granted.
+_LOCAL_ACCESS_PLATFORM = "darwin"
+
+# Claude Code 2.1.284 builds the sandboxed shell's temp base from CLAUDE_CODE_TMPDIR (else /tmp)
+# only when that base is at most this many UTF-8 bytes; a longer base falls back to /tmp. Mirrors
+# the 2.1.284 binary's temp-dir rule (LS()/EWo()/n7n=44); the per-user dir is <base>/claude-<uid>.
+_CLAUDE_CODE_TMPDIR_MAX_BYTES = 44
+
+
+def _host_platform():
+    return sys.platform
+
+
 def _resolve_claude_write_sandbox(cwd_real, *, timeout):
     """Resolve the claude write channel's sandbox inputs ONCE, at run open (#1554).
 
@@ -1731,15 +1746,25 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
         if reason == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
             return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
         return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
+    if (calibrated["localPorts"] or calibrated["localSockets"]) \
+            and _host_platform() != _LOCAL_ACCESS_PLATFORM:
+        return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM
     socket_dirs = []
     if calibrated["localSockets"]:
         if not hasattr(os, "getuid"):
             return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
-        socket_dirs.append(os.path.realpath(os.path.join(
-            os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp", "claude-%d" % os.getuid())))
+        # the sandboxed shell's TMPDIR, not the CLI's internal temp dir: an override longer than
+        # the CLI's limit is ignored there, so a socket grant under it would never match
+        tmp_base = os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp"
+        if len(tmp_base.encode("utf-8", "surrogateescape")) > _CLAUDE_CODE_TMPDIR_MAX_BYTES:
+            tmp_base = "/tmp"
+        socket_dirs.append(os.path.realpath(os.path.join(tmp_base, "claude-%d" % os.getuid())))
     extra_write_paths = []
     for extra in calibrated["extraWritePaths"]:
         extra = os.path.realpath(extra)
+        # calibration refuses a root spelling, but a symlink to / only resolves to root here
+        if not extra.strip("/"):
+            return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
         if extra not in extra_write_paths:
             extra_write_paths.append(extra)
     return {
