@@ -92,6 +92,25 @@ def test_guardian_cli_reports_the_refusal(tmp_path, capsys):
     assert out["error"].startswith(REFUSAL_TOKEN + ": ")
 
 
+def test_dispatch_gates_classify_the_refusal_as_named_unreadable(tmp_path):
+    repo = init_calibrated_repo(tmp_path, verify_command="   ")
+    store = str(tmp_path / "store")
+    prefs = cm.engine_preferences_for_gate(cwd=repo, root=store)
+    policy = cm.review_gate_policy_for_gate(cwd=repo, root=store)
+    for gate in (prefs, policy):
+        assert gate.status == cm.CONFIG_UNREADABLE
+        assert gate.detail.startswith(REFUSAL_TOKEN + ": ")
+
+
+def test_core_resolve_cli_refuses_by_name_and_exits_nonzero(tmp_path, capsys):
+    repo = init_calibrated_repo(tmp_path, verify_command=["x"])
+    rc = cm.main(["resolve", "--cwd", repo, "--root", str(tmp_path / "store")])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["reason"] == REFUSAL_TOKEN
+    assert "verifyCommand" not in out
+
+
 def test_configure_view_refuses_instead_of_showing_none(tmp_path):
     repo = init_calibrated_repo(tmp_path, verify_command=0)
     with pytest.raises(cm.VerifyCommandMalformed, match=REFUSAL_TOKEN):

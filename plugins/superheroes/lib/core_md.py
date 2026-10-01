@@ -396,7 +396,10 @@ def _classify_core_md_at_path(path):
             "UTF-8 decode failed at %s: %s" % (path, exc),
         )
 
-    facts = parse_core(text)
+    try:
+        facts = parse_core(text)
+    except VerifyCommandMalformed as exc:
+        return CoreGateConfig({}, CONFIG_UNREADABLE, "%s at %s" % (exc, path))
     if facts is None:
         return CoreGateConfig(
             {},
@@ -494,7 +497,10 @@ def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
     structural = _gate_structural_refusal(cwd=cwd, root=root, profile_path=profile_path)
     if structural is not None:
         return ReviewGatePolicyGate(CONFIG_STRUCTURAL_AMBIGUITY, None, structural)
-    facts = parse_core(text)
+    try:
+        facts = parse_core(text)
+    except VerifyCommandMalformed as exc:
+        return ReviewGatePolicyGate(CONFIG_UNREADABLE, None, "%s at %s" % (exc, path))
     if facts is None:
         return ReviewGatePolicyGate(
             CONFIG_UNREADABLE,
@@ -2546,6 +2552,9 @@ def main(argv):
     if args.cmd == "resolve":
         try:
             rec = read(args.cwd, args.root)
+        except VerifyCommandMalformed as exc:  # #1331: named and non-zero, never "no command"
+            sys.stdout.write(json.dumps(gate_refusal(exc.reason, str(exc))) + "\n")
+            return 1
         except Exception:  # fail-open like review_store.py — never crash a consumer
             rec = None
         out = {"verifyCommand": rec["verifyCommand"] if rec else None,

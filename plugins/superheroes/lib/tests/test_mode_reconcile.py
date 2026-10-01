@@ -581,3 +581,18 @@ def test_gather_signals_core_md_import_failure_is_fail_open(tmp_path, monkeypatc
 
     assert not any(s["type"] == "core-md-unreadable" for s in sigs)
 
+
+
+def test_malformed_verify_command_is_a_named_unreadable_signal(tmp_path, monkeypatch):
+    # #1331: the refusal is named in the core-md-unreadable signal, never "nothing to reconcile".
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    d = tmp_path / ".claude" / "superheroes"
+    d.mkdir(parents=True)
+    (d / "core.md").write_text(_cm().render_core(
+        {"verifyCommand": [], "stackTags": [], "threatModel": "x", "patterns": ""},
+        "confirmed", "2026-10-01", "2026-10-01"))
+    unr = [s for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+           if s["type"] == "core-md-unreadable"]
+    assert len(unr) == 1
+    assert unr[0]["detail"]["detail"].startswith("verify-command-malformed: ")
