@@ -375,3 +375,28 @@ def test_routing_vars_have_one_home():
     assert sanitized_view._GIT_ROUTING_VARS is git_routing.GIT_ROUTING_VARS
     assert "GIT_NAMESPACE" in git_routing.GIT_ROUTING_VARS
     assert len(git_routing.GIT_ROUTING_VARS) == 12
+
+
+def test_untracked_dash_file_counts_its_real_lines(tmp_path):
+    root, base = _repo(tmp_path)
+    (root / "h.py").write_text(_lines(4, "h"))
+    (root / "-").write_text(_lines(5, "d"))
+
+    result = size_count.collect(str(root), base, head=None, bar_exclude=["-"])
+
+    assert result["ok"] is True
+    assert result["tripwireCount"] == 9
+    assert result["barCount"] == 4
+    assert result["barExcluded"] == ["-"]
+
+
+def test_untracked_dash_prefixed_names_count_their_real_lines(tmp_path):
+    root, base = _repo(tmp_path)
+    (root / "-x").write_text(_lines(2, "x"))
+    (root / "--y").write_text(_lines(3, "y"))
+    (root / "sp ace.py").write_text(_lines(6, "s"))
+
+    result = size_count.collect(str(root), base, head=None)
+
+    assert result["ok"] is True
+    assert result["tripwireCount"] == 11

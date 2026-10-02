@@ -196,9 +196,10 @@ def _untracked_rows(repo_root, deadline):
         if path.endswith("/"):
             repos.append(path)
             continue
+        # Axis: a file operand of "-" is stdin to --no-index; it is "./"-prefixed and the row keeps the listed path.
         proc, failure = _run_git(
             repo_root,
-            ["-c", "core.safecrlf=false", "diff", "--no-index", "--numstat", "-z", "--", "/dev/null", path],
+            ["-c", "core.safecrlf=false", "diff", "--no-index", "--numstat", "-z", "--", "/dev/null", "./" + path],
             deadline,
             ok_codes=(0, 1),
         )
@@ -207,7 +208,7 @@ def _untracked_rows(repo_root, deadline):
         # Axis: exit 1 is "differences found" only when stderr is empty; git also exits 1 on access errors.
         if proc.stderr.strip() != b"":
             return None, None, _git_failed(proc.stderr)
-        rows.extend(_parse_numstat_z(proc.stdout))
+        rows.extend((added, deleted, path) for added, deleted, _ in _parse_numstat_z(proc.stdout))
     return rows, sorted(repos), None
 
 
