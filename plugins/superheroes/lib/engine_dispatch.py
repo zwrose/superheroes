@@ -6535,7 +6535,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
     if (size_base is None) != (size_line is None):
         size_refusal = SIZE_INPUTS_INCOMPLETE
     elif size_line is not None:
-        if not isinstance(size_line, int) or isinstance(size_line, bool) or size_line <= 0:
+        if not isinstance(size_line, int) or isinstance(size_line, bool) or size_line < 0:
             size_refusal = SIZE_LINE_INVALID
         elif not _validate_base_sha(size_base)[0]:
             size_refusal = SIZE_BASE_NOT_AN_OBJECT_ID

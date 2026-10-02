@@ -82,6 +82,15 @@ def test_t3_tests_do_not_count(tmp_path):
     assert res["sizeTripwire"]["crossed"] is False
 
 
+# axis: a test-only build's zero line is accepted; only test files are written, so the count is 0.
+def test_t3b_zero_line_test_only_build(tmp_path):
+    res, _run_dir, sha = _run(tmp_path, {"tests/test_big.py": 500}, line=0)
+    assert res["ok"] is True, res
+    assert res["sizeTripwire"]["line"] == 0
+    assert res["sizeTripwire"]["tripwireCount"] == 0
+    assert res["sizeTripwire"]["crossed"] is False
+
+
 # axis: a run opened without size inputs says so, and adds nothing else to the result.
 def test_t4_absent(tmp_path, monkeypatch):
     def fold(sub):
@@ -107,8 +116,7 @@ def test_t5_refusals(tmp_path):
     cases = [
         ({"size_base": sha}, "size-inputs-incomplete"),
         ({"size_line": 240}, "size-inputs-incomplete"),
-        ({"size_base": sha, "size_line": 0}, "size-line-invalid"),
-        ({"size_base": sha, "size_line": -1}, "size-line-invalid"),
+                ({"size_base": sha, "size_line": -1}, "size-line-invalid"),
         ({"size_base": sha, "size_line": True}, "size-line-invalid"),
         ({"size_base": sha, "size_line": "240"}, "size-line-invalid"),
         ({"size_base": "main", "size_line": 240}, "size-base-not-an-object-id"),

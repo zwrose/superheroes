@@ -87,9 +87,9 @@ The check is final-diff membership, not proof of authorship:
 - It does not prove which copy of a cited file the implementer read.
 
 Every implementer dispatch also passes `--size-base` and `--size-line`, so the fold reports the
-worktree's non-test size against the build's tripwire line. A fold with `crossed: true` obliges you
-to message the advisor before the next order; `status: "indeterminate"` obliges a hand count first.
-See `skills/workhorse/reference/dispatch-mechanics.md` § Size tripwire at fold.
+worktree's non-test size against the build's tripwire line. `crossed: true` is the count past the
+line, and what it obliges (including an advisor ruling already recorded) is `rubric/review-discipline.md`
+§ Size; `status: "indeterminate"` obliges a hand count first. See `skills/workhorse/reference/dispatch-mechanics.md` § Size tripwire at fold.
 
 ## Linting an order
 
