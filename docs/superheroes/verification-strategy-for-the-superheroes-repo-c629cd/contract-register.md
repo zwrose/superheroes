@@ -17,7 +17,7 @@ amended spec, and R22 records the keep-list seam.
 *Producer:* P7
 *Consumers:* P7, P5
 
-**R4 — The receipt fields are hand-written.** A builder's handback carries the spec's FR-9 fields in the PR body — what ran, what was skipped and why, the source state, the interpreter, the attempt number and whether the prior attempt was red, and elapsed time; the vet reads them and nothing checks them mechanically. The plugin's `gate-receipt/1` format (`plugins/superheroes/reference/gate-receipt.md`, shipped 2026-09-30) is optional: a project may emit it, and no child is required to emit or meet it.
+**R4 — The receipt fields are hand-written.** A builder's handback carries the spec's FR-9 fields in the PR body — what ran, what was skipped and why, the source state, the interpreter, the attempt number and whether the prior attempt was red — with the tests that failed on that same source state, named or quoted from a traceable log reference, when it was — and elapsed time; the vet reads them and nothing checks them mechanically. The plugin's `gate-receipt/1` format (`plugins/superheroes/reference/gate-receipt.md`, shipped 2026-09-30) is optional: a project may emit it, and no child is required to emit or meet it.
 *Producer:* the spec (the convention)
 *Consumers:* P5
 
@@ -25,7 +25,7 @@ amended spec, and R22 records the keep-list seam.
 *Producer:* P1
 *Consumers:* P1, P9
 
-**R9 — Flake notes and the vet finding.** A flake is recorded by hand on the collector when it is seen, naming the test, the run and the date; that note is the advisory flake listing. A listed flake is a vet finding on any PR that touches that test and blocks nothing repo-wide; its dispositions are a fix at the cause with red-under-cause and green-after evidence, a cannot-bite removal, or an advisor withdrawal naming a non-test cause, with a second withdrawal of the same test inside thirty days going to the owner (FR-26). Until P5's vet-checks encoding lands, the advisor's vet reads the listing directly from the spec.
+**R9 — Flake notes and the vet finding.** A flake is recorded by hand on the collector when it is seen, naming the test, the run and the date; that note is the advisory flake listing. A listed flake is a vet finding on any PR that touches that test and blocks nothing repo-wide; its dispositions are a fix at the cause with red-under-cause and green-after evidence, a cannot-bite removal, an advisor withdrawal naming a non-test cause, or an owner-authorized removal under FR-26 (diagnosis evidence and the open coverage obligation retained), with a second withdrawal of the same test inside thirty days going to the owner (FR-26). Until P5's vet-checks encoding lands, the advisor's vet reads the listing directly from the spec.
 *Producer:* the spec (the advisor and the vet record and read)
 *Consumers:* P5
 
