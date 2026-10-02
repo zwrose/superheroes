@@ -185,7 +185,9 @@ never read.
 
 The `run` and `compose-liveness` subcommands also emit a top-level `configRead` object (its fields are `CONFIG_READ_FIELDS` in `lib/preflight_probe.py`) — recording whether the **core.md** read succeeded for that
 invocation. Model tiers are read separately by each consumer and are **not** covered by
-`configRead`. Distinguish three cases for `crossVendorEngines` in the same output: **configured**
+`configRead`. `run`'s `crossVendorEngines` is the role-derived set (engines a calibration role
+names); `compose-liveness`'s is the review set (those plus every cross-vendor engine whose CLI is
+installed). Distinguish three cases for `crossVendorEngines` in the same output: **configured**
 (the list was derived from the project's engine preferences because the read succeeded), **selected**
 (the caller passed an explicit `run --engine …` on the command line — a deliberate choice, not a
 default), and **defaulted** (preferences were not read — `configRead.reason` is non-null — and the
@@ -222,7 +224,7 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
 ```
 
-On a cache miss this probes each configured reviewer vendor's pin-reachable models and writes the
+On a cache miss this probes each review-set vendor's pin-reachable models (every cross-vendor engine a calibration role names or whose CLI is installed) and writes the
 machine-readable liveness receipt to the project store; **on a valid cache hit within the TTL that
 covers every needed cell, it probes nothing and reuses the existing receipt** (a young receipt that
 does not cover newly pin-reachable cells still probes and rewrites) — either way, a `review-code`
