@@ -3007,6 +3007,22 @@ def _fold_sibling_worktrees(state):
 CC_WRITES_SWEEP_BUDGET_SECONDS = 10.0
 
 
+def _registered_nested_worktree_roots(cwd_real, timeout=CC_WRITES_SWEEP_BUDGET_SECONDS):
+    """Registered worktrees nested under ``cwd_real`` (never cwd itself), or None when unenumerable."""
+    try:
+        wt_list = _git_scrubbed_bytes(
+            cwd_real, "worktree", "list", "--porcelain", timeout=timeout)
+        if wt_list.returncode != 0:
+            return None
+        cwd_real = os.path.realpath(cwd_real)
+        return {
+            wt["path"] for wt in _parse_git_worktree_list(wt_list.stdout or b"")
+            if wt["path"].startswith(cwd_real + os.sep)
+        }
+    except Exception:
+        return None
+
+
 def _sweep_claude_dir(dirfd, prefix, removed):
     """Remove an empty `.cc-writes` under the `.claude` at ``dirfd``, then `.claude` if now empty.
 
@@ -3038,9 +3054,10 @@ def _sweep_claude_dir(dirfd, prefix, removed):
 # delete-when: the Claude Code version the channel runs no longer creates `.claude/.cc-writes`
 # under the shell's working directory (or lets the staging dir be relocated outside the worktree).
 # axis: removes only empty `.claude/.cc-writes` dirs and their then-empty `.claude` parent,
-# dir_fd-relative, never following symlinks or crossing devices.
-def _sweep_cc_writes(root, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS, clock=time.monotonic):
-    """Sweep empty `.claude/.cc-writes` staging dirs under ``root``. Never raises."""
+# dir_fd-relative, never following symlinks, crossing devices or entering a nested registered worktree.
+def _sweep_cc_writes(root, *, skip_roots=frozenset(), budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
+                     clock=time.monotonic):
+    """Sweep empty `.claude/.cc-writes` staging dirs under ``root``, pruning ``skip_roots``. Never raises."""
     removed = []
     walker = None
     try:
@@ -3054,7 +3071,7 @@ def _sweep_cc_writes(root, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS, clo
                 root_dev = os.fstat(dirfd).st_dev
             kept = []
             for name in dirnames:
-                if name == ".git":
+                if name == ".git" or os.path.join(dirpath, name) in skip_roots:
                     continue
                 try:
                     dev = os.stat(name, dir_fd=dirfd, follow_symlinks=False).st_dev
@@ -3087,7 +3104,11 @@ def _fold_cc_writes_sweep(state):
         cwd = opened.get("cwd")
         if not isinstance(cwd, str) or not cwd:
             return {"removed": [], "incomplete": True, "error": "run-context-incomplete"}
-        return _sweep_cc_writes(os.path.realpath(cwd))
+        cwd_real = os.path.realpath(cwd)
+        nested = _registered_nested_worktree_roots(cwd_real)
+        if nested is None:
+            return {"removed": [], "incomplete": True, "error": "worktree-enumeration-failed"}
+        return _sweep_cc_writes(cwd_real, skip_roots=nested)
     except Exception as exc:
         return {"removed": [], "incomplete": True, "error": type(exc).__name__}
 

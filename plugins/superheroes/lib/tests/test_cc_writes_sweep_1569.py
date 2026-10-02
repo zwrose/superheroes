@@ -6,6 +6,7 @@ dirs (and their then-empty `.claude` parent), dir_fd-relative, never following s
 import itertools
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -102,6 +103,26 @@ def test_sweep_prunes_git(tmp_path):
     assert (tmp_path / ".git" / ".claude" / ".cc-writes").is_dir()
 
 
+# axis: a skipped root (a nested registered worktree) is never entered, so its staging dir survives.
+def test_sweep_prunes_skip_roots(tmp_path):
+    _plant(tmp_path, ".claude/worktrees/sib/.claude/.cc-writes")
+    _plant(tmp_path, "plain/.claude/.cc-writes")
+    root = os.path.realpath(str(tmp_path))
+    sib = os.path.join(root, ".claude", "worktrees", "sib")
+    out = ED._sweep_cc_writes(root, skip_roots={sib})
+    assert out["removed"] == ["plain/.claude/.cc-writes", "plain/.claude"]
+    assert (tmp_path / ".claude" / "worktrees" / "sib" / ".claude" / ".cc-writes").is_dir()
+
+
+# axis: an unenumerable worktree list means no sweep at all, reported incomplete.
+def test_fold_sweep_skips_when_worktrees_unenumerable(tmp_path):
+    staging = _plant(tmp_path, ".claude/.cc-writes")
+    got = ED._fold_cc_writes_sweep({"opened": {
+        "runKind": ED.RUN_KIND_WRITE, "engine": "claude", "cwd": str(tmp_path)}})
+    assert got == {"removed": [], "incomplete": True, "error": "worktree-enumeration-failed"}
+    assert os.path.isdir(staging)
+
+
 # axis: an exhausted budget stops the walk before it touches anything (S1).
 def test_sweep_budget_exhausted_is_incomplete(tmp_path):
     _plant(tmp_path, ".claude/.cc-writes")
@@ -178,6 +199,24 @@ def test_claude_write_fold_sweeps_worktree(tmp_path, monkeypatch):
     for sweep in (res["ccWritesSweep"], _folded_result(run_dir)["ccWritesSweep"]):
         assert sorted(sweep["removed"]) == sorted(expected["removed"])
         assert sweep["incomplete"] is False and sweep["error"] is None
+
+
+# axis: a claude write run never sweeps a nested registered worktree's staging dir.
+def test_claude_write_fold_spares_nested_worktree(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    sib = os.path.join(wt, ".claude", "worktrees", "sib")
+    os.makedirs(os.path.dirname(sib))
+    subprocess.run(["git", "-C", wt, "worktree", "add", "-q", sib], check=True)
+    sib_staging = _plant(sib, ".claude/.cc-writes")
+    _plant(wt, "sub/.claude/.cc-writes")
+    run_dir = str(tmp_path / "run")
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_implementer_claude_seat())
+    assert res["ok"] is True, res
+    assert os.path.isdir(sib_staging)
+    assert not os.path.exists(os.path.join(wt, "sub", ".claude"))
+    assert res["ccWritesSweep"]["incomplete"] is False
 
 
 # axis: a codex write run is never swept and carries no sweep key.
