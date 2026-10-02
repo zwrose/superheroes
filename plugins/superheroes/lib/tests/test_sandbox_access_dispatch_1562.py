@@ -18,6 +18,7 @@ Detector axes (bite-proof):
 - test_extra_write_path_resolving_to_root_* — refusal: an alias of / never reaches allowWrite
 - test_local_socket_dir_* — mapping: the grant follows the CLI's own temp-dir rule
 """
+import json
 import os
 
 import pytest
@@ -60,6 +61,19 @@ _ALL_OFF_ACCESS = {
 # not `false`, not `[]` — is the contract of an all-off run.
 _BYTE_SANDBOX = dict(_SANDBOX, uvCacheDir="/cache/uv")
 _TODAYS_SETTINGS = (
+    '{"env":{"UV_CACHE_DIR":"/cache/uv","UV_OFFLINE":"1"},'
+    '"permissions":{"allow":["Bash(python:*)","Bash(python3:*)","Bash(pytest:*)",'
+    '"Bash(scripts/pinned-python:*)","Bash(echo:*)"],"deny":["WebFetch","WebSearch"]},'
+    '"sandbox":{"allowUnsandboxedCommands":false,"autoAllowBashIfSandboxed":true,'
+    '"enabled":true,"failIfUnavailable":true,'
+    '"filesystem":{"allowWrite":["/work/wt","/work/main/.git/worktrees/wt","/work/main/.git",'
+    '"/cache/uv"],'
+    '"denyWrite":["/work/main/.git/hooks","/work/main/.git/config",'
+    '"/work/main/.git/worktrees/wt/config.worktree"]},'
+    '"network":{"allowedDomains":[],"strictAllowlist":true}}}'
+)
+# The same settings as before the claude write channel's Bash allow rules (#1569).
+_SETTINGS_0_38_0 = (
     '{"env":{"UV_CACHE_DIR":"/cache/uv","UV_OFFLINE":"1"},'
     '"permissions":{"deny":["WebFetch","WebSearch"]},'
     '"sandbox":{"allowUnsandboxedCommands":false,"autoAllowBashIfSandboxed":true,'
@@ -173,6 +187,15 @@ def test_all_off_settings_are_byte_identical():
     assert EA.claude_write_sandbox_settings(dict(_BYTE_SANDBOX, access=None)) == _TODAYS_SETTINGS
     assert EA.claude_write_sandbox_settings(
         dict(_BYTE_SANDBOX, access=dict(_ALL_OFF_ACCESS))) == _TODAYS_SETTINGS
+
+
+def test_all_off_differs_from_0_38_0_only_by_allow_rules():
+    new = json.loads(EA.claude_write_sandbox_settings(_BYTE_SANDBOX))
+    assert new["permissions"].pop("allow") == [
+        "Bash(python:*)", "Bash(python3:*)", "Bash(pytest:*)",
+        "Bash(scripts/pinned-python:*)", "Bash(echo:*)",
+    ]
+    assert new == json.loads(_SETTINGS_0_38_0)
 
 
 # --- T2-T5: each option alone, driven through a real open (G12-G15) ---------------------------

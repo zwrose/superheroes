@@ -2106,6 +2106,27 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   2026-09-18), so the one reader is the only place a wrong type can be caught before a gate reads
   it as "no verify command".
 
+#### S27 — Claude write channel: targeted Bash allow rules
+
+- **Component.** Not a census row. `CLAUDE_WRITE_BASH_ALLOW` in
+  `plugins/superheroes/lib/engine_adapter.py`, emitted as `permissions.allow` by
+  `claude_write_sandbox_settings`. Workaround-marked (#1569). Cost: a rule list that tracks the
+  harness's safety check, and a command a managed policy excludes from the sandbox that matches a
+  rule runs unprompted outside it.
+- **Start date.** 2026-10-01.
+- **Condition.** Citation-based, 45 days: build records or vet receipts citing an implementer
+  refusal "requires approval" on the claude write channel for a Python, pytest or echo command
+  (a regression signal), or for a new command family (a candidate rule). Re-measure on each Claude
+  Code bump: when the workaround marker's delete-when condition is observed, a proposal to the
+  owner at a gardening pass to remove the rules.
+- **Last demonstrated benefit.** A live claude write run (Claude Code 2.1.284) ran `-X
+  pycache_prefix` pytest and `$?` shapes with no refusal, with network, outside-root writes and
+  git-hooks writes still denied (#1569 PR build record).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — the auto-allow gap is Claude Code 2.1.284 behaviour; observed on the
+  anthropic family's sandboxed implementer.
+
 
 ## The workaround-marker inventory
 
@@ -2131,6 +2152,10 @@ file, returns exactly that set.
   configuration items has shipped; then the version is raised with the new literal pinned in the
   tests rather than referenced from the constant. (Lands with the configuration-items child; the
   tree carries this marker once that child merges.)
+- `plugins/superheroes/lib/engine_adapter.py` — the claude write channel allows the Python, pytest
+  and echo command families by rule because the harness's sandbox auto-allow misses shapes its
+  safety check flags (`-X` on a Python call, `$?`). **delete-when:** `autoAllowBashIfSandboxed`
+  auto-approves every sandboxed command shape on the Claude Code version the channel runs.
 - `plugins/superheroes/lib/hostinfo.py` — OS-specific boot-id reads to corroborate a recorded pid
   belongs to this boot. **delete-when:** the host exposes a stable per-boot identity without
   OS-specific parsing.
