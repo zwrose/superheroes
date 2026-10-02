@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""PR size counters: tripwire vs bar, with whole-file deletions listed (#1447). stdlib only."""
+"""PR size counters: tripwire vs bar, with whole-file deletions listed (#1447). stdlib and sibling lib modules only."""
 import argparse
 import fnmatch
 import json
 import subprocess
 import sys
+
+import core_md
 
 # Axis: a path is test code iff a directory component (case-insensitive) is a TEST_DIR_NAMES member or the file name (case-sensitive globs) matches TEST_FILE_GLOBS; the one home of the size rule's test-path list (rubric/review-discipline.md § Size).
 TEST_DIR_NAMES = frozenset({
@@ -35,16 +37,35 @@ def is_test_path(path):
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in TEST_FILE_GLOBS)
 
 
-def count(numstat_rows, deleted_paths, bar_exclude=()):
+# Axis: a path is a lockfile iff its base name (the last "/" component, case-sensitive, at any depth) is a LOCKFILE_NAMES member; the one home of the size rule's lockfile list (rubric/review-discipline.md § Size).
+LOCKFILE_NAMES = frozenset({
+    "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
+    "uv.lock", "poetry.lock", "Pipfile.lock", "Cargo.lock", "Gemfile.lock", "composer.lock",
+    "go.sum",
+})
+
+
+def is_lockfile(path):
+    """True when the base name of ``path`` is a ``LOCKFILE_NAMES`` member."""
+    return path.replace("\\", "/").split("/")[-1] in LOCKFILE_NAMES
+
+
+def count(numstat_rows, deleted_paths, bar_exclude=(), size_exclude=None):
     """Pure size count from parsed numstat rows and deleted path names.
 
     ``bar_exclude`` lists regenerated artifacts (review-discipline Size § bars): paths
     here still add to ``tripwireCount`` but not ``barCount``, and appear in ``barExcluded``.
+    Lockfiles (``LOCKFILE_NAMES``) and paths matching a ``size_exclude`` glob count toward
+    neither number and are listed in ``lockfilesExcluded`` / ``pathsExcluded`` with their line
+    counts. ``size_exclude`` None means the calibration key is absent; a list (possibly empty)
+    means declared.
     """
     tripwire = 0
     bar = 0
     deleted_files = []
     binary = []
+    lockfiles = []
+    paths_excluded = []
     bar_exclude_set = frozenset(bar_exclude or ())
     bar_excluded = set()
 
@@ -57,6 +78,15 @@ def count(numstat_rows, deleted_paths, bar_exclude=()):
         if path in deleted_paths and added == 0:
             deleted_files.append({"path": path, "lines": deleted})
             continue
+        if is_lockfile(path):
+            lockfiles.append({"path": path, "lines": added + deleted})
+            continue
+        if size_exclude is not None:
+            normalized = path.replace("\\", "/")
+            glob = next((g for g in size_exclude if fnmatch.fnmatchcase(normalized, g)), None)
+            if glob is not None:
+                paths_excluded.append({"path": path, "lines": added + deleted, "glob": glob})
+                continue
         tripwire += added + deleted
         if path in bar_exclude_set:
             bar_excluded.add(path)
@@ -65,6 +95,8 @@ def count(numstat_rows, deleted_paths, bar_exclude=()):
 
     deleted_files.sort(key=lambda item: item["path"])
     binary.sort()
+    lockfiles.sort(key=lambda item: item["path"])
+    paths_excluded.sort(key=lambda item: item["path"])
     out = {
         "tripwireCount": tripwire,
         "barCount": bar,
@@ -73,6 +105,10 @@ def count(numstat_rows, deleted_paths, bar_exclude=()):
     }
     if bar_exclude_set:
         out["barExcluded"] = sorted(bar_excluded)
+    if lockfiles:
+        out["lockfilesExcluded"] = lockfiles
+    if size_exclude is not None:
+        out["pathsExcluded"] = paths_excluded
     return out
 
 
@@ -137,8 +173,18 @@ def _git_failed(stderr_bytes):
     return {"ok": False, "reason": "git-failed", "detail": line[0] if line else ""}
 
 
-def collect(repo_root, base, head="HEAD", bar_exclude=()):
+def collect(repo_root, base, head="HEAD", bar_exclude=(), root=None):
     """Run git diffs between ``base`` and ``head`` and return size JSON."""
+    try:
+        read = core_md.read_size_exclude(repo_root, root)
+    except Exception as exc:
+        return {"ok": False, "reason": "size-exclude-unreadable",
+                "detail": "%s: %s" % (type(exc).__name__, exc)}
+    if read["reason"] == "size-exclude-malformed":
+        return {"ok": False, "reason": "size-exclude-malformed", "malformed": read["malformed"]}
+    if read["reason"] not in (None, "core-md-absent"):
+        return {"ok": False, "reason": "size-exclude-unreadable",
+                "detail": read["detail"] or read["reason"]}
     git_timeout = 60
     numstat_argv = [
         "git",
@@ -192,7 +238,7 @@ def collect(repo_root, base, head="HEAD", bar_exclude=()):
 
     rows = _parse_numstat_z(numstat.stdout)
     deleted_paths = _parse_deleted_paths(status.stdout)
-    result = count(rows, deleted_paths, bar_exclude=bar_exclude)
+    result = count(rows, deleted_paths, bar_exclude=bar_exclude, size_exclude=read["globs"])
     result["base"] = base
     result["head"] = head
     result["ok"] = True

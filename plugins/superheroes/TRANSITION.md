@@ -9,6 +9,15 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Size count: lockfiles and project-listed paths are left out
+
+- The size count (`lib/size_count.py`) now leaves common package-manager lockfiles out of both `tripwireCount` and `barCount` for every project: `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lockb`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock` and `go.sum`, matched on the file's base name at any depth. They are listed under the new `lockfilesExcluded` result key (`[{"path", "lines"}]`), present only when non-empty.
+- New optional `sizeExclude` key in the `superheroes-core` block of `core.md`: a list of repo-relative globs matched with `fnmatch` against the path, where `*` also crosses `/`. Set and viewed through configure. Matching paths are left out of both counts and listed under the new `pathsExcluded` result key (`[{"path", "lines", "glob"}]`, the first matching glob), present only when the key is declared (`[]` when nothing matched).
+- Refusals at read and write: `size-exclude-malformed`, with items `size-exclude-not-a-list`, `size-exclude-entry-not-a-nonempty-string` and `size-exclude-entry-absolute`. On write only: `size-exclude-input-unparseable`.
+- `size_count` itself now refuses with `ok: false` and `size-exclude-malformed` (with the `malformed` items) or `size-exclude-unreadable` (with a `detail`) when `core.md` holds a bad or unreadable `sizeExclude`, instead of counting.
+- Who sees a change: every project whose diffs touch a lockfile. Only projects that set `sizeExclude` see changes in what else counts. A project wanting test-pilot plans excluded lists `.claude/test-pilot/**` itself.
+- The profile schema version is unchanged, so an older plugin that re-calibrates from scratch can drop the key.
+
 ### Claude write channel: implementers can run their own Python tests
 
 - Sandboxed Claude implementers now run the commands their orders name for Python tests. Before, python `-X` flags (including the pinned gate command `scripts/pinned-python -B -X pycache_prefix=… -m pytest …`) and `; echo "exit=$?"` were refused with "This command requires approval", and implementers handed back untested work. The channel now allows the `python`, `python3`, `pytest`, `scripts/pinned-python` and `echo` command families by rule. The sandbox still denies the network, writes outside the build roots, and writes to the git hooks and config.
