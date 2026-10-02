@@ -58,6 +58,7 @@ import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO
 import sanitized_view  # noqa: E402
 import session_contract  # noqa: E402  WRITE_RESULT_KIND — shared with writer via leaf module
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
+import size_count  # noqa: E402  working-tree size count for the fold tripwire (#1582)
 from guardian_tools import path_is_confidently_under  # noqa: E402
 
 # The adopted mode-7 hardening (#563) and sanitized review cwd (#684): a dispatched one-shot reviewer
@@ -141,6 +142,13 @@ ITEM_EVIDENCE_CAUSE_DIFF_FAILED = "diff-failed"
 ITEM_EVIDENCE_CAUSE_STATUS_TIMEOUT = "status-timeout"
 ITEM_EVIDENCE_CAUSE_STATUS_FAILED = "status-failed"
 BASE_SHA_UNRESOLVABLE = "base-sha-unresolvable"
+SIZE_COUNT_BUDGET_SECONDS = 30  # bounds the fold-time working-tree size count
+SIZE_INPUTS_INCOMPLETE = "size-inputs-incomplete"
+SIZE_LINE_INVALID = "size-line-invalid"
+SIZE_BASE_NOT_AN_OBJECT_ID = "size-base-not-an-object-id"
+SIZE_BASE_UNRESOLVABLE = "size-base-unresolvable"
+SIZE_INPUTS_MISMATCH = "size-inputs-mismatch"
+SIZE_TRIPWIRE_ABSENT_NOT_SUPPLIED = "size-inputs-not-supplied"
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
 _STDERR_TAIL = 4096
 MAX_STDOUT_CAPTURE = engine_adapter.ENGINE_OUTPUT_MAX_BYTES   # keep only the last 8 MB of engine stdout — the result JSON
@@ -3117,6 +3125,44 @@ def _fold_cc_writes_sweep(state):
         return {"removed": [], "incomplete": True, "error": type(exc).__name__}
 
 
+def _fold_size_tripwire(state):
+    """Count a write run's worktree against the base journaled at open. None for a review run
+    or a run opened without size inputs. Never raises."""
+    opened = state.get("opened") or {}
+    inputs = opened.get("sizeTripwireInputs")
+    if opened.get("runKind") != RUN_KIND_WRITE or not isinstance(inputs, dict):
+        return None
+    base = inputs.get("base")
+    line = inputs.get("line")
+    try:
+        counted = size_count.collect(
+            opened.get("cwd"), base, head=None,
+            deadline=time.monotonic() + SIZE_COUNT_BUDGET_SECONDS,
+        )
+        if not counted.get("ok"):
+            field = {"status": "indeterminate", "base": base, "line": line,
+                     "reason": counted.get("reason")}
+            if "detail" in counted:
+                field["detail"] = counted["detail"]
+            return field
+        tripwire_count = counted["tripwireCount"]
+        field = {
+            "status": "ok", "base": base, "line": line,
+            "tripwireCount": tripwire_count,
+            "crossed": tripwire_count > line,
+            "barCount": counted["barCount"],
+            "deletedFiles": counted["deletedFiles"],
+            "binary": counted["binary"],
+            "untrackedRepos": counted["untrackedRepos"],
+        }
+        if "barExcluded" in counted:
+            field["barExcluded"] = counted["barExcluded"]
+        return field
+    except Exception:
+        return {"status": "indeterminate", "base": base, "line": line,
+                "reason": "count-raised"}
+
+
 def _fold_run(run_dir_real, state, result):
     sibling = _fold_sibling_worktrees(state)
     if sibling is not None:
@@ -3126,6 +3172,15 @@ def _fold_run(run_dir_real, state, result):
     if cc_writes is not None:
         result = dict(result)
         result["ccWritesSweep"] = cc_writes
+    size_tripwire = _fold_size_tripwire(state)
+    opened = state.get("opened") or {}
+    if size_tripwire is not None:
+        result = dict(result)
+        result["sizeTripwire"] = size_tripwire
+    elif (opened.get("runKind") == RUN_KIND_WRITE
+          and not isinstance(opened.get("sizeTripwireInputs"), dict)):
+        result = dict(result)
+        result["sizeTripwireAbsent"] = SIZE_TRIPWIRE_ABSENT_NOT_SUPPLIED
     return _terminate_run(run_dir_real, state, record_kind="run-folded", result=result)
 
 
@@ -6192,7 +6247,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
                     repo_root=None, expected_items=None, baseline_dirty=None,
                     sibling_baseline=None, resolved_inputs=None, claude_mode=None,
-                    claude_write_sandbox=None):
+                    claude_write_sandbox=None, size_tripwire_inputs=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -6287,6 +6342,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         record["echoNonce"] = effective_nonce
     if resolved_inputs is not None:
         record["resolvedInputs"] = resolved_inputs
+    if size_tripwire_inputs is not None:
+        record["sizeTripwireInputs"] = size_tripwire_inputs
     if not _journal_append(run_dir_real, record):
         return False, "journal-append-failed"
     return True, ""
@@ -6297,7 +6354,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                    retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
                    run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, claude_mode=None,
                    expected_items=None, expected_items_file=None,
-                   requires_process_listing=False, **kwargs):
+                   requires_process_listing=False, size_base=None, size_line=None, **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -6370,6 +6427,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             max_wait_source=max_wait_source, claude_mode=claude_mode,
             expected_items=expected_items, expected_items_file=expected_items_file,
             requires_process_listing=requires_process_listing,
+            size_base=size_base, size_line=size_line,
         )
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -6394,7 +6452,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          run_engine=_run_engine, run_dir=None, run_dir_supplied=False,
                          max_wait=None, max_wait_source=resolved_inputs_vocab.DEFAULT,
                          claude_mode=None, expected_items=None,
-                         expected_items_file=None, requires_process_listing=False):
+                         expected_items_file=None, requires_process_listing=False,
+                         size_base=None, size_line=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
     role = seat["role"]
@@ -6472,6 +6531,23 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
             run_dir=run_dir or "", argv=[],
         )
     run_dir_real = rd_detail
+
+    size_refusal = None
+    if (size_base is None) != (size_line is None):
+        size_refusal = SIZE_INPUTS_INCOMPLETE
+    elif size_line is not None:
+        if not isinstance(size_line, int) or isinstance(size_line, bool) or size_line <= 0:
+            size_refusal = SIZE_LINE_INVALID
+        elif not _validate_base_sha(size_base)[0]:
+            size_refusal = SIZE_BASE_NOT_AN_OBJECT_ID
+    if size_refusal is not None:
+        return _write_preflight_terminal(
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": size_refusal,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir_real, argv=[],
+        )
+    size_inputs_supplied = size_line is not None
+    size_tripwire_inputs = {"base": size_base, "line": size_line} if size_inputs_supplied else None
 
     caller_omitted_expected = expected_items is None and expected_items_file is None
     resolved_claude_mode = {"claudeMode": claude_mode}
@@ -6557,6 +6633,13 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
             argv = opened.get("argv") or argv
+            if size_inputs_supplied and size_tripwire_inputs != opened.get("sizeTripwireInputs"):
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": SIZE_INPUTS_MISMATCH,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
             if state.get("folded") is not None:
                 return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv)
             if state.get("abandoned") is not None:
@@ -6593,6 +6676,15 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                         run_dir=run_dir_real, argv=argv,
                     )
         else:
+            if size_inputs_supplied and not _verify_base_sha_resolves(
+                cwd_real, size_base, timeout=preflight_timeout,
+            ):
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": SIZE_BASE_UNRESOLVABLE,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
             if base_sha is None:
                 try:
                     head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=preflight_timeout)
@@ -6728,6 +6820,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 resolved_inputs=resolved_inputs,
                 claude_mode=resolved_claude_mode["claudeMode"],
                 claude_write_sandbox=claude_write_sandbox,
+                size_tripwire_inputs=size_tripwire_inputs,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
@@ -7333,6 +7426,8 @@ def build_parser():
     cc.add_argument(w, "--progress-file", contract="free-text", default=None)
     cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
+    cc.add_argument(w, "--size-base", contract="free-text", default=None)
+    cc.add_argument(w, "--size-line", contract="integer", default=None, type=int)
     cc.add_argument(w, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
                     choices=claude_modes.CLAUDE_MODE_INPUTS,
                     help=_CLAUDE_MODE_HELP)
@@ -7395,7 +7490,8 @@ def main(argv):
                                  claude_mode=args.claude_mode,
                                  expected_items=args.expect_item,
                                  expected_items_file=args.expect_items_file,
-                                 requires_process_listing=args.requires_process_listing)
+                                 requires_process_listing=args.requires_process_listing,
+                                 size_base=args.size_base, size_line=args.size_line)
             classification = dispatch_outcome.classify_dispatch_result(res)
         elif args.cmd == "dispatch-poll":
             res, classification = _dispatch_poll_impl(args.run_dir)
