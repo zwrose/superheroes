@@ -705,7 +705,7 @@ _PAYLOAD_SHAPES = {
          "detail": "duplicate-core-key:sizeExclude"},
         ["### Size count exclusions",
          "⚠ size count exclusions unreadable: size-exclude-unreadable",
-         "duplicate-core-key:sizeExclude"]),
+         "cause: duplicate-core-key"]),
     "other-reason-no-detail": (
         {"declared": False, "globs": None, "reason": "size-exclude-read-failed"},
         ["### Size count exclusions",
