@@ -8,11 +8,14 @@ import subprocess
 import sys
 import time
 
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import git_routing  # noqa: E402  the one home of the git routing-var list
+
 GIT_TIMEOUT = 60
-# Same list as engine_dispatch._GIT_ROUTING_VARS (copied: this module stays stdlib-only).
-_GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_GLOBAL",
-                     "GIT_CONFIG_SYSTEM", "GIT_COMMON_DIR")
+_GIT_ROUTING_VARS = git_routing.GIT_ROUTING_VARS
 # ``git ls-files -v`` tags for assume-unchanged (h), skip-worktree (S) and both (s).
 _HIDDEN_TAGS = frozenset("hsS")
 
@@ -195,7 +198,7 @@ def _untracked_rows(repo_root, deadline):
             continue
         proc, failure = _run_git(
             repo_root,
-            ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", path],
+            ["-c", "core.safecrlf=false", "diff", "--no-index", "--numstat", "-z", "--", "/dev/null", path],
             deadline,
             ok_codes=(0, 1),
         )
@@ -215,7 +218,8 @@ def collect(repo_root, base, head="HEAD", bar_exclude=(), deadline=None):
     and untracked-but-not-ignored changes, read-only. Failures return ``ok: False`` with a ``reason``.
     """
     worktree = head is None
-    diff_tail = ["--end-of-options", base] if worktree else ["--end-of-options", base, head]
+    # Axis: the trailing "--" makes base a revision only; an unresolvable base fails instead of becoming a pathspec.
+    diff_tail = ["--end-of-options", base, "--"] if worktree else ["--end-of-options", base, head, "--"]
     if worktree:
         flags, failure = _run_git(repo_root, ["ls-files", "-v", "-z"], deadline)
         if failure:
