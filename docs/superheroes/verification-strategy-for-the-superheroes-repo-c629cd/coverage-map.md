@@ -102,9 +102,9 @@ touches a criterion (R4, R11, R22).
 | [72] FR-18f — bullet 1: the finding names the remaining case or pin | **P5-lens** | — |
 | [73] FR-18f — bullet 2: the vet applies the halt exception | **P5-vet** | UFR-6 |
 | [74] Instruments paragraph — the escape rate is the gardening pass's hand count | **shipped elsewhere** — owner-decisions duty 7 (`plugins/superheroes/skills/showrunner/reference/owner-decisions.md`) | no instrument stores it |
-| [75] FR-20 — requirement: the mutation run, bought not built, scoped, budgeted, sharded, on demand, advisory | **P9** | P1 (the pinned interpreter) |
+| [75] FR-20 — requirement: the mutation run, bought not built, scoped, budgeted, sharded, on demand, advisory; publishes per planted defect its subject file, whether any test detected it, and the killing test file(s) where the tool reports per-test results | **P9** | P1 (the pinned interpreter) |
 | [76] FR-20 — bullet 1, results consumed at gardening passes (duty 7 records survivors and kills; an uncovered file reads unmeasured; a survivor is a cut-list candidate) | **advisor process** | P9 publishes; [48] |
-| [77] FR-20 — bullet 1, a kill earns the file a keep-list line | **advisor process** | [10] |
+| [77] FR-20 — bullet 1, a kill earns the file a keep-list line; a kill with no test-file attribution earns none (the file reads as unmeasured for the keep list) | **advisor process** | [10] |
 | [78] FR-20 — bullet 2: a run marks defects it did not re-evaluate "not evaluated"; a budget-exhausted run publishes a marked partial result | **P9** | — |
 | [79] The red-then-green script — on demand, no storage, never a gate | **P9** | — |
 | [80] FR-23 — requirement: a flake is recorded by hand on the collector when seen | **P5-vet** — the vet-as-recorder encoding | R9 |
@@ -125,28 +125,29 @@ touches a criterion (R4, R11, R22).
 | [90] UFR-4 — requirement, lens arm (the lens flags the weakening it sees in the diff) | **P5-lens** | — |
 | [91] UFR-4 — requirement, vet arm (the vet checks the collector listing) | **P5-vet** | R9 |
 | [92] UFR-4 — Given-When-Then bullet: the finding names the listing and the PR is returned | **P5-vet** | — |
-| [93] UFR-5 — requirement, lens arm (the lens flags the deletion or de-listing in the diff) | **P5-lens** | P7 (primary subject), R17 |
-| [94] UFR-5 — requirement, vet arm (the body's evidence, the owner's approval, the independent re-run) | **P5-vet** | R17 |
-| [95] UFR-5 — vetted-lane bullet: a change that removes a test or edits the inventory takes a lane with a vet | **P5-vet** | — |
-| [96] UFR-5 — Given-When-Then bullet: the finding names the test and asks for the evidence | **P5-lens** | — |
-| [97] UFR-6 — requirement: the rate read, the hand counts brought to the owner, the removal halt | **advisor process** — the rate read and the owner decision | — |
-| [98] UFR-6 — Given-When-Then bullet: the vet parks a proactive removal while the rate reads above the baseline | **P5-vet** | — |
-| [99] UFR-6 — bullet: a halt lifts only by the owner's recorded decision | **advisor process** | — |
-| [100] UFR-7 — requirement: no test-lens receipt means unreviewed | **P5-vet** | — |
-| [101] UFR-7 — Given-When-Then bullet: a PR body with no test-lens receipt is returned | **P5-vet** | — |
-| [102] UFR-7 — bullet: a review receipt is written by the review run itself | **P5-vet** | — |
-| [103] UFR-8 — requirement: CI fails at the validator step before any test on a pin disagreement | **P1** | R7 |
-| [104] UFR-8 — Given-When-Then bullet: a PR naming a version in the documented gate fails the drift validator | **P1** | R7 |
+| [93] UFR-4 — vetted-lane bullet: a change that weakens an assertion in, adds a skip to, or otherwise edits a listed test takes a lane with a vet, whatever its size | **P5-vet** | UFR-5's vetted-lane rule |
+| [94] UFR-5 — requirement, lens arm (the lens flags the deletion or de-listing in the diff) | **P5-lens** | P7 (primary subject), R17 |
+| [95] UFR-5 — requirement, vet arm (the body's evidence, the owner's approval, the independent re-run) | **P5-vet** | R17 |
+| [96] UFR-5 — vetted-lane bullet: a change that removes a test or edits the inventory takes a lane with a vet | **P5-vet** | — |
+| [97] UFR-5 — Given-When-Then bullet: the finding names the test and asks for the evidence | **P5-lens** | — |
+| [98] UFR-6 — requirement: the rate read, the hand counts brought to the owner, the removal halt | **advisor process** — the rate read and the owner decision | — |
+| [99] UFR-6 — Given-When-Then bullet: the vet parks a proactive removal while the rate reads above the baseline | **P5-vet** | — |
+| [100] UFR-6 — bullet: a halt lifts only by the owner's recorded decision | **advisor process** | — |
+| [101] UFR-7 — requirement: no test-lens receipt means unreviewed | **P5-vet** | — |
+| [102] UFR-7 — Given-When-Then bullet: a PR body with no test-lens receipt is returned | **P5-vet** | — |
+| [103] UFR-7 — bullet: a review receipt is written by the review run itself | **P5-vet** | — |
+| [104] UFR-8 — requirement: CI fails at the validator step before any test on a pin disagreement | **P1** | R7 |
+| [105] UFR-8 — Given-When-Then bullet: a PR naming a version in the documented gate fails the drift validator | **P1** | R7 |
 
 ## Non-functional requirements, risk profile, presentation
 
 | Criterion | Owner | Consumers / notes |
 | --- | --- | --- |
-| [105] NFR — nothing degrades invisibly | **P5-vet** | FR-9 receipt |
-| [106] NFR — escape rate not raised | **advisor process** | UFR-6 |
-| [107] NFR — reproducibility (a handback names the interpreter, matching the pin) | **P5-vet** | P1 (the pin) |
-| [108] Risk profile — the normative table, the deepest-row rule, the depth vocabulary | **P5-lens** (grading); the spec stays the table's home | [20]–[25] |
-| [109] Coverage table — the Show-it row (Visibility & disclosure → the hand-written receipt) | **P5-vet** | FR-9 |
+| [106] NFR — nothing degrades invisibly | **P5-vet** | FR-9 receipt |
+| [107] NFR — escape rate not raised | **advisor process** | UFR-6 |
+| [108] NFR — reproducibility (a handback names the interpreter, matching the pin) | **P5-vet** | P1 (the pin) |
+| [109] Risk profile — the normative table, the deepest-row rule, the depth vocabulary | **P5-lens** (grading); the spec stays the table's home | [20]–[25] |
+| [110] Coverage table — the Show-it row (Visibility & disclosure → the hand-written receipt) | **P5-vet** | FR-9 |
 
 ## Held and declined
 
@@ -160,8 +161,8 @@ touches a criterion (R4, R11, R22).
 | --- | --- | --- | --- | --- |
 | #1228 | P1 | shipped | — | closed |
 | #1229 | P2 | close as declined | FR-F6 change 1; registry seeds "the nightly catch-and-escape classifier" and "the flake differential" | — |
-| #1230 | P3a | close as declined | FR-F6 change 5 (registry seed "the verification tiers, lanes, and local-tier selection with observation mode"); its named-edit form dropped, FR-B1 | — |
-| #1231 | P3b | close as declined | FR-F6 change 5, same seed | — |
+| #1230 | P3a | close; held on the registry | FR-F6 change 5 (registry seed "the verification tiers, lanes, and local-tier selection with observation mode"); its named-edit form dropped, FR-B1 | — |
+| #1231 | P3b | close; held on the registry | FR-F6 change 5, same seed | — |
 | #1232 | P4 | close as declined | FR-F6 change 6, FR-B1 | — |
 | #1233 | P5 | rewrite to the amended slice: the vet-checks slice live; its test-lens slice parked under the owner's review hold | ruling @373-8 ("11 a") | Backlog, machinery under the dial |
 | #1234 | P6 | close as declined | FR-F6 change 4 (the differential to the registry, seed "the flake differential"; vitals to the guardian); the mutation run moves to P9 | — |
@@ -270,22 +271,23 @@ P9 (new) is filed on the owner's word, into Backlog as machinery under the dial.
 90. UFR-4 requirement, lens arm → P5-lens
 91. UFR-4 requirement, vet arm → P5-vet
 92. UFR-4 Given-When-Then bullet → P5-vet
-93. UFR-5 requirement, lens arm → P5-lens
-94. UFR-5 requirement, vet arm → P5-vet
-95. UFR-5 vetted-lane bullet → P5-vet
-96. UFR-5 Given-When-Then bullet → P5-lens
-97. UFR-6 requirement → advisor process
-98. UFR-6 Given-When-Then bullet (vet park) → P5-vet
-99. UFR-6 halt-lift bullet → advisor process
-100. UFR-7 requirement → P5-vet
-101. UFR-7 Given-When-Then bullet → P5-vet
-102. UFR-7 receipt-written-by-the-review-run bullet → P5-vet
-103. UFR-8 requirement → P1
-104. UFR-8 Given-When-Then bullet → P1
-105. NFR nothing degrades invisibly → P5-vet
-106. NFR escape rate not raised → advisor process
-107. NFR reproducibility → P5-vet
-108. Risk profile (table, deepest-row rule, vocabulary) → P5-lens
-109. Coverage-table Show-it row → P5-vet
+93. UFR-4 vetted-lane bullet → P5-vet
+94. UFR-5 requirement, lens arm → P5-lens
+95. UFR-5 requirement, vet arm → P5-vet
+96. UFR-5 vetted-lane bullet → P5-vet
+97. UFR-5 Given-When-Then bullet → P5-lens
+98. UFR-6 requirement → advisor process
+99. UFR-6 Given-When-Then bullet (vet park) → P5-vet
+100. UFR-6 halt-lift bullet → advisor process
+101. UFR-7 requirement → P5-vet
+102. UFR-7 Given-When-Then bullet → P5-vet
+103. UFR-7 receipt-written-by-the-review-run bullet → P5-vet
+104. UFR-8 requirement → P1
+105. UFR-8 Given-When-Then bullet → P1
+106. NFR nothing degrades invisibly → P5-vet
+107. NFR escape rate not raised → advisor process
+108. NFR reproducibility → P5-vet
+109. Risk profile (table, deepest-row rule, vocabulary) → P5-lens
+110. Coverage-table Show-it row → P5-vet
 
-Result: 109 surviving criteria; 109 owned exactly once; 0 unowned; 0 owned twice.
+Result: 110 surviving criteria; 110 owned exactly once; 0 unowned; 0 owned twice.
