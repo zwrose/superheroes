@@ -668,8 +668,18 @@ def test_view_core_unparseable_branch_names_reason_and_detail(tmp_path):
     assert lines[:2] == [
         "### Size count exclusions",
         "⚠ size count exclusions unreadable: size-exclude-unreadable"]
-    assert lines[2].startswith("core-md-unparseable:")
+    assert lines[2] == "cause: core-md-unparseable"
     assert len(lines) == 3
+    assert CM.core_path(repo, store) not in screen
+
+
+def test_view_unreadable_detail_shows_path_free_cause():
+    payload = {"declared": False, "globs": None, "reason": "size-exclude-unreadable",
+               "detail": "multiple-core-blocks:/abs/x/core.md"}
+    assert CV._size_exclude_view_lines(payload) == [
+        "### Size count exclusions",
+        "⚠ size count exclusions unreadable: size-exclude-unreadable",
+        "cause: multiple-core-blocks"]
 
 
 _PAYLOAD_SHAPES = {

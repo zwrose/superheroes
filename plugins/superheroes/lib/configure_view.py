@@ -428,8 +428,10 @@ def _size_exclude_view_lines(payload):
                     accepted.append(item["accepted"])
             for shape in accepted:
                 lines.append("accepted: %s" % shape)
-        elif payload.get("detail"):
-            lines.append(payload["detail"])
+        elif isinstance(payload.get("detail"), str):
+            token = payload["detail"].split(":", 1)[0].strip()
+            if token:
+                lines.append("cause: %s" % token)
         return lines
     globs = payload.get("globs")
     if not payload.get("declared") or not isinstance(globs, list):

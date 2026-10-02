@@ -107,6 +107,20 @@ E       ValueError: substring not found
 - **Restore.** Inverse Edit; quoted back: `        for line in _size_exclude_view_lines(data.get("sizeExclude")):` followed by `            out.append(line)` and `        prefs = core.get("enginePreferences")`.
 - **Green.** `1 passed in 2.06s`
 
+### E8 — the path-free cause (display)
+
+- **Neutralization.** In `_size_exclude_view_lines`, the `elif isinstance(payload.get("detail"), str):` branch body (`token = payload["detail"].split(":", 1)[0].strip()` / `if token:` / `lines.append("cause: %s" % token)`) became `lines.append(payload["detail"])`, so the reader's `detail` shows verbatim.
+- **Node.** `test_configure_view.py::test_render_builder_dispatch_reason_shows_classifier_not_path`
+- **Red** (1 failed in 2.85s):
+
+```
+>       assert core_md_path not in screen
+E       AssertionError: assert '/private/tm...roes/core.md' not in '# superhero...ns\n(none)\n'
+```
+
+- **Restore.** Inverse Edit; quoted back: `            token = payload["detail"].split(":", 1)[0].strip()` then `            if token:` then `                lines.append("cause: %s" % token)`.
+- **Green.** `1 passed in 2.71s`
+
 ## Notes the reader of the proof needs
 
 - **Edge 9 premise.** The order names "cwd not a git repo" for the repo-root-unavailable edge. Measured on the pinned interpreter: a plain directory with no `.git` ancestor is greenfield (`store_core.repo_root` returns the cwd), so the reader reads `core-md-absent`. `RepoRootUnavailable` needs a `.git` entry that git declines. `T::test_read_repo_root_unavailable` uses an empty `.git` directory; `T::test_read_plain_non_git_dir_is_greenfield_core_absent` pins the plain-directory behaviour.
