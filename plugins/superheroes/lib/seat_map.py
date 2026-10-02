@@ -1329,7 +1329,7 @@ def build_parser():
         "--configured-engines",
         contract="free-text",
         default="",
-        help="comma list of non-claude engines; used to run preflight when --live-vendors omitted",
+        help="comma list of non-claude engines to probe for liveness when --live-vendors is omitted (review-code passes preflight_probe.review_cross_vendor_engines)",
     )
     cc.add_argument(
         c,
