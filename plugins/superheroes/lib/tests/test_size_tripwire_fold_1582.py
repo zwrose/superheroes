@@ -170,6 +170,34 @@ def test_t6_continuation(tmp_path):
     assert replay["sizeTripwire"] == first["sizeTripwire"]
 
 
+# axis: a run opened without size flags keeps folding the absent marker when a continuation passes them.
+def test_t6b_continuation_flags_on_unflagged_run(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    sha = _head(wt)
+    active = str(tmp_path / "active")
+    _dispatch_write(
+        tmp_path, FakeRunner([(_build_ok_stdout(), False, 0, "")]), cwd=wt, run_dir=active,
+        max_wait=0,
+    )
+    res = _dispatch_write(
+        tmp_path, _implementing_runner({"big.py": 241}), cwd=wt, run_dir=active,
+        size_base=sha, size_line=240, max_wait=120,
+    )
+    assert res.get("detail") != "size-inputs-mismatch", res
+    assert res["ok"] is True, res
+    assert res["sizeTripwireAbsent"] == "size-inputs-not-supplied"
+    assert "sizeTripwire" not in res
+
+    finished = str(tmp_path / "finished")
+    first = _dispatch_write(tmp_path, _implementing_runner({}), cwd=wt, run_dir=finished)
+    assert first["sizeTripwireAbsent"] == "size-inputs-not-supplied"
+    replay = _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=finished, size_base=sha, size_line=999,
+    )
+    assert replay["sizeTripwireAbsent"] == "size-inputs-not-supplied"
+    assert "sizeTripwire" not in replay
+
+
 # axis: an unusable count is reported as no count and never changes the run's outcome.
 def test_t7_indeterminate(tmp_path, monkeypatch):
     monkeypatch.setattr(

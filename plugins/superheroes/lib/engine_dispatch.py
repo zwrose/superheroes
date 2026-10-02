@@ -6632,7 +6632,15 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
             argv = opened.get("argv") or argv
-            if size_inputs_supplied and size_tripwire_inputs != opened.get("sizeTripwireInputs"):
+            # Only a run that journaled size inputs binds a continuation to them; a run
+            # opened without the flags (an older plugin's, or one that omitted them) has
+            # no journaled values, folds sizeTripwireAbsent, and ignores continuation flags.
+            journaled_size_inputs = opened.get("sizeTripwireInputs")
+            if (
+                size_inputs_supplied
+                and isinstance(journaled_size_inputs, dict)
+                and size_tripwire_inputs != journaled_size_inputs
+            ):
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                      "detail": SIZE_INPUTS_MISMATCH,
