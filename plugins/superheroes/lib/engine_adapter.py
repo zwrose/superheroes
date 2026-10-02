@@ -289,6 +289,23 @@ def _sandbox_access_valid(access):
     return type(access["localPorts"]) is bool
 
 
+# WORKAROUND: the harness's sandbox auto-allow misses command shapes its safety check flags (`-X` on
+# a Python call, `$?`), so the write channel allows the project's Python, pytest and echo command
+# families by rule and lets the sandbox confine them
+# delete-when: `autoAllowBashIfSandboxed` auto-approves every sandboxed command shape on the Claude
+# Code version the channel runs
+# axis: the rules cover only the named command families; every other shape keeps the harness's
+# auto-allow, and a command managed policy excludes from the sandbox and that matches a rule runs
+# unprompted outside it (the disclosed residual)
+CLAUDE_WRITE_BASH_ALLOW = (
+    "Bash(python:*)",
+    "Bash(python3:*)",
+    "Bash(pytest:*)",
+    "Bash(scripts/pinned-python:*)",
+    "Bash(echo:*)",
+)
+
+
 def claude_write_sandbox_settings(sandbox):
     """The inline ``--settings`` JSON for the claude write channel's sandboxed shell (#1554).
 
@@ -311,7 +328,7 @@ def claude_write_sandbox_settings(sandbox):
         network["allowUnixSockets"] = list(socket_dirs)
     obj = {
         "env": env,
-        "permissions": {"deny": ["WebFetch", "WebSearch"]},
+        "permissions": {"allow": list(CLAUDE_WRITE_BASH_ALLOW), "deny": ["WebFetch", "WebSearch"]},
         "sandbox": {
             "enabled": True,
             "failIfUnavailable": True,

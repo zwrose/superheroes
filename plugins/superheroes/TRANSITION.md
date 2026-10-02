@@ -9,6 +9,14 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Claude write channel: implementers can run their own Python tests
+
+- Sandboxed Claude implementers now run the commands their orders name for Python tests. Before, python `-X` flags (including the pinned gate command `scripts/pinned-python -B -X pycache_prefix=… -m pytest …`) and `; echo "exit=$?"` were refused with "This command requires approval", and implementers handed back untested work. The channel now allows the `python`, `python3`, `pytest`, `scripts/pinned-python` and `echo` command families by rule. The sandbox still denies the network, writes outside the build roots, and writes to the git hooks and config.
+- Still refused: an env-var prefix outside the harness's safe list (`FOO=1 cmd`, `export FOO=1 && cmd`). Set the variable inside the test, or use Python's own `PYTHON*` variables.
+- Every project's claude write sandbox settings, configured or not, gain these `permissions.allow` rules; nothing else in the default settings changes.
+- On a machine whose managed Claude Code policy excludes one of those commands from the sandbox, that command now runs outside the sandbox without a prompt, as the policy says.
+- **Finish or abandon in-flight claude write runs before upgrading.** A claude write run opened by an older plugin refuses its continuation (its stored sandbox settings lack the new allow rules, so the spawn argv check fails); open a fresh dispatch.
+
 ### Claude write sandbox: four access options, offline by default
 
 - The sandbox is still offline by default. A project without `sandboxAccess` sees byte-identical sandbox settings.

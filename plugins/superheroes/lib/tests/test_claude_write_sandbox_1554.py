@@ -98,7 +98,11 @@ def test_settings_json_keys():
     obj = json.loads(raw)
     assert obj == {
         "env": {"UV_OFFLINE": "1"},
-        "permissions": {"deny": ["WebFetch", "WebSearch"]},
+        "permissions": {
+            "allow": ["Bash(python:*)", "Bash(python3:*)", "Bash(pytest:*)",
+                      "Bash(scripts/pinned-python:*)", "Bash(echo:*)"],
+            "deny": ["WebFetch", "WebSearch"],
+        },
         "sandbox": {
             "enabled": True,
             "failIfUnavailable": True,
