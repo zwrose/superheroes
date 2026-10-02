@@ -16,6 +16,7 @@ belongs to and lists every change with its replacement.
 - Every project's claude write sandbox settings, configured or not, gain these `permissions.allow` rules; nothing else in the default settings changes.
 - On a machine whose managed Claude Code policy excludes one of those commands from the sandbox, that command now runs outside the sandbox without a prompt, as the policy says.
 - **Finish or abandon in-flight claude write runs before upgrading.** A claude write run opened by an older plugin refuses its continuation (its stored sandbox settings lack the new allow rules, so the spawn argv check fails); open a fresh dispatch.
+- The channel no longer leaves empty `.claude/.cc-writes` directories in the build worktree. They are swept when the run folds, and the folded result gains `ccWritesSweep`. A run that is abandoned rather than folded can still leave them.
 
 ### Claude write sandbox: four access options, offline by default
 

@@ -792,6 +792,13 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   Python's own `PYTHON*` variables, which the harness accepts. A command that managed policy excludes
   from the sandbox and that matches one of these rules runs outside the sandbox without a prompt, by
   that policy.
+- **Staging-dir residue is swept at fold.** Claude Code creates an empty `.claude/.cc-writes`
+  under each directory the shell works in, outside the sandbox. When a claude write run folds, the
+  runner removes every empty `.claude/.cc-writes` in the worktree, and its `.claude` parent when
+  that is then empty. Removal never follows a symlink, never enters `.git` or another device, and
+  stops at the time budget `CC_WRITES_SWEEP_BUDGET_SECONDS` in
+  `lib/engine_dispatch.py`. The folded result reports it as `ccWritesSweep`
+  (`removed`, `incomplete`, `error`). An abandoned run is not swept.
 
 ### Write-report contract
 

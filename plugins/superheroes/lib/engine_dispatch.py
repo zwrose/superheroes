@@ -3004,11 +3004,128 @@ def _fold_sibling_worktrees(state):
         return {"status": "indeterminate", "reason": "probe-raised"}
 
 
+CC_WRITES_SWEEP_BUDGET_SECONDS = 10.0
+
+
+def _registered_nested_worktree_roots(cwd_real, timeout=CC_WRITES_SWEEP_BUDGET_SECONDS):
+    """Registered worktrees nested under ``cwd_real`` (never cwd itself), or None when unenumerable."""
+    try:
+        wt_list = _git_scrubbed_bytes(
+            cwd_real, "worktree", "list", "--porcelain", timeout=timeout)
+        if wt_list.returncode != 0:
+            return None
+        cwd_real = os.path.realpath(cwd_real)
+        return {
+            wt["path"] for wt in _parse_git_worktree_list(wt_list.stdout or b"")
+            if wt["path"].startswith(cwd_real + os.sep)
+        }
+    except Exception:
+        return None
+
+
+def _sweep_claude_dir(dirfd, prefix, removed):
+    """Remove an empty `.cc-writes` under the `.claude` at ``dirfd``, then `.claude` if now empty.
+
+    Returns True when `.claude` itself was removed. Every removal is dir_fd-relative."""
+    try:
+        claude_fd = os.open(
+            ".claude", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dirfd)
+    except OSError:
+        return False
+    try:
+        try:
+            os.rmdir(".cc-writes", dir_fd=claude_fd)
+        except OSError:
+            return False
+        removed.append(prefix + ".claude/.cc-writes")
+    finally:
+        os.close(claude_fd)
+    try:
+        os.rmdir(".claude", dir_fd=dirfd)
+    except OSError:
+        return False
+    removed.append(prefix + ".claude")
+    return True
+
+
+# WORKAROUND: Claude Code creates `<shell cwd>/.claude/.cc-writes` atomic-write staging dirs in the
+# worktree outside the sandbox, and an empty one under `plugins/superheroes/` breaks
+# `validate_skills`.
+# delete-when: the Claude Code version the channel runs no longer creates `.claude/.cc-writes`
+# under the shell's working directory (or lets the staging dir be relocated outside the worktree).
+# axis: removes only empty `.claude/.cc-writes` dirs and their then-empty `.claude` parent,
+# dir_fd-relative, never following symlinks, crossing devices or entering a nested registered worktree.
+def _sweep_cc_writes(root, *, skip_roots=frozenset(), budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
+                     clock=time.monotonic):
+    """Sweep empty `.claude/.cc-writes` staging dirs under ``root``, pruning ``skip_roots``. Never raises."""
+    removed = []
+    walker = None
+    try:
+        deadline = clock() + budget_seconds
+        root_dev = None
+        walker = os.fwalk(root, topdown=True, follow_symlinks=False)
+        for dirpath, dirnames, _filenames, dirfd in walker:
+            if clock() > deadline:
+                return {"removed": removed, "incomplete": True, "error": None}
+            if root_dev is None:
+                root_dev = os.fstat(dirfd).st_dev
+            kept = []
+            for name in dirnames:
+                if clock() > deadline:
+                    return {"removed": removed, "incomplete": True, "error": None}
+                if name == ".git" or os.path.join(dirpath, name) in skip_roots:
+                    continue
+                try:
+                    dev = os.stat(name, dir_fd=dirfd, follow_symlinks=False).st_dev
+                except OSError:
+                    continue
+                if dev != root_dev:
+                    continue
+                kept.append(name)
+            dirnames[:] = kept
+            if ".claude" not in dirnames:
+                continue
+            if clock() > deadline:
+                return {"removed": removed, "incomplete": True, "error": None}
+            rel = os.path.relpath(dirpath, root)
+            prefix = "" if rel == "." else rel.replace(os.sep, "/") + "/"
+            if _sweep_claude_dir(dirfd, prefix, removed):
+                dirnames.remove(".claude")
+        return {"removed": removed, "incomplete": False, "error": None}
+    except Exception as exc:
+        return {"removed": removed, "incomplete": True, "error": type(exc).__name__}
+    finally:
+        if walker is not None:
+            walker.close()
+
+
+def _fold_cc_writes_sweep(state):
+    """Sweep the worktree of a claude write run at fold. None for any other run. Never raises."""
+    try:
+        opened = state.get("opened") or {}
+        if opened.get("runKind") != RUN_KIND_WRITE or opened.get("engine") != "claude":
+            return None
+        cwd = opened.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            return {"removed": [], "incomplete": True, "error": "run-context-incomplete"}
+        cwd_real = os.path.realpath(cwd)
+        nested = _registered_nested_worktree_roots(cwd_real)
+        if nested is None:
+            return {"removed": [], "incomplete": True, "error": "worktree-enumeration-failed"}
+        return _sweep_cc_writes(cwd_real, skip_roots=nested)
+    except Exception as exc:
+        return {"removed": [], "incomplete": True, "error": type(exc).__name__}
+
+
 def _fold_run(run_dir_real, state, result):
     sibling = _fold_sibling_worktrees(state)
     if sibling is not None:
         result = dict(result)
         result["siblingWorktrees"] = sibling
+    cc_writes = _fold_cc_writes_sweep(state)
+    if cc_writes is not None:
+        result = dict(result)
+        result["ccWritesSweep"] = cc_writes
     return _terminate_run(run_dir_real, state, record_kind="run-folded", result=result)
 
 
