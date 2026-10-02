@@ -2235,7 +2235,7 @@ def read_size_exclude(cwd, root=None):
                         reason=SIZE_EXCLUDE_REASON_MALFORMED, behind=behind)
         return dict(base, declared=True, globs=copy.deepcopy(raw), behind=behind)
     except Exception as exc:  # total: any other failure is a named read refusal, never a raise
-        return dict(base, reason=unreadable, detail="%s: %s" % (type(exc).__name__, exc))
+        return dict(base, reason=unreadable, detail=gate_refusal_detail(exc))
 
 
 def write_size_exclude(cwd, globs, *, root=None):
