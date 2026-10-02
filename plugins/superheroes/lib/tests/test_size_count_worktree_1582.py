@@ -267,3 +267,79 @@ def test_cli_worktree_flag(tmp_path, capsys):
     assert code == 0
     assert out["worktree"] is True
     assert out["tripwireCount"] == 4
+
+
+def test_nested_repo_is_listed_not_diffed_not_counted(tmp_path, monkeypatch):
+    root, base = _repo(tmp_path)
+    nested = root / "nested"
+    nested.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(nested)], check=True, capture_output=True)
+    (nested / "inner.py").write_text(_lines(5, "i"))
+    _commit(nested, "inner")
+    (root / "mod.py").write_text(_lines(3, "m"))
+    real_run = subprocess.run
+    no_index_calls = []
+
+    def recorder(argv, *args, **kwargs):
+        if "--no-index" in argv:
+            no_index_calls.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    result = size_count.collect(str(root), base, head=None)
+
+    assert result["ok"] is True
+    assert result["tripwireCount"] == 3
+    assert result["untrackedRepos"] == ["nested/"]
+    assert no_index_calls
+    assert not any("nested/" in argv for argv in no_index_calls)
+
+
+def _fake_no_index(monkeypatch, returncode, stderr):
+    real_run = subprocess.run
+
+    def fake_run(argv, *args, **kwargs):
+        if "--no-index" in argv:
+            return subprocess.CompletedProcess(argv, returncode, b"", stderr)
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
+def test_no_index_exit_one_with_stderr_is_git_failed(tmp_path, monkeypatch):
+    root, base = _repo(tmp_path)
+    (root / "new.py").write_text(_lines(3, "n"))
+    _fake_no_index(monkeypatch, 1, b"error: Could not access 'x/null'\n")
+
+    result = size_count.collect(str(root), base, head=None)
+
+    assert result == {
+        "ok": False,
+        "reason": "git-failed",
+        "detail": "error: Could not access 'x/null'",
+    }
+
+
+def test_no_index_exit_zero_with_stderr_is_git_failed(tmp_path, monkeypatch):
+    root, base = _repo(tmp_path)
+    (root / "new.py").write_text(_lines(3, "n"))
+    _fake_no_index(monkeypatch, 0, b"warning: something odd\n")
+
+    result = size_count.collect(str(root), base, head=None)
+
+    assert result == {"ok": False, "reason": "git-failed", "detail": "warning: something odd"}
+
+
+def test_untracked_repos_key_only_in_working_tree_mode(tmp_path):
+    root, base = _repo(tmp_path)
+    (root / "new.py").write_text(_lines(2, "n"))
+    head = _commit(root, "more")
+
+    committed = size_count.collect(str(root), base, head=head)
+    worktree = size_count.collect(str(root), base, head=None)
+
+    assert committed["ok"] is True
+    assert "untrackedRepos" not in committed
+    assert worktree["ok"] is True
+    assert worktree["untrackedRepos"] == []

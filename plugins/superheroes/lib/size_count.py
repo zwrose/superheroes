@@ -181,13 +181,18 @@ def _hides_changes(ls_files_v_stdout):
 
 
 def _untracked_rows(repo_root, deadline):
+    """``(rows, nested_repos, None)`` on success, ``(None, None, failure_result)`` otherwise."""
     listed, failure = _run_git(repo_root, ["ls-files", "-o", "--exclude-standard", "-z"], deadline)
     if failure:
-        return None, failure
+        return None, None, failure
     paths = [p for p in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if p]
     rows = []
+    repos = []
     for path in paths:
-        # Exit 1 is "differences found" for --no-index; any other nonzero is a failure.
+        # Axis: a nested repository (listed with a trailing "/") is never diffed; it is named, not counted.
+        if path.endswith("/"):
+            repos.append(path)
+            continue
         proc, failure = _run_git(
             repo_root,
             ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", path],
@@ -195,9 +200,12 @@ def _untracked_rows(repo_root, deadline):
             ok_codes=(0, 1),
         )
         if failure:
-            return None, failure
+            return None, None, failure
+        # Axis: exit 1 is "differences found" only when stderr is empty; git also exits 1 on access errors.
+        if proc.stderr.strip() != b"":
+            return None, None, _git_failed(proc.stderr)
         rows.extend(_parse_numstat_z(proc.stdout))
-    return rows, None
+    return rows, sorted(repos), None
 
 
 def collect(repo_root, base, head="HEAD", bar_exclude=(), deadline=None):
@@ -226,7 +234,7 @@ def collect(repo_root, base, head="HEAD", bar_exclude=(), deadline=None):
     rows = _parse_numstat_z(numstat.stdout)
     deleted_paths = _parse_deleted_paths(status.stdout)
     if worktree:
-        untracked, failure = _untracked_rows(repo_root, deadline)
+        untracked, repos, failure = _untracked_rows(repo_root, deadline)
         if failure:
             return failure
         rows = rows + untracked
@@ -235,6 +243,7 @@ def collect(repo_root, base, head="HEAD", bar_exclude=(), deadline=None):
     result["head"] = head
     if worktree:
         result["worktree"] = True
+        result["untrackedRepos"] = repos
     result["ok"] = True
     return result
 
