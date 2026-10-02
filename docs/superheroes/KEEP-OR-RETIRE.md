@@ -2127,6 +2127,23 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Notes.** harness-limit — the auto-allow gap is Claude Code 2.1.284 behaviour; observed on the
   anthropic family's sandboxed implementer.
 
+#### S28 — Claude write channel: the `.cc-writes` sweep at fold
+
+- **Component.** Not a census row. `_sweep_cc_writes` / `_fold_cc_writes_sweep` in
+  `plugins/superheroes/lib/engine_dispatch.py`, called from `_fold_run`. Workaround-marked (#1569).
+  Cost: a bounded filesystem walk at every claude write fold.
+- **Start date.** 2026-10-01.
+- **Condition.** Citation-based, 45 days: build records or vet receipts citing `.claude/.cc-writes`
+  residue in a worktree after a folded claude write run (a regression signal). Re-measure on each
+  Claude Code bump: when the workaround marker's delete-when condition is observed, a proposal to
+  the owner at a gardening pass to remove the sweep.
+- **Last demonstrated benefit.** A live claude write run's fold removed `.claude/.cc-writes` at the
+  worktree root and at `plugins/superheroes/` (#1569 PR build record).
+- **Consumer evidence.** unmeasured.
+- **Decision.** keep-until-condition-fires.
+- **Notes.** harness-limit — Claude Code 2.1.284 creates the staging dir under the shell's working
+  directory; observed on the anthropic family's sandboxed implementer.
+
 
 ## The workaround-marker inventory
 
@@ -2156,6 +2173,10 @@ file, returns exactly that set.
   and echo command families by rule because the harness's sandbox auto-allow misses shapes its
   safety check flags (`-X` on a Python call, `$?`). **delete-when:** `autoAllowBashIfSandboxed`
   auto-approves every sandboxed command shape on the Claude Code version the channel runs.
+- `plugins/superheroes/lib/engine_dispatch.py` — the fold sweeps empty `.claude/.cc-writes`
+  atomic-write staging dirs Claude Code creates in the worktree outside the sandbox. **delete-when:**
+  the Claude Code version the channel runs no longer creates `.claude/.cc-writes` under the shell's
+  working directory (or lets the staging dir be relocated outside the worktree).
 - `plugins/superheroes/lib/hostinfo.py` — OS-specific boot-id reads to corroborate a recorded pid
   belongs to this boot. **delete-when:** the host exposes a stable per-boot identity without
   OS-specific parsing.

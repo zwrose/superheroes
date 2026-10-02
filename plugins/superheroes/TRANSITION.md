@@ -15,6 +15,7 @@ belongs to and lists every change with its replacement.
 - Still refused: an env-var prefix outside the harness's safe list (`FOO=1 cmd`, `export FOO=1 && cmd`). Set the variable inside the test, or use Python's own `PYTHON*` variables.
 - Every project's claude write sandbox settings, configured or not, gain these `permissions.allow` rules; nothing else in the default settings changes.
 - On a machine whose managed Claude Code policy excludes one of those commands from the sandbox, that command now runs outside the sandbox without a prompt, as the policy says.
+- The channel no longer leaves empty `.claude/.cc-writes` directories in the build worktree. They are swept when the run folds, and the folded result gains `ccWritesSweep`. A run that is abandoned rather than folded can still leave them.
 
 ### Claude write sandbox: four access options, offline by default
 
