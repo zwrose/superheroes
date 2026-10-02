@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.39.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.38.0...superheroes-v0.39.0) (2026-10-02)
+
+
+### Features
+
+* **superheroes:** four sandbox access options as calibration, set and viewed through configure ([#1562](https://github.com/zwrose/superheroes/issues/1562) layer 1) ([#1566](https://github.com/zwrose/superheroes/issues/1566)) ([06424f8](https://github.com/zwrose/superheroes/commit/06424f80e2a7bf27c4e099ae96eae1fd1900a680))
+* **superheroes:** review panels consider every installed cross-vendor engine ([#1577](https://github.com/zwrose/superheroes/issues/1577)) ([140117f](https://github.com/zwrose/superheroes/commit/140117f1b11ea5691fc192081036c3f98e06495a))
+* **superheroes:** the sandbox access options reach the claude write sandbox, offline by default ([#1562](https://github.com/zwrose/superheroes/issues/1562) layer 2) ([#1567](https://github.com/zwrose/superheroes/issues/1567)) ([5d3efe9](https://github.com/zwrose/superheroes/commit/5d3efe9348358791ccaf3f32b5549db370df9af2))
+
+
+### Bug Fixes
+
+* **superheroes:** a wrong-typed verifyCommand refuses at parse instead of silently disabling the verify gate ([#1572](https://github.com/zwrose/superheroes/issues/1572)) ([9738771](https://github.com/zwrose/superheroes/commit/9738771b0c949bb02be2f9f0ea65993703ec7ed8))
+* **superheroes:** sandboxed Claude implementers can run their own Python tests ([#1573](https://github.com/zwrose/superheroes/issues/1573), part of [#1569](https://github.com/zwrose/superheroes/issues/1569)) ([#1579](https://github.com/zwrose/superheroes/issues/1579)) ([e86aa89](https://github.com/zwrose/superheroes/commit/e86aa89eb503af31fb5cb823ac4c84bd65b92fd5))
+* **superheroes:** the sandboxed Claude channel cleans its .claude/.cc-writes residue at run close ([#1574](https://github.com/zwrose/superheroes/issues/1574), part of [#1569](https://github.com/zwrose/superheroes/issues/1569)) ([#1580](https://github.com/zwrose/superheroes/issues/1580)) ([0df3b40](https://github.com/zwrose/superheroes/commit/0df3b40757e194f210164167ffbfc48c82e7ea44))
+
 ## [0.38.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.37.0...superheroes-v0.38.0) (2026-10-01)
 
 
