@@ -28,6 +28,7 @@ if _LIB_DIR not in sys.path:
 
 import core_md                 # noqa: E402
 import engine_adapter          # noqa: E402
+import engine_detect           # noqa: E402
 import engine_dispatch         # noqa: E402
 import engine_pref            # noqa: E402
 import liveness_cache          # noqa: E402
@@ -664,6 +665,19 @@ def configured_cross_vendor_engines(prefs):
     return sorted(e for e in engines if e in ("codex", "cursor"))
 
 
+def review_cross_vendor_engines(prefs, which=None):
+    """The cross-vendor engines review composition probes for liveness: every engine a calibration
+    role names (configured_cross_vendor_engines) UNION every engine whose CLI resolves on PATH
+    (engine_detect.installed_engines). Review independence therefore does not depend on which engine
+    an unrelated role names; a role-named engine whose CLI is missing stays in the set so its probe
+    fails loudly, and an installed engine whose probe fails is simply not live. The `run` gate keeps
+    configured_cross_vendor_engines: it verifies only what the project will dispatch through, and
+    must not fail setup over an engine no role uses. Pure apart from PATH lookup; tolerant of
+    non-dict prefs."""
+    engines = set(configured_cross_vendor_engines(prefs)) | set(engine_detect.installed_engines(which))
+    return sorted(e for e in engines if e in ("codex", "cursor"))
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="preflight_probe")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -682,7 +696,7 @@ def main(argv):
 
         snap = readout_config(args.cwd)
         prefs = snap["prefs"]
-        configured = configured_cross_vendor_engines(prefs)
+        configured = review_cross_vendor_engines(prefs)
         needed_override = None
         if args.pins:
             import seat_map  # noqa: E402 — lazy: breaks import cycle with seat_map

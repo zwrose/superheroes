@@ -26,6 +26,13 @@ belongs to and lists every change with its replacement.
 - Malformed values are refused when the calibration is read, each item naming its field, its reason, and the accepted shape. The reason tokens are `sandbox-access-not-an-object`, `sandbox-access-unknown-field` (a misspelled key is refused, never ignored), `sandbox-access-not-a-list`, `sandbox-access-domain-invalid`, `sandbox-access-not-a-bool`, `sandbox-access-path-not-absolute`, and `sandbox-access-path-is-root`.
 - The profile schema version is unchanged, so an older plugin that re-calibrates from scratch can drop the `sandboxAccess` key.
 
+### Review panels consider every installed cross-vendor engine
+
+- Review composition now probes every cross-vendor engine whose CLI is installed (`codex`, `cursor-agent`) plus any a calibration role names, not only the role-named ones. An installed engine that fails its probe stays out of the panel.
+- A project with cursor or codex installed but named by no role now gets that engine's seats, at its usage cost. To keep an engine off the panel, uninstall its CLI or pin the seats you need held.
+- `compose-liveness`'s `crossVendorEngines` now reports that set. `run`'s `crossVendorEngines` is unchanged.
+- A liveness receipt written by 0.38.0 that lacks a newly considered engine re-probes once.
+
 ## 0.38.0
 
 ### Before you upgrade
