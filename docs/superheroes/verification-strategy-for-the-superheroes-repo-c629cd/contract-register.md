@@ -17,7 +17,7 @@ amended spec, and R22 records the keep-list seam.
 *Producer:* P7
 *Consumers:* P7, P5
 
-**R4 — The receipt fields are hand-written.** A builder's handback carries the spec's FR-9 fields in the PR body — what ran, what was skipped and why, the source state, the interpreter, the attempt number and whether the prior attempt was red — with the tests that failed on that same source state, named or quoted from a traceable log reference, when it was — and elapsed time; the vet reads them and nothing checks them mechanically. The plugin's `gate-receipt/1` format (`plugins/superheroes/reference/gate-receipt.md`, shipped 2026-09-30) is optional: a project may emit it, and no child is required to emit or meet it.
+**R4 — The receipt fields are hand-written.** A builder's handback carries the spec's FR-9 fields in the PR body — what ran, what was skipped and why, the source state, the interpreter, the attempt number and whether any earlier attempt on the same source state was red — with the tests that failed on that same source state, named or quoted from a traceable log reference, when one was — and elapsed time; the vet reads them and nothing checks them mechanically. The plugin's `gate-receipt/1` format (`plugins/superheroes/reference/gate-receipt.md`, shipped 2026-09-30) is optional: a project may emit it, and no child is required to emit or meet it.
 *Producer:* the spec (the convention)
 *Consumers:* P5
 
@@ -29,7 +29,7 @@ amended spec, and R22 records the keep-list seam.
 *Producer:* the spec (the advisor and the vet record and read)
 *Consumers:* P5
 
-**R10 — One linked-fix reference rule.** One reference rule serves FR-18d and the gardening pass's escape classification: "a named merged change in the fix's commit subject or body"; a fix satisfying FR-18d is by construction linked to the change it fixes; a pre-dates claim names nothing. The rule's home is the spec's FR-18d.
+**R10 — One linked-fix reference rule.** One reference rule serves FR-18d and the gardening pass's escape classification: a fix names the merged change it corrects in the fix pull request (its title, body, or commits), or states that the defect pre-dates any single change; a fix satisfying FR-18d is by construction linked to the change it fixes, and a pre-dates claim names nothing. The rule's home is the spec's FR-18d.
 *Producer:* the spec
 *Consumers:* P5
 
