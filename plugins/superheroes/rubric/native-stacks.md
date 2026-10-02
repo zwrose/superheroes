@@ -79,11 +79,11 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    `gh issue view <n> --json state`. Every landed layer's sub-issue carries a merge receipt that
    references the closure receipt already accepted on the top layer's vet: when that first view
    returns `CLOSED`, GitHub already closed it and the advisor posts the receipt with
-   `gh issue comment <n> --body <merge receipt>`; when it does not (a mid-stack layer's pull
-   request targets the layer below, so GitHub ignored its closing keyword), the advisor closes it
-   with `gh issue close <n> --comment <merge receipt>` and views it again. The advisor records
+   `gh issue comment <n> --body <merge receipt>`; when it does not, the advisor closes it with
+   `gh issue close <n> --comment <merge receipt>` and views it again. The advisor records
    `state=CLOSED` in the post-merge report only from a view that returned `CLOSED`; when the
-   confirming view is still not `CLOSED`, the post-merge step fails rather than recording it. The feature issue's close
+   confirming view is still not `CLOSED`, the post-merge step fails rather than recording it.
+   The feature issue's close
    stays the advisor's manual step: `gh issue close <feature> --comment <merge receipt>`, read back
    the same way. When a queued merge lands only a prefix of the stack, only the landed layers'
    sub-issues close, the read-back covers only those, and the feature issue stays open. Do not rely
