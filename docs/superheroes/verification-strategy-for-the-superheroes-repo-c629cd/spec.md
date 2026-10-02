@@ -74,8 +74,8 @@ This spec sets the owner's verification policy for this repo: what a test must d
 **FR-13.** The verification policy shall disposition all six known false-green channels, each by name:
   1. **Interpreter skew** — removed by FR-12 (one pinned Python everywhere).
   2. **Stale bytecode** — dissolved by FR-12: the gate never runs on the operating system's Python, whose out-of-tree cache created the channel; additionally, the documented gate command carries the bytecode-safety flags (`-B -X pycache_prefix=…`, CLAUDE.md).
-  3. **Git identity in temp repos** — no standing census (Spec A FR-B1). The channel turns a local green into a CI red before merge — the CI runner has no global git identity and no engine binaries — so CI at merge is its handler, and a site is fixed at contact; the investigation counted these as build-loop cost, not merged bugs (investigation record, the classes table and the engine-binaries note).
-  4. **Engine binaries assumed on `PATH`** — no standing census (Spec A FR-B1). The channel turns a local green into a CI red before merge — the CI runner has no global git identity and no engine binaries — so CI at merge is its handler, and a site is fixed at contact; the investigation counted these as build-loop cost, not merged bugs (investigation record, the classes table and the engine-binaries note).
+  3. **Git identity in temp repos** — no standing census (Spec A FR-B1). The CI runner carries no global git identity, so a fixture commit without inline identity goes red at CI before merge; CI at merge is its handler and a site is fixed at contact. The investigation counted these reds as infrastructure, not merged bugs (investigation record, the classes table: runner git identity).
+  4. **Engine binaries assumed on `PATH`** — no standing census (Spec A FR-B1). The CI runner installs the `claude` CLI but no other engine binary, so a test that assumes `codex` or `cursor` on `PATH` goes red at CI before merge; a test that assumes `claude` is not caught there, and the review rule on a pre-satisfied precondition carries it (a binary already on `PATH` is one; `plugins/superheroes/agents/test-reviewer.md`). The investigation counted these as build-loop cost, not merged bugs (investigation record, the engine-binaries note).
   5. **A harness that pre-satisfies a gate** — carried by the practice rule already in the review surfaces: a test whose harness pre-satisfies the condition under test is a finding (`plugins/superheroes/agents/test-reviewer.md`).
   6. **A sanitized view that strips a file a seat needs** — carried by the practice rule already in the review surfaces: the dispatch prompt names the paths the sanitized view stripped (`plugins/superheroes/skills/review-code/reference/auto-fix-loop.md`).
   - *Acceptance (rule):* each channel above is traceable to at least one named handler — a requirement of this policy or a review-surface rule; a seventh channel discovered later gets the same treatment before it is relied on as "handled".
@@ -84,7 +84,7 @@ This spec sets the owner's verification policy for this repo: what a test must d
 ### Deletion and burndown
 
 **FR-14.** The verification policy shall proactively delete only cannot-bite tests (FR-1), each deletion carrying its evidence — except a retired-subject removal under FR-1's retired-subject bullet, which carries the owner's recorded approval instead.
-  - *Acceptance (rule):* a first cut list is produced by P7 — the no-raise tests assessed (32 per the 2026-10-02 ruling's count; the investigation pinned 33), the one golden-fixture file; a deletion without structural or demonstrated cannot-bite evidence — and without FR-1's retired-subject bar — is a finding (UFR-5); a deletion that rests on none of FR-1's four bases is a finding (UFR-5).
+  - *Acceptance (rule):* a first cut list is produced by P7 — the no-raise tests assessed (32 per the 2026-10-02 ruling's count; the investigation pinned 33), the one golden-fixture file; a deletion that rests on none of FR-1's four bases is a finding (UFR-5).
   - *Acceptance (rule):* cannot-bite evidence is verified the way bite-proofs are: independently re-run at verification, never accepted from the deleting party's own assertion [cite: plugins/superheroes/rubric/bite-proof.md § Who owes what].
   - *Acceptance (rule):* surviving mutants from the mutation run (FR-20) are cut-list candidates, still re-run under the previous bullet's bar.
 
@@ -168,7 +168,7 @@ The escape rate this policy reads is the **gardening pass's hand count** (owner-
   - *Acceptance:* Given a PR body with no test-lens receipt, when vetted, then it is returned.
   - *Acceptance (rule):* a review receipt is written by the review run itself and names the reviewed source state — a hand-typed body line never satisfies this rule.
 
-**UFR-8.** If the pinned Python version and any **in-repo** home that should read it disagree (FR-12), then CI shall fail at the validator step before any test runs; the out-of-repo calibration home comes into line by calling `scripts/pinned-python` (FR-12), not by a CI check (shipped by P1).
+**UFR-8.** If the pinned Python version and any **in-repo** home that should read it disagree (FR-12), then CI shall fail at the validator step before any test runs; the out-of-repo calibration home is not CI's to check — it comes into line by calling `scripts/pinned-python` (FR-12). Shipped by P1.
   - *Acceptance:* Given a PR edits the documented local gate to name a version, when CI runs, then the drift validator fails with the two disagreeing values.
 
 ## Non-functional requirements
@@ -199,7 +199,7 @@ When a change maps to more than one row, the deepest applicable row governs. Row
 
 Rows marked closed were closed by the owner's 2026-10-02 ruling; the coverage map carries each child's disposition.
 
-Filed as issues only on the owner's word, in a later session. Each row carries its size, and every test-removing change names its H4 validation.
+A new row is filed as an issue only on the owner's word. Each row carries its size, and every test-removing change names its H4 validation.
 
 | # | Change | Predicted effect | H4 validation |
 | --- | --- | --- | --- |
