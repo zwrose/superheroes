@@ -39,7 +39,7 @@ touches a criterion (R4, R11, R22).
 | [1–5] FR-1 — the four removal bases (requirement) and bullets 1–4: shown to bite, cannot-bite, no-raise is suspect, unassessed is retained | **P7** — the cut list is where the policy first executes | P5-vet (UFR-5 re-run encoding). Shared vocabulary bound as R17 |
 | [6] FR-1 — retired-subject bullet | **P7** | P5-vet (UFR-5 vet arm) |
 | [7] FR-1 — obsolete-expectation bullet (delete on contact, bounded by the keep list and the classification step) | **shipped elsewhere** — `plugins/superheroes/rubric/review-discipline.md` § A behavior test that goes red | the reset's C3 owns the at-contact step; the reset map's FR-F6 n3 split; R22 |
-| [8–10] FR-1 — keep-list bullet, split by act: [8] the seed → **P7**; [9] the stamp → **advisor process** (the owner's act); [10] growth, the advisor adding a file at a pass → **advisor process** | one row, three criteria | R22 (the reset's R28) |
+| [8–10] FR-1 — keep-list bullet, split by act: [8] the seed → **P7**; [9] the stamp and removals → **advisor process** (the owner's acts); [10] growth, the advisor adding a file at a pass → **advisor process** | one row, three criteria | R22 (the reset's R28) |
 | [11] FR-2 — requirement: rails exempt from retention decisions based on failure frequency | **P7** | — |
 | [12] FR-2 — definition bullet, recognition (the lens flags an undeclared or uninventoried rail by what it tests) | **P5-lens** | lane derivation is held — see Held and declined |
 | [13] FR-2 — bullet 2: never removed on a "has not failed" basis; must still satisfy FR-1 | **P7** | P5-vet (UFR-5) |
@@ -187,7 +187,7 @@ P9 (new) is filed on the owner's word, into Backlog as machinery under the dial.
 6. FR-1 retired-subject bullet → P7
 7. FR-1 obsolete-expectation bullet → shipped elsewhere
 8. FR-1 keep-list bullet, the seed → P7
-9. FR-1 keep-list bullet, the stamp → advisor process
+9. FR-1 keep-list bullet, the stamp and removals → advisor process
 10. FR-1 keep-list bullet, growth → advisor process
 11. FR-2 requirement → P7
 12. FR-2 definition bullet, recognition → P5-lens
