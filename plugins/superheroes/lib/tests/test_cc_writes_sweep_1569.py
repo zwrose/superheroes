@@ -133,6 +133,27 @@ def test_sweep_budget_exhausted_is_incomplete(tmp_path):
     assert (tmp_path / ".claude" / ".cc-writes").is_dir()
 
 
+# axis: the budget is checked while a directory's children are statted and before any removal,
+# so a wide directory cannot run past the deadline or remove after it.
+def test_sweep_budget_expiring_mid_directory_removes_nothing(tmp_path):
+    _plant(tmp_path, ".claude/.cc-writes")
+    _plant(tmp_path, "wide/a")
+    _plant(tmp_path, "wide/b")
+    root = os.path.realpath(str(tmp_path))
+    now = [0.0]
+    real = os.stat
+
+    def stat(p, *a, **k):
+        now[0] += 6.0
+        return real(p, *a, **k)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(ED.os, "stat", stat)
+        out = ED._sweep_cc_writes(root, budget_seconds=10.0, clock=lambda: now[0])
+    assert out == {"removed": [], "incomplete": True, "error": None}
+    assert (tmp_path / ".claude" / ".cc-writes").is_dir()
+
+
 # axis: a subdirectory on another device is never entered (S2).
 def test_sweep_does_not_cross_devices(tmp_path, monkeypatch):
     _plant(tmp_path, "mount/.claude/.cc-writes")

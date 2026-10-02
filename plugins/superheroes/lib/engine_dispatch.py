@@ -3071,6 +3071,8 @@ def _sweep_cc_writes(root, *, skip_roots=frozenset(), budget_seconds=CC_WRITES_S
                 root_dev = os.fstat(dirfd).st_dev
             kept = []
             for name in dirnames:
+                if clock() > deadline:
+                    return {"removed": removed, "incomplete": True, "error": None}
                 if name == ".git" or os.path.join(dirpath, name) in skip_roots:
                     continue
                 try:
@@ -3083,6 +3085,8 @@ def _sweep_cc_writes(root, *, skip_roots=frozenset(), budget_seconds=CC_WRITES_S
             dirnames[:] = kept
             if ".claude" not in dirnames:
                 continue
+            if clock() > deadline:
+                return {"removed": removed, "incomplete": True, "error": None}
             rel = os.path.relpath(dirpath, root)
             prefix = "" if rel == "." else rel.replace(os.sep, "/") + "/"
             if _sweep_claude_dir(dirfd, prefix, removed):
