@@ -161,8 +161,9 @@ The escape rate this policy reads is the **gardening pass's hand count** (owner-
   - *Acceptance (rule):* a change that removes a test or edits the rail inventory is never eligible for a review lane without a vet — whatever its diff size, it takes at least the lane whose vet performs this check, so the independent re-run always has a stage to run at.
   - *Acceptance:* Given a PR removes a test with none of FR-1's four bases' evidence, when reviewed, then the finding names the test and asks for the evidence.
 
-**UFR-6.** If the gardening pass's escape rate (owner-decisions duty 7) exceeds the investigation's baseline of 17.4% of merged changes (87 escape candidates over 499 merges), then the advisor shall bring the owner the hand counts for a decision at that walk, and until the owner rules, **proactive removal halts**: FR-14 cuts, FR-15 burndown (suspended into debt), and any bulk-removal decision (FR-17). An owner-authorized FR-26 removal is exempt (a coverage obligation, not a cut). Obsolete-expectation deletion on contact is not halted — the stamped keep list bounds it.
-  - *Acceptance:* Given the pass's rate reads above the baseline, when the advisor next vets a change that makes a proactive removal (FR-14, FR-15), then the vet parks it pending the owner's decision.
+**UFR-6.** If the gardening pass's escape rate (owner-decisions duty 7) exceeds the baseline — the escape rate the first gardening record after the keep-list stamp establishes by the duty-7 hand count, recorded in that record — then the advisor shall bring the owner the hand counts for a decision at that walk, and until the owner rules, **proactive removal halts**: FR-14 cuts, FR-15 burndown (suspended into debt), and any bulk-removal decision (FR-17). An owner-authorized FR-26 removal is exempt (a coverage obligation, not a cut). Obsolete-expectation deletion on contact is not halted — the stamped keep list bounds it.
+  - *Baseline-pending:* until a baseline is recorded, the advisor reports the rate as baseline-pending and no halt fires on it. The investigation's 17.4% (87 candidates over 499 merges) is context only: its mechanical rule over-counts contextual PR references and mid-build tightening (investigation §4.7), so it is not comparable to a hand count and is not the ceiling.
+  - *Acceptance:* Given the pass's rate reads above the recorded baseline, when the advisor next vets a change that makes a proactive removal (FR-14, FR-15), then the vet parks it pending the owner's decision.
   - *Acceptance (rule):* a halt lifts only by the owner's recorded decision.
 
 **UFR-7.** If any pull request reaches handback without a review receipt showing the test lens ran on the handed-back source state, then the vet shall treat the pull request as unreviewed under the existing rule [cite: plugins/superheroes/rubric/review-discipline.md § The rule — no unreviewed PRs].
@@ -175,7 +176,7 @@ The escape rate this policy reads is the **gardening pass's hand count** (owner-
 ## Non-functional requirements
 
 - **Nothing degrades invisibly:** every skip and every failure appears in the hand-written receipt (FR-9) the owner reads; a silent fallback is a defect.
-- **Escape rate not raised:** the gardening pass's escape rate stays at or below UFR-6's baseline.
+- **Escape rate not raised:** the gardening pass's escape rate stays at or below UFR-6's recorded hand-count baseline (reported as baseline-pending until the first gardening record after the keep-list stamp records one).
 - **Reproducibility:** a handback names the interpreter it ran on, which matches the pin (FR-12).
 
 ## Definition of done / success
@@ -304,7 +305,7 @@ Long-lived surfaces cite these terms by the plugin glossary's stable slugs (`plu
 | --- | --- | --- | --- |
 | Empty & first-run | Specify | No | keep list unstamped → nothing deleted on contact (FR-1); no flake noted yet |
 | Invalid & malformed input | Specify | No | a deletion with no basis (UFR-5); a receipt missing its fields (FR-9) |
-| Boundaries & limits | Specify | No | UFR-6's 17.4% baseline; FR-26's thirty-day second withdrawal and 30-day restore-by |
+| Boundaries & limits | Specify | No | UFR-6's hand-count baseline (recorded by the first gardening record after the keep-list stamp); FR-26's thirty-day second withdrawal and 30-day restore-by |
 | Errors & failures | Specify | No | a flake seen (FR-23, FR-24); a product-cause red-then-green (FR-26) |
 | Access & permissions | Specify | No | owner-only decisions: keep-list stamp and removals (FR-1), bulk removal (FR-17), FR-26's removal, UFR-6's halt lift; instrument promotion (Constraints) |
 | Duplicates & double-actions | Specify | No | a flake seen twice is one collector note with two runs |
@@ -314,6 +315,6 @@ Long-lived surfaces cite these terms by the plugin glossary's stable slugs (`plu
 | Wording & tone | Specify | No | the FR-9 receipt fields and the PR-body classification line are hand-written; no fixed phrases |
 | Workflow shape | Specify | No | keep-list stamp before delete-on-contact; cut list's evidence re-run before any cut (FR-14) |
 | Placement & prominence | Specify | No | receipts and classifications in the PR body; flake notes and the hand count on the collector |
-| Limits & defaults | Specify | No | 17.4% baseline, thirty-day second withdrawal, 30-day restore-by cap |
+| Limits & defaults | Specify | No | hand-count escape baseline (recorded, not the investigation's 17.4%), thirty-day second withdrawal, 30-day restore-by cap |
 | Tier & access boundaries | N-A | — | tiers held (Held and declined) |
 | Visibility & disclosure | Specify | Yes | every skip and failure is in the hand-written receipt (FR-9) (Non-functional: nothing degrades invisibly) |
