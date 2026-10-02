@@ -782,8 +782,9 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   `localSockets` grant follows Claude Code 2.1.284's own rule for that dir: `CLAUDE_CODE_TMPDIR`
   when the whole per-user path `<CLAUDE_CODE_TMPDIR>/claude-<uid>` is at most 44 bytes, otherwise
   `/tmp`; the grant is never widened to bare `/tmp`.
-- **Command families allowed by rule.** The settings carry `permissions.allow` rules for
-  `python`, `python3`, `pytest`, `scripts/pinned-python` and `echo`, because the sandbox auto-allow
+- **Command families allowed by rule.** The settings carry `permissions.allow` rules for the
+  command families listed in `CLAUDE_WRITE_BASH_ALLOW` in `lib/engine_adapter.py` (the one home of
+  that list), because the sandbox auto-allow
   alone leaves some shapes needing approval, which print mode denies: python `-X` flags (the pinned
   gate command's `-X pycache_prefix=…`) and `$?`. Those shapes now run, still inside the sandbox
   (`allowUnsandboxedCommands: false`). An env-var prefix outside the harness's safe list
