@@ -154,8 +154,8 @@ GitHub's closing-keyword parser is negation-blind. `Resolves #NNN`, `Closes #NNN
 close the issue on merge even inside a sentence that says they do not. For an issue the PR must not
 close (a parent epic, a tracking issue, a "part of" link), use a non-closing verb: "addresses",
 "part of", or "relates to". Reserve the closing keywords for the issue this PR genuinely closes. A
-stack layer names its own sub-issue with a non-closing verb until the stack merges
-(`rubric/native-stacks.md` § Each layer is a sub-issue).
+stack layer's pull request links its own sub-issue and the feature issue as
+`rubric/native-stacks.md` § Each layer is a sub-issue, item 6 (Closure), says.
 
 ## Verifying the remote head
 
