@@ -343,3 +343,35 @@ def test_untracked_repos_key_only_in_working_tree_mode(tmp_path):
     assert "untrackedRepos" not in committed
     assert worktree["ok"] is True
     assert worktree["untrackedRepos"] == []
+
+
+def test_autocrlf_advisory_does_not_discard_untracked_count(tmp_path):
+    root, base = _repo(tmp_path)
+    _git(root, "config", "core.autocrlf", "true")
+    (root / "new.py").write_text(_lines(7, "n"))
+
+    result = size_count.collect(str(root), base, head=None)
+
+    assert result["ok"] is True
+    assert result["tripwireCount"] == 7
+
+
+def test_invalid_base_matching_a_path_is_refused_not_a_pathspec(tmp_path):
+    root, base = _repo(tmp_path)
+
+    result = size_count.collect(str(root), "keep.txt", head=None)
+
+    assert result["ok"] is False
+    assert result["reason"] == "git-failed"
+
+
+def test_routing_vars_have_one_home():
+    import engine_dispatch
+    import git_routing
+    import sanitized_view
+
+    assert size_count._GIT_ROUTING_VARS is git_routing.GIT_ROUTING_VARS
+    assert engine_dispatch._GIT_ROUTING_VARS is git_routing.GIT_ROUTING_VARS
+    assert sanitized_view._GIT_ROUTING_VARS is git_routing.GIT_ROUTING_VARS
+    assert "GIT_NAMESPACE" in git_routing.GIT_ROUTING_VARS
+    assert len(git_routing.GIT_ROUTING_VARS) == 12
