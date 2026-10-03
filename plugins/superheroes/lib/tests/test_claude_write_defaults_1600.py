@@ -20,6 +20,7 @@ Detector axes (bite-proof):
 import hashlib
 import json
 import os
+import tempfile
 
 import pytest
 
@@ -52,6 +53,20 @@ def _settings(sandbox):
 
 def _lease(wt):
     return os.path.realpath(ED._worktree_lease_path(os.path.realpath(wt)))
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_ledger_root(monkeypatch):
+    # the ledger deny entry follows the ambient override; a host that sets it must not leak in
+    monkeypatch.delenv("SUPERHEROES_LAUNCH_LEDGER_ROOT", raising=False)
+
+
+def _ledger(tmp_path):
+    return os.path.realpath(str(tmp_path / "temp-base" / "superheroes-launch-ledger"))
+
+
+def _default_ledger():
+    return os.path.realpath(os.path.join(tempfile.gettempdir(), "superheroes-launch-ledger"))
 
 
 def test_allow_list_is_the_eleven_literal_rules():
@@ -193,7 +208,8 @@ def test_open_denies_the_run_dir_and_the_journal_root(tmp_path, monkeypatch):
     opened = _write_opened_record(run_dir)
     journaled = opened["claudeWriteSandbox"]
     journal_root = os.path.realpath(str(tmp_path / "dispatch-journal-root"))
-    assert journaled["denyWrite"][6:] == [os.path.realpath(run_dir), journal_root, _lease(wt)]
+    assert journaled["denyWrite"][6:] == [
+        os.path.realpath(run_dir), journal_root, _lease(wt), _ledger(tmp_path)]
     deny = _settings_of(opened["argv"])["sandbox"]["filesystem"]["denyWrite"]
     assert deny == journaled["denyWrite"]
     assert _settings_of(fake.calls[0]["argv"]) == _settings_of(opened["argv"])
@@ -207,7 +223,8 @@ def test_open_denies_the_default_temp_journal_root(tmp_path, monkeypatch):
     journaled = _write_opened_record(run_dir)["claudeWriteSandbox"]
     default_root = os.path.realpath(
         os.path.join(str(tmp_path / "temp-base"), ED.JOURNAL_ROOT_NAME))
-    assert journaled["denyWrite"][6:] == [os.path.realpath(run_dir), default_root, _lease(wt)]
+    assert journaled["denyWrite"][6:] == [
+        os.path.realpath(run_dir), default_root, _lease(wt), _ledger(tmp_path)]
 
 
 def test_open_denies_the_pointer_journal_root(tmp_path, monkeypatch):
@@ -223,7 +240,7 @@ def test_open_denies_the_pointer_journal_root(tmp_path, monkeypatch):
         os.path.realpath(wt), timeout=30, run_dir=os.path.realpath(run_dir))
     assert refusal is None
     assert sandbox["denyWrite"][6:] == [
-        os.path.realpath(run_dir), os.path.realpath(pointed), _lease(wt)]
+        os.path.realpath(run_dir), os.path.realpath(pointed), _lease(wt), _default_ledger()]
 
 
 def test_open_denies_the_worktree_lease(tmp_path, monkeypatch):
@@ -236,6 +253,27 @@ def test_open_denies_the_worktree_lease(tmp_path, monkeypatch):
     lease = os.path.realpath(
         os.path.join(str(tmp_path / "temp-base"), "superheroes-worktree-lease-" + digest))
     assert lease in journaled["denyWrite"]
+
+
+def test_open_denies_the_default_launch_ledger_root(tmp_path, monkeypatch):
+    # axis: deny — the ledger the launcher trusts for slot reservations lives under the temp dir
+    # by default; the /tmp allow must not let the engine rewrite it
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    _wt, run_dir, _res, _fake = _open_with_core(tmp_path, monkeypatch, _core_text())
+    journaled = _write_opened_record(run_dir)["claudeWriteSandbox"]
+    ledger = os.path.realpath(str(tmp_path / "temp-base" / "superheroes-launch-ledger"))
+    assert ledger in journaled["denyWrite"]
+
+
+def test_open_denies_an_env_pointed_launch_ledger_root_under_tmp(tmp_path, monkeypatch):
+    # axis: deny — an operator-pointed ledger root under /tmp is covered by the /tmp grant
+    pointed = str(tmp_path / "pointed-ledger")
+    os.makedirs(pointed)
+    monkeypatch.setenv("SUPERHEROES_LAUNCH_LEDGER_ROOT", pointed)
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    _wt, run_dir, _res, _fake = _open_with_core(tmp_path, monkeypatch, _core_text())
+    journaled = _write_opened_record(run_dir)["claudeWriteSandbox"]
+    assert journaled["denyWrite"][-1] == os.path.realpath(pointed)
 
 
 @pytest.mark.parametrize("name", ["journal[1]", "journal*", "journal{a,b}", "journal?"])
@@ -272,7 +310,8 @@ def test_deny_entries_are_deduplicated(tmp_path, monkeypatch):
     sandbox, refusal = ED._resolve_claude_write_sandbox(
         os.path.realpath(wt), timeout=30, run_dir=os.path.realpath(run_dir))
     assert refusal is None
-    assert sandbox["denyWrite"][6:] == [os.path.realpath(run_dir), _lease(wt)]
+    assert sandbox["denyWrite"][6:] == [
+        os.path.realpath(run_dir), _lease(wt), _default_ledger()]
 
 
 def test_continuation_reuses_the_journaled_deny_entries(tmp_path, monkeypatch):
@@ -284,7 +323,7 @@ def test_continuation_reuses_the_journaled_deny_entries(tmp_path, monkeypatch):
     journaled_deny = list(opened["claudeWriteSandbox"]["denyWrite"])
     assert journaled_deny[6:] == [
         os.path.realpath(run_dir), os.path.realpath(str(tmp_path / "dispatch-journal-root")),
-        _lease(wt)]
+        _lease(wt), _ledger(tmp_path)]
     # the ambient journal root changes after open; a continuation must not re-derive the deny list
     monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, str(tmp_path / "another-root"))
     resumed = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])

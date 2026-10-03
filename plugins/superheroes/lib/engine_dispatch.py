@@ -1817,13 +1817,17 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
             tmp_write_roots.append(tmp_root)
     if run_dir is not None:
         # deny wins over the /tmp allow: the run dir, the journal root the runner trusts as its
-        # spawn/retry/fold record, and the worktree lease (a file in the temp dir) stay
-        # unwritable from inside the sandbox
+        # spawn/retry/fold record, the worktree lease (a file in the temp dir) and the launch
+        # ledger root (reservations, outcomes and vet records the launcher trusts, by default
+        # under the temp dir) stay unwritable from inside the sandbox
         journal_root, _source = _journal_root_with_source(run_dir)
+        ledger_root = os.environ.get(launch_ledger.LEDGER_ROOT_ENV) or os.path.join(
+            tempfile.gettempdir(), launch_ledger.LEDGER_DIR_NAME)
         for denied in (
             os.path.realpath(run_dir),
             os.path.realpath(journal_root),
             os.path.realpath(_worktree_lease_path(cwd_real)),
+            os.path.realpath(os.path.abspath(ledger_root)),
         ):
             # the runtime reads a deny entry as a glob too: a bracket spelling would match a
             # sibling and leave the literal path writable under the /tmp grant
