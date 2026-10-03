@@ -412,3 +412,12 @@ Owner: "really happy with this iteration ... converging." Directions taken from 
     lines, discovery raises a conversation about splitting.
 
 Board round 3 under way (owner: "go").
+37. **Board round 3 published** (2026-10-03, same link): everything restyled in theme C; the theme
+    artboard is now the theme spec (colours with one job each, type, parts, readability rules);
+    new artboards: one review template (card anatomy, who uses it, a PR-walk example) and image
+    zoom on a phone; discovery sends the final sheet; category 2 told as #1798 user stories;
+    Canon replaces the ledger (standing vs this-piece entries, exact words, session pointer;
+    threat model stays in configure); split trigger on the flow. Craft call recorded for veto:
+    hand-backs live in Canon and configure item 13 points there. Durable source copy:
+    `~/.claude/wave-logs/spec-alignment-discovery/board-v3/`. Next: the owner approves the board
+    (or comments), then the spec is written from it.
