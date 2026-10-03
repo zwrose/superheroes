@@ -46,6 +46,8 @@ action that owns it, leaving the rest of the calibration untouched:
   calibration file's `superheroes-core` json block directly (a non-empty string, or `null` for
   none), then run the view again and confirm it reads back. A wrong-typed, empty, or
   whitespace-only value is refused by name (`verify-command-malformed`) on every read until fixed.
+  Set it to the fast iteration check (lint, types, the touched tests), not the full gate; set-up § 3
+  says why.
 - **Change the threat model** → `core_md.write_threat_model`, which replaces only that section.
 - **Change one project-configuration item** → write only that item's home through `project_config`.
   Show the current value from the view first, then pipe the new value on stdin. A refusal is
