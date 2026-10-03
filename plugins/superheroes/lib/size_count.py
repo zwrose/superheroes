@@ -3,8 +3,21 @@
 import argparse
 import fnmatch
 import json
+import os
 import subprocess
 import sys
+import time
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import git_routing  # noqa: E402  the one home of the git routing-var list
+
+GIT_TIMEOUT = 60
+_GIT_ROUTING_VARS = git_routing.GIT_ROUTING_VARS
+# ``git ls-files -v`` tags for assume-unchanged (h), skip-worktree (S) and both (s).
+_HIDDEN_TAGS = frozenset("hsS")
 
 # Axis: a path is test code iff a directory component (case-insensitive) is a TEST_DIR_NAMES member or the file name (case-sensitive globs) matches TEST_FILE_GLOBS; the one home of the size rule's test-path list (rubric/review-discipline.md § Size).
 TEST_DIR_NAMES = frozenset({
@@ -137,64 +150,105 @@ def _git_failed(stderr_bytes):
     return {"ok": False, "reason": "git-failed", "detail": line[0] if line else ""}
 
 
-def collect(repo_root, base, head="HEAD", bar_exclude=()):
-    """Run git diffs between ``base`` and ``head`` and return size JSON."""
-    git_timeout = 60
-    numstat_argv = [
-        "git",
-        "-C",
-        repo_root,
-        "diff",
-        "--numstat",
-        "-z",
-        "-M",
-        "--end-of-options",
-        base,
-        head,
-    ]
+def _git_env():
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_ROUTING_VARS}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    return env
+
+
+def _run_git(repo_root, args, deadline, ok_codes=(0,)):
+    """One hardened git call: ``(proc, None)`` on success, ``(None, failure_result)`` otherwise."""
+    timeout = GIT_TIMEOUT
+    if deadline is not None:
+        timeout = min(GIT_TIMEOUT, deadline - time.monotonic())
+        # Axis: a call is never started once the caller's deadline has passed.
+        if timeout <= 0:
+            return None, {"ok": False, "reason": "git-timeout"}
+    argv = ["git", "-C", repo_root, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", *args]
     try:
-        numstat = subprocess.run(
-            numstat_argv,
-            capture_output=True,
-            timeout=git_timeout,
-        )
+        proc = subprocess.run(argv, capture_output=True, timeout=timeout, env=_git_env())
     except subprocess.TimeoutExpired:
-        return {"ok": False, "reason": "git-timeout"}
+        return None, {"ok": False, "reason": "git-timeout"}
     except FileNotFoundError:
-        return {"ok": False, "reason": "git-unavailable"}
-    if numstat.returncode != 0:
-        return _git_failed(numstat.stderr)
-    status_argv = [
-        "git",
-        "-C",
-        repo_root,
-        "diff",
-        "--name-status",
-        "-z",
-        "-M",
-        "--diff-filter=D",
-        "--end-of-options",
-        base,
-        head,
-    ]
-    try:
-        status = subprocess.run(
-            status_argv,
-            capture_output=True,
-            timeout=git_timeout,
+        return None, {"ok": False, "reason": "git-unavailable"}
+    if proc.returncode not in ok_codes:
+        return None, _git_failed(proc.stderr)
+    return proc, None
+
+
+def _hides_changes(ls_files_v_stdout):
+    """True when any ``ls-files -v -z`` entry carries an assume-unchanged or skip-worktree tag."""
+    text = ls_files_v_stdout.decode("utf-8", errors="surrogateescape")
+    # Axis: index flags that hide working-tree edits from ``git diff`` refuse the count.
+    return any(entry[:1] in _HIDDEN_TAGS for entry in text.split("\0") if entry)
+
+
+def _untracked_rows(repo_root, deadline):
+    """``(rows, nested_repos, None)`` on success, ``(None, None, failure_result)`` otherwise."""
+    listed, failure = _run_git(repo_root, ["ls-files", "-o", "--exclude-standard", "-z"], deadline)
+    if failure:
+        return None, None, failure
+    paths = [p for p in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if p]
+    rows = []
+    repos = []
+    for path in paths:
+        # Axis: a nested repository (listed with a trailing "/") is never diffed; it is named, not counted.
+        if path.endswith("/"):
+            repos.append(path)
+            continue
+        # Axis: a file operand of "-" is stdin to --no-index; it is "./"-prefixed and the row keeps the listed path.
+        proc, failure = _run_git(
+            repo_root,
+            ["-c", "core.safecrlf=false", "diff", "--no-index", "--numstat", "-z", "--", "/dev/null", "./" + path],
+            deadline,
+            ok_codes=(0, 1),
         )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "reason": "git-timeout"}
-    except FileNotFoundError:
-        return {"ok": False, "reason": "git-unavailable"}
-    if status.returncode != 0:
-        return _git_failed(status.stderr)
+        if failure:
+            return None, None, failure
+        # Axis: exit 1 is "differences found" only when stderr is empty; git also exits 1 on access errors.
+        if proc.stderr.strip() != b"":
+            return None, None, _git_failed(proc.stderr)
+        rows.extend((added, deleted, path) for added, deleted, _ in _parse_numstat_z(proc.stdout))
+    return rows, sorted(repos), None
+
+
+def collect(repo_root, base, head="HEAD", bar_exclude=(), deadline=None):
+    """Run git diffs between ``base`` and ``head`` and return size JSON.
+
+    ``head=None`` counts the working tree of ``repo_root`` against ``base``: committed, uncommitted
+    and untracked-but-not-ignored changes, read-only. Failures return ``ok: False`` with a ``reason``.
+    """
+    worktree = head is None
+    # Axis: the trailing "--" makes base a revision only; an unresolvable base fails instead of becoming a pathspec.
+    diff_tail = ["--end-of-options", base, "--"] if worktree else ["--end-of-options", base, head, "--"]
+    if worktree:
+        flags, failure = _run_git(repo_root, ["ls-files", "-v", "-z"], deadline)
+        if failure:
+            return failure
+        if _hides_changes(flags.stdout):
+            return {"ok": False, "reason": "index-flags-hide-changes"}
+    numstat, failure = _run_git(repo_root, ["diff", "--numstat", "-z", "-M", *diff_tail], deadline)
+    if failure:
+        return failure
+    status, failure = _run_git(
+        repo_root, ["diff", "--name-status", "-z", "-M", "--diff-filter=D", *diff_tail], deadline
+    )
+    if failure:
+        return failure
 
     rows = _parse_numstat_z(numstat.stdout)
     deleted_paths = _parse_deleted_paths(status.stdout)
+    if worktree:
+        untracked, repos, failure = _untracked_rows(repo_root, deadline)
+        if failure:
+            return failure
+        rows = rows + untracked
     result = count(rows, deleted_paths, bar_exclude=bar_exclude)
     result["base"] = base
     result["head"] = head
+    if worktree:
+        result["worktree"] = True
+        result["untrackedRepos"] = repos
     result["ok"] = True
     return result
 
@@ -208,7 +262,13 @@ def main(argv):
     sub = ap.add_subparsers(dest="cmd", required=True)
     cnt = sub.add_parser("count")
     cnt.add_argument("--base", required=True)
-    cnt.add_argument("--head", default="HEAD")
+    head_group = cnt.add_mutually_exclusive_group()
+    head_group.add_argument("--head", default="HEAD")
+    head_group.add_argument(
+        "--worktree",
+        action="store_true",
+        help="count the working tree (committed, uncommitted, untracked) against --base",
+    )
     cnt.add_argument("--repo-root", default=".")
     cnt.add_argument(
         "--bar-exclude",
@@ -222,7 +282,7 @@ def main(argv):
         result = collect(
             args.repo_root,
             args.base,
-            args.head,
+            None if args.worktree else args.head,
             bar_exclude=tuple(args.bar_exclude),
         )
         _emit(result)

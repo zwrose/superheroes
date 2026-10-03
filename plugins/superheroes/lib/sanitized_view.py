@@ -19,6 +19,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import git_routing  # noqa: E402  the one home of the git routing-var list
 from guardian_tools import path_is_confidently_under, path_is_under_repo  # noqa: E402
 
 SANITIZED_VIEW_STRATEGY = "git-tree-export"
@@ -90,20 +91,7 @@ REVIEW_MODES = (MODE_REVIEW, MODE_BRIEF_CHECK)
 _REVIEW_DIFF_ARGV_MAX_BYTES = 128 * 1024
 _REVIEW_DIFF_ARGV_MARGIN = 8 * 1024
 
-_GIT_ROUTING_VARS = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_CONFIG",
-    "GIT_CONFIG_GLOBAL",
-    "GIT_CONFIG_SYSTEM",
-    "GIT_COMMON_DIR",
-    "GIT_NAMESPACE",
-    "GIT_EXTERNAL_DIFF",
-    "GIT_REPLACE_REF_BASE",
-)
+_GIT_ROUTING_VARS = git_routing.GIT_ROUTING_VARS
 
 # Reader-wide security pin carried by every source-repository command that peels
 # a commit (head export, head census, review-diff census, diff-base verify,
