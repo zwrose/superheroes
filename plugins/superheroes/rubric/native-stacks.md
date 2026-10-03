@@ -64,19 +64,30 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    planned layer is vetted ([How a stack merges](#how-a-stack-merges)). The launcher's refusal of a
    second live launch for one issue stays as it is. It is what lets layers run in parallel, since
    each layer is its own issue.
-6. **Closure.** Each layer's pull request names its own sub-issue with a non-closing verb ("part
-   of", "addresses") until the stack merges — no layer pull request's merge closes the feature
-   issue. The vet that carries the closure receipt for a stacked feature is the top layer's vet
+6. **Closure.** Each layer's pull request closes its own sub-issue. Its first line is
+   `Closes #<its own layer sub-issue>`, and it names the feature issue only with a non-closing verb
+   (`part of #<feature issue>`), with no closing keyword anywhere near the feature issue's number,
+   because GitHub's closing-keyword parser is negation-blind. So GitHub shows each layer's link
+   natively, and no layer pull request's merge closes the feature issue. The vet that carries the
+   closure receipt for a stacked feature is the top layer's vet
    ([When closure fires](../skills/showrunner/reference/closure.md#when-closure-fires)); closure
    is not a separate process and the no-PR path ([declined scope](../skills/showrunner/reference/closure.md#when-closure-fires))
    applies only when the spec's last open child closes without a merge, not to these post-merge
-   administrative closes. After the merge train's post-merge step, the **advisor** closes the
-   feature issue and each layer sub-issue with `gh issue close <n> --comment <merge receipt>` that
-   references the closure receipt already accepted on the top layer's vet, then reads each back with
-   `gh issue view <n> --json state` and records `state=CLOSED` in the post-merge report. When a
-   queued merge lands only a prefix of the stack, close only the sub-issues whose layers landed
-   and leave the feature issue open. Do not rely on GitHub closing sub-issues when the parent
-   closes.
+   administrative closes. GitHub acts on a closing keyword only when a pull request merges into the
+   default branch, so a layer's close is read back, never assumed. After the merge train's
+   post-merge step, the **advisor** reads back each landed layer's sub-issue with
+   `gh issue view <n> --json state`. Every landed layer's sub-issue carries a merge receipt that
+   references the closure receipt already accepted on the top layer's vet: when that first view
+   returns `CLOSED`, GitHub already closed it and the advisor posts the receipt with
+   `gh issue comment <n> --body <merge receipt>`; when it does not, the advisor closes it with
+   `gh issue close <n> --comment <merge receipt>` and views it again. The advisor records
+   `state=CLOSED` in the post-merge report only from a view that returned `CLOSED`; when the
+   confirming view is still not `CLOSED`, the post-merge step fails rather than recording it.
+   The feature issue's close
+   stays the advisor's manual step: `gh issue close <feature> --comment <merge receipt>`, read back
+   the same way. When a queued merge lands only a prefix of the stack, only the landed layers'
+   sub-issues close, the read-back covers only those, and the feature issue stays open. Do not rely
+   on GitHub closing sub-issues when the parent closes.
 
 ## How a stack comes to exist
 
