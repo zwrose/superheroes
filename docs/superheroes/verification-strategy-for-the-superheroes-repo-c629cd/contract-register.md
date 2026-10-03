@@ -42,7 +42,7 @@ amended spec, and R22 records the keep-list seam.
 *Consumers:* P7, P5, P9
 
 **R22 — Delete on contact waits for the keep list (the reset register's R28).** Delete on contact is the shipped rule in plugins/superheroes/rubric/review-discipline.md § A behavior test that goes red (the spec's FR-1 cites it; neither restates it). It activates only once the owner has stamped the keep list; P7 seeds the keep list with Spec A FR-E1 item 12's three kinds for that stamp. *Cross-epic seam:* the keep list is seeded by the verification-strategy spec's own children (#1105's set); recorded reciprocally on #1105.
-*Reciprocal seam:* R22 is this register's side of the reset register's R28; R28's sentence "expectations are not rewritten" contradicts the shipped rule, and bringing R28 into line (both homes) is the advisor's follow-up.
+*Reciprocal seam:* R22 is this register's side of the reset register's R28; both agree with the shipped rule since the reset package's amendment of 2026-10-03 (owner "15 a", #1598).
 *Producer:* P7 (the seed); the owner (the stamp)
 *Consumers:* P7, P5
 
