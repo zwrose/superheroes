@@ -130,6 +130,17 @@ _SANDBOX_ACCEPTED_BOOL = "true or false"
 _SANDBOX_ACCEPTED_PATH = "an absolute path such as /Users/me/Library/Caches/ms-playwright"
 _SANDBOX_ACCEPTED_PATH_BELOW_ROOT = "an absolute path below / — the whole filesystem is never writable"
 _SANDBOX_HOSTNAME = re.compile(r"[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*")
+SIZE_EXCLUDE_KEY = "sizeExclude"
+SIZE_EXCLUDE_REASON_MALFORMED = "size-exclude-malformed"
+SIZE_EXCLUDE_REASON_INPUT_UNPARSEABLE = "size-exclude-input-unparseable"
+SIZE_EXCLUDE_REASON_ROUND_TRIP = "size-exclude-round-trip-refused"
+SIZE_EXCLUDE_REASON_UNREADABLE = "size-exclude-unreadable"
+SIZE_EXCLUDE_MALFORMED_NOT_A_LIST = "size-exclude-not-a-list"
+SIZE_EXCLUDE_MALFORMED_ENTRY_NOT_STRING = "size-exclude-entry-not-a-nonempty-string"
+SIZE_EXCLUDE_MALFORMED_ENTRY_ABSOLUTE = "size-exclude-entry-absolute"
+_SIZE_EXCLUDE_ACCEPTED_LIST = (
+    "a list of repo-relative path globs, such as [\"docs/**\", \"*.generated.ts\"]")
+_SIZE_EXCLUDE_ACCEPTED_GLOB = "a repo-relative glob, no leading /"
 THREAT_MODEL_REASON_ROUND_TRIP = "threat-model-round-trip-refused"
 GUARDIAN_CADENCE_REASON_LAYER_ABSENT = "guardian-layer-absent"
 GUARDIAN_CADENCE_REASON_NO_FENCE = "guardian-config-fence-absent"
@@ -279,6 +290,26 @@ def normalize_sandbox_access(value):
     return out
 
 
+def validate_size_exclude(value):
+    """Return malformed-item dicts for a sizeExclude value; empty list means valid. Never
+    raises. Every item carries ``accepted`` — the named refusal stating the accepted shape."""
+    def item(index, reason, accepted):
+        return {"index": index, "reason": reason, "accepted": accepted}
+
+    if not isinstance(value, list):
+        return [item(None, SIZE_EXCLUDE_MALFORMED_NOT_A_LIST, _SIZE_EXCLUDE_ACCEPTED_LIST)]
+    items = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry.strip():
+            items.append(item(index, SIZE_EXCLUDE_MALFORMED_ENTRY_NOT_STRING,
+                              _SIZE_EXCLUDE_ACCEPTED_GLOB))
+        # globs match repo-relative paths, so an absolute one can never match
+        elif entry.startswith("/"):
+            items.append(item(index, SIZE_EXCLUDE_MALFORMED_ENTRY_ABSOLUTE,
+                              _SIZE_EXCLUDE_ACCEPTED_GLOB))
+    return items
+
+
 def render_core(facts, status, created, updated):
     """Render the §2.2 core.md: provenance comment + prose sections + the json block."""
     block = {
@@ -300,6 +331,8 @@ def render_core(facts, status, created, updated):
         block[VET_CHECKS_KEY] = copy.deepcopy(facts[VET_CHECKS_KEY])
     if SANDBOX_ACCESS_KEY in facts:
         block[SANDBOX_ACCESS_KEY] = copy.deepcopy(facts[SANDBOX_ACCESS_KEY])
+    if SIZE_EXCLUDE_KEY in facts:
+        block[SIZE_EXCLUDE_KEY] = copy.deepcopy(facts[SIZE_EXCLUDE_KEY])
     show_it = (facts.get("showItSurface") or "").strip()
     show_it_block = ""
     if show_it:
@@ -408,6 +441,8 @@ def parse_core(text):
         out[VET_CHECKS_KEY] = copy.deepcopy(block[VET_CHECKS_KEY])
     if SANDBOX_ACCESS_KEY in block:
         out[SANDBOX_ACCESS_KEY] = copy.deepcopy(block[SANDBOX_ACCESS_KEY])
+    if SIZE_EXCLUDE_KEY in block:
+        out[SIZE_EXCLUDE_KEY] = copy.deepcopy(block[SIZE_EXCLUDE_KEY])
     return out
 
 
@@ -656,6 +691,8 @@ def read(cwd, root=None):
         out[VET_CHECKS_KEY] = facts[VET_CHECKS_KEY]
     if SANDBOX_ACCESS_KEY in facts:
         out[SANDBOX_ACCESS_KEY] = facts[SANDBOX_ACCESS_KEY]
+    if SIZE_EXCLUDE_KEY in facts:
+        out[SIZE_EXCLUDE_KEY] = facts[SIZE_EXCLUDE_KEY]
     return out
 
 
@@ -2129,6 +2166,115 @@ def clear_sandbox_access(cwd, *, root=None):
     return result
 
 
+def _size_exclude_core_path(cwd, root=None):
+    """Read-only core.md path for the size-exclude reader, or None when core.md is absent.
+    Never calls core_path or the default mode_registry.resolve: both can backfill-write the mode
+    registry when no core.md exists, and a reader must write nothing."""
+    in_repo, global_path = _core_candidates(cwd, root)
+    in_exists = os.path.lexists(in_repo)
+    gl_exists = os.path.lexists(global_path)
+    if not in_exists and not gl_exists:
+        return None
+    if in_exists != gl_exists:
+        return in_repo if in_exists else global_path
+    resolved = mode_registry.resolve(cwd, root, persist_backfill=False)
+    return in_repo if resolved["mode"] == mode_registry.IN_REPO else global_path
+
+
+def read_size_exclude(cwd, root=None):
+    """Read the ``sizeExclude`` json key from core.md. Total and read-only: never raises, never
+    writes. An absent key (or an absent core.md) reads declared False, globs None; a valid key
+    reads its globs as stored; every other failure reads globs None with reason
+    ``size-exclude-unreadable`` and a detail naming the underlying reason or exception."""
+    base = {
+        "declared": False,
+        "globs": None,
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": False,
+    }
+    unreadable = SIZE_EXCLUDE_REASON_UNREADABLE
+    try:
+        try:
+            path = _size_exclude_core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return dict(base, reason=unreadable,
+                        detail="repo-root-unavailable: %s" % gate_refusal_detail(exc))
+        if path is None:
+            return dict(base, reason="core-md-absent")
+
+        structural = _structural_refusal_at_path(path)
+        if structural is not None:
+            return dict(base, reason=unreadable, detail=structural)
+
+        if not os.path.isfile(path):
+            return dict(base, reason=unreadable,
+                        detail="core-md-unreadable: not a regular file at %s" % path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            return dict(base, reason=unreadable,
+                        detail="core-md-unreadable: %s" % gate_refusal_detail(exc, at=path))
+        try:
+            facts = parse_core(text)
+        except VerifyCommandMalformed as exc:
+            return dict(base, reason=unreadable, detail="VerifyCommandMalformed: %s" % exc)
+        if facts is None:
+            return dict(base, reason=unreadable,
+                        detail="core-md-unparseable: corrupt or unreadable core.md at %s" % path)
+
+        behind = facts["schemaVersion"] > SCHEMA_VERSION
+        if SIZE_EXCLUDE_KEY not in facts:
+            return dict(base, behind=behind)
+        raw = facts[SIZE_EXCLUDE_KEY]
+        malformed = validate_size_exclude(raw)
+        if malformed:
+            return dict(base, declared=True, malformed=malformed,
+                        reason=SIZE_EXCLUDE_REASON_MALFORMED, behind=behind)
+        return dict(base, declared=True, globs=copy.deepcopy(raw), behind=behind)
+    except Exception as exc:  # total: any other failure is a named read refusal, never a raise
+        return dict(base, reason=unreadable, detail=gate_refusal_detail(exc))
+
+
+def write_size_exclude(cwd, globs, *, root=None):
+    """Lock-guarded surgical write of ``sizeExclude`` only. Never raises."""
+    malformed = validate_size_exclude(globs)
+    if malformed:
+        return {
+            "action": "refused",
+            "reason": SIZE_EXCLUDE_REASON_MALFORMED,
+            "malformed": malformed,
+        }
+    return _write_json_block_key(
+        cwd,
+        SIZE_EXCLUDE_KEY,
+        copy.deepcopy(globs),
+        root=root,
+        not_a_mapping_reason=SIZE_EXCLUDE_REASON_MALFORMED,
+        round_trip_reason=SIZE_EXCLUDE_REASON_ROUND_TRIP,
+        require_mapping=False,
+    )
+
+
+def clear_size_exclude(cwd, *, root=None):
+    """Remove the ``sizeExclude`` key from core.md. Never raises."""
+    result = _write_json_block_key(
+        cwd,
+        SIZE_EXCLUDE_KEY,
+        None,
+        root=root,
+        not_a_mapping_reason=SIZE_EXCLUDE_REASON_MALFORMED,
+        round_trip_reason=SIZE_EXCLUDE_REASON_ROUND_TRIP,
+        require_mapping=False,
+        remove_key=True,
+    )
+    if result.get("action") in ("written", "noop"):
+        return dict(result, cleared=True)
+    return result
+
+
 _THREAT_MODEL_HEADING = re.compile(r"^\s*##\s+Threat model\s*$", re.IGNORECASE)
 
 
@@ -2630,6 +2776,8 @@ def confirm(cwd, *, root=None, now=None):
                 facts[VET_CHECKS_KEY] = existing[VET_CHECKS_KEY]
             if SANDBOX_ACCESS_KEY in existing:
                 facts[SANDBOX_ACCESS_KEY] = existing[SANDBOX_ACCESS_KEY]
+            if SIZE_EXCLUDE_KEY in existing:
+                facts[SIZE_EXCLUDE_KEY] = existing[SIZE_EXCLUDE_KEY]
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),
@@ -2775,6 +2923,17 @@ def main(argv):
         "--clear",
         action="store_true",
         help="remove sandboxAccess from core.md (explicit clear; empty stdin is refused)",
+    )
+    se = sub.add_parser("size-exclude")
+    se.add_argument("--cwd", default=".")
+    se.add_argument("--root", default=None)
+    wse = sub.add_parser("write-size-exclude")
+    wse.add_argument("--cwd", default=".")
+    wse.add_argument("--root", default=None)
+    wse.add_argument(
+        "--clear",
+        action="store_true",
+        help="remove sizeExclude from core.md (explicit clear; empty stdin is refused)",
     )
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
@@ -3066,6 +3225,50 @@ def main(argv):
                     sys.stdout.write(json.dumps(out, indent=2) + "\n")
                     return 0
                 out = write_sandbox_access(args.cwd, access, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "size-exclude":
+        try:
+            out = read_size_exclude(args.cwd, root=args.root)
+        except Exception:
+            out = {
+                "declared": False,
+                "globs": None,
+                "malformed": [],
+                "reason": SIZE_EXCLUDE_REASON_UNREADABLE,
+                "detail": None,
+                "behind": False,
+            }
+    elif args.cmd == "write-size-exclude":
+        try:
+            if args.clear:
+                out = clear_size_exclude(args.cwd, root=args.root)
+            else:
+                raw = sys.stdin.read()
+                if raw.strip() == "":
+                    out = {"action": "refused", "reason": SIZE_EXCLUDE_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                try:
+                    globs, duplicate_key = _json_loads_rejecting_duplicate_keys(raw.strip())
+                except TypeError:
+                    globs, duplicate_key = None, None
+                if duplicate_key is not None:
+                    out = {
+                        "action": "refused",
+                        "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key),
+                    }
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if globs is None:
+                    out = {"action": "refused", "reason": SIZE_EXCLUDE_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                out = write_size_exclude(args.cwd, globs, root=args.root)
         except RepoRootUnavailable as exc:
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,

@@ -27,7 +27,9 @@ print(configure_view.render('.'))"
 One plain-text screen, top to bottom: the project's core facts (including the **Show-it surface**
 declaration when present and the declared **Vet checks** block with any malformed or unreadable
 calibration flagged), the **Sandbox access** block (`all off (offline)` when nothing is set, with any
-malformed or unreadable value flagged), the **Dispatch calibration** (the
+malformed or unreadable value flagged), the **Size count exclusions** block (the declared path globs,
+`(none — …)` when nothing is declared, with any malformed or unreadable value flagged), the
+**Dispatch calibration** (the
 effective engine + model for every v2 dispatch role) and its Codex model-pin detail, each hero's
 layer, the pinned patterns, and the **Model tiers** block — "here is everything superheroes knows
 about this project," not a list of files. Any current staleness/drift is shown as a **single,
@@ -247,6 +249,48 @@ action that owns it, leaving the rest of the calibration untouched:
   opens, so a run already open keeps the access it opened with and an edit applies to the next run.
   A malformed saved value refuses the next claude write open with
   `engine-config:sandbox-access-malformed`.
+
+- **Leave paths out of the size count** → write **only** the `sizeExclude` key in `core.md`'s JSON
+  block, leaving every other key untouched. The value is a JSON list of repo-relative path globs,
+  such as `["docs/**", "*.generated.ts"]`. A glob is matched with Python `fnmatch`, case-sensitive,
+  against the repo-relative path, and `*` also crosses `/`. A matched path is left out of both size
+  counts and is listed with its line counts. Lockfiles are always left out without any setting. A
+  project that wants test-pilot plans left out lists `.claude/test-pilot/**` itself. An absolute
+  glob (a leading `/`) can never match a repo-relative path and is refused; `[]` declares that
+  nothing extra is excluded. Show the current value from the view's **Size count exclusions** block
+  first. Stdin carries a JSON list; empty stdin is refused (use `--clear` to remove the key):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' '["docs/**","*.generated.ts"]' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-size-exclude --cwd .
+  ```
+
+  To clear:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" write-size-exclude --cwd . --clear
+  ```
+
+  To read the saved value:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" size-exclude --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-size-exclude` returns `{action, reason?,
+  malformed?}`. Only `written` or `noop` means the list was saved — surface any other `action`
+  (`refused`, `deferred`, `behind`) to the owner with its `reason`; refusal `size-exclude-malformed`
+  carries `malformed` for the owner to fix, each item naming its index, its reason
+  (`size-exclude-not-a-list`, `size-exclude-entry-not-a-nonempty-string`, or
+  `size-exclude-entry-absolute`), and the accepted shape. Refusal reasons also include
+  `size-exclude-input-unparseable`, `duplicate-core-key:<key>`, `core-md-absent`,
+  `core-md-unparseable`, and `size-exclude-round-trip-refused`. The command exits 0 either way, so
+  check `action`, not exit status. The read verb never raises: a saved value that cannot be read
+  comes back `globs` null with reason `size-exclude-unreadable` and a `detail`, and a malformed
+  saved value comes back `size-exclude-malformed`.
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are

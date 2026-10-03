@@ -9,6 +9,7 @@
 - §4.6 — Project-configuration dependencies and kind labels
 - §4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
 - §4.8 — Sandbox access for the claude implementer — all off by default
+- §4.9 — Size count exclusions — none by default
 - §5 — Secrets stay out of shared calibration (NFR)
 - Recovering an interrupted set-up (UFR-7)
 
@@ -344,6 +345,13 @@ Set-up writes nothing for sandbox access. The claude implementer's sandbox is fu
 default: no network, no loopback, no extra sockets, and writes confined to the run's roots. When an
 order's verification needs one of those, the owner opens it later through the view-and-tune path,
 which holds the commands (`skills/configure/reference/view-and-tune.md` § 2).
+
+## 4.9 — Size count exclusions — none by default
+
+Set-up writes nothing for size count exclusions. By default every non-test path counts toward the
+size count, and lockfiles are always left out. When a project has generated or vendored paths that
+should not count, the owner lists them later through the view-and-tune path, which holds the
+commands (`skills/configure/reference/view-and-tune.md` § 2).
 
 ## 5 — Secrets stay out of shared calibration (NFR)
 
