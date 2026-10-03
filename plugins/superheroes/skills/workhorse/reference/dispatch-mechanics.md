@@ -756,11 +756,17 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
 
 - **Allowed:** writes to the build worktree, its git dir, the shared git common dir, the uv
   cache, and `/tmp` (with its realpath, `/private/tmp` on macOS); on macOS, binding and connecting
-  on localhost, which also allows a bind on 0.0.0.0. The `/tmp` writes and the localhost binding are
-  on by default for every project. **Blocked:** the network (unless `sandboxAccess` opens it), writes to the common dir's
-  `hooks` and `config` and the worktree's `config.worktree`, the runner's run dir and the supervisor
-  journal root (denied at open, so the `/tmp` allow cannot reach the decision record on any host),
-  WebFetch and WebSearch, and any command outside the sandbox. If the sandbox cannot start, the run fails instead of running unsandboxed.
+  on localhost, which also allows a bind on 0.0.0.0. The `/tmp` writes and the localhost binding
+  are on by default for every project. **Blocked:** the network (unless `sandboxAccess` opens it),
+  writes to the common dir's `hooks` and `config` and the worktree's `config.worktree`, the
+  runner's own state (its run dir, the supervisor journal root, the worktree lease, and the launch
+  ledger root, named by the ledger-root override, by the root the launcher hands a builder, and by
+  the default root), all denied at open so the `/tmp` allow cannot reach them on any host,
+  WebFetch and WebSearch, and any command outside the sandbox. Unix-domain socket binds under
+  `/tmp` stay blocked, because the runtime's socket grant is a path prefix that would also let a
+  sandboxed command connect to any host process's socket there, so a tool that binds a socket in
+  `/tmp` needs a project-side setting (for example mongod `--nounixsocket`, or passing `TMPDIR`
+  through). If the sandbox cannot start, the run fails instead of running unsandboxed.
 - **Settings files:** `--restricted` ignores user, project, and local settings and confines
   Write and Edit to the working directory.
 - **uv is offline** (`UV_OFFLINE=1`) unless `allowedDomains` is non-empty: the order's Python
