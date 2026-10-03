@@ -42,6 +42,12 @@ belongs to and lists every change with its replacement.
 - `compose-liveness`'s `crossVendorEngines` now reports that set. `run`'s `crossVendorEngines` is unchanged.
 - A liveness receipt written by 0.38.0 that lacks a newly considered engine re-probes once.
 
+### Stack layers close their own sub-issues
+
+- A stack-layer pull request now opens with `Closes #<its own layer sub-issue>` and names the feature issue only with "part of". GitHub shows the link natively and closes the layer's sub-issue when the layer lands on the default branch. No layer merge closes the feature issue. The rule's home is `rubric/native-stacks.md` § Each layer is a sub-issue, item 6.
+- The advisor's post-merge step changes from closing each layer sub-issue by hand to reading back that each landed layer's sub-issue is `CLOSED`, closing any GitHub did not close. Every landed layer's sub-issue still gets the merge receipt comment. The feature issue's close stays the advisor's manual step, with its receipt.
+- Stacks opened on 0.39.0 or earlier keep their "part of" layer links until a builder or the advisor edits those pull request bodies; the advisor's read-back closes any sub-issue GitHub did not close. A project that already runs this shape as a recorded override can drop the override once it adopts this release.
+
 ## 0.38.0
 
 ### Before you upgrade
