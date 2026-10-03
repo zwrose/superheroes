@@ -370,3 +370,9 @@ Rulings (owner agreed with every recommendation, 2026-10-03):
 Owner feedback on the round (binding on method): "none of those were really rulings or
 recommendations." When an owner's comment already states the direction and the recommendation
 only agrees, act on it and report; ask only about real choices.
+27. **Board round 2 published** (2026-10-03, same link): flow as a four-lane flow chart; review
+    cycle drawn as the process; the line in full (descriptions, real examples, sorting diagram,
+    worked examples, how a project adjusts it); tap sheets as a light web app on phone and
+    desktop; three theme directions (A field notes, B mission control, C comic panel); the
+    conversation artboard removed. Durable source copy: `~/.claude/wave-logs/spec-alignment-discovery/board-v2/`.
+    Open for the owner: the theme pick, and the spec-split trigger.
