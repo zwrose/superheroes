@@ -421,3 +421,6 @@ Board round 3 under way (owner: "go").
     hand-backs live in Canon and configure item 13 points there. Durable source copy:
     `~/.claude/wave-logs/spec-alignment-discovery/board-v3/`. Next: the owner approves the board
     (or comments), then the spec is written from it.
+38. **No image carousel** (owner, board comment): the zoom view has no swipe-to-next; sideways
+    swipes could conflict with dragging a zoomed image. Each image opens on its own; Close returns
+    to the card.
