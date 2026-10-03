@@ -94,7 +94,10 @@ receipt and filed to the Backlog.) (**Review panels can't silently
 degrade** — priority 1 of the 2026-08-21 re-order — closed 2026-08-28 with the 0.32.0 cut:
 exit met including the demonstrated driver-certified receipt, and the close armed the driver
 mandate's flip (#1095): a non-driver full-lane review is now a vet finding, driver-or-park
-the only valve.)
+the only valve.) (**new verification strategy** — priority 2 of the 2026-08-28 order — retired
+2026-10-03 without a release: the reset's verdict (Spec A FR-F6, FR-B1) cut most of the plan,
+amendment #5 recorded what survives, and the surviving machinery moved to the Backlog under the
+dial, owner-ruled "10 a" at the 2026-10-02 walk.)
 
 **The order is a draw priority, not a step ladder.** When a wave forms it draws from the top;
 work lower down interleaves freely wherever its builders don't collide with work above it
@@ -111,42 +114,36 @@ the owner is the direct consumer of.
    startup context before and after. *(Opened 2026-09-14 at the stamp of Spec A and Spec B,
    owner-ruled its own milestone the same day; placed first at filing on the stamp's own
    logic, the reset is paid before the dial reads anything, and the owner re-ranks at will.)*
-2. **new verification strategy** — the approved verification-strategy spec (#1105) delivered
-   across both adoption lanes: one trustworthy local gate that says what it ran and skipped,
-   one pinned Python, review-enforced authoring rules and depth grading, and the nightly
-   instruments publishing numbers the owner can read. *(Opened 2026-08-28, owner-ruled at the
-   walk-11 sitting after the adoption plan's advisor review and the weekly-eats consumer read;
-   set to priority 1 by owner word the same sitting.)*
-3. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
    harnesses that actually deliver the click, plans derived from the spec, CLI-project
    coverage; the parallel authenticated-pilot epic closes.
-4. **Review-spec keeps pace** — every review-code/review-spec divergence itemized and either
+3. **Review-spec keeps pace** — every review-code/review-spec divergence itemized and either
    ratified as deliberate or closed; recent spec rounds reviewed with findings dispositioned;
    owner-delta and section-scoped delta rounds land. *(Opened 2026-08-24, owner-ruled at the
    0.32.0 planning sitting: the driver mandate rebuilt review-code around the certified loop and
    review-spec inherited none of it; the divergence discovery gates the delta-round pair's
    shape.)*
-5. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
+4. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
    structured self-improvement of the plugin from its own operational record looks like —
    literature survey first (the WikiSkill paper is the seed, not the boundary), then scope
    what if anything earns building. *(Opened 2026-08-28 by owner word, in-session; placed
    under Review-spec keeps pace by the same word.)*
-6. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
+5. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
    re-verification: the result contract is test-bound, the run-dir failure class is deleted,
    the dispatch guard is hard-wired, seat bundles travel intact.
-7. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
+6. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
    hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
    garbage collection, the owner-authority gate's remaining side doors.
-8. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
+7. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
    two largest charters finally under one; the activation record bound to what it certifies;
    the harness tripwire leaving a durable result.
-9. **Cross-session messaging** — a discovery starter: where the host's cross-session
+8. **Cross-session messaging** — a discovery starter: where the host's cross-session
    messaging primitive replaces the deaf-session workarounds, per surface.
-10. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
+9. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
    actually is, for the owner first. Low priority.
-11. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
+10. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
    trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
-12. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
+11. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
    Owner-ruled lower priority; revisit.
 
 **Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen
