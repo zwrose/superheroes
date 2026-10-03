@@ -52,7 +52,7 @@ belongs to and lists every change with its replacement.
 ### Before you upgrade
 
 - **Finish or abandon in-flight claude write runs opened under 0.38.0** before upgrading. A 0.39.0 runner refuses their continuation (see the write-channel section below).
-- A project without `sandboxAccess` sees byte-identical sandbox settings; nothing else needs action.
+- A project without `sandboxAccess` stays offline. The one default change is the write channel's new Python command allowances (below); nothing else needs action.
 
 ### Claude write channel: implementers can run their own Python tests
 
