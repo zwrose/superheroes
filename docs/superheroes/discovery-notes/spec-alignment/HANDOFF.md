@@ -452,3 +452,6 @@ Board round 3 under way (owner: "go").
   call; final-sheet answers that change the spec; a later ruling vs the approved board; the round
   cap after owner rulings; specs stored out of repo. B: what each answer means; changing an
   answer; who may open a sheet; UFR-2 failed save and UFR-3 missing image (author-added).
+- Remainder sheet 1 sent (2026-10-03): https://claude.ai/artifact/9F53AdK2FdPpaTddgEkpXn, 11
+  cards (A: a1-a6, B: b1-b5), answers saved to the sheet's store collection `answers`, one doc per
+  card. Source: scratchpad `remainder-sheet-1.html`.
