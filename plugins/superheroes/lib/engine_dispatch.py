@@ -50,6 +50,7 @@ import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok â€
 import engine_result_channel  # noqa: E402  native result channel (#1270 WO-B1)
 import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
+import git_routing  # noqa: E402  the one home of the git routing-var list
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import model_registry  # noqa: E402  role read_write classification (#1269 WO-FIX1)
 import payload_contracts  # noqa: E402  verdict optional keys â€” single contract home (#1270 2c)
@@ -115,9 +116,7 @@ _CLAUDE_MODE_HELP = (
 RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
 RUN_KIND_WRITE = session_contract.RUN_KIND_WRITE
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
-_GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_GLOBAL",
-                     "GIT_CONFIG_SYSTEM", "GIT_COMMON_DIR")
+_GIT_ROUTING_VARS = git_routing.GIT_ROUTING_VARS
 
 RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceiling (never borderline)
 ITEM_EVIDENCE_TIMEOUT = 30  # bounds collection-time declared-item evidence git calls under the run lock
