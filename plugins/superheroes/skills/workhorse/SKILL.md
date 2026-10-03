@@ -496,7 +496,8 @@ recoverable. Without that evidence, state the wait as owed to the reader.
 **Read `${CLAUDE_PLUGIN_ROOT}/rubric/test-receipt-evidence.md` when you make any test-pass claim.**
 
 **Run the local full suite at most once per build, at the final head, and not at all when that suite
-workflow already passed on that head.** The calibrated verify command still runs every time this
+workflow already passed on that head.** The same holds for the project's full local gate, whatever
+it runs; CI is the final word on the suite. The calibrated verify command still runs every time this
 charter says it does, and the bite-proof runs are never what this skips. **A full-gate run starts
 only on a clean, settled tree**, ideally a detached pinned worktree. A suite started while edits
 still land measures a tree that no longer exists, so its green is not a receipt. The requirement

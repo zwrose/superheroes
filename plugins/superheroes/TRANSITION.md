@@ -7,7 +7,15 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
-## Unreleased
+## 0.40.0
+
+### Before you upgrade
+
+- **Nothing to do before upgrading.** No setting is rewritten and no in-flight run is refused.
+- **Size count:** every project's count now leaves package-manager lockfiles out (listed, with their line counts). A project that wants other paths left out sets `sizeExclude` through configure; nothing else is excluded until it does.
+- **Implementer dispatches:** to get the size tripwire reported at every fold, pass `--size-base` and `--size-line` on each `dispatch-write` (workhorse dispatch doctrine). A run opened without them, including one opened under 0.39.0, folds as before plus `sizeTripwireAbsent`.
+- **Stack layers:** stacks opened on 0.39.0 or earlier keep their "part of" layer links until their PR bodies are edited. A project that already ran "a layer PR closes its own sub-issue" as a recorded override can drop the override.
+- **Verify command:** if your calibrated verify command is your full gate, consider changing it to your fast iteration check through configure's "Change the verify command". Existing calibrations aren't rewritten.
 
 ### Claude write sandbox: node toolchains, localhost and /tmp by default
 
@@ -23,10 +31,39 @@ belongs to and lists every change with its replacement.
 ### dispatch-write reports the size tripwire at fold
 
 - `dispatch-write` takes two new flags, `--size-base <commit>` and `--size-line <non-negative integer>`. Pass both on every implementer dispatch, launch and continuation. The runner counts the worktree against the base at fold: committed, uncommitted, and untracked files, read-only.
-- A folded write run gains `sizeTripwire`. Counted: `{"status": "ok", "base", "line", "tripwireCount", "crossed", "barCount", "deletedFiles", "binary", "untrackedRepos"}`, plus `barExcluded` when reported; `crossed` is `tripwireCount > line`. Not counted: `{"status": "indeterminate", "base", "line", "reason"}`, plus `detail` when given.
+- A folded write run gains `sizeTripwire`. Counted: `{"status": "ok", "base", "line", "tripwireCount", "crossed", "barCount", "deletedFiles", "binary", "untrackedRepos"}`, plus `barExcluded`, `lockfilesExcluded` and `pathsExcluded` when reported; `crossed` is `tripwireCount > line`. Not counted: `{"status": "indeterminate", "base", "line", "reason"}`, plus `detail` when given.
 - Five new open-time refusals, reason `unrunnable`, each opening nothing: `size-inputs-incomplete`, `size-line-invalid`, `size-base-not-an-object-id`, `size-base-unresolvable`, and `size-inputs-mismatch` (a continuation passing different values than the run opened with).
 - A run opened without the flags, including one opened by an older plugin, folds with `sizeTripwireAbsent: "size-inputs-not-supplied"` instead of `sizeTripwire`. Passing the flags on a later continuation of such a run does not refuse; the flags are ignored. A review run carries neither key.
 - Commits the orchestrator types itself are not counted by this, so the builder still counts at each commit.
+
+### Configure advice: the verify command is the fast iteration check
+
+- Configure now advises that the calibrated verify command be the project's fast iteration check (lint, types, the tests the change touched), not its full gate. A build re-runs the verify command after every review fix round and on the final head.
+- Setup's verify-command detection now prefers a fast-check script the project already defines; when only a full gate is found, it proposes that and discloses that the owner can replace it.
+- Workhorse §8 now says the project's full local gate runs at most once per build, at the final head, and not at all when CI already passed that head; CI is the final word on the suite.
+- Existing calibrations are not rewritten. A project whose verify command is its full gate keeps paying for it on every run until its owner changes it, through configure's "Change the verify command" tune item (an explicit `verifyCommand` edit).
+
+### Size count: lockfiles and project-listed paths are left out
+
+- The size count (`lib/size_count.py`) now leaves common package-manager lockfiles out of both `tripwireCount` and `barCount` for every project: `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lockb`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock` and `go.sum`, matched on the file's base name at any depth. They are listed under the new `lockfilesExcluded` result key (`[{"path", "lines"}]`), present only when non-empty.
+- New optional `sizeExclude` key in the `superheroes-core` block of `core.md`: a list of repo-relative globs matched with `fnmatch` against the path, where `*` also crosses `/`. Set and viewed through configure. Matching paths are left out of both counts and listed under the new `pathsExcluded` result key (`[{"path", "lines", "glob"}]`, the first matching glob), present only when the key is declared (`[]` when nothing matched).
+- Refusals at read and write: `size-exclude-malformed`, with items `size-exclude-not-a-list`, `size-exclude-entry-not-a-nonempty-string` and `size-exclude-entry-absolute`. On write only: `size-exclude-input-unparseable`.
+- `size_count` itself now refuses with `ok: false` and `size-exclude-malformed` (with the `malformed` items) or `size-exclude-unreadable` (with a `detail`) when `core.md` holds a bad or unreadable `sizeExclude`, instead of counting.
+- Who sees a change: every project whose diffs touch a lockfile. Only projects that set `sizeExclude` see changes in what else counts. A project wanting test-pilot plans excluded lists `.claude/test-pilot/**` itself.
+- The profile schema version is unchanged, so an older plugin that re-calibrates from scratch can drop the key.
+
+### Stack layers close their own sub-issues
+
+- A stack-layer pull request now opens with `Closes #<its own layer sub-issue>` and names the feature issue only with "part of". GitHub shows the link natively and closes the layer's sub-issue when the layer lands on the default branch. No layer merge closes the feature issue. The rule's home is `rubric/native-stacks.md` § Each layer is a sub-issue, item 6.
+- The advisor's post-merge step changes from closing each layer sub-issue by hand to reading back that each landed layer's sub-issue is `CLOSED`, closing any GitHub did not close. Every landed layer's sub-issue still gets the merge receipt comment. The feature issue's close stays the advisor's manual step, with its receipt.
+- Stacks opened on 0.39.0 or earlier keep their "part of" layer links until a builder or the advisor edits those pull request bodies; the advisor's read-back closes any sub-issue GitHub did not close. A project that already runs this shape as a recorded override can drop the override once it adopts this release.
+
+## 0.39.0
+
+### Before you upgrade
+
+- **Finish or abandon in-flight claude write runs opened under 0.38.0** before upgrading. A 0.39.0 runner refuses their continuation (see the write-channel section below).
+- A project without `sandboxAccess` stays offline. The one default change is the write channel's new Python command allowances (below); nothing else needs action.
 
 ### Claude write channel: implementers can run their own Python tests
 
@@ -52,12 +89,6 @@ belongs to and lists every change with its replacement.
 - A project with cursor or codex installed but named by no role now gets that engine's seats, at its usage cost. To keep an engine off the panel, uninstall its CLI or pin the seats you need held.
 - `compose-liveness`'s `crossVendorEngines` now reports that set. `run`'s `crossVendorEngines` is unchanged.
 - A liveness receipt written by 0.38.0 that lacks a newly considered engine re-probes once.
-
-### Stack layers close their own sub-issues
-
-- A stack-layer pull request now opens with `Closes #<its own layer sub-issue>` and names the feature issue only with "part of". GitHub shows the link natively and closes the layer's sub-issue when the layer lands on the default branch. No layer merge closes the feature issue. The rule's home is `rubric/native-stacks.md` § Each layer is a sub-issue, item 6.
-- The advisor's post-merge step changes from closing each layer sub-issue by hand to reading back that each landed layer's sub-issue is `CLOSED`, closing any GitHub did not close. Every landed layer's sub-issue still gets the merge receipt comment. The feature issue's close stays the advisor's manual step, with its receipt.
-- Stacks opened on 0.39.0 or earlier keep their "part of" layer links until a builder or the advisor edits those pull request bodies; the advisor's read-back closes any sub-issue GitHub did not close. A project that already runs this shape as a recorded override can drop the override once it adopts this release.
 
 ## 0.38.0
 

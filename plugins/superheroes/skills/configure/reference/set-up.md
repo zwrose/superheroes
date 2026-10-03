@@ -9,6 +9,7 @@
 - §4.6 — Project-configuration dependencies and kind labels
 - §4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
 - §4.8 — Sandbox access for the claude implementer — all off by default
+- §4.9 — Size count exclusions — none by default
 - §5 — Secrets stay out of shared calibration (NFR)
 - Recovering an interrupted set-up (UFR-7)
 
@@ -68,6 +69,11 @@ layers itself. Review-crew disclosures are written in `review-init` Step 4b; tes
 in `test-pilot-init` Step 6.
 
 ## 3 — Verify command first (UFR-5)
+
+The verify command is the project's **fast iteration check**: for example lint, types, and the tests
+the change touched. It is not the project's full gate. A build re-runs it after every review fix
+round and on the final head, so a project whose verify command is its full gate pays that cost every
+time. Workhorse §8 says when the full gate runs.
 
 <!-- decision-point: id=configure-setup-verify-command mode=notify kind=ask-user-question default="mode: review-only when no verify command is detectable" carrier=review-crew-layer -->
 
@@ -339,6 +345,13 @@ Set-up writes nothing for sandbox access. The claude implementer's sandbox is fu
 default: no network, no loopback, no extra sockets, and writes confined to the run's roots. When an
 order's verification needs one of those, the owner opens it later through the view-and-tune path,
 which holds the commands (`skills/configure/reference/view-and-tune.md` § 2).
+
+## 4.9 — Size count exclusions — none by default
+
+Set-up writes nothing for size count exclusions. By default every non-test path counts toward the
+size count, and lockfiles are always left out. When a project has generated or vendored paths that
+should not count, the owner lists them later through the view-and-tune path, which holds the
+commands (`skills/configure/reference/view-and-tune.md` § 2).
 
 ## 5 — Secrets stay out of shared calibration (NFR)
 

@@ -74,6 +74,8 @@ Status vocabulary: *cut* (the *first-run-clean* stamp on the older rows is histo
 | **0.36.0** | Reset child C19 lands, a live session adopts a new plugin version in place, and field fixes | #1259 | Reset child C19 retires the charters' restated doctrine and the drift pins that guarded it, merged whole as a native stack (#1516, #1523). A live session adopts a newly installed plugin version in place, without a handoff (#1515). A binary file in a reviewed diff becomes a placeholder in the sanitized view, never a refusal (#1514). Every new issue filing needs the owner's word (#1522). `record-outcome` confirms a live pid is the lane's own builder before it refuses (#1521). A decomposition package's filing is dry-run before its merge word (#1528). Cursor is never handed a result path containing `--`, so it stops losing finished results (#1531). The release re-statement of #1514 (#1525). | (cut on receipts — every PR advisor-vetted, vets 348–355) | **cuts at the merge of release PR #1519** (superheroes-v0.36.0) — **The reset lands** stays open: C8 and C20 remain, with C13's deferred layers. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
 | **0.37.0** | A new codex default, and engine-dispatch and review field fixes | — | GPT-6.1 Sol becomes the codex default at each seat's existing effort, GPT-6 Sol stays as a pin, and Codex CLI 0.159.0 or later is required, refused at preflight otherwise (#1542). Cursor's finished work is no longer thrown away when cursor rewrites its result file before the deadline, and a dirty-tree forfeit names the paths it dirtied (#1537). Every engine attempt records host load and command time, the data for a later time-limit decision (#1538); #1537 and #1538 merged whole as stack #1539. The planted-bug control probe credits a correct Critical on the planted code, not only a finding that names the function (#1546). The size counter treats common test-support directories as test code (#1545). | (cut on receipts — every PR advisor-vetted, vets 358–362) | **cuts at the merge of release PR #1541** (superheroes-v0.37.0) — **The reset lands** stays open. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
 | **0.38.0** | The Claude implementer gets a sandboxed shell, and the verification strategy's first shared format | — | The Claude write channel runs implementer orders in a sandboxed shell (no network, writes limited to the build worktree and its git dirs, `ps` refused up front), and the registry's sonnet row becomes `sonnet-5.5` (#1557). Choosing the implementer is one calibration setting, and `claude`, the default when unset, now means that sandboxed channel; the seat map keeps both maker families off the review panel on a non-Claude host, with two known limits owner-accepted (#1558); #1557 and #1558 merged whole as stack #1559. The `gate-receipt/1` format for a project's verify-command receipt ships as a plugin reference (#1551). The wave watcher refuses instead of reporting a clean wave when its launch ledger file is missing (#1552). | (cut on receipts — every PR advisor-vetted, vets 364–367) | **cuts at the merge of release PR #1553** (superheroes-v0.38.0) — **The reset lands** stays open. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
+| **0.39.0** | Claude implementers run their own tests, and the sandbox opens on request | — | The sandboxed Claude write channel lets implementers run the Python test commands their orders name and sweeps its `.claude/.cc-writes` residue at run close (#1573, #1574, merged whole as stack #1581). Four opt-in `sandboxAccess` options (allowed domains, local ports, local sockets, extra write paths) are set and viewed through configure, offline by default (#1562). Review panels consider every installed cross-vendor engine (#1576, #1577). A wrong-typed `verifyCommand` refuses at parse instead of silently disabling the verify gate (#1572). | (cut on receipts — every PR advisor-vetted, vets 368–373) | **cut 2026-10-02** (superheroes-v0.39.0). This row and its TRANSITION heading landed late, in 0.40.0's pre-release doc pass (owner "1 b", 2026-10-02): 0.39.0 shipped without its own doc pass. |
+| **0.40.0** | The size tripwire reports itself, and lockfiles stop counting | — | `size_count` counts the uncommitted working tree read-only, and `dispatch-write` reports the size tripwire at every implementer fold (#1584, #1585, merged whole as stack #1594). The size count leaves package-manager lockfiles out for every project and honours a per-project `sizeExclude` list set through configure (#1589, #1590, merged whole as stack #1597). A stack-layer PR closes its own layer sub-issue, and the advisor's post-merge close becomes a read-back (#1592). Configure advises that the verify command be the fast iteration check, with the full gate once at the final head (#1602). | (cut on receipts — every PR advisor-vetted, vets 374–386) | **cuts at the merge of release PR #1601** (superheroes-v0.40.0) — **The reset lands** stays open. This row lands just ahead of that merge in the pre-release doc pass, because the release PR's content belongs to release-please. |
 
 
 
@@ -94,7 +96,10 @@ receipt and filed to the Backlog.) (**Review panels can't silently
 degrade** — priority 1 of the 2026-08-21 re-order — closed 2026-08-28 with the 0.32.0 cut:
 exit met including the demonstrated driver-certified receipt, and the close armed the driver
 mandate's flip (#1095): a non-driver full-lane review is now a vet finding, driver-or-park
-the only valve.)
+the only valve.) (**new verification strategy** — priority 2 of the 2026-08-28 order — retired
+2026-10-03 without a release: the reset's verdict (Spec A FR-F6, FR-B1) cut most of the plan,
+amendment #5 recorded what survives, and the surviving machinery moved to the Backlog under the
+dial, owner-ruled "10 a" at the 2026-10-02 walk.)
 
 **The order is a draw priority, not a step ladder.** When a wave forms it draws from the top;
 work lower down interleaves freely wherever its builders don't collide with work above it
@@ -111,42 +116,36 @@ the owner is the direct consumer of.
    startup context before and after. *(Opened 2026-09-14 at the stamp of Spec A and Spec B,
    owner-ruled its own milestone the same day; placed first at filing on the stamp's own
    logic, the reset is paid before the dial reads anything, and the owner re-ranks at will.)*
-2. **new verification strategy** — the approved verification-strategy spec (#1105) delivered
-   across both adoption lanes: one trustworthy local gate that says what it ran and skipped,
-   one pinned Python, review-enforced authoring rules and depth grading, and the nightly
-   instruments publishing numbers the owner can read. *(Opened 2026-08-28, owner-ruled at the
-   walk-11 sitting after the adoption plan's advisor review and the weekly-eats consumer read;
-   set to priority 1 by owner word the same sitting.)*
-3. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
    harnesses that actually deliver the click, plans derived from the spec, CLI-project
    coverage; the parallel authenticated-pilot epic closes.
-4. **Review-spec keeps pace** — every review-code/review-spec divergence itemized and either
+3. **Review-spec keeps pace** — every review-code/review-spec divergence itemized and either
    ratified as deliberate or closed; recent spec rounds reviewed with findings dispositioned;
    owner-delta and section-scoped delta rounds land. *(Opened 2026-08-24, owner-ruled at the
    0.32.0 planning sitting: the driver mandate rebuilt review-code around the certified loop and
    review-spec inherited none of it; the divergence discovery gates the delta-round pair's
    shape.)*
-5. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
+4. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
    structured self-improvement of the plugin from its own operational record looks like —
    literature survey first (the WikiSkill paper is the seed, not the boundary), then scope
    what if anything earns building. *(Opened 2026-08-28 by owner word, in-session; placed
    under Review-spec keeps pace by the same word.)*
-6. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
+5. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
    re-verification: the result contract is test-bound, the run-dir failure class is deleted,
    the dispatch guard is hard-wired, seat bundles travel intact.
-7. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
+6. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
    hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
    garbage collection, the owner-authority gate's remaining side doors.
-8. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
+7. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
    two largest charters finally under one; the activation record bound to what it certifies;
    the harness tripwire leaving a durable result.
-9. **Cross-session messaging** — a discovery starter: where the host's cross-session
+8. **Cross-session messaging** — a discovery starter: where the host's cross-session
    messaging primitive replaces the deaf-session workarounds, per surface.
-10. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
+9. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
    actually is, for the owner first. Low priority.
-11. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
+10. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
    trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
-12. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
+11. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
    Owner-ruled lower priority; revisit.
 
 **Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen

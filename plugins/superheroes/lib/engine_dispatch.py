@@ -3197,6 +3197,10 @@ def _fold_size_tripwire(state):
         }
         if "barExcluded" in counted:
             field["barExcluded"] = counted["barExcluded"]
+        if "lockfilesExcluded" in counted:
+            field["lockfilesExcluded"] = counted["lockfilesExcluded"]
+        if "pathsExcluded" in counted:
+            field["pathsExcluded"] = counted["pathsExcluded"]
         return field
     except Exception:
         return {"status": "indeterminate", "base": base, "line": line,
