@@ -254,16 +254,6 @@ def collect(repo_root, base, head="HEAD", bar_exclude=(), deadline=None, root=No
     and untracked-but-not-ignored changes, read-only. Failures return ``ok: False`` with a ``reason``.
     Both modes apply the project's ``sizeExclude`` calibration (read from ``repo_root``) in ``count()``.
     """
-    try:
-        read = core_md.read_size_exclude(repo_root, root)
-    except Exception as exc:
-        return {"ok": False, "reason": "size-exclude-unreadable",
-                "detail": "%s: %s" % (type(exc).__name__, exc)}
-    if read["reason"] == "size-exclude-malformed":
-        return {"ok": False, "reason": "size-exclude-malformed", "malformed": read["malformed"]}
-    if read["reason"] not in (None, "core-md-absent"):
-        return {"ok": False, "reason": "size-exclude-unreadable",
-                "detail": read["detail"] or read["reason"]}
     worktree = head is None
     # Axis: the trailing "--" makes base a revision only; an unresolvable base fails instead of becoming a pathspec.
     diff_tail = ["--end-of-options", base, "--"] if worktree else ["--end-of-options", base, head, "--"]
@@ -289,6 +279,19 @@ def collect(repo_root, base, head="HEAD", bar_exclude=(), deadline=None, root=No
         if failure:
             return failure
         rows = rows + untracked
+    # Axis: the calibration read runs git too, so it runs after the diffs and never past the deadline.
+    if deadline is not None and deadline - time.monotonic() <= 0:
+        return {"ok": False, "reason": "git-timeout"}
+    try:
+        read = core_md.read_size_exclude(repo_root, root)
+    except Exception as exc:
+        return {"ok": False, "reason": "size-exclude-unreadable",
+                "detail": "%s: %s" % (type(exc).__name__, exc)}
+    if read["reason"] == "size-exclude-malformed":
+        return {"ok": False, "reason": "size-exclude-malformed", "malformed": read["malformed"]}
+    if read["reason"] not in (None, "core-md-absent"):
+        return {"ok": False, "reason": "size-exclude-unreadable",
+                "detail": read["detail"] or read["reason"]}
     result = count(rows, deleted_paths, bar_exclude=bar_exclude, size_exclude=read["globs"])
     result["base"] = base
     result["head"] = head
