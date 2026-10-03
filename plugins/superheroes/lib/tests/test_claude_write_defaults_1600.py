@@ -59,6 +59,7 @@ def _lease(wt):
 def _no_ambient_ledger_root(monkeypatch):
     # the ledger deny entry follows the ambient override; a host that sets it must not leak in
     monkeypatch.delenv("SUPERHEROES_LAUNCH_LEDGER_ROOT", raising=False)
+    monkeypatch.delenv("SUPERHEROES_HEARTBEAT_ROOT", raising=False)
 
 
 def _ledger(tmp_path):
@@ -273,7 +274,25 @@ def test_open_denies_an_env_pointed_launch_ledger_root_under_tmp(tmp_path, monke
     monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
     _wt, run_dir, _res, _fake = _open_with_core(tmp_path, monkeypatch, _core_text())
     journaled = _write_opened_record(run_dir)["claudeWriteSandbox"]
-    assert journaled["denyWrite"][-1] == os.path.realpath(pointed)
+    assert journaled["denyWrite"][-2:] == [os.path.realpath(pointed), _default_ledger()]
+
+
+def test_open_denies_the_launcher_resolved_ledger_root_a_builder_carries(tmp_path, monkeypatch):
+    # axis: deny — the launcher scrubs SUPERHEROES_LAUNCH_LEDGER_ROOT from the builder and hands
+    # the root it resolved in SUPERHEROES_HEARTBEAT_ROOT; that root must be denied too
+    pointed = str(tmp_path / "operator-ledger")
+    os.makedirs(pointed)
+    launcher_env = {"SUPERHEROES_LAUNCH_LEDGER_ROOT": pointed}
+    child_env = ED.launch_ledger.scrub_env(launcher_env)
+    assert "SUPERHEROES_LAUNCH_LEDGER_ROOT" not in child_env
+    child_env["SUPERHEROES_HEARTBEAT_ROOT"] = pointed
+    for key, value in child_env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    _wt, run_dir, _res, _fake = _open_with_core(tmp_path, monkeypatch, _core_text())
+    journaled = _write_opened_record(run_dir)["claudeWriteSandbox"]
+    assert os.path.realpath(pointed) in journaled["denyWrite"]
+    assert _default_ledger() in journaled["denyWrite"]
 
 
 @pytest.mark.parametrize("name", ["journal[1]", "journal*", "journal{a,b}", "journal?"])

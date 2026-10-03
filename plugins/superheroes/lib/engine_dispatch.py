@@ -51,6 +51,7 @@ import engine_result_channel  # noqa: E402  native result channel (#1270 WO-B1)
 import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
 import git_routing  # noqa: E402  the one home of the git routing-var list
+import heartbeat  # noqa: E402  HEARTBEAT_ROOT_ENV — the ledger root the launcher hands a builder
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import model_registry  # noqa: E402  role read_write classification (#1269 WO-FIX1)
 import payload_contracts  # noqa: E402  verdict optional keys — single contract home (#1270 2c)
@@ -1821,13 +1822,20 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
         # ledger root (reservations, outcomes and vet records the launcher trusts, by default
         # under the temp dir) stay unwritable from inside the sandbox
         journal_root, _source = _journal_root_with_source(run_dir)
-        ledger_root = os.environ.get(launch_ledger.LEDGER_ROOT_ENV) or os.path.join(
-            tempfile.gettempdir(), launch_ledger.LEDGER_DIR_NAME)
+        # The launcher scrubs LEDGER_ROOT_ENV from a builder's environment and carries the root
+        # it resolved in HEARTBEAT_ROOT_ENV instead, so both spellings are denied, beside the
+        # default root, whichever of them a given process sees.
+        ledger_roots = [
+            os.environ[env_name]
+            for env_name in (launch_ledger.LEDGER_ROOT_ENV, heartbeat.HEARTBEAT_ROOT_ENV)
+            if os.environ.get(env_name)
+        ]
+        ledger_roots.append(launch_ledger.default_root())
         for denied in (
             os.path.realpath(run_dir),
             os.path.realpath(journal_root),
             os.path.realpath(_worktree_lease_path(cwd_real)),
-            os.path.realpath(os.path.abspath(ledger_root)),
+            *(os.path.realpath(os.path.abspath(root)) for root in ledger_roots),
         ):
             # the runtime reads a deny entry as a glob too: a bracket spelling would match a
             # sibling and leave the literal path writable under the /tmp grant
