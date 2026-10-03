@@ -341,3 +341,32 @@ open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' ow
     and the plugin's moments drawn as conversation. Not yet approved. Local source:
     this session's scratchpad `board/project/` (copy it into the record at approval).
     Open for the owner: the spec-split trigger.
+
+## Board round 1 comments (2026-09-29) and rulings (2026-10-03)
+
+Owner comments on the board: the flow should be a real flow chart; the review cycle should
+illustrate the process; "drawn as the conversation" wasn't useful; the line artboard was a
+*less* detailed view than chat ("visuals should never be"), needs real descriptions, examples
+and applied examples; tap sheets should be drawn as a light web app; a superheroes visual theme
+should ship with the plugin for these artifacts.
+
+Rulings (owner agreed with every recommendation, 2026-10-03):
+20. Draw two or three superheroes theme directions; the owner picks one; the plugin ships it.
+21. Category 1 stays project level (who the product is for and what it's for). Category 2
+    becomes the per-piece user context: who this feature is for and what they're trying to do,
+    captured in each discovery.
+22. The separate four tests go. The line reads: if something approved, a standing rule, the
+    code or a checkable fact already answers it, or the owner handed it back, it's craft; if it
+    touches any of the ten categories, it's the owner's; in doubt, the owner's.
+23. Scope: a light check at intake for obvious bundles; the real split check when the spec is
+    written (the length trigger and the source check's "is this one piece").
+24. The writing standard runs as a late pass, after the review rounds converge and before the
+    owner's sheet, followed by a check that no meaning shifted.
+25. The advisor's vet never fixes: it sends everything back to the discovery session, which
+    fixes, then the advisor re-vets.
+26. One PR: after approval the advisor adds the breakdown to the same spec PR and vets it; one
+    merge word covers both; issues are filed, with the owner's word, as it merges.
+
+Owner feedback on the round (binding on method): "none of those were really rulings or
+recommendations." When an owner's comment already states the direction and the recommendation
+only agrees, act on it and report; ask only about real choices.
