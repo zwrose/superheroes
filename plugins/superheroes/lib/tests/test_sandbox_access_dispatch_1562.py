@@ -63,7 +63,8 @@ _BYTE_SANDBOX = dict(_SANDBOX, uvCacheDir="/cache/uv")
 _TODAYS_SETTINGS = (
     '{"env":{"UV_CACHE_DIR":"/cache/uv","UV_OFFLINE":"1"},'
     '"permissions":{"allow":["Bash(python:*)","Bash(python3:*)","Bash(pytest:*)",'
-    '"Bash(scripts/pinned-python:*)","Bash(echo:*)"],"deny":["WebFetch","WebSearch"]},'
+    '"Bash(scripts/pinned-python:*)","Bash(echo:*)","Bash(npm:*)","Bash(npx:*)","Bash(node:*)",'
+    '"Bash(pnpm:*)","Bash(yarn:*)","Bash(ps:*)"],"deny":["WebFetch","WebSearch"]},'
     '"sandbox":{"allowUnsandboxedCommands":false,"autoAllowBashIfSandboxed":true,'
     '"enabled":true,"failIfUnavailable":true,'
     '"filesystem":{"allowWrite":["/work/wt","/work/main/.git/worktrees/wt","/work/main/.git",'
@@ -158,6 +159,9 @@ def _assert_options(opened, settings, *, domains=None, ports=False, sockets=None
     network = settings["sandbox"]["network"]
     allow_write = settings["sandbox"]["filesystem"]["allowWrite"]
     roots = opened["claudeWriteSandbox"]["writeRoots"]
+    # the open-time defaults (#1600): /tmp writes and, on macOS, localhost binding
+    tmp_roots = opened["claudeWriteSandbox"]["tmpWriteRoots"]
+    binding_default = opened["claudeWriteSandbox"]["localBinding"]
     if domains is None:
         assert network["allowedDomains"] == []
         assert settings["env"]["UV_OFFLINE"] == "1"
@@ -165,7 +169,7 @@ def _assert_options(opened, settings, *, domains=None, ports=False, sockets=None
         assert network["allowedDomains"] == domains
         assert "UV_OFFLINE" not in settings["env"]
     assert network["strictAllowlist"] is True
-    if ports:
+    if ports or binding_default:
         assert network["allowLocalBinding"] is True
     else:
         assert "allowLocalBinding" not in network
@@ -174,9 +178,9 @@ def _assert_options(opened, settings, *, domains=None, ports=False, sockets=None
     else:
         assert network["allowUnixSockets"] == sockets
     if extra is None:
-        assert allow_write == roots
+        assert allow_write == roots + tmp_roots
     else:
-        assert allow_write == roots + extra
+        assert allow_write == roots + tmp_roots + extra
 
 
 # --- T1: byte identity (G16) -----------------------------------------------------------------
@@ -194,6 +198,8 @@ def test_all_off_differs_from_0_38_0_only_by_allow_rules():
     assert new["permissions"].pop("allow") == [
         "Bash(python:*)", "Bash(python3:*)", "Bash(pytest:*)",
         "Bash(scripts/pinned-python:*)", "Bash(echo:*)",
+        "Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(pnpm:*)",
+        "Bash(yarn:*)", "Bash(ps:*)",
     ]
     assert new == json.loads(_SETTINGS_0_38_0)
 

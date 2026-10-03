@@ -754,10 +754,19 @@ A run opened without the flags folds with `"sizeTripwireAbsent": "size-inputs-no
 
 A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inline `--settings`.
 
-- **Allowed:** writes to the build worktree, its git dir, the shared git common dir, and the uv
-  cache. **Blocked:** the network (unless `sandboxAccess` opens it), writes to the common dir's
-  `hooks` and `config` and the worktree's `config.worktree`, WebFetch and WebSearch, and any command
-  outside the sandbox. If the sandbox cannot start, the run fails instead of running unsandboxed.
+- **Allowed:** writes to the build worktree, its git dir, the shared git common dir, the uv
+  cache, and `/tmp` (with its realpath, `/private/tmp` on macOS); on macOS, binding and connecting
+  on localhost, which also allows a bind on 0.0.0.0. The `/tmp` writes and the localhost binding
+  are on by default for every project. **Blocked:** the network (unless `sandboxAccess` opens it),
+  writes to the common dir's `hooks` and `config` and the worktree's `config.worktree`, the
+  runner's own state (its run dir, the supervisor journal root, the worktree lease, and the launch
+  ledger root, named by the ledger-root override, by the root the launcher hands a builder, and by
+  the default root), all denied at open so the `/tmp` allow cannot reach them on any host,
+  WebFetch and WebSearch, and any command outside the sandbox. Unix-domain socket binds under
+  `/tmp` stay blocked, because the runtime's socket grant is a path prefix that would also let a
+  sandboxed command connect to any host process's socket there, so a tool that binds a socket in
+  `/tmp` needs a project-side setting (for example mongod `--nounixsocket`, or passing `TMPDIR`
+  through). If the sandbox cannot start, the run fails instead of running unsandboxed.
 - **Settings files:** `--restricted` ignores user, project, and local settings and confines
   Write and Edit to the working directory.
 - **uv is offline** (`UV_OFFLINE=1`) unless `allowedDomains` is non-empty: the order's Python
@@ -770,10 +779,13 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   the sandbox's per-user temp dir and nothing else, so no Docker socket
   (`sandbox.network.allowUnixSockets`); `extraWritePaths` adds writable roots
   (`sandbox.filesystem.allowWrite`). The deny list (the git hooks, the git config files, the worktree
-  identity files) wins over any extra path.
+  identity files) wins over any extra path. Localhost binding is already on for every run on macOS,
+  so setting `localPorts` adds nothing there; on any other host it still refuses.
 - **Roots freeze at open.** The writable roots are resolved once at run open and journaled as
   `claudeWriteSandbox` in the run-opened record; continuations and spawns reuse them. The access
-  options are read once at open and journaled with the roots as `claudeWriteSandbox.access`, so a
+  options are read once at open and journaled with the roots as `claudeWriteSandbox.access`, and the
+  two defaults are journaled as `claudeWriteSandbox.tmpWriteRoots` and
+  `claudeWriteSandbox.localBinding`, so a
   calibration edit mid-run does not change a running run's sandbox; a run opened without that field
   reads as all off. A run opened without the roots refuses `engine-config:sandbox-roots-missing`. A
   root that cannot be resolved refuses at open, with nothing opened:
@@ -785,13 +797,14 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   its Linux one, so on any other host an open that asks for either refuses
   `engine-config:sandbox-access-unsupported-platform` rather than recording a grant nothing honors.
   An `extraWritePaths` entry that resolves to `/` through a symlink refuses
-  `engine-config:sandbox-access-malformed`.
-- **`ps` is blocked** inside the sandbox (measured on macOS). Pass `--requires-process-listing`
+  `engine-config:sandbox-access-malformed`. A `/tmp` whose realpath resolves to `/` is not journaled.
+- **`ps` is blocked** inside the sandbox (measured on macOS), although `ps` is among the allow rules:
+  the rule only skips the approval prompt and the sandbox itself still blocks it. Pass `--requires-process-listing`
   when the order's own verification lists processes, for example a test that shells out to `ps`;
   a claude write then refuses `engine-config:sandbox-process-listing-unavailable` before any run
   opens. Codex and cursor ignore the flag.
-- **Temp-dir residual:** the sandbox's per-user temp dir stays writable (a platform default,
-  measured as `/tmp/claude-<uid>`), and other Claude sessions' scratch can live there. The
+- **Temp-dir residual:** all of `/tmp` is writable, so the sandbox's per-user temp dir (measured as
+  `/tmp/claude-<uid>`) is too, and other Claude sessions' scratch can live there. The
   `localSockets` grant follows Claude Code 2.1.284's own rule for that dir: `CLAUDE_CODE_TMPDIR`
   when the whole per-user path `<CLAUDE_CODE_TMPDIR>/claude-<uid>` is at most 44 bytes, otherwise
   `/tmp`; the grant is never widened to bare `/tmp`.

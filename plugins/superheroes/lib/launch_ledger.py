@@ -526,6 +526,11 @@ def validate_candidate_root(repo_root, root, env=None):
     return _candidate_root_validation_reason(repo_root, root, env=env) is None
 
 
+def default_root():
+    """The ledger root used when no override names one."""
+    return os.path.join(tempfile.gettempdir(), LEDGER_DIR_NAME)
+
+
 def resolve_root(repo_root, env=None):
     """Resolve ledger root outside the repo; refuse in-repo paths."""
     if env is None:
@@ -536,7 +541,7 @@ def resolve_root(repo_root, env=None):
         return {"ok": False, "root": None, "reason": "ledger-repo-identity-unavailable"}
 
     override = env.get(LEDGER_ROOT_ENV)
-    root = override if override else os.path.join(tempfile.gettempdir(), LEDGER_DIR_NAME)
+    root = override if override else default_root()
     try:
         root = os.path.realpath(os.path.abspath(root))
     except OSError:

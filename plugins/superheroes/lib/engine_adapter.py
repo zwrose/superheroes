@@ -263,6 +263,14 @@ def claude_write_sandbox_valid(sandbox):
     tmp_base = sandbox.get("claudeTmpBase")
     if tmp_base is not None and not _abs_str(tmp_base):
         return False
+    if "tmpWriteRoots" in sandbox:
+        tmp_roots = sandbox["tmpWriteRoots"]
+        if not isinstance(tmp_roots, list) or not all(_abs_str(p) for p in tmp_roots):
+            return False
+        if any(sandbox_path_has_glob(p) for p in tmp_roots):
+            return False
+    if "localBinding" in sandbox and type(sandbox["localBinding"]) is not bool:
+        return False
     return _sandbox_access_valid(sandbox.get("access"))
 
 
@@ -290,8 +298,9 @@ def _sandbox_access_valid(access):
 
 
 # WORKAROUND: the harness's sandbox auto-allow misses command shapes its safety check flags (`-X` on
-# a Python call, `$?`), so the write channel allows the project's Python, pytest and echo command
-# families by rule and lets the sandbox confine them
+# a Python call, `$?`), so the write channel allows the project's Python, pytest, echo, node
+# toolchain (npm, npx, node, pnpm, yarn) and `ps` command families by rule and lets the sandbox
+# confine them
 # delete-when: `autoAllowBashIfSandboxed` auto-approves every sandboxed command shape on the Claude
 # Code version the channel runs
 # axis: the rules cover only the named command families; every other shape keeps the harness's
@@ -303,6 +312,12 @@ CLAUDE_WRITE_BASH_ALLOW = (
     "Bash(pytest:*)",
     "Bash(scripts/pinned-python:*)",
     "Bash(echo:*)",
+    "Bash(npm:*)",
+    "Bash(npx:*)",
+    "Bash(node:*)",
+    "Bash(pnpm:*)",
+    "Bash(yarn:*)",
+    "Bash(ps:*)",
 )
 
 
@@ -320,9 +335,10 @@ def claude_write_sandbox_settings(sandbox):
     if uv_cache is not None:
         env["UV_CACHE_DIR"] = uv_cache
         allow_write.append(uv_cache)
+    allow_write.extend(sandbox.get("tmpWriteRoots") or [])
     allow_write.extend(extra_paths)
     network = {"allowedDomains": list(domains), "strictAllowlist": True}
-    if access.get("localPorts"):
+    if sandbox.get("localBinding") is True or access.get("localPorts"):
         network["allowLocalBinding"] = True
     if socket_dirs:
         network["allowUnixSockets"] = list(socket_dirs)
