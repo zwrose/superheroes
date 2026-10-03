@@ -427,3 +427,9 @@ Board round 3 under way (owner: "go").
 39. **BOARD APPROVED** (owner, 2026-10-03: "ok i think i'm aligned to the board!"), round 3 as
     published plus ruling 38, including the craft call shown on its start page (hand-backs in
     Canon, configure item 13 points there). The spec is written from this board and rulings 1-39.
+40. **Two specs** (owner: "good with the split"): (a) the alignment flow: the owner-vs-craft line,
+    who-it's-for, Canon, the discovery flow and the review cycle; (b) the review surface: the
+    comic-panel theme, the shared review template, image zoom. (a) references (b).
+41. **Consent for the review rounds** (owner: "yep, go"): the three checks run automatically, up
+    to 4 rounds per spec, by Astra called directly (the configure seat doesn't exist yet), on
+    the owner's Codex usage. Source tags cite this file's ruling numbers until Canon exists.
