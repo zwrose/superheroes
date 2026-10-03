@@ -1798,10 +1798,17 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
             return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
         if extra not in extra_write_paths:
             extra_write_paths.append(extra)
+    tmp_write_roots = []
+    for tmp_root in ("/tmp", os.path.realpath("/tmp")):
+        if os.path.isdir(tmp_root) and tmp_root not in tmp_write_roots:
+            tmp_write_roots.append(tmp_root)
     sandbox = {
         "writeRoots": write_roots,
         "denyWrite": deny_write,
         "uvCacheDir": uv_cache_dir,
+        # the owner-ruled defaults (#1600), frozen at open like the roots
+        "tmpWriteRoots": tmp_write_roots,
+        "localBinding": _host_platform() == _LOCAL_ACCESS_PLATFORM,
         "access": {
             "allowedDomains": list(calibrated["allowedDomains"]),
             "localPorts": calibrated["localPorts"],

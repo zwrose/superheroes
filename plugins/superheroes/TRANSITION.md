@@ -9,6 +9,17 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Claude write sandbox: node toolchains, localhost and /tmp by default
+
+- The claude write channel now allows the `npm`, `npx`, `node`, `pnpm`, `yarn` and `ps` command families by rule. A rule only skips the approval prompt; the sandbox still confines the command.
+- Two defaults are on for every project, with no calibration: localhost binding (macOS only; it also allows a bind on 0.0.0.0), and writes under `/tmp` and `/private/tmp`.
+- Still denied: the network beyond the calibrated domains, writes outside the worktree, the git dirs and the temp dirs, writes to `.git/hooks`, the git config files and the worktree pointer files, WebFetch and WebSearch, and any unsandboxed fallback.
+- `ps` is still blocked by the sandbox itself, and the `--requires-process-listing` refusal is unchanged.
+- The run-opened record gains `claudeWriteSandbox.tmpWriteRoots` and `claudeWriteSandbox.localBinding`, resolved once at open. A record without them emits neither default.
+- There is no switch back to the stricter posture; none was asked for.
+- Codex and Cursor are unchanged.
+- **Finish or abandon in-flight claude write runs before upgrading.** A run opened by an older plugin refuses its continuation, because its stored settings lack the new rules.
+
 ### Claude write channel: implementers can run their own Python tests
 
 - Sandboxed Claude implementers now run the commands their orders name for Python tests. Before, python `-X` flags (including the pinned gate command `scripts/pinned-python -B -X pycache_prefix=… -m pytest …`) and `; echo "exit=$?"` were refused with "This command requires approval", and implementers handed back untested work. The channel now allows the `python`, `python3`, `pytest`, `scripts/pinned-python` and `echo` command families by rule. The sandbox still denies the network, writes outside the build roots, and writes to the git hooks and config.

@@ -100,7 +100,9 @@ def test_settings_json_keys():
         "env": {"UV_OFFLINE": "1"},
         "permissions": {
             "allow": ["Bash(python:*)", "Bash(python3:*)", "Bash(pytest:*)",
-                      "Bash(scripts/pinned-python:*)", "Bash(echo:*)"],
+                      "Bash(scripts/pinned-python:*)", "Bash(echo:*)",
+                      "Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(pnpm:*)",
+                      "Bash(yarn:*)", "Bash(ps:*)"],
             "deny": ["WebFetch", "WebSearch"],
         },
         "sandbox": {
