@@ -69,6 +69,11 @@ in `test-pilot-init` Step 6.
 
 ## 3 — Verify command first (UFR-5)
 
+The verify command is the project's **fast iteration check**: for example lint, types, and the tests
+the change touched. It is not the project's full gate. A build re-runs it after every review fix
+round and on the final head, so a project whose verify command is its full gate pays that cost every
+time. Workhorse §8 says when the full gate runs.
+
 <!-- decision-point: id=configure-setup-verify-command mode=notify kind=ask-user-question default="mode: review-only when no verify command is detectable" carrier=review-crew-layer -->
 
 When no verify command is detectable, take the provisional default **`mode: review-only`** (matching

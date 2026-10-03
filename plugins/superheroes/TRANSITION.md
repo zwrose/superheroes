@@ -9,6 +9,12 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### Configure advice: the verify command is the fast iteration check
+
+- Configure now advises that the calibrated verify command be the project's fast iteration check (lint, types, the tests the change touched), not its full gate. A build re-runs the verify command after every review fix round and on the final head.
+- Workhorse §8 now says the project's full local gate runs at most once per build, at the final head, and not at all when CI already passed that head; CI is the final word on the suite.
+- Existing calibrations are unchanged and nothing re-reads them. A project whose verify command is its full gate keeps paying for it on every run until its owner re-runs configure or edits `verifyCommand`.
+
 ### Claude write channel: implementers can run their own Python tests
 
 - Sandboxed Claude implementers now run the commands their orders name for Python tests. Before, python `-X` flags (including the pinned gate command `scripts/pinned-python -B -X pycache_prefix=… -m pytest …`) and `; echo "exit=$?"` were refused with "This command requires approval", and implementers handed back untested work. The channel now allows the `python`, `python3`, `pytest`, `scripts/pinned-python` and `echo` command families by rule. The sandbox still denies the network, writes outside the build roots, and writes to the git hooks and config.
