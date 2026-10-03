@@ -11,22 +11,12 @@ belongs to and lists every change with its replacement.
 
 ### Before you upgrade
 
-- **Nothing to do before upgrading.** No setting is rewritten and no in-flight run is refused.
+- **Finish or abandon in-flight claude write runs.** A claude write run opened under 0.39.0 refuses its continuation, because its stored sandbox settings lack the new allow rules; open a fresh dispatch. No setting is rewritten.
+- **Claude write sandbox defaults widen for every project:** `npm`, `npx`, `node`, `pnpm`, `yarn` and `ps` run without a prompt (`ps` stays blocked by the sandbox itself), writes under `/tmp` are allowed, and on macOS localhost binding is on (it also allows a bind on 0.0.0.0). Unix-domain socket binds under `/tmp` stay denied. There is no switch back.
 - **Size count:** every project's count now leaves package-manager lockfiles out (listed, with their line counts). A project that wants other paths left out sets `sizeExclude` through configure; nothing else is excluded until it does.
 - **Implementer dispatches:** to get the size tripwire reported at every fold, pass `--size-base` and `--size-line` on each `dispatch-write` (workhorse dispatch doctrine). A run opened without them, including one opened under 0.39.0, folds as before plus `sizeTripwireAbsent`.
 - **Stack layers:** stacks opened on 0.39.0 or earlier keep their "part of" layer links until their PR bodies are edited. A project that already ran "a layer PR closes its own sub-issue" as a recorded override can drop the override.
 - **Verify command:** if your calibrated verify command is your full gate, consider changing it to your fast iteration check through configure's "Change the verify command". Existing calibrations aren't rewritten.
-
-### Claude write sandbox: node toolchains, localhost and /tmp by default
-
-- The claude write channel now allows the `npm`, `npx`, `node`, `pnpm`, `yarn` and `ps` command families by rule. A rule only skips the approval prompt; the sandbox still confines the command.
-- Two defaults are on for every project, with no calibration: localhost binding (macOS only; it also allows a bind on 0.0.0.0), and writes under `/tmp` and `/private/tmp`.
-- Still denied: the network beyond the calibrated domains, writes outside the worktree, the git dirs and the temp dirs, writes to `.git/hooks`, the git config files and the worktree pointer files, the runner's run dir and the supervisor journal root (denied at run open, so the `/tmp` default cannot reach them), WebFetch and WebSearch, and any unsandboxed fallback.
-- `ps` is still blocked by the sandbox itself, and the `--requires-process-listing` refusal is unchanged.
-- The run-opened record gains `claudeWriteSandbox.tmpWriteRoots` and `claudeWriteSandbox.localBinding`, resolved once at open. A record without them emits neither default.
-- There is no switch back to the stricter posture; none was asked for.
-- Codex and Cursor are unchanged.
-- **Finish or abandon in-flight claude write runs before upgrading.** A run opened by an older plugin refuses its continuation, because its stored settings lack the new rules.
 
 ### dispatch-write reports the size tripwire at fold
 
@@ -57,6 +47,18 @@ belongs to and lists every change with its replacement.
 - A stack-layer pull request now opens with `Closes #<its own layer sub-issue>` and names the feature issue only with "part of". GitHub shows the link natively and closes the layer's sub-issue when the layer lands on the default branch. No layer merge closes the feature issue. The rule's home is `rubric/native-stacks.md` § Each layer is a sub-issue, item 6.
 - The advisor's post-merge step changes from closing each layer sub-issue by hand to reading back that each landed layer's sub-issue is `CLOSED`, closing any GitHub did not close. Every landed layer's sub-issue still gets the merge receipt comment. The feature issue's close stays the advisor's manual step, with its receipt.
 - Stacks opened on 0.39.0 or earlier keep their "part of" layer links until a builder or the advisor edits those pull request bodies; the advisor's read-back closes any sub-issue GitHub did not close. A project that already runs this shape as a recorded override can drop the override once it adopts this release.
+
+### Claude write sandbox: node toolchains, localhost and /tmp by default
+
+- The claude write channel now allows the `npm`, `npx`, `node`, `pnpm`, `yarn` and `ps` command families by rule. A rule only skips the approval prompt; the sandbox still confines the command.
+- Two defaults are on for every project, with no calibration: localhost binding (macOS only; it also allows a bind on 0.0.0.0), and writes under `/tmp` and `/private/tmp`.
+- Still denied: the network beyond the calibrated domains, writes outside the worktree, the git dirs and the temp dirs, writes to `.git/hooks`, the git config files and the worktree pointer files, the runner's own state (the run dir, the supervisor journal root, the worktree lease and the launch ledger root, denied at run open so the `/tmp` default cannot reach them), WebFetch and WebSearch, and any unsandboxed fallback.
+- Unix-domain socket binds under `/tmp` stay denied: the runtime's socket grant is a path prefix that would also let a sandboxed command connect to any host process's socket there. A tool that binds a socket in `/tmp` needs a project-side setting (for example mongod `--nounixsocket`, or passing `TMPDIR` through).
+- `ps` is still blocked by the sandbox itself, and the `--requires-process-listing` refusal is unchanged.
+- The run-opened record gains `claudeWriteSandbox.tmpWriteRoots` and `claudeWriteSandbox.localBinding`, resolved once at open. A record without them emits neither default. Its `claudeWriteSandbox.denyWrite` also lists the runner-state paths above; a run dir, journal root, lease path or ledger root whose resolved path carries a glob character refuses `engine-config:sandbox-roots-unresolvable` at open.
+- There is no switch back to the stricter posture; none was asked for.
+- Codex and Cursor are unchanged.
+- **Finish or abandon in-flight claude write runs before upgrading.** A run opened by an older plugin refuses its continuation, because its stored settings lack the new rules.
 
 ## 0.39.0
 
