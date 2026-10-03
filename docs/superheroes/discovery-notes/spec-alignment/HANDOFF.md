@@ -391,6 +391,17 @@ Owner: "really happy with this iteration ... converging." Directions taken from 
     other standing use is built in. Standing rule: when a decision has relevant images, the card
     includes them, and they can be tapped to zoom, especially on a phone.
 
-Open for the owner: how principles are tracked over time and whether they, the threat model
-and the ruling ledger are one primitive; whether source tags cite transcript lines (only if
-light); the spec-split trigger.
+    Amended (owner): not limited to when the owner asks; any session may reach for it. What is
+    not formalized yet is any other case where it is *expected* to be used, beyond specs and
+    discovery.
+32. **Principles live in the ledger** as standing rulings (a ruling marked to apply to future
+    work). The threat model is not migrated now; the downstream review-overhaul discovery
+    should consider moving some of review's inputs into the ledger. **The ledger gets a new,
+    more evocative name** (open).
+33. **Source tags cite no transcript lines.** A ledger entry carries the owner's exact words plus
+    the session id and time as a lookup pointer (owner: "ok").
+34. **One card shape for every review** using the template: context, images, options,
+    recommendation, note; Aligned and Discuss always; a direct pick when the card has options; no
+    per-review buttons (owner: "ok").
+
+Open for the owner: the ledger's name; the spec-split trigger.
