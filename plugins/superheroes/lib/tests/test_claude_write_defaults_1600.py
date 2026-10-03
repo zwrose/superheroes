@@ -168,6 +168,86 @@ def test_continuation_reuses_journaled_defaults(tmp_path, monkeypatch):
     assert resumed.calls[0]["argv"] == opened["argv"]
 
 
+def test_open_denies_the_run_dir_and_the_journal_root(tmp_path, monkeypatch):
+    # axis: deny — the /tmp allow must not reach the supervisor journal, so deny wins on every host
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    wt, run_dir, _res, fake = _open_with_core(tmp_path, monkeypatch, _core_text())
+    opened = _write_opened_record(run_dir)
+    journaled = opened["claudeWriteSandbox"]
+    journal_root = os.path.realpath(str(tmp_path / "dispatch-journal-root"))
+    assert journaled["denyWrite"][6:] == [os.path.realpath(run_dir), journal_root]
+    deny = _settings_of(opened["argv"])["sandbox"]["filesystem"]["denyWrite"]
+    assert deny == journaled["denyWrite"]
+    assert _settings_of(fake.calls[0]["argv"]) == _settings_of(opened["argv"])
+
+
+def test_open_denies_the_default_temp_journal_root(tmp_path, monkeypatch):
+    # the journal root the runner picks with no pointer and no env: tempfile.gettempdir()/name
+    monkeypatch.delenv(ED.JOURNAL_ROOT_ENV)
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    wt, run_dir, _res, _fake = _open_with_core(tmp_path, monkeypatch, _core_text())
+    journaled = _write_opened_record(run_dir)["claudeWriteSandbox"]
+    default_root = os.path.realpath(
+        os.path.join(str(tmp_path / "temp-base"), ED.JOURNAL_ROOT_NAME))
+    assert journaled["denyWrite"][6:] == [os.path.realpath(run_dir), default_root]
+
+
+def test_open_denies_the_pointer_journal_root(tmp_path, monkeypatch):
+    pointed = str(tmp_path / "pointed-root")
+    os.makedirs(pointed)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    with open(os.path.join(run_dir, "journal-root.txt"), "w", encoding="utf-8") as fh:
+        fh.write(pointed)
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    wt, _main = S1554._linked_worktree(tmp_path)
+    sandbox, refusal = ED._resolve_claude_write_sandbox(
+        os.path.realpath(wt), timeout=30, run_dir=os.path.realpath(run_dir))
+    assert refusal is None
+    assert sandbox["denyWrite"][6:] == [os.path.realpath(run_dir), os.path.realpath(pointed)]
+
+
+def test_deny_entries_are_deduplicated(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, run_dir)
+    wt, _main = S1554._linked_worktree(tmp_path)
+    sandbox, refusal = ED._resolve_claude_write_sandbox(
+        os.path.realpath(wt), timeout=30, run_dir=os.path.realpath(run_dir))
+    assert refusal is None
+    assert sandbox["denyWrite"][6:] == [os.path.realpath(run_dir)]
+
+
+def test_continuation_reuses_the_journaled_deny_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    wt, run_dir, _first, fake = _open_with_core(
+        tmp_path, monkeypatch, _core_text(), max_wait=0)
+    assert fake.calls == []
+    opened = _write_opened_record(run_dir)
+    journaled_deny = list(opened["claudeWriteSandbox"]["denyWrite"])
+    assert journaled_deny[6:] == [
+        os.path.realpath(run_dir), os.path.realpath(str(tmp_path / "dispatch-journal-root"))]
+    # the ambient journal root changes after open; a continuation must not re-derive the deny list
+    monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, str(tmp_path / "another-root"))
+    resumed = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    _dispatch_write(tmp_path, resumed, cwd=wt, run_dir=run_dir, seat=_implementer_claude_seat())
+    assert len(resumed.calls) == 1
+    settings = _settings_of(resumed.calls[0]["argv"])
+    assert settings["sandbox"]["filesystem"]["denyWrite"] == journaled_deny
+    assert resumed.calls[0]["argv"] == opened["argv"]
+
+
+def test_a_tmp_root_resolving_to_slash_is_not_journaled(tmp_path, monkeypatch):
+    real_realpath = os.path.realpath
+    monkeypatch.setattr(
+        ED.os.path, "realpath",
+        lambda p, *a, **k: "/" if p == "/tmp" else real_realpath(p, *a, **k))
+    wt, _main = S1554._linked_worktree(tmp_path)
+    sandbox, refusal = ED._resolve_claude_write_sandbox(real_realpath(wt), timeout=30)
+    assert refusal is None
+    assert sandbox["tmpWriteRoots"] == []
+
+
 @pytest.mark.parametrize("bad", [
     pytest.param({"tmpWriteRoots": "/tmp"}, id="tmp-not-a-list"),
     pytest.param({"tmpWriteRoots": ["tmp"]}, id="tmp-relative"),

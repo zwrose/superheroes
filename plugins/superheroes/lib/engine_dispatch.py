@@ -1715,8 +1715,11 @@ def _git_routing_scrubbed_environ():
         os.environ.update(saved)
 
 
-def _resolve_claude_write_sandbox(cwd_real, *, timeout):
+def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
     """Resolve the claude write channel's sandbox inputs ONCE, at run open (#1554).
+
+    ``run_dir`` is the dispatch run directory: it and the supervisor journal root are denied for
+    writes, so the default /tmp grant (#1600) cannot reach the decision record.
 
     Returns (sandbox_dict, None) or (None, refusal_token). The dict is journaled in the
     run-opened record and reused verbatim on every continuation and spawn — never re-derived
@@ -1807,8 +1810,18 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout):
             extra_write_paths.append(extra)
     tmp_write_roots = []
     for tmp_root in ("/tmp", os.path.realpath("/tmp")):
+        # a /tmp that resolves to / would grant the whole filesystem
+        if not os.path.realpath(tmp_root).strip("/"):
+            continue
         if os.path.isdir(tmp_root) and tmp_root not in tmp_write_roots:
             tmp_write_roots.append(tmp_root)
+    if run_dir is not None:
+        # deny wins over the /tmp allow: the run dir and the journal root the runner trusts as
+        # its spawn/retry/fold record stay unwritable from inside the sandbox
+        journal_root, _source = _journal_root_with_source(run_dir)
+        for denied in (os.path.realpath(run_dir), os.path.realpath(journal_root)):
+            if denied not in deny_write:
+                deny_write.append(denied)
     sandbox = {
         "writeRoots": write_roots,
         "denyWrite": deny_write,
@@ -6576,7 +6589,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 claude_write_sandbox = opened.get("claudeWriteSandbox")
             elif not requires_process_listing:
                 claude_write_sandbox, sandbox_refusal = _resolve_claude_write_sandbox(
-                    cwd_real, timeout=preflight_timeout,
+                    cwd_real, timeout=preflight_timeout, run_dir=run_dir_real,
                 )
                 if sandbox_refusal is not None:
                     return _write_preflight_terminal(

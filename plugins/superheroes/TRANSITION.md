@@ -13,7 +13,7 @@ belongs to and lists every change with its replacement.
 
 - The claude write channel now allows the `npm`, `npx`, `node`, `pnpm`, `yarn` and `ps` command families by rule. A rule only skips the approval prompt; the sandbox still confines the command.
 - Two defaults are on for every project, with no calibration: localhost binding (macOS only; it also allows a bind on 0.0.0.0), and writes under `/tmp` and `/private/tmp`.
-- Still denied: the network beyond the calibrated domains, writes outside the worktree, the git dirs and the temp dirs, writes to `.git/hooks`, the git config files and the worktree pointer files, WebFetch and WebSearch, and any unsandboxed fallback.
+- Still denied: the network beyond the calibrated domains, writes outside the worktree, the git dirs and the temp dirs, writes to `.git/hooks`, the git config files and the worktree pointer files, the runner's run dir and the supervisor journal root (denied at run open, so the `/tmp` default cannot reach them), WebFetch and WebSearch, and any unsandboxed fallback.
 - `ps` is still blocked by the sandbox itself, and the `--requires-process-listing` refusal is unchanged.
 - The run-opened record gains `claudeWriteSandbox.tmpWriteRoots` and `claudeWriteSandbox.localBinding`, resolved once at open. A record without them emits neither default.
 - There is no switch back to the stricter posture; none was asked for.

@@ -758,8 +758,9 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   cache, and `/tmp` (with its realpath, `/private/tmp` on macOS); on macOS, binding and connecting
   on localhost, which also allows a bind on 0.0.0.0. The `/tmp` writes and the localhost binding are
   on by default for every project. **Blocked:** the network (unless `sandboxAccess` opens it), writes to the common dir's
-  `hooks` and `config` and the worktree's `config.worktree`, WebFetch and WebSearch, and any command
-  outside the sandbox. If the sandbox cannot start, the run fails instead of running unsandboxed.
+  `hooks` and `config` and the worktree's `config.worktree`, the runner's run dir and the supervisor
+  journal root (denied at open, so the `/tmp` allow cannot reach the decision record on any host),
+  WebFetch and WebSearch, and any command outside the sandbox. If the sandbox cannot start, the run fails instead of running unsandboxed.
 - **Settings files:** `--restricted` ignores user, project, and local settings and confines
   Write and Edit to the working directory.
 - **uv is offline** (`UV_OFFLINE=1`) unless `allowedDomains` is non-empty: the order's Python
@@ -790,7 +791,7 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   its Linux one, so on any other host an open that asks for either refuses
   `engine-config:sandbox-access-unsupported-platform` rather than recording a grant nothing honors.
   An `extraWritePaths` entry that resolves to `/` through a symlink refuses
-  `engine-config:sandbox-access-malformed`.
+  `engine-config:sandbox-access-malformed`. A `/tmp` whose realpath resolves to `/` is not journaled.
 - **`ps` is blocked** inside the sandbox (measured on macOS), although `ps` is among the allow rules:
   the rule only skips the approval prompt and the sandbox itself still blocks it. Pass `--requires-process-listing`
   when the order's own verification lists processes, for example a test that shells out to `ps`;
@@ -803,8 +804,7 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   `/tmp`; the grant is never widened to bare `/tmp`.
 - **Command families allowed by rule.** The settings carry `permissions.allow` rules for the
   command families listed in `CLAUDE_WRITE_BASH_ALLOW` in `lib/engine_adapter.py` (the one home of
-  that list), the Python, pytest and echo families, the node toolchain families (`npm`, `npx`,
-  `node`, `pnpm`, `yarn`) and `ps`, because the sandbox auto-allow
+  that list), because the sandbox auto-allow
   alone leaves some shapes needing approval, which print mode denies: python `-X` flags (the pinned
   gate command's `-X pycache_prefix=…`) and `$?`. Those shapes now run, still inside the sandbox
   (`allowUnsandboxedCommands: false`). An env-var prefix outside the harness's safe list
