@@ -17,6 +17,7 @@ Detector axes (bite-proof):
 - test_validity_* — journal validity: a malformed default refuses
 - test_process_listing_refusal_unchanged — refusal: `ps` is allowed by rule, still refused
 """
+import hashlib
 import json
 import os
 
@@ -47,6 +48,10 @@ from test_sandbox_access_dispatch_1562 import (  # noqa: F401
 
 def _settings(sandbox):
     return json.loads(EA.claude_write_sandbox_settings(sandbox))
+
+
+def _lease(wt):
+    return os.path.realpath(ED._worktree_lease_path(os.path.realpath(wt)))
 
 
 def test_allow_list_is_the_eleven_literal_rules():
@@ -96,6 +101,19 @@ def test_local_binding_false_emits_no_key():
     assert _settings(sandbox)["sandbox"]["network"] == {
         "allowedDomains": [], "strictAllowlist": True,
     }
+
+
+def test_local_ports_alone_emits_allow_local_binding_when_binding_is_false():
+    # axis: mapping — access.localPorts drives allowLocalBinding independently of localBinding
+    sandbox = dict(_SANDBOX, localBinding=False, access=dict(_ALL_OFF_ACCESS, localPorts=True))
+    assert _settings(sandbox)["sandbox"]["network"]["allowLocalBinding"] is True
+
+
+def test_local_ports_alone_emits_allow_local_binding_when_binding_key_is_absent():
+    # a pre-#1600 journal: localPorts True and no localBinding key
+    sandbox = dict(_SANDBOX, access=dict(_ALL_OFF_ACCESS, localPorts=True))
+    assert "localBinding" not in sandbox
+    assert _settings(sandbox)["sandbox"]["network"]["allowLocalBinding"] is True
 
 
 def test_pre_change_journal_emits_no_defaults():
@@ -175,7 +193,7 @@ def test_open_denies_the_run_dir_and_the_journal_root(tmp_path, monkeypatch):
     opened = _write_opened_record(run_dir)
     journaled = opened["claudeWriteSandbox"]
     journal_root = os.path.realpath(str(tmp_path / "dispatch-journal-root"))
-    assert journaled["denyWrite"][6:] == [os.path.realpath(run_dir), journal_root]
+    assert journaled["denyWrite"][6:] == [os.path.realpath(run_dir), journal_root, _lease(wt)]
     deny = _settings_of(opened["argv"])["sandbox"]["filesystem"]["denyWrite"]
     assert deny == journaled["denyWrite"]
     assert _settings_of(fake.calls[0]["argv"]) == _settings_of(opened["argv"])
@@ -189,7 +207,7 @@ def test_open_denies_the_default_temp_journal_root(tmp_path, monkeypatch):
     journaled = _write_opened_record(run_dir)["claudeWriteSandbox"]
     default_root = os.path.realpath(
         os.path.join(str(tmp_path / "temp-base"), ED.JOURNAL_ROOT_NAME))
-    assert journaled["denyWrite"][6:] == [os.path.realpath(run_dir), default_root]
+    assert journaled["denyWrite"][6:] == [os.path.realpath(run_dir), default_root, _lease(wt)]
 
 
 def test_open_denies_the_pointer_journal_root(tmp_path, monkeypatch):
@@ -204,7 +222,46 @@ def test_open_denies_the_pointer_journal_root(tmp_path, monkeypatch):
     sandbox, refusal = ED._resolve_claude_write_sandbox(
         os.path.realpath(wt), timeout=30, run_dir=os.path.realpath(run_dir))
     assert refusal is None
-    assert sandbox["denyWrite"][6:] == [os.path.realpath(run_dir), os.path.realpath(pointed)]
+    assert sandbox["denyWrite"][6:] == [
+        os.path.realpath(run_dir), os.path.realpath(pointed), _lease(wt)]
+
+
+def test_open_denies_the_worktree_lease(tmp_path, monkeypatch):
+    # axis: deny — the lease is a file in the temp dir; the /tmp allow must not let the engine
+    # delete it and so defeat the single-writer guard
+    monkeypatch.setattr(ED, "_host_platform", lambda: "linux")
+    wt, run_dir, _res, _fake = _open_with_core(tmp_path, monkeypatch, _core_text())
+    journaled = _write_opened_record(run_dir)["claudeWriteSandbox"]
+    digest = hashlib.sha256(os.path.realpath(wt).encode("utf-8")).hexdigest()
+    lease = os.path.realpath(
+        os.path.join(str(tmp_path / "temp-base"), "superheroes-worktree-lease-" + digest))
+    assert lease in journaled["denyWrite"]
+
+
+@pytest.mark.parametrize("name", ["journal[1]", "journal*", "journal{a,b}", "journal?"])
+def test_open_refuses_a_glob_bearing_journal_root(tmp_path, monkeypatch, name):
+    # axis: refusal — a glob spelling in a deny path would match a sibling, not the literal dir
+    root = str(tmp_path / name)
+    os.makedirs(root)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, root)
+    wt, _main = S1554._linked_worktree(tmp_path)
+    sandbox, refusal = ED._resolve_claude_write_sandbox(
+        os.path.realpath(wt), timeout=30, run_dir=os.path.realpath(run_dir))
+    assert sandbox is None
+    assert refusal == "sandbox-roots-unresolvable"
+
+
+def test_open_refuses_a_glob_bearing_run_dir(tmp_path, monkeypatch):
+    run_dir = str(tmp_path / "run[1]")
+    os.makedirs(run_dir)
+    monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, str(tmp_path / "root"))
+    wt, _main = S1554._linked_worktree(tmp_path)
+    sandbox, refusal = ED._resolve_claude_write_sandbox(
+        os.path.realpath(wt), timeout=30, run_dir=os.path.realpath(run_dir))
+    assert sandbox is None
+    assert refusal == "sandbox-roots-unresolvable"
 
 
 def test_deny_entries_are_deduplicated(tmp_path, monkeypatch):
@@ -215,7 +272,7 @@ def test_deny_entries_are_deduplicated(tmp_path, monkeypatch):
     sandbox, refusal = ED._resolve_claude_write_sandbox(
         os.path.realpath(wt), timeout=30, run_dir=os.path.realpath(run_dir))
     assert refusal is None
-    assert sandbox["denyWrite"][6:] == [os.path.realpath(run_dir)]
+    assert sandbox["denyWrite"][6:] == [os.path.realpath(run_dir), _lease(wt)]
 
 
 def test_continuation_reuses_the_journaled_deny_entries(tmp_path, monkeypatch):
@@ -226,7 +283,8 @@ def test_continuation_reuses_the_journaled_deny_entries(tmp_path, monkeypatch):
     opened = _write_opened_record(run_dir)
     journaled_deny = list(opened["claudeWriteSandbox"]["denyWrite"])
     assert journaled_deny[6:] == [
-        os.path.realpath(run_dir), os.path.realpath(str(tmp_path / "dispatch-journal-root"))]
+        os.path.realpath(run_dir), os.path.realpath(str(tmp_path / "dispatch-journal-root")),
+        _lease(wt)]
     # the ambient journal root changes after open; a continuation must not re-derive the deny list
     monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, str(tmp_path / "another-root"))
     resumed = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])

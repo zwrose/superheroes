@@ -1816,10 +1816,19 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
         if os.path.isdir(tmp_root) and tmp_root not in tmp_write_roots:
             tmp_write_roots.append(tmp_root)
     if run_dir is not None:
-        # deny wins over the /tmp allow: the run dir and the journal root the runner trusts as
-        # its spawn/retry/fold record stay unwritable from inside the sandbox
+        # deny wins over the /tmp allow: the run dir, the journal root the runner trusts as its
+        # spawn/retry/fold record, and the worktree lease (a file in the temp dir) stay
+        # unwritable from inside the sandbox
         journal_root, _source = _journal_root_with_source(run_dir)
-        for denied in (os.path.realpath(run_dir), os.path.realpath(journal_root)):
+        for denied in (
+            os.path.realpath(run_dir),
+            os.path.realpath(journal_root),
+            os.path.realpath(_worktree_lease_path(cwd_real)),
+        ):
+            # the runtime reads a deny entry as a glob too: a bracket spelling would match a
+            # sibling and leave the literal path writable under the /tmp grant
+            if engine_adapter.sandbox_path_has_glob(denied):
+                return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
             if denied not in deny_write:
                 deny_write.append(denied)
     sandbox = {
