@@ -27,7 +27,7 @@ Run these and read the results; do not ask the user what you can observe:
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 # Package manager / stack
 ls "$ROOT"/package.json "$ROOT"/pyproject.toml "$ROOT"/Cargo.toml "$ROOT"/go.mod 2>/dev/null
-# Verify-command candidate (JS): a "check"/"test" script
+# Verify-command candidates (JS): a fast-check script first, else a "check"/"test" script
 [ -f "$ROOT/package.json" ] && python3 -B -c "import json;print(json.load(open('$ROOT/package.json')).get('scripts',{}))" 2>/dev/null
 # Default branch
 git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' \
@@ -39,8 +39,10 @@ ls -d "$ROOT"/src "$ROOT"/lib "$ROOT"/app 2>/dev/null
 ```
 
 Derive: **package manager / framework / test runner**; a **verify-command**
-candidate (`npm run check` → `npm test` → `pnpm/yarn` equivalents → `make check`
-→ none); **default-branch** (the `git symbolic-ref` result, else current branch);
+candidate — prefer the project's **fast iteration check**, a single script it already defines that
+runs lint, types or the touched tests (for example `check:fast` or `test:changed`); only when it has
+none, fall back to the full gate (`npm run check` → `npm test` → `pnpm/yarn` equivalents →
+`make check`) → none (`skills/configure/reference/set-up.md` § 3 says why); **default-branch** (the `git symbolic-ref` result, else current branch);
 **forge** (`github` if the remote host is github.com, `gitlab` if gitlab.*, else
 `none`); **dep-set** (top-level dependency names, with major version where cheap);
 **src-dirs**. Also **read `CLAUDE.md`** (root and any nested) to learn what
@@ -120,7 +122,10 @@ answered.
 Defaults when detection + `CLAUDE.md` did not answer:
 
 1. **Threat model** — `strict` (provisional default when unknown).
-2. **Verify command** — if none was detected, `mode: review-only` (provisional default).
+2. **Verify command** — if none was detected, `mode: review-only` (provisional default). If
+   only a full-gate candidate was detected, propose it and disclose that
+   `skills/configure/reference/set-up.md` § 3 advises a fast iteration check, which the owner can
+   set through `/superheroes:configure`.
 3. **Scope exclusions** — none (provisional default).
 
 If **no `CLAUDE.md` exists**, record a minimal conventions pointer in `## Conventions` (point at
