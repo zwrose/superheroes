@@ -9,6 +9,14 @@ belongs to and lists every change with its replacement.
 
 ## Unreleased
 
+### dispatch-write reports the size tripwire at fold
+
+- `dispatch-write` takes two new flags, `--size-base <commit>` and `--size-line <non-negative integer>`. Pass both on every implementer dispatch, launch and continuation. The runner counts the worktree against the base at fold: committed, uncommitted, and untracked files, read-only.
+- A folded write run gains `sizeTripwire`. Counted: `{"status": "ok", "base", "line", "tripwireCount", "crossed", "barCount", "deletedFiles", "binary", "untrackedRepos"}`, plus `barExcluded` when reported; `crossed` is `tripwireCount > line`. Not counted: `{"status": "indeterminate", "base", "line", "reason"}`, plus `detail` when given.
+- Five new open-time refusals, reason `unrunnable`, each opening nothing: `size-inputs-incomplete`, `size-line-invalid`, `size-base-not-an-object-id`, `size-base-unresolvable`, and `size-inputs-mismatch` (a continuation passing different values than the run opened with).
+- A run opened without the flags, including one opened by an older plugin, folds with `sizeTripwireAbsent: "size-inputs-not-supplied"` instead of `sizeTripwire`. Passing the flags on a later continuation of such a run does not refuse; the flags are ignored. A review run carries neither key.
+- Commits the orchestrator types itself are not counted by this, so the builder still counts at each commit.
+
 ### Size count: lockfiles and project-listed paths are left out
 
 - The size count (`lib/size_count.py`) now leaves common package-manager lockfiles out of both `tripwireCount` and `barCount` for every project: `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lockb`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock` and `go.sum`, matched on the file's base name at any depth. They are listed under the new `lockfilesExcluded` result key (`[{"path", "lines"}]`), present only when non-empty.
@@ -42,6 +50,12 @@ belongs to and lists every change with its replacement.
 - A project with cursor or codex installed but named by no role now gets that engine's seats, at its usage cost. To keep an engine off the panel, uninstall its CLI or pin the seats you need held.
 - `compose-liveness`'s `crossVendorEngines` now reports that set. `run`'s `crossVendorEngines` is unchanged.
 - A liveness receipt written by 0.38.0 that lacks a newly considered engine re-probes once.
+
+### Stack layers close their own sub-issues
+
+- A stack-layer pull request now opens with `Closes #<its own layer sub-issue>` and names the feature issue only with "part of". GitHub shows the link natively and closes the layer's sub-issue when the layer lands on the default branch. No layer merge closes the feature issue. The rule's home is `rubric/native-stacks.md` § Each layer is a sub-issue, item 6.
+- The advisor's post-merge step changes from closing each layer sub-issue by hand to reading back that each landed layer's sub-issue is `CLOSED`, closing any GitHub did not close. Every landed layer's sub-issue still gets the merge receipt comment. The feature issue's close stays the advisor's manual step, with its receipt.
+- Stacks opened on 0.39.0 or earlier keep their "part of" layer links until a builder or the advisor edits those pull request bodies; the advisor's read-back closes any sub-issue GitHub did not close. A project that already runs this shape as a recorded override can drop the override once it adopts this release.
 
 ## 0.38.0
 
