@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.40.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.39.0...superheroes-v0.40.0) (2026-10-03)
+
+
+### Features
+
+* **superheroes:** a per-project size-exclusion calibration key ([#1589](https://github.com/zwrose/superheroes/issues/1589)) ([#1595](https://github.com/zwrose/superheroes/issues/1595)) ([2b88444](https://github.com/zwrose/superheroes/commit/2b884443ef152852692e1003c91c1a983ec0b8f6))
+* **superheroes:** a stack-layer PR closes its own layer sub-issue ([#1592](https://github.com/zwrose/superheroes/issues/1592)) ([afea1a7](https://github.com/zwrose/superheroes/commit/afea1a728b28b17e4cb9bd48b781c12b1f5d9c4e))
+* **superheroes:** dispatch-write reports the size tripwire at every implementer fold ([#1585](https://github.com/zwrose/superheroes/issues/1585)) ([#1593](https://github.com/zwrose/superheroes/issues/1593)) ([107d7fa](https://github.com/zwrose/superheroes/commit/107d7fa725553e1fe108f119fc85b20d3448dadf))
+* **superheroes:** size_count counts the working tree read-only ([#1584](https://github.com/zwrose/superheroes/issues/1584)) ([#1588](https://github.com/zwrose/superheroes/issues/1588)) ([1b5841b](https://github.com/zwrose/superheroes/commit/1b5841bbfe73002c3637713604ab3060e0b3bd80))
+* **superheroes:** the claude write sandbox auto-approves common toolchains and allows localhost and /tmp by default ([#1607](https://github.com/zwrose/superheroes/issues/1607)) ([96f5fbc](https://github.com/zwrose/superheroes/commit/96f5fbc05df56168b15c5cc151fb42c8f6845e6d))
+* **superheroes:** the size count leaves out lockfiles and each project's listed paths ([#1590](https://github.com/zwrose/superheroes/issues/1590)) ([#1596](https://github.com/zwrose/superheroes/issues/1596)) ([63d6d5a](https://github.com/zwrose/superheroes/commit/63d6d5a71b823e92c2577917a182eb522b99e67e))
+
 ## [0.39.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.38.0...superheroes-v0.39.0) (2026-10-02)
 
 
