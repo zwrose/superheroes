@@ -404,10 +404,11 @@ Owner: "really happy with this iteration ... converging." Directions taken from 
     recommendation, note; Aligned and Discuss always; a direct pick when the card has options; no
     per-review buttons (owner: "ok").
 
-35. **The ledger is named Canon** (owner: "i like canon"); "Canon" vs "project canon" open.
+35. **The ledger is named Canon** (owner: "i like canon"; plain "Canon" approved with "go"): one
+    per project, `canon.md` at the project's superheroes root; docs say "the project's canon" where needed.
 36. **Spec-split trigger** (owner): the main trigger is one piece the owner could approve and ship
     on its own (roughly one cluster of user stories); a second piece found while writing →
     discovery proposes the split, the owner rules. Length is not a hard stop: around 300-400
     lines, discovery raises a conversation about splitting.
 
-Open for the owner: "Canon" or "project canon". Then board round 3.
+Board round 3 under way (owner: "go").
