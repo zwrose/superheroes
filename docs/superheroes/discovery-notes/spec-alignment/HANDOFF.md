@@ -433,3 +433,14 @@ Board round 3 under way (owner: "go").
 41. **Consent for the review rounds** (owner: "yep, go"): the three checks run automatically, up
     to 4 rounds per spec, by Astra called directly (the configure seat doesn't exist yet), on
     the owner's Codex usage. Source tags cite this file's ruling numbers until Canon exists.
+
+## Spec writing (2026-10-03)
+
+- Specs drafted from the approved board and rulings 1-41, at the paths the resolver gives (this
+  project stores specs out of repo): `aligning-on-what-to-build-6da1ee` (large, ~400 lines) and
+  `the-review-surface-d59417` (medium, ~210 lines), both `status: draft`. Citation check clean.
+- Review round 1 launched: three Astra checks (gap, source both directions, grounding), each
+  reviewing both specs. Prompts and results: `~/.claude/wave-logs/spec-alignment-discovery/review/`.
+- Author's open items for the owner, carried in the specs: no cross-family spec reviewer
+  configured; the fate of the weight call; review-surface UFR-2 (failed save) and UFR-3 (missing
+  image).
