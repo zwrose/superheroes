@@ -474,3 +474,79 @@ def test_count_lockfile_applies_with_no_size_exclude():
     assert out["tripwireCount"] == 2
     assert out["lockfilesExcluded"] == [{"path": "yarn.lock", "lines": 4}]
     assert "pathsExcluded" not in out
+
+
+# --- working-tree mode (#1590) ----------------------------------------------------------------
+
+def test_worktree_untracked_lockfile_excluded(tmp_path):
+    # axis: working-tree mode runs untracked rows through the lockfile rule in count()
+    repo, base = _build(
+        tmp_path,
+        {"package.json": _lines(2)},
+        {"package.json": _lines(5)},
+    )
+    _no_core(tmp_path, repo)
+    (repo / "package-lock.json").write_text(_lines(40))
+    out = _collect(tmp_path, repo, base, head=None)
+    assert out == {
+        "tripwireCount": 3,
+        "barCount": 3,
+        "deletedFiles": [],
+        "binary": [],
+        "lockfilesExcluded": [{"path": "package-lock.json", "lines": 40}],
+        "base": base,
+        "head": None,
+        "worktree": True,
+        "untrackedRepos": [],
+        "ok": True,
+    }
+
+
+def test_worktree_untracked_glob_path_excluded(tmp_path):
+    # axis: working-tree mode runs untracked rows through the sizeExclude globs in count()
+    repo, base = _build(
+        tmp_path,
+        {"src/a.py": _lines(1)},
+        {"src/a.py": _lines(6)},
+    )
+    _calibrate(tmp_path, repo, {"sizeExclude": ["docs/plans/**"]})
+    plan = repo / "docs" / "plans" / "plan-a"
+    plan.parent.mkdir(parents=True)
+    plan.write_text(_lines(12))
+    out = _collect(tmp_path, repo, base, head=None)
+    assert out == {
+        "tripwireCount": 5,
+        "barCount": 5,
+        "deletedFiles": [],
+        "binary": [],
+        "pathsExcluded": [{"path": "docs/plans/plan-a", "lines": 12, "glob": "docs/plans/**"}],
+        "base": base,
+        "head": None,
+        "worktree": True,
+        "untrackedRepos": [],
+        "ok": True,
+    }
+
+
+def test_calibration_read_never_past_deadline(tmp_path, monkeypatch):
+    # axis: the calibration read never runs once the deadline has expired after the git diffs
+    repo, base = _build(tmp_path, {"README.md": "r\n"}, {"src/x.py": _lines(2)})
+    _no_core(tmp_path, repo)
+
+    def must_not_run(cwd, root=None):
+        raise AssertionError("calibration read past the deadline")
+
+    monkeypatch.setattr(size_count.core_md, "read_size_exclude", must_not_run)
+    real_untracked = size_count._untracked_rows
+
+    def untracked_then_expire(*args, **kwargs):
+        got = real_untracked(*args, **kwargs)
+        monkeypatch.setattr(size_count.time, "monotonic", lambda: float("inf"))
+        return got
+
+    monkeypatch.setattr(size_count, "_untracked_rows", untracked_then_expire)
+    deadline = size_count.time.monotonic() + 60
+    out = size_count.collect(
+        str(repo), base, head=None, deadline=deadline, root=_store(tmp_path),
+    )
+    assert out == {"ok": False, "reason": "git-timeout"}

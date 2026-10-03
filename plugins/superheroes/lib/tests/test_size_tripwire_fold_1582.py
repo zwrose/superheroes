@@ -287,3 +287,25 @@ def test_t9_cli(tmp_path):
     ])
     assert args.size_base == sha
     assert args.size_line == 240
+
+
+# axis: the fold lists what the count left out, exactly as the count reported it.
+def test_fold_lists_excluded_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        ED.size_count, "collect",
+        lambda *_a, **_k: {
+            "ok": True, "tripwireCount": 3, "barCount": 3, "deletedFiles": [], "binary": [],
+            "untrackedRepos": [],
+            "lockfilesExcluded": [{"path": "package-lock.json", "lines": 40}],
+            "pathsExcluded": [
+                {"path": "docs/plans/plan-a", "lines": 12, "glob": "docs/plans/**"}],
+        },
+    )
+    res, _run_dir, sha = _run(tmp_path, {"big.py": 1})
+    assert res["sizeTripwire"] == {
+        "status": "ok", "base": sha, "line": 240, "tripwireCount": 3, "crossed": False,
+        "barCount": 3, "deletedFiles": [], "binary": [], "untrackedRepos": [],
+        "lockfilesExcluded": [{"path": "package-lock.json", "lines": 40}],
+        "pathsExcluded": [
+            {"path": "docs/plans/plan-a", "lines": 12, "glob": "docs/plans/**"}],
+    }
