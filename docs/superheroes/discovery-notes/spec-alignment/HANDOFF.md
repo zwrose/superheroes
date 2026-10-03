@@ -424,3 +424,6 @@ Board round 3 under way (owner: "go").
 38. **No image carousel** (owner, board comment): the zoom view has no swipe-to-next; sideways
     swipes could conflict with dragging a zoomed image. Each image opens on its own; Close returns
     to the card.
+39. **BOARD APPROVED** (owner, 2026-10-03: "ok i think i'm aligned to the board!"), round 3 as
+    published plus ruling 38, including the craft call shown on its start page (hand-backs in
+    Canon, configure item 13 points there). The spec is written from this board and rulings 1-39.
