@@ -444,3 +444,11 @@ Board round 3 under way (owner: "go").
 - Author's open items for the owner, carried in the specs: no cross-family spec reviewer
   configured; the fate of the weight call; review-surface UFR-2 (failed save) and UFR-3 (missing
   image).
+- Review rounds (Astra, same three sessions resumed each round): round 1, 29 findings (9 gap,
+  18 source, 2 grounding), 21 fixed as craft and 7 queued for the owner; round 2, 10 findings, all
+  craft; round 3, 4 findings, all craft; round 4, all three checks clean. No declines.
+- Writing pass (prose standard): 5 word-level edits; independent meaning check found 0 shifts.
+- Owner's remainder queue (each spec's "Open questions"): A: no cross-family reviewer; the weight
+  call; final-sheet answers that change the spec; a later ruling vs the approved board; the round
+  cap after owner rulings; specs stored out of repo. B: what each answer means; changing an
+  answer; who may open a sheet; UFR-2 failed save and UFR-3 missing image (author-added).
