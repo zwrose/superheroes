@@ -770,7 +770,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   (`round_driver._journal_append` and `round_commit.Commit.add_journal_append`) — refuses a
   `recorded` row missing any key of `REVISION_IDENTITY_FIELDS` before it reaches disk; refusal
   tokens `recorded-row-incomplete` / `IncompleteRevisionIdentity`.
-- **Start date.** 2026-09-18.
+- **Start date.** 2026-09-26.
 - **Condition.** Citation-based, 45 days: vet, review, or incident receipts citing
   `recorded-row-incomplete` or `IncompleteRevisionIdentity` as the thing that blocked a partial
   recorded row. On firing, a proposal to the owner at a gardening pass.
@@ -786,7 +786,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** `round_driver._stage_findings` (the only writer of `_toVerify`; seeds the ledger)
   and `_archive_departures` (every departure lands in the ledger); the refusal surfaces as the
   writer's "finding has no disposition recorded".
-- **Start date.** 2026-09-19.
+- **Start date.** 2026-09-26.
 - **Condition.** Citation-based, 45 days.
 - **Last demonstrated benefit.** unknown — ships with this change.
 - **Consumer evidence.** unmeasured.
@@ -799,7 +799,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** `lib/tests/test_evidence_digest_subject_1272.py`, pinning
   `session_contract.evidence_digest_subject` equal to `engine_adapter.review_payload_carried` for
   every result kind (the writer cannot import the adapter).
-- **Start date.** 2026-09-19.
+- **Start date.** 2026-09-26.
 - **Condition.** Citation-based, 45 days.
 - **Last demonstrated benefit.** unknown — ships with this change.
 - **Consumer evidence.** unmeasured.
@@ -1381,9 +1381,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 
 ### G. CI validators & the test estate
 
-#### G1 — CI validators (7 scripts)
+#### G1 — CI validators (8 scripts)
 
-- **Component.** The seven CI validator scripts under `.github/scripts/` (validate_* and check_*).
+- **Component.** The eight CI validator scripts under `.github/scripts/` (validate_* and check_*;
+  `validate_python_pin` joined after this entry was written, and its catch history is not yet read
+  into the condition below).
   They cost a few CI seconds each run. check_release_bump is best-evidenced; validate_marketplace
   and the other never-fired members are keep-cheap with attached conditions.
 - **Start date.** 2026-09-15.
@@ -1531,12 +1533,13 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** Not a census row. The library `run_loop` path that materialized a temp session and
   called `certify` to return a certified receipt over synthesized journal rows when no per-seat
   envelopes existed on disk.
-- **Start date.** 2026-09-18.
+- **Start date.** 2026-09-26.
 - **Condition.** Usage-based: the retirement condition that **reopens** it is *"a consumer needs a
   certified receipt from a library run"*, at which point the path is **rebuilt on real persisted
   per-seat envelopes as its own child, never patched back.* That rebuild child also routes both
   hand-built `writer-fault` envelopes in `round_driver._run_loop_certified_receipt`
-  (`plugins/superheroes/lib/round_driver.py:4817–4822`, `4827–4832`) through
+  (the two `"class": "writer-fault"` dicts in that function, `round_driver.py` about l.6625 and
+  l.6635 at b343a45e) through
   `round_certification.writer_fault()` — review finding v19, carried open and inert rather than
   patched on a surface the third-rework tripwire has closed.
 - **Last demonstrated benefit.** none — the path certified over synthesized evidence; that is why it
@@ -2113,9 +2116,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   `claude_write_sandbox_settings`. Workaround-marked (#1569). Cost: a rule list that tracks the
   harness's safety check, and a command a managed policy excludes from the sandbox that matches a
   rule runs unprompted outside it.
-- **Start date.** 2026-10-01.
+- **Start date.** 2026-10-02.
 - **Condition.** Citation-based, 45 days: build records or vet receipts citing an implementer
-  refusal "requires approval" on the claude write channel for a Python, pytest or echo command
+  refusal "requires approval" on the claude write channel for a Python, pytest, echo, node toolchain
+  (npm, npx, node, pnpm, yarn) or `ps` command (`ps` stays blocked by the sandbox itself)
   (a regression signal), or for a new command family (a candidate rule). Re-measure on each Claude
   Code bump: when the workaround marker's delete-when condition is observed, a proposal to the
   owner at a gardening pass to remove the rules.
@@ -2132,7 +2136,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** Not a census row. `_sweep_cc_writes` / `_fold_cc_writes_sweep` in
   `plugins/superheroes/lib/engine_dispatch.py`, called from `_fold_run`. Workaround-marked (#1569).
   Cost: a bounded filesystem walk at every claude write fold.
-- **Start date.** 2026-10-01.
+- **Start date.** 2026-10-02.
 - **Condition.** Citation-based, 45 days: build records or vet receipts citing `.claude/.cc-writes`
   residue in a worktree after a folded claude write run (a regression signal). Re-measure on each
   Claude Code bump: when the workaround marker's delete-when condition is observed, a proposal to
@@ -2167,10 +2171,11 @@ file, returns exactly that set.
   project-configuration keys an older build does not know, so an older build re-calibrating from
   scratch can drop them. **delete-when:** the keep list is stamped and a release carrying the
   configuration items has shipped; then the version is raised with the new literal pinned in the
-  tests rather than referenced from the constant. (Lands with the configuration-items child; the
-  tree carries this marker once that child merges.)
-- `plugins/superheroes/lib/engine_adapter.py` — the claude write channel allows the Python, pytest
-  and echo command families by rule because the harness's sandbox auto-allow misses shapes its
+  tests rather than referenced from the constant. (The marker is in the tree: the
+  configuration-items child merged 2026-09-15. Release half met in 0.34.0; the keep list is still
+  unstamped.)
+- `plugins/superheroes/lib/engine_adapter.py` — the claude write channel allows the Python, pytest,
+  echo, node toolchain (npm, npx, node, pnpm, yarn) and `ps` command families by rule because the harness's sandbox auto-allow misses shapes its
   safety check flags (`-X` on a Python call, `$?`). **delete-when:** `autoAllowBashIfSandboxed`
   auto-approves every sandboxed command shape on the Claude Code version the channel runs.
 - `plugins/superheroes/lib/engine_dispatch.py` — the fold sweeps empty `.claude/.cc-writes`
@@ -2227,4 +2232,6 @@ file, returns exactly that set.
 - `plugins/superheroes/lib/round_driver.py` — the `order-anchor` cited-head derivation retained for
   write runs and for records landed without a runner run directory. **delete-when:** every seat's
   evidence is minted from a runner record, so `runner-view` is the only derivation a `recorded` row
-  can declare.
+  can declare. (Inventory only: `round_driver.py` carries no `WORKAROUND:` comment for this yet; the
+  marker is owed at the next PR that touches the order-anchor derivation. Found at gardening pass 2,
+  2026-10-03.)
