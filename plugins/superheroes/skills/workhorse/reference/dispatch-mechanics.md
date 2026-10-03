@@ -705,12 +705,14 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
   --seat "$IMPL_SEAT" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
   --expect-item "<path-from-order>" \
+  --size-base "$BUILD_BASE" --size-line "$SIZE_LINE" \
   --run-dir "$RUN_DIR" --max-wait 45
 # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
   --seat "$IMPL_SEAT" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
   --expect-item "<path-from-order>" \
+  --size-base "$BUILD_BASE" --size-line "$SIZE_LINE" \
   --run-dir "$RUN_DIR" --max-wait 540
 ```
 
@@ -736,6 +738,17 @@ runner owns the bound — its per-attempt timeout, journal, and bounded slice �
 separate per-dispatch watchdog** on top of it. **`cwd` must be a linked build worktree** — a primary
 checkout is refused (`cwd-primary-checkout`) — which is exactly why this is the workhorse's
 implementer path and not review-code's in-place fixer path.
+
+### Size tripwire at fold (`sizeTripwire`)
+
+Pass `--size-base "$BUILD_BASE" --size-line "$SIZE_LINE"` on every implementer dispatch, launch and continuation alike. `$BUILD_BASE` is the build's base commit; `$SIZE_LINE` is the tripwire line, twice the upper end of the non-test estimate (`rubric/review-discipline.md` § Size). At fold the runner counts the worktree against that base with `lib/size_count.py`: committed, uncommitted, and untracked files, read-only. The folded result gains `sizeTripwire`:
+
+- `{"status": "ok", "base", "line", "tripwireCount", "crossed", "barCount", "deletedFiles", "binary", "untrackedRepos"}`, plus `barExcluded` when the count reports one. `crossed` is `tripwireCount > line`.
+- `{"status": "indeterminate", "base", "line", "reason"}`, plus `detail` when the count gave one. `reason` is `count-raised` or the count's own `git-failed`, `git-timeout`, `git-unavailable`, or `index-flags-hide-changes`.
+
+A run opened without the flags folds with `"sizeTripwireAbsent": "size-inputs-not-supplied"` instead. A continuation of such a run may pass the flags; they are ignored and the fold still carries the absent marker, because only values the run journaled at open are checked for `size-inputs-mismatch`. A review run carries neither key. A refused call opens nothing and returns reason `unrunnable` with `detail`: `size-inputs-incomplete` (one flag without the other), `size-line-invalid` (not a non-negative integer; a test-only build's zero line is valid), `size-base-not-an-object-id`, `size-base-unresolvable` (the base is not a commit in the worktree), or `size-inputs-mismatch` (a continuation passed different values than the run opened with).
+
+`crossed` reports the count against the line; what a crossing obliges, and how an advisor ruling already recorded on the issue carries forward, is `rubric/review-discipline.md` § Size. `status: "indeterminate"` is no count: count by hand before the next order. The runner does not see commits you type yourself, so the builder still counts at each commit.
 
 ### The claude write sandbox
 
