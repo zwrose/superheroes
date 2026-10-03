@@ -92,8 +92,9 @@ Verify the tag + GitHub Release appear as expected before relying on the automat
 
 ## Troubleshooting — a commit silently excluded from the release
 
-Release-please's conventional-commit parser can crash on a squash-commit **body** (this repo
-bakes PR bodies into commit messages by deliberate owner ruling). The affected commit is then
+Release-please's conventional-commit parser can crash on a squash-commit **body**. Since
+2026-10-02 this repo merges title-only (the squash commit message default is blank and merges
+pass `--body ""`, owner-ruled), so new commits carry no body; older commits baked PR bodies in. The affected commit is then
 silently dropped from both version calculation and the changelog while the workflow still reports
 success — a known upstream bug ([googleapis/release-please#2564](https://github.com/googleapis/release-please/issues/2564),
 cited, not filed by us).
@@ -122,7 +123,7 @@ ledger is a record of completed remediation, never a way to wave one off.
 
 **One limit:** the expected bump is derived from commit **titles** only. A `BREAKING CHANGE:`
 footer that lives in a commit **body** does not raise the floor — bodies are both the upstream
-crash surface and, because this repo bakes PR bodies into commit messages, a false-alarm surface.
+crash surface and, for commits from before the 2026-10-02 title-only rule, a false-alarm surface.
 Such a commit is reported as a notice instead, so the case is visible rather than silently
 absorbed.
 
