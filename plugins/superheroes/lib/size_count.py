@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """PR size counters: tripwire vs bar, with whole-file deletions listed (#1447). stdlib and sibling lib modules only."""
 import argparse
+import contextlib
 import fnmatch
 import json
 import os
@@ -191,6 +192,20 @@ def _git_env():
     return env
 
 
+@contextlib.contextmanager
+def _git_routing_scrubbed_environ():
+    """Hide the ambient Git routing variables from callees that read ``os.environ`` themselves.
+
+    The calibration read resolves its repository through store_core, whose Git subprocess copies
+    the ambient environment; the diffs beside it are scrubbed, and the two must name the same
+    repository."""
+    saved = {k: os.environ.pop(k) for k in _GIT_ROUTING_VARS if k in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
 def _run_git(repo_root, args, deadline, ok_codes=(0,)):
     """One hardened git call: ``(proc, None)`` on success, ``(None, failure_result)`` otherwise."""
     timeout = GIT_TIMEOUT
@@ -283,7 +298,8 @@ def collect(repo_root, base, head="HEAD", bar_exclude=(), deadline=None, root=No
     if deadline is not None and deadline - time.monotonic() <= 0:
         return {"ok": False, "reason": "git-timeout"}
     try:
-        read = core_md.read_size_exclude(repo_root, root)
+        with _git_routing_scrubbed_environ():
+            read = core_md.read_size_exclude(repo_root, root)
     except Exception as exc:
         return {"ok": False, "reason": "size-exclude-unreadable",
                 "detail": "%s: %s" % (type(exc).__name__, exc)}

@@ -550,3 +550,28 @@ def test_calibration_read_never_past_deadline(tmp_path, monkeypatch):
         str(repo), base, head=None, deadline=deadline, root=_store(tmp_path),
     )
     assert out == {"ok": False, "reason": "git-timeout"}
+
+
+def test_calibration_read_ignores_inherited_routing_env(tmp_path, monkeypatch):
+    # axis: the calibration read names the repository the diffs name, whatever routing env is inherited
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    repo_a, base_a = _build(tmp_path / "a", {"README.md": "r\n"}, {"src/a-file": _lines(4)})
+    _no_core(tmp_path, repo_a)
+    repo_b, _ = _build(tmp_path / "b", {"README.md": "r\n"}, {"src/b-file": _lines(1)})
+    _git(repo_b, "remote", "set-url", "origin", "git@github.com:o/other.git")
+    _calibrate(tmp_path, repo_b, {"sizeExclude": ["*"]})
+    monkeypatch.setenv("GIT_DIR", str(repo_b / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(repo_b))
+    out = size_count.collect(str(repo_a), base_a, root=_store(tmp_path))
+    assert out == {
+        "tripwireCount": 4,
+        "barCount": 4,
+        "deletedFiles": [],
+        "binary": [],
+        "base": base_a,
+        "head": "HEAD",
+        "ok": True,
+    }
+    assert os.environ["GIT_DIR"] == str(repo_b / ".git")
+    assert os.environ["GIT_WORK_TREE"] == str(repo_b)
