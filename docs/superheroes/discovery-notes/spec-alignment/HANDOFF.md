@@ -376,3 +376,21 @@ only agrees, act on it and report; ask only about real choices.
     desktop; three theme directions (A field notes, B mission control, C comic panel); the
     conversation artboard removed. Durable source copy: `~/.claude/wave-logs/spec-alignment-discovery/board-v2/`.
     Open for the owner: the theme pick, and the spec-split trigger.
+
+## Board round 2 comments (2026-10-03)
+
+Owner: "really happy with this iteration ... converging." Directions taken from the comments:
+28. **Theme: C, comic panel** ("let's start bold"; another theme can be added later).
+29. **The final sheet comes from the discovery session**, not the advisor: the vet's findings go
+    back to discovery, and discovery sends the owner's final sheet.
+30. **Category 2 is written as user stories** ("As a X, I want to Y, so I can Z"), evocative of
+    the core need, not comprehensive; the requirements carry the detail. Examples lead with a
+    core story (#1798), not an edge case (#1419 account deletion was a poor example).
+31. **Tap sheets are a reusable review template.** Spec review uses it, built in. Any plugin
+    session can use it for another review (a PR walk, a merge review) when the owner asks; no
+    other standing use is built in. Standing rule: when a decision has relevant images, the card
+    includes them, and they can be tapped to zoom, especially on a phone.
+
+Open for the owner: how principles are tracked over time and whether they, the threat model
+and the ruling ledger are one primitive; whether source tags cite transcript lines (only if
+light); the spec-split trigger.
