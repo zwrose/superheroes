@@ -13,7 +13,7 @@ belongs to and lists every change with its replacement.
 
 - Configure now advises that the calibrated verify command be the project's fast iteration check (lint, types, the tests the change touched), not its full gate. A build re-runs the verify command after every review fix round and on the final head.
 - Workhorse §8 now says the project's full local gate runs at most once per build, at the final head, and not at all when CI already passed that head; CI is the final word on the suite.
-- Existing calibrations are unchanged and nothing re-reads them. A project whose verify command is its full gate keeps paying for it on every run until its owner re-runs configure or edits `verifyCommand`.
+- Existing calibrations are not rewritten. A project whose verify command is its full gate keeps paying for it on every run until its owner changes it, through configure's "Change the verify command" tune item (an explicit `verifyCommand` edit).
 
 ### Claude write channel: implementers can run their own Python tests
 
