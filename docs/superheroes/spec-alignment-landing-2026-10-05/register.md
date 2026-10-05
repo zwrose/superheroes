@@ -74,7 +74,7 @@ approval handoff · C7 the theme and the template shell · C8 cards, sheets, ima
 *Status:* decided; **decide-by: C3** for item 14's slug and home section and for the item-13 set behaviour.
 *Consumers:* C2, C3, C4 (C4-L1).
 
-**R11 — The spec-reviewer seat.** The spec-reviewer seat is its own role in configure's engine preferences (`enginePreferences.specReviewer` in the project's `core.md`), separate from the code-review roles and seat pins, with no plugin default and no model named by the plugin. When it is unset, the checks use a reviewer from an installed engine of a different model family than the spec's author, chosen the way review panels already choose cross-vendor seats; only when no such reviewer is available (none installed, or the seat names the author's own family) do the checks take the same-family path: a fresh reviewer from the author's family, said plainly on the owner's final sheet.
+**R11 — The spec-reviewer seat.** The spec-reviewer seat is its own role in configure's engine preferences (`enginePreferences.specReviewer` in the project's `core.md`), separate from the code-review roles and seat pins, with no plugin default and no model named by the plugin. When it is unset, or names an engine of the spec author's own model family, the checks use a reviewer from an installed engine of a different model family, chosen the way review panels already choose cross-vendor seats; only when no different-family engine is installed do the checks take the same-family path: a fresh reviewer from the author's family, said plainly on the owner's final sheet.
 *Source:* Spec A FR-43 ("separate from the code-review seats; the plugin shall name no model for it"); FR-42; UFR-7.
 *Status:* decided.
 *Consumers:* C3, C4 (C4-L4), C5 (C5-L1).

@@ -161,3 +161,136 @@ Recorded by `lib/package_read_audit.py`. The maker is the advisor (anthropic fam
  "round": 1
 }
 ```
+
+<!-- package-read-audit:record -->
+```json
+{
+ "controlProbe": "engaged",
+ "declinedExtension": [
+  "codex2-2"
+ ],
+ "findings": [
+  {
+   "finding": "codex2-1",
+   "lens": "spec-contradiction"
+  },
+  {
+   "finding": "codex2-2",
+   "lens": "coverage-exactly-once"
+  },
+  {
+   "finding": "codex2-4",
+   "lens": "collisions"
+  },
+  {
+   "finding": "cursor2-ind-2",
+   "lens": "collisions"
+  },
+  {
+   "finding": "cursor2-ind-3",
+   "lens": "dod-adequacy"
+  },
+  {
+   "finding": "cursor2-ind-4",
+   "lens": "dod-adequacy"
+  }
+ ],
+ "invocation": "inv1",
+ "kind": "round",
+ "lenses": [
+  "spec-contradiction",
+  "register-drift",
+  "coverage-exactly-once",
+  "collisions",
+  "dod-adequacy"
+ ],
+ "mechanicalOnly": false,
+ "parts": [
+  {
+   "part": "register",
+   "status": "unreviewed"
+  },
+  {
+   "part": "coverage-map",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C1",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C3",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C4",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C4-L3",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C4-L4",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C5",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C5-L1",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C5-L2",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C6",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C8",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C8-L1",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C8-L2",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C8-L3",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C8-L4",
+   "status": "unreviewed"
+  },
+  {
+   "part": "C4-L1",
+   "status": "reviewed"
+  },
+  {
+   "part": "C4-L2",
+   "status": "reviewed"
+  },
+  {
+   "part": "C7-L2",
+   "status": "reviewed"
+  },
+  {
+   "part": "README",
+   "status": "reviewed"
+  },
+  {
+   "part": "epic",
+   "status": "reviewed"
+  }
+ ],
+ "round": 2
+}
+```

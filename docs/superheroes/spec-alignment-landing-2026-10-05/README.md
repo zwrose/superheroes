@@ -19,7 +19,7 @@ This folder holds the decomposition artifacts. The specs live in their own work-
 package covers both because Spec A relies on Spec B's sheets and theme, and the seams between them
 (the sheet data file, how answers come back, the theme file) are register entries both sides quote.
 
-- [`coverage-map.md`](coverage-map.md): every criterion of both specs (117) owned exactly once: 116 by a child, and one (the front-half-sdlc-core amendment) done at approval in PR #1614 by the advisor.
+- [`coverage-map.md`](coverage-map.md): every criterion of both specs (117) owned exactly once by a child.
 - [`register.md`](register.md): the cross-child contract register (25 entries); children quote it verbatim.
 - [`epic.md`](epic.md): the epic issue body, as it would be filed.
 - `children/C1.md` to `children/C8.md`: the child (feature) issue bodies, as they would be filed.
@@ -81,8 +81,8 @@ lands so weekly-eats adopts the whole flow at once.
   them is R21, decide-by C6, so C6 is sequenced before C4.
 - **FR-43 stays in C3**, with the seat's shape decided now (R11) so C5 reads a key C3 has landed.
 - **C5 is a two-layer stack:** the checks first, then the retirement, so discovery is never without a
-  review. The front-half-sdlc-core FR-16/17 amendment is not C5's: the advisor records it in PR #1614
-  at approval, the package's one non-child owner in the coverage map.
+  review. The front-half-sdlc-core FR-16/17 amendment was recorded by the advisor in PR #1614
+  at approval; C5's second layer owns its coverage row and confirms it.
 - **The glossary terms** are spread by owner (R24): Canon, ceded call and standing ruling with C1;
   the line with C2; remainder sheet and ready for vet with C4; card and sheet with C8.
 - **This repository's own Canon seed** (Spec A's reading note: the decisions among the handoff's

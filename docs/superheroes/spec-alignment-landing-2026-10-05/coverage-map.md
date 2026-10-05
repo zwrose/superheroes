@@ -27,9 +27,9 @@ shape); FR-15's second bullet is C6's (above).
 
 **"What this spec amends" and its one non-child owner.** Spec A says each amendment "is recorded as
 an owner-stamped amendment where it lives, at this spec's approval". Item 1 (front-half-sdlc-core-6181ee
-FR-16 and FR-17) lives in another spec's Amendments log, so the advisor records it in PR #1614 at
-approval; that row's owner is **done at approval in PR #1614 (advisor)**, the package's one non-child
-owner. Items 2 (showrunner duty 1) and 3 (review-spec) amend shipped plugin text, so they land when
+FR-16 and FR-17) lives in another spec's Amendments log; the advisor recorded it there in PR #1614 at
+approval, and **C5** owns the row: its second layer confirms the entry is in place and that the
+retirement it builds matches it. Items 2 (showrunner duty 1) and 3 (review-spec) amend shipped plugin text, so they land when
 C6 and C5 build them; item 4 (the anchor resolution) lands with C1.
 
 Children: C1 Canon (the seam) · C2 the owner-vs-craft line · C3 configuration items · C4 the
@@ -44,7 +44,7 @@ and C8).
 
 | Spec | Ref | Item | Criterion (opening words) | Owner |
 | --- | --- | --- | --- | --- |
-| A | Amends | 1 (front-half FR-16/17) | front-half-sdlc-core-6181ee, FR-16 and FR-17: the advisor's light-or-full weight call no longer decides… | **done at approval in PR #1614 (advisor)** |
+| A | Amends | 1 (front-half FR-16/17) | front-half-sdlc-core-6181ee, FR-16 and FR-17: the advisor's light-or-full weight call no longer decides… | **C5** |
 | A | Amends | 2 (showrunner duty 1) | The advisor's spec vet (showrunner duty 1): the advisor's vet sends findings back to discovery… | **C6** |
 | A | Amends | 3 (review-spec) | review-spec: retires (FR-49, FR-49b). | **C5** |
 | A | Amends | 4 (anchor resolution) | The issue contract's anchor resolution: a `ruling` anchor may point to a Canon entry… | **C1** |
@@ -162,7 +162,7 @@ and C8).
 | B | NFR | Touch | every control is at least 44px tall. | **C7** |
 | B | NFR | Telling things apart | colours that must be told apart also differ in lightness. | **C7** |
 
-**Counts.** Spec A: C1: 13, C2: 11, C3: 3, C4: 31, C5: 17, C6: 6, done at approval in PR #1614 (advisor): 1; total 82 (4 amends items, 69 FR criteria, 7 UFR criteria, 2 NFRs). Spec B: C7: 8, C8: 27; total 35 (27 FR criteria, 4 UFR criteria, 4 NFRs). Per child, both specs: C1: 13, C2: 11, C3: 3, C4: 31, C5: 17, C6: 6, C7: 8, C8: 27; children 116, non-child owner 1. **Total criteria: 117. Unallocated: 0. Owned twice: 0.**
+**Counts.** Spec A: C1: 13, C2: 11, C3: 3, C4: 31, C5: 18, C6: 6; total 82 (4 amends items, 69 FR criteria, 7 UFR criteria, 2 NFRs). Spec B: C7: 8, C8: 27; total 35 (27 FR criteria, 4 UFR criteria, 4 NFRs). Per child, both specs: C1: 13, C2: 11, C3: 3, C4: 31, C5: 18, C6: 6, C7: 8, C8: 27; children 117. **Total criteria: 117. Unallocated: 0. Owned twice: 0.**
 
 **Within stacked children** (for the layer sub-issues; each layer's DoD grades only its rows):
 
@@ -170,8 +170,8 @@ and C8).
   boards: FR-27, FR-28, FR-29, FR-29a, FR-29b, FR-30, FR-32, FR-32a (8); layer 3, writing: FR-31 (2),
   FR-33, FR-34, FR-40 (5); layer 4, sheets and the handoff: FR-35, FR-36, FR-36a, FR-38, FR-38a, UFR-1,
   UFR-4, UFR-5, the owner-time NFR (9).
-- C5 (17): layer 1, the checks: FR-41 (4), FR-42, FR-44 to FR-48, FR-50, UFR-3, UFR-7 (13); layer 2,
-  the retirements: amends item 3, FR-49, FR-49a, FR-49b (4).
+- C5 (18): layer 1, the checks: FR-41 (4), FR-42, FR-44 to FR-48, FR-50, UFR-3, UFR-7 (13); layer 2,
+  the retirements: amends items 1 and 3, FR-49, FR-49a, FR-49b (5).
 - C7 (8): layer 1, the theme: Spec B FR-19 to FR-22 and the readability, touch and telling-apart
   NFRs (7); layer 2, the template shell: Spec B FR-1 (1).
 - C8 (27): layer 1, cards and answers: Spec B FR-3, FR-4, FR-4a (2), FR-5, FR-6 bullets 1 to 3,
