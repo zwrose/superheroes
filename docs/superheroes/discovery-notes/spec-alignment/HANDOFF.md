@@ -520,3 +520,10 @@ are re-running on the changed parts before the re-vet.
   this worktree branch was 129 commits behind main, so grounding and the citation check ran against
   stale doctrine. Branch synced with main (merge fe384bda), F15 fixed with the advisor's wording, and
   a full regrounding of both specs against current main launched.
+- Advisor re-vet round 3: CLEAN (15 findings over 3 rounds: 9 craft, 6 owner calls, 0 declined;
+  stale-branch root cause disclosed).
+- Final sheet sent (2026-10-04): https://claude.ai/artifact/XdVB4zQzxHae7iYDrNwwCo. Six vet calls
+  (v4 Canon contents, v6 where the specs live, v7 Canon per storage mode, v8 cross-account
+  takeover, v14 one setup interview, vam amendment checks), one craft-veto card listing ten tagged
+  choices, and "Approve both specs?". Answers in collection `final`, the verdict in `verdict/final`.
+  Per ruling 44, approval waits on applying the answers, re-check and re-vet.
