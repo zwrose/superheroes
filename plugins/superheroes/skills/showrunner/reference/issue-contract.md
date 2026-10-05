@@ -294,7 +294,7 @@ kind resolves by its own test:
 
 - **Spec-section anchor.** It resolves when the spec's owner approval is recorded (`status: approved` with its `approved:` date), the cited section exists in the current body, and no substantive-class Amendments entry numbered greater than the anchor's `as-of amendment #N` names the cited section among its touched sections. Wording-class entries never stale an anchor. Entries are numbered by their order of addition to the log, oldest = 1 — the number is positional, not a field — so same-day amendments stay ordered, and the cursor test compares entry numbers, never dates.
 - **Receipt anchor.** It resolves when the link is live.
-- **Ruling anchor.** It resolves when the dated, owner-attributed record is reachable where the ruling was made and no later owner decision supersedes it.
+- **Ruling anchor.** It resolves when the dated, owner-attributed record is reachable where the ruling was made and no later owner decision supersedes it. The record may be a Canon entry cited by its id (`../../../rubric/canon-contract.md`): such an entry counts as reachable where the ruling was made, and the attribution, date and supersession checks still apply, so a superseded entry, or an id two entries share, does not resolve.
 
 A malformed Anchor — a header that declares no kind, an unknown kind, or more than one kind — and
 an empty Anchor **do not resolve**: they stop intake exactly as a failed per-kind test does.
@@ -318,7 +318,7 @@ because a venue name is not a record: a builder reading it has nothing to follow
 a paraphrase nobody downstream can check. The test is mechanical: **can the anchor carry an exact
 permalink to a dated record of the ruling?** Where the venue lives as a durable thread — a
 collector issue, a recorded sitting log — it can, and the permalink is the record (Pattern 2's
-board-pass permalink, below, is exactly this). Where it cannot — a chat, a live conversation — the
+board-pass permalink, below, is exactly this). A Canon entry's id, with the Canon file's path, is such a record. Where it cannot — a chat, a live conversation — the
 ruling test's own fallback governs: the owner **re-rules on the issue itself**, a dated owner
 comment or owner-stamped body line, which *is* the record, with its own date. Either way the
 anchor's location leg is a followable record, never a name. **This adds no new gate**: it spells

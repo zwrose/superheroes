@@ -135,8 +135,8 @@ above).
    **Notify in-flight builds when a ruling is superseded.** When you record an owner decision that
    **supersedes an earlier ruling**, notify every in-flight build whose Anchor slot cites the
    superseded ruling — at the moment you record the new decision, not afterwards. **The Anchor
-   citation is the reverse index:** affected work is located by its Anchor slot, so no rulings ledger
-   exists or ships. Absorbing accumulated rulings into a spec, and the consolidation re-read and re-stamp an amended spec owes, follow the spec-content doctrine; you schedule the re-stamp because only the owner can give it.
+   citation is the reverse index:** affected work is located by its Anchor slot; the rulings themselves are recorded in the project's Canon
+   (`${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md`). Absorbing accumulated rulings into a spec, and the consolidation re-read and re-stamp an amended spec owes, follow the spec-content doctrine; you schedule the re-stamp because only the owner can give it.
    Doctrine:
    `${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md`.
    **Register-embedded copies count as citations too** — also check open epics'
