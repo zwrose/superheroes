@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Start here</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;family=Atkinson+Hyperlegible:wght@400;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Atkinson Hyperlegible',sans-serif;color:#111111;background:#FFF8E7}
+a{color:#1B4FD8}a:hover{color:#1238A8}
+.card{background:#FFFFFF;border:3px solid #111111;border-radius:14px;box-shadow:6px 6px 0 #111111;padding:22px 24px;display:flex;flex-direction:column;gap:10px}
+.h2{margin:0;font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:23px}
+.p{margin:0;font-size:15.5px;line-height:1.55}
+.ul{margin:0;padding-left:20px;font-size:15px;line-height:1.55;display:flex;flex-direction:column;gap:4px}
+</style>
+</helmet>
+<div style="width: 1280px; height: 900px; box-sizing: border-box; display: flex; flex-direction: column; background: #FFF8E7;">
+<div style="background: #FFC93C; border-bottom: 3px solid #111111; padding: 14px 60px; display: flex; justify-content: space-between; align-items: center;">
+<div style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 22px;">superheroes</div>
+<div style="font-size: 14px; font-weight: 700;">Spec-alignment discovery · board · round 3 · 2026-10-03</div>
+</div>
+<div style="padding: 36px 60px; display: flex; flex-direction: column; gap: 24px;">
+<div style="display: flex; flex-direction: column; gap: 10px;">
+<h1 style="margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 50px; line-height: 1.05;">How superheroes defines and aligns on work</h1>
+<p style="margin: 0; font-size: 18px; line-height: 1.5; color: #2B2B2B; max-width: 1060px;">One spec, four pieces: the owner-vs-craft line, a home for who the product is for, the new discovery flow with its review cycle, and Canon, the project's record of your decisions. Nothing here is approved yet. Once you approve this board, the spec is written from it and must match it.</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px;">
+<div class="card" style="border-color: #1B4FD8;">
+<h2 class="h2">What changed this round</h2>
+<ul class="ul">
+<li>Everything restyled in the comic-panel theme</li>
+<li>The theme artboard is now the theme spec: colours, type and parts</li>
+<li>New: the review template, and tap-to-zoom images</li>
+<li>Discovery sends the final sheet, not the advisor</li>
+<li>Category 2 is told as user stories</li>
+<li>The ledger is now Canon; principles live there</li>
+<li>The split trigger is on the flow</li>
+</ul>
+</div>
+<div class="card">
+<h2 class="h2">Your rulings folded in</h2>
+<ul class="ul">
+<li>28 · Theme C, comic panel: start bold</li>
+<li>29 · The final sheet comes from discovery</li>
+<li>30 · User stories for category 2, evocative, not exhaustive</li>
+<li>31 · One review template; any session may use it</li>
+<li>32 · Principles are standing rulings in Canon</li>
+<li>33 · Your exact words, plus a session pointer</li>
+<li>34 · One card shape for every review</li>
+<li>35–36 · Canon named; the split trigger</li>
+</ul>
+</div>
+<div class="card">
+<h2 class="h2">Still open for you</h2>
+<p class="p"><b>Approve this board,</b> or comment where it's wrong. Once it's approved, I write the spec from it.</p>
+<p class="p"><b>One craft call to check:</b> your ceded calls ("you decide these") now sit in Canon beside your principles, and configure item 13 just points there. Say if you'd rather keep them in configure.</p>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 12px;">
+<div style="font-size: 14px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #4A4A4A;">How to read the marks</div>
+<div style="display: flex; gap: 32px; align-items: center; flex-wrap: wrap; font-size: 15.5px;">
+<div style="display: flex; gap: 10px; align-items: center;"><span style="width: 30px; height: 20px; border: 3px solid #1B4FD8; border-radius: 5px; background: #FFFFFF; box-shadow: 3px 3px 0 #111111;"></span><span>A moment that needs you</span></div>
+<div style="display: flex; gap: 10px; align-items: center;"><span style="width: 14px; height: 14px; border-radius: 50%; background: #FFC93C; border: 2px solid #111111;"></span><span>New compared with how discovery works today</span></div>
+<div style="display: flex; gap: 10px; align-items: center;"><span style="width: 30px; height: 20px; border: 2.5px solid #0F7A4F; border-radius: 5px; background: #E3F4EA;"></span><span>Independent reviewers</span></div>
+<div style="display: flex; gap: 10px; align-items: center;"><span style="background: #D7263D; color: #FFFFFF; font-weight: 700; font-size: 12px; padding: 2px 8px; border-radius: 6px; border: 2px solid #111111;">NO SOURCE</span><span>A warning: needs a decision</span></div>
+</div>
+<p class="p" style="color: #4A4A4A;">Comment on any artboard; click Send to Claude on a thread if you want me to pick it up straight away.</p>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

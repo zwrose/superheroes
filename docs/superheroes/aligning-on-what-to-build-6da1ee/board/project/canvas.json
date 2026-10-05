@@ -1,0 +1,156 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 900,
+      "title": "Start here"
+    },
+    "Theme.dc.html": {
+      "x": 1360,
+      "y": 0,
+      "w": 2400,
+      "h": 800,
+      "title": "The superheroes theme \u00b7 Comic panel"
+    },
+    "Flow.dc.html": {
+      "x": 0,
+      "y": 1580,
+      "w": 2560,
+      "h": 1100,
+      "title": "The flow, as a flow chart"
+    },
+    "ReviewCycle.dc.html": {
+      "x": 0,
+      "y": 3100,
+      "w": 1680,
+      "h": 1120,
+      "title": "The review cycle"
+    },
+    "SourceTags.dc.html": {
+      "x": 1760,
+      "y": 3100,
+      "w": 1280,
+      "h": 1120,
+      "title": "Source tags and Canon"
+    },
+    "Line.dc.html": {
+      "x": 0,
+      "y": 4640,
+      "w": 2400,
+      "h": 1900,
+      "title": "The owner-vs-craft line, in full"
+    },
+    "TapSheetItem.dc.html": {
+      "x": 0,
+      "y": 6960,
+      "w": 390,
+      "h": 844,
+      "title": "Spec review \u00b7 phone"
+    },
+    "TapSheetFinal.dc.html": {
+      "x": 470,
+      "y": 6960,
+      "w": 390,
+      "h": 844,
+      "title": "Final sheet \u00b7 phone"
+    },
+    "TapSheetDesktop.dc.html": {
+      "x": 940,
+      "y": 6960,
+      "w": 1440,
+      "h": 900,
+      "title": "Spec review \u00b7 desktop"
+    },
+    "TapSheetZoom.dc.html": {
+      "x": 2460,
+      "y": 6960,
+      "w": 390,
+      "h": 844,
+      "title": "Image zoom \u00b7 phone"
+    },
+    "ReviewTemplate.dc.html": {
+      "x": 0,
+      "y": 8280,
+      "w": 1680,
+      "h": 760,
+      "title": "One review template"
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-09-28T16:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "row1": {
+      "kind": "title1",
+      "maxW": 3760,
+      "text": "Start here \u00b7 the superheroes theme",
+      "w": 240,
+      "x": 0,
+      "y": -280
+    },
+    "row2": {
+      "kind": "title1",
+      "maxW": 2560,
+      "text": "The flow, as a flow chart",
+      "w": 240,
+      "x": 0,
+      "y": 1300
+    },
+    "row3": {
+      "kind": "title1",
+      "maxW": 3040,
+      "text": "The review cycle \u00b7 source tags and Canon",
+      "w": 240,
+      "x": 0,
+      "y": 2820
+    },
+    "row4": {
+      "kind": "title1",
+      "maxW": 2400,
+      "text": "The owner-vs-craft line, in full",
+      "w": 240,
+      "x": 0,
+      "y": 4360
+    },
+    "row5": {
+      "kind": "title1",
+      "maxW": 2850,
+      "text": "Tap sheets, as a light web app",
+      "w": 240,
+      "x": 0,
+      "y": 6680
+    },
+    "row6": {
+      "kind": "title1",
+      "maxW": 1680,
+      "text": "One review template, for any review",
+      "w": 240,
+      "x": 0,
+      "y": 8000
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Theme.dc.html",
+    "Flow.dc.html",
+    "ReviewCycle.dc.html",
+    "SourceTags.dc.html",
+    "Line.dc.html",
+    "TapSheetItem.dc.html",
+    "TapSheetFinal.dc.html",
+    "TapSheetDesktop.dc.html",
+    "TapSheetZoom.dc.html",
+    "ReviewTemplate.dc.html"
+  ],
+  "pages": [],
+  "title": "Spec Alignment Board"
+}

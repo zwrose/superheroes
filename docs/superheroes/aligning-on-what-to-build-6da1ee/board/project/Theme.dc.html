@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The superheroes theme</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;family=Atkinson+Hyperlegible:wght@400;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Atkinson Hyperlegible',sans-serif;color:#111111;background:#FFF8E7}
+.box{background:#FFFFFF;border:3px solid #111111;border-radius:14px;box-shadow:6px 6px 0 #111111;padding:22px 24px;display:flex;flex-direction:column;gap:14px}
+.lab{font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#4A4A4A}
+.sw{display:grid;grid-template-columns:64px minmax(0,1fr);gap:14px;align-items:center}
+.chip{width:64px;height:52px;border-radius:8px;border:3px solid #111111}
+.nm{font-weight:700;font-size:15.5px}
+.ds{font-size:14px;line-height:1.4;color:#2B2B2B}
+.hx{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#4A4A4A}
+.pt{display:flex;flex-direction:column;gap:6px}
+.cap{font-size:13px;color:#4A4A4A}
+.btn{min-height:44px;padding:0 20px;border-radius:8px;border:3px solid #111111;font-family:inherit;font-weight:700;font-size:15px;box-shadow:3px 3px 0 #111111}
+.pill{font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;border:2px solid #111111;white-space:nowrap}
+.rl{margin:0;padding-left:20px;font-size:14.5px;line-height:1.55;display:flex;flex-direction:column;gap:6px}
+</style>
+</helmet>
+<div style="width: 2400px; height: 800px; box-sizing: border-box; padding: 40px; display: flex; flex-direction: column; gap: 24px; background: #FFF8E7;">
+<div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 40px;">
+<div style="display: flex; flex-direction: column; gap: 6px;">
+<h1 style="margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 44px;">The superheroes theme · Comic panel</h1>
+<p style="margin: 0; font-size: 17px; color: #2B2B2B; max-width: 1500px;">Your pick, ruling 28: start bold; another theme can come later. The plugin ships this look for every board, tap sheet and review page. Bold, inked, a little playful, and still easy to read on a phone.</p>
+</div>
+<div style="background: #FFC93C; border: 3px solid #111111; border-radius: 10px; box-shadow: 4px 4px 0 #111111; padding: 10px 18px; font-weight: 700; font-size: 15px; white-space: nowrap;">Chosen 2026-10-03</div>
+</div>
+<div style="display: grid; grid-template-columns: 1.05fr 0.85fr 1.25fr 0.85fr; gap: 26px; flex-grow: 1;">
+
+<div class="box">
+<div class="lab">Colours, each with one job</div>
+<div class="sw"><div class="chip" style="background: #FFF8E7;"></div><div><div class="nm">Paper</div><div class="ds">The ground of every page.</div><div class="hx">#FFF8E7</div></div></div>
+<div class="sw"><div class="chip" style="background: #111111;"></div><div><div class="nm">Ink</div><div class="ds">Text, outlines, shadows, arrows.</div><div class="hx">#111111</div></div></div>
+<div class="sw"><div class="chip" style="background: #1B4FD8;"></div><div><div class="nm">Hero blue</div><div class="ds">Your moments, and the main action.</div><div class="hx">#1B4FD8 · text on it white</div></div></div>
+<div class="sw"><div class="chip" style="background: #D7263D;"></div><div><div class="nm">Alarm red</div><div class="ds">Warnings: a gap, no source, unsettled.</div><div class="hx">#D7263D · text on it white</div></div></div>
+<div class="sw"><div class="chip" style="background: #FFC93C;"></div><div><div class="nm">Highlight yellow</div><div class="ds">App bars, what's new, standing rulings.</div><div class="hx">#FFC93C · text on it ink</div></div></div>
+<div class="sw"><div class="chip" style="background: #E3F4EA; border-color: #0F7A4F;"></div><div><div class="nm">Reviewer green</div><div class="ds">Independent reviewers, nothing else.</div><div class="hx">#0F7A4F on #E3F4EA</div></div></div>
+</div>
+
+<div class="box">
+<div class="lab">Type</div>
+<div class="pt"><div style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 38px; line-height: 1.05;">Approve the spec?</div><div class="cap">Headings · Bricolage Grotesque 800</div></div>
+<div class="pt"><div style="font-size: 17px; line-height: 1.5;">Every statement traces to your board, your rulings, your answers, or craft recorded for your veto.</div><div class="cap">Body · Atkinson Hyperlegible 400 and 700, chosen for legibility</div></div>
+<div class="pt"><div style="font-family: 'IBM Plex Mono', monospace; font-size: 14px; background: #F2EEE3; border: 2px solid #111111; border-radius: 6px; padding: 4px 8px; align-self: flex-start;">canon C-16 · 2026-09-28</div><div class="cap">Tags and Canon entries · IBM Plex Mono</div></div>
+<div class="pt"><div style="font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #4A4A4A;">Section label</div><div class="cap">Labels · body font, capitals, tracked</div></div>
+</div>
+
+<div class="box">
+<div class="lab">The parts</div>
+<div style="background: #FFC93C; border: 3px solid #111111; border-radius: 10px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;"><span style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 19px;">superheroes</span><span style="font-weight: 700; font-size: 13.5px;">Spec review · 3 of 5</span></div>
+<div class="cap" style="margin-top: -8px;">App bar: yellow, the review's name and progress</div>
+<div style="display: flex; gap: 14px; flex-wrap: wrap; align-items: center;">
+<button type="button" class="btn" style="background: #1B4FD8; color: #FFFFFF;">Aligned</button>
+<button type="button" class="btn" style="background: #FFFFFF; color: #111111;">Discuss</button>
+<button type="button" class="btn" style="background: #111111; color: #FFFFFF; box-shadow: 3px 3px 0 #FFC93C;">Send verdict</button>
+</div>
+<div class="cap" style="margin-top: -8px;">Buttons: main, second, finish. At least 44px tall.</div>
+<div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+<span class="pill" style="background: #DCE5FC; color: #1238A8;">Aligned</span>
+<span class="pill" style="background: #FDE0E4; color: #A3162A;">Discuss</span>
+<span class="pill" style="background: #F2EEE3; color: #2B2B2B;">Open</span>
+<span style="background: #D7263D; color: #FFFFFF; font-weight: 700; font-size: 12px; padding: 3px 9px; border-radius: 6px; border: 2px solid #111111;">GAP FOUND</span>
+<span style="background: #FFC93C; color: #111111; font-weight: 700; font-size: 12px; padding: 3px 9px; border-radius: 6px; border: 2px solid #111111;">STANDING</span>
+</div>
+<div class="cap" style="margin-top: -8px;">Answer pills, a warning badge, a Canon mark</div>
+<div style="display: flex; gap: 18px; align-items: center;">
+<div style="background: #FFFFFF; border: 3px solid #1B4FD8; border-radius: 10px; box-shadow: 4px 4px 0 #111111; padding: 10px 16px; text-align: center;"><div style="font-weight: 700; font-size: 14px;">12 · Tap sheet</div><div style="font-size: 13px;">only the unruled</div></div>
+<div style="background: #E3F4EA; border: 2.5px solid #0F7A4F; border-radius: 10px; padding: 10px 16px; text-align: center;"><div style="font-weight: 700; font-size: 14px;">10 · Three checks</div><div style="font-size: 13px;">gap · source · grounding</div></div>
+<div style="background: #FFFFFF; border: 2.5px solid #111111; border-radius: 10px; padding: 10px 16px; text-align: center; position: relative;"><div style="font-weight: 700; font-size: 14px;">11 · Writing pass</div><div style="font-size: 13px;">then a meaning check</div><span style="position: absolute; top: -8px; right: -8px; width: 14px; height: 14px; border-radius: 50%; background: #FFC93C; border: 2px solid #111111;"></span></div>
+</div>
+<div class="cap" style="margin-top: -8px;">Flow-chart steps: yours, reviewers', an agent's (dot: new)</div>
+</div>
+
+<div class="box">
+<div class="lab">Rules that keep it readable</div>
+<ul class="rl">
+<li>Outlines are 3px ink; small parts 2px.</li>
+<li>Offset shadows, never blurred: 6px on cards, 4px on small boxes, 3px on buttons.</li>
+<li>Corners 6 to 14px. No gradients, no emoji.</li>
+<li>Text meets 4.5 to 1 contrast; white only on blue, red or ink.</li>
+<li>Colours that must be told apart also differ in lightness.</li>
+<li>Touch targets at least 44px; images tap to zoom.</li>
+<li>One theme for now. A dark variant can come later.</li>
+</ul>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2400,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

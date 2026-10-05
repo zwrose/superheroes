@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The owner-vs-craft line, in full</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;family=Atkinson+Hyperlegible:wght@400;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Atkinson Hyperlegible',sans-serif;color:#111111;background:#FFF8E7}
+.cat{background:#FFFFFF;border:3px solid #111111;border-radius:14px;box-shadow:6px 6px 0 #111111;padding:20px 22px;display:flex;flex-direction:column;gap:10px}
+.ct{font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:21px;line-height:1.25}
+.cn{display:inline-block;background:#1B4FD8;color:#FFFFFF;border:2px solid #111111;border-radius:6px;padding:0 7px;margin-right:4px}
+.cd{font-size:15px;line-height:1.5;color:#222222}
+.ex{margin:0;padding-left:18px;font-size:14.5px;line-height:1.5;color:#222222;display:flex;flex-direction:column;gap:5px}
+.nw{font-size:14px;line-height:1.45;color:#4A4A4A}
+.lab{font-size:12.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#4A4A4A}
+.panel{background:#FFFFFF;border:3px solid #111111;border-radius:14px;box-shadow:6px 6px 0 #111111;padding:20px 22px;display:flex;flex-direction:column;gap:12px}
+.wk{display:grid;grid-template-columns:minmax(0,1fr) 92px;gap:12px;padding:10px 0;border-bottom:1px solid #E2D9C2;align-items:start}
+.res{font-size:13px;font-weight:700;padding:4px 8px;border-radius:999px;text-align:center}
+.yours{background:#1B4FD8;color:#FFFFFF;border:2px solid #111111}
+.craft{background:#F2EEE3;color:#2B2B2B;border:2px solid #111111}
+.mono{font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.6;background:#F6F1E4;border-radius:10px;padding:12px 14px}
+</style>
+</helmet>
+<div style="width: 2400px; height: 1900px; box-sizing: border-box; padding: 40px; display: flex; flex-direction: column; gap: 22px; background: #FFF8E7;">
+<div style="display: flex; flex-direction: column; gap: 6px;">
+<h1 style="margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 40px;">The owner-vs-craft line, in full</h1>
+<p style="margin: 0; font-size: 17px; color: #2B2B2B; max-width: 1500px;">One line for the whole plugin and every project that uses it: discovery, the advisor, merges, fixes after approval, deviations and follow-ups. Examples are real calls from your sessions. When in doubt, it's yours.</p>
+</div>
+<div style="display: flex; gap: 32px; align-items: flex-start;">
+<div style="width: 1500px; flex-shrink: 0; display: flex; flex-direction: column; gap: 14px;">
+<div class="lab" style="color: #1238A8;">Yours · the ten owner categories</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px;">
+<div class="cat">
+<div class="ct"><span class="cn">1</span> Who the product is for, and what it's for</div>
+<div class="cd">The people the product serves and the job it does for them, kept once per project. Every other call leans on it, so discovery reads it first.</div>
+<ul class="ex"><li>superheroes is for a product-minded owner who isn't expected to know engineering craft.</li><li>Weekly Eats is for households planning meals and shopping together, and it's headed to a paid product.</li></ul>
+<div class="nw"><b>Not yours when</b> a spec just restates what's already recorded.</div>
+</div>
+<div class="cat">
+<div class="ct"><span class="cn">2</span> Who this piece of work is for, and what they're trying to do</div>
+<div class="cd">Told as user stories: <b>"As a …, I want …, so I can …"</b>, captured in each discovery. They evoke the core need, not every detail; the requirements carry the detail. It's what tells two right-looking designs apart.</div>
+<ul class="ex"><li>#1798: As a household shopper, I want to add more of something than my meal plans need, so I can stock up without losing track of what the plans need.</li><li>#1798: As a shopper mid-aisle, I want one number on each row, so I can put the right amount in the cart without doing the sums.</li></ul>
+<div class="nw"><b>Not yours when</b> the approved board or an agreed story already shows it. Edge cases are requirements, not stories.</div>
+</div>
+<div class="cat">
+<div class="ct"><span class="cn">3</span> What a person sees or can do at a given moment</div>
+<div class="cd">The behaviour of one screen or step: what's shown, what can be tapped, what happens next, and what happens when it goes wrong.</div>
+<ul class="ex"><li>#1798: Remove on a row that plans feed refuses, and points to Plans.</li><li>#1798: a row showing ??? can't be checked off; tapping it opens its question.</li></ul>
+<div class="nw"><b>Not yours when</b> it matches an approved board or an existing pattern exactly.</div>
+</div>
+<div class="cat">
+<div class="ct"><span class="cn">4</span> Whether a thing should exist at all</div>
+<div class="cd">Scope, and whether it's worth what it costs to build and keep, including retiring something already built.</div>
+<ul class="ex"><li>#1419: no "test version" concept in any environment; document versions are just seed data.</li><li>#1798: no extra controls for the rare shop-ahead case; the on-hand check already catches it.</li></ul>
+<div class="nw"><b>Not yours when</b> it's a routine split of scope you've agreed.</div>
+</div>
+<div class="cat">
+<div class="ct"><span class="cn">5</span> Risk tolerance and trust</div>
+<div class="cd">What the product defends against, who may bypass what, what's stored and for how long, and the privacy defaults.</div>
+<ul class="ex"><li>#1419: account creation is refused from the EEA and the UK.</li><li>superheroes: findings about deliberately malicious input are outside the threat model; accepted, not fixed.</li></ul>
+<div class="nw"><b>Not yours when</b> your stated threat model already decides it.</div>
+</div>
+<div class="cat">
+<div class="ct"><span class="cn">6</span> Your own time, attention and habits</div>
+<div class="cd">What reaches you, how and when, and what an agent may commit you to.</div>
+<ul class="ex"><li>Nothing is filed without your word, Backlog included.</li><li>#1798: fixes from the advisor's vet come to you on a tap sheet before they're pushed.</li></ul>
+<div class="nw"><b>Not yours when</b> it's only how a message to you is worded; plain language is already the rule.</div>
+</div>
+<div class="cat">
+<div class="ct"><span class="cn">7</span> A case that tests or creates a principle</div>
+<div class="cd">A case that clashes with a principle you've stated, or that no principle covers yet. Your answer becomes the principle: a <b>standing ruling in Canon</b>, which every later discovery reads.</div>
+<ul class="ex"><li>#1419: one deletion dialog shared with household delete: "I really don't want to end up with multiple implementations of the same thing."</li><li>superheroes: a proposed approval gate clashed with your autonomy principle.</li></ul>
+<div class="nw"><b>Not yours when</b> a standing ruling in Canon plainly decides it.</div>
+</div>
+<div class="cat">
+<div class="ct"><span class="cn">8</span> The quality bar, and what counts as proof</div>
+<div class="cd">Thresholds, what evidence comes before spending, and whether a known defect may ship.</div>
+<ul class="ex"><li>This discovery: review rounds stop at 4, and anything still open comes to you.</li><li>superheroes: a merge was held for one more fix round instead of shipping known leftovers.</li></ul>
+<div class="nw"><b>Not yours when</b> the bar is set and the case clearly meets or misses it.</div>
+</div>
+<div class="cat">
+<div class="ct"><span class="cn">9</span> All user-facing copy</div>
+<div class="cd">Every word the product shows its users. Agents draft it; you approve it. For superheroes, that's what the plugin says to its user.</div>
+<ul class="ex"><li>#1798: "Need beyond Plans" replaced "not from a plan".</li><li>#1419: "Keep my account" instead of "Cancel", which could be misread as cancelling the subscription.</li></ul>
+<div class="nw"><b>Not yours when</b> it's instruction text agents read, under the prose standard.</div>
+</div>
+<div class="cat">
+<div class="ct"><span class="cn">10</span> Priority and timing</div>
+<div class="cd">What ships when, when a decision gets made, and how much to invest now.</div>
+<ul class="ex"><li>#1912 was held until the #1915 work was settled.</li><li>#1419: the terms documents wait until just before go-live.</li></ul>
+<div class="nw"><b>Not yours when</b> it's the order of build pieces inside an agreed stack.</div>
+</div>
+</div>
+<div class="panel">
+<div class="lab">Craft · always craft, decided by agents and recorded for your veto</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 32px; font-size: 15px; line-height: 1.5;">
+<div>Matching an approved board, or reusing a pattern the product already has</div>
+<div>Applying a rule you already set to a new case</div>
+<div>Bookkeeping: a status changes because a fact changed, and no rule does</div>
+<div>Pulling implementation detail out of a requirement</div>
+<div>Routine size splits and the shape of a breakdown</div>
+<div>How it's built and how it's tested</div>
+<div>Tools and libraries, internal names, internal error handling</div>
+<div>How a speed or size target is met; cleanup that changes no behaviour</div>
+</div>
+<div class="nw"><b>Not decisions at all:</b> misreads, wrong facts, contradictions, jargon, and gaps a review should catch are errors. Review catches them.</div>
+</div>
+</div>
+<div style="flex-grow: 1; display: flex; flex-direction: column; gap: 18px;">
+<div class="panel">
+<div class="lab">How any call gets sorted</div>
+<figure style="margin: 0;">
+<svg viewBox="0 0 700 560" role="img" aria-label="A call that is already answered, or a kind of call you ceded, is craft. One that touches any of the ten categories is yours. If unsure, it is yours." style="width: 100%; height: auto; display: block;">
+<defs><marker id="lh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2B2B2B"></path></marker></defs>
+<g fill="none" stroke="#2B2B2B" stroke-width="2.2">
+<path d="M300,48 V75" marker-end="url(#lh)"></path>
+<path d="M300,165 V195" marker-end="url(#lh)"></path>
+<path d="M300,285 V315" marker-end="url(#lh)"></path>
+<path d="M300,405 V435" marker-end="url(#lh)"></path>
+<path d="M450,120 H540" marker-end="url(#lh)"></path>
+<path d="M450,240 H540" marker-end="url(#lh)"></path>
+<path d="M450,360 H540" marker-end="url(#lh)"></path>
+<path d="M450,480 H540" marker-end="url(#lh)"></path>
+<path d="M150,480 H90 V470" marker-end="url(#lh)"></path>
+</g>
+<g font-size="13" fill="#2B2B2B">
+<text x="308" y="186">no</text><text x="308" y="306">no</text><text x="308" y="426">no, or unsure</text>
+<text x="495" y="112" text-anchor="middle">yes</text><text x="495" y="232" text-anchor="middle">yes</text><text x="495" y="352" text-anchor="middle">yes</text><text x="495" y="472" text-anchor="middle">unsure</text><text x="122" y="500" text-anchor="middle">sure</text>
+</g>
+<rect x="200" y="8" width="200" height="40" rx="10" fill="#FFF3CC" stroke="#2B2B2B" stroke-width="2.5"></rect>
+<g fill="#FFFFFF" stroke="#2B2B2B" stroke-width="2.5">
+<polygon points="300,75 450,120 300,165 150,120"></polygon>
+<polygon points="300,195 450,240 300,285 150,240"></polygon>
+<polygon points="300,315 450,360 300,405 150,360"></polygon>
+<polygon points="300,435 450,480 300,525 150,480"></polygon>
+</g>
+<g fill="#F2EEE3" stroke="#2B2B2B" stroke-width="2.5">
+<rect x="540" y="98" width="150" height="44" rx="10"></rect>
+<rect x="540" y="218" width="150" height="44" rx="10"></rect>
+<rect x="10" y="426" width="160" height="44" rx="10"></rect>
+</g>
+<g fill="#1B4FD8" stroke="#1B4FD8" stroke-width="2.5">
+<rect x="540" y="338" width="150" height="44" rx="10"></rect>
+<rect x="540" y="458" width="150" height="44" rx="10"></rect>
+</g>
+<g text-anchor="middle" font-size="12.5" fill="#111111">
+<text x="300" y="33" font-weight="700" font-size="14">A call to make</text>
+<text x="300" y="116"><tspan x="300" font-weight="700">Already answered?</tspan><tspan x="300" dy="16" font-size="11.5">approved · a rule · the code · a fact</tspan></text>
+<text x="300" y="236"><tspan x="300" font-weight="700">Did you cede it?</tspan><tspan x="300" dy="16" font-size="11.5">"you decide these"</tspan></text>
+<text x="300" y="356"><tspan x="300" font-weight="700">Touches one of</tspan><tspan x="300" dy="16">the ten?</tspan></text>
+<text x="300" y="476"><tspan x="300" font-weight="700">Sure it doesn't?</tspan></text>
+<text x="615" y="125" font-weight="700">Craft</text>
+<text x="615" y="245" font-weight="700">Craft</text>
+<text x="90" y="453" font-weight="700">Craft</text>
+<text x="615" y="365" font-weight="700" fill="#FFFFFF">Yours</text>
+<text x="615" y="485" font-weight="700" fill="#FFFFFF">Yours</text>
+</g>
+</svg>
+<figcaption style="margin-top: 10px; font-size: 14.5px; line-height: 1.5; color: #2B2B2B;"><b>The consequence rule:</b> a craft choice never becomes yours, but an owner consequence it carries comes to you as its own decision. Picking a tool is craft; the monthly cost or outside service it adds is yours.</figcaption>
+</figure>
+</div>
+<div class="panel">
+<div class="lab">Worked examples</div>
+<div class="wk"><div style="font-size: 14.5px; line-height: 1.5;"><b>A reviewer finds the spec never says what a new person sees before any terms exist.</b> Nothing answers it, you never ceded that kind of call, and it touches 3 and 4.</div><div class="res yours">Yours</div></div>
+<div class="wk"><div style="font-size: 14.5px; line-height: 1.5;"><b>The board says phone sheets close by swipe only; the grabber must still work for a screen reader.</b> Your ruling and ordinary accessibility answer it.</div><div class="res craft">Craft</div></div>
+<div class="wk"><div style="font-size: 14.5px; line-height: 1.5;"><b>Pick the email sending service.</b> The tool is craft, but its monthly cost and a new outside service touch 4 and 5.</div><div class="res yours">Cost: yours</div></div>
+<div class="wk"><div style="font-size: 14.5px; line-height: 1.5;"><b>Switch twelve rules from "awaiting D2" to live wording now that D2 shipped.</b> A checkable fact; no rule changes.</div><div class="res craft">Craft</div></div>
+<div class="wk" style="border-bottom: none;"><div style="font-size: 14.5px; line-height: 1.5;"><b>The advisor wants to file a Backlog issue for a small defect it found.</b> It touches 6, your attention, and you took that right back.</div><div class="res yours">Yours</div></div>
+</div>
+<div class="panel">
+<div class="lab">How a project adjusts the line</div>
+<div class="cd">The ten categories never change. What changes, project by project, is how many calls inside them are already answered.</div>
+<ul class="ex">
+<li><b>Every ruling goes into the project's Canon</b> as it's made, so the same question is never asked twice. Next time, it's "already answered."</li>
+<li><b>When you cede a kind of call,</b> "you decide these from now on," it goes into Canon as a standing ruling with an example, called a ceded call, and later calls of that kind are craft.</li>
+<li><b>You can take any of them back</b> with one word, as you did with filing.</li>
+</ul>
+<div class="lab" style="margin-top: 4px;">In configure</div>
+<div class="mono">10 · Threat model · stays here for now (category 5)<br>13 · Material consequence line · points to Canon's standing rulings<br>&#160;&#160;Size splits of agreed work: the advisor's call<br>&#160;&#160;Filing issues: back with the owner (taken back)<br>14 · Who it's for and what it's for · NEW · category 1</div>
+</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2400,"height":1900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

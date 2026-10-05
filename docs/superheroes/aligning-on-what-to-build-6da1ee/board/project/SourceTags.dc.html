@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Source tags and Canon</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;family=Atkinson+Hyperlegible:wght@400;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Atkinson Hyperlegible',sans-serif;color:#111111;background:#FFF8E7}
+.box{background:#FFFFFF;border:3px solid #111111;border-radius:14px;box-shadow:6px 6px 0 #111111;padding:18px 22px;display:flex;flex-direction:column;gap:10px}
+.row{display:flex;flex-direction:column;gap:6px;padding:11px 0;border-bottom:2px solid #E2D9C2}
+.s{font-size:15px;line-height:1.5}
+.tag{align-self:flex-start;font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:3px 8px;border-radius:6px;background:#F2EEE3;color:#2B2B2B;border:2px solid #111111}
+.ent{font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.55;color:#222222;background:#F6F1E4;border:2px solid #111111;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:3px}
+.k{color:#4A4A4A}
+.lab{font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#4A4A4A}
+.st{display:inline-block;font-family:'Atkinson Hyperlegible',sans-serif;font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:5px;border:2px solid #111111;margin-left:6px}
+.p{margin:0;font-size:14.5px;line-height:1.5;color:#2B2B2B}
+</style>
+</helmet>
+<div style="width: 1280px; height: 1120px; box-sizing: border-box; padding: 44px; display: flex; flex-direction: column; gap: 20px; background: #FFF8E7;">
+<div style="display: flex; flex-direction: column; gap: 6px;">
+<h1 style="margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 38px;">Source tags and Canon</h1>
+<p style="margin: 0; font-size: 16px; color: #2B2B2B;">How the spec shows where each statement came from, and Canon: the project's record of every decision you've made, which every agent must stay consistent with. Illustrative; the build decides the exact layout.</p>
+</div>
+<div style="background: #FFC93C; border: 3px solid #111111; border-radius: 12px; box-shadow: 4px 4px 0 #111111; padding: 12px 18px; font-size: 15px; line-height: 1.5;"><b>Kept simple, on purpose:</b> a tag is plain text at the end of a line. Canon is one plain file per project, <code>canon.md</code> where the project keeps its specs, and every ruling is committed at once to the session's branch. The source check is an agent reading both. No new scripts or validators.</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px;">
+<div class="box">
+<div class="lab">A spec excerpt, with its sources</div>
+<div class="row"><div class="s">A reviewer never adds product behaviour to the spec. A fix that would, goes to the owner's queue.</div><div class="tag">canon C-7 · 2026-09-28</div></div>
+<div class="row"><div class="s">Findings still open after round 4 join the owner's queue, marked as unsettled.</div><div class="tag">canon C-16 · 2026-09-28</div></div>
+<div class="row"><div class="s">The final tap sheet's last card asks for approval, with Approve and Not yet.</div><div class="tag">board · Tap sheet, the final card</div></div>
+<div class="row"><div class="s">Each round's progress is posted as a single line.</div><div class="tag">craft · recorded for your veto</div></div>
+<div class="row" style="border-bottom: none; background: #FFF1F2; margin: 4px -10px 0; padding: 12px 10px; border-radius: 10px; border: 2px solid #D7263D;"><div class="s">Declined findings are deleted after 30 days.</div><div class="tag" style="background: #D7263D; color: #FFFFFF;">no source · a product decision · queued for you</div></div>
+</div>
+<div class="box">
+<div class="lab">Canon · one plain file per project</div>
+<div class="ent"><div><b>C-32 · 2026-10-03</b><span class="st" style="background: #FFC93C;">STANDING · a principle</span></div><div>Principles are standing rulings in Canon. The threat model stays in configure for now.</div><div class="k">Your words: "lets not migrate the threat model yet"</div><div class="k">Where: session 79206e2d · 2026-10-03, the time of your message</div></div>
+<div class="ent"><div><b>C-16 · 2026-09-28</b><span class="st" style="background: #FFC93C;">STANDING</span></div><div>Review rounds run automatically, up to 4. Findings still open join your queue, marked unsettled.</div><div class="k">Where: session 79206e2d · 2026-09-28</div></div>
+<div class="ent"><div><b>C-30 · 2026-10-03</b><span class="st" style="background: #FFFFFF;">THIS PIECE</span></div><div>The line's category 2 examples lead with #1798, told as user stories.</div><div class="k">Your words: "1798 is better"</div><div class="k">Where: board comment · 2026-10-03 13:40 UTC</div></div>
+<p class="p">Each entry: the ruling, whether it's <b>standing</b> (applies to all later work) or for <b>this piece</b>, your exact words where there are any, and a pointer to where it was said: the session and the time. No transcript line numbers; transcripts live on one machine and expire.</p>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px;">
+<div class="box">
+<div class="lab">What Canon holds</div>
+<p class="p"><b>Decisions</b> from every session, committed the moment they're made. Go-words (merge, launch) stay where you give them.</p>
+<p class="p"><b>Principles</b>: standing rulings, often born from a category 7 case.</p>
+<p class="p"><b>Ceded calls</b>: "you decide these from now on." Configure item 13 points here.</p>
+</div>
+<div class="box">
+<div class="lab">Who reads it</div>
+<p class="p">Discovery reads it first, so nothing you've ruled is asked twice. The source check traces tags back to it. The advisor's vet checks a spec against it, across every piece.</p>
+</div>
+<div class="box">
+<div class="lab">Not in Canon yet</div>
+<p class="p"><b>The threat model</b> stays in configure (item 10); review leans on it. The review-overhaul discovery, downstream of this one, should consider moving some of review's inputs into Canon.</p>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1120}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
