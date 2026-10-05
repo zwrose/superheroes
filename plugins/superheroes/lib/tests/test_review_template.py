@@ -511,13 +511,23 @@ def test_check_sheet_ends_on_a_ref_cycle():
 @pytest.mark.parametrize("wrap", [
     {"not": {"$ref": "#/$defs/loop"}},
     {"if": {"$ref": "#/$defs/loop"}, "then": {"type": "object"}},
-    {"anyOf": [{"$ref": "#/$defs/loop"}, {"type": "string"}]},
-], ids=["not", "if", "anyOf"])
+    {"anyOf": [{"$ref": "#/$defs/loop"}, {"type": "integer"}]},
+    {"anyOf": [{"type": "integer"}, {"$ref": "#/$defs/loop"}]},
+], ids=["not", "if", "anyOf-cycle-first", "anyOf-match-first"])
 def test_check_sheet_does_not_draw_on_a_ref_cycle_under_a_condition(wrap):
     schema = {"properties": {"node": wrap}, "$defs": {"loop": {"$ref": "#/$defs/loop"}}}
     problems = _run_check_sheet([{"cards": [], "node": 1}], schema=schema)[0]
     assert problems != [], "a cycle under a condition drew the sheet"
-    assert any("can't be checked" in problem for problem in problems), problems
+    assert any('"$ref"' in problem and "#/$defs/loop" in problem and "can't check" in problem for problem in problems), problems
+
+
+# Bites on: a recursive schema that descends through properties or items being refused as a cycle.
+def test_check_sheet_accepts_a_recursion_that_descends_through_properties_or_items():
+    schema = {
+        "properties": {"node": {"$ref": "#/$defs/tree"}},
+        "$defs": {"tree": {"type": "object", "properties": {"kids": {"type": "array", "items": {"$ref": "#/$defs/tree"}}}}},
+    }
+    assert _run_check_sheet([{"cards": [], "node": {"kids": [{"kids": []}]}}], schema=schema) == [[]]
 
 
 # Bites on: an annotation keyword being refused, or read as a rule, at any position.

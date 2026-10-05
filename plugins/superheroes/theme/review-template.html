@@ -169,7 +169,35 @@
       });
     };
 
+    // A cycle that never descends into a child value (only $ref, allOf, anyOf, not, if, then) can never
+    // end for any value, so it is refused here whatever the data or the order of an anyOf's branches.
+    // Cycles through "properties" or "items" descend into a child value and stay allowed.
+    const state = new Map();
+    const sameValue = (schema, pointer) => {
+      if (!isObject(schema) || state.get(schema) === 2) return;
+      state.set(schema, 1);
+      const next = (sub, at) => {
+        if (!isObject(sub)) return;
+        if (state.get(sub) === 1) {
+          refuse('"$ref" that leads back to itself without reading anything', pointer);
+          return;
+        }
+        sameValue(sub, at);
+      };
+      if (schema.$ref !== undefined) {
+        const resolved = resolvePointer(root, schema.$ref);
+        if (resolved.problem === undefined) next(resolved.target, schema.$ref);
+      }
+      ["allOf", "anyOf"].forEach((key) => {
+        if (Array.isArray(schema[key])) schema[key].forEach((sub, index) => next(sub, pointer + "/" + key + "/" + index));
+      });
+      ["not", "if", "then"].forEach((key) => next(schema[key], pointer + "/" + key));
+      state.set(schema, 2);
+    };
+
     walk(root, "#", "schema");
+    // Start from every schema the walk reached, since a cycle may sit under a property.
+    Array.from(walked).forEach((schema) => sameValue(schema, "#"));
     return problems;
   }
 
