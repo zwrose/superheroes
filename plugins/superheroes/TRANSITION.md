@@ -12,7 +12,7 @@ belongs to and lists every change with its replacement.
 ### Guardian dead-code ids are repo-relative
 
 - Dead-code candidate ids and their stored `path` no longer carry the checkout's absolute path, so a sweep from a different checkout no longer reports every carried dead-code hit as new.
-- **One transition sweep** for a baseline written with absolute ids: it reports every current dead-code candidate as new, once, and every old absolute-keyed id as resolved. The old checkout folder is not guessed, because a wrong guess could hide a finding. That sweep stores repo-relative ids, and from the next sweep on the dead-code drift is real again, from any checkout.
+- **One transition sweep** for a baseline written with absolute ids: it reports every current dead-code candidate as new, once, and every old absolute-keyed id as resolved. The old checkout folder is not guessed, because a wrong guess could hide a finding. That sweep stores repo-relative ids, and from the next sweep on the dead-code drift is real again, from any checkout. If one ecosystem's tool cannot run on that sweep (a partial sweep), its old absolute ids are carried unchanged and make the same one-time transition on the first sweep where that tool runs.
 
 ## 0.40.0
 
