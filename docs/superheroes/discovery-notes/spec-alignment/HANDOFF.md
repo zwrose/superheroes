@@ -527,3 +527,26 @@ are re-running on the changed parts before the re-vet.
   takeover, v14 one setup interview, vam amendment checks), one craft-veto card listing ten tagged
   choices, and "Approve both specs?". Answers in collection `final`, the verdict in `verdict/final`.
   Per ruling 44, approval waits on applying the answers, re-check and re-vet.
+
+## Final sheet rulings (owner, 2026-10-04/05; verdict "Not yet", sent)
+
+55. **What Canon holds** (v4, aligned with a): decisions (answers to owner calls, principles,
+    hand-backs); go-words stay where they're given; issue anchors may point to Canon entries; walk
+    records and the registry carry on.
+56. **Where these two specs live** (v6, aligned with a): move them to docs/superheroes/ through a
+    spec PR; the mismatched recorded storage mode goes to the advisor to fix.
+57. **One setup sitting** (v14, aligned with a): "who it's for" and the risk profile in one sitting;
+    where risk-tolerance records live is decided once, with the review-overhaul discovery.
+58. **Amendments after approval keep today's path** (vam, option b; owner: "amendments are usually
+    pretty thin and because of something very specific, which i don't think justifies the whole
+    review cycle").
+59. **No dependence on multiple Claude instances** (v8, owner note: "we should not assume that most
+    owners have multiple claude instances, the plugin should not have meaningful dependencies on
+    that concept"). Sheet takeover is by another session; nothing assumes several accounts.
+60. Craft-veto card: the owner asked what "hand-backs live in Canon" means (open); no veto raised
+    on items 2-10.
+- Open (Discuss): v7, Canon in in-repo projects. Owner: "this will add a lot of friction for in-repo
+  projects... but at the same time it would be bad to lose Canon esp after awhile... how can we
+  make it not super painful to put in a project?"
+- Sheet defects the owner hit: Send verdict gave no visible feedback; the verdict note saved to a
+  stray answers doc. Fix in the template; candidate acceptance for the review surface.
