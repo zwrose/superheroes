@@ -708,6 +708,18 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
   per the venue-citation convention that same PR ships). Substantive — a builder
   implementing the pass builds its completion record differently against it. Sections
   touched: FR-40, c8-adoption.md (What and DoD), coverage-map FR-40 row, Amendments.
+- **2026-10-04 (owner-stamped, substantive):** FR-16 and FR-17 — the spec review weight
+  call retires. Every spec now gets the same three checks (gap review; the source check,
+  both directions; grounding), each by an independent reviewer from a different model family
+  than the spec's author. No light-or-full weight call decides how a spec is reviewed, and the
+  advisor may still size its own vet. Code review's light, full and micro lanes are unchanged.
+  Stamp: the owner's approval of `aligning-on-what-to-build-6da1ee` on 2026-10-04 (the
+  final-sheet approval card, sent 2026-10-05T03:50Z). That spec's § "What this spec amends"
+  names this change and says it is recorded here at its approval (ruling 43; that spec's
+  FR-49a). Substantive, because an advisor and a discovery session review a spec differently
+  against it. The FR-16/FR-17 text above is left as written and reads as superseded by this
+  entry. Building the change (the discovery and showrunner surfaces) is the
+  spec-alignment-landing epic's work. Sections touched: FR-16, FR-17, Amendments.
 
 ## Coverage
 

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Image zoom on a phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;family=Atkinson+Hyperlegible:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Atkinson Hyperlegible',sans-serif;color:#FFFFFF;background:#111111}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; background: #111111; color: #FFFFFF;">
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 3px solid #FFC93C;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<div style="font-weight: 700; font-size: 15px;">The signup screen today</div>
+<div style="font-size: 12.5px; color: #D6D6D6;">Item 4 · one image</div>
+</div>
+<button type="button" style="min-height: 44px; min-width: 44px; padding: 0 16px; border-radius: 8px; border: 3px solid #FFFFFF; background: #FFC93C; color: #111111; font-family: inherit; font-weight: 700; font-size: 15px;">Close</button>
+</div>
+<div style="flex-grow: 1; display: flex; align-items: center; justify-content: center; padding: 16px; overflow: hidden;">
+<figure style="margin: 0; width: 100%;">
+<svg viewBox="0 0 300 500" role="img" aria-label="The signup screen, zoomed: a Create account form with name and email fields, a checkbox reading I agree to the Terms and Privacy Policy, circled in red because no Terms exist yet, and a Create account button." style="width: 100%; height: auto; display: block;">
+<rect x="6" y="6" width="288" height="488" rx="28" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4"></rect>
+<rect x="6" y="6" width="288" height="64" rx="24" fill="#FFC93C"></rect>
+<rect x="6" y="46" width="288" height="24" fill="#FFC93C"></rect>
+<line x1="6" y1="70" x2="294" y2="70" stroke="#111111" stroke-width="3"></line>
+<text x="30" y="46" font-family="Bricolage Grotesque, sans-serif" font-weight="800" font-size="20" fill="#111111">Weekly Eats</text>
+<text x="30" y="118" font-family="Bricolage Grotesque, sans-serif" font-weight="800" font-size="24" fill="#111111">Create account</text>
+<text x="30" y="160" font-size="14" fill="#4A4A4A">Name</text>
+<rect x="30" y="168" width="240" height="40" rx="6" fill="#FFFFFF" stroke="#111111" stroke-width="2"></rect>
+<text x="30" y="236" font-size="14" fill="#4A4A4A">Email</text>
+<rect x="30" y="244" width="240" height="40" rx="6" fill="#FFFFFF" stroke="#111111" stroke-width="2"></rect>
+<rect x="30" y="318" width="20" height="20" rx="3" fill="#FFFFFF" stroke="#111111" stroke-width="2"></rect>
+<text x="60" y="326" font-size="13.5" fill="#111111">I agree to the Terms</text>
+<text x="60" y="343" font-size="13.5" fill="#111111">and Privacy Policy</text>
+<ellipse cx="150" cy="330" rx="132" ry="30" fill="none" stroke="#D7263D" stroke-width="3.5" stroke-dasharray="8 5"></ellipse>
+<rect x="196" y="364" width="92" height="26" rx="6" fill="#D7263D" stroke="#111111" stroke-width="2"></rect>
+<text x="242" y="382" text-anchor="middle" font-size="12.5" font-weight="700" fill="#FFFFFF">no Terms yet</text>
+<rect x="30" y="414" width="240" height="48" rx="8" fill="#1B4FD8" stroke="#111111" stroke-width="2.5"></rect>
+<text x="150" y="444" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">Create account</text>
+</svg>
+</figure>
+</div>
+<div style="padding: 12px 16px 18px; display: flex; flex-direction: column; gap: 10px; border-top: 3px solid #FFC93C;">
+<div style="font-size: 14px; line-height: 1.45; color: #E6E6E6;">Pinch or double-tap to zoom. Drag to look around. Close to go back to the card; each image opens on its own.</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

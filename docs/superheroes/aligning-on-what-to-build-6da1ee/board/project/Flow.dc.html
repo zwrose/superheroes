@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The flow, as a flow chart</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;family=Atkinson+Hyperlegible:wght@400;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Atkinson Hyperlegible',sans-serif;color:#111111;background:#FFF8E7}
+</style>
+</helmet>
+<div style="width: 2560px; height: 1100px; box-sizing: border-box; padding: 40px; display: flex; flex-direction: column; gap: 18px; background: #FFF8E7;">
+<div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 40px;">
+<div style="display: flex; flex-direction: column; gap: 8px;">
+<h1 style="margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 40px;">The flow, start to handoff</h1>
+<p style="margin: 0; font-size: 17px; color: #2B2B2B;">Four lanes: who acts at each step. Blue boxes are your moments. Yellow dots mark what is new compared with today.</p>
+<p style="margin: 0; font-size: 15px; color: #4A4A4A;">A Start 1–4 · B Understand 5–6 · C Visualize 7–8 · D Write and check 9–11 · E Your remainder 12–13 · F Vet and approval 14–16 · G Handoff 17–18</p>
+</div>
+</div>
+<figure style="margin: 0;">
+<svg viewBox="0 0 2480 820" role="img" aria-label="Flow chart in four lanes, you, discovery, reviewers and the advisor, from the advisor routing an idea, through grounding, questions, framing, drawing and approving the board, writing and checking the spec, your tap sheet, ready for vet, the advisor's vet, the final sheet discovery sends you with approval as its last card, the breakdown on the same PR, and one merge word." style="width: 100%; height: auto; display: block;">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2B2B2B"></path></marker>
+</defs>
+<rect x="0" y="40" width="2480" height="180" fill="#E4EBFD"></rect>
+<rect x="0" y="230" width="2480" height="220" fill="#FFFDF6"></rect>
+<rect x="0" y="460" width="2480" height="140" fill="#E3F4EA"></rect>
+<rect x="0" y="610" width="2480" height="190" fill="#F3EDDD"></rect>
+<g font-size="14" font-weight="700" fill="#111111">
+<text x="16" y="124">YOU</text>
+<text x="16" y="334">DISCOVERY</text>
+<text x="16" y="524">REVIEWERS</text>
+<text x="16" y="699">ADVISOR</text>
+</g>
+<g font-size="12" fill="#4A4A4A">
+<text x="16" y="144">the owner</text>
+<text x="16" y="354">this session</text>
+<text x="16" y="544">independent</text>
+<text x="16" y="719">the project's seat</text>
+</g>
+<g fill="none" stroke="#2B2B2B" stroke-width="2.2">
+<path d="M273,705 H284 V340 H295" marker-end="url(#ah)"></path>
+<path d="M441,340 H476" marker-end="url(#ah)"></path>
+<path d="M536,290 V170" marker-end="url(#ah)"></path>
+<path d="M609,130 H620 V340 H631" marker-end="url(#ah)"></path>
+<path d="M596,340 H631" marker-end="url(#ah)"></path>
+<path d="M704,300 V170" stroke-dasharray="6 5" marker-start="url(#ah)" marker-end="url(#ah)"></path>
+<path d="M852,300 V170" marker-end="url(#ah)"></path>
+<path d="M892,170 V300" marker-end="url(#ah)"></path>
+<path d="M945,340 H956 V130 H967" marker-end="url(#ah)"></path>
+<path d="M1113,130 H1124 V340 H1135" marker-end="url(#ah)"></path>
+<path d="M1188,300 V170" marker-end="url(#ah)"></path>
+<path d="M1228,170 V300" marker-end="url(#ah)"></path>
+<path d="M1281,340 H1303" marker-end="url(#ah)"></path>
+<path d="M1376,300 V170" marker-end="url(#ah)"></path>
+<path d="M1449,130 H1460 V340 H1471" marker-end="url(#ah)"></path>
+<path d="M1524,380 V490" marker-end="url(#ah)"></path>
+<path d="M1564,490 V380" marker-end="url(#ah)"></path>
+<path d="M1617,340 H1639" marker-end="url(#ah)"></path>
+<path d="M1785,340 H1796 V130 H1807" marker-end="url(#ah)"></path>
+<path d="M1860,170 V300" marker-end="url(#ah)"></path>
+<path d="M1900,300 V170" marker-end="url(#ah)"></path>
+<path d="M1860,380 V490" marker-end="url(#ah)"></path>
+<path d="M1900,490 V380" marker-end="url(#ah)"></path>
+<path d="M1953,130 H1975" marker-end="url(#ah)"></path>
+<path d="M2048,170 V300" marker-end="url(#ah)"></path>
+<path d="M2028,380 V665" marker-end="url(#ah)"></path>
+<path d="M2068,665 V380" marker-end="url(#ah)"></path>
+<path d="M2121,340 H2132 V130 H2143" marker-end="url(#ah)"></path>
+<path d="M2216,170 V665" marker-end="url(#ah)"></path>
+<path d="M2289,705 H2300 V130 H2311" marker-end="url(#ah)"></path>
+<path d="M2384,170 V665" marker-end="url(#ah)"></path>
+</g>
+<g font-size="12" fill="#2B2B2B">
+<text x="546" y="236">no</text>
+<text x="613" y="332" text-anchor="middle">yes</text>
+<text x="714" y="206">only if an</text>
+<text x="714" y="221">unknown blocks</text>
+<text x="846" y="262" text-anchor="end">question</text>
+<text x="898" y="250">ruling</text>
+<text x="1182" y="262" text-anchor="end">drawn</text>
+<text x="1234" y="250">rulings</text>
+<text x="1382" y="240">for approval</text>
+<text x="1518" y="440" text-anchor="end">spec</text>
+<text x="1570" y="440">findings</text>
+<text x="1544" y="590" text-anchor="middle">automatic, up to 4 rounds</text>
+<text x="1854" y="240" text-anchor="end">rulings</text>
+<text x="1906" y="240">knock-ons</text>
+<text x="1880" y="590" text-anchor="middle">same three checks</text>
+<text x="1964" y="80" text-anchor="middle">nothing left</text>
+<text x="2054" y="240">ready</text>
+<text x="2022" y="520" text-anchor="end">PR</text>
+<text x="2074" y="520">findings,</text>
+<text x="2074" y="535">or clean</text>
+<text x="2138" y="250">vet clean</text>
+<text x="2222" y="420">approved</text>
+<text x="2306" y="420">vetted</text>
+<text x="2390" y="420">merge word</text>
+</g>
+<g fill="#111111" stroke="none">
+<rect x="468" y="95" width="146" height="80" rx="10"></rect>
+<rect x="636" y="95" width="146" height="80" rx="10"></rect>
+<rect x="804" y="95" width="146" height="80" rx="10"></rect>
+<rect x="972" y="95" width="146" height="80" rx="10"></rect>
+<rect x="1140" y="95" width="146" height="80" rx="10"></rect>
+<rect x="1308" y="95" width="146" height="80" rx="10"></rect>
+<rect x="1812" y="95" width="146" height="80" rx="10"></rect>
+<rect x="1980" y="95" width="146" height="80" rx="10"></rect>
+<rect x="2148" y="95" width="146" height="80" rx="10"></rect>
+<rect x="2316" y="95" width="146" height="80" rx="10"></rect>
+</g>
+<g stroke-width="3.5" stroke="#1B4FD8" fill="#FFFFFF">
+<rect x="463" y="90" width="146" height="80" rx="10"></rect>
+<rect x="631" y="90" width="146" height="80" rx="10" stroke-dasharray="6 5"></rect>
+<rect x="799" y="90" width="146" height="80" rx="10"></rect>
+<rect x="967" y="90" width="146" height="80" rx="10"></rect>
+<rect x="1135" y="90" width="146" height="80" rx="10"></rect>
+<rect x="1303" y="90" width="146" height="80" rx="10"></rect>
+<rect x="1807" y="90" width="146" height="80" rx="10"></rect>
+<rect x="1975" y="90" width="146" height="80" rx="10"></rect>
+<rect x="2143" y="90" width="146" height="80" rx="10"></rect>
+<rect x="2311" y="90" width="146" height="80" rx="10"></rect>
+</g>
+<g stroke-width="2.5" stroke="#2B2B2B" fill="#FFFFFF">
+<rect x="295" y="300" width="146" height="80" rx="10"></rect>
+<polygon points="536,290 596,340 536,390 476,340"></polygon>
+<rect x="631" y="300" width="146" height="80" rx="10"></rect>
+<rect x="799" y="300" width="146" height="80" rx="10"></rect>
+<rect x="1135" y="300" width="146" height="80" rx="10"></rect>
+<rect x="1303" y="300" width="146" height="80" rx="10"></rect>
+<rect x="1471" y="300" width="146" height="80" rx="10"></rect>
+<rect x="1639" y="300" width="146" height="80" rx="10"></rect>
+<rect x="1807" y="300" width="146" height="80" rx="10"></rect>
+<rect x="1975" y="300" width="146" height="80" rx="10"></rect>
+</g>
+<g stroke-width="2.5" stroke="#0F7A4F" fill="#FFFFFF">
+<rect x="1471" y="490" width="146" height="80" rx="10"></rect>
+<rect x="1807" y="490" width="146" height="80" rx="10"></rect>
+</g>
+<g stroke-width="2.5" stroke="#2B2B2B" fill="#FFFDF6">
+<rect x="127" y="665" width="146" height="80" rx="10"></rect>
+<rect x="1975" y="665" width="146" height="80" rx="10"></rect>
+<rect x="2143" y="665" width="146" height="80" rx="10"></rect>
+<rect x="2311" y="665" width="146" height="80" rx="10"></rect>
+</g>
+<g fill="#FFC93C" stroke="#111111" stroke-width="2">
+<circle cx="434" cy="307" r="6"></circle>
+<circle cx="602" cy="97" r="6"></circle>
+<circle cx="1610" cy="307" r="6"></circle>
+<circle cx="1610" cy="497" r="6"></circle>
+<circle cx="1778" cy="307" r="6"></circle>
+<circle cx="1946" cy="97" r="6"></circle>
+<circle cx="2114" cy="97" r="6"></circle>
+<circle cx="2114" cy="307" r="6"></circle>
+<circle cx="2282" cy="672" r="6"></circle>
+</g>
+<g text-anchor="middle" fill="#111111" font-size="12">
+<text x="200" y="701.5"><tspan x="200" font-size="13" font-weight="700">1 · Routes the idea</tspan><tspan x="200" dy="15">to discovery</tspan></text>
+<text x="368" y="321.5"><tspan x="368" font-size="13" font-weight="700">2 · Grounds itself</tspan><tspan x="368" dy="15">who it's for, Canon,</tspan><tspan x="368" dy="15">sibling boards,</tspan><tspan x="368" dy="15">product as built</tspan></text>
+<text x="536" y="336.5" font-size="11.5"><tspan x="536" font-weight="700">Who it's for</tspan><tspan x="536" dy="15">recorded?</tspan></text>
+<text x="536" y="119"><tspan x="536" font-size="13" font-weight="700">Sets it up with</tspan><tspan x="536" dy="15">the advisor first</tspan><tspan x="536" dy="15" fill="#4A4A4A">strongly advised</tspan></text>
+<text x="704" y="329"><tspan x="704" font-size="13" font-weight="700">3 · Scope check</tspan><tspan x="704" dy="15">obvious bundles</tspan><tspan x="704" dy="15">split off now</tspan></text>
+<text x="704" y="126.5"><tspan x="704" font-size="13" font-weight="700">4 · Consents to</tspan><tspan x="704" dy="15">investigation cost</tspan></text>
+<text x="872" y="321.5"><tspan x="872" font-size="13" font-weight="700">5 · Asks, one</tspan><tspan x="872" dy="15">at a time; craft</tspan><tspan x="872" dy="15">recorded for veto;</tspan><tspan x="872" dy="15">rulings to Canon</tspan></text>
+<text x="872" y="126.5"><tspan x="872" font-size="13" font-weight="700">Rules on each</tspan><tspan x="872" dy="15">question</tspan></text>
+<text x="1040" y="126.5"><tspan x="1040" font-size="13" font-weight="700">6 · Confirms</tspan><tspan x="1040" dy="15">the framing</tspan></text>
+<text x="1208" y="329"><tspan x="1208" font-size="13" font-weight="700">7 · Exploration</tspan><tspan x="1208" dy="15">journeys first,</tspan><tspan x="1208" dy="15">then the choices</tspan></text>
+<text x="1208" y="126.5"><tspan x="1208" font-size="13" font-weight="700">Comments</tspan><tspan x="1208" dy="15">and rules</tspan></text>
+<text x="1376" y="329"><tspan x="1376" font-size="13" font-weight="700">8 · Build board</tspan><tspan x="1376" dy="15">settled design,</tspan><tspan x="1376" dy="15">real wording</tspan></text>
+<text x="1376" y="126.5"><tspan x="1376" font-size="13" font-weight="700">Approves</tspan><tspan x="1376" dy="15">the board</tspan></text>
+<text x="1544" y="321.5"><tspan x="1544" font-size="13" font-weight="700">9 · Writes the spec</tspan><tspan x="1544" dy="15">every statement</tspan><tspan x="1544" dy="15">tagged; a second</tspan><tspan x="1544" dy="15">piece → propose split</tspan></text>
+<text x="1544" y="519"><tspan x="1544" font-size="13" font-weight="700">10 · Three checks</tspan><tspan x="1544" dy="15">gap · source ·</tspan><tspan x="1544" dy="15">grounding</tspan></text>
+<text x="1712" y="329"><tspan x="1712" font-size="13" font-weight="700">11 · Writing pass</tspan><tspan x="1712" dy="15">then a meaning</tspan><tspan x="1712" dy="15">check</tspan></text>
+<text x="1880" y="126.5"><tspan x="1880" font-size="13" font-weight="700">12 · Tap sheet</tspan><tspan x="1880" dy="15">only the unruled</tspan></text>
+<text x="1880" y="329"><tspan x="1880" font-size="13" font-weight="700">Applies rulings</tspan><tspan x="1880" dy="15">re-checks what</tspan><tspan x="1880" dy="15">changed</tspan></text>
+<text x="1880" y="526.5"><tspan x="1880" font-size="13" font-weight="700">Re-check</tspan><tspan x="1880" dy="15">changed parts</tspan></text>
+<text x="2048" y="126.5"><tspan x="2048" font-size="13" font-weight="700">13 · Ready for vet</tspan><tspan x="2048" dy="15">not approval yet</tspan></text>
+<text x="2048" y="321.5"><tspan x="2048" font-size="13" font-weight="700">Opens the spec PR</tspan><tspan x="2048" dy="15">fixes what the vet</tspan><tspan x="2048" dy="15">sends back; sends</tspan><tspan x="2048" dy="15">your final sheet</tspan></text>
+<text x="2048" y="694"><tspan x="2048" font-size="13" font-weight="700">14 · Vets the PR</tspan><tspan x="2048" dy="15">vs other specs and</tspan><tspan x="2048" dy="15">the whole project</tspan></text>
+<text x="2216" y="119"><tspan x="2216" font-size="13" font-weight="700">15 · Final sheet</tspan><tspan x="2216" dy="15">vet's owner calls;</tspan><tspan x="2216" dy="15">last card: approve</tspan></text>
+<text x="2216" y="694"><tspan x="2216" font-size="13" font-weight="700">16 · Adds breakdown</tspan><tspan x="2216" dy="15">to the same PR,</tspan><tspan x="2216" dy="15">vets it</tspan></text>
+<text x="2384" y="126.5"><tspan x="2384" font-size="13" font-weight="700">17 · Merge word</tspan><tspan x="2384" dy="15">and filing word</tspan></text>
+<text x="2384" y="694"><tspan x="2384" font-size="13" font-weight="700">18 · Merges, files,</tspan><tspan x="2384" dy="15">wires the board,</tspan><tspan x="2384" dy="15">routes builds</tspan></text>
+</g>
+</svg>
+<figcaption style="margin-top: 14px; font-size: 15px; line-height: 1.55; color: #2B2B2B; max-width: 1900px;">Discovery never breaks the spec into issues or files anything: after your approval the advisor adds the breakdown to the same PR and vets it, and one merge word covers both. The advisor's vet never fixes the spec itself; it sends findings back to discovery and re-vets. When the vet is clean, discovery sends your final sheet, with the vet's owner calls and approval as the last card. <b>Splitting:</b> a spec covers one piece you could approve and ship on its own; if writing turns up a second piece, discovery proposes the split and you rule. Around 300–400 lines, discovery raises splitting with you; length alone never stops the work. The dashed box only happens when an unknown blocks the requirements.</figcaption>
+</figure>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2560,"height":1100}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

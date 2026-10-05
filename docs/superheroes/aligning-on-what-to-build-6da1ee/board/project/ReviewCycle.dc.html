@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The review cycle</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;family=Atkinson+Hyperlegible:wght@400;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Atkinson Hyperlegible',sans-serif;color:#111111;background:#FFF8E7}
+.card{background:#FFFFFF;border:3px solid #111111;border-radius:14px;box-shadow:6px 6px 0 #111111;padding:18px 20px;display:flex;flex-direction:column;gap:8px}
+.lab{font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#4A4A4A}
+.d{font-size:15px;line-height:1.5;color:#222222}
+</style>
+</helmet>
+<div style="width: 1680px; height: 1120px; box-sizing: border-box; padding: 40px; display: flex; flex-direction: column; gap: 18px; background: #FFF8E7;">
+<div style="display: flex; flex-direction: column; gap: 6px;">
+<h1 style="margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 40px;">The review cycle</h1>
+<p style="margin: 0; font-size: 17px; color: #2B2B2B;">Steps 9 to 13 of the flow, drawn as the process. Everything left of your tap sheet runs without you.</p>
+</div>
+<figure style="margin: 0;">
+<svg viewBox="0 0 1600 660" role="img" aria-label="The written spec goes to three checks in parallel; discovery sorts each finding into craft, declined or yours; rounds repeat until clean or round four; then a writing pass and your tap sheet of only the unruled; your rulings are applied and the checks re-run on the changed parts; when nothing is left you mark it ready for vet." style="width: 100%; height: auto; display: block;">
+<defs>
+<marker id="rh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2B2B2B"></path></marker>
+</defs>
+<g fill="none" stroke="#2B2B2B" stroke-width="2.2">
+<path d="M200,365 H235 V260 H280" marker-end="url(#rh)"></path>
+<path d="M200,365 H280" marker-end="url(#rh)"></path>
+<path d="M200,365 H235 V470 H280" marker-end="url(#rh)"></path>
+<path d="M470,260 H505 V365 H530" marker-end="url(#rh)"></path>
+<path d="M470,365 H530" marker-end="url(#rh)"></path>
+<path d="M470,470 H505 V365 H530" marker-end="url(#rh)"></path>
+<path d="M600,305 V222 H740" marker-end="url(#rh)"></path>
+<path d="M670,365 H740" marker-end="url(#rh)"></path>
+<path d="M600,425 V511 H740" marker-end="url(#rh)"></path>
+<path d="M940,222 H952 V300 H965" marker-end="url(#rh)"></path>
+<path d="M940,365 H952 V300 H965"></path>
+<path d="M1040,245 V140 H375 V228" marker-end="url(#rh)"></path>
+<path d="M1115,300 H1170" marker-end="url(#rh)"></path>
+<path d="M1340,300 H1390" marker-end="url(#rh)"></path>
+<path d="M1480,262 V176" marker-end="url(#rh)"></path>
+<path d="M1480,338 V430" marker-end="url(#rh)"></path>
+<path d="M1480,494 V620 H375 V502" marker-end="url(#rh)"></path>
+<path d="M940,520 H1360 V300 H1390" marker-end="url(#rh)"></path>
+<path d="M840,397 V476" stroke-dasharray="6 5" marker-end="url(#rh)"></path>
+<path d="M1040,355 V440 H900 V476" stroke-dasharray="6 5" marker-end="url(#rh)"></path>
+</g>
+<g font-size="13" fill="#2B2B2B">
+<text x="708" y="130" text-anchor="middle">no · next round, the same reviewers</text>
+<text x="1142" y="292" text-anchor="middle">yes</text>
+<text x="1486" y="222">nothing left</text>
+<text x="1486" y="392">your rulings</text>
+<text x="928" y="612" text-anchor="middle">re-run the checks on the changed parts</text>
+<text x="1150" y="512" text-anchor="middle">your queue</text>
+<text x="832" y="440" text-anchor="end">still contested</text>
+<text x="1048" y="398">still open at</text>
+<text x="1048" y="414">round 4</text>
+</g>
+<g stroke="#2B2B2B" stroke-width="2.5" fill="#FFF3CC">
+<rect x="40" y="320" width="160" height="90" rx="10"></rect>
+</g>
+<g stroke="#0F7A4F" stroke-width="2.5" fill="#E3F4EA">
+<rect x="280" y="228" width="190" height="64" rx="10"></rect>
+<rect x="280" y="333" width="190" height="64" rx="10"></rect>
+<rect x="280" y="438" width="190" height="64" rx="10"></rect>
+</g>
+<g stroke="#2B2B2B" stroke-width="2.5" fill="#FFFFFF">
+<polygon points="600,305 670,365 600,425 530,365"></polygon>
+<rect x="740" y="190" width="200" height="64" rx="10"></rect>
+<rect x="740" y="333" width="200" height="64" rx="10"></rect>
+<polygon points="1040,245 1115,300 1040,355 965,300"></polygon>
+<rect x="1170" y="268" width="170" height="64" rx="10"></rect>
+<rect x="1390" y="430" width="180" height="64" rx="10"></rect>
+</g>
+<g fill="#111111" stroke="none">
+<rect x="745" y="481" width="200" height="70" rx="10"></rect>
+<rect x="1395" y="267" width="180" height="76" rx="10"></rect>
+<rect x="1395" y="117" width="180" height="64" rx="10"></rect>
+</g>
+<g stroke="#1B4FD8" stroke-width="3.5" fill="#FFFFFF">
+<rect x="740" y="476" width="200" height="70" rx="10"></rect>
+<rect x="1390" y="262" width="180" height="76" rx="10"></rect>
+<rect x="1390" y="112" width="180" height="64" rx="10"></rect>
+</g>
+<g text-anchor="middle" font-size="12.5" fill="#111111">
+<text x="120" y="350"><tspan x="120" font-size="14" font-weight="700">The spec</tspan><tspan x="120" dy="16">every statement</tspan><tspan x="120" dy="16">tagged with its source</tspan></text>
+<text x="375" y="256"><tspan x="375" font-size="14" font-weight="700">1 · Gap review</tspan><tspan x="375" dy="16">well formed? safe?</tspan></text>
+<text x="375" y="361"><tspan x="375" font-size="14" font-weight="700">2 · Source check</tspan><tspan x="375" dy="16">both directions</tspan></text>
+<text x="375" y="466"><tspan x="375" font-size="14" font-weight="700">3 · Grounding</tspan><tspan x="375" dy="16">claims vs the repo</tspan></text>
+<text x="600" y="353"><tspan x="600" font-weight="700">Discovery</tspan><tspan x="600" dy="16">sorts each</tspan><tspan x="600" dy="16">finding</tspan></text>
+<text x="840" y="218"><tspan x="840" font-size="14" font-weight="700">Craft</tspan><tspan x="840" dy="16">discovery fixes it</tspan></text>
+<text x="840" y="361"><tspan x="840" font-size="14" font-weight="700">Declined</tspan><tspan x="840" dy="16">cites proof · 5 reasons</tspan></text>
+<text x="840" y="507"><tspan x="840" font-size="14" font-weight="700" fill="#1238A8">Yours</tspan><tspan x="840" dy="16">queued, left unfixed</tspan></text>
+<text x="1040" y="296"><tspan x="1040" font-weight="700">Clean, or</tspan><tspan x="1040" dy="16">round 4?</tspan></text>
+<text x="1255" y="296"><tspan x="1255" font-size="14" font-weight="700">Writing pass</tspan><tspan x="1255" dy="16">then a meaning check</tspan></text>
+<text x="1480" y="296"><tspan x="1480" font-size="14" font-weight="700" fill="#1238A8">Your tap sheet</tspan><tspan x="1480" dy="16">only the unruled</tspan></text>
+<text x="1480" y="140"><tspan x="1480" font-size="14" font-weight="700" fill="#1238A8">Ready for vet</tspan><tspan x="1480" dy="16">on to the advisor</tspan></text>
+<text x="1480" y="458"><tspan x="1480" font-size="14" font-weight="700">Apply your rulings</tspan><tspan x="1480" dy="16">in the spec and ledger</tspan></text>
+</g>
+</svg>
+<figcaption style="margin-top: 10px; font-size: 15px; line-height: 1.55; color: #2B2B2B;">Craft and declines feed the next round; your items wait in the queue. When the round comes back clean, or at round 4, the writing pass runs and your sheet goes out. Dashed arrows: a decline the reviewer still contests, and anything still open at round 4, go to your queue marked "the review didn't settle this."</figcaption>
+</figure>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px;">
+<div class="card">
+<div class="lab">What each check asks</div>
+<div class="d"><b>Gap review:</b> clarity, testability, missing unhappy paths within the threat model, contradictions, safety and access.</div>
+<div class="d"><b>Source check:</b> forward, every statement has a source and matches it, board first, and nothing is another piece's; backward, every ruling in Canon for this piece, and the framing, is in the spec, written down right.</div>
+<div class="d"><b>Grounding:</b> every claim about the product or the repo, checked against the repo.</div>
+</div>
+<div class="card">
+<div class="lab">Who reviews</div>
+<div class="d">Each check is an independent reviewer from a different model family than the author, and the same reviewer continues across rounds.</div>
+<div class="d">Configure gains a <b>spec reviewer</b> seat, separate from code review: for example Astra for specs while Sol stays the deep code reviewer. The plugin names no model.</div>
+</div>
+<div class="card">
+<div class="lab">Declines: only five reasons</div>
+<div class="d">The finding is wrong, it's outside the threat model, it asks for implementation, it belongs to another spec, or it's already queued. Each one cites its proof, and every decline is listed, folded away, on your final sheet.</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1680,"height":1120}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
