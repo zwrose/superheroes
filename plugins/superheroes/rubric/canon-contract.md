@@ -137,7 +137,10 @@ resolve, and the duplicate goes to the owner.
 A session that receives a ruling that decides something writes it. That means an answer to an owner
 call, a principle, or a ceded call or its take-back. Go-words are never written.
 
-1. Run the lookup.
+1. Refresh the default branch, then run the lookup. Before the lookup, when an origin remote exists and
+   the network is available, run `git fetch origin`, so a stale `origin/HEAD` does not hide a Canon
+   the default branch already has. If the fetch could not run or failed, say so in the report. The
+   lookup itself never fetches.
 2. If `gitRoot` is not a git repository, stop and report. Never initialize one. Configure sets the
    project store up.
 3. If the file does not exist on disk and `home` is `"project-store"`, the store holds no Canon and
@@ -177,6 +180,11 @@ rules live in the superheroes plugin's `rubric/canon-contract.md`, and that entr
 one per line at the end and never edited or deleted. Then a blank line, `## Entries`, and a blank
 line. The entries follow, one per line, with nothing after them.
 
+The entries are exactly the lines that begin with the entry marker (`- **<id>**`). Every other line is
+header text and carries no meaning to a reader. If two branches each created the file and a union
+merge kept both headers, the file is still valid: readers ignore the repeated header, and no session
+edits it away.
+
 **Canon never gets a pull request of its own.** A ruling rides the pull request of the branch it was
 committed on, so a spec's rulings ride the spec's pull request. A ruling the advisor receives
 outside any open pull request is committed to the branch of the next pull request it opens. How the
@@ -191,7 +199,8 @@ In the repository home, the `.gitattributes` beside `canon.md` holds one line:
 
 A tool that ignores the attribute, a web conflict editor for example, is resolved by the same rule
 by hand. Keep every line from both sides whole and change no entry's text. The order of entries
-carries no meaning.
+carries no meaning. A repeated header kept by a union merge of two created files is header text and
+is left as it is.
 
 ## Reading Canon
 
