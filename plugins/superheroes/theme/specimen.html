@@ -5,10 +5,10 @@
 <style>
   html { background: var(--sh-paper); }
   .sh-theme { box-sizing: border-box; min-height: 100vh; padding-block: 16px 40px; padding-inline: 16px; }
-  .sh-theme *, .sh-theme *::before, .sh-theme *::after { box-sizing: border-box; }
-  .sh-theme :is(h1, h2, p, ul) { margin: 0; }
-  .sh-theme h1 { font-size: 36px; }
-  .sh-theme h2 { font-size: 22px; }
+  .sh-theme :not(:where(.sh-product *)), .sh-theme :not(:where(.sh-product *))::before, .sh-theme :not(:where(.sh-product *))::after { box-sizing: border-box; }
+  .sh-theme :is(h1, h2, p, ul):not(:where(.sh-product *)) { margin: 0; }
+  .sh-theme h1:not(:where(.sh-product *)) { font-size: 36px; }
+  .sh-theme h2:not(:where(.sh-product *)) { font-size: 22px; }
   .page { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); margin-inline: auto; max-width: 1100px; }
   .page > * { min-width: 0; }
   .stack { align-content: start; display: grid; gap: 16px; }
@@ -155,6 +155,15 @@
         <p class="sh-label">Section label</p>
         <p class="sh-caption">Labels: body font, capitals, tracked</p>
       </div>
+    </section>
+
+    <section class="sh-card stack wide">
+      <h2>A product drawing inside the theme</h2>
+      <div class="sh-product">
+        <h1>Your product's page</h1>
+        <p>Plain text in the project's own look, <b>with bold</b>.</p>
+      </div>
+      <p class="sh-caption">Wrapped in sh-product, a drawing keeps the project's own fonts and colours: the theme stops at the boundary.</p>
     </section>
 
     <section class="sh-card stack wide">
