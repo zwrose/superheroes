@@ -518,9 +518,7 @@ Follow-up: `/superheroes:configure`.
   **every definition document**, and **every other work-item record** the preview lists under
   `workItemRecords` — a discovery's findings record is one, and it moves with its folder without
   being a definition document. A flip into the repo newly publishes all of it to collaborators —
-  say so. A switch into the repository under a committed policy also moves the store's Canon
-  (`canon.md`), and refuses when the repository already has one; no other switch moves it.
-  Machine-local bookkeeping (the mode record, in-progress run state) is updated in place, not
+  say so. Machine-local bookkeeping (the mode record, in-progress run state) is updated in place, not
   relocated.
 - **In-flight work (UFR-3):** if a piece of work is mid-flight (its documents would move underneath
   it), warn the owner — naming the work and what could break — and proceed only on an explicit
