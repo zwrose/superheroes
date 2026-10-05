@@ -27,10 +27,8 @@ A project that keeps them out of the repository keeps Canon at `docs/canon.md` i
 gitignored file never reaches the default branch, lives in one worktree only, and is lost when that
 worktree is removed. This is a choice recorded for the owner's veto.
 
-A switch to in-repository storage made through configure moves a project-store Canon into the
-repository when the definition-docs policy is committed, and refuses when the repository already
-holds a `canon.md` on disk, because the copy would overwrite entries. Every other switch leaves
-Canon where it is: the lookup below finds it there in either mode.
+A storage-mode switch made through configure does not move Canon. It stays where it is, and the
+lookup below finds an existing Canon there in either mode.
 
 Every session finds the file with:
 
