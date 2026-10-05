@@ -493,3 +493,20 @@ Board round 3 under way (owner: "go").
 - Vet handed to the "superheroes advisor" session (2026-10-04) by cross-session message: both spec
   paths, the sources, what already ran, and the vet's rules (check repo and other approved specs,
   never fix, send every finding back here, no PR per ruling 47). Waiting on its findings.
+
+## Advisor vet, round 1 (2026-10-04)
+
+The advisor seat (~/.claude) returned 14 findings (F1-F13, plus F14 on overlap with the #1472
+review-overhaul discovery). Craft fixed in the specs: F1 (new "What this spec amends" section:
+front-half-sdlc-core FR-16/17, showrunner duty 1's spec-approval delivery, review-spec), F2 (every
+current home of the line listed and rewritten; door rules kept as cases of the line), F3 (the
+independent package read still runs), F5 (item 13 moves into Canon at adoption), F9 (Codex hosts
+open the board as a local HTML file), F10 (Comic panel for the plugin's own pages; the product in
+the project's design system), F11 (review-spec consumers; gates.review keeps its meaning;
+post-approval substantive amendments get the three checks), F12 (consequences section), F13
+(tier grading stays craft), F14a (naming: "spec review weight call"; code-review seats/lanes
+unchanged). Several carry "craft, for your veto". Queued for the owner's final sheet: F4 (what
+Canon holds), F6 (where these two specs live: the resolver's recorded mode put them in the project
+store, but doc-policy.json and CLAUDE.md say docs/superheroes committed), F7 (Canon in each storage
+mode), F8 (sheet takeover across accounts), F14b (one setup interview with #1472). The three checks
+are re-running on the changed parts before the re-vet.
