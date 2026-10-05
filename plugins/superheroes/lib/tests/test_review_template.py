@@ -478,6 +478,7 @@ def _unsupported_rule_cases():
         ("E14-boolean-sub-schema", _plant_at("properties", title=True), "properties", "#/properties/title"),
         ("E15-items-as-a-list", _plant_at("properties", "cards", items=[{"type": "object"}]), "items", "#/properties/cards"),
         ("E16-additionalProperties-as-an-object", _plant_at("properties", "remainder", additionalProperties={"type": "string"}), "additionalProperties", "#/properties/remainder"),
+        ("E18-root-id", _plant_at(**{"$id": "https://example.test/sheet"}), "$id", "#"),
         ("E18-nested-id", _plant_at("properties", "title", **{"$id": "https://example.test/title"}), "$id", "#/properties/title"),
         ("E17-else", _plant_at("allOf", 0, **{"else": {"type": "object"}}), "else", "#/allOf/0"),
     ]
@@ -533,20 +534,34 @@ def test_check_sheet_accepts_a_recursion_that_descends_through_properties_or_ite
 # Bites on: an annotation keyword being refused, or read as a rule, at any position.
 def test_check_sheet_allows_annotations_anywhere():
     annotations = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "sheet", "title": "T", "description": "D",
+        "$schema": "https://json-schema.org/draft/2020-12/schema", "title": "T", "description": "D",
         "$comment": "C", "examples": [1], "default": 1, "$defs": {}, "definitions": {},
     }
 
     def mutate(schema):
         schema.update({key: copy.deepcopy(value) for key, value in annotations.items() if key not in ("$defs", "definitions")})
-        nested = {key: value for key, value in annotations.items() if key != "$id"}  # a nested $id is refused
-        schema["$defs"]["card"]["properties"]["question"].update(copy.deepcopy(nested))
+        schema["$defs"]["card"]["properties"]["question"].update(copy.deepcopy(annotations))
         schema["$defs"]["extra"] = {"type": "string"}
         schema["definitions"] = {"spare": {"title": "unused"}}
 
     valid = [_remainder_sheet(), _final_sheet(), _sheet("plain")]
     for index, problems in enumerate(_run_check_sheet(valid, schema=_planted(mutate))):
         assert problems == [], "valid fixture %d was refused: %s" % (index, problems)
+
+
+# Bites on: an unfollowable $ref being read from a schema author's prose instead of from the schema's structure.
+def test_check_sheet_ignores_schema_prose_that_reads_like_a_reference_failure():
+    for ending in (" follows a rule this page can't find.", " follows a rule that leads back to itself."):
+        sentinel = "The title" + ending
+        branch_first = {"properties": {"title": {"anyOf": [
+            {"if": {}, "then": {"const": "other"}, "description": sentinel},
+            {"type": "string"},
+        ]}}}
+        assert _run_check_sheet([{"cards": [], "title": "A title"}], schema=branch_first) == [[]], ending
+        failing = {"properties": {"title": {"if": {}, "then": {"const": "other"}, "description": sentinel}}}
+        problems = _run_check_sheet([{"cards": [], "title": "A title"}], schema=failing)[0]
+        assert problems == [sentinel], problems
+        assert not any("can't be checked" in problem for problem in problems), problems
 
 
 # Bites on: const and enum comparing compound values by identity instead of by content.

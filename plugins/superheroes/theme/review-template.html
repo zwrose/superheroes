@@ -35,7 +35,8 @@
 <script id="sheet-check">
   // sheet.schema.json is the only home of a sheet's shape: the page fetches it and checks the data
   // file against it with the small reader below. READ_RULES lists the keywords the reader enforces
-  // and ANNOTATIONS the ones that carry no rule. A schema that uses any other keyword, or one of
+  // and ANNOTATIONS the ones that carry no rule. A schema that uses any other keyword ($id included,
+  // since every $ref is read from the root and no reference scope is honoured), or one of
   // these in a form the reader does not implement, is refused whole before any sheet is checked, so
   // a sheet is never drawn against a rule this page cannot check. The rest is authored here
   // because a schema cannot express it: unique card ids, unique option ids within a card,
@@ -45,7 +46,7 @@
     "properties", "additionalProperties", "items", "$ref", "allOf", "if", "then", "not", "anyOf",
   ];
   const ANNOTATIONS = [
-    "$schema", "$id", "title", "description", "$comment", "examples", "default", "$defs", "definitions",
+    "$schema", "title", "description", "$comment", "examples", "default", "$defs", "definitions",
   ];
 
   // Two values are equal when they hold the same data, whatever order an object's keys came in.
@@ -158,9 +159,6 @@
           } else {
             walk(resolved.target, value, key);
           }
-        } else if (key === "$id" && pointer !== "#") {
-          // A nested $id opens a new reference scope, which resolvePointer (root only) does not follow.
-          refuse('"$id" inside a sub-schema (it would change what a $ref points at)', pointer);
         } else if (Object.prototype.hasOwnProperty.call(readableForms, key)) {
           if (!readableForms[key](value)) refuse('"' + key + '" with a value this page does not read', pointer);
         } else if (!READ_RULES.includes(key) && !ANNOTATIONS.includes(key)) {
@@ -201,7 +199,6 @@
     return problems;
   }
 
-  const UNFOLLOWABLE_ENDINGS = [" follows a rule this page can't find.", " follows a rule that leads back to itself."];
   class UncheckableSchema extends Error {}
 
   function validateAgainstSchema(root, schema, value, path, problems, viaRefs) {
@@ -216,10 +213,6 @@
     const quiet = (sub, item) => {
       const found = [];
       validateAgainstSchema(root, sub, item, path, found, chain);
-      // A reference that cannot be followed is not a mismatch: it must not turn into a passing
-      // "not", a skipped "if" or a failed "anyOf" branch, so it ends the whole check.
-      const stuck = found.find((problem) => problem.endsWith(UNFOLLOWABLE_ENDINGS[0]) || problem.endsWith(UNFOLLOWABLE_ENDINGS[1]));
-      if (stuck !== undefined) throw new UncheckableSchema(stuck);
       return found;
     };
     const where = path || "The sheet";
@@ -229,12 +222,12 @@
     if (schema.$ref !== undefined) {
       const resolved = resolvePointer(root, schema.$ref);
       if (resolved.problem !== undefined) {
-        problems.push(where + " follows a rule this page can't find.");
-        return;
+        // Not a mismatch: it must not turn into a passing "not", a skipped "if" or a failed "anyOf"
+        // branch, so it ends the whole check by type, whatever any schema text says.
+        throw new UncheckableSchema(where + " follows a rule this page can't find.");
       }
       if (chain.includes(schema.$ref)) {
-        problems.push(where + " follows a rule that leads back to itself.");
-        return;
+        throw new UncheckableSchema(where + " follows a rule that leads back to itself.");
       }
       validateAgainstSchema(root, resolved.target, value, path, problems, chain.concat([schema.$ref]));
     }
