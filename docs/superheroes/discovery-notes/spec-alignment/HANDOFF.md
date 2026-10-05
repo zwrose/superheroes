@@ -510,3 +510,8 @@ Canon holds), F6 (where these two specs live: the resolver's recorded mode put t
 store, but doc-policy.json and CLAUDE.md say docs/superheroes committed), F7 (Canon in each storage
 mode), F8 (sheet takeover across accounts), F14b (one setup interview with #1472). The three checks
 are re-running on the changed parts before the re-vet.
+- Re-check of the vet fixes (same Astra sessions): round 1, 11 findings (P2 carve-out kept;
+  package read scoped to epics; gate states kept; FR-49c amendment checks removed and QUEUED as a
+  sixth owner call; migration provenance marked); round 2, 3 findings (tags, provenance wording,
+  stale-approval cite); round 3, all clean. Sent back to the advisor for re-vet with dispositions;
+  full diff since the vet: ~/.claude/wave-logs/spec-alignment-discovery/review/vet1-all-changes.diff.
