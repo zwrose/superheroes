@@ -24,7 +24,7 @@ package covers both because Spec A relies on Spec B's sheets and theme, and the 
 - [`epic.md`](epic.md): the epic issue body, as it would be filed.
 - `children/C1.md` to `children/C8.md`: the child (feature) issue bodies, as they would be filed.
 - `children/C4-L1.md` to `C4-L4.md`, `C5-L1.md`, `C5-L2.md`, `C7-L1.md`, `C7-L2.md`, `C8-L1.md` to `C8-L4.md`: the twelve layer sub-issue bodies of the four stacked children.
-- `package-read-audit.md`: not yet started; the independent package read writes it before the children file.
+- [`package-read-audit.md`](package-read-audit.md): the independent package read's audit trail (converged at round 3, trail conforming) and the filing dry-run.
 
 ## The children
 
@@ -108,9 +108,9 @@ line's home) and restates nothing, and it is named here for the owner's veto at 
 
 ## Milestone note
 
-The open milestone "Review-spec keeps pace" names a skill C5 retires. Whether that milestone closes,
-is renamed, or is folded once C5 lands is a train-level call for the advisor and owner, not this
-package's.
+The "Review-spec keeps pace" milestone named a skill C5 retires. The owner retired it on
+2026-10-05 (walk item 35), and this package's epic took the ranked slot as its own milestone,
+"The alignment specs land", 2nd. The next release holds until C4 lands (owner, 2026-10-05).
 
 ## Consequences (from each child's consequence line)
 
@@ -121,11 +121,9 @@ chat prose. At adoption its item-13 value moves into Canon, its next discovery r
 its specs get the three checks. A Codex host gets Canon and the checks unchanged, boards as local
 HTML files, and sheets as numbered chat prose.
 
-## Owed before filing
+## Filing
 
-- The independent package read (decomposition.md § The adversarial package read), with its audit
-  trail written through `lib/package_read_audit.py`.
-- The filing dry-run over every body (epic, eight children, twelve layers), recorded in the audit
-  trail. The children's and layers' build-ready and register checks pass on this draft; each layer's
-  binding register check uses its feature issue's body and child token, and the layer tokens on the
-  register's `*Consumers:*` lines let the same check also prove each layer's own quotes.
+Done 2026-10-05, on the owner's merge word for PR #1614: the package read converged and its
+trail checks conforming, the filing dry-run passed on every body, and the epic, eight children
+and twelve layers filed as epic #1615 (the epic body maps each token to its issue number), each
+child and layer carrying its register-check output in a filing note.
