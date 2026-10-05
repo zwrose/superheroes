@@ -259,11 +259,12 @@ def _knip_id(path, export=None):
     return "deadcode:knip:%s" % path if export is None else "deadcode:knip:%s:%s" % (path, export)
 
 
-def _legacy_root(prev_candidates, tracked):
+def _legacy_root(prev_candidates, known):
     """Old checkout root of an absolute-keyed baseline (#1610): each prev absolute path's
-    prefix before the LONGEST tracked path it ends with. Only a unanimous root counts — a
-    wrong one could hide a finding, while none resurfaces the baseline as new once."""
-    rels = sorted((p for p in tracked or () if not os.path.isabs(p)), key=len, reverse=True)
+    prefix before the LONGEST path git history ever held that it ends with (its true path
+    was tracked when swept, so a since-deleted directory cannot shorten the match). Only a
+    unanimous root counts: a wrong one could hide a finding; none resurfaces it once."""
+    rels = sorted((p for p in known or () if not os.path.isabs(p)), key=len, reverse=True)
     roots = set()
     for rec in prev_candidates.values():
         path = rec.get("path")
@@ -899,9 +900,10 @@ class DeadCodeLens(object):
         merged = dict(fresh)
         legacy_root = None
         if any(os.path.isabs(str(c.get("path"))) for c in prev_candidates.values()):
-            tracked, _reason = guardian_census.tracked_existing_files(
-                ctx, repo, exclude_symlinks=True)
-            legacy_root = _legacy_root(prev_candidates, tracked)
+            res = guardian_census._git(
+                ctx, repo, ["log", "--all", "--format=", "--name-only", "-z"])
+            known = {n.strip("\n") for n in (res.get("stdout") or "").split("\0")}
+            legacy_root = _legacy_root(prev_candidates, known if res.get("ok") else None)
             prev_candidates = _rekey_absolute(prev_candidates, legacy_root)
         prefixes = {"python": "deadcode:vulture:", "node": "deadcode:knip:"}
         for ecosystem, section in ecosystems.items():
