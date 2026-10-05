@@ -178,11 +178,6 @@ def test_check_sheet():
 
     red = [
         ("missing title", _with(_sheet(), lambda s: s.pop("title")), None),
-        ("bad kind", _with(_sheet(), lambda s: s.update(kind="draft")), None),
-        ("remainder kind without remainder", _with(_remainder_sheet(), lambda s: s.pop("remainder")), None),
-        ("plain kind with final", _with(_sheet(), lambda s: s.update(final=_final_sheet()["final"])), None),
-        ("final kind without final", _with(_final_sheet(), lambda s: s.pop("final")), None),
-        ("remainder block on a plain sheet", _with(_sheet(), lambda s: s.update(remainder=_remainder_sheet()["remainder"])), None),
         ("empty cards", _sheet(cards=[]), None),
         ("missing question", _with(_sheet(), _drop(1, "question")), "fridge-check"),
         ("warning not boolean", _with(_sheet(), _set(1, "warning", "yes")), "fridge-check"),
@@ -195,7 +190,6 @@ def test_check_sheet():
         ])), "fridge-check"),
         ("unsettled naming a missing card", _with(_remainder_sheet(), lambda s: s["remainder"].update(unsettled=["no-such-card"])), "no-such-card"),
         ("optionId naming a missing option", _with(_sheet(), _set(1, "recommendation", {"text": "Pick it.", "reason": "Why not.", "optionId": "maybe"})), "fridge-check"),
-        ("wrong schema value", _with(_sheet(), lambda s: s.update(schema="superheroes-sheet/2")), None),
         ("sheet as an array", [_sheet()], None),
     ]
     results = _run_check_sheet([sheet for _, sheet, _ in red])

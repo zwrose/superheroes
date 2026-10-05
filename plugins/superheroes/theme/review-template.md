@@ -22,7 +22,9 @@ doc. There are three kinds of sheet:
 Each card's `id` must stay the same call across republishes, because answers are keyed by it.
 Change the wording of a card freely; never reuse an id for a different call.
 
-The data file is the sheet's saved source. Keep it with the work it belongs to.
+The data file is the sheet's saved source. Keep it with the work it belongs to. Check a data file
+against `sheet.schema.json` before publishing; the page itself refuses only a file it cannot draw
+or whose ids clash.
 
 ## Publishing a sheet
 

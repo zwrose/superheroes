@@ -2,6 +2,8 @@
 import copy
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,7 @@ from jsonschema import Draft202012Validator
 THEME = Path(__file__).resolve().parents[2] / "theme"
 SCHEMA_PATH = THEME / "sheet.schema.json"
 SAMPLE_PATH = THEME / "sample-sheet.json"
+TEMPLATE_PATH = THEME / "review-template.html"
 
 
 def load_schema():
@@ -24,25 +27,18 @@ def errors_for(sheet):
     return list(Draft202012Validator(load_schema()).iter_errors(sheet))
 
 
-def integrity_problems(sheet):
-    """The four rules JSON Schema cannot express; returns one line per breach."""
-    problems = []
-    cards = sheet.get("cards", [])
-    card_ids = [card.get("id") for card in cards]
-    for card_id in sorted({i for i in card_ids if card_ids.count(i) > 1}):
-        problems.append(f"card id {card_id!r} is used more than once")
-    for card in cards:
-        option_ids = [opt.get("id") for opt in card.get("options", [])]
-        for option_id in sorted({i for i in option_ids if option_ids.count(i) > 1}):
-            problems.append(f"option id {option_id!r} repeats in card {card.get('id')!r}")
-        recommendation = card.get("recommendation") or {}
-        if "optionId" in recommendation and recommendation["optionId"] not in option_ids:
-            problems.append(
-                f"card {card.get('id')!r} recommends missing option {recommendation['optionId']!r}")
-    for unsettled_id in sheet.get("remainder", {}).get("unsettled", []):
-        if unsettled_id not in card_ids:
-            problems.append(f"unsettled id {unsettled_id!r} names no card")
-    return problems
+def check_sheet_problems(sheet):
+    """Run the shipped page's checkSheet under node; returns its problem lines."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.fail("node is required to run checkSheet and is not on PATH")
+    html = TEMPLATE_PATH.read_text(encoding="utf-8")
+    match = re.search(r'<script id="sheet-check">(.*?)</script>', html, re.S)
+    assert match, "no <script id=sheet-check> in the template"
+    program = match.group(1) + "\nconsole.log(JSON.stringify(checkSheet(%s)));\n" % json.dumps(sheet)
+    result = subprocess.run([node], input=program, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
 
 
 def mutated(change):
@@ -62,8 +58,8 @@ def test_sample_validates():
 
 
 def test_sample_meets_integrity_rules():
-    # Axis: the shipped sample obeys the four rules the schema cannot express.
-    assert integrity_problems(load_sample()) == []
+    # Axis: the shipped sample passes the shipped page's check.
+    assert check_sheet_problems(load_sample()) == []
 
 
 CENSUS = {
@@ -190,7 +186,7 @@ INTEGRITY_FIXTURES = [
     "change", [c for _, c in INTEGRITY_FIXTURES], ids=[n for n, _ in INTEGRITY_FIXTURES])
 def test_integrity_rules_reject(change):
     # Axis: each of the four integrity rules reports a problem when broken.
-    assert integrity_problems(mutated(change)) != []
+    assert check_sheet_problems(mutated(change)) != []
 
 
 def test_final_and_plain_sheets_validate():

@@ -33,9 +33,10 @@
 </div>
 
 <script id="sheet-check">
-  // The full shape of a sheet is defined by sheet.schema.json. This check covers what the page
-  // reads, plus the rules a schema cannot express: unique card ids, unique option ids within a
-  // card, unsettled ids that name real cards, and a recommendation that names a real option.
+  // sheet.schema.json is the only home of a sheet's shape. This check guards only the fields the
+  // page reads, so drawing never dereferences a missing value, plus the four rules a schema cannot
+  // express: unique card ids, unique option ids within a card, unsettled ids that name real cards,
+  // and a recommendation that names one of its card's options.
   function checkSheet(sheet) {
     const problems = [];
     const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -46,27 +47,8 @@
       return ["The sheet's data file must hold one object."];
     }
 
-    if (sheet.schema !== "superheroes-sheet/1") {
-      problems.push('The sheet\'s schema must be "superheroes-sheet/1".');
-    }
-    if (!["remainder", "final", "plain"].includes(sheet.kind)) {
-      problems.push('The sheet\'s kind must be "remainder", "final" or "plain".');
-    }
     if (!isText(sheet.title)) {
       problems.push("The sheet has no title.");
-    }
-
-    if (sheet.kind === "remainder" && !has(sheet, "remainder")) {
-      problems.push('A remainder sheet needs a "remainder" block.');
-    }
-    if (sheet.kind !== "remainder" && has(sheet, "remainder")) {
-      problems.push('Only a remainder sheet may have a "remainder" block.');
-    }
-    if (sheet.kind === "final" && !has(sheet, "final")) {
-      problems.push('A final sheet needs a "final" block.');
-    }
-    if (sheet.kind !== "final" && has(sheet, "final")) {
-      problems.push('Only a final sheet may have a "final" block.');
     }
 
     if (!Array.isArray(sheet.cards) || sheet.cards.length === 0) {
@@ -122,18 +104,11 @@
         }
       }
 
-      if (!Array.isArray(card.images)) {
-        problems.push(name + " has no images list.");
-      }
-
       const optionIds = new Set();
-      if (!Array.isArray(card.options)) {
-        problems.push(name + " has no options list.");
-      } else {
+      if (Array.isArray(card.options)) {
         const reportedOptions = new Set();
         card.options.forEach((option) => {
           if (!isObject(option) || !isText(option.id)) {
-            problems.push(name + " has an option without an id.");
             return;
           }
           if (optionIds.has(option.id) && !reportedOptions.has(option.id)) {
@@ -151,10 +126,8 @@
       }
     });
 
-    if (sheet.kind === "remainder" && isObject(sheet.remainder)) {
-      if (!Array.isArray(sheet.remainder.unsettled)) {
-        problems.push("The remainder's unsettled list must be a list of card ids.");
-      } else {
+    if (isObject(sheet.remainder)) {
+      if (Array.isArray(sheet.remainder.unsettled)) {
         sheet.remainder.unsettled.forEach((id) => {
           if (!cardIds.has(id)) {
             problems.push('The unsettled list names "' + id + '", which is not a card in this sheet.');
