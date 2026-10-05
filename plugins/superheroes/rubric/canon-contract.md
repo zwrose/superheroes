@@ -140,17 +140,21 @@ call, a principle, or a ceded call or its take-back. Go-words are never written.
 1. Run the lookup.
 2. If `gitRoot` is not a git repository, stop and report. Never initialize one. Configure sets the
    project store up.
-3. If the file does not exist on disk, check the default branch first. If `defaultRef` is set and
-   `git show <defaultRef>:<repo-relative path>` succeeds, the file exists there: bring the default
-   branch into the working branch with the ordinary bring-the-branch-current merge
-   (`git merge <defaultRef>`, never a rebase or force), so the working copy shares history with the
-   default-branch Canon, then go on to step 4. Make the merge only on a clean working tree: if the
-   tree has uncommitted changes, stop and report. Commit the merge on its own, before the Canon
-   commit. If the merge stops on any conflict, run `git merge --abort`, which returns the branch to
-   where it was, then stop and report; never resolve a non-Canon conflict to get Canon written, and
-   never create a parallel copy. Only when
-   the file exists neither on disk nor at `defaultRef` do you create it with the shape below, and in
-   the repository home also create the `.gitattributes` beside it.
+3. If the file does not exist on disk, check the default branch first, telling absence from
+   failure. Run `git ls-tree <defaultRef> -- <repo-relative path>`. Exit 0 with output means the
+   default branch has a Canon: bring the default branch into the working branch with the ordinary
+   bring-the-branch-current merge (`git merge <defaultRef>`, never a rebase or force), so the
+   working copy shares history with the default-branch Canon, then go on to step 4. Make the merge
+   only on a clean working tree: if the tree has uncommitted changes, stop and report. Commit the
+   merge on its own, before the Canon commit. If the merge stops on any conflict, run
+   `git merge --abort`, which returns the branch to where it was, then stop and report; never
+   resolve a non-Canon conflict to get Canon written, and never create a parallel copy. Exit 0 with
+   empty output means the default branch has no Canon. Any non-zero exit, or a `defaultRef` the
+   lookup could not give for a reason other than the repository having no origin remote, means the
+   session stops and reports and never creates the file. Create the file with the shape below (and,
+   in the repository home, the `.gitattributes` beside it) only when it is absent on disk AND the
+   `ls-tree` check succeeded empty, or the lookup returned `defaultRef` null because the repository
+   has no origin remote.
 4. Read the ids already present in the working copy and, when `defaultRef` is set, in
    `git show <defaultRef>:<repo-relative path>`.
 5. Append the entry as one new last line. Never rewrite the file.
