@@ -898,3 +898,139 @@ def test_resolve_write_refuses_gitignored_but_tracked(tmp_path):
     out = _resolve_write(tmp_path)
     assert out.returncode == 1
     assert "refusing to write" in out.stderr
+
+
+# --- resolve_canon (Canon lookup) ---
+
+def _canon_stub(monkeypatch, mode, store, visibility="committed"):
+    import mode_registry, architect_config
+    monkeypatch.setattr(mode_registry, "resolve",
+                        lambda cwd, root=None, persist_backfill=True: {"mode": mode})
+    monkeypatch.setattr(mode_registry, "project_store_dir",
+                        lambda cwd, root=None: store)
+    monkeypatch.setattr(architect_config, "read_policy",
+                        lambda cwd, root=None: {"location": "docs/superheroes",
+                                                "visibility": visibility,
+                                                "confirmed": True})
+
+
+def _write_canon(directory):
+    os.makedirs(directory, exist_ok=True)
+    open(os.path.join(directory, "canon.md"), "w").write("# Canon\n")
+
+
+def _tree_snapshot(top):
+    seen = set()
+    for dirpath, dirnames, filenames in os.walk(top):
+        for name in dirnames + filenames:
+            seen.add(os.path.join(dirpath, name))
+    return seen
+
+
+def test_canon_inrepo_mode_committed_no_canon_resolves_to_repo(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _canon_stub(monkeypatch, "in-repo", store)
+    got = DD.resolve_canon(root=str(tmp_path))
+    assert got["path"] == os.path.join(str(tmp_path), "docs", "superheroes", "canon.md")
+    assert got["home"] == "repo"
+    assert got["gitRoot"] == str(tmp_path)
+    assert got["exists"] is False
+
+
+def test_canon_global_mode_no_canon_resolves_to_store(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _canon_stub(monkeypatch, "global", store)
+    got = DD.resolve_canon(root=str(tmp_path))
+    assert got["path"] == os.path.join(store, "docs", "canon.md")
+    assert got["home"] == "project-store"
+    assert got["gitRoot"] == store
+    assert got["exists"] is False
+    assert got["defaultRef"] is None
+
+
+def test_canon_gitignored_policy_never_yields_inrepo_file(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _canon_stub(monkeypatch, "in-repo", store, visibility="gitignored")
+    _write_canon(os.path.join(str(tmp_path), "docs", "superheroes"))
+    got = DD.resolve_canon(root=str(tmp_path))
+    assert got["path"] == os.path.join(store, "docs", "canon.md")
+    assert got["home"] == "project-store"
+    assert got["exists"] is False
+
+
+def test_canon_existing_inrepo_file_beats_global_mode(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _canon_stub(monkeypatch, "global", store)
+    _write_canon(os.path.join(str(tmp_path), "docs", "superheroes"))
+    got = DD.resolve_canon(root=str(tmp_path))
+    assert got["path"] == os.path.join(str(tmp_path), "docs", "superheroes", "canon.md")
+    assert got["home"] == "repo"
+    assert got["exists"] is True
+
+
+def test_canon_default_branch_ref_beats_global_mode(tmp_path, monkeypatch):
+    repo = str(tmp_path / "repo")
+    _git_repo(repo)
+
+    def git(*args):
+        subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True)
+
+    open(os.path.join(repo, "README.md"), "w").write("x")
+    git("add", "README.md")
+    git("commit", "-q", "-m", "first")
+    _write_canon(os.path.join(repo, "docs", "superheroes"))
+    git("add", "docs/superheroes/canon.md")
+    git("commit", "-q", "-m", "second")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    git("checkout", "-q", "-b", "side", "HEAD~1")
+    assert not os.path.exists(os.path.join(repo, "docs", "superheroes", "canon.md"))
+    _canon_stub(monkeypatch, "global", str(tmp_path / "store"))
+    got = DD.resolve_canon(root=repo)
+    assert got["home"] == "repo"
+    assert got["exists"] is False
+    assert got["defaultRef"] == "origin/main"
+
+
+def test_canon_store_file_beats_inrepo_mode(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _canon_stub(monkeypatch, "in-repo", store)
+    _write_canon(os.path.join(store, "docs"))
+    got = DD.resolve_canon(root=str(tmp_path))
+    assert got["path"] == os.path.join(store, "docs", "canon.md")
+    assert got["home"] == "project-store"
+    assert got["exists"] is True
+
+
+@pytest.mark.parametrize("mode", ["in-repo", "global"])
+def test_canon_lookup_writes_nothing(tmp_path, monkeypatch, mode):
+    _canon_stub(monkeypatch, mode, str(tmp_path / "store"))
+    before = _tree_snapshot(str(tmp_path))
+    DD.resolve_canon(root=str(tmp_path))
+    assert _tree_snapshot(str(tmp_path)) == before
+
+
+def test_canon_cli_prints_one_json_object(tmp_path):
+    _git_repo(str(tmp_path))
+    _write_canon(os.path.join(str(tmp_path), "docs", "superheroes"))
+    out = subprocess.run([sys.executable, _MODULE_PATH, "canon", "--root", str(tmp_path)],
+                         capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    got = _json.loads(out.stdout)
+    assert set(got) == {"path", "home", "gitRoot", "exists", "defaultRef"}
+    assert got["home"] == "repo"
+
+
+def test_canon_cli_halts_on_unknown_schema(tmp_path):
+    _git_repo(str(tmp_path))
+    import mode_registry as _mr
+    store = _mr.project_store_dir(str(tmp_path))
+    os.makedirs(store, exist_ok=True)
+    with open(os.path.join(store, "registry.json"), "w") as fh:
+        _json.dump({"schemaVersion": 999, "storageMode": "global",
+                    "remoteKey": None, "createdAt": "t"}, fh)
+    out = subprocess.run([sys.executable, _MODULE_PATH, "canon", "--root", str(tmp_path)],
+                         capture_output=True, text=True)
+    assert out.returncode == 1
+    assert "could not be determined" in out.stderr
+    assert out.stdout == ""

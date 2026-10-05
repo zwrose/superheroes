@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -42,6 +43,7 @@ DOC_TYPES = ("spec", "plan", "tasks")
 # imported, so these pure path helpers stay import-light (no module-load dependency on the
 # policy/mode stack — the deferred-import design).
 DEFAULT_LOCATION = "docs/superheroes"
+CANON_FILE = "canon.md"
 
 
 def _plugin_version():
@@ -105,6 +107,65 @@ def resolve_work_item_dir(work_item, *, root, cwd, store_root=None):
     # No existing doc → the recorded mode decides (raises UnknownSchemaVersion if newer).
     mode = mode_registry.resolve(cwd, store_root)["mode"]
     return in_repo if mode == mode_registry.IN_REPO else global_dir
+
+
+def _default_branch_ref(root):
+    """The default-branch ref name for `root` (e.g. `origin/main`), or None when it cannot be
+    determined (no remote HEAD, not a git repo, git missing or slow)."""
+    try:
+        proc = subprocess.run(["git", "-C", root, "rev-parse", "--abbrev-ref", "origin/HEAD"],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    ref = proc.stdout.strip()
+    if proc.returncode != 0 or not ref or ref == "origin/HEAD":
+        return None
+    return ref
+
+
+def _exists_at_ref(root, ref, relpath):
+    """True iff `relpath` (forward slashes) exists in the tree at `ref`; False on any failure."""
+    try:
+        proc = subprocess.run(["git", "-C", root, "cat-file", "-e", "%s:%s" % (ref, relpath)],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def resolve_canon(*, root, cwd=None, store_root=None):
+    """Locate the project's Canon file. Returns {path, home, gitRoot, exists, defaultRef}:
+    an existing Canon (in the repo on disk, in the repo at the default-branch ref, or in the
+    project store on disk, in that order) wins over the recorded storage mode; with none, an
+    in-repo mode and a committed policy give the repo, anything else the project store. Read-only:
+    creates and writes nothing, and records no registry backfill. Propagates
+    mode_registry.UnknownSchemaVersion when the mode is needed and undeterminable."""
+    import architect_config
+    import mode_registry
+    cwd = cwd if cwd is not None else root
+    pol = architect_config.read_policy(cwd, store_root) or architect_config.analyze_repo(root)
+    committed = pol["visibility"] == architect_config.COMMITTED
+    root_abs = os.path.abspath(root)
+    in_repo = os.path.join(root_abs, *pol["location"].split("/"), CANON_FILE)
+    store_dir = mode_registry.project_store_dir(cwd, store_root)
+    store = os.path.join(store_dir, "docs", CANON_FILE)
+    default_ref = _default_branch_ref(root) if committed else None
+    if committed and os.path.isfile(in_repo):
+        home = "repo"
+    elif committed and default_ref and _exists_at_ref(
+            root, default_ref, "/".join([*pol["location"].split("/"), CANON_FILE])):
+        home = "repo"
+    elif os.path.isfile(store):
+        home = "project-store"
+    else:
+        mode = mode_registry.resolve(cwd, store_root, persist_backfill=False)["mode"]
+        home = "repo" if committed and mode == mode_registry.IN_REPO else "project-store"
+    if home == "repo":
+        path, git_root = in_repo, root_abs
+    else:
+        path, git_root, default_ref = store, store_dir, None
+    return {"path": os.path.abspath(path), "home": home, "gitRoot": git_root,
+           "exists": os.path.isfile(path), "defaultRef": default_ref}
 
 
 class IgnoreCoverageError(RuntimeError):
@@ -514,6 +575,9 @@ def _build_parser():
     rw.add_argument("--doc", required=True, choices=DOC_TYPES)
     rw.add_argument("--root", default=".")
     rw.add_argument("--cwd", default=None)
+
+    cn = sub.add_parser("canon", help="locate the project's Canon file (read-only)")
+    cn.add_argument("--root", default=".")
     return p
 
 
@@ -557,6 +621,9 @@ def main(argv):
         sys.stdout.write(render_frontmatter(fm))
         return 0
     try:
+        if args.cmd == "canon":
+            sys.stdout.write(json.dumps(resolve_canon(root=args.root, cwd=args.root)) + "\n")
+            return 0
         if args.cmd in ("path", "dir", "read-gate", "set-gate"):
             d = resolve_work_item_dir(args.work_item, root=args.root, cwd=args.root)
             if args.cmd == "path":
