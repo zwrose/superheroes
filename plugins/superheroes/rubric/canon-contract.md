@@ -140,8 +140,13 @@ call, a principle, or a ceded call or its take-back. Go-words are never written.
 1. Run the lookup.
 2. If `gitRoot` is not a git repository, stop and report. Never initialize one. Configure sets the
    project store up.
-3. If the file does not exist, create it with the shape below. In the repository home, also create
-   the `.gitattributes` beside it.
+3. If the file does not exist on disk, check the default branch first. If `defaultRef` is set and
+   `git show <defaultRef>:<repo-relative path>` succeeds, the file exists there: bring the default
+   branch into the working branch with a plain merge (`git merge <defaultRef>`, never a rebase or
+   force), so the working copy shares history with the default-branch Canon, then go on to step 4.
+   If that merge cannot complete cleanly, stop and report; never create a parallel copy. Only when
+   the file exists neither on disk nor at `defaultRef` do you create it with the shape below, and in
+   the repository home also create the `.gitattributes` beside it.
 4. Read the ids already present in the working copy and, when `defaultRef` is set, in
    `git show <defaultRef>:<repo-relative path>`.
 5. Append the entry as one new last line. Never rewrite the file.
@@ -177,7 +182,10 @@ carries no meaning.
 ## Reading Canon
 
 A reader reads the default-branch copy (`git show <defaultRef>:<path>`) plus its own working copy,
-joined by id. A ruling not yet on the default branch binds only the sessions on the branch that
+joined by id. Before that read, readers and writers run `git fetch origin` for the default branch
+when the network is available, so a ruling merged since the last fetch is not missed; when the
+fetch could not run or failed, they say so and name the copy they read as possibly stale. The
+lookup itself never fetches. A ruling not yet on the default branch binds only the sessions on the branch that
 holds it. In the store home there is one copy, and every session sharing the store reads it.
 
 These sessions read Canon:

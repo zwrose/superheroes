@@ -120,9 +120,10 @@ _CANON_REMEDY = "run `git remote set-head origin --auto` (or fetch origin) and r
 
 
 def _git(root, *args):
+    import launch_ledger
     try:
         return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
-                              timeout=10)
+                              timeout=10, env=launch_ledger.scrub_env())
     except (OSError, subprocess.SubprocessError) as exc:
         raise CanonLookupError("git could not be run (%s: %s)" % (type(exc).__name__, exc))
 
@@ -130,10 +131,19 @@ def _git(root, *args):
 def _default_branch_ref(root):
     """The default-branch ref name for `root` (e.g. `origin/main`). Resolution order: origin/HEAD,
     then refs/remotes/origin/main, then refs/remotes/origin/master. Returns None ONLY when the
-    repository has no origin remote (`git remote get-url origin` fails with git working). Raises
-    CanonLookupError when git cannot be run or an origin remote has no resolvable default ref."""
-    if _git(root, "remote", "get-url", "origin").returncode != 0:
+    repository has no origin remote, which only git's own answer establishes: `git remote get-url
+    origin` exits 2, or `git config --get remote.origin.url` exits 1 with nothing on stderr. Any
+    other failure raises CanonLookupError, as does git that cannot be run or an origin remote with
+    no resolvable default ref."""
+    got = _git(root, "remote", "get-url", "origin")
+    if got.returncode == 2:
         return None
+    if got.returncode != 0:
+        cfg = _git(root, "config", "--get", "remote.origin.url")
+        if cfg.returncode == 1 and not cfg.stderr.strip():
+            return None
+        raise CanonLookupError("could not probe the origin remote: %s"
+                               % (got.stderr.strip() or "git exit %d" % got.returncode))
     proc = _git(root, "rev-parse", "--abbrev-ref", "origin/HEAD")
     ref = proc.stdout.strip()
     if proc.returncode == 0 and ref and ref != "origin/HEAD":

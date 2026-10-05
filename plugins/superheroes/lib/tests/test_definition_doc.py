@@ -1083,3 +1083,36 @@ def test_canon_no_origin_remote_keeps_default_ref_null(tmp_path, monkeypatch):
     _canon_stub(monkeypatch, "in-repo", str(tmp_path / "store"))
     got = DD.resolve_canon(root=repo)
     assert got["defaultRef"] is None
+
+
+def test_canon_origin_probe_other_git_failure_refuses(tmp_path, monkeypatch):
+    repo = str(tmp_path / "repo")
+    _git_repo(repo)
+    _canon_stub(monkeypatch, "in-repo", str(tmp_path / "store"))
+    real = DD._git
+
+    def fake(root, *args):
+        if args[:2] == ("remote", "get-url"):
+            return subprocess.CompletedProcess(args, 128, "", "fatal: bad boolean config value")
+        if args[:2] == ("config", "--get"):
+            return subprocess.CompletedProcess(args, 128, "", "fatal: bad config")
+        return real(root, *args)
+
+    monkeypatch.setattr(DD, "_git", fake)
+    with pytest.raises(DD.CanonLookupError):
+        DD.resolve_canon(root=repo)
+
+
+def test_canon_origin_probe_config_unset_means_no_origin(tmp_path, monkeypatch):
+    repo = str(tmp_path / "repo")
+    _git_repo(repo)
+    _canon_stub(monkeypatch, "in-repo", str(tmp_path / "store"))
+    real = DD._git
+
+    def fake(root, *args):
+        if args[:2] == ("remote", "get-url"):
+            return subprocess.CompletedProcess(args, 128, "", "")
+        return real(root, *args)
+
+    monkeypatch.setattr(DD, "_git", fake)
+    assert DD.resolve_canon(root=repo)["defaultRef"] is None
