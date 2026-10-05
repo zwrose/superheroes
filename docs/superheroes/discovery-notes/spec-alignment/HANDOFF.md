@@ -490,3 +490,6 @@ Board round 3 under way (owner: "go").
     trigger at 436 lines; the review surface stays its own spec.
 54. **READY FOR VET** (owner, 2026-10-04: "ready for vet"), both specs. Not approval. Per ruling 47
     (specs stored out of repo) the stored specs stand in for the spec PR.
+- Vet handed to the "superheroes advisor" session (2026-10-04) by cross-session message: both spec
+  paths, the sources, what already ran, and the vet's rules (check repo and other approved specs,
+  never fix, send every finding back here, no PR per ruling 47). Waiting on its findings.
