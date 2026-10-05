@@ -120,21 +120,20 @@ _CANON_REMEDY = "run `git remote set-head origin --auto` (or fetch origin) and r
 
 
 def _git(root, *args):
-    import launch_ledger
     try:
         return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
-                              timeout=10, env=launch_ledger.scrub_env())
+                              timeout=10)
     except (OSError, subprocess.SubprocessError) as exc:
         raise CanonLookupError("git could not be run (%s: %s)" % (type(exc).__name__, exc))
 
 
 def _default_branch_ref(root):
-    """The default-branch ref name for `root` (e.g. `origin/main`). Resolution order: origin/HEAD,
-    then refs/remotes/origin/main, then refs/remotes/origin/master. Returns None ONLY when the
+    """The default-branch ref name for `root` (e.g. `origin/main`), read from origin/HEAD only; a
+    name guess (origin/main, origin/master) is never accepted. Returns None ONLY when the
     repository has no origin remote, which only git's own answer establishes: `git remote get-url
     origin` exits 2, or `git config --get remote.origin.url` exits 1 with nothing on stderr. Any
-    other failure raises CanonLookupError, as does git that cannot be run or an origin remote with
-    no resolvable default ref."""
+    other failure raises CanonLookupError, as does git that cannot be run or an origin remote whose
+    origin/HEAD does not resolve."""
     got = _git(root, "remote", "get-url", "origin")
     if got.returncode == 2:
         return None
@@ -148,11 +147,8 @@ def _default_branch_ref(root):
     ref = proc.stdout.strip()
     if proc.returncode == 0 and ref and ref != "origin/HEAD":
         return ref
-    for full in ("refs/remotes/origin/main", "refs/remotes/origin/master"):
-        if _git(root, "rev-parse", "--verify", "--quiet", full + "^{commit}").returncode == 0:
-            return full[len("refs/remotes/"):]
-    raise CanonLookupError("origin has no resolvable default branch (origin/HEAD, origin/main "
-                           "and origin/master all fail to resolve)")
+    raise CanonLookupError("origin/HEAD does not resolve, so the default branch is unknown; "
+                           + _CANON_REMEDY)
 
 
 def _exists_at_ref(root, ref, relpath):
@@ -175,10 +171,13 @@ def resolve_canon(*, root, cwd=None, store_root=None):
     CanonLookupError when the default branch cannot be probed (it fails closed)."""
     import architect_config
     import mode_registry
-    top = _git(os.path.abspath(root), "rev-parse", "--show-toplevel")
-    if top.returncode == 0 and top.stdout.strip():
-        if os.path.realpath(root) != os.path.realpath(top.stdout.strip()):
-            root = top.stdout.strip()
+    import store_core
+    try:
+        top = store_core.repo_root(os.path.abspath(root))
+    except store_core.RepoRootUnavailable as exc:
+        raise CanonLookupError("could not resolve the repository root: %s" % exc)
+    if os.path.realpath(root) != top:
+        root = top
     cwd = cwd if cwd is not None else root
     pol = architect_config.read_policy(cwd, store_root) or architect_config.analyze_repo(root)
     committed = pol["visibility"] == architect_config.COMMITTED

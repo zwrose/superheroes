@@ -1075,13 +1075,13 @@ def _canon_origin_repo(tmp_path):
     return repo, git, carrier
 
 
-def test_canon_origin_head_unset_falls_back_to_origin_main(tmp_path, monkeypatch):
+def test_canon_origin_main_without_origin_head_refuses(tmp_path, monkeypatch):
     repo, git, carrier = _canon_origin_repo(tmp_path)
     git("update-ref", "refs/remotes/origin/main", carrier)
     _canon_stub(monkeypatch, "global", str(tmp_path / "store"))
-    got = DD.resolve_canon(root=repo)
-    assert got["home"] == "repo"
-    assert got["defaultRef"] == "origin/main"
+    with pytest.raises(DD.CanonLookupError) as exc:
+        DD.resolve_canon(root=repo)
+    assert "git remote set-head origin --auto" in str(exc.value)
 
 
 def test_canon_origin_without_resolvable_default_refuses(tmp_path, monkeypatch):

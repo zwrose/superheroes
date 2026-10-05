@@ -42,8 +42,8 @@ The command prints one JSON object on one line with five keys:
 - `exists`: `true` when a file exists on disk at `path`, else `false`.
 - `defaultRef`: the default-branch ref name, for example `origin/main`, when `home` is `"repo"` and
   `git rev-parse --abbrev-ref origin/HEAD` resolves. Otherwise `null`. The lookup resolves the
-  default ref as `origin/HEAD`, else `origin/main`, else `origin/master`, returns `null` only when
-  the repository has no `origin` remote, and otherwise refuses (exit 1, nothing on stdout, the
+  default ref from `origin/HEAD` only (never a guessed `origin/main` or `origin/master`), returns
+  `null` only when the repository has no `origin` remote, and otherwise refuses (exit 1, nothing on stdout, the
   cause and the remedy `git remote set-head origin --auto` on stderr) rather than reading an
   unprobed default branch as one with no Canon.
 
@@ -195,7 +195,9 @@ carries no meaning.
 
 ## Reading Canon
 
-A reader reads the default-branch copy plus its own working copy, joined by id. It first runs
+A reader reads the default-branch copy plus its own working copy, joined by id. When `defaultRef`
+is null (the repository has no origin remote) there is no default-branch copy: it reads its own
+working copy only, says so, and skips the fetch and the tree probe. Otherwise it first runs
 `git ls-tree <defaultRef> -- <repo-relative path>` (the absence test write step 3 uses): exit 0 with empty
 output means the default branch has no Canon yet, so the reader reads its own working copy only and says
 so; exit 0 with output means it reads the copy with `git show <defaultRef>:<path>`; any non-zero exit means
