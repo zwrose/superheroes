@@ -927,6 +927,7 @@ def _tree_snapshot(top):
     return seen
 
 
+# axis: an in-repo mode with a committed policy and no Canon anywhere resolves to the repo path
 def test_canon_inrepo_mode_committed_no_canon_resolves_to_repo(tmp_path, monkeypatch):
     store = str(tmp_path / "store")
     _canon_stub(monkeypatch, "in-repo", store)
@@ -937,6 +938,7 @@ def test_canon_inrepo_mode_committed_no_canon_resolves_to_repo(tmp_path, monkeyp
     assert got["exists"] is False
 
 
+# axis: a global mode with no Canon anywhere resolves to the project store with no default ref
 def test_canon_global_mode_no_canon_resolves_to_store(tmp_path, monkeypatch):
     store = str(tmp_path / "store")
     _canon_stub(monkeypatch, "global", store)
@@ -948,6 +950,7 @@ def test_canon_global_mode_no_canon_resolves_to_store(tmp_path, monkeypatch):
     assert got["defaultRef"] is None
 
 
+# axis: a gitignored policy never resolves to an in-repo Canon file, even when one exists on disk
 def test_canon_gitignored_policy_never_yields_inrepo_file(tmp_path, monkeypatch):
     store = str(tmp_path / "store")
     _canon_stub(monkeypatch, "in-repo", store, visibility="gitignored")
@@ -958,6 +961,7 @@ def test_canon_gitignored_policy_never_yields_inrepo_file(tmp_path, monkeypatch)
     assert got["exists"] is False
 
 
+# axis: an existing in-repo Canon wins over a recorded global mode
 def test_canon_existing_inrepo_file_beats_global_mode(tmp_path, monkeypatch):
     store = str(tmp_path / "store")
     _canon_stub(monkeypatch, "global", store)
@@ -968,6 +972,7 @@ def test_canon_existing_inrepo_file_beats_global_mode(tmp_path, monkeypatch):
     assert got["exists"] is True
 
 
+# axis: a Canon present only at the default-branch ref wins over a recorded global mode
 def test_canon_default_branch_ref_beats_global_mode(tmp_path, monkeypatch):
     repo = str(tmp_path / "repo")
     _git_repo(repo)
@@ -993,6 +998,7 @@ def test_canon_default_branch_ref_beats_global_mode(tmp_path, monkeypatch):
     assert got["defaultRef"] == "origin/main"
 
 
+# axis: a lookup from a subdirectory resolves to the same Canon as one from the repo top level
 def test_canon_subdirectory_root_matches_top_level_lookup(tmp_path, monkeypatch, capsys):
     repo = str(tmp_path / "repo")
     _git_repo(repo)
@@ -1009,6 +1015,7 @@ def test_canon_subdirectory_root_matches_top_level_lookup(tmp_path, monkeypatch,
     assert cli["path"] == top["path"] and cli["gitRoot"] == top["gitRoot"]
 
 
+# axis: an existing project-store Canon wins over a recorded in-repo mode
 def test_canon_store_file_beats_inrepo_mode(tmp_path, monkeypatch):
     store = str(tmp_path / "store")
     _canon_stub(monkeypatch, "in-repo", store)
@@ -1020,6 +1027,7 @@ def test_canon_store_file_beats_inrepo_mode(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["in-repo", "global"])
+# axis: the lookup creates no file or directory on disk
 def test_canon_lookup_writes_nothing(tmp_path, monkeypatch, mode):
     _canon_stub(monkeypatch, mode, str(tmp_path / "store"))
     before = _tree_snapshot(str(tmp_path))
@@ -1027,6 +1035,7 @@ def test_canon_lookup_writes_nothing(tmp_path, monkeypatch, mode):
     assert _tree_snapshot(str(tmp_path)) == before
 
 
+# axis: the canon verb prints exactly one JSON object with the five documented keys
 def test_canon_cli_prints_one_json_object(tmp_path):
     _git_repo(str(tmp_path))
     _write_canon(os.path.join(str(tmp_path), "docs", "superheroes"))
@@ -1038,6 +1047,7 @@ def test_canon_cli_prints_one_json_object(tmp_path):
     assert got["home"] == "repo"
 
 
+# axis: a newer registry schema halts the canon verb with exit 1 and nothing on stdout
 def test_canon_cli_halts_on_unknown_schema(tmp_path):
     _git_repo(str(tmp_path))
     import mode_registry as _mr
@@ -1075,6 +1085,7 @@ def _canon_origin_repo(tmp_path):
     return repo, git, carrier
 
 
+# axis: an origin/main ref without origin/HEAD is never accepted as the default branch
 def test_canon_origin_main_without_origin_head_refuses(tmp_path, monkeypatch):
     repo, git, carrier = _canon_origin_repo(tmp_path)
     git("update-ref", "refs/remotes/origin/main", carrier)
@@ -1084,6 +1095,7 @@ def test_canon_origin_main_without_origin_head_refuses(tmp_path, monkeypatch):
     assert "git remote set-head origin --auto" in str(exc.value)
 
 
+# axis: an origin remote whose default branch is unresolvable makes the canon verb refuse with exit 1
 def test_canon_origin_without_resolvable_default_refuses(tmp_path, monkeypatch):
     repo, _git, _carrier = _canon_origin_repo(tmp_path)
     out = subprocess.run([sys.executable, _MODULE_PATH, "canon", "--root", repo],
@@ -1093,6 +1105,7 @@ def test_canon_origin_without_resolvable_default_refuses(tmp_path, monkeypatch):
     assert "git remote set-head origin --auto" in out.stderr
 
 
+# axis: a repo with no origin remote reports a null default ref instead of refusing
 def test_canon_no_origin_remote_keeps_default_ref_null(tmp_path, monkeypatch):
     repo = str(tmp_path / "repo")
     _git_repo(repo)
@@ -1101,6 +1114,7 @@ def test_canon_no_origin_remote_keeps_default_ref_null(tmp_path, monkeypatch):
     assert got["defaultRef"] is None
 
 
+# axis: an origin probe that fails for any reason other than no-remote refuses
 def test_canon_origin_probe_other_git_failure_refuses(tmp_path, monkeypatch):
     repo = str(tmp_path / "repo")
     _git_repo(repo)
@@ -1119,6 +1133,7 @@ def test_canon_origin_probe_other_git_failure_refuses(tmp_path, monkeypatch):
         DD.resolve_canon(root=repo)
 
 
+# axis: an unset origin config with a silent git means no origin remote
 def test_canon_origin_probe_config_unset_means_no_origin(tmp_path, monkeypatch):
     repo = str(tmp_path / "repo")
     _git_repo(repo)
@@ -1132,3 +1147,37 @@ def test_canon_origin_probe_config_unset_means_no_origin(tmp_path, monkeypatch):
 
     monkeypatch.setattr(DD, "_git", fake)
     assert DD.resolve_canon(root=repo)["defaultRef"] is None
+
+
+# axis: only an unresolved origin/HEAD refusal names the set-head remedy; other causes name none
+def test_canon_cli_refusal_names_set_head_only_for_unresolved_origin_head(tmp_path, monkeypatch,
+                                                                         capsys):
+    repo, _git, _carrier = _canon_origin_repo(tmp_path)
+    out = subprocess.run([sys.executable, _MODULE_PATH, "canon", "--root", repo],
+                         capture_output=True, text=True)
+    assert out.returncode == 1, (out.stdout, out.stderr)
+    assert "set-head" in out.stderr
+
+    def unrunnable(root, *args):
+        raise DD.CanonLookupError("git could not be run (stub)")
+
+    monkeypatch.setattr(DD, "_git", unrunnable)
+    rc = DD.main(["definition_doc.py", "canon", "--root", repo])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "git could not be run (stub)" in captured.err
+    assert "set-head" not in captured.err
+
+
+# axis: the lookup never records a storage mode in the registry, with the real resolver in play
+def test_canon_lookup_writes_no_registry_backfill(tmp_path):
+    import mode_registry
+    repo = str(tmp_path / "repo")
+    _git_repo(repo)
+    evidence = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    os.makedirs(os.path.dirname(evidence))
+    open(evidence, "w").write("calibrated\n")
+    assert not os.path.exists(mode_registry.registry_path(repo))
+    DD.resolve_canon(root=repo)
+    assert not os.path.exists(mode_registry.registry_path(repo))

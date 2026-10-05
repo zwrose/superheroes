@@ -113,7 +113,12 @@ class CanonLookupError(RuntimeError):
     """The default-branch copy of Canon could not be probed (git missing or slow, no resolvable
     default ref on a repo with an origin remote, or a tree read that failed for a reason other
     than the path being absent). The lookup fails closed: an unprobed default branch is never
-    read as one with no Canon. The single arg names the cause."""
+    read as one with no Canon. The single arg names the cause; `remedy`, when set, is the one
+    action that fixes that cause and is set only where such an action exists."""
+
+    def __init__(self, message, *, remedy=None):
+        super().__init__(message)
+        self.remedy = remedy
 
 
 _CANON_REMEDY = "run `git remote set-head origin --auto` (or fetch origin) and retry"
@@ -147,8 +152,8 @@ def _default_branch_ref(root):
     ref = proc.stdout.strip()
     if proc.returncode == 0 and ref and ref != "origin/HEAD":
         return ref
-    raise CanonLookupError("origin/HEAD does not resolve, so the default branch is unknown; "
-                           + _CANON_REMEDY)
+    raise CanonLookupError("origin/HEAD does not resolve, so the default branch is unknown",
+                           remedy=_CANON_REMEDY)
 
 
 def _exists_at_ref(root, ref, relpath):
@@ -661,8 +666,9 @@ def main(argv):
             try:
                 result = resolve_canon(root=args.root)
             except CanonLookupError as exc:
-                sys.stderr.write("definition_doc: canon lookup refused — %s; %s. Refusing to "
-                                 "guess a Canon home.\n" % (exc, _CANON_REMEDY))
+                remedy = "; %s" % exc.remedy if exc.remedy else ""
+                sys.stderr.write("definition_doc: canon lookup refused — %s%s. Refusing to "
+                                 "guess a Canon home.\n" % (exc, remedy))
                 return 1
             sys.stdout.write(json.dumps(result) + "\n")
             return 0
