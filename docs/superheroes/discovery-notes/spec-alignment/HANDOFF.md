@@ -488,3 +488,5 @@ Board round 3 under way (owner: "go").
   both specs are ready for vet.
 53. **Keep the alignment-flow spec as one** (owner: "i think keep it"), past the 300-400 line
     trigger at 436 lines; the review surface stays its own spec.
+54. **READY FOR VET** (owner, 2026-10-04: "ready for vet"), both specs. Not approval. Per ruling 47
+    (specs stored out of repo) the stored specs stand in for the spec PR.
