@@ -481,3 +481,8 @@ Board round 3 under way (owner: "go").
     owner answers.
 51. Keep review-surface UFR-2 (a failed save says so and offers a retry).
 52. Keep review-surface UFR-3 (a missing image doesn't stop the card).
+- Re-check after rulings 42-52 (same three Astra sessions, changed parts only): round 1, 7
+  findings (all craft; "Send verdict" is the final sheet's done word; ruling 47 applied to
+  gitignored specs, tagged craft for veto); round 2, 1 cross-spec wording finding (all three
+  checks agreed); round 3, all three clean. Remainder queue empty. Next: ask the owner whether
+  both specs are ready for vet.
