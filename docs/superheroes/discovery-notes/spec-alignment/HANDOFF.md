@@ -569,3 +569,7 @@ are re-running on the changed parts before the re-vet.
 - Advisor re-vet round 4: 3 craft gaps in Canon's mechanics (F16 advisor rulings outside any PR
   ride its next PR; F17 collision-free ids and union merges; F18 out-of-repo projects commit Canon
   in the git project store at once, binding sessions that share the store). Fixed; checks clean.
+- Advisor re-vet round 5: CLEAN on #1614 at dbc9f326 (full vet: 5 rounds, F1-F18, 12 craft, 6
+  owner calls answered as rulings 55-61, 0 declined; durable vet record posted on the PR). The
+  storage-mode mismatch is the advisor's, raised to the owner separately. Approval card sent
+  (ruling 44); verdict in its store at `verdict/approval`.
