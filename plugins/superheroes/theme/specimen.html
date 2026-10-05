@@ -1,0 +1,342 @@
+<title>Comic Panel Theme</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="comic-panel.css">
+<style>
+  html { background: var(--sh-paper); }
+  .sh-theme { box-sizing: border-box; min-height: 100vh; padding-block: 16px 40px; padding-inline: 16px; }
+  .sh-theme *, .sh-theme *::before, .sh-theme *::after { box-sizing: border-box; }
+  .sh-theme :is(h1, h2, p, ul) { margin: 0; }
+  .sh-theme h1 { font-size: 36px; }
+  .sh-theme h2 { font-size: 22px; }
+  .page { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); margin-inline: auto; max-width: 1100px; }
+  .page > * { min-width: 0; }
+  .stack { display: grid; gap: 16px; }
+  .stack-small { display: grid; gap: 8px; }
+  .rows { display: grid; gap: 14px; list-style: none; padding: 0; }
+  .color-row { align-items: center; display: grid; gap: 14px; grid-template-columns: 64px minmax(0, 1fr); }
+  .swatch { align-items: center; display: grid; font-weight: 700; height: 52px; justify-content: center; width: 64px; }
+  .color-text { display: grid; gap: 2px; min-width: 0; }
+  .color-text .sh-tag { overflow-wrap: anywhere; }
+  .sample-heading { font-size: 28px; }
+  .parts { display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr); }
+  .parts > * { min-width: 0; }
+  .row { align-items: center; display: flex; flex-wrap: wrap; gap: 20px; }
+  .row-pills { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
+  .corners { display: grid; gap: 20px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .corners > * { min-width: 0; overflow-wrap: anywhere; text-align: center; }
+  .steps { display: flex; flex-wrap: wrap; gap: 20px; padding: 8px 8px 0 0; }
+  .rules { display: grid; gap: 10px; padding-left: 20px; }
+  .rules li { min-width: 0; }
+  .live { align-self: start; display: grid; gap: 4px; }
+  @media (min-width: 760px) {
+    .page { column-gap: 28px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .wide { grid-column: 1 / -1; }
+    .parts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+</style>
+
+<div class="sh-theme">
+  <main class="page">
+    <div class="sh-appbar wide">
+      <span class="sh-appbar__name">superheroes</span>
+      <span>Theme specimen</span>
+    </div>
+
+    <header class="stack-small wide">
+      <h1>Comic panel</h1>
+      <p>The one look the plugin ships for every sheet, review page and board frame: bold, inked, and easy to read on a phone.</p>
+    </header>
+
+    <section class="sh-card stack">
+      <h2>Colours, each with one job</h2>
+      <ul class="rows">
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-paper); border: var(--sh-line) solid var(--sh-ink)"></span>
+          <div class="color-text">
+            <strong>Paper</strong>
+            <span class="sh-caption">The ground of every page</span>
+            <span><span class="sh-tag" data-token="--sh-paper"></span></span>
+          </div>
+        </li>
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-ink); border: var(--sh-line) solid var(--sh-ink)"></span>
+          <div class="color-text">
+            <strong>Ink</strong>
+            <span class="sh-caption">Text, outlines, shadows, arrows</span>
+            <span><span class="sh-tag" data-token="--sh-ink"></span></span>
+          </div>
+        </li>
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-blue); border: var(--sh-line) solid var(--sh-ink)"></span>
+          <div class="color-text">
+            <strong>Hero blue</strong>
+            <span class="sh-caption">The owner's moments and the main action</span>
+            <span><span class="sh-tag" data-token="--sh-blue"></span></span>
+          </div>
+        </li>
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-red); border: var(--sh-line) solid var(--sh-ink)"></span>
+          <div class="color-text">
+            <strong>Alarm red</strong>
+            <span class="sh-caption">Warnings</span>
+            <span><span class="sh-tag" data-token="--sh-red"></span></span>
+          </div>
+        </li>
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-yellow); border: var(--sh-line) solid var(--sh-ink)"></span>
+          <div class="color-text">
+            <strong>Highlight yellow</strong>
+            <span class="sh-caption">App bars, what's new, standing rulings</span>
+            <span><span class="sh-tag" data-token="--sh-yellow"></span></span>
+          </div>
+        </li>
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-green-ground); color: var(--sh-green); border: var(--sh-line) solid var(--sh-ink)">Aa</span>
+          <div class="color-text">
+            <strong>Reviewer green</strong>
+            <span class="sh-caption">Independent reviewers only (text and marks), on its own ground</span>
+            <span><span class="sh-tag" data-token="--sh-green"></span> on <span class="sh-tag" data-token="--sh-green-ground"></span></span>
+          </div>
+        </li>
+      </ul>
+      <p class="sh-caption">White text sits only on hero blue, alarm red or ink.</p>
+      <ul class="rows">
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-white); border: var(--sh-line) solid var(--sh-ink)"></span>
+          <div class="color-text">
+            <strong>White</strong>
+            <span class="sh-caption">Card and box grounds; text on blue, red or ink</span>
+            <span><span class="sh-tag" data-token="--sh-white"></span></span>
+          </div>
+        </li>
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-ink-muted); border: var(--sh-line) solid var(--sh-ink)"></span>
+          <div class="color-text">
+            <strong>Muted ink</strong>
+            <span class="sh-caption">Labels and captions</span>
+            <span><span class="sh-tag" data-token="--sh-ink-muted"></span></span>
+          </div>
+        </li>
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-tag-ground); border: var(--sh-line) solid var(--sh-ink)"></span>
+          <div class="color-text">
+            <strong>Tag ground</strong>
+            <span class="sh-caption">The ground of tags and Canon entries</span>
+            <span><span class="sh-tag" data-token="--sh-tag-ground"></span></span>
+          </div>
+        </li>
+        <li class="color-row">
+          <span class="swatch" style="background: var(--sh-discuss-ground); border: var(--sh-line) solid var(--sh-ink)"></span>
+          <div class="color-text">
+            <strong>Discuss tint</strong>
+            <span class="sh-caption">The Discuss answer pill</span>
+            <span><span class="sh-tag" data-token="--sh-discuss-ground"></span></span>
+          </div>
+        </li>
+      </ul>
+    </section>
+
+    <section class="sh-card stack">
+      <h2>Type</h2>
+      <div class="stack-small">
+        <p class="sh-heading sample-heading">Approve the spec?</p>
+        <p class="sh-caption">Headings: <span data-token="--sh-font-heading" data-font></span> <span data-token="--sh-weight-heading"></span></p>
+      </div>
+      <div class="stack-small">
+        <p>Read the change, then tell the agent what you decided. <strong>Your answer is final once sent.</strong></p>
+        <p class="sh-caption">Body: <span data-token="--sh-font-body" data-font></span> 400 and 700</p>
+      </div>
+      <div class="stack-small">
+        <p><span class="sh-tag">canon C-16</span></p>
+        <p class="sh-caption">Tags and Canon entries: <span data-token="--sh-font-mono" data-font></span></p>
+      </div>
+      <div class="stack-small">
+        <p class="sh-label">Section label</p>
+        <p class="sh-caption">Labels: body font, capitals, tracked</p>
+      </div>
+    </section>
+
+    <section class="sh-card stack wide">
+      <h2>The parts</h2>
+      <div class="parts">
+        <div class="stack-small">
+          <p class="sh-label">Outline</p>
+          <div class="sh-box">A boxed note with an ink outline.</div>
+          <p class="sh-caption">Outline <span data-token="--sh-line"></span>; small parts <span data-token="--sh-line-small"></span></p>
+        </div>
+
+        <div class="stack-small">
+          <p class="sh-label">Shadow</p>
+          <div class="row">
+            <div class="sh-card">Card</div>
+            <div class="sh-box">Box</div>
+            <button type="button" class="sh-button">Button</button>
+          </div>
+          <p class="sh-caption">Offset shadows, never blurred: cards <span data-token="--sh-shadow-card"></span>, small boxes <span data-token="--sh-shadow-box"></span>, buttons <span data-token="--sh-shadow-button"></span></p>
+        </div>
+
+        <div class="stack-small">
+          <p class="sh-label">Corners</p>
+          <div class="corners">
+            <div class="sh-box" style="border-radius: var(--sh-radius-small)">Small <span data-token="--sh-radius-small"></span></div>
+            <div class="sh-box" style="border-radius: var(--sh-radius)">Box <span data-token="--sh-radius"></span></div>
+            <div class="sh-box" style="border-radius: var(--sh-radius-card)">Card <span data-token="--sh-radius-card"></span></div>
+          </div>
+          <p class="sh-caption">Corners, smallest to largest</p>
+        </div>
+
+        <div class="stack-small">
+          <p class="sh-label">Buttons</p>
+          <div class="row">
+            <button type="button" class="sh-button sh-button--main">Aligned</button>
+            <button type="button" class="sh-button sh-button--second">Discuss</button>
+            <button type="button" class="sh-button sh-button--finish">Send verdict</button>
+          </div>
+          <p class="sh-caption">Main, second, finish. Every control at least <span data-token="--sh-touch"></span> tall.</p>
+        </div>
+
+        <div class="stack-small">
+          <p class="sh-label">App bar</p>
+          <div class="sh-appbar">
+            <span class="sh-appbar__name">superheroes · Spec review · 3 of 5</span>
+          </div>
+          <p class="sh-caption">App bar: the review's name and progress</p>
+        </div>
+
+        <div class="stack-small">
+          <p class="sh-label">Pills and badges</p>
+          <div class="row-pills">
+            <span class="sh-pill sh-pill--aligned">Aligned</span>
+            <span class="sh-pill sh-pill--discuss">Discuss</span>
+            <span class="sh-pill sh-pill--open">Open</span>
+            <span class="sh-badge sh-badge--warning">Gap found</span>
+            <span class="sh-badge sh-badge--standing">Standing</span>
+          </div>
+          <p class="sh-caption">Answer pills, a warning badge, a standing mark</p>
+        </div>
+
+        <div class="stack-small">
+          <p class="sh-label">Reviewer box</p>
+          <div class="sh-reviewer">Three checks: gap, source, grounding</div>
+          <p class="sh-caption">Reviewer green marks independent reviewers, nothing else</p>
+        </div>
+
+        <div class="stack-small">
+          <p class="sh-label">Flow steps</p>
+          <div class="steps">
+            <div class="sh-step sh-step--owner">12 · Your sheet</div>
+            <div class="sh-step sh-step--reviewer">10 · Three checks</div>
+            <div class="sh-step sh-step--agent">11 · Writing pass<span class="sh-new"></span></div>
+          </div>
+          <p class="sh-caption">Flow steps: yours, a reviewer's, an agent's (dot: new)</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="sh-card stack">
+      <h2>Rules that keep it readable</h2>
+      <ul class="rules">
+        <li>Outlines are <span data-token="--sh-line"></span> ink, small parts <span data-token="--sh-line-small"></span>.</li>
+        <li>Offset shadows, never blurred: <span data-token="--sh-shadow-card"></span> on cards, <span data-token="--sh-shadow-box"></span> on boxes, <span data-token="--sh-shadow-button"></span> on buttons.</li>
+        <li>Corners run <span data-token="--sh-radius-small"></span> to <span data-token="--sh-radius-card"></span>, no gradients, no emoji.</li>
+        <li>Text meets 4.5 to 1 contrast, white only on blue, red or ink.</li>
+        <li>Colours that must be told apart also differ in lightness.</li>
+        <li>Every control is at least <span data-token="--sh-touch"></span> tall.</li>
+        <li>One theme for now.</li>
+      </ul>
+    </section>
+
+    <section class="sh-box live">
+      <p class="sh-label">Live check</p>
+      <p>Stylesheet: <span data-live="stylesheet"></span></p>
+      <p>Fonts: <span data-live="fonts"></span></p>
+      <p>Smallest control: <span data-live="control"></span></p>
+    </section>
+  </main>
+</div>
+
+<script>
+  (function () {
+    var NOT_LOADED = 'not loaded';
+    var rootStyle = getComputedStyle(document.documentElement);
+
+    function read(token) {
+      return rootStyle.getPropertyValue(token).trim();
+    }
+
+    function unquote(text) {
+      return text.replace(/^["']|["']$/g, '');
+    }
+
+    function firstFamily(stack) {
+      return unquote(stack.split(',')[0].trim());
+    }
+
+    function live(name, text) {
+      document.querySelector('[data-live="' + name + '"]').textContent = text;
+    }
+
+    document.querySelectorAll('[data-token]').forEach(function (el) {
+      var value = read(el.getAttribute('data-token'));
+      if (!value) {
+        el.textContent = NOT_LOADED;
+        return;
+      }
+      if (el.hasAttribute('data-font')) {
+        value = firstFamily(value);
+      } else if (value.charAt(0) === '#') {
+        value = value.toUpperCase();
+      }
+      el.textContent = value;
+    });
+
+    var sheetLoaded = read('--sh-paper') !== '';
+    live('stylesheet', sheetLoaded ? 'loaded' : NOT_LOADED);
+
+    var smallest = null;
+    document.querySelectorAll('button').forEach(function (button) {
+      var height = button.getBoundingClientRect().height;
+      if (smallest === null || height < smallest) smallest = height;
+    });
+    live('control', smallest === null ? 'no controls' : (Math.round(smallest * 10) / 10) + 'px');
+
+    function coversWeight(face, weight) {
+      var bounds = String(face.weight).split(' ').map(function (part) {
+        if (part === 'bold') return 700;
+        if (part === 'normal') return 400;
+        return Number(part);
+      });
+      return bounds[0] <= weight && weight <= bounds[bounds.length - 1];
+    }
+
+    function faceLoaded(family, weight) {
+      if (!document.fonts.check(weight + ' 16px "' + family + '"')) return false;
+      var found = false;
+      document.fonts.forEach(function (face) {
+        if (unquote(face.family) === family && face.status === 'loaded' && coversWeight(face, weight)) found = true;
+      });
+      return found;
+    }
+
+    if (!sheetLoaded || !document.fonts) {
+      live('fonts', NOT_LOADED);
+      return;
+    }
+
+    var wanted = [
+      [firstFamily(read('--sh-font-heading')), Number(read('--sh-weight-heading'))],
+      [firstFamily(read('--sh-font-body')), 400],
+      [firstFamily(read('--sh-font-body')), 700],
+      [firstFamily(read('--sh-font-mono')), 400]
+    ];
+
+    document.fonts.ready.then(function () {
+      var failed = wanted.filter(function (face) {
+        return !faceLoaded(face[0], face[1]);
+      }).map(function (face) {
+        return face[1] + ' 16px "' + face[0] + '"';
+      });
+      live('fonts', failed.length ? NOT_LOADED + ' (' + failed.join(', ') + ')' : 'loaded');
+    });
+  })();
+</script>

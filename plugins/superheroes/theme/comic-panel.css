@@ -1,0 +1,249 @@
+/* The plugin's one visual theme, loaded by every sheet, review page and board frame. A board's product drawing stays in the project's own design system, so every rule here is scoped under .sh-theme or an sh- class and nothing styles bare elements. */
+@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,800&family=IBM+Plex+Mono:wght@400;600&display=swap');
+
+:root {
+  --sh-paper: #FFF8E7; /* the ground of every page */
+  --sh-ink: #111111; /* text, outlines, shadows, arrows */
+  --sh-blue: #1B4FD8; /* the owner's moments and the main action */
+  --sh-red: #D7263D; /* warnings */
+  --sh-yellow: #FFC93C; /* app bars, what's new, standing rulings */
+  --sh-green: #0F7A4F; /* independent reviewers only (text and marks) */
+  --sh-green-ground: #E3F4EA; /* the ground under reviewer green */
+  --sh-white: #FFFFFF; /* card and box grounds; text on blue, red or ink */
+  --sh-ink-muted: #4A4A4A; /* labels and captions */
+  --sh-tag-ground: #F2EEE3; /* the ground of tags and Canon entries */
+  --sh-discuss-ground: #EFA3AD; /* the Discuss answer pill */
+  --sh-font-heading: 'Bricolage Grotesque', 'Arial Black', sans-serif; /* headings */
+  --sh-weight-heading: 800; /* heading weight */
+  --sh-font-body: 'Atkinson Hyperlegible', system-ui, sans-serif; /* body text and labels */
+  --sh-font-mono: 'IBM Plex Mono', ui-monospace, monospace; /* tags and Canon entries */
+  --sh-line: 3px; /* outlines */
+  --sh-line-small: 2px; /* outlines on small parts */
+  --sh-shadow-card: 6px; /* card shadow offset */
+  --sh-shadow-box: 4px; /* small-box shadow offset */
+  --sh-shadow-button: 3px; /* button shadow offset */
+  --sh-radius-small: 6px; /* small parts' corners */
+  --sh-radius: 10px; /* boxes, buttons, app bar */
+  --sh-radius-card: 14px; /* cards and pills */
+  --sh-touch: 44px; /* minimum height of every control */
+  --sh-tracking: 0.08em; /* label letter-spacing */
+}
+
+.sh-theme {
+  background: var(--sh-paper);
+  color: var(--sh-ink);
+  font-family: var(--sh-font-body);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.sh-theme strong,
+.sh-theme b {
+  font-weight: 700;
+}
+
+.sh-heading,
+.sh-theme :is(h1, h2, h3) {
+  font-family: var(--sh-font-heading);
+  font-weight: var(--sh-weight-heading);
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.sh-label {
+  color: var(--sh-ink-muted);
+  font-family: var(--sh-font-body);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: var(--sh-tracking);
+  text-transform: uppercase;
+}
+
+.sh-caption {
+  color: var(--sh-ink-muted);
+  font-size: 14px;
+}
+
+.sh-tag {
+  background: var(--sh-tag-ground);
+  border: var(--sh-line-small) solid var(--sh-ink);
+  border-radius: var(--sh-radius-small);
+  color: var(--sh-ink);
+  display: inline-block;
+  font-family: var(--sh-font-mono);
+  font-size: 14px;
+  padding: 1px 8px;
+}
+
+.sh-card {
+  background: var(--sh-white);
+  border: var(--sh-line) solid var(--sh-ink);
+  border-radius: var(--sh-radius-card);
+  box-shadow: var(--sh-shadow-card) var(--sh-shadow-card) 0 var(--sh-ink);
+  box-sizing: border-box;
+  padding: 20px;
+}
+
+.sh-box {
+  background: var(--sh-white);
+  border: var(--sh-line) solid var(--sh-ink);
+  border-radius: var(--sh-radius);
+  box-shadow: var(--sh-shadow-box) var(--sh-shadow-box) 0 var(--sh-ink);
+  box-sizing: border-box;
+  padding: 14px 16px;
+}
+
+.sh-button {
+  align-items: center;
+  background: var(--sh-white);
+  border: var(--sh-line) solid var(--sh-ink);
+  border-radius: var(--sh-radius);
+  box-shadow: var(--sh-shadow-button) var(--sh-shadow-button) 0 var(--sh-ink);
+  box-sizing: border-box;
+  color: var(--sh-ink);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--sh-font-body);
+  font-size: 16px;
+  font-weight: 700;
+  justify-content: center;
+  min-height: var(--sh-touch);
+  padding: 0 20px;
+}
+
+.sh-button--main {
+  background: var(--sh-blue);
+  color: var(--sh-white);
+}
+
+.sh-button--second {
+  background: var(--sh-white);
+  color: var(--sh-ink);
+}
+
+.sh-button--finish {
+  background: var(--sh-ink);
+  color: var(--sh-white);
+}
+
+.sh-button:focus-visible {
+  outline: var(--sh-line) solid var(--sh-blue);
+  outline-offset: 2px;
+}
+
+.sh-button:active {
+  box-shadow: none;
+  transform: translate(var(--sh-shadow-button), var(--sh-shadow-button));
+}
+
+.sh-appbar {
+  align-items: center;
+  background: var(--sh-yellow);
+  border: var(--sh-line) solid var(--sh-ink);
+  border-radius: var(--sh-radius);
+  box-sizing: border-box;
+  color: var(--sh-ink);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: var(--sh-touch);
+  padding: 6px 16px;
+}
+
+.sh-appbar__name {
+  font-family: var(--sh-font-heading);
+  font-weight: var(--sh-weight-heading);
+}
+
+.sh-pill {
+  border: var(--sh-line-small) solid var(--sh-ink);
+  border-radius: var(--sh-radius-card);
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 12px;
+  white-space: nowrap;
+}
+
+.sh-pill--aligned {
+  background: var(--sh-blue);
+  color: var(--sh-white);
+}
+
+.sh-pill--discuss {
+  background: var(--sh-discuss-ground);
+  color: var(--sh-ink);
+}
+
+.sh-pill--open {
+  background: var(--sh-white);
+  color: var(--sh-ink);
+}
+
+.sh-badge {
+  border: var(--sh-line-small) solid var(--sh-ink);
+  border-radius: var(--sh-radius-small);
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: var(--sh-tracking);
+  padding: 2px 8px;
+  text-transform: uppercase;
+}
+
+.sh-badge--warning {
+  background: var(--sh-red);
+  color: var(--sh-white);
+}
+
+.sh-badge--standing {
+  background: var(--sh-yellow);
+  color: var(--sh-ink);
+}
+
+.sh-reviewer {
+  background: var(--sh-green-ground);
+  border: var(--sh-line) solid var(--sh-ink);
+  border-radius: var(--sh-radius);
+  box-sizing: border-box;
+  color: var(--sh-green);
+  font-weight: 700;
+  padding: 12px 16px;
+}
+
+.sh-step {
+  border: var(--sh-line) solid var(--sh-ink);
+  border-radius: var(--sh-radius);
+  box-shadow: var(--sh-shadow-box) var(--sh-shadow-box) 0 var(--sh-ink);
+  box-sizing: border-box;
+  font-weight: 700;
+  padding: 10px 14px;
+  position: relative;
+}
+
+.sh-step--owner {
+  background: var(--sh-blue);
+  color: var(--sh-white);
+}
+
+.sh-step--reviewer {
+  background: var(--sh-green-ground);
+  color: var(--sh-green);
+}
+
+.sh-step--agent {
+  background: var(--sh-white);
+  color: var(--sh-ink);
+}
+
+.sh-new {
+  background: var(--sh-yellow);
+  border: var(--sh-line-small) solid var(--sh-ink);
+  border-radius: 50%;
+  box-sizing: border-box;
+  height: 14px;
+  position: absolute;
+  right: -8px;
+  top: -8px;
+  width: 14px;
+}
