@@ -89,18 +89,13 @@ class FakeRun(object):
     ``tracked=[...]`` to control the census (``None`` = walk cwd on disk).
     """
 
-    def __init__(self, table, tracked=None, history=None):
+    def __init__(self, table, tracked=None):
         self.table = list(table)
         self.tracked = tracked
-        self.history = history  # `git log` paths; None = same as the census, False = fail
         self.calls = []
 
-    def _git_result(self, argv, kwargs):
-        if "log" in argv and self.history is False:
-            return _R(128, "", "fatal: git log failed")
-        if "log" in argv and self.history is not None:
-            names = list(self.history)
-        elif self.tracked is not None:
+    def _git_result(self, kwargs):
+        if self.tracked is not None:
             names = list(self.tracked)
         else:
             cwd = kwargs.get("cwd") or "."
@@ -122,7 +117,7 @@ class FakeRun(object):
         argv = list(argv)
         self.calls.append((argv, dict(kwargs)))
         if argv and argv[0] == "git":
-            return self._git_result(argv, kwargs)
+            return self._git_result(kwargs)
         line = " ".join(argv)
         for key, val in self.table:
             if key in line:
@@ -1295,100 +1290,21 @@ def _legacy_digest():
             "detected": ["python", "node"], "ecosystems": {}, "candidates": dict(rows)}
 
 
-def test_absolute_keyed_baseline_carries_forward_on_next_sweep(tmp_path):
+
+def test_absolute_keyed_baseline_reports_one_loud_transition(tmp_path):
+    """No guessed carry-forward (#1610, owner ruling option 3): the first sweep after the
+    fix reports every current candidate as new and every old absolute id as resolved."""
     prev = _legacy_digest()
     repo = _py_repo_with_excerpt(tmp_path)
     run = FakeRun([("vulture", (3, _absolute_excerpt(os.path.realpath(repo)), ""))],
                   tracked=_EXCERPT_PATHS + ["pyproject.toml"])
     out = gld.LENS.collect(_ctx(repo, run, prev=prev))
+    cur = out["digest"]["candidates"]
+    assert len(cur) == 4
+    assert not [c for c in cur if _LEGACY_ROOT in c]
+    # Carried under the old absolute key, still reported once as new under its relative id.
+    assert "deadcode:vulture:plugins/superheroes/lib/repo_doctor.py:variable:engine_plugin_ver" in cur
     d = gld.LENS.diff(prev, out["digest"])
-    # The excerpt's one candidate absent from the baseline is the only new one.
-    assert d["new"] == ["deadcode:vulture:plugins/superheroes/lib/tests/test_engine_apply.py:import:blocks_mod"]
+    assert d["new"] == sorted(cur)
     assert d["worsened"] == []
-    assert d["resolved"] == [
-        "deadcode:knip:scripts/old-file.js",
-        "deadcode:vulture:plugins/superheroes/lib/gone.py:function:removed_since",
-    ]
-
-
-def test_absolute_keyed_baseline_partial_sweep_carries_relative_ids(tmp_path):
-    prev = _legacy_digest()
-    files = _vulture_excerpt_files()
-    files.update({"pyproject.toml": "[project]\nname = \"x\"\n", "package.json": "{}\n",
-                  "node_modules/.gitkeep": ""})
-    repo = _repo(tmp_path, files)
-    run = FakeRun([
-        ("vulture", (3, _absolute_excerpt(os.path.realpath(repo)), "")),
-        ("knip", (127, "", "TEST-STUB-MISSING")),
-    ], tracked=sorted(files))
-    out = gld.LENS.collect(_ctx(repo, run, prev=prev))
-    assert out["status"] == "partial"
-    carried = out["digest"]["candidates"]["deadcode:knip:scripts/old-file.js"]
-    assert carried["carriedForward"] is True
-    assert carried["path"] == "scripts/old-file.js"
-    d = gld.LENS.diff(prev, out["digest"])
-    assert "deadcode:knip:scripts/old-file.js" not in d["new"] + d["resolved"]
-    assert not [i for i in d["new"] + d["resolved"] if _LEGACY_ROOT in i]
-
-
-def _sweep_moved_tree(tmp_path, cur, history):
-    """collect() + diff() over a legacy baseline of /old/src/a.py:f and /old/src/b.py:g,
-    with `cur` = [(path, line, symbol)] reported now and `history` = git log's paths."""
-    prev = {"schema": gld.DIGEST_SCHEMA, "candidates": dict([
-        _legacy_vulture("/old/src/a.py", "function", "f", [1]),
-        _legacy_vulture("/old/src/b.py", "function", "g", [2]),
-    ])}
-    tracked = sorted({p for p, _n, _s in cur})
-    repo = os.path.realpath(_repo(tmp_path, {p: "pass\n" for p in tracked}))
-    stdout = "".join("%s/%s:%d: unused function '%s' (60%% confidence)\n" % (repo, p, n, sym)
-                     for p, n, sym in cur)
-    run = FakeRun([("vulture", (3, stdout, ""))], tracked=tracked, history=history)
-    out = gld.LENS.collect(_ctx(repo, run, prev=prev))
-    return out["digest"], gld.LENS.diff(prev, out["digest"])
-
-
-def test_legacy_root_from_history_survives_deleted_file(tmp_path):
-    """Review round 1 (code-reviewer-1): src/b.py is deleted and a.py/b.py exist at the
-    root. History still holds src/b.py, so the root is /old and nothing hides."""
-    digest, d = _sweep_moved_tree(
-        tmp_path, [("src/a.py", 1, "f"), ("a.py", 1, "f"), ("b.py", 2, "g")],
-        history=["src/a.py", "src/b.py", "a.py", "b.py"])
-    assert digest["legacyRoot"] == "/old"
-    assert d["new"] == ["deadcode:vulture:a.py:function:f", "deadcode:vulture:b.py:function:g"]
-    assert d["resolved"] == ["deadcode:vulture:src/b.py:function:g"]
-
-
-def test_legacy_root_from_history_survives_deleted_directory(tmp_path):
-    """Review round 2 (code-reviewer-1): all of src/ is deleted and same-named files with
-    the same unused symbols exist at the root. A current-tree match would name /old/src
-    unanimously and hide two new findings and two resolutions; history names /old."""
-    digest, d = _sweep_moved_tree(
-        tmp_path, [("a.py", 1, "f"), ("b.py", 2, "g")],
-        history=["src/a.py", "src/b.py", "a.py", "b.py"])
-    assert digest["legacyRoot"] == "/old"
-    assert d["new"] == ["deadcode:vulture:a.py:function:f", "deadcode:vulture:b.py:function:g"]
-    assert d["resolved"] == ["deadcode:vulture:src/a.py:function:f",
-                             "deadcode:vulture:src/b.py:function:g"]
-
-
-def test_competing_legacy_roots_rekey_nothing_so_nothing_hides():
-    """A split answer (one record names /old, one /old/src) proves no root."""
-    prev = dict([_legacy_vulture("/old/src/a.py", "function", "f", [1]),
-                 _legacy_vulture("/old/src/b.py", "function", "g", [2])])
-    assert gld._legacy_root(prev, ["src/a.py", "a.py", "b.py"]) is None
-
-
-def test_git_history_failure_rekeys_nothing(tmp_path):
-    digest, d = _sweep_moved_tree(tmp_path, [("src/a.py", 1, "f")], history=False)
-    assert "legacyRoot" not in digest
-    assert d["new"] == ["deadcode:vulture:src/a.py:function:f"]
-    assert d["resolved"] == ["deadcode:vulture:/old/src/a.py:function:f",
-                             "deadcode:vulture:/old/src/b.py:function:g"]
-
-
-def test_legacy_root_uses_longest_tracked_suffix():
-    """A same-named file at the repo root does not split the vote: each record takes its
-    longest tracked match, so tests/conftest.py names /old, not /old/tests."""
-    prev = dict([_legacy_vulture("/old/tests/conftest.py", "variable", "v", [1]),
-                 _legacy_vulture("/old/lib/x.py", "function", "h", [3])])
-    assert gld._legacy_root(prev, ["conftest.py", "tests/conftest.py", "lib/x.py"]) == "/old"
+    assert d["resolved"] == sorted(prev["candidates"])
