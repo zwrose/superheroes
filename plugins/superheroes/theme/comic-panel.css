@@ -15,6 +15,8 @@
   --sh-discuss-ground: #EFA3AD; /* the Discuss answer pill */
   --sh-font-heading: 'Bricolage Grotesque', 'Arial Black', sans-serif; /* headings */
   --sh-weight-heading: 800; /* heading weight */
+  --sh-weight-body: 400; /* body text weight */
+  --sh-weight-bold: 700; /* bold body text and labels weight */
   --sh-font-body: 'Atkinson Hyperlegible', system-ui, sans-serif; /* body text and labels */
   --sh-font-mono: 'IBM Plex Mono', ui-monospace, monospace; /* tags and Canon entries */
   --sh-line: 3px; /* outlines */
@@ -33,13 +35,13 @@
   background: var(--sh-paper);
   color: var(--sh-ink);
   font-family: var(--sh-font-body);
-  font-weight: 400;
+  font-weight: var(--sh-weight-body);
   line-height: 1.5;
 }
 
 .sh-theme strong,
 .sh-theme b {
-  font-weight: 700;
+  font-weight: var(--sh-weight-bold);
 }
 
 .sh-heading,
@@ -54,7 +56,7 @@
   color: var(--sh-ink-muted);
   font-family: var(--sh-font-body);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: var(--sh-weight-bold);
   letter-spacing: var(--sh-tracking);
   text-transform: uppercase;
 }
@@ -105,7 +107,7 @@
   display: inline-flex;
   font-family: var(--sh-font-body);
   font-size: 16px;
-  font-weight: 700;
+  font-weight: var(--sh-weight-bold);
   justify-content: center;
   min-height: var(--sh-touch);
   padding: 0 20px;
@@ -160,7 +162,7 @@
   border-radius: var(--sh-radius-card);
   display: inline-block;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: var(--sh-weight-bold);
   padding: 3px 12px;
   white-space: nowrap;
 }
@@ -185,7 +187,7 @@
   border-radius: var(--sh-radius-small);
   display: inline-block;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: var(--sh-weight-bold);
   letter-spacing: var(--sh-tracking);
   padding: 2px 8px;
   text-transform: uppercase;
@@ -207,7 +209,7 @@
   border-radius: var(--sh-radius);
   box-sizing: border-box;
   color: var(--sh-green);
-  font-weight: 700;
+  font-weight: var(--sh-weight-bold);
   padding: 12px 16px;
 }
 
@@ -216,7 +218,7 @@
   border-radius: var(--sh-radius);
   box-shadow: var(--sh-shadow-box) var(--sh-shadow-box) 0 var(--sh-ink);
   box-sizing: border-box;
-  font-weight: 700;
+  font-weight: var(--sh-weight-bold);
   padding: 10px 14px;
   position: relative;
 }

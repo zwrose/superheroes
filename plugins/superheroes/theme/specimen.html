@@ -15,7 +15,7 @@
   .stack-small { align-content: start; display: grid; gap: 8px; }
   .rows { display: grid; gap: 14px; list-style: none; padding: 0; }
   .color-row { align-items: center; display: grid; gap: 14px; grid-template-columns: 64px minmax(0, 1fr); }
-  .swatch { align-items: center; display: grid; font-weight: 700; height: 52px; justify-content: center; width: 64px; }
+  .swatch { align-items: center; display: grid; font-weight: var(--sh-weight-bold); height: 52px; justify-content: center; width: 64px; }
   .color-text { display: grid; gap: 2px; min-width: 0; }
   .color-text .sh-tag { overflow-wrap: anywhere; }
   .sample-heading { font-size: 28px; }
@@ -145,7 +145,7 @@
       </div>
       <div class="stack-small">
         <p>Read the change, then tell the agent what you decided. <strong>Your answer is final once sent.</strong></p>
-        <p class="sh-caption">Body: <span data-token="--sh-font-body" data-font></span> 400 and 700</p>
+        <p class="sh-caption">Body: <span data-token="--sh-font-body" data-font></span> <span data-token="--sh-weight-body"></span> and <span data-token="--sh-weight-bold"></span></p>
       </div>
       <div class="stack-small">
         <p><span class="sh-tag">canon C-16</span></p>
@@ -326,8 +326,8 @@
 
     var wanted = [
       [firstFamily(read('--sh-font-heading')), Number(read('--sh-weight-heading'))],
-      [firstFamily(read('--sh-font-body')), 400],
-      [firstFamily(read('--sh-font-body')), 700],
+      [firstFamily(read('--sh-font-body')), Number(read('--sh-weight-body'))],
+      [firstFamily(read('--sh-font-body')), Number(read('--sh-weight-bold'))],
       [firstFamily(read('--sh-font-mono')), 400]
     ];
 
