@@ -481,6 +481,9 @@ def _unsupported_rule_cases():
         ("E18-root-id", _plant_at(**{"$id": "https://example.test/sheet"}), "$id", "#"),
         ("E18-nested-id", _plant_at("properties", "title", **{"$id": "https://example.test/title"}), "$id", "#/properties/title"),
         ("E17-else", _plant_at("allOf", 0, **{"else": {"type": "object"}}), "else", "#/allOf/0"),
+        ("E19-minLength-not-a-number", _plant_at("properties", "title", minLength="1"), "minLength", "#/properties/title"),
+        ("E19-uniqueItems-not-a-boolean", _plant_at("properties", "title", uniqueItems="yes"), "uniqueItems", "#/properties/title"),
+        ("E19-pattern-not-a-regex", _plant_at("properties", "title", pattern="["), "pattern", "#/properties/title"),
     ]
 
 
@@ -500,7 +503,9 @@ def test_check_sheet_ends_on_a_ref_cycle():
         "properties": {"node": {"$ref": "#/$defs/a"}},
         "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}},
     }
-    assert len(_run_check_sheet([{"cards": [], "node": 1}, {}], schema=cyclic)) == 2
+    refused = _run_check_sheet([{"cards": [], "node": 1}, {"cards": []}], schema=cyclic)
+    _assert_names(refused[0], "$ref", "#/$defs/b")
+    assert refused[1] == refused[0], "the refusal changed with the data: %s" % refused
     tree = {
         "properties": {"child": {"$ref": "#/$defs/tree"}},
         "$defs": {"tree": {"type": "object", "properties": {"child": {"$ref": "#/$defs/tree"}}}},
