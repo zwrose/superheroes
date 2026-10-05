@@ -140,8 +140,11 @@ call, a principle, or a ceded call or its take-back. Go-words are never written.
 1. Run the lookup.
 2. If `gitRoot` is not a git repository, stop and report. Never initialize one. Configure sets the
    project store up.
-3. If the file does not exist on disk, check the default branch first, telling absence from
-   failure. Run `git ls-tree <defaultRef> -- <repo-relative path>`. Exit 0 with output means the
+3. If the file does not exist on disk and `home` is `"project-store"`, the store holds no Canon and
+   the lookup gives no `defaultRef` by design: skip the default-branch probe and create the file in
+   the store's own repository (step 2 already confirmed it is one). The rest of this step applies
+   when `home` is `"repo"`. If the file does not exist on disk, check the default branch first,
+   telling absence from failure. Run `git ls-tree <defaultRef> -- <repo-relative path>`. Exit 0 with output means the
    default branch has a Canon: bring the default branch into the working branch with the ordinary
    bring-the-branch-current merge (`git merge <defaultRef>`, never a rebase or force), so the
    working copy shares history with the default-branch Canon, then go on to step 4. Make the merge

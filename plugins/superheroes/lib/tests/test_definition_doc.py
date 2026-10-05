@@ -993,6 +993,22 @@ def test_canon_default_branch_ref_beats_global_mode(tmp_path, monkeypatch):
     assert got["defaultRef"] == "origin/main"
 
 
+def test_canon_subdirectory_root_matches_top_level_lookup(tmp_path, monkeypatch, capsys):
+    repo = str(tmp_path / "repo")
+    _git_repo(repo)
+    _write_canon(os.path.join(repo, "docs", "superheroes"))
+    sub = os.path.join(repo, "plugins", "x")
+    os.makedirs(sub)
+    _canon_stub(monkeypatch, "in-repo", str(tmp_path / "store"))
+    top = DD.resolve_canon(root=repo)
+    assert top["exists"] is True
+    assert DD.resolve_canon(root=sub) == top
+    rc, out = _run_main(["canon", "--root", sub], capsys)
+    assert rc == 0
+    cli = json.loads(out)
+    assert cli["path"] == top["path"] and cli["gitRoot"] == top["gitRoot"]
+
+
 def test_canon_store_file_beats_inrepo_mode(tmp_path, monkeypatch):
     store = str(tmp_path / "store")
     _canon_stub(monkeypatch, "in-repo", store)

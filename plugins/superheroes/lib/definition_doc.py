@@ -175,6 +175,10 @@ def resolve_canon(*, root, cwd=None, store_root=None):
     CanonLookupError when the default branch cannot be probed (it fails closed)."""
     import architect_config
     import mode_registry
+    top = _git(os.path.abspath(root), "rev-parse", "--show-toplevel")
+    if top.returncode == 0 and top.stdout.strip():
+        if os.path.realpath(root) != os.path.realpath(top.stdout.strip()):
+            root = top.stdout.strip()
     cwd = cwd if cwd is not None else root
     pol = architect_config.read_policy(cwd, store_root) or architect_config.analyze_repo(root)
     committed = pol["visibility"] == architect_config.COMMITTED
@@ -656,7 +660,7 @@ def main(argv):
     try:
         if args.cmd == "canon":
             try:
-                result = resolve_canon(root=args.root, cwd=args.root)
+                result = resolve_canon(root=args.root)
             except CanonLookupError as exc:
                 sys.stderr.write("definition_doc: canon lookup refused — %s; %s. Refusing to "
                                  "guess a Canon home.\n" % (exc, _CANON_REMEDY))
