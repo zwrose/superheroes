@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 
+import architect_config
 import core_md
 import mode_migrate as mm
 import mode_registry as mr
@@ -112,10 +113,12 @@ def test_preview_buckets_are_disjoint_and_cover_every_moved_file(tmp_path):
     m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
     pv = mm.preview(m)
     cal, defs, records = pv["calibration"], pv["definitionDocs"], pv["workItemRecords"]
+    canon = pv["canon"]
     assert not (set(cal) & set(defs))
     assert not (set(cal) & set(records))
     assert not (set(defs) & set(records))
-    assert set(cal) | set(defs) | set(records) == {f["src"] for f in m.files}
+    assert not (set(canon) & (set(cal) | set(defs) | set(records)))
+    assert set(cal) | set(defs) | set(records) | set(canon) == {f["src"] for f in m.files}
 
 
 def test_calibration_bucket_excludes_every_work_item_doc(tmp_path):
@@ -306,6 +309,8 @@ def test_preview_disclosure_names_every_non_empty_bucket(tmp_path):
         assert "definition document" in disc
     if pv["calibration"]:
         assert "calibration" in disc
+    if pv["canon"]:
+        assert "canon" in disc
 
 
 def test_definition_docs_constant_tracks_definition_doc_doc_types():
@@ -568,3 +573,130 @@ def test_recover_triggers_store_root_migration_only_on_a_real_run(monkeypatch, t
     assert calls == []
     mm.recover(str(tmp_path), root=None)                      # real run → trigger once
     assert calls == [1]
+
+
+# --------------------------------------------------------------------------- Canon on a flip into the repo
+
+
+def _write_policy(tmp_path, root, visibility):
+    assert architect_config.write_policy(
+        str(tmp_path), {"location": "docs/superheroes", "visibility": visibility}, root=root)
+
+
+def _canon_paths(tmp_path, root):
+    store = os.path.join(mr.project_store_dir(str(tmp_path), root), "docs", "canon.md")
+    repo = os.path.join(str(tmp_path), "docs", "superheroes", "canon.md")
+    return store, repo
+
+
+def _seed_global_with_store_canon(tmp_path, root, body="canon entries\n"):
+    mr.write_registry(str(tmp_path), mr.GLOBAL, "rk", root=root)
+    store, repo = _canon_paths(tmp_path, root)
+    os.makedirs(os.path.dirname(store), exist_ok=True)
+    sc.atomic_write(store, body)
+    return store, repo
+
+
+def _read(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_flip_into_repo_under_committed_policy_moves_the_store_canon(tmp_path):
+    # axis: the Canon append in enumerate_flip — neutralizing it leaves the store Canon behind,
+    # so the repo path never appears and this goes red.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    store, repo = _seed_global_with_store_canon(tmp_path, root, "entry one\nentry two\n")
+    _write_policy(tmp_path, root, architect_config.COMMITTED)
+    m = mm.plan(str(tmp_path), mr.IN_REPO, root=root, owner_authorized=True)
+    assert not m.blocked
+    assert (store, repo) in {(f["src"], f["dst"]) for f in m.files}
+    pv = mm.preview(m)
+    assert pv["canon"] == [store]
+    assert "canon" in pv["disclosure"].lower()
+    assert mm.execute(m, root=root)["status"] == "done"
+    assert _read(repo) == "entry one\nentry two\n"
+    assert not os.path.exists(store)
+
+
+def test_flip_into_repo_refuses_when_canon_is_in_both_homes(tmp_path):
+    # axis: the both-present block — neutralizing it lets the copy overwrite the repo Canon,
+    # so the status is not "blocked" and the bytes change; this goes red.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    store, repo = _seed_global_with_store_canon(tmp_path, root, "store entries\n")
+    os.makedirs(os.path.dirname(repo), exist_ok=True)
+    sc.atomic_write(repo, "repo entries\n")
+    _write_policy(tmp_path, root, architect_config.COMMITTED)
+    m = mm.plan(str(tmp_path), mr.IN_REPO, root=root, owner_authorized=True)
+    assert m.blocked
+    assert store in m.reason and repo in m.reason and "Merging rule" in m.reason
+    assert mm.execute(m, root=root)["status"] == "blocked"
+    assert _read(store) == "store entries\n"
+    assert _read(repo) == "repo entries\n"
+    assert mr.resolve(str(tmp_path), root=root)["mode"] == mr.GLOBAL
+
+
+def test_flip_to_global_never_moves_a_repo_canon(tmp_path):
+    # axis: only the flip into the repo moves Canon — a flip to global leaves the repo Canon put.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    _seed_flip_inputs(tmp_path, root)
+    _write_policy(tmp_path, root, architect_config.COMMITTED)
+    store, repo = _canon_paths(tmp_path, root)
+    sc.atomic_write(repo, "repo entries\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
+    assert repo not in {f["src"] for f in m.files}
+    assert mm.preview(m)["canon"] == []
+    assert mm.execute(m, root=root)["status"] == "done"
+    assert _read(repo) == "repo entries\n"
+    assert not os.path.exists(store)
+
+
+def test_flip_into_repo_under_gitignored_policy_leaves_the_store_canon(tmp_path):
+    # axis: the committed-policy condition — under a gitignored policy Canon lives in the store
+    # in either mode; neutralizing the condition moves it into the ignored repo path.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    store, repo = _seed_global_with_store_canon(tmp_path, root, "store entries\n")
+    _write_policy(tmp_path, root, architect_config.GITIGNORED)
+    m = mm.plan(str(tmp_path), mr.IN_REPO, root=root, owner_authorized=True)
+    assert not m.blocked
+    assert store not in {f["src"] for f in m.files}
+    assert mm.preview(m)["canon"] == []
+    assert mm.execute(m, root=root)["status"] == "done"
+    assert _read(store) == "store entries\n"
+    assert not os.path.exists(repo)
+
+
+def test_flip_into_repo_with_no_policy_record_falls_back_to_analyze_repo(tmp_path):
+    # axis: an absent policy record reads as analyze_repo's answer, the same as the lookup.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    store, repo = _seed_global_with_store_canon(tmp_path, root)
+    assert architect_config.read_policy(str(tmp_path), root) is None
+    assert architect_config.analyze_repo(str(tmp_path))["visibility"] == architect_config.COMMITTED
+    m = mm.plan(str(tmp_path), mr.IN_REPO, root=root, owner_authorized=True)
+    assert (store, repo) in {(f["src"], f["dst"]) for f in m.files}
+
+
+def test_preview_canon_bucket_is_disjoint_and_covers_a_flip_into_the_repo(tmp_path):
+    # axis: the canon bucket — a Canon must not be claimed by calibration as an unknown .md.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    store, repo = _seed_global_with_store_canon(tmp_path, root)
+    gdir = os.path.join(mr.project_store_dir(str(tmp_path), root), "config")
+    os.makedirs(gdir, exist_ok=True)
+    sc.atomic_write(os.path.join(gdir, "review-crew.md"), "<!-- review-crew: v1 -->\nbody\n")
+    gdocs = os.path.join(mr.project_store_dir(str(tmp_path), root), "docs", "wi")
+    os.makedirs(gdocs, exist_ok=True)
+    for name in ("spec.md", "findings.md"):
+        sc.atomic_write(os.path.join(gdocs, name), name + " body\n")
+    _write_policy(tmp_path, root, architect_config.COMMITTED)
+    m = mm.plan(str(tmp_path), mr.IN_REPO, root=root, owner_authorized=True)
+    pv = mm.preview(m)
+    buckets = [pv["calibration"], pv["definitionDocs"], pv["workItemRecords"], pv["canon"]]
+    assert pv["canon"] == [store]
+    assert sum(len(b) for b in buckets) == len({p for b in buckets for p in b})
+    assert {p for b in buckets for p in b} == {f["src"] for f in m.files}

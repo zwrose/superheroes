@@ -20,6 +20,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import architect_config  # noqa: E402  (sibling)
 import control_plane   # noqa: E402  (sibling)
 import core_md         # noqa: E402  (sibling)
 import mode_registry   # noqa: E402  (sibling)
@@ -29,6 +30,7 @@ import store_core      # noqa: E402  (sibling)
 # mode_registry.resolve's backfill guard also reads), so both share one source of truth.
 _JOURNAL = mode_registry.MIGRATION_JOURNAL
 _REBIND = mode_registry.REBIND_KIND
+_CANON_FILE = "canon.md"  # the project Canon (definition_doc.CANON_FILE); moved only into the repo
 _CAL_BASENAMES_PRESERVE = ("core.md", "patterns.md")  # plus any <plugin>.md layer
 # The definition-doc basenames — the three docs that carry §3.1 frontmatter and gates.
 # This is the *classification* set: it answers "is this a definition-doc?", nothing else.
@@ -176,9 +178,26 @@ def enumerate_flip(cwd, target_mode, *, root=None):
     else:
         files = _enumerate(gl_cal, in_cal, gl_docs, in_docs)
     remote_key = store_core.derive_identifiers(cwd)["remote_hash"]
-    return Migration(kind="flip", target=target_mode, files=files,
-                     cwd=cwd, root=root, remote_key=remote_key,
-                     owner_authorized=False)
+    migration = Migration(kind="flip", target=target_mode, files=files,
+                          cwd=cwd, root=root, remote_key=remote_key,
+                          owner_authorized=False)
+    if target_mode == mode_registry.IN_REPO:
+        # The one flip that moves Canon: the lookup (definition_doc.resolve_canon) reads the
+        # policy this way, and a store Canon would otherwise keep winning over a repo one.
+        top = _repo_root(cwd)
+        pol = architect_config.read_policy(cwd, root) or architect_config.analyze_repo(top)
+        store_canon = os.path.join(gl_docs, _CANON_FILE)
+        repo_canon = os.path.join(top, *pol["location"].split("/"), _CANON_FILE)
+        if pol["visibility"] == architect_config.COMMITTED and os.path.isfile(store_canon):
+            if os.path.exists(repo_canon):
+                migration.blocked = True
+                migration.reason = (
+                    "Canon exists in both homes (%s and %s); join them by the Merging rule in "
+                    "the Canon contract first, because the move would overwrite entries."
+                    % (store_canon, repo_canon))
+            else:
+                migration.files.append({"src": store_canon, "dst": repo_canon, "done": False})
+    return migration
 
 
 def plan(cwd, target_mode, *, root=None, owner_authorized):
@@ -207,10 +226,14 @@ def preview(migration):
     """The plain-language 'exactly what will move' summary FR-10 requires before any confirm.
     Enumerates calibration, definition-docs, and non-definition-doc work-item records, with a
     one-line collaborator-visibility disclosure."""
-    calibration, def_docs, work_item_records = [], [], []
+    calibration, def_docs, work_item_records, canon = [], [], [], []
+    store_docs = _global_docs_base(migration.cwd, migration.root) if migration.cwd else None
     for f in migration.files:
         src = f["src"]
-        if _is_calibration(src):
+        if (migration.target == mode_registry.IN_REPO and os.path.basename(src) == _CANON_FILE
+                and os.path.dirname(src) == store_docs):
+            canon.append(src)
+        elif _is_calibration(src):
             calibration.append(src)
         elif _is_definition_doc(src):
             def_docs.append(src)
@@ -221,12 +244,14 @@ def preview(migration):
                       "document, AND every work-item record (a discovery findings record "
                       "carries the owner's ratification) into the repo — visible to "
                       "collaborators.")
+        if canon:
+            disclosure += " The project's Canon moves into the repo too."
     else:
         disclosure = ("Switching to out-of-repo moves the calibration, the definition documents "
                       "and the work-item records out of the repo — the repo stays pristine.")
     return {"target": migration.target, "calibration": calibration,
             "definitionDocs": def_docs, "workItemRecords": work_item_records,
-            "disclosure": disclosure}
+            "canon": canon, "disclosure": disclosure}
 
 
 # --------------------------------------------------------------------------- execute
