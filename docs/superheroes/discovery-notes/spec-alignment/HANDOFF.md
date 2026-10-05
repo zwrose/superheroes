@@ -486,3 +486,5 @@ Board round 3 under way (owner: "go").
   gitignored specs, tagged craft for veto); round 2, 1 cross-spec wording finding (all three
   checks agreed); round 3, all three clean. Remainder queue empty. Next: ask the owner whether
   both specs are ready for vet.
+53. **Keep the alignment-flow spec as one** (owner: "i think keep it"), past the 300-400 line
+    trigger at 436 lines; the review surface stays its own spec.
