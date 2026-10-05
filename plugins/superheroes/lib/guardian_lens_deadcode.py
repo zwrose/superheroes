@@ -251,51 +251,6 @@ def _carry_forward_prefix(prev_candidates, prefix, merged):
     return carried
 
 
-def _vulture_id(path, kind, symbol):
-    return "deadcode:vulture:%s:%s:%s" % (path, kind, symbol)
-
-
-def _knip_id(path, export=None):
-    return "deadcode:knip:%s" % path if export is None else "deadcode:knip:%s:%s" % (path, export)
-
-
-def _legacy_root(prev_candidates, known):
-    """Old checkout root of an absolute-keyed baseline (#1610): each prev absolute path's
-    prefix before the LONGEST path git history ever held that it ends with (its true path
-    was tracked when swept, so a since-deleted directory cannot shorten the match). Only a
-    unanimous root counts: a wrong one could hide a finding; none resurfaces it once."""
-    rels = sorted((p for p in known or () if not os.path.isabs(p)), key=len, reverse=True)
-    roots = set()
-    for rec in prev_candidates.values():
-        path = rec.get("path")
-        if isinstance(path, str) and os.path.isabs(path):
-            rel = next((r for r in rels if path.endswith("/" + r)), None)
-            if rel is not None:
-                roots.add(path[:-len(rel) - 1])
-    return roots.pop() if len(roots) == 1 else None
-
-
-def _rekey_absolute(prev_candidates, root):
-    """Re-key every prev record under the legacy ``root`` to its repo-relative id."""
-    if not isinstance(root, str) or not root:
-        return prev_candidates
-    out = {}
-    for cid, rec in prev_candidates.items():
-        path = rec.get("path")
-        new_id = None
-        if isinstance(path, str) and path.startswith(root + "/"):
-            rel = path[len(root) + 1:]
-            if rec.get("tool") == "vulture" and rec.get("kind") and rec.get("symbol"):
-                new_id = _vulture_id(rel, rec["kind"], rec["symbol"])
-            elif rec.get("tool") == "knip":
-                new_id = _knip_id(rel, rec.get("export") or None)
-        if new_id is None or new_id in prev_candidates or new_id in out:
-            out.setdefault(cid, rec)
-        else:
-            out[new_id] = dict(rec, id=new_id, path=rel)
-    return out
-
-
 # ----------------------------------------------------------------------- python (vulture)
 
 def _vulture_argv():
@@ -426,7 +381,7 @@ def aggregate_vulture(hits):
     """
     groups = {}
     for h in hits:
-        cid = _vulture_id(h["path"], h["kind"], h["symbol"])
+        cid = "deadcode:vulture:%s:%s:%s" % (h["path"], h["kind"], h["symbol"])
         groups.setdefault(cid, []).append(h)
     out = {}
     for cid, occ in groups.items():
@@ -662,7 +617,7 @@ def aggregate_knip(issues):
         if not isinstance(path, str) or not path:
             continue
         for _f in entry.get("files") or []:
-            cid = _knip_id(path)
+            cid = "deadcode:knip:%s" % path
             groups.setdefault(cid, {"kind": "file", "path": path, "export": None, "occ": []})
             groups[cid]["occ"].append({"line": None})
         for exp in entry.get("exports") or []:
@@ -671,7 +626,7 @@ def aggregate_knip(issues):
             name = exp.get("name")
             if not name:
                 continue
-            cid = _knip_id(path, name)
+            cid = "deadcode:knip:%s:%s" % (path, name)
             groups.setdefault(
                 cid, {"kind": "export", "path": path, "export": name, "occ": []})
             groups[cid]["occ"].append({"line": exp.get("line")})
@@ -898,13 +853,6 @@ class DeadCodeLens(object):
             ecosystems[ecosystem] = section
 
         merged = dict(fresh)
-        legacy_root = None
-        if any(os.path.isabs(str(c.get("path"))) for c in prev_candidates.values()):
-            res = guardian_census._git(
-                ctx, repo, ["log", "--all", "--format=", "--name-only", "-z"])
-            known = {n.strip("\n") for n in (res.get("stdout") or "").split("\0")}
-            legacy_root = _legacy_root(prev_candidates, known if res.get("ok") else None)
-            prev_candidates = _rekey_absolute(prev_candidates, legacy_root)
         prefixes = {"python": "deadcode:vulture:", "node": "deadcode:knip:"}
         for ecosystem, section in ecosystems.items():
             if section["status"] != "collected":
@@ -917,8 +865,6 @@ class DeadCodeLens(object):
             "ecosystems": ecosystems,
             "candidates": merged,
         }
-        if legacy_root is not None:
-            digest["legacyRoot"] = legacy_root  # diff() re-keys prev from the same root
 
         # not-collected returns digest None (the base conformance contract: a degraded
         # collect must not overwrite the tracked snapshot — see the deps lens and
@@ -943,8 +889,8 @@ class DeadCodeLens(object):
         # finding as a false `resolved` (an uninstalled tool looking like a cleanup).
         if not isinstance(cur_digest, dict):
             return {"new": [], "worsened": [], "resolved": []}
+        prev = _candidates_of(prev_digest)
         cur = _candidates_of(cur_digest)
-        prev = _rekey_absolute(_candidates_of(prev_digest), cur_digest.get("legacyRoot"))
         new = sorted(cid for cid in cur if cid not in prev)
         worsened = sorted(
             cid for cid in cur
