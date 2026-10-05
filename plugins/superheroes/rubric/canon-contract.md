@@ -158,8 +158,11 @@ call, a principle, or a ceded call or its take-back. Go-words are never written.
    in the repository home, the `.gitattributes` beside it) only when it is absent on disk AND the
    `ls-tree` check succeeded empty, or the lookup returned `defaultRef` null because the repository
    has no origin remote.
-4. Read the ids already present in the working copy and, when `defaultRef` is set, in
-   `git show <defaultRef>:<repo-relative path>`.
+4. Read the ids already present in the working copy and, when `defaultRef` is set, in the default-branch
+   copy, found with the same absence test as step 3: run `git ls-tree <defaultRef> -- <repo-relative path>`;
+   exit 0 with empty output means the default branch has no Canon yet, so read the working copy only;
+   exit 0 with output means read it with `git show <defaultRef>:<repo-relative path>`; any non-zero exit
+   means stop and report.
 5. Append the entry as one new last line. Never rewrite the file.
 6. Make the Canon commit: commit only Canon's paths at once, before the session's next step. Commit to the branch the
    session is working on in the repository home, and to the store's own repository in the store
@@ -192,8 +195,11 @@ carries no meaning.
 
 ## Reading Canon
 
-A reader reads the default-branch copy (`git show <defaultRef>:<path>`) plus its own working copy,
-joined by id. Before that read, readers and writers run `git fetch origin` for the default branch
+A reader reads the default-branch copy plus its own working copy, joined by id. It first runs
+`git ls-tree <defaultRef> -- <repo-relative path>` (the absence test write step 3 uses): exit 0 with empty
+output means the default branch has no Canon yet, so the reader reads its own working copy only and says
+so; exit 0 with output means it reads the copy with `git show <defaultRef>:<path>`; any non-zero exit means
+it stops and reports. Before that read, readers and writers run `git fetch origin` for the default branch
 when the network is available, so a ruling merged since the last fetch is not missed; when the
 fetch could not run or failed, they say so and name the copy they read as possibly stale. The
 lookup itself never fetches. A ruling not yet on the default branch binds only the sessions on the branch that
