@@ -116,12 +116,15 @@ def _set(card_index, *path_and_value):
     return mutate
 
 
-def _run_check_sheet(fixtures):
+def _run_check_sheet(fixtures, schema=None):
     node = shutil.which("node")
     if node is None:
         pytest.fail("node is required to run checkSheet and is not on PATH")
     source = _script_by_id(_template_text(), "sheet-check")
-    schema = (THEME / "sheet.schema.json").read_text(encoding="utf-8")
+    if schema is None:
+        schema = (THEME / "sheet.schema.json").read_text(encoding="utf-8")
+    else:
+        schema = json.dumps(schema)
     program = source + "\nconst schema = %s;\nconsole.log(JSON.stringify(%s.map((sheet) => checkSheet(sheet, schema))));\n" % (schema, json.dumps(fixtures))
     result = subprocess.run([node], input=program, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
@@ -207,6 +210,23 @@ def test_check_sheet():
         assert len(problems) >= 1, "%s: no problem reported" % name
         if needle:
             assert any(needle in problem for problem in problems), "%s: no problem names %r: %s" % (name, needle, problems)
+
+
+# Bites on: checkSheet passing a sheet because the fetched schema file is not a schema, or throwing on non-array cards/options.
+def test_check_sheet_refuses_a_non_schema_and_malformed_lists():
+    sheet = _sheet()
+    for name, bad_schema in [("empty object", {}), ("array", []), ("boolean", True), ("string", "x"), ("the sample sheet", sheet)]:
+        problems = _run_check_sheet([sheet], schema=bad_schema)[0]
+        assert any("isn't a schema" in problem for problem in problems), "%s: %s" % (name, problems)
+
+    shipped = json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-8"))
+    loose = {"properties": {}, "additionalProperties": True}
+    bad_cards = _with(_sheet(), lambda s: s.update(cards="nope"))
+    bad_options = _with(_sheet(), _set(0, "options", "nope"))
+    results = _run_check_sheet([bad_cards, bad_options], schema=loose)
+    assert any("cards" in problem for problem in results[0]), results[0]
+    assert any("options" in problem for problem in results[1]), results[1]
+    assert shipped["properties"]
 
 
 # Bites on: spec provenance (requirement, ruling, issue, work-item numbers or handoff references) leaking into shipped text.

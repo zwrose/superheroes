@@ -137,6 +137,10 @@
     const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
     const isText = (value) => typeof value === "string" && value.length > 0;
 
+    if (!isObject(schema) || !(isObject(schema.properties) || isObject(schema.$defs))) {
+      return ["The sheet's schema file isn't a schema."];
+    }
+
     const shape = [];
     validateAgainstSchema(schema, schema, sheet, "", shape);
     if (shape.length > 0) {
@@ -148,9 +152,16 @@
     }
 
     const problems = [];
+    if (!Array.isArray(sheet.cards)) {
+      return ["The sheet's cards must be a list."];
+    }
     const cardIds = new Set();
     const reportedDuplicates = new Set();
-    sheet.cards.forEach((card) => {
+    sheet.cards.forEach((card, cardIndex) => {
+      if (!isObject(card)) {
+        problems.push("Card number " + (cardIndex + 1) + " must be an object.");
+        return;
+      }
       if (cardIds.has(card.id) && !reportedDuplicates.has(card.id)) {
         reportedDuplicates.add(card.id);
         problems.push('Two cards share the id "' + card.id + '".');
@@ -159,7 +170,15 @@
 
       const optionIds = new Set();
       const reportedOptions = new Set();
+      if (!Array.isArray(card.options)) {
+        problems.push('Card "' + card.id + '" must have its options as a list.');
+        return;
+      }
       card.options.forEach((option) => {
+        if (!isObject(option)) {
+          problems.push('Card "' + card.id + '" has an option that is not an object.');
+          return;
+        }
         if (optionIds.has(option.id) && !reportedOptions.has(option.id)) {
           reportedOptions.add(option.id);
           problems.push('Card "' + card.id + '" has two options with the id "' + option.id + '".');
@@ -172,7 +191,7 @@
       }
     });
 
-    if (sheet.remainder) {
+    if (sheet.remainder && Array.isArray(sheet.remainder.unsettled)) {
       sheet.remainder.unsettled.forEach((id) => {
         if (!cardIds.has(id)) {
           problems.push('The unsettled list names "' + id + '", which is not a card in this sheet.');
