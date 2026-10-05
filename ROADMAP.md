@@ -99,7 +99,11 @@ mandate's flip (#1095): a non-driver full-lane review is now a vet finding, driv
 the only valve.) (**new verification strategy** — priority 2 of the 2026-08-28 order — retired
 2026-10-03 without a release: the reset's verdict (Spec A FR-F6, FR-B1) cut most of the plan,
 amendment #5 recorded what survives, and the surviving machinery moved to the Backlog under the
-dial, owner-ruled "10 a" at the 2026-10-02 walk.)
+dial, owner-ruled "10 a" at the 2026-10-02 walk.) (**Review-spec keeps pace** — priority 3 of the
+2026-08-28 order — retired 2026-10-05 without a release: the approved alignment spec replaces
+review-spec with three checks that re-run on changed parts, which answers the divergence census
+and both delta-round items, closed as superseded; its slot went to The alignment specs land,
+owner-ruled at the 2026-10-05 walk.)
 
 **The order is a draw priority, not a step ladder.** When a wave forms it draws from the top;
 work lower down interleaves freely wherever its builders don't collide with work above it
@@ -116,15 +120,16 @@ the owner is the direct consumer of.
    startup context before and after. *(Opened 2026-09-14 at the stamp of Spec A and Spec B,
    owner-ruled its own milestone the same day; placed first at filing on the stamp's own
    logic, the reset is paid before the dial reads anything, and the owner re-ranks at will.)*
-2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+2. **The alignment specs land** — the landing epic of the two owner-approved alignment specs
+   (aligning on what to build; the review surface): Canon as the record of the owner's
+   decisions, one owner-vs-craft line, the board-first discovery flow, the three checks that
+   replace review-spec, and the Comic panel review surface; the closure receipt posts with the
+   owner's delivery decision. The next release holds until the discovery-flow child lands, so a
+   consuming project adopts the whole flow at once. *(Opened 2026-10-05, owner-ruled at the walk:
+   replaces Review-spec keeps pace and ranked 2nd.)*
+3. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
    harnesses that actually deliver the click, plans derived from the spec, CLI-project
    coverage; the parallel authenticated-pilot epic closes.
-3. **Review-spec keeps pace** — every review-code/review-spec divergence itemized and either
-   ratified as deliberate or closed; recent spec rounds reviewed with findings dispositioned;
-   owner-delta and section-scoped delta rounds land. *(Opened 2026-08-24, owner-ruled at the
-   0.32.0 planning sitting: the driver mandate rebuilt review-code around the certified loop and
-   review-spec inherited none of it; the divergence discovery gates the delta-round pair's
-   shape.)*
 4. **Self-improvement loops** — a discovery starter: what institutionalized, continual,
    structured self-improvement of the plugin from its own operational record looks like —
    literature survey first (the WikiSkill paper is the seed, not the boundary), then scope
