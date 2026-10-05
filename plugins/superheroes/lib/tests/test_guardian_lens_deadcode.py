@@ -1326,13 +1326,33 @@ def test_absolute_keyed_baseline_partial_sweep_carries_relative_ids(tmp_path):
     assert not [i for i in d["new"] + d["resolved"] if _LEGACY_ROOT in i]
 
 
-def test_ambiguous_legacy_root_rekeys_nothing():
-    """Two roots tied on votes: an unproven rekey could hide a finding, so none happens."""
-    prev = dict([_legacy_vulture("/old/pkg/a.py", "function", "f", [1])])
-    cur = {"candidates": {
-        "deadcode:vulture:a.py:function:f": {"path": "a.py", "metric": 1},
-        "deadcode:vulture:pkg/a.py:function:f": {"path": "pkg/a.py", "metric": 1},
-    }}
-    assert gld._rekey_absolute(prev, ["a.py", "pkg/a.py"]) == prev
-    d = gld.LENS.diff({"candidates": prev}, cur)
-    assert d["resolved"] == ["deadcode:vulture:/old/pkg/a.py:function:f"]
+def test_competing_legacy_roots_rekey_nothing_so_nothing_hides(tmp_path):
+    """Review finding (code-reviewer-1): src/b.py is deleted, so /old/src/b.py only
+    suffix-matches b.py and names root /old/src while /old/src/a.py names /old. A root
+    picked from that split would hide two new candidates and one resolution; instead
+    nothing is re-keyed and every change surfaces."""
+    prev = {"schema": gld.DIGEST_SCHEMA, "candidates": dict([
+        _legacy_vulture("/old/src/a.py", "function", "f", [1]),
+        _legacy_vulture("/old/src/b.py", "function", "g", [2]),
+    ])}
+    tracked = ["src/a.py", "a.py", "b.py"]
+    assert gld._legacy_root(prev["candidates"], tracked) is None
+    repo = os.path.realpath(_repo(tmp_path, {p: "pass\n" for p in tracked}))
+    stdout = "".join("%s/%s:%d: unused function '%s' (60%% confidence)\n" % (repo, p, n, sym)
+                     for p, n, sym in [("src/a.py", 1, "f"), ("a.py", 1, "f"), ("b.py", 2, "g")])
+    out = gld.LENS.collect(_ctx(repo, FakeRun([("vulture", (3, stdout, ""))], tracked=tracked),
+                                prev=prev))
+    assert "legacyRoot" not in out["digest"]
+    d = gld.LENS.diff(prev, out["digest"])
+    assert d["new"] == ["deadcode:vulture:a.py:function:f", "deadcode:vulture:b.py:function:g",
+                        "deadcode:vulture:src/a.py:function:f"]
+    assert d["resolved"] == ["deadcode:vulture:/old/src/a.py:function:f",
+                             "deadcode:vulture:/old/src/b.py:function:g"]
+
+
+def test_legacy_root_uses_longest_tracked_suffix():
+    """A same-named file at the repo root does not split the vote: each record takes its
+    longest tracked match, so tests/conftest.py names /old, not /old/tests."""
+    prev = dict([_legacy_vulture("/old/tests/conftest.py", "variable", "v", [1]),
+                 _legacy_vulture("/old/lib/x.py", "function", "h", [3])])
+    assert gld._legacy_root(prev, ["conftest.py", "tests/conftest.py", "lib/x.py"]) == "/old"

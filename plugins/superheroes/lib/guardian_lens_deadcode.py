@@ -259,25 +259,25 @@ def _knip_id(path, export=None):
     return "deadcode:knip:%s" % path if export is None else "deadcode:knip:%s:%s" % (path, export)
 
 
-def _rekey_absolute(prev_candidates, rel_paths):
-    """Re-key a legacy baseline whose ids carry the old checkout's absolute path (#1610).
-
-    Each prev absolute ``path`` ending in ``/<rel>`` for a path this sweep measured votes
-    for that prefix as the old root; the top root re-keys every prev record under it. A
-    tie (or no vote) re-keys nothing: a wrong rekey could hide a finding, while an absolute
-    id only resurfaces as new — ambiguity fails loud, never quiet."""
-    rel_paths = {p for p in rel_paths if isinstance(p, str) and p and not os.path.isabs(p)}
-    votes = {}
+def _legacy_root(prev_candidates, tracked):
+    """Old checkout root of an absolute-keyed baseline (#1610): each prev absolute path's
+    prefix before the LONGEST tracked path it ends with. Only a unanimous root counts — a
+    wrong one could hide a finding, while none resurfaces the baseline as new once."""
+    rels = sorted((p for p in tracked or () if not os.path.isabs(p)), key=len, reverse=True)
+    roots = set()
     for rec in prev_candidates.values():
         path = rec.get("path")
-        if not isinstance(path, str) or not os.path.isabs(path):
-            continue
-        for root in {path[:-len(rel) - 1] for rel in rel_paths if path.endswith("/" + rel)}:
-            votes[root] = votes.get(root, 0) + 1
-    ranked = sorted(votes.values(), reverse=True)
-    if not ranked or (len(ranked) > 1 and ranked[0] == ranked[1]):
+        if isinstance(path, str) and os.path.isabs(path):
+            rel = next((r for r in rels if path.endswith("/" + r)), None)
+            if rel is not None:
+                roots.add(path[:-len(rel) - 1])
+    return roots.pop() if len(roots) == 1 else None
+
+
+def _rekey_absolute(prev_candidates, root):
+    """Re-key every prev record under the legacy ``root`` to its repo-relative id."""
+    if not isinstance(root, str) or not root:
         return prev_candidates
-    root = next(r for r, n in votes.items() if n == ranked[0])
     out = {}
     for cid, rec in prev_candidates.items():
         path = rec.get("path")
@@ -312,10 +312,7 @@ def _vulture_argv():
 
 def _filter_vulture_hits(hits, tracked, repo):
     """Drop hits whose path is not in the tracked census; return (kept, dropped_count).
-
-    A kept hit's ``path`` is rewritten to its repo-relative census form: vulture reports
-    the absolute operands it was handed, and an id keyed on the checkout path would read
-    every carried finding as new from any other checkout (#1610)."""
+    Kept paths become repo-relative: vulture echoes its absolute operands (#1610)."""
     if not hits:
         return [], 0
     tracked_norm = {_norm_repo_path(repo, p) for p in tracked}
@@ -900,8 +897,12 @@ class DeadCodeLens(object):
             ecosystems[ecosystem] = section
 
         merged = dict(fresh)
-        prev_candidates = _rekey_absolute(
-            prev_candidates, [c.get("path") for c in fresh.values()])
+        legacy_root = None
+        if any(os.path.isabs(str(c.get("path"))) for c in prev_candidates.values()):
+            tracked, _reason = guardian_census.tracked_existing_files(
+                ctx, repo, exclude_symlinks=True)
+            legacy_root = _legacy_root(prev_candidates, tracked)
+            prev_candidates = _rekey_absolute(prev_candidates, legacy_root)
         prefixes = {"python": "deadcode:vulture:", "node": "deadcode:knip:"}
         for ecosystem, section in ecosystems.items():
             if section["status"] != "collected":
@@ -914,6 +915,8 @@ class DeadCodeLens(object):
             "ecosystems": ecosystems,
             "candidates": merged,
         }
+        if legacy_root is not None:
+            digest["legacyRoot"] = legacy_root  # diff() re-keys prev from the same root
 
         # not-collected returns digest None (the base conformance contract: a degraded
         # collect must not overwrite the tracked snapshot — see the deps lens and
@@ -939,8 +942,7 @@ class DeadCodeLens(object):
         if not isinstance(cur_digest, dict):
             return {"new": [], "worsened": [], "resolved": []}
         cur = _candidates_of(cur_digest)
-        prev = _rekey_absolute(
-            _candidates_of(prev_digest), [c.get("path") for c in cur.values()])
+        prev = _rekey_absolute(_candidates_of(prev_digest), cur_digest.get("legacyRoot"))
         new = sorted(cid for cid in cur if cid not in prev)
         worsened = sorted(
             cid for cid in cur
