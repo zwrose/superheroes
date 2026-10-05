@@ -204,16 +204,18 @@ is left as it is.
 
 ## Reading Canon
 
+Before the lookup, a reader runs `git fetch origin` when an origin remote exists and the network is
+available, so a stale tracking ref does not hide a Canon the default branch already has (the same
+step writing step 1 has); when the fetch could not run or failed, it says so and names the copy it
+read as possibly stale. The lookup itself never fetches.
+
 A reader reads the default-branch copy plus its own working copy, joined by id. When `defaultRef`
-is null (the repository has no origin remote) there is no default-branch copy: it reads its own
-working copy only, says so, and skips the fetch and the tree probe. Otherwise it first runs
+is null (the repository has no origin remote, even after the fetch) there is no default-branch copy: it
+reads its own working copy only, says so, and skips the tree probe. Otherwise it first runs
 `git ls-tree <defaultRef> -- <repo-relative path>` (the absence test write step 3 uses): exit 0 with empty
 output means the default branch has no Canon yet, so the reader reads its own working copy only and says
 so; exit 0 with output means it reads the copy with `git show <defaultRef>:<path>`; any non-zero exit means
-it stops and reports. Before that read, readers and writers run `git fetch origin` for the default branch
-when the network is available, so a ruling merged since the last fetch is not missed; when the
-fetch could not run or failed, they say so and name the copy they read as possibly stale. The
-lookup itself never fetches. A ruling not yet on the default branch binds only the sessions on the branch that
+it stops and reports. A ruling not yet on the default branch binds only the sessions on the branch that
 holds it. In the store home there is one copy, and every session sharing the store reads it.
 
 These sessions read Canon:
