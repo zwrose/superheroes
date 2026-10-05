@@ -455,3 +455,29 @@ Board round 3 under way (owner: "go").
 - Remainder sheet 1 sent (2026-10-03): https://claude.ai/artifact/9F53AdK2FdPpaTddgEkpXn, 11
   cards (A: a1-a6, B: b1-b5), answers saved to the sheet's store collection `answers`, one doc per
   card. Source: scratchpad `remainder-sheet-1.html`.
+
+## Remainder sheet 1 rulings (owner, 2026-10-04; all Aligned with the recommendation)
+
+42. No cross-family reviewer available: run the checks with a fresh same-family reviewer and say
+    so plainly on the final sheet.
+43. The advisor's light-or-full weight call retires for spec review; every spec gets the three
+    checks; the advisor can still size its own vet.
+44. A final-sheet answer that changes the spec: approval waits; discovery applies the change,
+    re-checks the changed parts, the advisor re-vets, then a new last card asks for approval.
+45. A later ruling that changes an approved board: discovery redraws the affected part, shown on
+    the next sheet, so the board stays the truth.
+46. Each re-check after a set of owner rulings gets up to 4 rounds of its own, on the changed parts.
+47. Specs stored outside the repo: keep the project's storage choice; the spec in the project store
+    stands in for the PR, with the same vet, approval and merge-word steps; issues are filed at the
+    merge word.
+48. Card answers: Aligned agrees with the recommendation (or the statement when there is none); a
+    pick chooses that option; Discuss leaves it open for chat; a note that disagrees with the
+    answer is treated as Discuss and discovery asks.
+49. The owner may change an answer; the last tap counts. Owner's note: "things shouldn't submit on
+    tap anyway... it should be batch... should not require a lot of machinery. this very sheet
+    already does the right thing" — taps save as a draft and the session reads the sheet's answers
+    together when the owner says the sheet is done.
+50. Sheets are private to the owner by default; the owner may share one to show someone; only the
+    owner answers.
+51. Keep review-surface UFR-2 (a failed save says so and offers a retry).
+52. Keep review-surface UFR-3 (a missing image doesn't stop the card).
