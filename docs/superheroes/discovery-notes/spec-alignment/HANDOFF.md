@@ -566,3 +566,6 @@ are re-running on the changed parts before the re-vet.
   consistent; anchor-contract change added to "What this spec amends"; when a ruling binds other
   sessions stated per ruling 61's accepted trade-off). Spec PR opened: zwrose/superheroes#1614.
   Re-vet requested from the advisor; then the one-card approval sheet (ruling 44).
+- Advisor re-vet round 4: 3 craft gaps in Canon's mechanics (F16 advisor rulings outside any PR
+  ride its next PR; F17 collision-free ids and union merges; F18 out-of-repo projects commit Canon
+  in the git project store at once, binding sessions that share the store). Fixed; checks clean.

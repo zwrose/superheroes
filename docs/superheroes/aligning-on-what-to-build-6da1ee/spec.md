@@ -182,17 +182,27 @@ when that branch merges. (source: board · Source tags and Canon; ruling 61)
     next step, then the ruling is already committed in Canon on that session's branch. (source:
     as its requirement)
   - *Acceptance (rule):* Canon never gets a PR of its own; a spec's rulings ride the spec PR and
-    the advisor's ride the PRs it already opens. (source: ruling 61)
+    the advisor's ride the PRs it already opens; a ruling the advisor receives outside any open PR
+    is committed to the branch of the next PR the advisor opens, and until then only that branch
+    sees it. (source: ruling 61; advisor vet round 4, F16; craft, for your veto)
   - *Acceptance (rule):* a ruling binds every session working on the branch that holds it at once,
     and sessions on other branches once it reaches the default branch; until then, they may not
     see it. (source: ruling 61, the
     trade-off the owner accepted)
+  - *Acceptance (rule):* the branch-and-merge mechanics apply where definition-docs live in the
+    repo; where a project keeps them out of the repo, Canon lives in its project store and each
+    ruling is committed there at once, binding at once every session that shares that store on
+    the machine. (source: ruling 61, applied to the project store; advisor vet round 4, F18; craft,
+    for your veto) [cite: CONVENTIONS.md § 2.3 Storage mode]
 
 **FR-16.** Each Canon entry shall carry: an id, the date, the ruling, whether it is standing
 (applies to all later work) or for this piece, the owner's exact words where there are any, and
 a pointer to where it was said (the session and the time). (source: ruling 33; board · Source
 tags and Canon)
   - *Acceptance (rule):* no entry cites transcript line numbers. (source: ruling 33)
+  - *Acceptance (rule):* an entry's id can't collide across branches (for example the date, the
+    session's short id and a sequence number), and when two branches both add to Canon, the merge
+    keeps both entries. (source: advisor vet round 4, F17)
 
 **FR-17.** Canon's standing rulings shall be the project's principles; when the owner answers a
 category 7 case, the session shall record the answer as a standing ruling. (source: ruling 32;
