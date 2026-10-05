@@ -25,7 +25,7 @@ discovery's grounding, and discovery's skill has one owner); FR-18 and the item-
 C3's (every configure change in one child, sequenced after C1 so the migration writes C1's entry
 shape); FR-15's second bullet is C6's (above).
 
-**"What this spec amends" and its one non-child owner.** Spec A says each amendment "is recorded as
+**"What this spec amends".** Spec A says each amendment "is recorded as
 an owner-stamped amendment where it lives, at this spec's approval". Item 1 (front-half-sdlc-core-6181ee
 FR-16 and FR-17) lives in another spec's Amendments log; the advisor recorded it there in PR #1614 at
 approval, and **C5** owns the row: its second layer confirms the entry is in place and that the

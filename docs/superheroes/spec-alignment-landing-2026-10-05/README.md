@@ -34,7 +34,7 @@ package covers both because Spec A relies on Spec B's sheets and theme, and the 
 | [C2](children/C2.md) | The owner-vs-craft line: one rubric home, every older statement repointed, door rules as cases | A | 11 | ~350 | no | full | say it |
 | [C3](children/C3.md) | Configuration items: "who it's for" (item 14), item 13 → Canon with its migration, the spec-reviewer seat | A | 3 | ~280 | no | full | say it |
 | [C4](children/C4.md) | The discovery flow: grounding and questions, boards, writing with source tags, sheets and the handoff | A | 31 | ~1,150 | 4 layers | full | show it |
-| [C5](children/C5.md) | The three checks, then review-spec's retirement and the weight call's | A | 17 | ~1,750 | 2 layers | full | say it |
+| [C5](children/C5.md) | The three checks, then review-spec's retirement and the weight call's | A | 18 | ~1,750 | 2 layers | full | say it |
 | [C6](children/C6.md) | The advisor's vet and the approval handoff: vet never fixes, breakdown on the same PR, one merge word | A | 6 | ~250 | no | full | show it |
 | [C7](children/C7.md) | The Comic panel theme and the review template's shell, with the sheet data schema | B | 8 | ~600 | 2 layers | full | show it |
 | [C8](children/C8.md) | Cards, sheets, images and answers: the owner-facing sheet, phone and desktop, final sheet, zoom | B | 27 | ~1,200 | 4 layers | full | show it |
