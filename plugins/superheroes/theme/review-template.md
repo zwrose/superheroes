@@ -22,9 +22,8 @@ doc. There are three kinds of sheet:
 Each card's `id` must stay the same call across republishes, because answers are keyed by it.
 Change the wording of a card freely; never reuse an id for a different call.
 
-The data file is the sheet's saved source. Keep it with the work it belongs to. Check a data file
-against `sheet.schema.json` before publishing; the page itself refuses only a file it cannot draw
-or whose ids clash.
+The data file is the sheet's saved source. Keep it with the work it belongs to. The page checks
+the data file against `sheet.schema.json` when it loads, so a file the schema refuses is never drawn.
 
 ## Publishing a sheet
 
@@ -32,16 +31,19 @@ On Claude Code, the Artifact tool publishes only files under the working directo
 session's scratchpad. So:
 
 1. Make one folder under the scratchpad.
-2. Copy `review-template.html` and `comic-panel.css` into it, unchanged.
+2. Copy `review-template.html`, `comic-panel.css` and `sheet.schema.json` into it, unchanged.
 3. Write the data file into the same folder as `sheet.json`.
-4. Publish the template as the page, with the stylesheet and the data file as supporting files, so
-   the published paths are `comic-panel.css` and `sheet.json`.
+4. Publish the template as the page, with the stylesheet, the schema and the data file as
+   supporting files, so the published paths are `comic-panel.css`, `sheet.schema.json` and
+   `sheet.json`.
 
 The shape of the publish call:
 
 ```
 file_path = <staged folder>/review-template.html
-files     = {"comic-panel.css": "<staged comic-panel.css>", "sheet.json": "<staged sheet.json>"}
+files     = {"comic-panel.css": "<staged comic-panel.css>",
+             "sheet.schema.json": "<staged sheet.schema.json>",
+             "sheet.json": "<staged sheet.json>"}
 ```
 
 A published sheet is private to the owner. The owner may share it from the page's Share menu.
@@ -60,6 +62,6 @@ If the page can't trust the data file, it shows a box titled "This sheet can't b
 what is wrong, one problem to a line. It draws no cards, so a broken sheet never looks like a
 finished one.
 
-The problems name the data file: it could not be loaded, it isn't valid JSON, or a card is
+The problems name the data file: it (or the schema file) could not be loaded, it isn't valid JSON, or a card is
 missing something (the problem names the card's `id`). Fix the data file and republish to the
 same link.

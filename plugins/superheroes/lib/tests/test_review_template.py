@@ -121,7 +121,8 @@ def _run_check_sheet(fixtures):
     if node is None:
         pytest.fail("node is required to run checkSheet and is not on PATH")
     source = _script_by_id(_template_text(), "sheet-check")
-    program = source + "\nconsole.log(JSON.stringify(%s.map(checkSheet)));\n" % json.dumps(fixtures)
+    schema = (THEME / "sheet.schema.json").read_text(encoding="utf-8")
+    program = source + "\nconst schema = %s;\nconsole.log(JSON.stringify(%s.map((sheet) => checkSheet(sheet, schema))));\n" % (schema, json.dumps(fixtures))
     result = subprocess.run([node], input=program, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
@@ -138,7 +139,16 @@ def test_template_has_no_document_skeleton():
 def test_template_loads_the_stylesheet_and_data_file():
     text = _template_text()
     assert len(re.findall(r'<link rel="stylesheet" href="comic-panel\.css">', text)) == 1
-    assert re.search(r"""fetch\(\s*['"]sheet\.json['"]""", text)
+    assert re.search(r"""fetchJson\(\s*['"]sheet\.json['"]""", text)
+    assert re.search(r"""fetchJson\(\s*['"]sheet\.schema\.json['"]""", text)
+    assert re.search(r"\bfetch\(\s*name\b", text)
+
+
+# Bites on: the usage doc leaving the schema out of the published files, which the page now fetches at runtime.
+def test_usage_doc_lists_the_schema_as_a_published_file():
+    doc = USAGE_DOC.read_text(encoding="utf-8")
+    assert '"sheet.schema.json": "<staged sheet.schema.json>"' in doc
+    assert "`sheet.schema.json`" in doc.split("## Publishing a sheet", 1)[1]
 
 
 # Bites on: the page restating any theme value (colour, font, border, shadow, spacing of letters, case) the stylesheet owns.

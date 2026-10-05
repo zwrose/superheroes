@@ -33,107 +33,151 @@
 </div>
 
 <script id="sheet-check">
-  // sheet.schema.json is the only home of a sheet's shape. This check guards only the fields the
-  // page reads, so drawing never dereferences a missing value, plus the four rules a schema cannot
-  // express: unique card ids, unique option ids within a card, unsettled ids that name real cards,
-  // and a recommendation that names one of its card's options.
-  function checkSheet(sheet) {
-    const problems = [];
-    const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-    const isText = (value) => typeof value === "string" && value.length > 0;
-    const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+  // sheet.schema.json is the only home of a sheet's shape: the page fetches it and checks the data
+  // file against it with the small interpreter below, which reads the keywords the schema uses
+  // (type, const, enum, minLength, minimum, minItems, uniqueItems, pattern, required, properties,
+  // additionalProperties, items, $ref, allOf, if/then, not, anyOf). The rest is authored here
+  // because a schema cannot express it: unique card ids, unique option ids within a card,
+  // unsettled ids that name real cards, and a recommendation that names one of its card's options.
+  function validateAgainstSchema(root, schema, value, path, problems) {
+    const isObject = (item) => item !== null && typeof item === "object" && !Array.isArray(item);
+    const typeOf = (item) => {
+      if (item === null) return "null";
+      if (Array.isArray(item)) return "array";
+      if (typeof item === "number") return Number.isInteger(item) ? "integer" : "number";
+      return typeof item;
+    };
+    const matchesType = (name, item) => typeOf(item) === name || (name === "number" && typeOf(item) === "integer");
+    const quiet = (sub, item) => {
+      const found = [];
+      validateAgainstSchema(root, sub, item, path, found);
+      return found;
+    };
+    const where = path || "The sheet";
 
-    if (!isObject(sheet)) {
-      return ["The sheet's data file must hold one object."];
+    if (schema.$ref) {
+      let target = root;
+      schema.$ref.replace(/^#\//, "").split("/").forEach((key) => { target = target[key]; });
+      validateAgainstSchema(root, target, value, path, problems);
     }
 
-    if (!isText(sheet.title)) {
-      problems.push("The sheet has no title.");
-    }
-
-    if (!Array.isArray(sheet.cards) || sheet.cards.length === 0) {
-      problems.push("The sheet has no cards.");
-      return problems;
-    }
-
-    const cardIds = new Set();
-    const reportedDuplicates = new Set();
-    sheet.cards.forEach((card, index) => {
-      if (!isObject(card)) {
-        problems.push("Card number " + (index + 1) + " must be an object.");
+    if (schema.type !== undefined) {
+      const names = Array.isArray(schema.type) ? schema.type : [schema.type];
+      if (!names.some((name) => matchesType(name, value))) {
+        problems.push(where + " must be " + names.join(" or ") + ".");
         return;
       }
-      let name;
-      if (isText(card.id)) {
-        name = 'Card "' + card.id + '"';
-        if (cardIds.has(card.id)) {
-          if (!reportedDuplicates.has(card.id)) {
-            reportedDuplicates.add(card.id);
-            problems.push('Two cards share the id "' + card.id + '".');
-          }
-        }
-        cardIds.add(card.id);
-      } else {
-        name = "Card number " + (index + 1);
-        problems.push(name + " has no id.");
-      }
+    }
+    if (schema.const !== undefined && value !== schema.const) {
+      problems.push(where + " must be " + JSON.stringify(schema.const) + ".");
+    }
+    if (schema.enum && !schema.enum.includes(value)) {
+      problems.push(where + " must be one of " + schema.enum.join(", ") + ".");
+    }
 
-      if (!isText(card.callKind)) {
-        problems.push(name + " has no callKind.");
+    if (typeof value === "string") {
+      if (schema.minLength !== undefined && value.length < schema.minLength) {
+        problems.push(where + " must not be empty.");
       }
-      if (typeof card.warning !== "boolean") {
-        problems.push(name + " must say whether it is a warning (true or false).");
+      if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
+        problems.push(where + ' has the value "' + value + '", which is not a valid id (lowercase letters, digits and hyphens).');
       }
-      if (!isText(card.question)) {
-        problems.push(name + " has no question.");
-      }
+    }
+    if (typeof value === "number" && schema.minimum !== undefined && value < schema.minimum) {
+      problems.push(where + " must be at least " + schema.minimum + ".");
+    }
 
-      if (!isObject(card.context)) {
-        problems.push(name + " has no context.");
-      } else {
-        if (!isText(card.context.now)) {
-          problems.push(name + " has no context.now text.");
-        }
-        if (!isText(card.context.whyOwner)) {
-          problems.push(name + " has no context.whyOwner text.");
-        }
-        if (!has(card.context, "exactText")) {
-          problems.push(name + " has no exactText key; give the text, or null when there is none.");
-        } else if (card.context.exactText !== null && !isText(card.context.exactText)) {
-          problems.push(name + " must give exactText as non-empty text, or null when there is none.");
-        }
+    if (Array.isArray(value)) {
+      if (schema.minItems !== undefined && value.length < schema.minItems) {
+        problems.push(where + " must have at least " + schema.minItems + " item(s).");
       }
-
-      const optionIds = new Set();
-      if (Array.isArray(card.options)) {
-        const reportedOptions = new Set();
-        card.options.forEach((option) => {
-          if (!isObject(option) || !isText(option.id)) {
-            return;
-          }
-          if (optionIds.has(option.id) && !reportedOptions.has(option.id)) {
-            reportedOptions.add(option.id);
-            problems.push(name + ' has two options with the id "' + option.id + '".');
-          }
-          optionIds.add(option.id);
+      if (schema.uniqueItems && new Set(value.map((item) => JSON.stringify(item))).size !== value.length) {
+        problems.push(where + " must not repeat an item.");
+      }
+      if (schema.items) {
+        value.forEach((item, index) => {
+          validateAgainstSchema(root, schema.items, item, (path ? path + "." : "") + index, problems);
         });
       }
+    }
 
-      if (has(card, "recommendation") && isObject(card.recommendation) && has(card.recommendation, "optionId")) {
-        if (!optionIds.has(card.recommendation.optionId)) {
-          problems.push(name + ' recommends the option "' + card.recommendation.optionId + '", which is not one of its options.');
+    if (isObject(value)) {
+      (schema.required || []).forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) {
+          problems.push(where + " has no " + key + " key.");
         }
+      });
+      const known = schema.properties || {};
+      Object.keys(value).forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(known, key)) {
+          validateAgainstSchema(root, known[key], value[key], (path ? path + "." : "") + key, problems);
+        } else if (schema.additionalProperties === false) {
+          problems.push(where + " has an unexpected key " + key + ".");
+        }
+      });
+    }
+
+    (schema.allOf || []).forEach((sub) => {
+      validateAgainstSchema(root, sub, value, path, problems);
+    });
+    if (schema.if && schema.then && quiet(schema.if, value).length === 0) {
+      if (quiet(schema.then, value).length > 0) {
+        problems.push(schema.description || (where + " does not fit its kind."));
+      }
+    }
+    if (schema.not && quiet(schema.not, value).length === 0) {
+      problems.push(schema.description || (where + " carries something it must not."));
+    }
+    if (schema.anyOf && !schema.anyOf.some((sub) => quiet(sub, value).length === 0)) {
+      problems.push(where + " fits none of its allowed shapes.");
+    }
+  }
+
+  function checkSheet(sheet, schema) {
+    const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+    const isText = (value) => typeof value === "string" && value.length > 0;
+
+    const shape = [];
+    validateAgainstSchema(schema, schema, sheet, "", shape);
+    if (shape.length > 0) {
+      // Name a card by its id, not its position, when it has one.
+      return shape.map((problem) => problem.replace(/^cards\.(\d+)(?=[. ])/, (whole, index) => {
+        const card = sheet.cards[Number(index)];
+        return isObject(card) && isText(card.id) ? 'Card "' + card.id + '"' : "Card number " + (Number(index) + 1);
+      }));
+    }
+
+    const problems = [];
+    const cardIds = new Set();
+    const reportedDuplicates = new Set();
+    sheet.cards.forEach((card) => {
+      if (cardIds.has(card.id) && !reportedDuplicates.has(card.id)) {
+        reportedDuplicates.add(card.id);
+        problems.push('Two cards share the id "' + card.id + '".');
+      }
+      cardIds.add(card.id);
+
+      const optionIds = new Set();
+      const reportedOptions = new Set();
+      card.options.forEach((option) => {
+        if (optionIds.has(option.id) && !reportedOptions.has(option.id)) {
+          reportedOptions.add(option.id);
+          problems.push('Card "' + card.id + '" has two options with the id "' + option.id + '".');
+        }
+        optionIds.add(option.id);
+      });
+
+      if (card.recommendation && card.recommendation.optionId !== undefined && !optionIds.has(card.recommendation.optionId)) {
+        problems.push('Card "' + card.id + '" recommends the option "' + card.recommendation.optionId + '", which is not one of its options.');
       }
     });
 
-    if (isObject(sheet.remainder)) {
-      if (Array.isArray(sheet.remainder.unsettled)) {
-        sheet.remainder.unsettled.forEach((id) => {
-          if (!cardIds.has(id)) {
-            problems.push('The unsettled list names "' + id + '", which is not a card in this sheet.');
-          }
-        });
-      }
+    if (sheet.remainder) {
+      sheet.remainder.unsettled.forEach((id) => {
+        if (!cardIds.has(id)) {
+          problems.push('The unsettled list names "' + id + '", which is not a card in this sheet.');
+        }
+      });
     }
 
     return problems;
@@ -195,33 +239,40 @@
       status.hidden = true;
     }
 
-    async function load() {
+    async function fetchJson(name, label) {
       let response;
       try {
-        response = await fetch("sheet.json", { cache: "no-store" });
+        response = await fetch(name, { cache: "no-store" });
       } catch (error) {
-        showErrors(["The sheet's data file could not be loaded."]);
-        return;
+        throw [label + " could not be loaded."];
       }
       if (!response.ok) {
-        showErrors(["The sheet's data file could not be loaded (HTTP " + response.status + ")."]);
-        return;
+        throw [label + " could not be loaded (HTTP " + response.status + ")."];
       }
       let text;
       try {
         text = await response.text();
       } catch (error) {
-        showErrors(["The sheet's data file could not be loaded."]);
-        return;
+        throw [label + " could not be loaded."];
       }
-      let sheet;
       try {
-        sheet = JSON.parse(text);
+        return JSON.parse(text);
       } catch (error) {
-        showErrors(["The sheet's data file isn't valid JSON."]);
+        throw [label + " isn't valid JSON."];
+      }
+    }
+
+    async function load() {
+      let sheet;
+      let schema;
+      try {
+        sheet = await fetchJson("sheet.json", "The sheet's data file");
+        schema = await fetchJson("sheet.schema.json", "The sheet's schema file");
+      } catch (problems) {
+        showErrors(Array.isArray(problems) ? problems : ["The sheet could not be drawn."]);
         return;
       }
-      const problems = checkSheet(sheet);
+      const problems = checkSheet(sheet, schema);
       if (problems.length > 0) {
         showErrors(problems);
         return;

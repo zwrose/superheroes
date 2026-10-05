@@ -35,7 +35,8 @@ def check_sheet_problems(sheet):
     html = TEMPLATE_PATH.read_text(encoding="utf-8")
     match = re.search(r'<script id="sheet-check">(.*?)</script>', html, re.S)
     assert match, "no <script id=sheet-check> in the template"
-    program = match.group(1) + "\nconsole.log(JSON.stringify(checkSheet(%s)));\n" % json.dumps(sheet)
+    program = match.group(1) + "\nconsole.log(JSON.stringify(checkSheet(%s, %s)));\n" % (
+        json.dumps(sheet), SCHEMA_PATH.read_text(encoding="utf-8"))
     result = subprocess.run([node], input=program, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
