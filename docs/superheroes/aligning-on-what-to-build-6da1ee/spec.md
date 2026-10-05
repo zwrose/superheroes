@@ -5,11 +5,12 @@ docType: spec
 workItem: aligning-on-what-to-build-6da1ee
 issue: null
 size: large
-status: draft
-gates: {review: pending}
+status: approved
+approved: "2026-10-04"
+gates: {review: passed}
 producedBy: "the-architect@0.33.0"
 created: "2026-10-03"
-updated: "2026-10-03"
+updated: "2026-10-04"
 ---
 # Aligning on what to build
 

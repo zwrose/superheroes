@@ -573,3 +573,14 @@ are re-running on the changed parts before the re-vet.
   owner calls answered as rulings 55-61, 0 declined; durable vet record posted on the PR). The
   storage-mode mismatch is the advisor's, raised to the owner separately. Approval card sent
   (ruling 44); verdict in its store at `verdict/approval`.
+
+## Approval (owner, 2026-10-04 local / 2026-10-05 UTC)
+
+62. **BOTH SPECS APPROVED.** Approval card: "approve", sent 2026-10-05T03:50Z; in chat: "just approve
+    without worrying about this". Gates set to passed on both specs as reviewed (unchanged since the
+    clean re-vet at dbc9f326). Exit A reached.
+- Not filed, owner: "this isn't that important": a sheet's Send verdict could reach the session
+  without a chat message (room `sendToClaudeSession`, or a comment sent to Claude as fallback).
+  Left as a note for a later sheet build; no amendment.
+- Next (the advisor's, ruling 26): add the breakdown to #1614 and vet it, with the package read
+  where it applies; then the owner's one merge word.
