@@ -557,3 +557,8 @@ are re-running on the changed parts before the re-vet.
     Canon is one file where the project keeps its definition-docs; every ruling is committed at
     once to the session's working branch and reaches main when that branch merges (spec rulings
     ride the spec PR; the advisor's ride PRs it already opens); no Canon-only PRs, no new merge words.
+- Rulings 55-61 applied to both specs; Open questions removed. Specs moved into the repo (ruling 56):
+  docs/superheroes/aligning-on-what-to-build-6da1ee/spec.md and the-review-surface-d59417/spec.md;
+  the resolver now finds the repo copies. Removing the stale project-store copies was blocked by
+  permissions; they remain at ~/.claude/superheroes/projects/8fa39520fa839af0/docs/<slug>/ for the
+  owner to delete. Board redrawn for ceded calls and Canon commits (ruling 45).
