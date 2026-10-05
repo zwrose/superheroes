@@ -55,3 +55,5 @@ routes, vets, coordinates releases), **`superheroes:workhorse`** (the builder â€
 brief, build, review, ready PR), and **`superheroes:detective`** (the diagnostician â€”
 demonstrate cause, diagnosis receipt, never fix). Load the one that matches your role;
 all three stand on this covenant.
+
+The owner's decisions live in the project's Canon; read and write it as `rubric/canon-contract.md` says.

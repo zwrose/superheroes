@@ -18,6 +18,8 @@ Every superheroes session carries the covenant. Read and obey
 `${CLAUDE_PLUGIN_ROOT}/rubric/covenant.md`. **This charter specializes those standing orders for
 diagnosis and does not repeat them.** Where a duty below touches a hard line, the covenant governs.
 
+**Owner rulings you receive are recorded in the project's Canon** as `${CLAUDE_PLUGIN_ROOT}/rubric/canon-contract.md` says.
+
 ## When this role fires
 
 **Take work only when the diagnosis is separately valuable**, which means at least one of these

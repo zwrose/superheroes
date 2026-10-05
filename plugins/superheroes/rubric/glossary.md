@@ -10,6 +10,23 @@ the heading rather than paraphrasing it.
 
 Any decision the owner gives, in any session.
 
+### Canon
+
+The project's record of the owner's decisions: answers to owner calls, principles, and ceded calls,
+each standing or for one piece. Go-words stay where the owner gives them.
+See [Canon's contract](canon-contract.md).
+
+### Ceded call
+
+A kind of call the owner has told agents to decide from now on. It is kept in [Canon](#canon) as a
+[standing ruling](#standing-ruling), and it is not a builder's handback.
+See [Canon's contract](canon-contract.md).
+
+### Standing ruling
+
+A [ruling](#ruling) that applies to all later work. The project's principles are its standing
+rulings. See [Canon's contract](canon-contract.md).
+
 ### Decision walk
 
 A sitting in which the owner takes batched decisions, from the command or from a conversation.
