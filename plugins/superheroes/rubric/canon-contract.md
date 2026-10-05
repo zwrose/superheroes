@@ -41,7 +41,11 @@ The command prints one JSON object on one line with five keys:
   when `home` is `"repo"` and the project store directory when `home` is `"project-store"`.
 - `exists`: `true` when a file exists on disk at `path`, else `false`.
 - `defaultRef`: the default-branch ref name, for example `origin/main`, when `home` is `"repo"` and
-  `git rev-parse --abbrev-ref origin/HEAD` resolves. Otherwise `null`.
+  `git rev-parse --abbrev-ref origin/HEAD` resolves. Otherwise `null`. The lookup resolves the
+  default ref as `origin/HEAD`, else `origin/main`, else `origin/master`, returns `null` only when
+  the repository has no `origin` remote, and otherwise refuses (exit 1, nothing on stdout, the
+  cause and the remedy `git remote set-head origin --auto` on stderr) rather than reading an
+  unprobed default branch as one with no Canon.
 
 The in-repository candidate is `<repo root>/<doc-policy location>/canon.md`. It is a candidate only
 when the doc-policy visibility is `committed`. The store candidate is `<project store>/docs/canon.md`.

@@ -109,28 +109,50 @@ def resolve_work_item_dir(work_item, *, root, cwd, store_root=None):
     return in_repo if mode == mode_registry.IN_REPO else global_dir
 
 
-def _default_branch_ref(root):
-    """The default-branch ref name for `root` (e.g. `origin/main`), or None when it cannot be
-    determined (no remote HEAD, not a git repo, git missing or slow)."""
+class CanonLookupError(RuntimeError):
+    """The default-branch copy of Canon could not be probed (git missing or slow, no resolvable
+    default ref on a repo with an origin remote, or a tree read that failed for a reason other
+    than the path being absent). The lookup fails closed: an unprobed default branch is never
+    read as one with no Canon. The single arg names the cause."""
+
+
+_CANON_REMEDY = "run `git remote set-head origin --auto` (or fetch origin) and retry"
+
+
+def _git(root, *args):
     try:
-        proc = subprocess.run(["git", "-C", root, "rev-parse", "--abbrev-ref", "origin/HEAD"],
-                              capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
+        return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
+                              timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CanonLookupError("git could not be run (%s: %s)" % (type(exc).__name__, exc))
+
+
+def _default_branch_ref(root):
+    """The default-branch ref name for `root` (e.g. `origin/main`). Resolution order: origin/HEAD,
+    then refs/remotes/origin/main, then refs/remotes/origin/master. Returns None ONLY when the
+    repository has no origin remote (`git remote get-url origin` fails with git working). Raises
+    CanonLookupError when git cannot be run or an origin remote has no resolvable default ref."""
+    if _git(root, "remote", "get-url", "origin").returncode != 0:
         return None
+    proc = _git(root, "rev-parse", "--abbrev-ref", "origin/HEAD")
     ref = proc.stdout.strip()
-    if proc.returncode != 0 or not ref or ref == "origin/HEAD":
-        return None
-    return ref
+    if proc.returncode == 0 and ref and ref != "origin/HEAD":
+        return ref
+    for full in ("refs/remotes/origin/main", "refs/remotes/origin/master"):
+        if _git(root, "rev-parse", "--verify", "--quiet", full + "^{commit}").returncode == 0:
+            return full[len("refs/remotes/"):]
+    raise CanonLookupError("origin has no resolvable default branch (origin/HEAD, origin/main "
+                           "and origin/master all fail to resolve)")
 
 
 def _exists_at_ref(root, ref, relpath):
-    """True iff `relpath` (forward slashes) exists in the tree at `ref`; False on any failure."""
-    try:
-        proc = subprocess.run(["git", "-C", root, "cat-file", "-e", "%s:%s" % (ref, relpath)],
-                              capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
+    """True iff `relpath` (forward slashes) exists in the tree at `ref`, False when the path is
+    absent there; raises CanonLookupError on any other failure (the tree could not be read)."""
+    proc = _git(root, "ls-tree", "--name-only", ref, "--", relpath)
+    if proc.returncode != 0:
+        raise CanonLookupError("could not read %s at %s: %s"
+                               % (relpath, ref, proc.stderr.strip() or "git exit %d" % proc.returncode))
+    return bool(proc.stdout.strip())
 
 
 def resolve_canon(*, root, cwd=None, store_root=None):
@@ -139,7 +161,8 @@ def resolve_canon(*, root, cwd=None, store_root=None):
     project store on disk, in that order) wins over the recorded storage mode; with none, an
     in-repo mode and a committed policy give the repo, anything else the project store. Read-only:
     creates and writes nothing, and records no registry backfill. Propagates
-    mode_registry.UnknownSchemaVersion when the mode is needed and undeterminable."""
+    mode_registry.UnknownSchemaVersion when the mode is needed and undeterminable, and
+    CanonLookupError when the default branch cannot be probed (it fails closed)."""
     import architect_config
     import mode_registry
     cwd = cwd if cwd is not None else root
@@ -622,7 +645,13 @@ def main(argv):
         return 0
     try:
         if args.cmd == "canon":
-            sys.stdout.write(json.dumps(resolve_canon(root=args.root, cwd=args.root)) + "\n")
+            try:
+                result = resolve_canon(root=args.root, cwd=args.root)
+            except CanonLookupError as exc:
+                sys.stderr.write("definition_doc: canon lookup refused — %s; %s. Refusing to "
+                                 "guess a Canon home.\n" % (exc, _CANON_REMEDY))
+                return 1
+            sys.stdout.write(json.dumps(result) + "\n")
             return 0
         if args.cmd in ("path", "dir", "read-gate", "set-gate"):
             d = resolve_work_item_dir(args.work_item, root=args.root, cwd=args.root)

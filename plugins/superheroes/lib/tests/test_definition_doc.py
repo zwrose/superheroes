@@ -981,6 +981,7 @@ def test_canon_default_branch_ref_beats_global_mode(tmp_path, monkeypatch):
     _write_canon(os.path.join(repo, "docs", "superheroes"))
     git("add", "docs/superheroes/canon.md")
     git("commit", "-q", "-m", "second")
+    git("remote", "add", "origin", "https://example.invalid/x.git")
     git("update-ref", "refs/remotes/origin/main", "HEAD")
     git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
     git("checkout", "-q", "-b", "side", "HEAD~1")
@@ -1034,3 +1035,51 @@ def test_canon_cli_halts_on_unknown_schema(tmp_path):
     assert out.returncode == 1
     assert "could not be determined" in out.stderr
     assert out.stdout == ""
+
+
+def _canon_origin_repo(tmp_path):
+    """A repo with an origin remote whose current branch lacks Canon; returns (repo, git, carrier
+    sha) where the carrier commit holds docs/superheroes/canon.md."""
+    repo = str(tmp_path / "repo")
+    _git_repo(repo)
+
+    def git(*args):
+        return subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    open(os.path.join(repo, "README.md"), "w").write("x")
+    git("add", "README.md")
+    git("commit", "-q", "-m", "first")
+    _write_canon(os.path.join(repo, "docs", "superheroes"))
+    git("add", "docs/superheroes/canon.md")
+    git("commit", "-q", "-m", "second")
+    carrier = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", "https://example.invalid/x.git")
+    git("checkout", "-q", "-b", "side", "HEAD~1")
+    return repo, git, carrier
+
+
+def test_canon_origin_head_unset_falls_back_to_origin_main(tmp_path, monkeypatch):
+    repo, git, carrier = _canon_origin_repo(tmp_path)
+    git("update-ref", "refs/remotes/origin/main", carrier)
+    _canon_stub(monkeypatch, "global", str(tmp_path / "store"))
+    got = DD.resolve_canon(root=repo)
+    assert got["home"] == "repo"
+    assert got["defaultRef"] == "origin/main"
+
+
+def test_canon_origin_without_resolvable_default_refuses(tmp_path, monkeypatch):
+    repo, _git, _carrier = _canon_origin_repo(tmp_path)
+    out = subprocess.run([sys.executable, _MODULE_PATH, "canon", "--root", repo],
+                         capture_output=True, text=True)
+    assert out.returncode == 1, (out.stdout, out.stderr)
+    assert out.stdout == ""
+    assert "git remote set-head origin --auto" in out.stderr
+
+
+def test_canon_no_origin_remote_keeps_default_ref_null(tmp_path, monkeypatch):
+    repo = str(tmp_path / "repo")
+    _git_repo(repo)
+    _canon_stub(monkeypatch, "in-repo", str(tmp_path / "store"))
+    got = DD.resolve_canon(root=repo)
+    assert got["defaultRef"] is None
