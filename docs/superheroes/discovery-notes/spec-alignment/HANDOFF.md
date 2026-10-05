@@ -562,3 +562,7 @@ are re-running on the changed parts before the re-vet.
   the resolver now finds the repo copies. Removing the stale project-store copies was blocked by
   permissions; they remain at ~/.claude/superheroes/projects/8fa39520fa839af0/docs/<slug>/ for the
   owner to delete. Board redrawn for ceded calls and Canon commits (ruling 45).
+- Re-check of the final-sheet changes: rounds 1-4 to clean (Canon decision-only wording made
+  consistent; anchor-contract change added to "What this spec amends"; when a ruling binds other
+  sessions stated per ruling 61's accepted trade-off). Spec PR opened: zwrose/superheroes#1614.
+  Re-vet requested from the advisor; then the one-card approval sheet (ruling 44).
