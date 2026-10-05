@@ -7,6 +7,13 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Next release (after 0.40.0)
+
+### Guardian dead-code ids are repo-relative
+
+- Dead-code candidate ids and their stored `path` no longer carry the checkout's absolute path, so a sweep from a different checkout no longer reports every carried dead-code hit as new.
+- **One transition sweep** for a baseline written with absolute ids: its matching candidates carry forward (none report as new), real new dead code reports as new, and candidates now gone report as resolved under their relative ids. That sweep stores relative ids. If the old checkout root cannot be told apart unambiguously, that one sweep reports every candidate as new and the old absolute ids as resolved, rather than guess.
+
 ## 0.40.0
 
 ### Before you upgrade

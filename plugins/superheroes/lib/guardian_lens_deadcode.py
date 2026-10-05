@@ -251,6 +251,50 @@ def _carry_forward_prefix(prev_candidates, prefix, merged):
     return carried
 
 
+def _vulture_id(path, kind, symbol):
+    return "deadcode:vulture:%s:%s:%s" % (path, kind, symbol)
+
+
+def _knip_id(path, export=None):
+    return "deadcode:knip:%s" % path if export is None else "deadcode:knip:%s:%s" % (path, export)
+
+
+def _rekey_absolute(prev_candidates, rel_paths):
+    """Re-key a legacy baseline whose ids carry the old checkout's absolute path (#1610).
+
+    Each prev absolute ``path`` ending in ``/<rel>`` for a path this sweep measured votes
+    for that prefix as the old root; the top root re-keys every prev record under it. A
+    tie (or no vote) re-keys nothing: a wrong rekey could hide a finding, while an absolute
+    id only resurfaces as new — ambiguity fails loud, never quiet."""
+    rel_paths = {p for p in rel_paths if isinstance(p, str) and p and not os.path.isabs(p)}
+    votes = {}
+    for rec in prev_candidates.values():
+        path = rec.get("path")
+        if not isinstance(path, str) or not os.path.isabs(path):
+            continue
+        for root in {path[:-len(rel) - 1] for rel in rel_paths if path.endswith("/" + rel)}:
+            votes[root] = votes.get(root, 0) + 1
+    ranked = sorted(votes.values(), reverse=True)
+    if not ranked or (len(ranked) > 1 and ranked[0] == ranked[1]):
+        return prev_candidates
+    root = next(r for r, n in votes.items() if n == ranked[0])
+    out = {}
+    for cid, rec in prev_candidates.items():
+        path = rec.get("path")
+        new_id = None
+        if isinstance(path, str) and path.startswith(root + "/"):
+            rel = path[len(root) + 1:]
+            if rec.get("tool") == "vulture" and rec.get("kind") and rec.get("symbol"):
+                new_id = _vulture_id(rel, rec["kind"], rec["symbol"])
+            elif rec.get("tool") == "knip":
+                new_id = _knip_id(rel, rec.get("export") or None)
+        if new_id is None or new_id in prev_candidates or new_id in out:
+            out.setdefault(cid, rec)
+        else:
+            out[new_id] = dict(rec, id=new_id, path=rel)
+    return out
+
+
 # ----------------------------------------------------------------------- python (vulture)
 
 def _vulture_argv():
@@ -267,15 +311,20 @@ def _vulture_argv():
 
 
 def _filter_vulture_hits(hits, tracked, repo):
-    """Drop hits whose path is not in the tracked census; return (kept, dropped_count)."""
+    """Drop hits whose path is not in the tracked census; return (kept, dropped_count).
+
+    A kept hit's ``path`` is rewritten to its repo-relative census form: vulture reports
+    the absolute operands it was handed, and an id keyed on the checkout path would read
+    every carried finding as new from any other checkout (#1610)."""
     if not hits:
         return [], 0
     tracked_norm = {_norm_repo_path(repo, p) for p in tracked}
     kept = []
     dropped = 0
     for h in hits:
-        if _norm_repo_path(repo, h.get("path")) in tracked_norm:
-            kept.append(h)
+        rel = _norm_repo_path(repo, h.get("path"))
+        if rel in tracked_norm:
+            kept.append(dict(h, path=rel))
         else:
             dropped += 1
     return kept, dropped
@@ -295,6 +344,8 @@ def _filter_knip_issues(issues, tracked, repo):
         path_norm = _norm_repo_path(repo, path) if isinstance(path, str) else ""
         tracked_file = bool(path_norm and path_norm in tracked_norm)
         new_entry = dict(entry)
+        if tracked_file:
+            new_entry["file"] = path_norm  # repo-relative id key, as for vulture (#1610)
         files = entry.get("files")
         if isinstance(files, list):
             if tracked_file:
@@ -377,7 +428,7 @@ def aggregate_vulture(hits):
     """
     groups = {}
     for h in hits:
-        cid = "deadcode:vulture:%s:%s:%s" % (h["path"], h["kind"], h["symbol"])
+        cid = _vulture_id(h["path"], h["kind"], h["symbol"])
         groups.setdefault(cid, []).append(h)
     out = {}
     for cid, occ in groups.items():
@@ -613,7 +664,7 @@ def aggregate_knip(issues):
         if not isinstance(path, str) or not path:
             continue
         for _f in entry.get("files") or []:
-            cid = "deadcode:knip:%s" % path
+            cid = _knip_id(path)
             groups.setdefault(cid, {"kind": "file", "path": path, "export": None, "occ": []})
             groups[cid]["occ"].append({"line": None})
         for exp in entry.get("exports") or []:
@@ -622,7 +673,7 @@ def aggregate_knip(issues):
             name = exp.get("name")
             if not name:
                 continue
-            cid = "deadcode:knip:%s:%s" % (path, name)
+            cid = _knip_id(path, name)
             groups.setdefault(
                 cid, {"kind": "export", "path": path, "export": name, "occ": []})
             groups[cid]["occ"].append({"line": exp.get("line")})
@@ -849,6 +900,8 @@ class DeadCodeLens(object):
             ecosystems[ecosystem] = section
 
         merged = dict(fresh)
+        prev_candidates = _rekey_absolute(
+            prev_candidates, [c.get("path") for c in fresh.values()])
         prefixes = {"python": "deadcode:vulture:", "node": "deadcode:knip:"}
         for ecosystem, section in ecosystems.items():
             if section["status"] != "collected":
@@ -885,8 +938,9 @@ class DeadCodeLens(object):
         # finding as a false `resolved` (an uninstalled tool looking like a cleanup).
         if not isinstance(cur_digest, dict):
             return {"new": [], "worsened": [], "resolved": []}
-        prev = _candidates_of(prev_digest)
         cur = _candidates_of(cur_digest)
+        prev = _rekey_absolute(
+            _candidates_of(prev_digest), [c.get("path") for c in cur.values()])
         new = sorted(cid for cid in cur if cid not in prev)
         worsened = sorted(
             cid for cid in cur
