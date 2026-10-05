@@ -159,6 +159,16 @@ def test_rejects_invalid_sheets(change):
     assert errors_for(mutated(change)) != []
 
 
+KIND_FIXTURE_NAMES = ("remainder-missing-block", "final-without-final", "plain-carrying-remainder")
+KIND_FIXTURES = [(n, c) for n, c in RED_FIXTURES if n in KIND_FIXTURE_NAMES]
+
+
+@pytest.mark.parametrize("change", [c for _, c in KIND_FIXTURES], ids=[n for n, _ in KIND_FIXTURES])
+def test_page_check_rejects_kind_fixtures(change):
+    # Axis: the page's own check, not only the Python validator, refuses a sheet whose kind and block disagree.
+    assert check_sheet_problems(mutated(change)) != []
+
+
 def duplicate_card_id(sheet):
     sheet["cards"][1]["id"] = sheet["cards"][0]["id"]
 

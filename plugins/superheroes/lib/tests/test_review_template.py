@@ -131,6 +131,111 @@ def _run_check_sheet(fixtures, schema=None):
     return json.loads(result.stdout)
 
 
+PAGE_HARNESS = r"""
+class Node {
+  constructor(tag) {
+    this.tagName = tag;
+    this.id = "";
+    this.className = "";
+    this.textContent = "";
+    this.hidden = false;
+    this.children = [];
+  }
+  appendChild(child) {
+    if (child.tagName === "#fragment") {
+      child.children.splice(0).forEach((inner) => this.children.push(inner));
+    } else {
+      this.children.push(child);
+    }
+    return child;
+  }
+  replaceChildren(...nodes) {
+    this.children = [];
+    nodes.forEach((node) => this.appendChild(node));
+  }
+}
+const elements = {};
+["sheet-status", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title"].forEach((id) => {
+  elements[id] = new Node("div");
+  elements[id].id = id;
+});
+elements["sheet-status"].hidden = false;
+elements["sheet-error"].hidden = true;
+elements["sheet-title"].textContent = "Review sheet";
+const document = {
+  title: "Review sheet",
+  getElementById: (id) => elements[id],
+  createElement: (tag) => new Node(tag),
+  createDocumentFragment: () => new Node("#fragment"),
+};
+const files = __FILES__;
+async function fetch(name, options) {
+  const file = files[name];
+  if (file === undefined) return { ok: false, status: 404, text: async () => "" };
+  if (file.reject) throw new Error("network down");
+  if (file.hang) await new Promise(() => {});
+  return { ok: file.status >= 200 && file.status < 300, status: file.status, text: async () => file.body };
+}
+__CHECK__
+__PAGE__
+(async () => {
+  const settled = () => elements["sheet-status"].hidden === true || elements["sheet-error"].hidden === false;
+  for (let tries = 0; tries < 20 && !settled(); tries += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const cards = elements["sheet-cards"].children.filter((child) => child.tagName === "article").map((article) => ({
+    id: article.id,
+    className: article.className,
+    badgeClass: article.children[0].className,
+    question: article.children.find((child) => child.tagName === "h2").textContent,
+  }));
+  console.log(JSON.stringify({
+    settled: settled(),
+    title: document.title,
+    appBar: elements["sheet-title"].textContent,
+    statusHidden: elements["sheet-status"].hidden,
+    errorHidden: elements["sheet-error"].hidden,
+    errors: elements["sheet-error-list"].children.map((item) => item.textContent),
+    cards: cards,
+  }));
+  process.exit(0);
+})();
+"""
+
+
+def _run_page(files):
+    node = shutil.which("node")
+    if node is None:
+        pytest.fail("node is required to run the page and is not on PATH")
+    text = _template_text()
+    page = re.search(r"<script>(.*?)</script>", text, re.S)
+    assert page, "no unnamed <script> in the template"
+    program = (
+        PAGE_HARNESS.replace("__FILES__", json.dumps(files))
+        .replace("__CHECK__", _script_by_id(text, "sheet-check"))
+        .replace("__PAGE__", page.group(1))
+    )
+    result = subprocess.run([node], input=program, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def _sample_files(sheet=None):
+    sheet_text = (THEME / "sample-sheet.json").read_text(encoding="utf-8") if sheet is None else json.dumps(sheet)
+    return {
+        "sheet.json": {"status": 200, "body": sheet_text},
+        "sheet.schema.json": {"status": 200, "body": (THEME / "sheet.schema.json").read_text(encoding="utf-8")},
+    }
+
+
+def _assert_error_shown(page):
+    assert page["settled"], "the page never settled: %s" % page
+    assert page["cards"] == []
+    assert page["statusHidden"] is True
+    assert page["errorHidden"] is False
+    assert page["errors"], "the error box is empty"
+
+
 # Bites on: a template carrying its own document skeleton, which the artifact host would nest inside its own.
 def test_template_has_no_document_skeleton():
     text = _template_text()
@@ -239,3 +344,69 @@ def test_shipped_files_carry_no_provenance():
         text = path.read_text(encoding="utf-8")
         for pattern in patterns:
             assert not re.search(pattern, text), "%s matches %s" % (path.name, pattern)
+
+
+# Bites on: the page's startup load or its render step going missing, so a valid sheet is never drawn.
+def test_page_draws_the_sample_sheet():
+    sample = json.loads((THEME / "sample-sheet.json").read_text(encoding="utf-8"))
+    page = _run_page(_sample_files())
+    assert page["settled"], "the page never settled: %s" % page
+    assert page["title"] == sample["title"]
+    assert page["appBar"] == sample["title"]
+    assert len(page["cards"]) == len(sample["cards"])
+    for drawn, card in zip(page["cards"], sample["cards"]):
+        assert drawn["className"] == "sh-card"
+        assert drawn["id"] == "card-" + card["id"]
+        assert drawn["question"] == card["question"]
+        assert ("sh-badge--warning" in drawn["badgeClass"]) == card["warning"]
+    assert sample["cards"][0]["warning"] is True
+    assert any(not card["warning"] for card in sample["cards"])
+    assert page["statusHidden"] is True
+    assert page["errorHidden"] is True
+    assert page["errors"] == []
+
+
+# Bites on: the error display (box shown, loading line hidden, no cards) for a data file that is not there.
+def test_page_shows_an_error_for_a_missing_data_file():
+    files = _sample_files()
+    del files["sheet.json"]
+    page = _run_page(files)
+    _assert_error_shown(page)
+    assert any("HTTP 404" in error for error in page["errors"]), page["errors"]
+    assert page["appBar"] == "Review sheet"
+
+
+# Bites on: the page drawing from, or crashing on, a data file that is not valid JSON.
+def test_page_shows_an_error_for_invalid_json():
+    files = _sample_files()
+    files["sheet.json"] = {"status": 200, "body": '{"schema": '}
+    page = _run_page(files)
+    _assert_error_shown(page)
+    assert any("valid JSON" in error for error in page["errors"]), page["errors"]
+
+
+# Bites on: a failed network request escaping the page's handling instead of showing the error box.
+def test_page_shows_an_error_for_a_rejected_fetch():
+    files = _sample_files()
+    files["sheet.json"] = {"reject": True}
+    page = _run_page(files)
+    _assert_error_shown(page)
+    assert any("data file could not be loaded" in error for error in page["errors"]), page["errors"]
+
+
+# Bites on: the page drawing a sheet its schema check refuses (here, two cards sharing an id).
+def test_page_refuses_a_sheet_the_schema_rejects():
+    sheet = json.loads((THEME / "sample-sheet.json").read_text(encoding="utf-8"))
+    sheet["cards"][1]["id"] = sheet["cards"][0]["id"]
+    page = _run_page(_sample_files(sheet))
+    _assert_error_shown(page)
+    assert any(sheet["cards"][0]["id"] in error for error in page["errors"]), page["errors"]
+
+
+# Bites on: the harness's bounded wait, which must end and report an unsettled page rather than hang.
+def test_page_that_never_settles_is_reported_unsettled():
+    files = _sample_files()
+    files["sheet.json"] = {"hang": True}
+    page = _run_page(files)
+    assert page["settled"] is False
+    assert page["cards"] == []
