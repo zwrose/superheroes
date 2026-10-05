@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Comic Panel Theme</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="stylesheet" href="comic-panel.css">
@@ -10,15 +11,15 @@
   .sh-theme h2 { font-size: 22px; }
   .page { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); margin-inline: auto; max-width: 1100px; }
   .page > * { min-width: 0; }
-  .stack { display: grid; gap: 16px; }
-  .stack-small { display: grid; gap: 8px; }
+  .stack { align-content: start; display: grid; gap: 16px; }
+  .stack-small { align-content: start; display: grid; gap: 8px; }
   .rows { display: grid; gap: 14px; list-style: none; padding: 0; }
   .color-row { align-items: center; display: grid; gap: 14px; grid-template-columns: 64px minmax(0, 1fr); }
   .swatch { align-items: center; display: grid; font-weight: 700; height: 52px; justify-content: center; width: 64px; }
   .color-text { display: grid; gap: 2px; min-width: 0; }
   .color-text .sh-tag { overflow-wrap: anywhere; }
   .sample-heading { font-size: 28px; }
-  .parts { display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr); }
+  .parts { align-items: start; display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr); }
   .parts > * { min-width: 0; }
   .row { align-items: center; display: flex; flex-wrap: wrap; gap: 20px; }
   .row-pills { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
