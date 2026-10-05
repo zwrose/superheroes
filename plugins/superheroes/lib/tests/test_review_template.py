@@ -410,3 +410,147 @@ def test_page_that_never_settles_is_reported_unsettled():
     page = _run_page(files)
     assert page["settled"] is False
     assert page["cards"] == []
+
+
+def _planted(mutate):
+    schema = json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-8"))
+    mutate(schema)
+    return schema
+
+
+def _plant_at(*path, **rule):
+    def mutate(schema):
+        target = schema
+        for key in path:
+            target = target[key]
+        target.update(rule)
+    return mutate
+
+
+def _assert_names(problems, keyword, pointer):
+    assert any('"%s"' % keyword in problem and " at %s," % pointer in problem for problem in problems), (
+        "no problem names %r at %s: %s" % (keyword, pointer, problems)
+    )
+
+
+# Bites on: the page drawing cards against a schema that carries a rule its reader does not check.
+def test_page_refuses_a_schema_with_an_unknown_rule():
+    schema = _planted(_plant_at("$defs", "card", "properties", "question", maxLength=200))
+    files = _sample_files()
+    files["sheet.schema.json"] = {"status": 200, "body": json.dumps(schema)}
+    page = _run_page(files)
+    _assert_error_shown(page)
+    pointer = "#/$defs/card/properties/question"
+    assert any('"maxLength"' in error and pointer in error for error in page["errors"]), page["errors"]
+
+
+def _unsupported_rule_cases():
+    def definitions(schema):
+        schema["definitions"] = {"spare": {"type": "string", "maxLength": 3}}
+
+    def all_of(schema):
+        schema["allOf"].append({"type": "object", "maxLength": 3})
+
+    def any_of(schema):
+        schema["allOf"].append({"anyOf": [{"type": "object"}, {"type": "null", "maxLength": 3}]})
+
+    def reached_ref(schema):
+        schema["examples"] = [{"type": "string", "maxLength": 0}]
+        schema["properties"]["title"] = {"$ref": "#/examples/0"}
+
+    declined = ("properties", "final", "properties", "declinedFindings")
+    return [
+        ("E1-root", _plant_at(maxLength=3), "maxLength", "#"),
+        ("E2-defs-member", _plant_at("$defs", "id", maxLength=3), "maxLength", "#/$defs/id"),
+        ("E3-unreferenced-definitions-member", definitions, "maxLength", "#/definitions/spare"),
+        ("E4-properties", _plant_at("properties", "title", maxLength=3), "maxLength", "#/properties/title"),
+        ("E4-nested-properties", _plant_at("$defs", "card", "properties", "question", maxLength=3), "maxLength", "#/$defs/card/properties/question"),
+        ("E5-items", _plant_at(*declined, "items", maxLength=3), "maxLength", "#/properties/final/properties/declinedFindings/items"),
+        ("E6-allOf-member", all_of, "maxLength", "#/allOf/3"),
+        ("E7-anyOf-member", any_of, "maxLength", "#/allOf/3/anyOf/1"),
+        ("E8-if", _plant_at("allOf", 0, "if", maxLength=3), "maxLength", "#/allOf/0/if"),
+        ("E9-then", _plant_at("allOf", 0, "then", maxLength=3), "maxLength", "#/allOf/0/then"),
+        ("E10-not", _plant_at("allOf", 0, "then", "not", maxLength=3), "maxLength", "#/allOf/0/then/not"),
+        ("E11-ref-target-outside-the-walked-containers", reached_ref, "maxLength", "#/examples/0"),
+        ("E13-ref-without-hash-slash", _plant_at("properties", "title", **{"$ref": "defs/id"}), "$ref", "#/properties/title"),
+        ("E13-ref-with-a-tilde-segment", _plant_at("properties", "title", **{"$ref": "#/$defs/a~1b"}), "$ref", "#/properties/title"),
+        ("E13-ref-that-does-not-resolve", _plant_at("properties", "title", **{"$ref": "#/$defs/nowhere"}), "$ref", "#/properties/title"),
+        ("E14-boolean-sub-schema", _plant_at("properties", title=True), "properties", "#/properties/title"),
+        ("E15-items-as-a-list", _plant_at("properties", "cards", items=[{"type": "object"}]), "items", "#/properties/cards"),
+        ("E16-additionalProperties-as-an-object", _plant_at("properties", "remainder", additionalProperties={"type": "string"}), "additionalProperties", "#/properties/remainder"),
+        ("E17-else", _plant_at("allOf", 0, **{"else": {"type": "object"}}), "else", "#/allOf/0"),
+    ]
+
+
+# Bites on: the reader skipping a rule it does not implement, at any position it walks or a $ref reaches.
+@pytest.mark.parametrize(
+    "mutate,keyword,pointer",
+    [pytest.param(mutate, keyword, pointer, id=name) for name, mutate, keyword, pointer in _unsupported_rule_cases()],
+)
+def test_check_sheet_refuses_a_schema_rule_it_cannot_check(mutate, keyword, pointer):
+    problems = _run_check_sheet([_sheet("plain")], schema=_planted(mutate))[0]
+    _assert_names(problems, keyword, pointer)
+
+
+# Bites on: a $ref cycle sending the reader into endless recursion, or a recursive schema being refused.
+def test_check_sheet_ends_on_a_ref_cycle():
+    cyclic = {
+        "properties": {"node": {"$ref": "#/$defs/a"}},
+        "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}},
+    }
+    assert len(_run_check_sheet([{"cards": [], "node": 1}, {}], schema=cyclic)) == 2
+    tree = {
+        "properties": {"child": {"$ref": "#/$defs/tree"}},
+        "$defs": {"tree": {"type": "object", "properties": {"child": {"$ref": "#/$defs/tree"}}}},
+    }
+    assert _run_check_sheet([{"cards": [], "child": {"child": {}}}], schema=tree) == [[]]
+
+
+# Bites on: an annotation keyword being refused, or read as a rule, at any position.
+def test_check_sheet_allows_annotations_anywhere():
+    annotations = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "sheet", "title": "T", "description": "D",
+        "$comment": "C", "examples": [1], "default": 1, "$defs": {}, "definitions": {},
+    }
+
+    def mutate(schema):
+        schema.update({key: copy.deepcopy(value) for key, value in annotations.items() if key not in ("$defs", "definitions")})
+        schema["$defs"]["card"]["properties"]["question"].update(copy.deepcopy(annotations))
+        schema["$defs"]["extra"] = {"type": "string"}
+        schema["definitions"] = {"spare": {"title": "unused"}}
+
+    valid = [_remainder_sheet(), _final_sheet(), _sheet("plain")]
+    for index, problems in enumerate(_run_check_sheet(valid, schema=_planted(mutate))):
+        assert problems == [], "valid fixture %d was refused: %s" % (index, problems)
+
+
+# Bites on: const and enum comparing compound values by identity instead of by content.
+def test_check_sheet_compares_compound_const_and_enum_by_content():
+    not_const = {"properties": {"tags": {"not": {"const": ["a"]}}}}
+    results = _run_check_sheet([{"cards": [], "tags": ["a"]}, {"cards": [], "tags": ["b"]}], schema=not_const)
+    assert results[0] != [] and results[1] == [], results
+    not_enum = {"properties": {"tags": {"not": {"enum": [["a"], {"k": 1}]}}}}
+    results = _run_check_sheet([{"cards": [], "tags": ["a"]}, {"cards": [], "tags": {"k": 1}}, {"cards": [], "tags": ["b"]}], schema=not_enum)
+    assert results[0] != [] and results[1] != [] and results[2] == [], results
+    object_const = {"properties": {"tags": {"const": {"a": 1, "b": 2}}}}
+    results = _run_check_sheet([{"cards": [], "tags": {"b": 2, "a": 1}}, {"cards": [], "tags": {"a": 1}}], schema=object_const)
+    assert results[0] == [] and results[1] != [], results
+
+
+# Bites on: uniqueItems treating two equal objects as different because their keys came in another order.
+def test_check_sheet_uniqueitems_ignores_key_order():
+    schema = {"properties": {"things": {"type": "array", "uniqueItems": True}}}
+    results = _run_check_sheet(
+        [{"cards": [], "things": [{"a": 1, "b": 2}, {"b": 2, "a": 1}]}, {"cards": [], "things": [{"a": 1}, {"a": 2}]}],
+        schema=schema,
+    )
+    assert any("repeat" in problem for problem in results[0]), results[0]
+    assert results[1] == [], results[1]
+
+
+# Bites on: minLength counting UTF-16 units, so one character outside the basic plane counts as two.
+def test_check_sheet_minlength_counts_characters():
+    schema = {"properties": {"word": {"type": "string", "minLength": 2}}}
+    results = _run_check_sheet([{"cards": [], "word": "\U0001F600"}, {"cards": [], "word": "ab"}], schema=schema)
+    assert any("empty" in problem for problem in results[0]), results[0]
+    assert results[1] == [], results[1]

@@ -23,7 +23,7 @@ Each card's `id` must stay the same call across republishes, because answers are
 Change the wording of a card freely; never reuse an id for a different call.
 
 The data file is the sheet's saved source. Keep it with the work it belongs to. The page checks
-the data file against `sheet.schema.json` when it loads, so a file the schema refuses is never drawn.
+the data file against `sheet.schema.json` when it loads, so a file the schema refuses is never drawn. The page also refuses a schema that uses a kind of rule its reader doesn't check, so a change to the sheet's shape that needs a new kind of rule must also teach the page's reader, or the page refuses every sheet.
 
 ## Publishing a sheet
 
