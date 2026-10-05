@@ -1,0 +1,263 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Review sheet</title>
+<link rel="stylesheet" href="comic-panel.css">
+<style>
+  body { background: var(--sh-paper); margin: 0; }
+  .sh-theme { padding-block: 16px 40px; padding-inline: 16px; }
+  .sheet-page { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-inline: auto; max-width: 720px; overflow-wrap: anywhere; }
+  .sheet-page .sh-appbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 1; }
+  .sheet-page > main { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page :is(h2, p, ul, blockquote) { margin: 0; }
+  .sheet-page :is(.sh-card, .sh-box) > * + * { margin-top: 8px; }
+  .sheet-page .sh-card > h2 { font-size: 22px; margin-top: 12px; }
+  .sheet-page .sh-card > .sh-label { margin-top: 16px; }
+  .sheet-page .sh-card > .sh-label + * { margin-top: 4px; }
+  .sheet-page .sh-box h2 { font-size: 22px; }
+  .sheet-page .sh-box ul { padding-left: 20px; }
+  .sh-theme [hidden] { display: none; }
+</style>
+
+<div class="sh-theme">
+  <div class="sheet-page">
+    <header class="sh-appbar">
+      <span class="sh-appbar__name" id="sheet-title">Review sheet</span>
+    </header>
+    <p id="sheet-status" class="sh-caption">Loading the sheet…</p>
+    <div id="sheet-error" class="sh-box" role="alert" hidden>
+      <h2>This sheet can't be shown</h2>
+      <ul id="sheet-error-list"></ul>
+    </div>
+    <main id="sheet-cards"></main>
+  </div>
+</div>
+
+<script id="sheet-check">
+  // The full shape of a sheet is defined by sheet.schema.json. This check covers what the page
+  // reads, plus the rules a schema cannot express: unique card ids, unique option ids within a
+  // card, unsettled ids that name real cards, and a recommendation that names a real option.
+  function checkSheet(sheet) {
+    const problems = [];
+    const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+    const isText = (value) => typeof value === "string" && value.length > 0;
+    const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+    if (!isObject(sheet)) {
+      return ["The sheet's data file must hold one object."];
+    }
+
+    if (sheet.schema !== "superheroes-sheet/1") {
+      problems.push('The sheet\'s schema must be "superheroes-sheet/1".');
+    }
+    if (!["remainder", "final", "plain"].includes(sheet.kind)) {
+      problems.push('The sheet\'s kind must be "remainder", "final" or "plain".');
+    }
+    if (!isText(sheet.title)) {
+      problems.push("The sheet has no title.");
+    }
+
+    if (sheet.kind === "remainder" && !has(sheet, "remainder")) {
+      problems.push('A remainder sheet needs a "remainder" block.');
+    }
+    if (sheet.kind !== "remainder" && has(sheet, "remainder")) {
+      problems.push('Only a remainder sheet may have a "remainder" block.');
+    }
+    if (sheet.kind === "final" && !has(sheet, "final")) {
+      problems.push('A final sheet needs a "final" block.');
+    }
+    if (sheet.kind !== "final" && has(sheet, "final")) {
+      problems.push('Only a final sheet may have a "final" block.');
+    }
+
+    if (!Array.isArray(sheet.cards) || sheet.cards.length === 0) {
+      problems.push("The sheet has no cards.");
+      return problems;
+    }
+
+    const cardIds = new Set();
+    const reportedDuplicates = new Set();
+    sheet.cards.forEach((card, index) => {
+      if (!isObject(card)) {
+        problems.push("Card number " + (index + 1) + " must be an object.");
+        return;
+      }
+      let name;
+      if (isText(card.id)) {
+        name = 'Card "' + card.id + '"';
+        if (cardIds.has(card.id)) {
+          if (!reportedDuplicates.has(card.id)) {
+            reportedDuplicates.add(card.id);
+            problems.push('Two cards share the id "' + card.id + '".');
+          }
+        }
+        cardIds.add(card.id);
+      } else {
+        name = "Card number " + (index + 1);
+        problems.push(name + " has no id.");
+      }
+
+      if (!isText(card.callKind)) {
+        problems.push(name + " has no callKind.");
+      }
+      if (typeof card.warning !== "boolean") {
+        problems.push(name + " must say whether it is a warning (true or false).");
+      }
+      if (!isText(card.question)) {
+        problems.push(name + " has no question.");
+      }
+
+      if (!isObject(card.context)) {
+        problems.push(name + " has no context.");
+      } else {
+        if (!isText(card.context.now)) {
+          problems.push(name + " has no context.now text.");
+        }
+        if (!isText(card.context.whyOwner)) {
+          problems.push(name + " has no context.whyOwner text.");
+        }
+        if (!has(card.context, "exactText")) {
+          problems.push(name + " has no exactText key; give the text, or null when there is none.");
+        } else if (card.context.exactText !== null && !isText(card.context.exactText)) {
+          problems.push(name + " must give exactText as non-empty text, or null when there is none.");
+        }
+      }
+
+      if (!Array.isArray(card.images)) {
+        problems.push(name + " has no images list.");
+      }
+
+      const optionIds = new Set();
+      if (!Array.isArray(card.options)) {
+        problems.push(name + " has no options list.");
+      } else {
+        const reportedOptions = new Set();
+        card.options.forEach((option) => {
+          if (!isObject(option) || !isText(option.id)) {
+            problems.push(name + " has an option without an id.");
+            return;
+          }
+          if (optionIds.has(option.id) && !reportedOptions.has(option.id)) {
+            reportedOptions.add(option.id);
+            problems.push(name + ' has two options with the id "' + option.id + '".');
+          }
+          optionIds.add(option.id);
+        });
+      }
+
+      if (has(card, "recommendation") && isObject(card.recommendation) && has(card.recommendation, "optionId")) {
+        if (!optionIds.has(card.recommendation.optionId)) {
+          problems.push(name + ' recommends the option "' + card.recommendation.optionId + '", which is not one of its options.');
+        }
+      }
+    });
+
+    if (sheet.kind === "remainder" && isObject(sheet.remainder)) {
+      if (!Array.isArray(sheet.remainder.unsettled)) {
+        problems.push("The remainder's unsettled list must be a list of card ids.");
+      } else {
+        sheet.remainder.unsettled.forEach((id) => {
+          if (!cardIds.has(id)) {
+            problems.push('The unsettled list names "' + id + '", which is not a card in this sheet.');
+          }
+        });
+      }
+    }
+
+    return problems;
+  }
+</script>
+
+<script>
+  (function () {
+    const status = document.getElementById("sheet-status");
+    const errorBox = document.getElementById("sheet-error");
+    const errorList = document.getElementById("sheet-error-list");
+    const cardsHost = document.getElementById("sheet-cards");
+    const titleHost = document.getElementById("sheet-title");
+
+    function showErrors(problems) {
+      errorList.replaceChildren();
+      problems.forEach(function (problem) {
+        const item = document.createElement("li");
+        item.textContent = problem;
+        errorList.appendChild(item);
+      });
+      cardsHost.replaceChildren();
+      status.hidden = true;
+      errorBox.hidden = false;
+    }
+
+    function textElement(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      element.textContent = text;
+      return element;
+    }
+
+    function buildCard(card) {
+      const article = document.createElement("article");
+      article.className = "sh-card";
+      article.id = "card-" + card.id;
+      article.appendChild(textElement("span", card.warning ? "sh-badge sh-badge--warning" : "sh-badge", card.callKind));
+      article.appendChild(textElement("h2", "", card.question));
+      article.appendChild(textElement("p", "sh-label", "What's true now"));
+      article.appendChild(textElement("p", "", card.context.now));
+      article.appendChild(textElement("p", "sh-label", "Why it needs you"));
+      article.appendChild(textElement("p", "", card.context.whyOwner));
+      if (card.context.exactText !== null) {
+        article.appendChild(textElement("p", "sh-label", "The exact text"));
+        article.appendChild(textElement("blockquote", "", card.context.exactText));
+      }
+      return article;
+    }
+
+    function render(sheet) {
+      const fragment = document.createDocumentFragment();
+      sheet.cards.forEach(function (card) {
+        fragment.appendChild(buildCard(card));
+      });
+      document.title = sheet.title;
+      titleHost.textContent = sheet.title;
+      cardsHost.replaceChildren(fragment);
+      status.hidden = true;
+    }
+
+    async function load() {
+      let response;
+      try {
+        response = await fetch("sheet.json", { cache: "no-store" });
+      } catch (error) {
+        showErrors(["The sheet's data file could not be loaded."]);
+        return;
+      }
+      if (!response.ok) {
+        showErrors(["The sheet's data file could not be loaded (HTTP " + response.status + ")."]);
+        return;
+      }
+      let text;
+      try {
+        text = await response.text();
+      } catch (error) {
+        showErrors(["The sheet's data file could not be loaded."]);
+        return;
+      }
+      let sheet;
+      try {
+        sheet = JSON.parse(text);
+      } catch (error) {
+        showErrors(["The sheet's data file isn't valid JSON."]);
+        return;
+      }
+      const problems = checkSheet(sheet);
+      if (problems.length > 0) {
+        showErrors(problems);
+        return;
+      }
+      render(sheet);
+    }
+
+    load().catch(function () {
+      showErrors(["The sheet could not be drawn."]);
+    });
+  })();
+</script>
