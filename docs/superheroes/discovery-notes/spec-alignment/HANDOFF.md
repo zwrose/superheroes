@@ -515,3 +515,8 @@ are re-running on the changed parts before the re-vet.
   sixth owner call; migration provenance marked); round 2, 3 findings (tags, provenance wording,
   stale-approval cite); round 3, all clean. Sent back to the advisor for re-vet with dispositions;
   full diff since the vet: ~/.claude/wave-logs/spec-alignment-discovery/review/vet1-all-changes.diff.
+- Advisor re-vet round 2: one blocking finding, F15. The spec "preserved" a P2 carve-out that #1522
+  reverted (shipped doctrine: every new filing waits on the owner's word at every tier). Root cause:
+  this worktree branch was 129 commits behind main, so grounding and the citation check ran against
+  stale doctrine. Branch synced with main (merge fe384bda), F15 fixed with the advisor's wording, and
+  a full regrounding of both specs against current main launched.
