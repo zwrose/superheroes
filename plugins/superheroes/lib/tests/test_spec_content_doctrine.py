@@ -324,7 +324,7 @@ _CLAUSE_ENTRIES = [
         "architect-spec-spec-content-pointer",
         _ARCHITECT_SPEC_CHARTER,
         "",
-        "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-spec/reference/spec-content.md",
+        "${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md",
         "pointer_literal",
     ),
     # D. showrunner/SKILL.md
@@ -332,43 +332,8 @@ _CLAUSE_ENTRIES = [
         "showrunner-spec-content-pointer",
         _SHOWRUNNER_CHARTER,
         "",
-        "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-spec/reference/spec-content.md",
+        "${CLAUDE_PLUGIN_ROOT}/skills/architect-spec/reference/spec-content.md",
         "pointer_literal",
-    ),
-    (
-        "showrunner-absorption-judgment",
-        _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**||**absorbed into a spec**",
-        "recorded advisor judgment",
-        "literal_bold_section",
-    ),
-    (
-        "showrunner-absorption-no-trigger",
-        _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**||**no mechanical trigger**",
-        "no mechanical trigger",
-        "literal_bold_section",
-    ),
-    (
-        "showrunner-consolidation-five",
-        _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**||When a spec reaches",
-        "five amendments since its last full approval",
-        "literal_bold_section",
-    ),
-    (
-        "showrunner-consolidation-next-touch",
-        _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**||When a spec reaches",
-        "next touch",
-        "literal_bold_section",
-    ),
-    (
-        "showrunner-consolidation-owner-restamp",
-        _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**||When a spec reaches",
-        "the **owner's** re-stamp",
-        "literal_bold_section",
     ),
     # E. architect-discovery/SKILL.md
     (
@@ -574,11 +539,6 @@ _CLAUSE_IDS = frozenset({
     "review-spec-detail-annex-recognition-test",
     "review-spec-nine-unhappy-path-areas",
     "spec-content-fr23-carry-forward-restamp",
-    "showrunner-absorption-judgment",
-    "showrunner-absorption-no-trigger",
-    "showrunner-consolidation-five",
-    "showrunner-consolidation-next-touch",
-    "showrunner-consolidation-owner-restamp",
     "showrunner-spec-content-pointer",
     "spec-content-amendments-never-deleted-reason",
     "spec-content-amendments-never-deleted-rule",
@@ -945,7 +905,7 @@ def _assert_register_r4(read_text=None, isfile=None, is_source_repo=None):
         )
 
 
-_POINTER_ROOT_PREFIX = "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/"
+_POINTER_ROOT_PREFIX = "${CLAUDE_PLUGIN_ROOT}/"
 
 
 def _pointer_suffix(pointer):
@@ -1275,7 +1235,7 @@ def test_negative_pointer_literal_missing_fails():
     _expect_assertion_error(
         lambda: _assert_pointer_literal(
             _ARCHITECT_SPEC_CHARTER,
-            "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/missing/spec-content.md",
+            "${CLAUDE_PLUGIN_ROOT}/skills/missing/spec-content.md",
         ),
         match="plugin-relative pointer missing",
     )
@@ -1283,7 +1243,7 @@ def test_negative_pointer_literal_missing_fails():
 
 def test_negative_pointer_literal_unresolvable_path_fails():
     pointer = (
-        "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/missing/spec-content.md"
+        "${CLAUDE_PLUGIN_ROOT}/skills/missing/spec-content.md"
     )
     charter_text = _read_plugin(_ARCHITECT_SPEC_CHARTER)
     synthetic = charter_text + f"\n`{pointer}`\n"

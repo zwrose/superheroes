@@ -19,12 +19,15 @@ status files are advisory evidence for supervisor decisions only. Never raises t
 (CONVENTIONS §7.5: engine *selection* fails open; a completed external *result* fails closed.)
 """
 import argparse
+import contextlib
+import glob
 import hashlib
 import json
 import os
 import posixpath
 import re
 import secrets
+import shutil
 import signal
 import stat
 import subprocess
@@ -37,14 +40,18 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import claude_modes  # noqa: E402  claude dispatch-mode vocabulary (#1504)
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import config_dir  # noqa: E402  claude config root resolution (#1273)
+import core_md  # noqa: E402  sandboxAccess calibration read, once at run open (#1562)
 import dispatch_guard  # noqa: E402  model allowlist gate (#600, #1269 WO-B)
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
 import engine_result_channel  # noqa: E402  native result channel (#1270 WO-B1)
 import seat_bundle  # noqa: E402  single dispatch seat entry (#1269 WO-A1)
 import file_lock  # noqa: E402
+import git_routing  # noqa: E402  the one home of the git routing-var list
+import heartbeat  # noqa: E402  HEARTBEAT_ROOT_ENV — the ledger root the launcher hands a builder
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import model_registry  # noqa: E402  role read_write classification (#1269 WO-FIX1)
 import payload_contracts  # noqa: E402  verdict optional keys — single contract home (#1270 2c)
@@ -53,6 +60,7 @@ import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO
 import sanitized_view  # noqa: E402
 import session_contract  # noqa: E402  WRITE_RESULT_KIND — shared with writer via leaf module
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
+import size_count  # noqa: E402  working-tree size count for the fold tripwire (#1582)
 from guardian_tools import path_is_confidently_under  # noqa: E402
 
 # The adopted mode-7 hardening (#563) and sanitized review cwd (#684): a dispatched one-shot reviewer
@@ -68,6 +76,14 @@ ANTIHIJACK_PREAMBLE = (
     "when the diff alone cannot settle a question. Respond with your review ONLY.\n\n"
 )
 
+# Dispatched write engines never receive the orchestrator's kill-by-PID standing rule in the order
+# body; without an explicit process rule, a field engine used name-pattern kills and took down
+# sibling sessions' processes on a shared machine.
+WRITE_DISPATCH_PROCESS_RULE = (
+    "Never stop processes by name or pattern (`pkill`, `killall`, `kill` on a `pgrep` match); "
+    "other sessions share this machine. Stop only a PID you started yourself."
+)
+
 DEFAULT_SYNC_WAIT = 540          # below the 600 s foreground-conversion boundary (2.1.219)
 MAX_SYNC_WAIT = 540              # hard cap: a caller can ask for less, never more
 MIN_SYNC_WAIT = 0                # a zero slice is legal (open the run, return now); negative is not
@@ -75,6 +91,7 @@ MAX_WAIT_REFUSAL_RANGE = "max-wait-out-of-range"
 MAX_WAIT_REFUSAL_TYPE = "max-wait-not-an-integer"
 MAX_ATTEMPTS = 2                 # unchanged semantics: one tight-inline retry
 SUPERVISOR_POLL_INTERVAL = 0.5
+_ATTEMPT_POLL_INTERVAL = 0.2
 RUN_CHILD_RECORD_WAIT_SECONDS = 10
 RUN_LOCK_TTL = 2 * MAX_SYNC_WAIT
 ABANDON_CONFIRM_SECONDS = 10
@@ -86,18 +103,22 @@ WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
 NATIVE_SCHEMA_NAME = "native-schema.json"
-RUN_KIND_REVIEW = "review"
+RUN_KIND_REVIEW = session_contract.RUN_KIND_REVIEW
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
 REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
 _REVIEW_RESULT_KINDS_CHOICES_CONTRACT = (
     "choices:" + ",".join(str(kind) for kind in REVIEW_RESULT_KINDS)
 )
+_CLAUDE_MODES_CHOICES_CONTRACT = (
+    "choices:" + ",".join(str(mode) for mode in claude_modes.CLAUDE_MODE_INPUTS)
+)
+_CLAUDE_MODE_HELP = (
+    "print only; background is retired and refuses claude-mode-retired before spawn"
+)
 RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
-RUN_KIND_WRITE = "write"
+RUN_KIND_WRITE = session_contract.RUN_KIND_WRITE
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
-_GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_GLOBAL",
-                     "GIT_CONFIG_SYSTEM", "GIT_COMMON_DIR")
+_GIT_ROUTING_VARS = git_routing.GIT_ROUTING_VARS
 
 RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceiling (never borderline)
 ITEM_EVIDENCE_TIMEOUT = 30  # bounds collection-time declared-item evidence git calls under the run lock
@@ -108,7 +129,6 @@ MAX_BASELINE_ENTRIES = 20000
 MAX_BASELINE_ENTRY_BYTES = 2 * 1024 * 1024
 ITEM_DETAIL_UNDELIVERED = "items-undelivered"
 ITEM_DETAIL_EVIDENCE_UNAVAILABLE = "item-evidence-unavailable"
-ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED = "report-missing-items-delivered"
 ITEM_DETAIL_STDOUT_CAPPED = "stdout-capped-by-attempt"
 STDOUT_TRUNCATION_MARKER_PREFIX = "<<<SUPERHEROES-STDOUT-TRUNCATED:"
 STDERR_TRUNCATION_MARKER_PREFIX = "<<<SUPERHEROES-STDERR-TRUNCATED:"
@@ -122,6 +142,13 @@ ITEM_EVIDENCE_CAUSE_DIFF_FAILED = "diff-failed"
 ITEM_EVIDENCE_CAUSE_STATUS_TIMEOUT = "status-timeout"
 ITEM_EVIDENCE_CAUSE_STATUS_FAILED = "status-failed"
 BASE_SHA_UNRESOLVABLE = "base-sha-unresolvable"
+SIZE_COUNT_BUDGET_SECONDS = 30  # bounds the fold-time working-tree size count
+SIZE_INPUTS_INCOMPLETE = "size-inputs-incomplete"
+SIZE_LINE_INVALID = "size-line-invalid"
+SIZE_BASE_NOT_AN_OBJECT_ID = "size-base-not-an-object-id"
+SIZE_BASE_UNRESOLVABLE = "size-base-unresolvable"
+SIZE_INPUTS_MISMATCH = "size-inputs-mismatch"
+SIZE_TRIPWIRE_ABSENT_NOT_SUPPLIED = "size-inputs-not-supplied"
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
 _STDERR_TAIL = 4096
 MAX_STDOUT_CAPTURE = engine_adapter.ENGINE_OUTPUT_MAX_BYTES   # keep only the last 8 MB of engine stdout — the result JSON
@@ -132,6 +159,10 @@ MAX_STDERR_CAPTURE = 64 * 1024
 MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
 MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
+MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH = "run-dir-claude-mode-mismatch"
+MODE_REFUSAL_CLAUDE_MODE_RETIRED = claude_modes.ENTRY_REASON_CLAUDE_MODE_RETIRED
+MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_RETIRED = claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_RETIRED
+MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_UNKNOWN = claude_modes.DETAIL_RUN_DIR_CLAUDE_MODE_UNKNOWN
 PR_BODY_REFUSAL_RUN_DIR_MISMATCH = "run-dir-pr-body-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
@@ -173,6 +204,62 @@ def _mode_invalid_refusal(rejected_mode):
             "detail": MODE_REFUSAL_INVALID,
             "mode": sanitized_view.MODE_REVIEW,
             "rejectedMode": _coerce_rejected_mode(rejected_mode)}
+
+
+def _claude_mode_unknown_detail(value):
+    return "claude-mode-unknown:%s" % _coerce_rejected_mode(value)
+
+
+def _entry_claude_mode_refusal(claude_mode, **kwargs):
+    """Entry chokepoint for --claude-mode. Returns a refusal dict or None. Never raises."""
+    kind = claude_modes.classify(claude_mode)
+    if kind == claude_modes.CLASS_DISPATCHABLE:
+        return None
+    if kind == claude_modes.CLASS_RETIRED:
+        return _claude_mode_entry_refusal(
+            MODE_REFUSAL_CLAUDE_MODE_RETIRED,
+            "%s:%s" % (MODE_REFUSAL_CLAUDE_MODE_RETIRED, claude_mode),
+            **kwargs,
+        )
+    return _claude_mode_entry_refusal(
+        "claude-mode-unknown",
+        _claude_mode_unknown_detail(claude_mode),
+        **kwargs,
+    )
+
+
+def _continuation_claude_mode_refusal(journal_claude_mode):
+    """Continuation chokepoint for journal claudeMode. Returns refusal dict or None. Never raises."""
+    kind = claude_modes.classify(journal_claude_mode)
+    if kind == claude_modes.CLASS_DISPATCHABLE:
+        return None
+    detail = (
+        MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_RETIRED
+        if kind == claude_modes.CLASS_RETIRED
+        else MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_UNKNOWN
+    )
+    return {
+        "ok": False,
+        "reason": dispatch_outcome.REASON_UNRUNNABLE,
+        "detail": detail,
+        "attempts": 0,
+        "terminal": True,
+        "forfeited": False,
+    }
+
+
+def _claude_mode_entry_refusal(
+    entry_reason, detail, *, run_dir=None, mode=None, repo_root=None, engine=None,
+    run_kind=RUN_KIND_REVIEW,
+):
+    return _entry_refusal_terminal(
+        {"ok": False, "entryReason": entry_reason, "detail": detail, "mode": mode},
+        run_dir=run_dir,
+        mode=mode,
+        repo_root=repo_root,
+        engine=engine,
+        run_kind=run_kind,
+    )
 
 
 def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
@@ -444,10 +531,9 @@ def _native_schema_path(run_dir_real):
 
 def _native_channel_suffix(opened):
     """Return native-channel argv suffix for this run's result delivery mode."""
-    try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
-    except Exception:
-        return ()
+    delivery = engine_result_channel.result_delivery(
+        opened.get("engine"), opened.get("claudeMode"),
+    )
     if _opened_channel(opened) != engine_result_channel.CHANNEL_NATIVE:
         return ()
     schema_path = opened.get("nativeSchemaPath")
@@ -490,7 +576,9 @@ def _spawn_native_result_argv(run_dir_real, attempt, opened, spawn_argv):
         return False, spawn_argv, result_path, "native-result-path-occupied"
     # axis: prompt-delivered path is handed in _stage_attempt_prompt; argv delivery appends -o here.
     try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
     except Exception:
         delivery = None
     if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
@@ -500,42 +588,116 @@ def _spawn_native_result_argv(run_dir_real, attempt, opened, spawn_argv):
     return True, argv_out, result_path, None
 
 
+def _result_handoff_base():
+    """First dash-free existing directory among realpath(tempdir) and realpath(/tmp)."""
+    candidates = []
+    try:
+        candidates.append(os.path.realpath(tempfile.gettempdir()))
+    except OSError:
+        pass
+    try:
+        candidates.append(os.path.realpath("/tmp"))
+    except OSError:
+        pass
+    seen = set()
+    for base in candidates:
+        if base in seen:
+            continue
+        seen.add(base)
+        if os.path.isdir(base) and not re.search(r"-{2,}", base):
+            return base
+    return None
+
+
+def _release_result_handoff(handoff_path, run_dir_real):
+    """Remove the per-attempt run-dir symlink when it still points at run_dir_real. Never raises."""
+    if not handoff_path:
+        return
+    try:
+        link = os.path.dirname(handoff_path)
+        st = os.lstat(link)
+        if not stat.S_ISLNK(st.st_mode):
+            return
+        if os.readlink(link) != run_dir_real:
+            return
+        os.unlink(link)
+    except OSError:
+        pass
+
+
 def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
     """Stage per-attempt prompt with typed-file contract when delivery is prompt.
 
-    Returns (prompt_path, sha256_or_None, refusal)."""
+    Returns (prompt_path, sha256_or_None, refusal, handoff_path_or_None)."""
+    handoff_path = None
+
+    def _refuse(token):
+        _release_result_handoff(handoff_path, run_dir_real)
+        return None, None, token, None
+
     try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
     except Exception:
         delivery = None
     if result_path is None or delivery != engine_result_channel.RESULT_DELIVERY_PROMPT:
-        return opened["promptPath"], None, None
+        return opened["promptPath"], None, None, None
     try:
         with open(opened["promptPath"], "rb") as fh:
             prompt_bytes = fh.read()
     except OSError:
-        return None, None, "prompt-unreadable"
+        return None, None, "prompt-unreadable", None
     bound_sha = opened.get("stagedPromptSha256")
     if bound_sha is not None:
         if hashlib.sha256(prompt_bytes).hexdigest() != bound_sha:
-            return None, None, "prompt-tampered"
+            return None, None, "prompt-tampered", None
     staged = prompt_bytes.decode("utf-8", errors="ignore")
     schema_path = opened.get("nativeSchemaPath")
     if not schema_path:
-        return None, None, "native-schema-unreadable"
+        return None, None, "native-schema-unreadable", None
     try:
         st = os.lstat(schema_path)
         if not stat.S_ISREG(st.st_mode):
-            return None, None, "native-schema-unreadable"
+            return None, None, "native-schema-unreadable", None
     except OSError:
-        return None, None, "native-schema-unreadable"
+        return None, None, "native-schema-unreadable", None
     try:
         with open(schema_path, "r", encoding="utf-8") as fh:
             schema_text = fh.read()
     except OSError:
-        return None, None, "native-schema-unreadable"
+        return None, None, "native-schema-unreadable", None
+    contract_path = result_path
+    if re.search(r"-{2,}", result_path):
+        base = _result_handoff_base()
+        if base is None:
+            return None, None, "native-result-path-unsafe", None
+        link = None
+        for _ in range(3):
+            candidate = os.path.join(
+                base, "superheroes-result-" + secrets.token_hex(8),
+            )
+            try:
+                os.symlink(run_dir_real, candidate)
+                link = candidate
+                break
+            except FileExistsError:
+                continue
+            except OSError:
+                return None, None, "native-result-path-unsafe", None
+        if link is None:
+            return None, None, "native-result-path-unsafe", None
+        handed = os.path.join(link, os.path.basename(result_path))
+        if re.search(r"-{2,}", handed):
+            try:
+                os.unlink(link)
+            except OSError:
+                pass
+            return None, None, "native-result-path-unsafe", None
+        contract_path = handed
+        handoff_path = handed
     contract = engine_result_channel.file_result_contract(
-        schema_text.rstrip("\n"), result_path,
+        schema_text.rstrip("\n"), contract_path,
         opened.get("runKind", RUN_KIND_REVIEW),
     )
     if staged and not staged.endswith("\n"):
@@ -548,24 +710,26 @@ def _stage_attempt_prompt(run_dir_real, attempt, opened, result_path):
     except FileNotFoundError:
         pass
     except OSError:
-        return None, None, "attempt-prompt-unwritable"
+        return _refuse("attempt-prompt-unwritable")
     else:
-        return None, None, "attempt-prompt-occupied"
+        return _refuse("attempt-prompt-occupied")
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
-        return None, None, "attempt-prompt-occupied"
+        return _refuse("attempt-prompt-occupied")
     except OSError:
-        return None, None, "attempt-prompt-unwritable"
+        return _refuse("attempt-prompt-unwritable")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(content)
     except OSError:
-        return None, None, "attempt-prompt-unwritable"
-    return path, hashlib.sha256(content.encode("utf-8")).hexdigest(), None
+        return _refuse("attempt-prompt-unwritable")
+    return path, hashlib.sha256(content.encode("utf-8")).hexdigest(), None, handoff_path
 
 
-def _open_native_channel_argv(run_dir_real, engine, argv, run_kind, expected_result_kind=None):
+def _open_native_channel_argv(
+    run_dir_real, engine, argv, run_kind, expected_result_kind=None, claude_mode=None,
+):
     """Write native schema and extend argv for native-channel opens. Returns (argv, error_token, schema_path)."""
     if engine_result_channel.channel_for(engine) != engine_result_channel.CHANNEL_NATIVE:
         return list(argv), None, None
@@ -583,7 +747,7 @@ def _open_native_channel_argv(run_dir_real, engine, argv, run_kind, expected_res
     except OSError:
         return None, "native-schema-unwritable", None
     schema_text = json.dumps(schema, separators=(",", ":"))
-    delivery = engine_result_channel.result_delivery(engine)
+    delivery = engine_result_channel.result_delivery(engine, claude_mode)
     if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
         argv_out = list(argv) + ["--output-schema", schema_path]
     elif delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
@@ -614,6 +778,11 @@ def _canonical_spawn_argv(opened):
     role_kind = expected_role_kind
     cwd = opened.get("cwd")
     opts = {"cwd": cwd} if cwd else {}
+    claude_mode = opened.get("claudeMode")
+    if claude_mode is not None:
+        opts["claudeMode"] = claude_mode
+    if opened.get("claudeWriteSandbox") is not None:
+        opts["claudeWriteSandbox"] = opened["claudeWriteSandbox"]
     built = engine_adapter.build_argv_result(seat, role_kind, opts)
     if built.get("reason") is not None:
         return None, "engine-config:%s" % built["reason"]
@@ -760,6 +929,13 @@ def _claude_child_env(opened, base=None):
     if isinstance(cfg, str) and cfg:
         env["CLAUDE_CONFIG_DIR"] = cfg
         pins["CLAUDE_CONFIG_DIR"] = cfg
+    # the journaled socket grant names a directory under this base; a recovering invocation's own
+    # CLAUDE_CODE_TMPDIR must not move the shell's $TMPDIR away from it
+    sandbox = opened.get("claudeWriteSandbox")
+    tmp_base = sandbox.get("claudeTmpBase") if isinstance(sandbox, dict) else None
+    if isinstance(tmp_base, str) and tmp_base:
+        env["CLAUDE_CODE_TMPDIR"] = tmp_base
+        pins["CLAUDE_CODE_TMPDIR"] = tmp_base
     seat = _seat_dict_from_resolved_snapshot(opened.get("resolvedInputs"))
     effort = seat.get("effort") if isinstance(seat, dict) else None
     if isinstance(effort, str) and effort:
@@ -769,29 +945,100 @@ def _claude_child_env(opened, base=None):
     return env, pins
 
 
-def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
-    """Materialize claude stdout delivery's structured_output to the native result path. (#1273)"""
+_NATIVE_MATERIALIZER_DELIVERIES = frozenset({
+    engine_result_channel.RESULT_DELIVERY_STDOUT,
+})
+
+
+_SLEEP = time.sleep
+_NOW = time.monotonic
+
+
+def _session_id_path_safe(session_id):
+    """Reject session ids that escape the projects tree or expand globs. Never raises."""
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    if os.sep in session_id or "/" in session_id or ".." in session_id:
+        return False
+    if any(ch in session_id for ch in "*?[\\"):
+        return False
+    return True
+
+
+def _transcript_path_contained(path, config_dir):
+    """True when path resolves under config_dir/projects/. Never raises."""
     try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
+        projects_root = os.path.realpath(os.path.join(config_dir, "projects"))
+        resolved = os.path.realpath(path)
+        prefix = projects_root + os.sep
+        return resolved == projects_root or resolved.startswith(prefix)
+    except (OSError, ValueError):
+        return False
+
+
+def _glob_transcript_paths(config_dir, session_id):
+    """Glob transcript paths for session_id. Never raises."""
+    paths = []
+    try:
+        if not isinstance(config_dir, str) or not config_dir:
+            return paths
+        if not _session_id_path_safe(session_id):
+            return paths
+        pattern = os.path.join(config_dir, "projects", "*", session_id + ".jsonl")
+        paths = [
+            path for path in glob.glob(pattern)
+            if _transcript_path_contained(path, config_dir)
+        ]
     except Exception:
-        return None
-    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
-        return None
-    stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
-    result_path = _native_result_path(run_dir_real, attempt)
-    if result_path is None:
-        return "error"
-    env = engine_adapter.claude_result_envelope(stdout)
-    if (not isinstance(env, dict)
-            or env.get("is_error") is True
-            or "structured_output" not in env):
-        # axis: a path planted during the run occupies the materializer even without a result event.
-        try:
-            os.lstat(result_path)
-        except FileNotFoundError:
-            return "absent"
-        return "occupied"
-    payload = json.dumps(env["structured_output"], separators=(",", ":")) + "\n"
+        return []
+    return paths
+
+
+def _read_session_transcript_rows(config_dir, session_id):
+    """Read capped transcript JSONL rows; missing file is empty. Never raises."""
+    paths = _glob_transcript_paths(config_dir, session_id)
+    if len(paths) != 1:
+        return [], paths, 0, False
+    rows = []
+    file_size = 0
+    truncated = False
+    try:
+        with open(paths[0], "rb") as fh:
+            capped, truncated, observed = _bounded_stdout_cap_from_file(
+                fh, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
+            )
+            file_size = observed or 0
+        if capped is None:
+            return [], paths, file_size, False
+        text = capped.decode("utf-8", errors="ignore")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+    except OSError:
+        return [], paths, file_size, False
+    return rows, paths, file_size, truncated
+
+
+read_session_transcript_rows = _read_session_transcript_rows
+
+
+def _scrub_native_payload(obj):
+    """Scrub every string key and value in a native structured-output payload. Never raises."""
+    try:
+        return engine_adapter._scrub_mapping(obj)
+    except Exception:
+        return obj
+
+
+def _write_native_result_payload(result_path, payload_obj):
+    payload = json.dumps(_scrub_native_payload(payload_obj), separators=(",", ":")) + "\n"
     try:
         fd = os.open(
             result_path,
@@ -810,13 +1057,59 @@ def _materialize_stdout_result(run_dir_real, attempt, opened, stdout_path):
     return "materialized"
 
 
-def _stdout_delivery_gate(run_dir_real, attempt, opened):
-    """Refuse admission when stdout delivery did not materialize a native result. (#1273)"""
-    try:
-        delivery = engine_result_channel.result_delivery(opened.get("engine"))
-    except Exception:
+def _native_result_materialization_status(result_path, payload_obj):
+    if payload_obj is None:
+        try:
+            os.lstat(result_path)
+        except FileNotFoundError:
+            return "absent"
+        return "occupied"
+    return _write_native_result_payload(result_path, payload_obj)
+
+
+def _materialize_stdout_result(
+        run_dir_real, attempt, opened, stdout_path, stdout_event,
+        stdout_obs_state=None,
+):
+    """Materialize stdout delivery to the native result path. (#1273)"""
+    delivery = engine_result_channel.result_delivery(
+        opened.get("engine"), opened.get("claudeMode"),
+    )
+    if delivery not in _NATIVE_MATERIALIZER_DELIVERIES:
         return None
-    if delivery != engine_result_channel.RESULT_DELIVERY_STDOUT:
+    result_path = _native_result_path(run_dir_real, attempt)
+    if result_path is None:
+        return "error"
+    if stdout_obs_state is not None:
+        _held_stdout_bytes_unchanged(stdout_obs_state, stdout_path)
+        stdout_event = stdout_obs_state.get("event")
+    env = stdout_event
+    if (not isinstance(env, dict)
+            or env.get("is_error") is True
+            or "structured_output" not in env):
+        return _native_result_materialization_status(result_path, None)
+    return _native_result_materialization_status(
+        result_path, env["structured_output"],
+    )
+
+
+def _result_delivery_gate_refusal():
+    return {
+        "forfeit": True,
+        "reason": dispatch_outcome.REASON_FORFEITED,
+        "detail": "result-delivery-unresolved",
+    }
+
+
+def _stdout_delivery_gate(run_dir_real, attempt, opened):
+    """Refuse admission when stdout/transcript delivery did not materialize a native result. (#1273)"""
+    try:
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
+    except (engine_result_channel.UnknownEngineError, ValueError):
+        return _result_delivery_gate_refusal()
+    if delivery not in _NATIVE_MATERIALIZER_DELIVERIES:
         return None
     records, _corrupt = _journal_read(run_dir_real)
     state = _journal_state(records)
@@ -834,14 +1127,22 @@ def _stdout_delivery_gate(run_dir_real, attempt, opened):
             "reason": dispatch_outcome.REASON_FORFEITED,
             "detail": "native-result-missing",
         }
-    stdout_result = ended.get("stdoutResult")
-    if stdout_result == "materialized":
+    materialized = ended.get("stdoutResult")
+    if materialized == "materialized":
         return None
-    if stdout_result == "occupied":
+    if materialized == "occupied":
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
             "detail": "native-result-path-occupied",
+        }
+    dropped = ended.get("stdoutResultDropped")
+    if isinstance(dropped, str) and dropped:
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "stdout-result-dropped",
+            "droppedCause": dropped,
         }
     return {
         "forfeit": True,
@@ -955,9 +1256,11 @@ def _resolved_inputs_status_from_opened(opened):
 
 
 def _continuation_seat_tuple(snapshot):
+    vendor = snapshot.get("engine")
+    model = snapshot.get("model")
     return (
-        snapshot.get("engine"),
-        snapshot.get("model"),
+        vendor,
+        model,
         snapshot.get("effort"),
         snapshot.get("role"),
     )
@@ -1003,6 +1306,8 @@ def _build_resolved_inputs(
     progress_path,
     progress_path_source,
     engine_model_opts,
+    claude_mode=None,
+    claude_mode_source=resolved_inputs_vocab.DEFAULT,
 ):
     snapshot = {}
     model_source = seat.get("modelSource", resolved_inputs_vocab.CALLER)
@@ -1034,6 +1339,7 @@ def _build_resolved_inputs(
     _put_resolved(snapshot, "baseSha", base_sha, base_sha_source)
     _put_resolved(snapshot, "diffBase", diff_base, diff_base_source)
     _put_resolved(snapshot, "progressPath", progress_path, progress_path_source)
+    _put_resolved(snapshot, "claudeMode", claude_mode, claude_mode_source)
     journal_root, journal_root_source = _journal_root_with_source(run_dir_real)
     _put_resolved(snapshot, "journalRoot", journal_root, journal_root_source)
     return snapshot
@@ -1083,9 +1389,26 @@ def _journal_path(run_dir_real):
     return os.path.join(root, digest, JOURNAL_NAME)
 
 
+def _host_load_sample():
+    """Host 1/5/15-minute load average as three floats; None where the OS cannot give it."""
+    try:
+        return [round(v, 2) for v in os.getloadavg()]
+    except (OSError, AttributeError):
+        return None
+
+
 def _journal_append(run_dir_real, record):
-    """Append one JSON line; flush + fsync. False on OSError; never raises."""
+    """Append one JSON line; flush + fsync. False on OSError; never raises.
+
+    Chokepoint (#1467): every attempt-ended record carries hostLoadAtOpen, hostLoadAtEnd and
+    commandTime; absent keys default here, on a copy, so no producer can omit them."""
     path = _journal_path(run_dir_real)
+    if isinstance(record, dict) and record.get("kind") == "attempt-ended":
+        record = dict(record)
+        if "hostLoadAtEnd" not in record:
+            record["hostLoadAtEnd"] = _host_load_sample()
+        record.setdefault("hostLoadAtOpen", None)
+        record.setdefault("commandTime", None)
     try:
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         line = json.dumps(record, separators=(",", ":")) + "\n"
@@ -1195,10 +1518,14 @@ def _journal_state(records):
                 slot["enginePgid"] = rec.get("enginePgid")
                 if "attemptPromptPath" in rec:
                     slot["attemptPromptPath"] = rec.get("attemptPromptPath")
+                if "hostLoadAtOpen" in rec:
+                    slot["hostLoadAtOpen"] = rec.get("hostLoadAtOpen")
                 if "attemptPromptSha256" in rec:
                     slot["attemptPromptSha256"] = rec.get("attemptPromptSha256")
                 if "nativeResultPath" in rec:
                     slot["nativeResultPath"] = rec.get("nativeResultPath")
+                if "nativeResultHandoffPath" in rec:
+                    slot["nativeResultHandoffPath"] = rec.get("nativeResultHandoffPath")
         elif kind == "attempt-ended":
             att = rec.get("attempt")
             if att is not None:
@@ -1347,17 +1674,204 @@ def _run_live_evidence(state):
 
 def _git_scrubbed(cwd, *args, timeout=None):
     return subprocess.run(
-        ["git", "-C", cwd, *args],
+        [
+            "git", "-C", cwd,
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "core.fsmonitor=",
+            *args,
+        ],
         capture_output=True, text=True,
         env=launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,)),
         timeout=timeout,
     )
 
 
+# The platform whose sandbox runtime honors network.allowLocalBinding and network.allowUnixSockets.
+# The upstream sandbox runtime forwards both settings to its macOS wrapper only; its Linux wrapper
+# receives neither, so a run opened there would record local access that is never granted.
+_LOCAL_ACCESS_PLATFORM = "darwin"
+
+# Claude Code 2.1.284 builds the sandboxed shell's per-user temp dir, <base>/claude-<uid>, from
+# CLAUDE_CODE_TMPDIR (else /tmp) only when that whole path is at most this many UTF-8 bytes; a
+# longer one falls back to /tmp/claude-<uid>. Mirrors the 2.1.284 binary's sandboxed-shell rule
+# (ASe(), n7n=44); its EWo() helper measures the base alone and is not the rule the shell uses.
+_CLAUDE_CODE_TMPDIR_MAX_BYTES = 44
+
+
+def _host_platform():
+    return sys.platform
+
+
+@contextlib.contextmanager
+def _git_routing_scrubbed_environ():
+    """Hide the ambient Git routing variables from callees that read ``os.environ`` themselves.
+
+    The calibration read resolves its repository through store_core, whose Git subprocess copies
+    the ambient environment; the sandbox-root lookup beside it is scrubbed, and the two must name
+    the same repository."""
+    saved = {k: os.environ.pop(k) for k in _GIT_ROUTING_VARS if k in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
+    """Resolve the claude write channel's sandbox inputs ONCE, at run open (#1554).
+
+    ``run_dir`` is the dispatch run directory: it and the supervisor journal root are denied for
+    writes, so the default /tmp grant (#1600) cannot reach the decision record.
+
+    Returns (sandbox_dict, None) or (None, refusal_token). The dict is journaled in the
+    run-opened record and reused verbatim on every continuation and spawn — never re-derived
+    from the ambient environment."""
+    try:
+        proc = _git_scrubbed(
+            cwd_real, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir",
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
+    if proc.returncode != 0:
+        return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    if len(lines) != 2 or not all(os.path.isabs(ln) for ln in lines):
+        return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
+    git_dir = os.path.realpath(lines[0])
+    git_common_dir = os.path.realpath(lines[1])
+    write_roots = []
+    for root in (cwd_real, git_dir, git_common_dir):
+        if root not in write_roots:
+            write_roots.append(root)
+    deny_write = []
+    for denied in (
+        os.path.join(cwd_real, ".git"),
+        os.path.join(git_common_dir, "hooks"),
+        os.path.join(git_common_dir, "config"),
+        os.path.join(git_dir, "config.worktree"),
+        os.path.join(git_dir, "commondir"),
+        os.path.join(git_dir, "gitdir"),
+    ):
+        if denied not in deny_write:
+            deny_write.append(denied)
+    uv_cache_dir = None
+    uv_path = shutil.which("uv")
+    if uv_path is not None:
+        try:
+            uv_proc = subprocess.run(
+                [uv_path, "cache", "dir"], cwd=cwd_real, capture_output=True, text=True,
+                timeout=timeout,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None, engine_adapter.REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE
+        out = (uv_proc.stdout or "").strip()
+        if uv_proc.returncode != 0 or not out:
+            return None, engine_adapter.REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE
+        uv_cache_dir = os.path.realpath(os.path.join(cwd_real, out))
+    # The sandboxAccess calibration is read here and only here (#1562); continuations and spawns
+    # use the journaled value.
+    try:
+        with _git_routing_scrubbed_environ():
+            read = core_md.read_sandbox_access(cwd_real)
+        calibrated = read["access"]
+        reason = read["reason"]
+    except Exception:
+        return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
+    if calibrated is None:
+        if reason == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
+            return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
+        return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
+    if (calibrated["localPorts"] or calibrated["localSockets"]) \
+            and _host_platform() != _LOCAL_ACCESS_PLATFORM:
+        return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM
+    socket_dirs = []
+    tmp_base = None
+    if calibrated["localSockets"]:
+        if not hasattr(os, "getuid"):
+            return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_UNREADABLE
+        # the sandboxed shell's TMPDIR, not the CLI's internal temp dir: a per-user path longer
+        # than the CLI's limit is ignored there, so a socket grant under it would never match
+        tmp_base = os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp"
+        user_dir = os.path.join(tmp_base, "claude-%d" % os.getuid())
+        if len(user_dir.encode("utf-8", "surrogateescape")) > _CLAUDE_CODE_TMPDIR_MAX_BYTES:
+            tmp_base = "/tmp"
+            user_dir = os.path.join(tmp_base, "claude-%d" % os.getuid())
+        socket_dirs.append(os.path.realpath(user_dir))
+    extra_write_paths = []
+    for configured in calibrated["extraWritePaths"]:
+        extra = os.path.realpath(configured)
+        # calibration refuses a root spelling, but a symlink to / only resolves to root here
+        if not extra.strip("/"):
+            return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
+        # the runtime reads an allowWrite entry as a glob: `/**` would grant the whole filesystem
+        if engine_adapter.sandbox_path_has_glob(configured) \
+                or engine_adapter.sandbox_path_has_glob(extra):
+            return None, engine_adapter.REFUSAL_SANDBOX_ACCESS_MALFORMED
+        if extra not in extra_write_paths:
+            extra_write_paths.append(extra)
+    tmp_write_roots = []
+    for tmp_root in ("/tmp", os.path.realpath("/tmp")):
+        # a /tmp that resolves to / would grant the whole filesystem
+        if not os.path.realpath(tmp_root).strip("/"):
+            continue
+        if os.path.isdir(tmp_root) and tmp_root not in tmp_write_roots:
+            tmp_write_roots.append(tmp_root)
+    if run_dir is not None:
+        # deny wins over the /tmp allow: the run dir, the journal root the runner trusts as its
+        # spawn/retry/fold record, the worktree lease (a file in the temp dir) and the launch
+        # ledger root (reservations, outcomes and vet records the launcher trusts, by default
+        # under the temp dir) stay unwritable from inside the sandbox
+        journal_root, _source = _journal_root_with_source(run_dir)
+        # The launcher scrubs LEDGER_ROOT_ENV from a builder's environment and carries the root
+        # it resolved in HEARTBEAT_ROOT_ENV instead, so both spellings are denied, beside the
+        # default root, whichever of them a given process sees.
+        ledger_roots = [
+            os.environ[env_name]
+            for env_name in (launch_ledger.LEDGER_ROOT_ENV, heartbeat.HEARTBEAT_ROOT_ENV)
+            if os.environ.get(env_name)
+        ]
+        ledger_roots.append(launch_ledger.default_root())
+        for denied in (
+            os.path.realpath(run_dir),
+            os.path.realpath(journal_root),
+            os.path.realpath(_worktree_lease_path(cwd_real)),
+            *(os.path.realpath(os.path.abspath(root)) for root in ledger_roots),
+        ):
+            # the runtime reads a deny entry as a glob too: a bracket spelling would match a
+            # sibling and leave the literal path writable under the /tmp grant
+            if engine_adapter.sandbox_path_has_glob(denied):
+                return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
+            if denied not in deny_write:
+                deny_write.append(denied)
+    sandbox = {
+        "writeRoots": write_roots,
+        "denyWrite": deny_write,
+        "uvCacheDir": uv_cache_dir,
+        # the owner-ruled defaults (#1600), frozen at open like the roots
+        "tmpWriteRoots": tmp_write_roots,
+        "localBinding": _host_platform() == _LOCAL_ACCESS_PLATFORM,
+        "access": {
+            "allowedDomains": list(calibrated["allowedDomains"]),
+            "localPorts": calibrated["localPorts"],
+            "localSocketDirs": socket_dirs,
+            "extraWritePaths": extra_write_paths,
+        },
+    }
+    if tmp_base is not None:
+        # frozen with the socket grant: every spawn pins it as the child's CLAUDE_CODE_TMPDIR
+        sandbox["claudeTmpBase"] = tmp_base
+    return sandbox, None
+
+
 def _git_scrubbed_bytes(cwd, *args, timeout=None):
     """Byte-exact git for the dirt probe: pathnames are bytes, and no channel may rewrite them."""
     return subprocess.run(
-        ["git", "-C", cwd, *args],
+        [
+            "git", "-C", cwd,
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "core.fsmonitor=",
+            *args,
+        ],
         capture_output=True,
         env=launch_ledger.scrub_env(keys=_GIT_ROUTING_VARS, roots=(JOURNAL_ROOT_ENV,)),
         timeout=timeout,
@@ -1769,6 +2283,97 @@ def _baseline_head_sha_readable(baseline):
     return bool(_BASE_SHA_OBJECT_ID_RE.match(head_sha.strip()))
 
 
+def _baseline_effective_excluded_roots(baseline, cwd_real, timeout=None):
+    """Baseline excludedRoots plus live foreign-leased roots, kept only when strictly inside cwd."""
+    roots = set(baseline.get("excludedRoots") or [])
+    live = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+    if live is not None:
+        roots |= live
+    # Axis: the strict-inside-cwd invariant is enforced where it is load-bearing, because persisted roots arrive from disk and are not trustworthy.
+    return {
+        r for r in roots
+        if isinstance(r, str) and r.startswith(cwd_real + os.sep)
+    }
+
+
+MAX_DIRTIED_PATHS = 200
+
+
+def _worktree_dirtied_paths(baseline, cwd_real, timeout=None):
+    """Name the paths a write attempt changed. Never raises.
+
+    Returns {"status": "ok", "paths", "headMoved", "truncated"} or
+    {"status": "indeterminate", "reason": token}. Baseline validity mirrors
+    _worktree_dirt_verdict, so ok is never reported from a baseline the verdict refuses.
+    A path already dirty at open whose status did not change is not listed.
+    """
+    def indeterminate(reason):
+        return {"status": "indeterminate", "reason": reason}
+
+    try:
+        if not isinstance(baseline, dict):
+            return indeterminate("baseline-not-a-dict")
+        if not _baseline_head_sha_readable(baseline):
+            return indeterminate("baseline-head-unreadable")
+        if "entriesVersion" not in baseline:
+            return indeterminate("baseline-entries-version-missing")
+        if baseline.get("entriesVersion") != BASELINE_ENTRIES_VERSION:
+            return indeterminate("baseline-entries-version-unknown")
+        if baseline.get("entriesOverflow"):
+            return indeterminate("baseline-entries-overflow")
+        entries_before = baseline.get("entries")
+        if not isinstance(entries_before, list) or not all(
+            isinstance(e, list) and len(e) >= 1 and all(isinstance(p, str) for p in e)
+            for e in entries_before
+        ):
+            return indeterminate("baseline-entries-malformed")
+        try:
+            head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return indeterminate("git-rev-parse-timeout")
+        if head.returncode != 0:
+            return indeterminate("git-rev-parse-failed")
+        current_head = (head.stdout or "").strip()
+        entries_after = _worktree_entry_set(cwd_real, timeout=timeout)
+        if entries_after is None:
+            return indeterminate("git-status-unreadable")
+        roots = _baseline_effective_excluded_roots(baseline, cwd_real, timeout=timeout)
+        before = _filter_entry_list(entries_before, cwd_real, roots)
+        after = _filter_entry_list(entries_after, cwd_real, roots)
+        entry_key = lambda record: json.dumps(record, ensure_ascii=False, sort_keys=False)
+        keys_before = {entry_key(r) for r in before}
+        keys_after = {entry_key(r) for r in after}
+        paths = set()
+        for record in before + after:
+            key = entry_key(record)
+            if (key in keys_before) != (key in keys_after):
+                paths.update(record[1:])
+        head_moved = current_head != baseline["headSha"].strip()
+        if head_moved:
+            try:
+                diff = _git_scrubbed_bytes(
+                    cwd_real, "diff", "--name-only", "--no-renames", "-z",
+                    baseline["headSha"].strip(), "HEAD", timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                return indeterminate("git-diff-timeout")
+            if diff.returncode != 0:
+                return indeterminate("git-diff-failed")
+            for raw in (diff.stdout or b"").split(b"\0"):
+                if raw:
+                    paths.add(raw.decode("utf-8", errors="surrogateescape"))
+        ordered = sorted(paths)
+        truncated = len(ordered) > MAX_DIRTIED_PATHS
+        return {
+            "status": "ok",
+            "paths": ordered[:MAX_DIRTIED_PATHS],
+            "headMoved": head_moved,
+            "truncated": truncated,
+        }
+    except Exception:  # never raises: an unforeseen failure is an honest indeterminate
+        return indeterminate("unexpected-error")
+
+
 def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
     """Return True if dirtied, False if clean, None if unreadable (fail-closed)."""
     if not isinstance(baseline, dict):
@@ -1799,15 +2404,7 @@ def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
         entries_after = _worktree_entry_set(cwd_real, timeout=timeout)
         if entries_after is None:
             return None
-        roots = set(baseline.get("excludedRoots") or [])
-        live = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
-        if live is not None:
-            roots |= live
-        # Axis: the strict-inside-cwd invariant is enforced where it is load-bearing, because persisted roots arrive from disk and are not trustworthy.
-        roots = {
-            r for r in roots
-            if isinstance(r, str) and r.startswith(cwd_real + os.sep)
-        }
+        roots = _baseline_effective_excluded_roots(baseline, cwd_real, timeout=timeout)
         before = _filter_entry_list(entries_before, cwd_real, roots)
         after = _filter_entry_list(entries_after, cwd_real, roots)
         entry_key = lambda record: json.dumps(record, ensure_ascii=False, sort_keys=False)
@@ -2237,7 +2834,7 @@ def _validate_run_dir(run_dir, *, create=False):
     while path.endswith(os.sep) and len(path) > 1:
         path = path[:-1]
     if os.path.islink(path):
-        return False, "run-dir-is-symlink"
+        return False, dispatch_outcome.DETAIL_RUN_DIR_IS_SYMLINK
     if create and not os.path.exists(path):
         try:
             os.makedirs(path, mode=0o700, exist_ok=True)
@@ -2326,235 +2923,9 @@ def _repository_root_from_git_cwd(cwd_real, timeout=None):
     return None
 
 
-def _read_stdout_for_artifact_scan(path):
-    """Read attempt stdout for engaged-artifact scan; None when unreadable. Never raises."""
-    try:
-        with open(path, encoding="utf-8", errors="ignore") as fh:
-            return fh.read()
-    except OSError:
-        return None
-
-
-# Marker-channel recoveries (salvage, engaged-artifact upgrade, stdout-cap forfeit,
-# report-missing-items-delivered): no dispatchable engine is on the marker channel since
-# C11 layer 3c (#1270); these helpers have no caller in the supervised path and are kept
-# only until the gardening pass that deletes them (KEEP-OR-RETIRE S1/S2).
-def _scan_review_engaged_candidates(run_dir_real, state):
-    """Scan every attempt-ended stdout for engaged review artifacts (#747 WO-4b).
-
-    axis: which outcome is minted — all attempts, not only the graded last attempt.
-    """
-    opened = state.get("opened") or {}
-    engine = opened.get("engine")
-    fed_prompt = opened.get("fedPrompt", "")
-    echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
-    candidates = []
-    for att in sorted(state.get("attempts") or {}):
-        slot = state["attempts"][att]
-        if slot.get("ended") is None:
-            continue
-        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % att)
-        stdout = _read_stdout_for_artifact_scan(stdout_path)
-        if stdout is None:
-            continue
-        shape = engine_adapter.review_artifact_shape(stdout, fed_prompt)
-        if not shape.get("engaged"):
-            continue
-        salvage = engine_adapter.salvage_from_artifact(
-            stdout, fed_prompt, echo_nonce=echo_nonce)
-        candidates.append({
-            "attempt": att,
-            "stdoutPath": stdout_path,
-            "shape": shape,
-            "salvage": salvage,
-            "citations": shape.get("citations") or 0,
-        })
-    return candidates
-
-
-def _scan_write_report_candidates(run_dir_real, state):
-    """Scan every ended write stdout for recoverable implementer reports. Never raises."""
-    try:
-        opened = state.get("opened") or {}
-        engine = opened.get("engine")
-        role_kind = opened.get("roleKind", "build")
-        fed_prompt = opened.get("fedPrompt", "")
-        candidates = []
-        for att in sorted(state.get("attempts") or {}):
-            slot = state["attempts"][att]
-            if slot.get("ended") is None:
-                continue
-            stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % att)
-            stdout = _read_stdout_for_artifact_scan(stdout_path)
-            if stdout is None:
-                continue
-            salvage = engine_adapter.salvage_write_report(
-                engine, role_kind, stdout, fed_prompt,
-            )
-            if not isinstance(salvage, dict) or salvage.get("salvaged") is not True:
-                continue
-            candidates.append({
-                "attempt": att,
-                "stdoutPath": stdout_path,
-                "salvage": salvage,
-            })
-        return candidates
-    except Exception:
-        return []
-
-
-def _write_report_salvage_block(best, also):
-    salvage = {
-        "attempt": best["attempt"],
-        "stdoutPath": best["stdoutPath"],
-    }
-    salvage.update(best["salvage"])
-    if also:
-        salvage["alsoRecovered"] = also
-    return salvage
-
-
-def _write_report_disclosure(engine):
-    return (
-        "%s build worker produced a report, but our transport did not carry it to a "
-        "gradeable result — the outcome is still a forfeit. Every claim in the salvaged "
-        "report is the implementer's claim and must be independently verified before use."
-        % engine
-    )
-
-
-def _write_report_missing_items_delivered_disclosure(engine):
-    return (
-        "%s build worker ended cleanly but the contracted write-report tail was missing; "
-        "every declared path is present in the delivery evidence, so the work very likely "
-        "landed — reconstruct the change from the diff and re-verify it rather than "
-        "re-running the order. This proves membership in the final diff only, not authorship "
-        "and not completeness; a concurrent writer could supply a path, and a delivered path "
-        "says nothing about whether the order's intent was met." % engine
-    )
-
-
-def _write_report_missing_items_delivered_detail(run_dir_real, state, attempt):
-    """Return report-missing-items-delivered when all five I3 clauses hold; else None."""
-    try:
-        opened = state.get("opened") or {}
-        slot = (state.get("attempts") or {}).get(attempt) or {}
-        ended = slot.get("ended") or {}
-        if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
-            return None
-        fed_prompt = opened.get("fedPrompt", "")
-        if not engine_adapter.write_prompt_is_contracted(fed_prompt):
-            return None
-        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
-        stdout = _read_capped_text(stdout_path, stream=CAP_STREAM_STDOUT)
-        engine = opened.get("engine")
-        role_kind = opened.get("roleKind", "build")
-        res = engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
-        if res.get("ok") is True:
-            return None
-        if res.get("reason") != "unreadable":
-            return None
-        expected_items = opened.get("expectedItems")
-        if not isinstance(expected_items, list) or not expected_items:
-            return None
-        cwd = opened.get("cwd")
-        if not cwd:
-            return None
-        cwd_real = os.path.realpath(cwd)
-        item_check = _item_delivery_check(cwd_real, opened, timeout=ITEM_EVIDENCE_TIMEOUT)
-        if item_check is None:
-            return None
-        if item_check.get("evidenceUnavailable"):
-            return None
-        if item_check.get("missing"):
-            return None
-        return (ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED, item_check)
-    except Exception:
-        return None
-
-
 def _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempt):
     """Marker-channel recoveries retired with layer 3c (#1270); the terminal passes through unchanged."""
     return terminal
-
-
-def _attach_write_report_salvage(run_dir_real, state, terminal, engine):
-    """Attach recoverable write-report metadata without changing a forfeited outcome."""
-    candidates = _scan_write_report_candidates(run_dir_real, state)
-    if not candidates:
-        return terminal
-    best = max(candidates, key=lambda candidate: (
-        candidate["salvage"].get("structured") is True,
-        candidate["attempt"],
-    ))
-    also = [
-        {"attempt": candidate["attempt"], "stdoutPath": candidate["stdoutPath"]}
-        for candidate in candidates
-        if candidate["attempt"] != best["attempt"]
-    ]
-    out = dict(terminal)
-    out["salvage"] = _write_report_salvage_block(best, also)
-    out["disclosure"] = "%s %s" % (
-        terminal.get("disclosure", ""), _write_report_disclosure(engine),
-    )
-    return out
-
-
-def _select_best_engaged_candidate(candidates):
-    """Highest citation count; ties broken by later attempt. Never raises."""
-    if not candidates:
-        return None, []
-    best = max(candidates, key=lambda c: (c["citations"], c["attempt"]))
-    also = [
-        {"attempt": c["attempt"], "stdoutPath": c["stdoutPath"]}
-        for c in candidates
-        if c["attempt"] != best["attempt"]
-    ]
-    return best, also
-
-
-def _engaged_artifact_disclosure(engine):
-    return (
-        "%s reviewer seat produced a review, but our transport did not carry it to a "
-        "gradeable result — this seat is not credited toward certification. Any finding "
-        "taken from the salvaged artifact must be independently verified before use; "
-        "disclose this degraded vendor mix in the PR" % engine
-    )
-
-
-def _salvage_block_from_candidate(best, also):
-    salvage_out = {
-        "attempt": best["attempt"],
-        "stdoutPath": best["stdoutPath"],
-        "shape": best["shape"],
-    }
-    for key in ("findings", "structured", "requiresManualRead", "excerptBytes", "excerpt"):
-        val = best["salvage"].get(key)
-        if val is not None:
-            salvage_out[key] = val
-    if also:
-        salvage_out["alsoEngaged"] = also
-    return salvage_out
-
-
-def _maybe_upgrade_review_terminal_forfeit(run_dir_real, state, terminal, engine):
-    """Marker-channel runs only — a native run's terminal is never upgraded; the typed result file is the only result.
-
-    axis: which outcome is minted — engaged artifact upgrades forfeited/vacuous terminal only.
-  Write runs never mint this outcome — build salvage is work-on-disk doctrine."""
-    if not terminal.get("forfeited"):
-        return terminal
-    candidates = _scan_review_engaged_candidates(run_dir_real, state)
-    if not candidates:
-        return terminal
-    best, also = _select_best_engaged_candidate(candidates)
-    if best is None:
-        return terminal
-    out = dict(terminal)
-    out["reason"] = dispatch_outcome.REASON_FORFEIT_ENGAGED_ARTIFACT
-    out["salvage"] = _salvage_block_from_candidate(best, also)
-    out["disclosure"] = _engaged_artifact_disclosure(engine)
-    return out
 
 
 def _finish_preflight_terminal(
@@ -2591,9 +2962,11 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
     non-cleanup refusal when the terminal record could not be made durable. Never raises."""
     opened = state.get("opened") or {}
     argv = list(opened.get("argv") or result.get("argv") or [])
+    terminal_result = result
 
     if record_kind == "run-folded":
-        record = {"kind": "run-folded", "result": dict(result), "at": time.time()}
+        terminal_result = dict(result)
+        record = {"kind": "run-folded", "result": dict(terminal_result), "at": time.time()}
     elif record_kind == "run-abandoned":
         # axis: that repeat reads return the stored result — not a fresh abandon mint.
         abandon_result = _abandon_terminal_result(run_dir_real, state)
@@ -2618,7 +2991,7 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
             run_dir=run_dir_real, argv=argv,
         )
 
-    return _with_run_fields(result, run_dir=run_dir_real, argv=argv)
+    return _with_run_fields(terminal_result, run_dir=run_dir_real, argv=argv)
 
 
 def _capture_sibling_baseline(repo_root, cwd_real, *, preflight_timeout):
@@ -2679,11 +3052,179 @@ def _fold_sibling_worktrees(state):
         return {"status": "indeterminate", "reason": "probe-raised"}
 
 
+CC_WRITES_SWEEP_BUDGET_SECONDS = 10.0
+
+
+def _registered_nested_worktree_roots(cwd_real, timeout=CC_WRITES_SWEEP_BUDGET_SECONDS):
+    """Registered worktrees nested under ``cwd_real`` (never cwd itself), or None when unenumerable."""
+    try:
+        wt_list = _git_scrubbed_bytes(
+            cwd_real, "worktree", "list", "--porcelain", timeout=timeout)
+        if wt_list.returncode != 0:
+            return None
+        cwd_real = os.path.realpath(cwd_real)
+        return {
+            wt["path"] for wt in _parse_git_worktree_list(wt_list.stdout or b"")
+            if wt["path"].startswith(cwd_real + os.sep)
+        }
+    except Exception:
+        return None
+
+
+def _sweep_claude_dir(dirfd, prefix, removed):
+    """Remove an empty `.cc-writes` under the `.claude` at ``dirfd``, then `.claude` if now empty.
+
+    Returns True when `.claude` itself was removed. Every removal is dir_fd-relative."""
+    try:
+        claude_fd = os.open(
+            ".claude", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dirfd)
+    except OSError:
+        return False
+    try:
+        try:
+            os.rmdir(".cc-writes", dir_fd=claude_fd)
+        except OSError:
+            return False
+        removed.append(prefix + ".claude/.cc-writes")
+    finally:
+        os.close(claude_fd)
+    try:
+        os.rmdir(".claude", dir_fd=dirfd)
+    except OSError:
+        return False
+    removed.append(prefix + ".claude")
+    return True
+
+
+# WORKAROUND: Claude Code creates `<shell cwd>/.claude/.cc-writes` atomic-write staging dirs in the
+# worktree outside the sandbox, and an empty one under `plugins/superheroes/` breaks
+# `validate_skills`.
+# delete-when: the Claude Code version the channel runs no longer creates `.claude/.cc-writes`
+# under the shell's working directory (or lets the staging dir be relocated outside the worktree).
+# axis: removes only empty `.claude/.cc-writes` dirs and their then-empty `.claude` parent,
+# dir_fd-relative, never following symlinks, crossing devices or entering a nested registered worktree.
+def _sweep_cc_writes(root, *, skip_roots=frozenset(), budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
+                     clock=time.monotonic):
+    """Sweep empty `.claude/.cc-writes` staging dirs under ``root``, pruning ``skip_roots``. Never raises."""
+    removed = []
+    walker = None
+    try:
+        deadline = clock() + budget_seconds
+        root_dev = None
+        walker = os.fwalk(root, topdown=True, follow_symlinks=False)
+        for dirpath, dirnames, _filenames, dirfd in walker:
+            if clock() > deadline:
+                return {"removed": removed, "incomplete": True, "error": None}
+            if root_dev is None:
+                root_dev = os.fstat(dirfd).st_dev
+            kept = []
+            for name in dirnames:
+                if clock() > deadline:
+                    return {"removed": removed, "incomplete": True, "error": None}
+                if name == ".git" or os.path.join(dirpath, name) in skip_roots:
+                    continue
+                try:
+                    dev = os.stat(name, dir_fd=dirfd, follow_symlinks=False).st_dev
+                except OSError:
+                    continue
+                if dev != root_dev:
+                    continue
+                kept.append(name)
+            dirnames[:] = kept
+            if ".claude" not in dirnames:
+                continue
+            if clock() > deadline:
+                return {"removed": removed, "incomplete": True, "error": None}
+            rel = os.path.relpath(dirpath, root)
+            prefix = "" if rel == "." else rel.replace(os.sep, "/") + "/"
+            if _sweep_claude_dir(dirfd, prefix, removed):
+                dirnames.remove(".claude")
+        return {"removed": removed, "incomplete": False, "error": None}
+    except Exception as exc:
+        return {"removed": removed, "incomplete": True, "error": type(exc).__name__}
+    finally:
+        if walker is not None:
+            walker.close()
+
+
+def _fold_cc_writes_sweep(state):
+    """Sweep the worktree of a claude write run at fold. None for any other run. Never raises."""
+    try:
+        opened = state.get("opened") or {}
+        if opened.get("runKind") != RUN_KIND_WRITE or opened.get("engine") != "claude":
+            return None
+        cwd = opened.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            return {"removed": [], "incomplete": True, "error": "run-context-incomplete"}
+        cwd_real = os.path.realpath(cwd)
+        nested = _registered_nested_worktree_roots(cwd_real)
+        if nested is None:
+            return {"removed": [], "incomplete": True, "error": "worktree-enumeration-failed"}
+        return _sweep_cc_writes(cwd_real, skip_roots=nested)
+    except Exception as exc:
+        return {"removed": [], "incomplete": True, "error": type(exc).__name__}
+
+
+def _fold_size_tripwire(state):
+    """Count a write run's worktree against the base journaled at open. None for a review run
+    or a run opened without size inputs. Never raises."""
+    opened = state.get("opened") or {}
+    inputs = opened.get("sizeTripwireInputs")
+    if opened.get("runKind") != RUN_KIND_WRITE or not isinstance(inputs, dict):
+        return None
+    base = inputs.get("base")
+    line = inputs.get("line")
+    try:
+        counted = size_count.collect(
+            opened.get("cwd"), base, head=None,
+            deadline=time.monotonic() + SIZE_COUNT_BUDGET_SECONDS,
+        )
+        if not counted.get("ok"):
+            field = {"status": "indeterminate", "base": base, "line": line,
+                     "reason": counted.get("reason")}
+            if "detail" in counted:
+                field["detail"] = counted["detail"]
+            return field
+        tripwire_count = counted["tripwireCount"]
+        field = {
+            "status": "ok", "base": base, "line": line,
+            "tripwireCount": tripwire_count,
+            "crossed": tripwire_count > line,
+            "barCount": counted["barCount"],
+            "deletedFiles": counted["deletedFiles"],
+            "binary": counted["binary"],
+            "untrackedRepos": counted["untrackedRepos"],
+        }
+        if "barExcluded" in counted:
+            field["barExcluded"] = counted["barExcluded"]
+        if "lockfilesExcluded" in counted:
+            field["lockfilesExcluded"] = counted["lockfilesExcluded"]
+        if "pathsExcluded" in counted:
+            field["pathsExcluded"] = counted["pathsExcluded"]
+        return field
+    except Exception:
+        return {"status": "indeterminate", "base": base, "line": line,
+                "reason": "count-raised"}
+
+
 def _fold_run(run_dir_real, state, result):
     sibling = _fold_sibling_worktrees(state)
     if sibling is not None:
         result = dict(result)
         result["siblingWorktrees"] = sibling
+    cc_writes = _fold_cc_writes_sweep(state)
+    if cc_writes is not None:
+        result = dict(result)
+        result["ccWritesSweep"] = cc_writes
+    size_tripwire = _fold_size_tripwire(state)
+    opened = state.get("opened") or {}
+    if size_tripwire is not None:
+        result = dict(result)
+        result["sizeTripwire"] = size_tripwire
+    elif (opened.get("runKind") == RUN_KIND_WRITE
+          and not isinstance(opened.get("sizeTripwireInputs"), dict)):
+        result = dict(result)
+        result["sizeTripwireAbsent"] = SIZE_TRIPWIRE_ABSENT_NOT_SUPPLIED
     return _terminate_run(run_dir_real, state, record_kind="run-folded", result=result)
 
 
@@ -2934,6 +3475,283 @@ def _sample_stream_sizes(stdout_path, stderr_path):
     return stdout_sz, stderr_sz
 
 
+def _apply_completion_stamp(ended_record, stamp):
+    """Merge a completion stamp onto an attempt-ended record when present. Never raises."""
+    if isinstance(stamp, dict):
+        ended_record.update(stamp)
+
+
+_STDOUT_COMPLETION_READ_CHUNK = 65536
+
+
+def _record_stdout_drop_cause(obs_state, cause):
+    """Record why a held stdout result was dropped. First cause wins. Never raises."""
+    if obs_state.get("drop_cause") is None:
+        obs_state["drop_cause"] = cause
+
+
+def _clear_held_stdout_result(obs_state):
+    """Clear held stdout result fields. Never raises."""
+    obs_state["event"] = None
+    obs_state["stamp"] = None
+    obs_state["stamp_line_start"] = None
+    obs_state["stamp_line_len"] = None
+    obs_state["stamp_line_sha256"] = None
+
+
+def _held_stdout_bytes_unchanged(obs_state, stdout_path):
+    """Verify held stdout result line bytes are unchanged at save time. Never raises."""
+    if obs_state.get("event") is None or obs_state.get("stamp_line_start") is None:
+        return True
+    stamp_line_len = obs_state.get("stamp_line_len")
+    stamp_line_sha256 = obs_state.get("stamp_line_sha256")
+    if stamp_line_len is None or stamp_line_sha256 is None:
+        _clear_held_stdout_result(obs_state)
+        _record_stdout_drop_cause(obs_state, "bytes-changed")
+        return False
+    try:
+        with open(stdout_path, "rb") as fh:
+            fh.seek(obs_state["stamp_line_start"])
+            line_bytes = fh.read(stamp_line_len)
+        if len(line_bytes) != stamp_line_len:
+            _clear_held_stdout_result(obs_state)
+            _record_stdout_drop_cause(obs_state, "bytes-changed")
+            return False
+        if hashlib.sha256(line_bytes).hexdigest() != stamp_line_sha256:
+            _clear_held_stdout_result(obs_state)
+            _record_stdout_drop_cause(obs_state, "bytes-changed")
+            return False
+        return True
+    except OSError:
+        _clear_held_stdout_result(obs_state)
+        _record_stdout_drop_cause(obs_state, "final-read-failed")
+        return False
+    except Exception:
+        _clear_held_stdout_result(obs_state)
+        _record_stdout_drop_cause(obs_state, "final-read-failed")
+        return False
+
+
+def _process_stdout_completion_line(obs_state, line_bytes, line_start):
+    """Apply one complete stdout line to the completion stamp. Never raises."""
+    try:
+        text = line_bytes.decode("utf-8", errors="ignore").rstrip("\r").strip()
+        if not text:
+            return
+        obj = json.loads(text)
+        if not isinstance(obj, dict) or obj.get("type") != "result":
+            return
+        obs_state["event"] = obj
+        if obj.get("is_error") is True or "structured_output" not in obj:
+            obs_state["stamp"] = None
+            obs_state["stamp_line_start"] = None
+            obs_state["stamp_line_len"] = None
+            obs_state["stamp_line_sha256"] = None
+            return
+        digest = engine_result_channel.canonical_payload_digest(
+            _scrub_native_payload(obj["structured_output"]),
+        )
+        stamp = engine_result_channel.completion_stamp(time.monotonic(), digest)
+        if stamp is None or digest is None:
+            obs_state["stamp"] = None
+            obs_state["stamp_line_start"] = None
+            obs_state["stamp_line_len"] = None
+            obs_state["stamp_line_sha256"] = None
+            return
+        obs_state["stamp"] = stamp
+        obs_state["stamp_line_start"] = line_start
+        obs_state["stamp_line_len"] = len(line_bytes)
+        obs_state["stamp_line_sha256"] = hashlib.sha256(line_bytes).hexdigest()
+    except Exception:
+        return
+
+
+def _drain_stdout_completion_bytes(obs_state, data, file_offset_before):
+    """Split newly read stdout bytes on newlines and stamp complete result events. Never raises."""
+    buf = obs_state.get("buf", b"")
+    overflow = obs_state.get("overflow", False)
+    line_start = file_offset_before - len(buf)
+    pos = 0
+    while pos < len(data):
+        nl = data.find(b"\n", pos)
+        if nl < 0:
+            tail = data[pos:]
+            if overflow:
+                obs_state["buf"] = b""
+            else:
+                new_buf = buf + tail
+                if len(new_buf) > MAX_STDOUT_CAPTURE:
+                    overflow = True
+                    obs_state["buf"] = b""
+                else:
+                    obs_state["buf"] = new_buf
+            obs_state["overflow"] = overflow
+            return
+        segment = data[pos:nl]
+        if not overflow:
+            _process_stdout_completion_line(obs_state, buf + segment, line_start)
+        buf = b""
+        overflow = False
+        line_start = file_offset_before + nl + 1
+        pos = nl + 1
+    obs_state["buf"] = buf
+    obs_state["overflow"] = overflow
+
+
+def _observe_stdout_completion(obs_state, stdout_path, *, terminal=False):
+    """Incrementally stamp stdout delivery completion on complete result lines. Never raises.
+
+    Each poll reads only new bytes from the stdout file. Non-terminal polls process
+    complete lines only; the terminal call drains remaining bytes and parses any
+    trailing buffered line as final."""
+    if obs_state.get("poisoned"):
+        _clear_held_stdout_result(obs_state)
+        return
+    try:
+        offset = obs_state.get("offset", 0)
+        with open(stdout_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            file_size = fh.tell()
+            if file_size < offset:
+                _clear_held_stdout_result(obs_state)
+                obs_state["buf"] = b""
+                obs_state["overflow"] = False
+                obs_state["poisoned"] = True
+                _record_stdout_drop_cause(obs_state, "shrunk-below-read")
+                return
+            fh.seek(offset)
+            while True:
+                chunk = fh.read(_STDOUT_COMPLETION_READ_CHUNK)
+                if not chunk:
+                    break
+                file_offset_before = offset
+                offset += len(chunk)
+                obs_state["offset"] = offset
+                _drain_stdout_completion_bytes(obs_state, chunk, file_offset_before)
+        if terminal:
+            buf = obs_state.get("buf", b"")
+            overflow = obs_state.get("overflow", False)
+            if not overflow and buf:
+                line_start = offset - len(buf)
+                _process_stdout_completion_line(obs_state, buf, line_start)
+            obs_state["buf"] = b""
+            obs_state["overflow"] = False
+        stamp = obs_state.get("stamp")
+        stamp_line_start = obs_state.get("stamp_line_start")
+        if stamp is not None and stamp_line_start is not None:
+            # Retention mirrors _bounded_stdout_cap_from_file's tail rule, so a held event is
+            # always inside the stdout capture _cap_file_tail keeps. At the terminal
+            # observation offset is the final file size (this runs after proc.wait). An
+            # earlier poll cannot evict prematurely: offset - stamp_line_start only grows
+            # while the content budget only shrinks.
+            if (
+                offset > MAX_STDOUT_CAPTURE
+                and offset - stamp_line_start
+                > _cap_content_budget(MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT, offset)
+            ):
+                _clear_held_stdout_result(obs_state)
+    except (OSError, MemoryError):
+        if terminal:
+            _clear_held_stdout_result(obs_state)
+            _record_stdout_drop_cause(obs_state, "final-read-failed")
+        return
+    except Exception:
+        if terminal:
+            _clear_held_stdout_result(obs_state)
+            _record_stdout_drop_cause(obs_state, "final-read-failed")
+        return
+
+
+def _observe_native_file_completion(
+        obs_state, run_dir_real, attempt, *, terminal=False, deadline_mono=None,
+):
+    """Hold the digest of the latest native result content observed stable at or before
+    the attempt's monotonic deadline, stamped after that content was fully read; content
+    first observed after the deadline never replaces an existing stamp. Never raises."""
+    result_path = _native_result_path(run_dir_real, attempt)
+    if result_path is None:
+        return
+    try:
+        # Producer-side stat only — not on WO-C's admission-path census.
+        st = os.stat(result_path)
+        sig = (st.st_size, st.st_mtime_ns, st.st_ino)
+    except OSError:
+        return
+    if sig[0] == 0:
+        return
+    if not terminal:
+        prev_sig = obs_state.get("prev_sig")
+        obs_state["prev_sig"] = sig
+        if prev_sig != sig:
+            return
+    if sig == obs_state.get("digested_sig") or sig == obs_state.get("parse_failed_sig"):
+        return
+    obj, detail = _read_native_result_file(result_path)
+    if detail or not isinstance(obj, dict):
+        obs_state["parse_failed_sig"] = sig
+        return
+    digest = engine_result_channel.canonical_payload_digest(_scrub_native_payload(obj))
+    # axis: the instant is sampled AFTER the read and digest, so a read that straddles the
+    # deadline is judged by when its content was fully in hand.
+    now = time.monotonic()
+    obs_state["digested_sig"] = sig
+    held = obs_state.get("stamp")
+    if held is not None:
+        if held.get(engine_result_channel.FIELD_RESULT_COMPLETE_SHA256) == digest:
+            return
+        if not (
+            isinstance(deadline_mono, (int, float))
+            and not isinstance(deadline_mono, bool)
+            and now <= deadline_mono
+        ):
+            return
+    stamp = engine_result_channel.completion_stamp(now, digest)
+    if stamp is not None:
+        obs_state["stamp"] = stamp
+
+
+def _observe_attempt_completions(
+        delivery, stdout_obs, native_obs, run_dir_real, attempt, stdout_path,
+        *, terminal=False, deadline_mono=None,
+):
+    """Poll-loop observation hook for stdout and native-file deliveries. Never raises."""
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        _observe_stdout_completion(stdout_obs, stdout_path, terminal=terminal)
+    elif delivery in (
+        engine_result_channel.RESULT_DELIVERY_ARGV,
+        engine_result_channel.RESULT_DELIVERY_PROMPT,
+    ):
+        _observe_native_file_completion(
+            native_obs, run_dir_real, attempt, terminal=terminal,
+            deadline_mono=deadline_mono,
+        )
+
+
+def _completion_payload_for_delivery(
+        delivery, run_dir_real, attempt, opened, stdout_event, stdout_path,
+):
+    """Derive the payload object a delivery stamps, or None. Never raises."""
+    if delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        env = stdout_event
+        if (not isinstance(env, dict)
+                or env.get("is_error") is True
+                or "structured_output" not in env):
+            return None
+        return _scrub_native_payload(env["structured_output"])
+    if delivery in (
+        engine_result_channel.RESULT_DELIVERY_ARGV,
+        engine_result_channel.RESULT_DELIVERY_PROMPT,
+    ):
+        result_path = _native_result_path(run_dir_real, attempt)
+        if result_path is None:
+            return None
+        obj, detail = _read_native_result_file(result_path)
+        if detail or not isinstance(obj, dict):
+            return None
+        return _scrub_native_payload(obj)
+    return None
+
+
 def _fold_stream_activity(stdout_path, stderr_path, prev_stdout, prev_stderr,
                           last_activity_at, activity_stream):
     """Final post-reap sample (BC-7): fold mtime/size growth into activity telemetry."""
@@ -2989,7 +3807,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     if not ok_prep:
         _journal_prep_refusal(run_dir_real, attempt, prep_refusal)
         return
-    staged_path, prompt_sha, prompt_refusal = _stage_attempt_prompt(
+    staged_path, prompt_sha, prompt_refusal, handoff_path = _stage_attempt_prompt(
         run_dir_real, attempt, opened, native_result_path,
     )
     if prompt_refusal:
@@ -3000,6 +3818,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         # axis: spawn-time configDir must still be a directory — open-time record is not enough.
         if not isinstance(cfg, str) or not cfg or not os.path.isdir(cfg):
             _journal_prep_refusal(run_dir_real, attempt, "config-dir-unusable:not-a-directory")
+            _release_result_handoff(handoff_path, run_dir_real)
             return
     prompt_path = staged_path
     argv, recorded = _derive_and_record_spawn_argv(
@@ -3011,6 +3830,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             "exit": 127, "timedOut": False, "signal": None,
             "refusal": "journal-append-failed", "at": time.time(),
         })
+        _release_result_handoff(handoff_path, run_dir_real)
         return
     dispatch_path = _dispatch_path_from_opened(opened)
     try:
@@ -3037,15 +3857,20 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             "exit": 127, "timedOut": False, "signal": None,
             "refusal": ("spawn-failed: %s" % exc)[:_STDERR_TAIL], "at": time.time(),
         })
+        _release_result_handoff(handoff_path, run_dir_real)
         return
 
     pgid = proc.pid
+    host_load_open = _host_load_sample()
     engine_started = {
         "kind": "engine-started", "attempt": attempt,
         "enginePgid": pgid, "at": time.time(),
+        "hostLoadAtOpen": host_load_open,
     }
     if native_result_path is not None:
         engine_started["nativeResultPath"] = native_result_path
+    if handoff_path is not None:
+        engine_started["nativeResultHandoffPath"] = handoff_path
     if staged_path != opened["promptPath"]:
         engine_started["attemptPromptPath"] = staged_path
         if prompt_sha is not None:
@@ -3062,19 +3887,48 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             "kind": "attempt-ended", "attempt": attempt,
             "exit": 127, "timedOut": False, "signal": None,
             "refusal": "journal-append-failed", "at": time.time(),
+            "hostLoadAtOpen": host_load_open,
         })
+        _release_result_handoff(handoff_path, run_dir_real)
         return
 
+    try:
+        delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
+    except Exception:
+        delivery = None
+
     start = time.monotonic()
+    start_wall = time.time()
+    timeout_deadline_wall = start_wall + timeout
     last_beat = start
     timed_out = False
+    timeout_at = None
     natural_rc = None
     # lastActivityAt is accurate to the poll interval (HEARTBEAT_INTERVAL / sleep), not to the byte.
     last_activity_at = None
     activity_stream = None
     prev_stdout = 0
     prev_stderr = 0
+    stdout_completion_obs = {
+        "stamp": None,
+        "offset": 0,
+        "buf": b"",
+        "overflow": False,
+        "stamp_line_start": None,
+        "stamp_line_len": None,
+        "stamp_line_sha256": None,
+        "event": None,
+        "poisoned": False,
+        "drop_cause": None,
+    }
+    native_completion_obs = {"stamp": None, "prev_sig": None}
     while True:
+        _observe_attempt_completions(
+            delivery, stdout_completion_obs, native_completion_obs,
+            run_dir_real, attempt, stdout_path, deadline_mono=start + timeout,
+        )
         rc = proc.poll()
         now = time.monotonic()
         if now - last_beat >= HEARTBEAT_INTERVAL:
@@ -3097,13 +3951,26 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             break
         if now - start >= timeout:
             timed_out = True
+            # axis: the wall-cap deadline is stamped BEFORE termination begins, so a native
+            # result written during the SIGTERM/SIGKILL grace window can be told apart from
+            # one written before the cap (see timeoutAt on the ended record).
+            timeout_at = timeout_deadline_wall
             break
-        time.sleep(0.2)
+        time.sleep(_ATTEMPT_POLL_INTERVAL)
+    _observe_attempt_completions(
+        delivery, stdout_completion_obs, native_completion_obs,
+        run_dir_real, attempt, stdout_path, deadline_mono=start + timeout,
+    )
     _terminate_process_group(pgid)
     try:
         proc.wait(timeout=2)
     except Exception:
         pass
+    _observe_attempt_completions(
+        delivery, stdout_completion_obs, native_completion_obs,
+        run_dir_real, attempt, stdout_path, terminal=True,
+        deadline_mono=start + timeout,
+    )
     stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
     last_activity_at, silence_seconds, activity_stream = _fold_stream_activity(
         stdout_path, stderr_path, prev_stdout, prev_stderr,
@@ -3111,15 +3978,21 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     )
     stdout_result = _materialize_stdout_result(
         run_dir_real, attempt, opened, stdout_path,
+        stdout_completion_obs.get("event"),
+        stdout_completion_obs,
     )
+    returncode = proc.returncode
+    elapsed = time.monotonic() - start
+    host_load_end = _host_load_sample()
+    command_time = None
+    if opened.get("engine") == "cursor":
+        command_time = engine_adapter.cursor_command_time(stdout_path, time.time() * 1000)
     _, stdout_observed, stdout_rewrite_failed = _cap_file_tail(
         stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
     )
     _, stderr_observed, _stderr_rewrite_failed = _cap_file_tail(
         stderr_path, MAX_STDERR_CAPTURE, CAP_STREAM_STDERR,
     )
-    returncode = proc.returncode
-    elapsed = time.monotonic() - start
     ended_record = {
         "kind": "attempt-ended", "attempt": attempt,
         "exit": returncode, "timedOut": timed_out,
@@ -3129,7 +4002,19 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "wallSeconds": round(elapsed, 1),
         "capSeconds": timeout,
         "dispatchPath": dispatch_path,
+        "hostLoadAtOpen": host_load_open,
+        "hostLoadAtEnd": host_load_end,
+        "commandTime": command_time,
     }
+    _apply_completion_stamp(
+        ended_record, engine_result_channel.deadline_stamp(start + timeout),
+    )
+    if timed_out:
+        ended_record["timeoutAt"] = timeout_at
+    completion_stamp = stdout_completion_obs.get("stamp")
+    if completion_stamp is None:
+        completion_stamp = native_completion_obs.get("stamp")
+    _apply_completion_stamp(ended_record, completion_stamp)
     if prompt_bytes is not None:
         ended_record["promptBytes"] = prompt_bytes
     if stdout_observed is not None:
@@ -3150,7 +4035,11 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         ended_record["activityStream"] = None
     if stdout_result is not None:
         ended_record["stdoutResult"] = stdout_result
+    drop_cause = stdout_completion_obs.get("drop_cause")
+    if drop_cause is not None:
+        ended_record["stdoutResultDropped"] = drop_cause
     _journal_append(run_dir_real, ended_record)
+    _release_result_handoff(handoff_path, run_dir_real)
 
 
 def _attempt_timeout(opened, attempt):
@@ -3193,7 +4082,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         if not _journal_prep_refusal(run_dir_real, attempt, prep_refusal):
             return False, "journal-append-failed"
         return True, ""
-    staged_path, prompt_sha, prompt_refusal = _stage_attempt_prompt(
+    staged_path, prompt_sha, prompt_refusal, handoff_path = _stage_attempt_prompt(
         run_dir_real, attempt, opened, native_result_path,
     )
     if prompt_refusal:
@@ -3209,6 +4098,7 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         run_dir_real, attempt, spawn_argv, opened.get("engine"))
     if not recorded:
         # axis: spawnArgv append failed — run_engine not invoked, attempt ends journal-append-failed.
+        _release_result_handoff(handoff_path, run_dir_real)
         return False, "journal-append-failed"
     cwd = opened["cwd"]
     timeout = _attempt_timeout(opened, attempt)
@@ -3223,23 +4113,30 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "childPid": os.getpid(), "at": time.time(),
     }):
         return False, "journal-append-failed"
+    host_load_open = _host_load_sample()
     engine_started = {
         "kind": "engine-started", "attempt": attempt,
         "enginePgid": os.getpid(), "at": time.time(),
+        "hostLoadAtOpen": host_load_open,
     }
     if native_result_path is not None:
         engine_started["nativeResultPath"] = native_result_path
+    if handoff_path is not None:
+        engine_started["nativeResultHandoffPath"] = handoff_path
     if staged_path != opened["promptPath"]:
         engine_started["attemptPromptPath"] = staged_path
         if prompt_sha is not None:
             engine_started["attemptPromptSha256"] = prompt_sha
     if not _journal_append(run_dir_real, engine_started):
+        _release_result_handoff(handoff_path, run_dir_real)
         return False, "journal-append-failed"
 
     def cb(elapsed, stdout_bytes, stderr_bytes=0, _a=attempt):
         write_progress(_a, elapsed, stdout_bytes, stderr_bytes)
 
     t0 = time.monotonic()
+    t0_wall = time.time()
+    timeout_deadline_wall = t0_wall + timeout
     stdout, timed_out, rc, stderr_tail = run_engine(argv, prompt_bytes, timeout, cb, cwd)
     elapsed = time.monotonic() - t0
 
@@ -3253,8 +4150,31 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
     except OSError:
         pass
 
+    command_time = None
+    completion_stamp = None
+    stdout_event = None
+    try:
+        inj_delivery = engine_result_channel.result_delivery(
+            opened.get("engine"), opened.get("claudeMode"),
+        )
+    except (engine_result_channel.UnknownEngineError, ValueError):
+        inj_delivery = None
+    if inj_delivery == engine_result_channel.RESULT_DELIVERY_STDOUT:
+        stdout_event = engine_adapter.claude_result_envelope(stdout)
+    if inj_delivery is not None:
+        inj_payload = _completion_payload_for_delivery(
+            inj_delivery, run_dir_real, attempt, opened, stdout_event, stdout_path,
+        )
+        if inj_payload is not None:
+            completion_stamp = engine_result_channel.completion_stamp(
+                time.monotonic(),
+                engine_result_channel.canonical_payload_digest(inj_payload),
+            )
+    if opened.get("engine") == "cursor":
+        command_time = engine_adapter.cursor_command_time(stdout_path, time.time() * 1000)
+
     stdout_result = _materialize_stdout_result(
-        run_dir_real, attempt, opened, stdout_path,
+        run_dir_real, attempt, opened, stdout_path, stdout_event,
     )
 
     refusal = None
@@ -3279,10 +4199,17 @@ def _execute_injected_attempt(run_dir_real, state, attempt, run_engine):
         "silenceSeconds": None,
         "activityStream": None,
         "activitySource": "injected-seam",
+        "hostLoadAtOpen": host_load_open,
+        "commandTime": command_time,
     }
     if stdout_result is not None:
         ended["stdoutResult"] = stdout_result
+    if timed_out:
+        ended["timeoutAt"] = timeout_deadline_wall
+    _apply_completion_stamp(ended, engine_result_channel.deadline_stamp(t0 + timeout))
+    _apply_completion_stamp(ended, completion_stamp)
     _journal_append(run_dir_real, ended)
+    _release_result_handoff(handoff_path, run_dir_real)
     return True, ""
 
 
@@ -3463,6 +4390,7 @@ def _review_attempt_engagement(
     cwd="",
     view_meta=None,
     native_result_path=None,
+    native_result_handoff_path=None,
 ):
     """Shared engine signals and engagement.read grading decision. Never raises.
 
@@ -3478,9 +4406,12 @@ def _review_attempt_engagement(
             source = "codex-events" if tool_calls is not None else "none"
         elif engine == "cursor":
             tokens = None
-            exclude = ()
+            exclude_paths = []
             if isinstance(native_result_path, str):
-                exclude = (native_result_path,)
+                exclude_paths.append(native_result_path)
+            if isinstance(native_result_handoff_path, str):
+                exclude_paths.append(native_result_handoff_path)
+            exclude = tuple(exclude_paths)
             tool_calls = engine_adapter.cursor_tool_calls(stdout, exclude_paths=exclude)
             source = "cursor-stream" if tool_calls is not None else "none"
         elif engine == "claude":
@@ -3577,11 +4508,8 @@ def _native_review_forfeit(engagement, detail, *, payload_shape=None, **extra):
     return result
 
 
-def _load_native_result_json(run_dir_real, attempt):
-    """Load native result JSON via fd. Returns (obj, None) or (None, detail). Never raises."""
-    path = _native_result_path(run_dir_real, attempt)
-    if path is None:
-        return None, "native-result-missing"
+def _read_native_result_file(path):
+    """Read native result JSON via bounded fd. Returns (obj, None) or (None, detail). Never raises."""
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
         # axis: the result path is opened without following a symlink and without blocking; a symlink, FIFO or absent entry reads as native-result-missing.
@@ -3622,9 +4550,43 @@ def _load_native_result_json(run_dir_real, attempt):
         os.close(fd)
 
 
-def _read_native_review_envelope(run_dir_real, attempt, engagement):
+def _load_native_result_json(run_dir_real, attempt, opened):
+    """Load native result JSON via fd. Returns (obj, None) or (None, detail). Never raises."""
+    path = _native_result_path(run_dir_real, attempt)
+    if path is None:
+        return None, "native-result-missing"
+    obj, detail = _read_native_result_file(path)
+    if detail:
+        return None, detail
+    records, _corrupt = _journal_read(run_dir_real)
+    state = _journal_state(records)
+    attempt_rec = state.get("attempts", {}).get(attempt)
+    ended = attempt_rec.get("ended") if isinstance(attempt_rec, dict) else None
+    if not isinstance(ended, dict):
+        return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
+    if ended.get("timedOut"):
+        deadline_mono = ended.get(engine_result_channel.FIELD_DEADLINE_MONO)
+        deadline_epoch = ended.get(engine_result_channel.FIELD_DEADLINE_EPOCH)
+        if (
+            isinstance(deadline_mono, bool)
+            or not isinstance(deadline_mono, (int, float))
+            or not isinstance(deadline_epoch, str)
+            or not deadline_epoch
+        ):
+            return None, "timeout-deadline-unrecorded"
+    digest_obj = _scrub_native_payload(obj) if isinstance(obj, dict) else obj
+    digest = engine_result_channel.canonical_payload_digest(digest_obj)
+    if digest is None:
+        return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
+    verdict, detail = engine_result_channel.completion_window(ended, digest)
+    if verdict == "forfeit":
+        return None, detail
+    return digest_obj, None
+
+
+def _read_native_review_envelope(run_dir_real, attempt, engagement, opened):
     """Load and unwrap a native review result envelope. Returns (envelope, branch) or a forfeit."""
-    envelope, detail = _load_native_result_json(run_dir_real, attempt)
+    envelope, detail = _load_native_result_json(run_dir_real, attempt, opened)
     if detail == "native-result-missing":
         shape = engine_result_channel.native_review_payload_shape("native-result-missing")
         return _native_review_forfeit(engagement, "native-result-missing", payload_shape=shape)
@@ -3633,6 +4595,8 @@ def _read_native_review_envelope(run_dir_real, attempt, engagement):
     if detail == "native-result-malformed":
         shape = engine_result_channel.native_review_payload_shape("native-result-malformed")
         return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
+    if detail:
+        return _native_review_forfeit(engagement, detail)
     if not isinstance(envelope, dict) or "result" not in envelope:
         shape = engine_result_channel.native_review_payload_shape(
             "native-result-malformed", envelope=envelope if isinstance(envelope, dict) else None)
@@ -3703,14 +4667,14 @@ def _normalize_native_review_branch_for_parser(branch):
     return branch
 
 
-def _native_review_parser_refusal_forfeit(engagement, envelope, branch):
+def _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce=None):
     """Forfeit a schema-valid native branch the adapter parser refused. Never raises."""
     placeholder_shape = _native_branch_placeholder_shape(branch)
     if placeholder_shape is not None:
         return _native_review_forfeit(
             engagement, "native-result-malformed", payload_shape=placeholder_shape)
     shape = engine_result_channel.native_review_payload_shape(
-        "native-result-malformed-branch", envelope=envelope, branch=branch)
+        "native-result-malformed-branch", envelope=envelope, branch=branch, echo_nonce=echo_nonce)
     return _native_review_forfeit(engagement, "native-result-malformed", payload_shape=shape)
 
 
@@ -3741,7 +4705,7 @@ def _admit_native_write_result(run_dir_real, attempt, opened):
     gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
     if gate is not None:
         return gate
-    obj, detail = _load_native_result_json(run_dir_real, attempt)
+    obj, detail = _load_native_result_json(run_dir_real, attempt, opened)
     if detail:
         return {
             "forfeit": True,
@@ -3801,12 +4765,17 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
     """Single admission authority for the native review channel (codex, cursor). Never raises."""
     gate = _stdout_delivery_gate(run_dir_real, attempt, opened)
     if gate is not None:
+        extra = {}
+        dropped = gate.get("droppedCause")
+        if dropped is not None:
+            extra["droppedCause"] = dropped
         return _native_review_forfeit(
             engagement,
             gate["detail"],
             payload_shape=engine_result_channel.native_review_payload_shape(gate["detail"]),
+            **extra,
         )
-    loaded = _read_native_review_envelope(run_dir_real, attempt, engagement)
+    loaded = _read_native_review_envelope(run_dir_real, attempt, engagement, opened)
     if not isinstance(loaded, tuple):
         return loaded
     envelope, branch = loaded
@@ -3848,7 +4817,7 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
     kind = branch.get("resultKind")
     parser = engine_adapter._REVIEW_CONTRACT_PARSERS.get(kind)
     if parser is None:
-        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce)
     normalized = _normalize_native_review_branch_for_parser(branch)
     try:
         if kind == "findings":
@@ -3856,9 +4825,9 @@ def _admit_native_review_result(run_dir_real, attempt, opened, engagement, echo_
         else:
             parsed = parser(normalized, None)
     except Exception:
-        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce)
     if not parsed.get("ok"):
-        return _native_review_parser_refusal_forfeit(engagement, envelope, branch)
+        return _native_review_parser_refusal_forfeit(engagement, envelope, branch, echo_nonce)
     return parsed
 
 
@@ -3975,11 +4944,12 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     if ended.get("guardRefusal"):
         return _grade_spawn_guard_refusal(ended)
-    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+    if ended.get("refusal"):
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
-        if ended.get("refusal"):
-            result["detail"] = ended["refusal"]
+        result["detail"] = ended["refusal"]
         return result
+    if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
     try:
         with open(stderr_path, encoding="utf-8", errors="ignore") as fh:
@@ -3992,7 +4962,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
     engagement = _review_attempt_engagement(
         engine, stdout, stderr_tail, elapsed, stdout_bytes,
-        native_result_path=slot.get("nativeResultPath"))
+        native_result_path=slot.get("nativeResultPath"),
+        native_result_handoff_path=slot.get("nativeResultHandoffPath"))
 
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         return _grade_native_review_attempt(
@@ -4015,14 +4986,46 @@ def _grade_write_attempt(run_dir_real, state, attempt):
 
     if ended.get("guardRefusal"):
         return _grade_spawn_guard_refusal(ended)
-    if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+    if ended.get("refusal"):
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
-        if ended.get("refusal"):
-            result["detail"] = ended["refusal"]
+        result["detail"] = ended["refusal"]
         return result
 
+    if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "nonzero-exit",
+        }
+
+    admitted = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
-        return _admit_native_write_result(run_dir_real, attempt, opened)
+        admitted = _admit_native_write_result(run_dir_real, attempt, opened)
+        if not admitted.get("forfeit"):
+            if ended.get("timedOut"):
+                # axis: the process still had to be terminated at the wall cap even though its
+                # result was admitted (written before the deadline) — carry that fact onto the
+                # success so it never reads identical to a clean, un-timed-out exit.
+                return dict(admitted, admittedAfterTimeout=True)
+            return admitted
+
+    if admitted is not None and admitted.get("forfeit"):
+        result = dict(admitted)
+        if ended.get("timedOut"):
+            admission_detail = admitted.get("detail")
+            if admission_detail == "native-result-missing":
+                result["detail"] = "timeout-no-native-result"
+            else:
+                result["detail"] = "timeout-native-result-unadmitted"
+                result["admissionDetail"] = admission_detail
+        return result
+
+    if ended.get("timedOut"):
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": "timeout-no-admission",
+        }
 
     return _marker_arm_retired_grade()
 
@@ -4069,6 +5072,11 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
     }
     if attempt_detail:
         terminal["attemptDetail"] = attempt_detail
+    opened = (state or {}).get("opened") or {}
+    terminal["dirtiedPaths"] = _worktree_dirtied_paths(
+        opened.get("worktreeBaseline"), opened.get("cwd") or "",
+        timeout=ITEM_EVIDENCE_TIMEOUT,
+    )
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
@@ -4155,7 +5163,7 @@ def _stdout_capped_forfeit(engine, observed_bytes, *, run_dir_real=None, state=N
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
                             investigated_rejected=None, investigated_rejected_records=None,
-                            payload_shape=None, detail=None):
+                            payload_shape=None, detail=None, dropped_cause=None):
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         terminal = {
             "ok": False,
@@ -4191,6 +5199,8 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
         result["payloadShape"] = payload_shape
     if detail is not None:
         result["detail"] = detail
+    if isinstance(dropped_cause, str) and dropped_cause:
+        result["droppedCause"] = dropped_cause
     return result
 
 
@@ -4302,6 +5312,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     "kind": "attempt-ended", "attempt": att,
                     "exit": None, "timedOut": False, "signal": None,
                     "refusal": "attempt-died-unrecorded", "at": time.time(),
+                    "hostLoadAtOpen": slot.get("hostLoadAtOpen"),
                 }
                 records, _corrupt = _journal_read(run_dir_real)
                 recheck = _journal_state(records)
@@ -4323,7 +5334,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     continue
 
                 in_flight = any(
-                    attempts[a].get("ended") is None for a in attempts
+                    attempts[a].get("ended") is None
+                    for a in attempts
                 )
                 if in_flight:
                     time.sleep(SUPERVISOR_POLL_INTERVAL)
@@ -4400,6 +5412,12 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             result["itemCheck"] = item_check
                         if "report" in grade:
                             result["report"] = grade["report"]
+                        if grade.get("admittedAfterTimeout"):
+                            # axis: a write attempt hit the wall cap but was admitted (its
+                            # result was written before the deadline) — carry that fact onto
+                            # the terminal result so it never reads as a clean, un-timed-out
+                            # success on the receipt.
+                            result["admittedAfterTimeout"] = True
                     else:
                         terminal_ok = {
                             "ok": True, "terminal": True,
@@ -4442,6 +5460,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     )
                     if "report" in grade:
                         result["report"] = grade["report"]
+                    if grade.get("admittedAfterTimeout"):
+                        result["admittedAfterTimeout"] = True
                     return _fold_run(run_dir_real, state, result)
 
                 if grade.get("guard_refusal"):
@@ -4494,6 +5514,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         investigated_rejected_records=grade.get("investigatedRejectedRecords"),
                         payload_shape=grade.get("payloadShape"),
                         detail=grade.get("detail"),
+                        dropped_cause=grade.get("droppedCause"),
                     )
                     view = opened.get("viewMeta")
                     if view:
@@ -4627,7 +5648,8 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
                      progress_path, repo_root=None, mode="review",
                      expected_result_kind=None, pr_body_source_path=None,
-                     echo_nonce=None, base_prompt=None, resolved_inputs=None):
+                     echo_nonce=None, base_prompt=None, resolved_inputs=None,
+                     claude_mode=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -4664,6 +5686,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     channel = engine_result_channel.channel_for(engine)
     argv, native_err, native_schema_path = _open_native_channel_argv(
         run_dir_real, engine, argv, RUN_KIND_REVIEW, expected_result_kind,
+        claude_mode=claude_mode,
     )
     if native_err:
         return False, native_err
@@ -4675,6 +5698,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "roleKind": RUN_KIND_REVIEW,
         "orderId": order_id,
         "mode": mode,
+        "claudeMode": claude_mode,
         "channel": channel,
         "argv": argv,
         "cwd": cwd,
@@ -4716,13 +5740,15 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                     retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
                     run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, order_id=None, diff_base=None,
-                    mode=None, expected_result_kind=None, pr_body_path=None, session_dir=None,
+                    mode=None, claude_mode=None, expected_result_kind=None,
+                    pr_body_path=None, session_dir=None,
                     **kwargs):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to the host model."""
     resolved_mode = {"mode": None}
+    resolved_claude_mode = {"claudeMode": claude_mode}
     timeout_source = (
         resolved_inputs_vocab.DEFAULT if timeout is _PARAM_UNSET else resolved_inputs_vocab.CALLER
     )
@@ -4775,6 +5801,13 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                     run_dir=run_dir,
                     mode=mode or sanitized_view.MODE_REVIEW,
                 )
+        claude_refusal = _entry_claude_mode_refusal(
+            claude_mode,
+            run_dir=run_dir,
+            mode=mode or sanitized_view.MODE_REVIEW,
+        )
+        if claude_refusal is not None:
+            return claude_refusal
         entry = seat_bundle.resolve_entry(
             seat, verb="dispatch-review", mode=mode,
             mode_for_role_check=seat_bundle.dispatch_review_mode_for_role_check(
@@ -4809,10 +5842,12 @@ def dispatch_review(*args, seat=None, prompt_path=None,
             build_view=build_view, run_dir=run_dir, run_dir_supplied=run_dir_supplied,
             max_wait=max_wait, max_wait_source=max_wait_source, order_id=order_id,
             diff_base=diff_base, mode=mode, resolved_mode=resolved_mode,
+            claude_mode=claude_mode, resolved_claude_mode=resolved_claude_mode,
             expected_result_kind=expected_result_kind,
             pr_body_path=pr_body_path, session_dir=session_dir)
         stamped = dict(result)
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
+        stamped["claudeMode"] = resolved_claude_mode["claudeMode"]
         return stamped
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -4838,7 +5873,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                           build_view=sanitized_view.build_sanitized_view,
                           run_dir=None, run_dir_supplied=False, max_wait=None,
                           max_wait_source=resolved_inputs_vocab.DEFAULT, order_id=None, diff_base=None,
-                          mode=None, resolved_mode=None, expected_result_kind=None,
+                          mode=None, claude_mode=None, resolved_mode=None,
+                          resolved_claude_mode=None, expected_result_kind=None,
                           pr_body_path=None, session_dir=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
@@ -4848,6 +5884,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
     if resolved_mode is None:
         resolved_mode = {"mode": None}
     resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
+    if resolved_claude_mode is None:
+        resolved_claude_mode = {"claudeMode": claude_mode}
 
     ok, wait_detail = _validate_max_wait(max_wait)
     if not ok:
@@ -4950,7 +5988,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 if order_id is not None and opened.get("orderId") != order_id:
                     return _finish_preflight_terminal(
                         repo_detail,
-                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": dispatch_outcome.DETAIL_RUN_DIR_REUSED,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=opened.get("argv") or [], engine=engine,
                     )
@@ -4974,6 +6013,27 @@ def _dispatch_review_impl(seat, *, prompt_path,
                         repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                          "detail": MODE_REFUSAL_RUN_DIR_MISMATCH,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv, engine=engine,
+                    )
+                journal_claude_mode = opened.get("claudeMode")
+                resolved_claude_mode["claudeMode"] = journal_claude_mode
+                claude_refusal = _continuation_claude_mode_refusal(journal_claude_mode)
+                if claude_refusal is not None:
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        claude_refusal,
+                        run_dir=run_dir_real, argv=argv, engine=engine,
+                    )
+                if (
+                    claude_mode is not None
+                    and engine_result_channel.normalize_claude_mode(claude_mode)
+                    != engine_result_channel.normalize_claude_mode(journal_claude_mode)
+                ):
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=argv, engine=engine,
                     )
@@ -5007,13 +6067,14 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 return _finish_preflight_terminal(
                     repo_detail,
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                     "detail": "run-dir-not-empty-unopened",
+                     "detail": dispatch_outcome.DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, engine=engine,
                 )
 
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
+            resolved_claude_mode["claudeMode"] = claude_mode
             try:
                 view = build_view(
                     repo_detail,
@@ -5032,6 +6093,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
             view_path = view["path"]
             cwd = os.path.realpath(view_path)
             opts = {"cwd": cwd}
+            if resolved_claude_mode["claudeMode"] is not None:
+                opts["claudeMode"] = resolved_claude_mode["claudeMode"]
             built = engine_adapter.build_argv_result(seat, role_kind, opts)
             if built["reason"] is not None:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -5057,7 +6120,9 @@ def _dispatch_review_impl(seat, *, prompt_path,
             _prompt_section_sep = "\n\n"
             if expected_result_kind == "findings":
                 fed_prompt += _prompt_section_sep + review_findings_schema.example_prompt_block(echo_nonce)
-            delivery = engine_result_channel.result_delivery(engine)
+            delivery = engine_result_channel.result_delivery(
+                engine, resolved_claude_mode["claudeMode"],
+            )
             if engine_result_channel.channel_for(engine) == engine_result_channel.CHANNEL_NATIVE:
                 native_schema = engine_result_channel.declared_schema(
                     engine, RUN_KIND_REVIEW, expected_result_kind,
@@ -5084,6 +6149,11 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 resolved_inputs_vocab.CALLER
                 if expected_result_kind is not None
                 else resolved_inputs_vocab.DECLARED_NONE
+            )
+            claude_mode_source = (
+                resolved_inputs_vocab.CALLER
+                if claude_mode is not None
+                else resolved_inputs_vocab.DEFAULT
             )
             resolved_inputs = _build_resolved_inputs(
                 seat=seat,
@@ -5122,6 +6192,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                     if progress_path is not None
                     else resolved_inputs_vocab.RESOLVED
                 ),
+                claude_mode=resolved_claude_mode["claudeMode"],
+                claude_mode_source=claude_mode_source,
                 engine_model_opts={"cwd": cwd},
             )
             ok_open, open_detail = _open_review_run(
@@ -5135,6 +6207,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 pr_body_source_path=os.path.realpath(pr_body_path) if pr_body_set else None,
                 echo_nonce=echo_nonce, base_prompt=base_prompt,
                 resolved_inputs=resolved_inputs,
+                claude_mode=resolved_claude_mode["claudeMode"],
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -5217,7 +6290,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
                     repo_root=None, expected_items=None, baseline_dirty=None,
-                    sibling_baseline=None, resolved_inputs=None):
+                    sibling_baseline=None, resolved_inputs=None, claude_mode=None,
+                    claude_write_sandbox=None, size_tripwire_inputs=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -5229,7 +6303,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             base = src.read()
         base_prompt_sha256 = hashlib.sha256(base.encode("utf-8")).hexdigest()
         channel = engine_result_channel.channel_for(engine)
-        delivery = engine_result_channel.result_delivery(engine)
+        delivery = engine_result_channel.result_delivery(engine, claude_mode)
         if channel == engine_result_channel.CHANNEL_NATIVE:
             try:
                 native_schema = engine_result_channel.declared_schema(engine, RUN_KIND_WRITE)
@@ -5240,8 +6314,11 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             )
         else:
             contract = engine_adapter.WRITE_REPORT_CONTRACT
-        prompt_sep = "\n" if base and not base.endswith("\n") else ""
-        content = base + prompt_sep + contract
+        order_part = base
+        if order_part and not order_part.endswith("\n"):
+            order_part = order_part + "\n"
+        prefix = order_part + ("\n" if order_part else "")
+        content = prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + contract
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(content)
         staged_prompt_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -5265,7 +6342,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     echo_nonce = secrets.token_hex(16)
 
     argv, native_err, native_schema_path = _open_native_channel_argv(
-        run_dir_real, engine, list(argv), RUN_KIND_WRITE,
+        run_dir_real, engine, list(argv), RUN_KIND_WRITE, claude_mode=claude_mode,
     )
     if native_err:
         return False, native_err
@@ -5276,6 +6353,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "engine": engine,
         "roleKind": "build",
         "orderId": order_id,
+        "claudeMode": claude_mode,
         "channel": channel,
         "argv": argv,
         "cwd": cwd,
@@ -5301,11 +6379,15 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         record["nativeSchemaPath"] = native_schema_path
     if cfg is not None:
         record["configDir"] = cfg
+    if claude_write_sandbox is not None:
+        record["claudeWriteSandbox"] = claude_write_sandbox
     effective_nonce = review_findings_schema.effective_nonce(echo_nonce)
     if effective_nonce is not None:
         record["echoNonce"] = effective_nonce
     if resolved_inputs is not None:
         record["resolvedInputs"] = resolved_inputs
+    if size_tripwire_inputs is not None:
+        record["sizeTripwireInputs"] = size_tripwire_inputs
     if not _journal_append(run_dir_real, record):
         return False, "journal-append-failed"
     return True, ""
@@ -5314,8 +6396,9 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
 def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                    order_id=None, base_sha=None, timeout=_PARAM_UNSET,
                    retry_timeout=_PARAM_UNSET, progress_path=None, run_engine=_run_engine,
-                   run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, expected_items=None,
-                   expected_items_file=None, **kwargs):
+                   run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, claude_mode=None,
+                   expected_items=None, expected_items_file=None,
+                   requires_process_listing=False, size_base=None, size_line=None, **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -5354,6 +6437,13 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                 ),
                 run_dir=run_dir,
             )
+        claude_refusal = _entry_claude_mode_refusal(
+            claude_mode,
+            run_dir=run_dir,
+            run_kind=RUN_KIND_WRITE,
+        )
+        if claude_refusal is not None:
+            return claude_refusal
         resolved = seat_bundle.resolve_entry(seat, verb="dispatch-write")
         if not resolved.get("ok"):
             allowlist_verdict = resolved.get("allowlistVerdict")
@@ -5378,8 +6468,10 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             retry_timeout=retry_timeout, retry_timeout_source=retry_timeout_source,
             progress_path=progress_path, run_engine=run_engine, run_dir=run_dir,
             run_dir_supplied=run_dir_supplied, max_wait=max_wait,
-            max_wait_source=max_wait_source, expected_items=expected_items,
-            expected_items_file=expected_items_file,
+            max_wait_source=max_wait_source, claude_mode=claude_mode,
+            expected_items=expected_items, expected_items_file=expected_items_file,
+            requires_process_listing=requires_process_listing,
+            size_base=size_base, size_line=size_line,
         )
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -5403,8 +6495,9 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          progress_path=None,
                          run_engine=_run_engine, run_dir=None, run_dir_supplied=False,
                          max_wait=None, max_wait_source=resolved_inputs_vocab.DEFAULT,
-                         expected_items=None,
-                         expected_items_file=None):
+                         claude_mode=None, expected_items=None,
+                         expected_items_file=None, requires_process_listing=False,
+                         size_base=None, size_line=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
     role = seat["role"]
@@ -5483,7 +6576,25 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
         )
     run_dir_real = rd_detail
 
+    size_refusal = None
+    if (size_base is None) != (size_line is None):
+        size_refusal = SIZE_INPUTS_INCOMPLETE
+    elif size_line is not None:
+        if not isinstance(size_line, int) or isinstance(size_line, bool) or size_line < 0:
+            size_refusal = SIZE_LINE_INVALID
+        elif not _validate_base_sha(size_base)[0]:
+            size_refusal = SIZE_BASE_NOT_AN_OBJECT_ID
+    if size_refusal is not None:
+        return _write_preflight_terminal(
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": size_refusal,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir_real, argv=[],
+        )
+    size_inputs_supplied = size_line is not None
+    size_tripwire_inputs = {"base": size_base, "line": size_line} if size_inputs_supplied else None
+
     caller_omitted_expected = expected_items is None and expected_items_file is None
+    resolved_claude_mode = {"claudeMode": claude_mode}
 
     try:
         records, _corrupt = _journal_read(run_dir_real)
@@ -5491,6 +6602,29 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
         opened = state.get("opened")
 
         opts = {"cwd": cwd_real}
+        if resolved_claude_mode["claudeMode"] is not None:
+            opts["claudeMode"] = resolved_claude_mode["claudeMode"]
+        if requires_process_listing:
+            opts["requiresProcessListing"] = True
+        # The claude write sandbox is resolved once at open and journaled; a continuation
+        # reuses the journaled value and never re-derives it from the environment (#1554).
+        claude_write_sandbox = None
+        if engine == "claude":
+            if opened is not None:
+                claude_write_sandbox = opened.get("claudeWriteSandbox")
+            elif not requires_process_listing:
+                claude_write_sandbox, sandbox_refusal = _resolve_claude_write_sandbox(
+                    cwd_real, timeout=preflight_timeout, run_dir=run_dir_real,
+                )
+                if sandbox_refusal is not None:
+                    return _write_preflight_terminal(
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": "engine-config:%s" % sandbox_refusal,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=[],
+                    )
+            if claude_write_sandbox is not None:
+                opts["claudeWriteSandbox"] = claude_write_sandbox
         built = engine_adapter.build_argv_result(seat, role_kind, opts)
         if built["reason"] is not None:
             return _write_preflight_terminal(
@@ -5510,7 +6644,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 )
             if order_id is not None and opened.get("orderId") != order_id:
                 return _write_preflight_terminal(
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-reused",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": dispatch_outcome.DETAIL_RUN_DIR_REUSED,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
@@ -5522,7 +6657,41 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
+            journal_claude_mode = opened.get("claudeMode")
+            resolved_claude_mode["claudeMode"] = journal_claude_mode
+            claude_refusal = _continuation_claude_mode_refusal(journal_claude_mode)
+            if claude_refusal is not None:
+                return _write_preflight_terminal(
+                    claude_refusal,
+                    run_dir=run_dir_real, argv=opened.get("argv") or argv,
+                )
+            if (
+                claude_mode is not None
+                and engine_result_channel.normalize_claude_mode(claude_mode)
+                != engine_result_channel.normalize_claude_mode(journal_claude_mode)
+            ):
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=opened.get("argv") or argv,
+                )
             argv = opened.get("argv") or argv
+            # Only a run that journaled size inputs binds a continuation to them; a run
+            # opened without the flags (an older plugin's, or one that omitted them) has
+            # no journaled values, folds sizeTripwireAbsent, and ignores continuation flags.
+            journaled_size_inputs = opened.get("sizeTripwireInputs")
+            if (
+                size_inputs_supplied
+                and isinstance(journaled_size_inputs, dict)
+                and size_tripwire_inputs != journaled_size_inputs
+            ):
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": SIZE_INPUTS_MISMATCH,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
             if state.get("folded") is not None:
                 return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv)
             if state.get("abandoned") is not None:
@@ -5559,6 +6728,15 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                         run_dir=run_dir_real, argv=argv,
                     )
         else:
+            if size_inputs_supplied and not _verify_base_sha_resolves(
+                cwd_real, size_base, timeout=preflight_timeout,
+            ):
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": SIZE_BASE_UNRESOLVABLE,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
             if base_sha is None:
                 try:
                     head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=preflight_timeout)
@@ -5594,7 +6772,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
 
             if _run_dir_nonempty(run_dir_real):
                 return _write_preflight_terminal(
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-not-empty-unopened",
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": dispatch_outcome.DETAIL_RUN_DIR_NOT_EMPTY_UNOPENED,
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
@@ -5629,6 +6808,11 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 base_sha_source = resolved_inputs_vocab.RESOLVED
             else:
                 base_sha_source = resolved_inputs_vocab.DECLARED_NONE
+            claude_mode_source = (
+                resolved_inputs_vocab.CALLER
+                if claude_mode is not None
+                else resolved_inputs_vocab.DEFAULT
+            )
             resolved_inputs = _build_resolved_inputs(
                 seat=seat,
                 role_kind=role_kind,
@@ -5662,6 +6846,8 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                     if progress_path is not None
                     else resolved_inputs_vocab.RESOLVED
                 ),
+                claude_mode=resolved_claude_mode["claudeMode"],
+                claude_mode_source=claude_mode_source,
                 engine_model_opts={"cwd": cwd_real},
             )
             ok_lease, lease_detail, _token, lease_path = _acquire_worktree_lease(
@@ -5684,6 +6870,9 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                 baseline_dirty=baseline_dirty,
                 sibling_baseline=sibling_baseline,
                 resolved_inputs=resolved_inputs,
+                claude_mode=resolved_claude_mode["claudeMode"],
+                claude_write_sandbox=claude_write_sandbox,
+                size_tripwire_inputs=size_tripwire_inputs,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
@@ -5794,7 +6983,8 @@ def _parse_review_attempt(run_dir_real, state, attempt):
             stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
             engagement = _review_attempt_engagement(
                 engine, stdout, stderr_tail, elapsed, stdout_bytes,
-                native_result_path=slot.get("nativeResultPath"))
+                native_result_path=slot.get("nativeResultPath"),
+                native_result_handoff_path=slot.get("nativeResultHandoffPath"))
             echo_nonce = review_findings_schema.effective_nonce(opened.get("echoNonce"))
             admitted = _admit_native_review_result(
                 run_dir_real, attempt, opened, engagement, echo_nonce)
@@ -5906,7 +7096,8 @@ def _observation_from_attempt(run_dir_real, state, attempt):
     stdout_bytes = ended.get("stdoutBytes", len(stdout or ""))
     engagement = _review_attempt_engagement(
         engine, stdout, stderr_tail, elapsed, stdout_bytes,
-        native_result_path=slot.get("nativeResultPath"))
+        native_result_path=slot.get("nativeResultPath"),
+        native_result_handoff_path=slot.get("nativeResultHandoffPath"))
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         if opened.get("runKind") == RUN_KIND_WRITE:
             return _engagement_with_read(engagement)
@@ -5983,6 +7174,16 @@ def run_execution_record(run_dir):
         observation = _observation_from_attempt(run_dir_real, state, attempt)
         if not isinstance(observation, dict):
             return None, "observation-unavailable"
+        view_head_sha = None
+        view_meta = opened.get("viewMeta")
+        if isinstance(view_meta, dict):
+            head_sha_val = view_meta.get("headSha")
+            if isinstance(head_sha_val, str) and head_sha_val:
+                view_head_sha = head_sha_val
+        if view_head_sha is None:
+            base_sha = opened.get("baseSha")
+            if isinstance(base_sha, str) and base_sha:
+                view_head_sha = base_sha
         record = {
             "source": engine,
             "runnerNonce": echo_nonce,
@@ -5990,12 +7191,33 @@ def run_execution_record(run_dir):
             "observation": observation,
             "promptSha256": prompt_sha256,
             "orderPromptSha256": opened.get("basePromptSha256"),
+            "runKind": run_kind,
+            "viewHeadSha": view_head_sha,
         }
         if isinstance(attempt_prompt_path, str) and attempt_prompt_path:
             record["attemptPromptPath"] = attempt_prompt_path
         if isinstance(result_digest, str) and result_digest and isinstance(result_kind, str) and result_kind:
             record["resultDigest"] = result_digest
             record["resultKind"] = result_kind
+        if run_kind != RUN_KIND_WRITE and isinstance(result_kind, str):
+            if result_kind in session_contract.RECORD_RESULT_KINDS:
+                _, result_content = _result_kind_and_content_from_parse(res)
+                if isinstance(result_content, dict):
+                    record["resultContent"] = result_content
+        resolved = opened.get("resolvedInputs")
+        if isinstance(resolved, dict) and "engineModel" in resolved:
+            engine_model = resolved.get("engineModel")
+            if engine_model is None:
+                record["model"] = None
+            elif isinstance(engine_model, str) and engine_model:
+                record["model"] = engine_model
+        resolved = opened.get("resolvedInputs")
+        if isinstance(resolved, dict):
+            engine_model = resolved.get("engineModel")
+        else:
+            engine_model = opened.get("engineModel")
+        if isinstance(engine_model, str) and engine_model:
+            record["engineModel"] = engine_model
         return record, None
     except Exception:
         return None, "internal-error"
@@ -6230,11 +7452,16 @@ def build_parser():
                          "expression, branch name or tag is refused")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
+    cc.add_argument(d, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
+                    choices=claude_modes.CLAUDE_MODE_INPUTS,
+                    help=_CLAUDE_MODE_HELP)
     cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
-    cc.add_argument(d, "--pr-body-path", contract="free-text", default=None)
-    cc.add_argument(d, "--session-dir", contract="existing-directory", default=None)
+    cc.add_argument(d, "--pr-body-path", contract="free-text", default=None,
+                    help="pairs with --session-dir; either alone refuses pr-body-args-unpaired")
+    cc.add_argument(d, "--session-dir", contract="existing-directory", default=None,
+                    help="pairs with --pr-body-path; either alone refuses pr-body-args-unpaired")
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--seat", contract="free-text", required=True,
@@ -6251,6 +7478,14 @@ def build_parser():
     cc.add_argument(w, "--progress-file", contract="free-text", default=None)
     cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
     cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
+    cc.add_argument(w, "--size-base", contract="free-text", default=None)
+    cc.add_argument(w, "--size-line", contract="integer", default=None, type=int)
+    cc.add_argument(w, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
+                    choices=claude_modes.CLAUDE_MODE_INPUTS,
+                    help=_CLAUDE_MODE_HELP)
+    cc.add_argument(w, "--requires-process-listing", contract="boolean-flag",
+                    help="declare the order needs process listing (ps); a claude write "
+                         "refuses sandbox-process-listing-unavailable before any run opens")
 
     p = sub.add_parser("dispatch-poll")
     cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)
@@ -6293,6 +7528,7 @@ def main(argv):
                                   progress_path=args.progress_file, run_dir=args.run_dir,
                                   max_wait=args.max_wait, order_id=args.order_id,
                                   diff_base=args.diff_base, mode=args.mode,
+                                  claude_mode=args.claude_mode,
                                   expected_result_kind=args.expected_result_kind,
                                   pr_body_path=args.pr_body_path, session_dir=args.session_dir)
             classification = dispatch_outcome.classify_dispatch_result(res)
@@ -6303,8 +7539,11 @@ def main(argv):
                                  run_dir=args.run_dir, timeout=args.timeout,
                                  retry_timeout=args.retry_timeout, max_wait=args.max_wait,
                                  progress_path=args.progress_file,
+                                 claude_mode=args.claude_mode,
                                  expected_items=args.expect_item,
-                                 expected_items_file=args.expect_items_file)
+                                 expected_items_file=args.expect_items_file,
+                                 requires_process_listing=args.requires_process_listing,
+                                 size_base=args.size_base, size_line=args.size_line)
             classification = dispatch_outcome.classify_dispatch_result(res)
         elif args.cmd == "dispatch-poll":
             res, classification = _dispatch_poll_impl(args.run_dir)

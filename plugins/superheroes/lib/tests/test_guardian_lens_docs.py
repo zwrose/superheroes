@@ -502,7 +502,8 @@ def test_verify_command_is_never_executed(tmp_path, monkeypatch):
 
 
 def test_absent_verify_command_is_partial_with_reason(tmp_path):
-    repo = init_calibrated_repo(tmp_path, verify_command="")
+    # null is "none configured"; an empty string is refused at parse (#1331).
+    repo = init_calibrated_repo(tmp_path, verify_command=None)
     _write(repo, "README.md", "hi\n")
     ctx, _run = _ctx(repo, tmp_path)
 

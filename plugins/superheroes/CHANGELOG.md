@@ -1,5 +1,231 @@
 # Changelog
 
+## [0.40.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.39.0...superheroes-v0.40.0) (2026-10-03)
+
+
+### Features
+
+* **superheroes:** a per-project size-exclusion calibration key ([#1589](https://github.com/zwrose/superheroes/issues/1589)) ([#1595](https://github.com/zwrose/superheroes/issues/1595)) ([2b88444](https://github.com/zwrose/superheroes/commit/2b884443ef152852692e1003c91c1a983ec0b8f6))
+* **superheroes:** a stack-layer PR closes its own layer sub-issue ([#1592](https://github.com/zwrose/superheroes/issues/1592)) ([afea1a7](https://github.com/zwrose/superheroes/commit/afea1a728b28b17e4cb9bd48b781c12b1f5d9c4e))
+* **superheroes:** dispatch-write reports the size tripwire at every implementer fold ([#1585](https://github.com/zwrose/superheroes/issues/1585)) ([#1593](https://github.com/zwrose/superheroes/issues/1593)) ([107d7fa](https://github.com/zwrose/superheroes/commit/107d7fa725553e1fe108f119fc85b20d3448dadf))
+* **superheroes:** size_count counts the working tree read-only ([#1584](https://github.com/zwrose/superheroes/issues/1584)) ([#1588](https://github.com/zwrose/superheroes/issues/1588)) ([1b5841b](https://github.com/zwrose/superheroes/commit/1b5841bbfe73002c3637713604ab3060e0b3bd80))
+* **superheroes:** the claude write sandbox auto-approves common toolchains and allows localhost and /tmp by default ([#1607](https://github.com/zwrose/superheroes/issues/1607)) ([96f5fbc](https://github.com/zwrose/superheroes/commit/96f5fbc05df56168b15c5cc151fb42c8f6845e6d))
+* **superheroes:** the size count leaves out lockfiles and each project's listed paths ([#1590](https://github.com/zwrose/superheroes/issues/1590)) ([#1596](https://github.com/zwrose/superheroes/issues/1596)) ([63d6d5a](https://github.com/zwrose/superheroes/commit/63d6d5a71b823e92c2577917a182eb522b99e67e))
+
+## [0.39.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.38.0...superheroes-v0.39.0) (2026-10-02)
+
+
+### Features
+
+* **superheroes:** four sandbox access options as calibration, set and viewed through configure ([#1562](https://github.com/zwrose/superheroes/issues/1562) layer 1) ([#1566](https://github.com/zwrose/superheroes/issues/1566)) ([06424f8](https://github.com/zwrose/superheroes/commit/06424f80e2a7bf27c4e099ae96eae1fd1900a680))
+* **superheroes:** review panels consider every installed cross-vendor engine ([#1577](https://github.com/zwrose/superheroes/issues/1577)) ([140117f](https://github.com/zwrose/superheroes/commit/140117f1b11ea5691fc192081036c3f98e06495a))
+* **superheroes:** the sandbox access options reach the claude write sandbox, offline by default ([#1562](https://github.com/zwrose/superheroes/issues/1562) layer 2) ([#1567](https://github.com/zwrose/superheroes/issues/1567)) ([5d3efe9](https://github.com/zwrose/superheroes/commit/5d3efe9348358791ccaf3f32b5549db370df9af2))
+
+
+### Bug Fixes
+
+* **superheroes:** a wrong-typed verifyCommand refuses at parse instead of silently disabling the verify gate ([#1572](https://github.com/zwrose/superheroes/issues/1572)) ([9738771](https://github.com/zwrose/superheroes/commit/9738771b0c949bb02be2f9f0ea65993703ec7ed8))
+* **superheroes:** sandboxed Claude implementers can run their own Python tests ([#1573](https://github.com/zwrose/superheroes/issues/1573), part of [#1569](https://github.com/zwrose/superheroes/issues/1569)) ([#1579](https://github.com/zwrose/superheroes/issues/1579)) ([e86aa89](https://github.com/zwrose/superheroes/commit/e86aa89eb503af31fb5cb823ac4c84bd65b92fd5))
+* **superheroes:** the sandboxed Claude channel cleans its .claude/.cc-writes residue at run close ([#1574](https://github.com/zwrose/superheroes/issues/1574), part of [#1569](https://github.com/zwrose/superheroes/issues/1569)) ([#1580](https://github.com/zwrose/superheroes/issues/1580)) ([0df3b40](https://github.com/zwrose/superheroes/commit/0df3b40757e194f210164167ffbfc48c82e7ea44))
+
+## [0.38.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.37.0...superheroes-v0.38.0) (2026-10-01)
+
+
+### Features
+
+* **superheroes:** a sandboxed-shell Claude write channel and the sonnet-5.5 registry id ([#1554](https://github.com/zwrose/superheroes/issues/1554) layer 1) ([#1557](https://github.com/zwrose/superheroes/issues/1557)) ([c6ab58b](https://github.com/zwrose/superheroes/commit/c6ab58ba228c3033317868ae0573bac3f7b1a8eb))
+* **superheroes:** add the gate-receipt/1 schema reference ([#1551](https://github.com/zwrose/superheroes/issues/1551)) ([b95a56b](https://github.com/zwrose/superheroes/commit/b95a56b40a1b3c46e7dfc52f77766b671b297ef6))
+* **superheroes:** the implementer is one calibration setting, and the seat map excludes both makers ([#1554](https://github.com/zwrose/superheroes/issues/1554) layer 2) ([#1558](https://github.com/zwrose/superheroes/issues/1558)) ([e746195](https://github.com/zwrose/superheroes/commit/e7461957e8b5293919e551fe709fa07883812497))
+
+
+### Bug Fixes
+
+* **superheroes:** wave_watch refuses a missing launch ledger instead of reporting clean ([#1552](https://github.com/zwrose/superheroes/issues/1552)) ([77515eb](https://github.com/zwrose/superheroes/commit/77515eb40815de7fc837792170f5f62d51736288))
+
+## [0.37.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.36.0...superheroes-v0.37.0) (2026-09-30)
+
+
+### Features
+
+* **superheroes:** GPT-6.1 Sol becomes the codex default; GPT-6 Sol stays as a pin ([#1542](https://github.com/zwrose/superheroes/issues/1542)) ([95cb23f](https://github.com/zwrose/superheroes/commit/95cb23fefedbeab0d3c42e2646be5ac08256390b))
+* **superheroes:** record host load and command time on every engine attempt ([#1538](https://github.com/zwrose/superheroes/issues/1538)) ([94d9f84](https://github.com/zwrose/superheroes/commit/94d9f8474ac14707ce63f174ca4a35a78666ebd3))
+
+
+### Bug Fixes
+
+* **superheroes:** admit a result file rewritten before the deadline, and name dirtied paths on a dirty-tree forfeit ([#1537](https://github.com/zwrose/superheroes/issues/1537)) ([401ac1a](https://github.com/zwrose/superheroes/commit/401ac1a3a73b17cf9aee1d1b0ac42068b617db66))
+* **superheroes:** count common test-support directories as test code in the size counter ([#1545](https://github.com/zwrose/superheroes/issues/1545)) ([9819e44](https://github.com/zwrose/superheroes/commit/9819e44e6c778f1efa93c8fe7679ee700f72d9a7))
+* **superheroes:** the control probe credits a Critical on the planted code, not only a finding that names the function ([#1549](https://github.com/zwrose/superheroes/issues/1549)) ([7460da7](https://github.com/zwrose/superheroes/commit/7460da75ee5e521807d30ca8811b95c480cb80de))
+
+## [0.36.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.35.1...superheroes-v0.36.0) (2026-09-29)
+
+
+### Features
+
+* **superheroes:** adopt a newly installed plugin version in the live session ([#1515](https://github.com/zwrose/superheroes/issues/1515)) ([ac9dfca](https://github.com/zwrose/superheroes/commit/ac9dfcaf174fc5fcf7c07e1f5294f9e7288b332e))
+
+
+### Bug Fixes
+
+* **superheroes:** a binary file in a reviewed diff becomes a placeholder in the sanitized view, never a refusal ([#1525](https://github.com/zwrose/superheroes/issues/1525)) ([38b00e4](https://github.com/zwrose/superheroes/commit/38b00e4de11b2cbb8e73e25d0d65d3795281573b))
+* **superheroes:** every new issue filing needs the owner's word ([#1522](https://github.com/zwrose/superheroes/issues/1522)) ([dd51b4b](https://github.com/zwrose/superheroes/commit/dd51b4b49e60ac661f033374a13dab8a757005a8))
+* **superheroes:** hand cursor a dash-free result path so a collapsed "--" never loses the result ([#1531](https://github.com/zwrose/superheroes/issues/1531)) ([3f363da](https://github.com/zwrose/superheroes/commit/3f363da9e483858ef22da574705986dc36340c02))
+* **superheroes:** record-outcome confirms a live pid is the lane's own builder before refusing terminal-child-live ([#1521](https://github.com/zwrose/superheroes/issues/1521)) ([b35b8b6](https://github.com/zwrose/superheroes/commit/b35b8b6f114595d04775e1e26d207cde5ac6c2ce))
+
+
+### Chores
+
+* **superheroes:** retire lib-homed legacy drift pins and amend the verification-strategy removal basis (C19 layer 1) ([#1516](https://github.com/zwrose/superheroes/issues/1516)) ([24d1c12](https://github.com/zwrose/superheroes/commit/24d1c120d0bc43c73be6eef945a1fc9799b35fd9))
+* **superheroes:** retire the charters' restated doctrine and their drift pins (C19 layer 2) ([#1523](https://github.com/zwrose/superheroes/issues/1523)) ([077c6bd](https://github.com/zwrose/superheroes/commit/077c6bd7b4864488ccdbdcdbab70a4e577310908))
+
+## [0.35.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.35.0...superheroes-v0.35.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **superheroes:** retire claude's background dispatch mode — print is the only claude mode ([#1507](https://github.com/zwrose/superheroes/issues/1507)) ([ad9c7e8](https://github.com/zwrose/superheroes/commit/ad9c7e89eba4bc6fae9d4df59dc540529004951d))
+* **superheroes:** the order-lint semantic seat is a named read-only agent ([#1510](https://github.com/zwrose/superheroes/issues/1510)) ([a046903](https://github.com/zwrose/superheroes/commit/a04690342b0bcce2b71092930ca993090f21a056))
+* **superheroes:** the size counter recognizes common test-path conventions, not only a tests/ directory ([#1506](https://github.com/zwrose/superheroes/issues/1506)) ([b2426db](https://github.com/zwrose/superheroes/commit/b2426db7fe11996d4fe23ef572301b19fd22b942))
+
+## [0.35.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.34.0...superheroes-v0.35.0) (2026-09-27)
+
+
+### Features
+
+* **superheroes:** bounded certification — the fix batch excludes discharged findings and an empty fix leg converges (C13 layer 3) ([#1385](https://github.com/zwrose/superheroes/issues/1385)) ([3ae8354](https://github.com/zwrose/superheroes/commit/3ae8354399da49271788ef07943d4f4eb0f1fee9))
+* **superheroes:** builder follow-ups are keyed, and the owner-half writer refuses a dropped one ([#1449](https://github.com/zwrose/superheroes/issues/1449)) ([400afa7](https://github.com/zwrose/superheroes/commit/400afa73bf1cee63a8a9f7c15432771212e5054f))
+* **superheroes:** C13 layer 4a — a seat proves it ran; fix-audit rulings carry runner evidence ([#1403](https://github.com/zwrose/superheroes/issues/1403)) ([fc86d36](https://github.com/zwrose/superheroes/commit/fc86d3619f4fb2bbe5625682aac3b2d18e4b61da))
+* **superheroes:** C13 layer 4b — the control probe is a sampled competence probe, never a certification gate ([#1412](https://github.com/zwrose/superheroes/issues/1412)) ([0f7bfae](https://github.com/zwrose/superheroes/commit/0f7bfae19cb2cc0ddf9f8c48f07d7dd17a2bba8b))
+* **superheroes:** C13 layer 4c-1 — the run-kind check at certification, the auditor-role family (D-B), and control-probe refusal tests ([#1418](https://github.com/zwrose/superheroes/issues/1418)) ([171ced6](https://github.com/zwrose/superheroes/commit/171ced672728f1d34aec10f3fe3781341d087214))
+* **superheroes:** C13 layer 4c-2 — the audited-chain finish, with the canonical audit-fold chokepoint ([#1433](https://github.com/zwrose/superheroes/issues/1433)) ([5aee881](https://github.com/zwrose/superheroes/commit/5aee88105cdbc9dbc1b7b5fa627c92c2f3684e72))
+* **superheroes:** C13 layer 4c-3 — the fix-audit proof, with the reconciliation rule for audits that found a new issue ([#1439](https://github.com/zwrose/superheroes/issues/1439)) ([e55b92c](https://github.com/zwrose/superheroes/commit/e55b92c6639462e4b9bed59b9bb7575d54568ac1))
+* **superheroes:** C13 layer 4d-2 — the rulings channel: rulings reach the round driver as a declared input ([#1459](https://github.com/zwrose/superheroes/issues/1459)) ([9555aac](https://github.com/zwrose/superheroes/commit/9555aac7787bd77241b978e3018c8207dcbbf08d))
+* **superheroes:** reset C13 layer 1a — one finding identity and one chokepoint for recorded journal rows (release re-statement of [#1322](https://github.com/zwrose/superheroes/issues/1322)) ([#1497](https://github.com/zwrose/superheroes/issues/1497)) ([bfdc1b7](https://github.com/zwrose/superheroes/commit/bfdc1b740f69146ebd7f0e2986277df23b3a26b7))
+* **superheroes:** reset C13 layer 1b — seat provenance from the runner record, the recorded fixer vendor, and the typed receipt fault ([#1327](https://github.com/zwrose/superheroes/issues/1327)) ([f0b9662](https://github.com/zwrose/superheroes/commit/f0b96627a1b68c5749c0c748bc4a692ab190d5c9))
+* **superheroes:** reset C13 layer 1c — the cited head a recorded row carries is the runner-observed view head ([#1354](https://github.com/zwrose/superheroes/issues/1354)) ([8e65ab1](https://github.com/zwrose/superheroes/commit/8e65ab1fac144864de1c9464a65a284084eeb17a))
+* **superheroes:** reset C13 layer 2a — one finding identity minted at compile, and one home each for the digest subject, the list-type tokens, the audit-provenance vocabulary, and the unauthenticated cause ([#1330](https://github.com/zwrose/superheroes/issues/1330)) ([685bc64](https://github.com/zwrose/superheroes/commit/685bc645e3f179592bc7e2408381a37dcdc97494))
+* **superheroes:** reset C13 layer 2b — a re-dispatched finding carries its prior audit and gate ruling into the fixer order; numeric-string lines are coerced, other non-integer lines refused loudly ([#1343](https://github.com/zwrose/superheroes/issues/1343)) ([1c9730f](https://github.com/zwrose/superheroes/commit/1c9730fe10a434211598f9cd5dc3dded4562313b))
+* **superheroes:** reset C13 layer 2c — the disposition ledger is the one owner, and a fixed receipt's verify proof is bound to its own head ([#1349](https://github.com/zwrose/superheroes/issues/1349)) ([63c1272](https://github.com/zwrose/superheroes/commit/63c12724b952ffa0f381211489031b7436bc3b88))
+* **superheroes:** reset C13 layer 2d — round economy: one verify-gate run per round, the gate beside the audits, fixer batches capped and split ([#1344](https://github.com/zwrose/superheroes/issues/1344)) ([acb7aaa](https://github.com/zwrose/superheroes/commit/acb7aaa3e04d65c60821d01123db0d794bfdf402))
+* **superheroes:** the C13 folds — follow-ups validated where given, staged ids never skipped, the ceiling gate on the post-fix head, and the transition rule (C13 layer 2e) ([#1383](https://github.com/zwrose/superheroes/issues/1383)) ([de0c787](https://github.com/zwrose/superheroes/commit/de0c787d44a9f2bd905f8b0b25b9bd57fa0c74e6))
+* **superheroes:** the certification writer reads one disposition owner and re-binds fixed receipts to the certified head (C13 layer 2f) ([#1362](https://github.com/zwrose/superheroes/issues/1362)) ([3ecf5b3](https://github.com/zwrose/superheroes/commit/3ecf5b3c3febf09ac1a26f788141f125f713627d))
+* **superheroes:** the review loop can move a parked session to another checkout (C13 layer 2i-a) ([#1372](https://github.com/zwrose/superheroes/issues/1372)) ([bdc403f](https://github.com/zwrose/superheroes/commit/bdc403f482e47d98939278dc1855fdaf20a650f5))
+* **superheroes:** the round driver can re-emit an order a relocation made stale (C13 layer 2i-b) ([#1380](https://github.com/zwrose/superheroes/issues/1380)) ([5437405](https://github.com/zwrose/superheroes/commit/5437405351d5415d88df2e21dc09a94de687dd15))
+* **superheroes:** the terminal finalization returns — fixed receipts re-bind to the certified head inside one step (C13 layer 2g) ([#1365](https://github.com/zwrose/superheroes/issues/1365)) ([cb77cbf](https://github.com/zwrose/superheroes/commit/cb77cbf1645fcf8f464c432d8b113e71aa686fd8))
+* **superheroes:** the verify submit refuses recoverably when it cannot resolve its head (C13 layer 2h) ([#1368](https://github.com/zwrose/superheroes/issues/1368)) ([90a370a](https://github.com/zwrose/superheroes/commit/90a370a1e951ff7792b6106daff03fd565926cbb))
+
+
+### Bug Fixes
+
+* **superheroes:** C13 layer 4d-1 — an unknown-surface panel reviews the diff at its head, or parks ([#1450](https://github.com/zwrose/superheroes/issues/1450)) ([7947f86](https://github.com/zwrose/superheroes/commit/7947f86a9576d1bf97636b8039342b157ba4b245))
+* **superheroes:** the charter detector recognizes showrunner-resume and showrunner-handoff seats ([#1495](https://github.com/zwrose/superheroes/issues/1495)) ([d80b42e](https://github.com/zwrose/superheroes/commit/d80b42e812ea4d01bc84f0f47de3d56b7a011d04))
+* **superheroes:** the clamp-exact legacy-key collision that holds the C13 stack (layer 2e-b) ([#1384](https://github.com/zwrose/superheroes/issues/1384)) ([a00643b](https://github.com/zwrose/superheroes/commit/a00643b9b12ab0e266db10cc888e89c9739d11d3))
+* **superheroes:** the guardian sweep collects what it reports ([#1491](https://github.com/zwrose/superheroes/issues/1491)) ([70adb92](https://github.com/zwrose/superheroes/commit/70adb92b973977ae2d90c3799f24c045cf9e373c))
+* **superheroes:** the launcher's stack gate lets an adoption re-occupy its own layer position ([#1489](https://github.com/zwrose/superheroes/issues/1489)) ([65a3ad1](https://github.com/zwrose/superheroes/commit/65a3ad17c324f82743852c6113a8daff165e722c))
+* **superheroes:** wave_watch counts a stack position occupied when the stack already has a PR there ([#1455](https://github.com/zwrose/superheroes/issues/1455)) ([325843f](https://github.com/zwrose/superheroes/commit/325843ff7b0e75b65e6d7862d13448783ea76e4c))
+
+
+### Chores
+
+* **superheroes:** after GPT-6 Sol — registration-probe name, one tier-map source, honest pin tests, size counter, doctrine fixes (release re-statement of [#1464](https://github.com/zwrose/superheroes/issues/1464)) ([#1498](https://github.com/zwrose/superheroes/issues/1498)) ([f4e152a](https://github.com/zwrose/superheroes/commit/f4e152a1a4425d63d2cfd62af2c6152177e998be))
+* **superheroes:** C7 eval suite, layer 1 — R8, workhorse cases, README ([#1481](https://github.com/zwrose/superheroes/issues/1481)) ([2f5c3d3](https://github.com/zwrose/superheroes/commit/2f5c3d3ae967d2034927647db97eae8f7e11cc65))
+* **superheroes:** C7 eval suite, layer 2 — showrunner cases ([#1482](https://github.com/zwrose/superheroes/issues/1482)) ([a6303b3](https://github.com/zwrose/superheroes/commit/a6303b3ecc95e5c911cdde2d7523eed93118ecde))
+* **superheroes:** C7 eval suite, layer 3 — detective and covenant cases, baseline ([#1483](https://github.com/zwrose/superheroes/issues/1483)) ([57c9d8f](https://github.com/zwrose/superheroes/commit/57c9d8f7daa0d7e71170ded9686f3db18f8bc377))
+* **superheroes:** C7 layer 1a — dispatch-mechanics swept of provenance, with the await and check-runner sections ([#1474](https://github.com/zwrose/superheroes/issues/1474)) ([3488dee](https://github.com/zwrose/superheroes/commit/3488deee659ea36b37a53fa8f457be87626f754c))
+* **superheroes:** C7 layer 1b — the workhorse charter as a map ([#1475](https://github.com/zwrose/superheroes/issues/1475)) ([96cf158](https://github.com/zwrose/superheroes/commit/96cf158c6cd818f1850ee47dd0308917b7226008))
+* **superheroes:** C7 layer 2 — the showrunner charter as a map ([#1494](https://github.com/zwrose/superheroes/issues/1494)) ([e8e0a05](https://github.com/zwrose/superheroes/commit/e8e0a051b8dde08a5cb7c58de385774c8aad0a3f))
+* **superheroes:** C7 layer 2b — the merge policy's pointers, the vet-receipt fields and the owner-decisions satellites ([#1500](https://github.com/zwrose/superheroes/issues/1500)) ([222ad09](https://github.com/zwrose/superheroes/commit/222ad09ac43cd243f976fe0a2f1a48d07a0cac2f))
+* **superheroes:** C7 layer 3 — the detective charter as a map, skill descriptions as pointers, and the landing note ([#1503](https://github.com/zwrose/superheroes/issues/1503)) ([089f6f0](https://github.com/zwrose/superheroes/commit/089f6f0ec40286abddceddcce92d9162be0490ad))
+* **superheroes:** one liveness signal — retire the heartbeat's stale half, keep its ending stamp ([#1488](https://github.com/zwrose/superheroes/issues/1488)) ([80f63a8](https://github.com/zwrose/superheroes/commit/80f63a83474431c3904e8b54327c2575dddaf5c1))
+* **superheroes:** retire the dispatch salvage paths; a sizing note for long cursor write dispatches ([#1463](https://github.com/zwrose/superheroes/issues/1463)) ([a08376c](https://github.com/zwrose/superheroes/commit/a08376c23dca0bb9720a96ce57124e6a286d1b1b))
+
+## [0.34.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.33.0...superheroes-v0.34.0) (2026-09-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **superheroes:** reset C11 layer 1 — one exit-code rule, the fail-closed residuals, and the readout scrub egress ([#1306](https://github.com/zwrose/superheroes/issues/1306))
+* **superheroes:** the launcher refuses a CLAUDE_CONFIG_DIR pin that is not the calling seat's own ([#1315](https://github.com/zwrose/superheroes/issues/1315))
+* **superheroes:** reset C12 layer 2 — the receipt writer, the evidence seam, and codex runner-side telemetry ([#1295](https://github.com/zwrose/superheroes/issues/1295))
+* **superheroes:** reset C12 layer 1 — the authenticated seat-result envelope and the CAS-token record identity ([#1290](https://github.com/zwrose/superheroes/issues/1290))
+* **superheroes:** the certified review loop's automated fixer no longer runs a file-scope guard and no longer refuses to edit any file. `escalation.py` loses its `SAFETY_MACHINERY` tuple, its `is_safety_machinery` predicate and its `guard` CLI verb; `escalation_resolve.py` loses its `guard` verb; the `dispatch-fixer` order loses its `Escalation guard` input and the gating step that used it; and `rubric/review-discipline.md` loses the safety-machinery route section. A caller invoking either `guard` verb now gets an argparse rejection, and a fixer dispatched on a finding in the dispatch shell or the loop's own driver edits the file like any other. The checks on those edits are the independent fix audit and each gate's bite-proof.
+* **superheroes:** reset C22 — the unconditional orchestration retirements ([#1304](https://github.com/zwrose/superheroes/issues/1304))
+* **superheroes:** reset C2 — the routing-time vocabulary, the tier rename, and the narrowed census ([#1292](https://github.com/zwrose/superheroes/issues/1292))
+* **superheroes:** reset C10 — the dispatch shell's entry surface shrinks to one seat bundle ([#1283](https://github.com/zwrose/superheroes/issues/1283))
+* **superheroes:** reset C5 — retire the owner-authority gate family by census ([#1293](https://github.com/zwrose/superheroes/issues/1293))
+* **superheroes:** reset C3 — the review-facing doctrine rules and the pointer-only amendments ([#1286](https://github.com/zwrose/superheroes/issues/1286))
+* **superheroes:** reset C4 — the host position, the micro-lane vocabulary, and the host-model sites ([#1285](https://github.com/zwrose/superheroes/issues/1285))
+* **superheroes:** reset C17 — the thirteen configuration items, their one homes, and the door's fail direction ([#1282](https://github.com/zwrose/superheroes/issues/1282))
+* **superheroes:** reset C16 — the sanitized view shrinks to trusted-repo pollution, and configuration changes become reviewable ([#1280](https://github.com/zwrose/superheroes/issues/1280))
+* **superheroes:** reset C1 — promise 1's new shape across its four homes, plus the canonical glossary ([#1277](https://github.com/zwrose/superheroes/issues/1277))
+
+### Features
+
+* **superheroes:** C11 layer 2a — codex reviews come home on the native result channel ([#1310](https://github.com/zwrose/superheroes/issues/1310)) ([d8081e1](https://github.com/zwrose/superheroes/commit/d8081e10765b0c79cc770c48345cecc692f78f96))
+* **superheroes:** C11 layer 2a2 — the declared schema is the one admission authority ([#1319](https://github.com/zwrose/superheroes/issues/1319)) ([f44fbb7](https://github.com/zwrose/superheroes/commit/f44fbb742356fac3b36743b608c7429f4cea5a6c))
+* **superheroes:** C11 layer 2b — codex writes come home on the native result channel ([#1326](https://github.com/zwrose/superheroes/issues/1326)) ([25ddf27](https://github.com/zwrose/superheroes/commit/25ddf279c49a4153ed19f78b2af58e9ee15de3bf))
+* **superheroes:** C11 layer 2c — the marker parser and salvage tiers leave codex's path; the prose for the native channel ([#1328](https://github.com/zwrose/superheroes/issues/1328)) ([7528aa7](https://github.com/zwrose/superheroes/commit/7528aa7ce28caec9e045e0d01758dc75e42b576f))
+* **superheroes:** C11 layer 3 — the per-engine conformance probe, the cursor trial's record, and the closing note ([#1332](https://github.com/zwrose/superheroes/issues/1332)) ([6f60dfb](https://github.com/zwrose/superheroes/commit/6f60dfb462d8364172e65b92da4091bf3f41bbf2))
+* **superheroes:** C11 layer 3b — the 2c craft follow-ups and the vet-244 fold ([#1335](https://github.com/zwrose/superheroes/issues/1335)) ([1ff04f4](https://github.com/zwrose/superheroes/commit/1ff04f4ba8c65a0a7a4631222eceeca6a600aceb))
+* **superheroes:** C11 layer 3c — cursor moves to the typed-file result channel ([#1341](https://github.com/zwrose/superheroes/issues/1341)) ([aaf27b8](https://github.com/zwrose/superheroes/commit/aaf27b8089159c2ea4020b03ccbddcd263c57e8a))
+* **superheroes:** C14 layer 1 — command-line Claude as a dispatchable engine, print mode ([#1273](https://github.com/zwrose/superheroes/issues/1273)) ([#1346](https://github.com/zwrose/superheroes/issues/1346)) ([072785e](https://github.com/zwrose/superheroes/commit/072785edf17fd4610ec99cf693abc87d1ee5134d))
+* **superheroes:** C14 layer 2a — the claude dispatch-mode contract ([#1273](https://github.com/zwrose/superheroes/issues/1273)) ([#1351](https://github.com/zwrose/superheroes/issues/1351)) ([1eee4ff](https://github.com/zwrose/superheroes/commit/1eee4ff7ed090f2f1e0c35df171e99306f8e2560))
+* **superheroes:** C14 layer 2b — the claude background dispatch flow ([#1273](https://github.com/zwrose/superheroes/issues/1273)) ([#1358](https://github.com/zwrose/superheroes/issues/1358)) ([2d59c2c](https://github.com/zwrose/superheroes/commit/2d59c2c5b5c5cb7b0fa3cc1bd324c3135c460187))
+* **superheroes:** C14 layer 3a — the engine result contracts ([#1273](https://github.com/zwrose/superheroes/issues/1273)) ([#1360](https://github.com/zwrose/superheroes/issues/1360)) ([4dccfb4](https://github.com/zwrose/superheroes/commit/4dccfb4913e0bfc363032a40c41bba00cb778760))
+* **superheroes:** C14 layer 3a-b — the result-completion contract ([#1273](https://github.com/zwrose/superheroes/issues/1273)) ([#1364](https://github.com/zwrose/superheroes/issues/1364)) ([10ab6e1](https://github.com/zwrose/superheroes/commit/10ab6e1af2a3290da76ec3b1405d3d810acdf779))
+* **superheroes:** C14 layer 3a-c — stdout is parsed exactly once ([#1273](https://github.com/zwrose/superheroes/issues/1273)) ([#1369](https://github.com/zwrose/superheroes/issues/1369)) ([f887760](https://github.com/zwrose/superheroes/commit/f8877604e7e15233c35193929e29e5e9848de377))
+* **superheroes:** C14 layer 3b — the codex role pin reaches the panel, the host model sets the families, the receipt names the real model ([#1273](https://github.com/zwrose/superheroes/issues/1273)) ([#1377](https://github.com/zwrose/superheroes/issues/1377)) ([da41bd7](https://github.com/zwrose/superheroes/commit/da41bd75697e1bb8326c36aa4baa70c5167b81e5))
+* **superheroes:** C14 layer 3b-2 — the Astra registration probe and one design for codex role pins ([#1382](https://github.com/zwrose/superheroes/issues/1382)) ([f287dce](https://github.com/zwrose/superheroes/commit/f287dce940e7758d7cf145297e373b1d39927c9c))
+* **superheroes:** C14 layer 3c — the engine-dispatch residuals ([#1273](https://github.com/zwrose/superheroes/issues/1273)) ([#1399](https://github.com/zwrose/superheroes/issues/1399)) ([1af416c](https://github.com/zwrose/superheroes/commit/1af416ca939a52209848dec1df332e62401d6495))
+* **superheroes:** C14 layer 4a-1 — the adapter is the one home for claude argv; the ledger's background launch record ([#1273](https://github.com/zwrose/superheroes/issues/1273)) ([#1404](https://github.com/zwrose/superheroes/issues/1404)) ([cb66c64](https://github.com/zwrose/superheroes/commit/cb66c6471df230f9dd2cafa6753a37c3d60b867d))
+* **superheroes:** C14 layer 4a-2p — builders stay on claude -p, their command comes from the adapter; the builder canary ([#1410](https://github.com/zwrose/superheroes/issues/1410)) ([4d1b99b](https://github.com/zwrose/superheroes/commit/4d1b99b2f33bab8e8893ad133d045d3cbb319953))
+* **superheroes:** C15 layer 1a — wave_watch run is a one-shot ([#1413](https://github.com/zwrose/superheroes/issues/1413)) ([8bbd874](https://github.com/zwrose/superheroes/commit/8bbd874595d696f67964c30c2724e5c748d5c68f))
+* **superheroes:** C15 layer 1b — wave_watch loop passes over benign wakes and reports them ([#1414](https://github.com/zwrose/superheroes/issues/1414)) ([74674f5](https://github.com/zwrose/superheroes/commit/74674f57e14a309ef78029421593ef2cf7bcccdd))
+* **superheroes:** C15 layer 1c — wave_watch loop refuses a second live loop on the same batch ([#1415](https://github.com/zwrose/superheroes/issues/1415)) ([2adac79](https://github.com/zwrose/superheroes/commit/2adac793e0539107d288729c8bb8fee98afa2cb9))
+* **superheroes:** every planned stack layer is a sub-issue of its feature issue ([#1430](https://github.com/zwrose/superheroes/issues/1430)) ([11ac4eb](https://github.com/zwrose/superheroes/commit/11ac4eb87b64c89ea4d7b87c17bbf6245a9ec973))
+* **superheroes:** gpt-6-sol becomes the codex default; Terra retires; 5.6 Sol stays as a pin ([#1442](https://github.com/zwrose/superheroes/issues/1442)) ([6a4635f](https://github.com/zwrose/superheroes/commit/6a4635fe945e35b6c39f406d0e2cf199710f13f8))
+* **superheroes:** order lint before every implementer dispatch — the deterministic half, the semantic seat, and the fixer-emission hook ([#1342](https://github.com/zwrose/superheroes/issues/1342)) ([23acef8](https://github.com/zwrose/superheroes/commit/23acef87aa3dc67022da29c2febf11cf833501eb))
+* **superheroes:** reset C1 — promise 1's new shape across its four homes, plus the canonical glossary ([#1277](https://github.com/zwrose/superheroes/issues/1277)) ([3d78d3f](https://github.com/zwrose/superheroes/commit/3d78d3f7e62dedefa1bfeb59d63b5dae82ec9f58))
+* **superheroes:** reset C10 — the dispatch shell's entry surface shrinks to one seat bundle ([#1283](https://github.com/zwrose/superheroes/issues/1283)) ([898c0ff](https://github.com/zwrose/superheroes/commit/898c0ff21d9270781962cff90c31507ca4ef8d90))
+* **superheroes:** reset C11 layer 1 — one exit-code rule, the fail-closed residuals, and the readout scrub egress ([#1306](https://github.com/zwrose/superheroes/issues/1306)) ([3874783](https://github.com/zwrose/superheroes/commit/3874783138a802a5ee4ef997a8765632a726fb1d))
+* **superheroes:** reset C12 layer 1 — the authenticated seat-result envelope and the CAS-token record identity ([#1290](https://github.com/zwrose/superheroes/issues/1290)) ([71dfde2](https://github.com/zwrose/superheroes/commit/71dfde2a8c990d2b0898dc7a741c739411accf73))
+* **superheroes:** reset C12 layer 2 — the receipt writer, the evidence seam, and codex runner-side telemetry ([#1295](https://github.com/zwrose/superheroes/issues/1295)) ([0176207](https://github.com/zwrose/superheroes/commit/0176207bb3c4e35f6991dc14b51b7869a0de0731))
+* **superheroes:** reset C16 — the sanitized view shrinks to trusted-repo pollution, and configuration changes become reviewable ([#1280](https://github.com/zwrose/superheroes/issues/1280)) ([06f3ce3](https://github.com/zwrose/superheroes/commit/06f3ce3cf49814d1222602bcaa4cf088da1aa11f))
+* **superheroes:** reset C17 — the thirteen configuration items, their one homes, and the door's fail direction ([#1282](https://github.com/zwrose/superheroes/issues/1282)) ([33d7c1a](https://github.com/zwrose/superheroes/commit/33d7c1a4b906d9b8ce5363080786337faefa0aa2))
+* **superheroes:** reset C2 — the routing-time vocabulary, the tier rename, and the narrowed census ([#1292](https://github.com/zwrose/superheroes/issues/1292)) ([fa4211c](https://github.com/zwrose/superheroes/commit/fa4211c648919e3782d32f1ec12548c3219698f4))
+* **superheroes:** reset C21 — retire the safety-machinery fixer refusal ([#1305](https://github.com/zwrose/superheroes/issues/1305)) ([a758c34](https://github.com/zwrose/superheroes/commit/a758c345186e44d684709ee455cf5d19a2869a3f))
+* **superheroes:** reset C22 — the unconditional orchestration retirements ([#1304](https://github.com/zwrose/superheroes/issues/1304)) ([b1ea870](https://github.com/zwrose/superheroes/commit/b1ea87030f7d7475de9efd16c2b99bab11bbe3b5))
+* **superheroes:** reset C3 — the review-facing doctrine rules and the pointer-only amendments ([#1286](https://github.com/zwrose/superheroes/issues/1286)) ([f6570e0](https://github.com/zwrose/superheroes/commit/f6570e0e2f5fb56bb62970d5538a0c7c255e37d2))
+* **superheroes:** reset C4 — the host position, the micro-lane vocabulary, and the host-model sites ([#1285](https://github.com/zwrose/superheroes/issues/1285)) ([bf49fa1](https://github.com/zwrose/superheroes/commit/bf49fa1296e93e086ef12779e66b57ccb1ef7960))
+* **superheroes:** reset C5 — retire the owner-authority gate family by census ([#1293](https://github.com/zwrose/superheroes/issues/1293)) ([3c9bd58](https://github.com/zwrose/superheroes/commit/3c9bd58b71689c88883fec79db0d3384399f2237))
+* **superheroes:** reset C6 — the keep-or-retire list, workaround markers, and the consumer-report channel ([#1281](https://github.com/zwrose/superheroes/issues/1281)) ([8ba68be](https://github.com/zwrose/superheroes/commit/8ba68be05067d7a10b964a27749036da4918b89a))
+* **superheroes:** showrunner-handoff and showrunner-resume — the advisor seat moves by two commands ([#1318](https://github.com/zwrose/superheroes/issues/1318)) ([1875d85](https://github.com/zwrose/superheroes/commit/1875d855d91a05344e2e0272d8e42710cbdd190c))
+* **superheroes:** stack-native builds, layer 1 — the native-stack doctrine and the verification rewrite ([#1350](https://github.com/zwrose/superheroes/issues/1350)) ([e7c6f7f](https://github.com/zwrose/superheroes/commit/e7c6f7f4388e772c7fdac02b228695e8f9a19fff))
+* **superheroes:** stack-native builds, layer 2a — the membership read ([#1352](https://github.com/zwrose/superheroes/issues/1352)) ([90693c8](https://github.com/zwrose/superheroes/commit/90693c88a3bdf6b0f215cb25f65ecbe42f8bd8ba))
+* **superheroes:** stack-native builds, layer 2b — the stack-reading half (premise fields, the base-not-layer-head gate, and one shared read budget) ([#1355](https://github.com/zwrose/superheroes/issues/1355)) ([227f3c5](https://github.com/zwrose/superheroes/commit/227f3c52d1d938e295d98bf5ebc427d4726ca3b6))
+* **superheroes:** stack-native builds, layer 2c — the consumers half (wave watch, register copy, the gate's own causes, and the doctrine correction) ([#1357](https://github.com/zwrose/superheroes/issues/1357)) ([7928482](https://github.com/zwrose/superheroes/commit/79284828a31dcc9133cf183bc42f136dc1a60f88))
+* **superheroes:** stack-native builds, layer 2d — one home for the shared reads, the premise's planned layer count, and the passed git environment ([#1361](https://github.com/zwrose/superheroes/issues/1361)) ([325ad7c](https://github.com/zwrose/superheroes/commit/325ad7c3a6f4354a5f13caff7e2f1a3212b607a8))
+* **superheroes:** stack-native builds, layer 2f — the verdict reader and the dependency gate ([#1367](https://github.com/zwrose/superheroes/issues/1367)) ([794f6ed](https://github.com/zwrose/superheroes/commit/794f6ed6a27e0c4adfe99fce0af4ecdc0c1d6060))
+* **superheroes:** the builder's size tripwire resolves by agent message ([#1436](https://github.com/zwrose/superheroes/issues/1436)) ([b87ebeb](https://github.com/zwrose/superheroes/commit/b87ebeb155ad16baf439383861e9dabfe9ecfa4d))
+* **superheroes:** the launcher refuses a CLAUDE_CONFIG_DIR pin that is not the calling seat's own ([#1315](https://github.com/zwrose/superheroes/issues/1315)) ([70af138](https://github.com/zwrose/superheroes/commit/70af138890d52fe3ab5c72e6c3973ccee3bef79d))
+* **superheroes:** the stack completion signal, and the advisor seat read from a versioned binary ([#1340](https://github.com/zwrose/superheroes/issues/1340) layer 2g) ([#1370](https://github.com/zwrose/superheroes/issues/1370)) ([86ed6f6](https://github.com/zwrose/superheroes/commit/86ed6f68f3a78411df3c97b7d8dbc4119a3ba296))
+* **superheroes:** vet checks as a vetChecks key in core.md's JSON block ([#1238](https://github.com/zwrose/superheroes/issues/1238)) ([#1437](https://github.com/zwrose/superheroes/issues/1437)) ([f529c4a](https://github.com/zwrose/superheroes/commit/f529c4ac68d1846f21d846996e1158569e68b8b2))
+
+
+### Bug Fixes
+
+* **superheroes:** C15 layer 2 — the launcher findings, the all-six-kept record, and the heartbeat outcome ([#1429](https://github.com/zwrose/superheroes/issues/1429)) ([2345957](https://github.com/zwrose/superheroes/commit/23459575784f1f4a5d2d5666f97dae05c3705b75))
+* **superheroes:** keep the test suite from writing the real checkout's review scope marker ([#1381](https://github.com/zwrose/superheroes/issues/1381)) ([8e9a12a](https://github.com/zwrose/superheroes/commit/8e9a12a00c0f6e791bb889d85e30f9712f85b1de))
+* **superheroes:** showrunner-resume never adopts a lane whose pull request is ready ([#1323](https://github.com/zwrose/superheroes/issues/1323)) ([cb36417](https://github.com/zwrose/superheroes/commit/cb364170eda6bbf55f737479d514599ad7134054))
+* **superheroes:** the order lint passes an order that inlines the shipped implementer template ([#1378](https://github.com/zwrose/superheroes/issues/1378)) ([b956741](https://github.com/zwrose/superheroes/commit/b9567412689eceb33b2ee544a5c163b244bc2a53))
+* **superheroes:** the verify command binds a {baseRef} token to the pinned base commit ([#1336](https://github.com/zwrose/superheroes/issues/1336)) ([a9f1095](https://github.com/zwrose/superheroes/commit/a9f1095e3c3d113105c2f5437693b19d242d7435))
+
+
+### Chores
+
+* **superheroes:** C15 layer 3 — the plugin-root seam and its lint retire ([#1432](https://github.com/zwrose/superheroes/issues/1432)) ([b5f25c4](https://github.com/zwrose/superheroes/commit/b5f25c4afbf6f53f7a3954bcbfbf26e066a9b5df))
+* **superheroes:** one pinned Python, drift-guarded ([#1228](https://github.com/zwrose/superheroes/issues/1228)) ([#1427](https://github.com/zwrose/superheroes/issues/1427)) ([911a957](https://github.com/zwrose/superheroes/commit/911a9578b8cb8cda3351633b7d65958646e28de9))
+
 ## [0.33.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.32.0...superheroes-v0.33.0) (2026-08-31)
 
 

@@ -6,6 +6,7 @@ write/write_layer/confirm*/write_show_it_surface are the lock-guarded fail-open 
 (mode_registry.config_lock; return a `deferred` action, never raise, never block). The
 legacy-profile migration path was removed in favour of a named refusal (issue #724)."""
 import collections
+import copy
 import datetime
 import json
 import os
@@ -20,8 +21,9 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-# WORKAROUND: the profile schema stays at 2 while it carries the projectConfiguration keys an
-# older build does not know, so an older build re-calibrating from scratch can drop them.
+# WORKAROUND: the profile schema stays at 2 while it carries the projectConfiguration and
+# vetChecks keys an older build does not know, so an older build re-calibrating from scratch
+# can drop them.
 # delete-when: the keep list is stamped and a release carrying the configuration items has
 # shipped; then raise this version, pinning the new literal in the tests rather than referencing
 # this constant, so an older build refuses the profile instead of rewriting it.
@@ -85,6 +87,60 @@ PROJECT_CONFIG_REASON_NOT_A_MAPPING = "project-config-not-a-mapping"
 PROJECT_CONFIG_REASON_ROUND_TRIP = "project-config-round-trip-refused"
 DECLARED_DEPS_REASON_NOT_A_MAPPING = "declared-deps-not-a-mapping"
 DECLARED_DEPS_REASON_ROUND_TRIP = "declared-deps-round-trip-refused"
+VET_CHECKS_KEY = "vetChecks"
+VET_CHECKS_REASON_MALFORMED = "vet-checks-malformed"
+VET_CHECKS_REASON_INPUT_UNPARSEABLE = "vet-checks-input-unparseable"
+VET_CHECKS_REASON_ROUND_TRIP = "vet-checks-round-trip-refused"
+VET_CHECK_FIELD_NAMES = ("name", "evidence", "records")
+_VET_CHECK_FIELDS = frozenset(VET_CHECK_FIELD_NAMES)
+VET_CHECKS_MALFORMED_NOT_A_LIST = "vet-checks-not-a-list"
+VET_CHECKS_MALFORMED_ENTRY_NOT_OBJECT = "vet-checks-entry-not-an-object"
+VET_CHECKS_MALFORMED_ENTRY_MISSING_FIELD = "vet-checks-entry-missing-field"
+VET_CHECKS_MALFORMED_ENTRY_UNKNOWN_FIELD = "vet-checks-entry-unknown-field"
+VET_CHECKS_MALFORMED_FIELD_NOT_STRING = "vet-checks-field-not-a-nonempty-string"
+VET_CHECKS_MALFORMED_DUPLICATE_NAME = "vet-checks-duplicate-name"
+VET_CHECKS_MALFORMED_REASONS = (
+    VET_CHECKS_MALFORMED_NOT_A_LIST,
+    VET_CHECKS_MALFORMED_ENTRY_NOT_OBJECT,
+    VET_CHECKS_MALFORMED_ENTRY_MISSING_FIELD,
+    VET_CHECKS_MALFORMED_ENTRY_UNKNOWN_FIELD,
+    VET_CHECKS_MALFORMED_FIELD_NOT_STRING,
+    VET_CHECKS_MALFORMED_DUPLICATE_NAME,
+)
+SANDBOX_ACCESS_KEY = "sandboxAccess"
+SANDBOX_ACCESS_FIELDS = ("allowedDomains", "localPorts", "localSockets", "extraWritePaths")
+SANDBOX_ACCESS_REASON_MALFORMED = "sandbox-access-malformed"
+SANDBOX_ACCESS_REASON_INPUT_UNPARSEABLE = "sandbox-access-input-unparseable"
+SANDBOX_ACCESS_REASON_ROUND_TRIP = "sandbox-access-round-trip-refused"
+SANDBOX_ACCESS_MALFORMED_NOT_AN_OBJECT = "sandbox-access-not-an-object"
+SANDBOX_ACCESS_MALFORMED_UNKNOWN_FIELD = "sandbox-access-unknown-field"
+SANDBOX_ACCESS_MALFORMED_NOT_A_LIST = "sandbox-access-not-a-list"
+SANDBOX_ACCESS_MALFORMED_DOMAIN_INVALID = "sandbox-access-domain-invalid"
+SANDBOX_ACCESS_MALFORMED_NOT_A_BOOL = "sandbox-access-not-a-bool"
+SANDBOX_ACCESS_MALFORMED_PATH_NOT_ABSOLUTE = "sandbox-access-path-not-absolute"
+SANDBOX_ACCESS_MALFORMED_PATH_IS_ROOT = "sandbox-access-path-is-root"
+_SANDBOX_ACCEPTED_OBJECT = (
+    "an object with any of the keys allowedDomains, localPorts, localSockets, extraWritePaths")
+_SANDBOX_ACCEPTED_DOMAIN_LIST = "a list of hostnames, such as [\"pypi.org\", \"*.example.com\"]"
+_SANDBOX_ACCEPTED_PATH_LIST = "a list of absolute paths"
+_SANDBOX_ACCEPTED_DOMAIN = (
+    "a bare hostname such as pypi.org, or a subdomain wildcard such as *.example.com "
+    "— no scheme, path, port, or bare *")
+_SANDBOX_ACCEPTED_BOOL = "true or false"
+_SANDBOX_ACCEPTED_PATH = "an absolute path such as /Users/me/Library/Caches/ms-playwright"
+_SANDBOX_ACCEPTED_PATH_BELOW_ROOT = "an absolute path below / — the whole filesystem is never writable"
+_SANDBOX_HOSTNAME = re.compile(r"[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*")
+SIZE_EXCLUDE_KEY = "sizeExclude"
+SIZE_EXCLUDE_REASON_MALFORMED = "size-exclude-malformed"
+SIZE_EXCLUDE_REASON_INPUT_UNPARSEABLE = "size-exclude-input-unparseable"
+SIZE_EXCLUDE_REASON_ROUND_TRIP = "size-exclude-round-trip-refused"
+SIZE_EXCLUDE_REASON_UNREADABLE = "size-exclude-unreadable"
+SIZE_EXCLUDE_MALFORMED_NOT_A_LIST = "size-exclude-not-a-list"
+SIZE_EXCLUDE_MALFORMED_ENTRY_NOT_STRING = "size-exclude-entry-not-a-nonempty-string"
+SIZE_EXCLUDE_MALFORMED_ENTRY_ABSOLUTE = "size-exclude-entry-absolute"
+_SIZE_EXCLUDE_ACCEPTED_LIST = (
+    "a list of repo-relative path globs, such as [\"docs/**\", \"*.generated.ts\"]")
+_SIZE_EXCLUDE_ACCEPTED_GLOB = "a repo-relative glob, no leading /"
 THREAT_MODEL_REASON_ROUND_TRIP = "threat-model-round-trip-refused"
 GUARDIAN_CADENCE_REASON_LAYER_ABSENT = "guardian-layer-absent"
 GUARDIAN_CADENCE_REASON_NO_FENCE = "guardian-config-fence-absent"
@@ -95,6 +151,14 @@ GATE_POLICY_REASON_INPUT_UNPARSEABLE = "gate-policy-input-unparseable"
 GATE_POLICY_REASON_NOT_A_MAPPING = "gate-policy-not-a-mapping"
 GATE_POLICY_REASON_INVALID = "gate-policy-invalid"
 GATE_POLICY_REASON_ROUND_TRIP = "gate-policy-round-trip-refused"
+VERIFY_COMMAND_REASON_MALFORMED = "verify-command-malformed"
+
+
+class VerifyCommandMalformed(Exception):
+    """Named refusal (#1331): a present verifyCommand that is not a non-empty string. Raised by
+    parse_core, the one reader, so no caller can mistake a typo for "no verify command"."""
+    reason = VERIFY_COMMAND_REASON_MALFORMED
+
 
 CoreGateConfig = collections.namedtuple("CoreGateConfig", "prefs status detail")
 ReviewGatePolicyGate = collections.namedtuple(
@@ -104,6 +168,146 @@ _PROV = re.compile(
     r"<!--\s*superheroes-core:\s*schemaVersion=(\d+)\s+status=(\w+)\s+"
     r"created=(\S+)\s+updated=(\S+)\s*-->")
 _JSON_BLOCK = re.compile(r"```json superheroes-core\s*\n(.*?)\n```", re.DOTALL)
+
+
+def validate_vet_checks(value):
+    """Return malformed-item dicts for a vetChecks value; empty list means valid. Never raises."""
+    items = []
+    if not isinstance(value, list):
+        return [{"index": None, "field": None, "reason": VET_CHECKS_MALFORMED_NOT_A_LIST}]
+    seen_names = {}
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            items.append(
+                {"index": index, "field": None,
+                 "reason": VET_CHECKS_MALFORMED_ENTRY_NOT_OBJECT})
+            continue
+        for key in entry:
+            if key not in _VET_CHECK_FIELDS:
+                items.append(
+                    {"index": index, "field": key,
+                     "reason": VET_CHECKS_MALFORMED_ENTRY_UNKNOWN_FIELD})
+        for field in VET_CHECK_FIELD_NAMES:
+            if field not in entry:
+                items.append(
+                    {"index": index, "field": field,
+                     "reason": VET_CHECKS_MALFORMED_ENTRY_MISSING_FIELD})
+        for field in _VET_CHECK_FIELDS:
+            if field not in entry:
+                continue
+            raw = entry[field]
+            if not isinstance(raw, str) or not raw.strip():
+                items.append({
+                    "index": index,
+                    "field": field,
+                    "reason": VET_CHECKS_MALFORMED_FIELD_NOT_STRING,
+                })
+        name_val = entry.get("name")
+        if isinstance(name_val, str) and name_val.strip():
+            stripped_name = name_val.strip()
+            if stripped_name in seen_names:
+                items.append(
+                    {"index": index, "field": "name",
+                     "reason": VET_CHECKS_MALFORMED_DUPLICATE_NAME})
+            else:
+                seen_names[stripped_name] = index
+    return items
+
+
+def sandbox_access_all_off():
+    """The sandbox-access value with every option off — the default when the key is absent."""
+    return {"allowedDomains": [], "localPorts": False, "localSockets": False,
+            "extraWritePaths": []}
+
+
+def _sandbox_domain_ok(entry):
+    if not isinstance(entry, str) or not entry:
+        return False
+    if entry.startswith("*."):
+        rest = entry[2:]
+        return bool(_SANDBOX_HOSTNAME.fullmatch(rest)) and "." in rest
+    return bool(_SANDBOX_HOSTNAME.fullmatch(entry))
+
+
+def validate_sandbox_access(value):
+    """Return malformed-item dicts for a sandboxAccess value; empty list means valid. Never
+    raises. Every item carries ``accepted`` — the named refusal stating the accepted shape."""
+    def item(field, index, reason, accepted):
+        return {"field": field, "index": index, "reason": reason, "accepted": accepted}
+
+    if not isinstance(value, dict):
+        return [item(None, None, SANDBOX_ACCESS_MALFORMED_NOT_AN_OBJECT,
+                     _SANDBOX_ACCEPTED_OBJECT)]
+    items = []
+    for key in value:
+        if key not in SANDBOX_ACCESS_FIELDS:
+            items.append(item(key, None, SANDBOX_ACCESS_MALFORMED_UNKNOWN_FIELD,
+                              _SANDBOX_ACCEPTED_OBJECT))
+    if "allowedDomains" in value:
+        domains = value["allowedDomains"]
+        if not isinstance(domains, list):
+            items.append(item("allowedDomains", None, SANDBOX_ACCESS_MALFORMED_NOT_A_LIST,
+                              _SANDBOX_ACCEPTED_DOMAIN_LIST))
+        else:
+            for index, entry in enumerate(domains):
+                if not _sandbox_domain_ok(entry):
+                    items.append(item("allowedDomains", index,
+                                      SANDBOX_ACCESS_MALFORMED_DOMAIN_INVALID,
+                                      _SANDBOX_ACCEPTED_DOMAIN))
+    for flag in ("localPorts", "localSockets"):
+        if flag in value and type(value[flag]) is not bool:
+            items.append(item(flag, None, SANDBOX_ACCESS_MALFORMED_NOT_A_BOOL,
+                              _SANDBOX_ACCEPTED_BOOL))
+    if "extraWritePaths" in value:
+        paths = value["extraWritePaths"]
+        if not isinstance(paths, list):
+            items.append(item("extraWritePaths", None, SANDBOX_ACCESS_MALFORMED_NOT_A_LIST,
+                              _SANDBOX_ACCEPTED_PATH_LIST))
+        else:
+            for index, entry in enumerate(paths):
+                if not isinstance(entry, str) or not os.path.isabs(entry):
+                    items.append(item("extraWritePaths", index,
+                                      SANDBOX_ACCESS_MALFORMED_PATH_NOT_ABSOLUTE,
+                                      _SANDBOX_ACCEPTED_PATH))
+                # normpath keeps a leading "//" as-is, so root is "every character a slash"
+                elif not os.path.normpath(entry).strip("/"):
+                    items.append(item("extraWritePaths", index,
+                                      SANDBOX_ACCESS_MALFORMED_PATH_IS_ROOT,
+                                      _SANDBOX_ACCEPTED_PATH_BELOW_ROOT))
+    return items
+
+
+def normalize_sandbox_access(value):
+    """The full four-key dict for a VALID sandboxAccess value: missing keys take the all-off
+    value, domains and normalized paths are deduped preserving order."""
+    out = sandbox_access_all_off()
+    for key in SANDBOX_ACCESS_FIELDS:
+        if key in value:
+            out[key] = copy.deepcopy(value[key])
+    out["allowedDomains"] = list(dict.fromkeys(out["allowedDomains"]))
+    out["extraWritePaths"] = list(dict.fromkeys(
+        os.path.normpath(path) for path in out["extraWritePaths"]))
+    return out
+
+
+def validate_size_exclude(value):
+    """Return malformed-item dicts for a sizeExclude value; empty list means valid. Never
+    raises. Every item carries ``accepted`` — the named refusal stating the accepted shape."""
+    def item(index, reason, accepted):
+        return {"index": index, "reason": reason, "accepted": accepted}
+
+    if not isinstance(value, list):
+        return [item(None, SIZE_EXCLUDE_MALFORMED_NOT_A_LIST, _SIZE_EXCLUDE_ACCEPTED_LIST)]
+    items = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry.strip():
+            items.append(item(index, SIZE_EXCLUDE_MALFORMED_ENTRY_NOT_STRING,
+                              _SIZE_EXCLUDE_ACCEPTED_GLOB))
+        # globs match repo-relative paths, so an absolute one can never match
+        elif entry.startswith("/"):
+            items.append(item(index, SIZE_EXCLUDE_MALFORMED_ENTRY_ABSOLUTE,
+                              _SIZE_EXCLUDE_ACCEPTED_GLOB))
+    return items
 
 
 def render_core(facts, status, created, updated):
@@ -123,6 +327,12 @@ def render_core(facts, status, created, updated):
     declared_deps = facts.get(DECLARED_DEPENDENCIES_KEY)
     if isinstance(declared_deps, dict) and declared_deps:
         block[DECLARED_DEPENDENCIES_KEY] = dict(declared_deps)
+    if VET_CHECKS_KEY in facts:
+        block[VET_CHECKS_KEY] = copy.deepcopy(facts[VET_CHECKS_KEY])
+    if SANDBOX_ACCESS_KEY in facts:
+        block[SANDBOX_ACCESS_KEY] = copy.deepcopy(facts[SANDBOX_ACCESS_KEY])
+    if SIZE_EXCLUDE_KEY in facts:
+        block[SIZE_EXCLUDE_KEY] = copy.deepcopy(facts[SIZE_EXCLUDE_KEY])
     show_it = (facts.get("showItSurface") or "").strip()
     show_it_block = ""
     if show_it:
@@ -163,10 +373,22 @@ def _section(text, heading):
     return "\n".join(out).strip()
 
 
+def _checked_verify_command(raw):
+    """A verifyCommand is a non-empty, non-whitespace string, or null/absent for none. Any other
+    value raises VerifyCommandMalformed — refused, never normalised to "none" (#1331).
+    Axis: refusal of a present value by its type and its content, never by key presence."""
+    if raw is None or (isinstance(raw, str) and raw.strip()):
+        return raw
+    raise VerifyCommandMalformed(
+        "%s: core.md verifyCommand must be a non-empty string, or null for none; found %s %s"
+        % (VERIFY_COMMAND_REASON_MALFORMED, type(raw).__name__, json.dumps(raw)))
+
+
 def parse_core(text):
     """Parse a core.md document → the fact dict, or None when the json block is
     missing/corrupt (UFR-1 — never a half-read value). verifyCommand+stackTags are
-    authoritative from the json block; threatModel+patterns come from prose."""
+    authoritative from the json block; threatModel+patterns come from prose. A wrong-typed,
+    empty, or whitespace-only verifyCommand raises VerifyCommandMalformed."""
     mb = _JSON_BLOCK.search(text or "")
     if not mb:
         return None
@@ -199,10 +421,10 @@ def parse_core(text):
     declared_deps = block.get(DECLARED_DEPENDENCIES_KEY)
     if declared_deps is not None and not isinstance(declared_deps, dict):
         declared_deps = {}
-    return {
+    out = {
         "schemaVersion": int(block["schemaVersion"]),
         "status": status,
-        "verifyCommand": block.get("verifyCommand"),
+        "verifyCommand": _checked_verify_command(block.get("verifyCommand")),
         "stackTags": list(tags) if isinstance(tags, list) else [],
         "enginePreferences": dict(prefs) if isinstance(prefs, dict) else {},
         "reviewGatePolicy": dict(overlay) if isinstance(overlay, dict) else None,
@@ -215,6 +437,13 @@ def parse_core(text):
         "created": created,
         "updated": updated,
     }
+    if VET_CHECKS_KEY in block:
+        out[VET_CHECKS_KEY] = copy.deepcopy(block[VET_CHECKS_KEY])
+    if SANDBOX_ACCESS_KEY in block:
+        out[SANDBOX_ACCESS_KEY] = copy.deepcopy(block[SANDBOX_ACCESS_KEY])
+    if SIZE_EXCLUDE_KEY in block:
+        out[SIZE_EXCLUDE_KEY] = copy.deepcopy(block[SIZE_EXCLUDE_KEY])
+    return out
 
 
 def _repo_root(cwd):
@@ -305,7 +534,10 @@ def _classify_core_md_at_path(path):
             "UTF-8 decode failed at %s: %s" % (path, exc),
         )
 
-    facts = parse_core(text)
+    try:
+        facts = parse_core(text)
+    except VerifyCommandMalformed as exc:
+        return CoreGateConfig({}, CONFIG_UNREADABLE, "%s at %s" % (exc, path))
     if facts is None:
         return CoreGateConfig(
             {},
@@ -403,7 +635,7 @@ def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
     structural = _gate_structural_refusal(cwd=cwd, root=root, profile_path=profile_path)
     if structural is not None:
         return ReviewGatePolicyGate(CONFIG_STRUCTURAL_AMBIGUITY, None, structural)
-    facts = parse_core(text)
+    facts = parse_core(text)  # a verifyCommand refusal is already UNREADABLE via the gate above
     if facts is None:
         return ReviewGatePolicyGate(
             CONFIG_UNREADABLE,
@@ -438,7 +670,7 @@ def read(cwd, root=None):
     ver = facts["schemaVersion"]
     behind = ver > SCHEMA_VERSION
     effective = ver if behind else SCHEMA_VERSION  # UFR-2: older stamped current in memory
-    return {
+    out = {
         "schemaVersion": effective,
         "status": facts["status"],
         "verifyCommand": facts["verifyCommand"],
@@ -455,6 +687,13 @@ def read(cwd, root=None):
         "created": facts["created"],
         "updated": facts["updated"],
     }
+    if VET_CHECKS_KEY in facts:
+        out[VET_CHECKS_KEY] = facts[VET_CHECKS_KEY]
+    if SANDBOX_ACCESS_KEY in facts:
+        out[SANDBOX_ACCESS_KEY] = facts[SANDBOX_ACCESS_KEY]
+    if SIZE_EXCLUDE_KEY in facts:
+        out[SIZE_EXCLUDE_KEY] = facts[SIZE_EXCLUDE_KEY]
+    return out
 
 
 def _today():
@@ -921,13 +1160,8 @@ def write_show_it_surface(cwd, prose, *, root=None):
         return {"action": "written"}
 
 
-def _loads_rejecting_duplicate_keys(text):
-    """Parse a JSON object, returning ``(value, duplicate_key)``.
-
-    ``duplicate_key`` is the first duplicated key name when one is present (``value`` is then
-    ``None``); a parse failure returns ``(None, None)``. This is the in-lock half of the
-    ``profile_structural_refusal`` duplicate-key check: the pre-lock check cannot bind a file that
-    may change before the lock is taken."""
+def _json_loads_rejecting_duplicate_keys(text):
+    """Parse JSON (any top-level type), returning ``(value, duplicate_key_or_none)``."""
     dup_key = [None]
 
     def _reject_dupes(pairs):
@@ -947,6 +1181,19 @@ def _loads_rejecting_duplicate_keys(text):
         return None, None
     except TypeError:
         return None, None
+    return value, None
+
+
+def _loads_rejecting_duplicate_keys(text):
+    """Parse a JSON object, returning ``(value, duplicate_key)``.
+
+    ``duplicate_key`` is the first duplicated key name when one is present (``value`` is then
+    ``None``); a parse failure returns ``(None, None)``. This is the in-lock half of the
+    ``profile_structural_refusal`` duplicate-key check: the pre-lock check cannot bind a file that
+    may change before the lock is taken."""
+    value, dup = _json_loads_rejecting_duplicate_keys(text)
+    if dup is not None:
+        return None, dup
     return value, None
 
 
@@ -1240,9 +1487,7 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
                 set_values[role] = val
         if set_values:
             if key == "codexModels":
-                effort = prefs.get("effort")
-                effort_map = effort if isinstance(effort, dict) else {}
-                norm = engine_pref.normalize_codex_pin_map(set_values, effort_map)
+                norm = engine_pref.normalize_codex_pin_map(set_values)
             else:
                 norm = engine_pref.normalize_seat_pin_map(set_values)
             if norm["invalid"]:
@@ -1252,6 +1497,7 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
                         ENGINE_PINS_REASON_INVALID,
                         ",".join(sorted(norm["invalid"])),
                     ),
+                    "detail": dict(norm["invalid"]),
                 }
         if merged:
             prefs[key] = merged
@@ -1275,7 +1521,32 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
                 "reason": BUILDER_DISPATCH_DEFER_WRITE_FAILED,
             }
         clear_pending(cwd, root)
-        return {"action": "written"}
+        result = {"action": "written"}
+        if key == "codexModels" and set_values:
+            import model_registry
+            import seat_map
+            notes = []
+            for role in set_values:
+                pref_key = model_registry.engine_pref_key(role)
+                if pref_key is None:
+                    continue
+                engine = engine_pref.resolve_engine_pref_key(pref_key, prefs)
+                if engine != "codex":
+                    if role in seat_map.panel_pin_tiers():
+                        notes.append(
+                            "codexModels.%s applies to the review panel's codex seats; "
+                            "the single-seat %s role's engine is %s, so that seat does not use it"
+                            % (role, pref_key, engine)
+                        )
+                    else:
+                        notes.append(
+                            "codexModels.%s is ignored while the %s role's engine is %s; "
+                            "it applies when that role routes to codex"
+                            % (role, pref_key, engine)
+                        )
+            if notes:
+                result["notes"] = notes
+        return result
 
 
 def _gate_policy_round_trip_ok(orig, new_parsed):
@@ -1527,9 +1798,9 @@ def _prose_field_round_trip_ok(orig, new_parsed, owned_field):
 
 
 def _write_json_block_key(cwd, block_key, mapping, *, root=None, not_a_mapping_reason,
-                          round_trip_reason):
-    """Shared lock-guarded writer for a single superheroes-core json object key."""
-    if not isinstance(mapping, dict):
+                          round_trip_reason, require_mapping=True, remove_key=False):
+    """Shared lock-guarded writer for a single superheroes-core json block key."""
+    if require_mapping and not isinstance(mapping, dict):
         return {"action": "refused", "reason": not_a_mapping_reason}
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
@@ -1584,15 +1855,14 @@ def _write_json_block_key(cwd, block_key, mapping, *, root=None, not_a_mapping_r
                     "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
         if block is None or not isinstance(block, dict):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
-        current = block.get(block_key)
-        if mapping:
-            if isinstance(current, dict) and current == mapping:
-                return {"action": "noop"}
-            block[block_key] = dict(mapping)
-        else:
+        if remove_key or (require_mapping and not mapping):
             if block_key not in block:
                 return {"action": "noop"}
             block.pop(block_key, None)
+        else:
+            if block_key in block and block[block_key] == mapping:
+                return {"action": "noop"}
+            block[block_key] = copy.deepcopy(mapping)
         new_body = json.dumps(block, indent=2)
         new_text = _splice_single_json_block(text, new_body)
         if new_text is None:
@@ -1644,6 +1914,365 @@ def write_declared_dependency_item(cwd, slug, value, *, root=None):
         cwd, DECLARED_DEPENDENCIES_KEY, slug, value, root=root,
         not_a_mapping_reason=DECLARED_DEPS_REASON_NOT_A_MAPPING,
         round_trip_reason=DECLARED_DEPS_REASON_ROUND_TRIP)
+
+
+def read_vet_checks(cwd, root=None):
+    """Read the ``vetChecks`` json key from core.md. Never raises."""
+    base = {
+        "declared": False,
+        "checks": [],
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": False,
+    }
+    try:
+        path = core_path(cwd, root)
+    except RepoRootUnavailable:
+        return dict(base, reason="repo-root-unavailable")
+
+    structural = _structural_refusal_at_path(path)
+    if structural is not None:
+        if structural.startswith("%s:" % DUPLICATE_CORE_KEY_REASON):
+            reason = structural
+            detail = None
+        else:
+            reason = structural.split(":", 1)[0]
+            detail = structural
+        return dict(base, reason=reason, detail=detail)
+
+    cls = _classify_core_md_at_path(path)
+    if cls.status == CONFIG_ABSENT:
+        return dict(base, reason="core-md-absent")
+    if cls.status == CONFIG_UNREADABLE:
+        reason = "core-md-unreadable"
+        detail = cls.detail
+        try:
+            with open(path, encoding="utf-8") as fh:
+                probe = fh.read()
+            if parse_core(probe) is None:
+                reason = "core-md-unparseable"
+        except (OSError, UnicodeDecodeError, VerifyCommandMalformed):
+            pass  # a verifyCommand refusal keeps the classifier's named detail (#1331)
+        return dict(base, reason=reason, detail=detail)
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return dict(
+            base,
+            reason="core-md-unreadable",
+            detail=gate_refusal_detail(exc, at=path),
+        )
+
+    facts = parse_core(text)
+    if facts is None:
+        return dict(
+            base,
+            reason="core-md-unparseable",
+            detail="corrupt or unreadable core.md at %s" % path,
+        )
+
+    ver = facts["schemaVersion"]
+    behind = ver > SCHEMA_VERSION
+    if VET_CHECKS_KEY not in facts:
+        return dict(base, behind=behind)
+
+    raw = facts[VET_CHECKS_KEY]
+    malformed = validate_vet_checks(raw)
+    if malformed:
+        return {
+            "declared": True,
+            "checks": [],
+            "malformed": malformed,
+            "reason": VET_CHECKS_REASON_MALFORMED,
+            "detail": None,
+            "behind": behind,
+        }
+    checks = [
+        {
+            "name": entry["name"].strip(),
+            "evidence": entry["evidence"].strip(),
+            "records": entry["records"].strip(),
+        }
+        for entry in raw
+    ]
+    return {
+        "declared": True,
+        "checks": checks,
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": behind,
+    }
+
+
+def write_vet_checks(cwd, checks, *, root=None):
+    """Lock-guarded surgical write of ``vetChecks`` only. Never raises."""
+    malformed = validate_vet_checks(checks)
+    if malformed:
+        return {
+            "action": "refused",
+            "reason": VET_CHECKS_REASON_MALFORMED,
+            "malformed": malformed,
+        }
+    stored = [
+        {
+            "name": entry["name"].strip(),
+            "evidence": entry["evidence"].strip(),
+            "records": entry["records"].strip(),
+        }
+        for entry in checks
+    ]
+    return _write_json_block_key(
+        cwd,
+        VET_CHECKS_KEY,
+        stored,
+        root=root,
+        not_a_mapping_reason=VET_CHECKS_REASON_MALFORMED,
+        round_trip_reason=VET_CHECKS_REASON_ROUND_TRIP,
+        require_mapping=False,
+    )
+
+
+def clear_vet_checks(cwd, *, root=None):
+    """Remove the ``vetChecks`` key from core.md. Never raises."""
+    result = _write_json_block_key(
+        cwd,
+        VET_CHECKS_KEY,
+        None,
+        root=root,
+        not_a_mapping_reason=VET_CHECKS_REASON_MALFORMED,
+        round_trip_reason=VET_CHECKS_REASON_ROUND_TRIP,
+        require_mapping=False,
+        remove_key=True,
+    )
+    if result.get("action") in ("written", "noop"):
+        return dict(result, cleared=True)
+    return result
+
+
+def read_sandbox_access(cwd, root=None):
+    """Read the ``sandboxAccess`` json key from core.md. Never raises. An absent key (or an
+    absent core.md) reads as every option off; every other failure carries ``access`` None."""
+    base = {
+        "declared": False,
+        "access": None,
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": False,
+    }
+    try:
+        path = core_path(cwd, root)
+    except RepoRootUnavailable:
+        return dict(base, reason="repo-root-unavailable")
+
+    structural = _structural_refusal_at_path(path)
+    if structural is not None:
+        if structural.startswith("%s:" % DUPLICATE_CORE_KEY_REASON):
+            reason = structural
+            detail = None
+        else:
+            reason = structural.split(":", 1)[0]
+            detail = structural
+        return dict(base, reason=reason, detail=detail)
+
+    cls = _classify_core_md_at_path(path)
+    if cls.status == CONFIG_ABSENT:
+        return dict(base, reason="core-md-absent", access=sandbox_access_all_off())
+    if cls.status == CONFIG_UNREADABLE:
+        reason = "core-md-unreadable"
+        detail = cls.detail
+        try:
+            with open(path, encoding="utf-8") as fh:
+                probe = fh.read()
+            if parse_core(probe) is None:
+                reason = "core-md-unparseable"
+        except (OSError, UnicodeDecodeError):
+            pass
+        return dict(base, reason=reason, detail=detail)
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return dict(
+            base,
+            reason="core-md-unreadable",
+            detail=gate_refusal_detail(exc, at=path),
+        )
+
+    facts = parse_core(text)
+    if facts is None:
+        return dict(
+            base,
+            reason="core-md-unparseable",
+            detail="corrupt or unreadable core.md at %s" % path,
+        )
+
+    behind = facts["schemaVersion"] > SCHEMA_VERSION
+    if SANDBOX_ACCESS_KEY not in facts:
+        return dict(base, access=sandbox_access_all_off(), behind=behind)
+
+    raw = facts[SANDBOX_ACCESS_KEY]
+    malformed = validate_sandbox_access(raw)
+    if malformed:
+        return dict(
+            base,
+            declared=True,
+            malformed=malformed,
+            reason=SANDBOX_ACCESS_REASON_MALFORMED,
+            behind=behind,
+        )
+    return dict(base, declared=True, access=normalize_sandbox_access(raw), behind=behind)
+
+
+def write_sandbox_access(cwd, access, *, root=None):
+    """Lock-guarded surgical write of ``sandboxAccess`` only. Never raises."""
+    malformed = validate_sandbox_access(access)
+    if malformed:
+        return {
+            "action": "refused",
+            "reason": SANDBOX_ACCESS_REASON_MALFORMED,
+            "malformed": malformed,
+        }
+    return _write_json_block_key(
+        cwd,
+        SANDBOX_ACCESS_KEY,
+        normalize_sandbox_access(access),
+        root=root,
+        not_a_mapping_reason=SANDBOX_ACCESS_REASON_MALFORMED,
+        round_trip_reason=SANDBOX_ACCESS_REASON_ROUND_TRIP,
+        require_mapping=False,
+    )
+
+
+def clear_sandbox_access(cwd, *, root=None):
+    """Remove the ``sandboxAccess`` key from core.md. Never raises."""
+    result = _write_json_block_key(
+        cwd,
+        SANDBOX_ACCESS_KEY,
+        None,
+        root=root,
+        not_a_mapping_reason=SANDBOX_ACCESS_REASON_MALFORMED,
+        round_trip_reason=SANDBOX_ACCESS_REASON_ROUND_TRIP,
+        require_mapping=False,
+        remove_key=True,
+    )
+    if result.get("action") in ("written", "noop"):
+        return dict(result, cleared=True)
+    return result
+
+
+def _size_exclude_core_path(cwd, root=None):
+    """Read-only core.md path for the size-exclude reader, or None when core.md is absent.
+    Never calls core_path or the default mode_registry.resolve: both can backfill-write the mode
+    registry when no core.md exists, and a reader must write nothing."""
+    in_repo, global_path = _core_candidates(cwd, root)
+    in_exists = os.path.lexists(in_repo)
+    gl_exists = os.path.lexists(global_path)
+    if not in_exists and not gl_exists:
+        return None
+    if in_exists != gl_exists:
+        return in_repo if in_exists else global_path
+    resolved = mode_registry.resolve(cwd, root, persist_backfill=False)
+    return in_repo if resolved["mode"] == mode_registry.IN_REPO else global_path
+
+
+def read_size_exclude(cwd, root=None):
+    """Read the ``sizeExclude`` json key from core.md. Total and read-only: never raises, never
+    writes. An absent key (or an absent core.md) reads declared False, globs None; a valid key
+    reads its globs as stored; every other failure reads globs None with reason
+    ``size-exclude-unreadable`` and a detail naming the underlying reason or exception."""
+    base = {
+        "declared": False,
+        "globs": None,
+        "malformed": [],
+        "reason": None,
+        "detail": None,
+        "behind": False,
+    }
+    unreadable = SIZE_EXCLUDE_REASON_UNREADABLE
+    try:
+        try:
+            path = _size_exclude_core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return dict(base, reason=unreadable,
+                        detail="repo-root-unavailable: %s" % gate_refusal_detail(exc))
+        if path is None:
+            return dict(base, reason="core-md-absent")
+
+        structural = _structural_refusal_at_path(path)
+        if structural is not None:
+            return dict(base, reason=unreadable, detail=structural)
+
+        if not os.path.isfile(path):
+            return dict(base, reason=unreadable,
+                        detail="core-md-unreadable: not a regular file at %s" % path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            return dict(base, reason=unreadable,
+                        detail="core-md-unreadable: %s" % gate_refusal_detail(exc, at=path))
+        try:
+            facts = parse_core(text)
+        except VerifyCommandMalformed as exc:
+            return dict(base, reason=unreadable, detail="VerifyCommandMalformed: %s" % exc)
+        if facts is None:
+            return dict(base, reason=unreadable,
+                        detail="core-md-unparseable: corrupt or unreadable core.md at %s" % path)
+
+        behind = facts["schemaVersion"] > SCHEMA_VERSION
+        if SIZE_EXCLUDE_KEY not in facts:
+            return dict(base, behind=behind)
+        raw = facts[SIZE_EXCLUDE_KEY]
+        malformed = validate_size_exclude(raw)
+        if malformed:
+            return dict(base, declared=True, malformed=malformed,
+                        reason=SIZE_EXCLUDE_REASON_MALFORMED, behind=behind)
+        return dict(base, declared=True, globs=copy.deepcopy(raw), behind=behind)
+    except Exception as exc:  # total: any other failure is a named read refusal, never a raise
+        return dict(base, reason=unreadable, detail=gate_refusal_detail(exc))
+
+
+def write_size_exclude(cwd, globs, *, root=None):
+    """Lock-guarded surgical write of ``sizeExclude`` only. Never raises."""
+    malformed = validate_size_exclude(globs)
+    if malformed:
+        return {
+            "action": "refused",
+            "reason": SIZE_EXCLUDE_REASON_MALFORMED,
+            "malformed": malformed,
+        }
+    return _write_json_block_key(
+        cwd,
+        SIZE_EXCLUDE_KEY,
+        copy.deepcopy(globs),
+        root=root,
+        not_a_mapping_reason=SIZE_EXCLUDE_REASON_MALFORMED,
+        round_trip_reason=SIZE_EXCLUDE_REASON_ROUND_TRIP,
+        require_mapping=False,
+    )
+
+
+def clear_size_exclude(cwd, *, root=None):
+    """Remove the ``sizeExclude`` key from core.md. Never raises."""
+    result = _write_json_block_key(
+        cwd,
+        SIZE_EXCLUDE_KEY,
+        None,
+        root=root,
+        not_a_mapping_reason=SIZE_EXCLUDE_REASON_MALFORMED,
+        round_trip_reason=SIZE_EXCLUDE_REASON_ROUND_TRIP,
+        require_mapping=False,
+        remove_key=True,
+    )
+    if result.get("action") in ("written", "noop"):
+        return dict(result, cleared=True)
+    return result
 
 
 _THREAT_MODEL_HEADING = re.compile(r"^\s*##\s+Threat model\s*$", re.IGNORECASE)
@@ -2143,6 +2772,12 @@ def confirm(cwd, *, root=None, now=None):
                 "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",
                 "ratifiedResiduals", REVIEW_GATE_POLICY_KEY, PROJECT_CONFIGURATION_KEY,
                 DECLARED_DEPENDENCIES_KEY)}
+            if VET_CHECKS_KEY in existing:
+                facts[VET_CHECKS_KEY] = existing[VET_CHECKS_KEY]
+            if SANDBOX_ACCESS_KEY in existing:
+                facts[SANDBOX_ACCESS_KEY] = existing[SANDBOX_ACCESS_KEY]
+            if SIZE_EXCLUDE_KEY in existing:
+                facts[SIZE_EXCLUDE_KEY] = existing[SIZE_EXCLUDE_KEY]
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),
@@ -2267,10 +2902,46 @@ def main(argv):
     wgc = sub.add_parser("write-guardian-cadence")
     wgc.add_argument("--cwd", default=".")
     wgc.add_argument("--root", default=None)
+    vc = sub.add_parser("vet-checks")
+    vc.add_argument("--cwd", default=".")
+    vc.add_argument("--root", default=None)
+    wvc = sub.add_parser("write-vet-checks")
+    wvc.add_argument("--cwd", default=".")
+    wvc.add_argument("--root", default=None)
+    wvc.add_argument(
+        "--clear",
+        action="store_true",
+        help="remove vetChecks from core.md (explicit clear; empty stdin is refused)",
+    )
+    sa = sub.add_parser("sandbox-access")
+    sa.add_argument("--cwd", default=".")
+    sa.add_argument("--root", default=None)
+    wsa = sub.add_parser("write-sandbox-access")
+    wsa.add_argument("--cwd", default=".")
+    wsa.add_argument("--root", default=None)
+    wsa.add_argument(
+        "--clear",
+        action="store_true",
+        help="remove sandboxAccess from core.md (explicit clear; empty stdin is refused)",
+    )
+    se = sub.add_parser("size-exclude")
+    se.add_argument("--cwd", default=".")
+    se.add_argument("--root", default=None)
+    wse = sub.add_parser("write-size-exclude")
+    wse.add_argument("--cwd", default=".")
+    wse.add_argument("--root", default=None)
+    wse.add_argument(
+        "--clear",
+        action="store_true",
+        help="remove sizeExclude from core.md (explicit clear; empty stdin is refused)",
+    )
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
             rec = read(args.cwd, args.root)
+        except VerifyCommandMalformed as exc:  # #1331: named and non-zero, never "no command"
+            sys.stdout.write(json.dumps(gate_refusal(exc.reason, str(exc))) + "\n")
+            return 1
         except Exception:  # fail-open like review_store.py — never crash a consumer
             rec = None
         out = {"verifyCommand": rec["verifyCommand"] if rec else None,
@@ -2448,6 +3119,156 @@ def main(argv):
                 sys.stdout.write(json.dumps(out, indent=2) + "\n")
                 return 0
             out = write_guardian_cadence(args.cwd, cadence, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "vet-checks":
+        try:
+            out = read_vet_checks(args.cwd, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {
+                "declared": False,
+                "checks": [],
+                "malformed": [],
+                "reason": "repo-root-unavailable",
+                "detail": gate_refusal_detail(exc),
+                "behind": False,
+            }
+        except Exception:
+            out = {
+                "declared": False,
+                "checks": [],
+                "malformed": [],
+                "reason": "core-md-unreadable",
+                "detail": None,
+                "behind": False,
+            }
+    elif args.cmd == "write-vet-checks":
+        try:
+            if args.clear:
+                out = clear_vet_checks(args.cwd, root=args.root)
+            else:
+                raw = sys.stdin.read()
+                if raw.strip() == "":
+                    out = {"action": "refused", "reason": VET_CHECKS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                try:
+                    checks, duplicate_key = _json_loads_rejecting_duplicate_keys(raw.strip())
+                except TypeError:
+                    checks, duplicate_key = None, None
+                if duplicate_key is not None:
+                    out = {
+                        "action": "refused",
+                        "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key),
+                    }
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if checks is None:
+                    out = {"action": "refused", "reason": VET_CHECKS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                out = write_vet_checks(args.cwd, checks, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "sandbox-access":
+        try:
+            out = read_sandbox_access(args.cwd, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {
+                "declared": False,
+                "access": None,
+                "malformed": [],
+                "reason": "repo-root-unavailable",
+                "detail": gate_refusal_detail(exc),
+                "behind": False,
+            }
+        except Exception:
+            out = {
+                "declared": False,
+                "access": None,
+                "malformed": [],
+                "reason": "core-md-unreadable",
+                "detail": None,
+                "behind": False,
+            }
+    elif args.cmd == "write-sandbox-access":
+        try:
+            if args.clear:
+                out = clear_sandbox_access(args.cwd, root=args.root)
+            else:
+                raw = sys.stdin.read()
+                if raw.strip() == "":
+                    out = {"action": "refused", "reason": SANDBOX_ACCESS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                try:
+                    access, duplicate_key = _json_loads_rejecting_duplicate_keys(raw.strip())
+                except TypeError:
+                    access, duplicate_key = None, None
+                if duplicate_key is not None:
+                    out = {
+                        "action": "refused",
+                        "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key),
+                    }
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if access is None:
+                    out = {"action": "refused", "reason": SANDBOX_ACCESS_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                out = write_sandbox_access(args.cwd, access, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "size-exclude":
+        try:
+            out = read_size_exclude(args.cwd, root=args.root)
+        except Exception:
+            out = {
+                "declared": False,
+                "globs": None,
+                "malformed": [],
+                "reason": SIZE_EXCLUDE_REASON_UNREADABLE,
+                "detail": None,
+                "behind": False,
+            }
+    elif args.cmd == "write-size-exclude":
+        try:
+            if args.clear:
+                out = clear_size_exclude(args.cwd, root=args.root)
+            else:
+                raw = sys.stdin.read()
+                if raw.strip() == "":
+                    out = {"action": "refused", "reason": SIZE_EXCLUDE_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                try:
+                    globs, duplicate_key = _json_loads_rejecting_duplicate_keys(raw.strip())
+                except TypeError:
+                    globs, duplicate_key = None, None
+                if duplicate_key is not None:
+                    out = {
+                        "action": "refused",
+                        "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key),
+                    }
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if globs is None:
+                    out = {"action": "refused", "reason": SIZE_EXCLUDE_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                out = write_size_exclude(args.cwd, globs, root=args.root)
         except RepoRootUnavailable as exc:
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,

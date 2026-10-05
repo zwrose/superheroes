@@ -4,8 +4,9 @@ are re-typed across the surviving Python libs and schema literals.
 Each guard reads the authoritative home (or, where no single named home exists, pins
 the shared vocabulary across every enumerated copy-holder) and **fails closed** on an
 unparseable literal — so a change to the truth breaks CI in every copy-holder rather
-than letting them silently diverge (the PR #205 class). Per the §11.2 caveat, every
-test enumerates its copy-holders explicitly: a NEW copy must be added here.
+than letting them silently diverge. No new hand-maintained copy is ever added: the surviving
+guards are identifier-presence checks, code-to-code self-consistency, censuses, register-quote
+pins, and the few copies whose home a consumer cannot read or cite, which wait for that home.
 
 Clusters covered (post spine-retirement #468 — execution-spine JS twins
 `showrunner.js` / `build_phase.js` / `model_tier.js` / `engine_pref.js` and the
@@ -14,16 +15,15 @@ are gone with them; no lib/*.js copy-holders remain):
 - Severity tiers + BLOCKING / SEV_RANK / NON_BLOCKING  (home: rubric/review-base.md)
 - Terminal-state vocabulary                            (home: panel_tally.py)
 - Codex translation/effort policy (docs + adapter default) (home: engine_pref.py)
-- Model-registry ids + family vocabulary                (home: model_registry.py)
+- Model-registry leak scan (_CONCRETE_MODEL_TOKENS)     (home: model_registry.py + retired literals)
 - Base-guard refusal reasons                           (home: review_base_guard.py)
 - Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7;
   copy-holders: review-discipline.md, workhorse §11, review-code step 8, grounding_stage.py)
 - Session modes                                       (home: review_base_guard.py;
   copy-holder: grounding_stage.py)
-- `configRead` CLI field set                             (home: preflight_probe.py)
-- Wave-watch vocabulary                                  (home: wave_watch.py)
-- Issue-contract vocabulary                              (home: issue_contract.py)
-- Register-check vocabulary                              (home: register_check.py)
+- Wave-watch verbs and exit contract                     (home: wave_watch.py)
+- Issue-contract refusal table + charter skeleton        (home: issue_contract.py)
+- Register-check Results table + verification sentence   (home: register_check.py)
 - Package-read-audit vocabulary                          (home: package_read_audit.py;
   copy-holder: skills/showrunner/reference/decomposition.md § The audit trail)
 - R5 weight vocabulary + R7 park surface (pinned literals) (home: epic register when
@@ -40,12 +40,11 @@ are gone with them; no lib/*.js copy-holders remain):
   routing block + frontmatter description, skills/workhorse/SKILL.md §1 intake,
   skills/configure/reference/preflight.md §E, README.md Showrunner section, CONVENTIONS.md Showrunner
   cast bullet, eval/skills/registry.json requiredPhrases)
-- Investigation floor (spot_check_investigated → dispatch-mechanics.md § Findings-only,
-  auto-fix-loop.md vacuous-forfeit block)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
 """
+import importlib.util
 import json
 import os
 import re
@@ -165,9 +164,8 @@ def test_severity_vocabulary_is_single_sourced(monkeypatch):
 # --- Cluster 3b: Codex translation/effort policy (docs + adapter default) -----
 
 def test_complete_codex_policy_single_sourced():
-    """The Python home (engine_pref.py) owns the Codex translation/effort policy; the
-    engine_adapter no-tier default and the owner-facing docs must agree with it."""
-    import engine_pref
+    """The Python home (engine_pref.py) owns the Codex translation/effort policy; docs cite the
+    registry for the tier map (no copied haiku/sonnet/opus pairs) and engine_pref derives from it."""
     import model_registry
 
     expected_ids = set(model_registry.codex_models())
@@ -175,14 +173,50 @@ def test_complete_codex_policy_single_sourced():
                 "skills/configure/reference/set-up.md",
                 "skills/configure/reference/view-and-tune.md"):
         doc = _read(rel)
-        documented_ids = set(re.findall(r"gpt-5\.6-(?:sol|terra)", doc))
-        assert documented_ids == expected_ids, "%s Codex model IDs drifted from model_registry" % rel
+        id_pattern = r"(?<![A-Za-z0-9._-])gpt-[0-9][A-Za-z0-9._-]*(?![A-Za-z0-9._-])"
+        documented_ids = {m.rstrip(".") for m in re.findall(id_pattern, doc)}
+        # (a) every registered codex model must be documented (unchanged strength).
+        missing = expected_ids - documented_ids
+        assert not missing, "%s missing registered Codex model IDs: %r" % (rel, missing)
+        # (b) every documented gpt-… id must be a registered codex model or a retired
+        # one (judged by model_registry.retired_model_reason, never a re-spelled list).
+        undocumented_extra = {
+            mid for mid in documented_ids - expected_ids
+            if model_registry.retired_model_reason("codex", mid) is None
+        }
+        assert not undocumented_extra, (
+            "%s Codex model IDs drifted from model_registry (neither registered nor "
+            "retired): %r" % (rel, undocumented_extra))
         mapping_text = _one(re.findall(r"Codex tier map:\s*([^\n]+(?:\n(?!\s*\n)[^\n]+)?)", doc),
                             "Codex tier map", rel, "tier=model, ...")
-        documented_map = dict(re.findall(
-            r"(haiku|sonnet|opus)=(gpt-5\.6-(?:sol|terra))", mapping_text))
-        assert documented_map == engine_pref.CODEX_MODEL_BY_TIER, (
-            "%s Codex tier map drifted from engine_pref.py" % rel)
+        if "codex_peer_for_claude_tier" not in mapping_text:
+            pytest.fail(
+                "%s Codex tier map does not cite model_registry.codex_peer_for_claude_tier" % rel)
+        if re.search(r"(haiku|sonnet|opus)=", mapping_text):
+            pytest.fail(
+                "%s Codex tier map copied into the document; cite the registry instead" % rel)
+
+
+def test_codex_model_by_tier_derives_from_registry_at_import(monkeypatch):
+    """engine_pref.CODEX_MODEL_BY_TIER must read codex_peer_for_claude_tier at import, not a copy."""
+    import model_registry
+
+    sentinels = {
+        "haiku": "gpt-ssot-drift-haiku-sentinel",
+        "sonnet": "gpt-ssot-drift-sonnet-sentinel",
+        "opus": "gpt-ssot-drift-opus-sentinel",
+    }
+
+    def fake_peer(tier):
+        return sentinels[tier]
+
+    monkeypatch.setattr(model_registry, "codex_peer_for_claude_tier", fake_peer)
+    mod_name = "engine_pref_isolated_ssot_%s" % os.getpid()
+    path = os.path.join(PLUGIN, "lib", "engine_pref.py")
+    spec = importlib.util.spec_from_file_location(mod_name, path)
+    isolated = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(isolated)
+    assert isolated.CODEX_MODEL_BY_TIER == sentinels
 
 
 # --- Cluster: base-guard refusal reasons (review_base_guard → round-driver.md) -
@@ -301,572 +335,12 @@ def _plugin_python_sources_excluding_tests():
 
 
 
-# --- Cluster: shapeDrivers channel vocabulary (round_driver.py → round-driver.md) ---
-
-
-_SHAPE_DRIVERS_DOC_ANCHOR_LABEL = (
-    "`shapeDrivers` — sorted channel names that fired for the certification shape"
-)
-
-_SHAPE_DRIVERS_CHANNEL_COPY_REGISTER = (
-    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/round-driver.md")),
-)
-
-
-def _shape_drivers_doc_anchor_regex(anchor_label=None):
-    label = anchor_label if anchor_label is not None else _SHAPE_DRIVERS_DOC_ANCHOR_LABEL
-    return r"\s+".join(re.escape(token) for token in label.split())
-
-
-def _shape_drivers_append_block_from_home():
-    src = _read("lib/round_driver.py")
-    pattern = (
-        r"shape_drivers = \[\].*?"
-        r'"shapeDrivers": sorted\(shape_drivers\)\}'
-    )
-    matches = re.findall(pattern, src, re.DOTALL)
-    return _one(
-        matches,
-        "shape_drivers block",
-        "round_driver.py",
-        "shape_drivers = [] ... \"shapeDrivers\": sorted(shape_drivers)}",
-    )
-
-
-def _shape_drivers_members_from_home():
-    block = _shape_drivers_append_block_from_home()
-    members = set(re.findall(r'shape_drivers\.append\("([^"]+)"\)', block))
-    assert members, (
-        "round_driver.py: no shape_drivers.append(...) sites discovered in the "
-        "certification block (vacuous extraction — pin would agree with everything)"
-    )
-    return members
-
-
-def _certification_shape_drivers_enumeration_tokens(doc, *, anchor=None):
-    anchor_label = anchor if anchor is not None else _SHAPE_DRIVERS_DOC_ANCHOR_LABEL
-    pattern = _shape_drivers_doc_anchor_regex(anchor_label) + r"\s*\(([^)]+)\)"
-    matches = re.findall(pattern, doc, re.DOTALL)
-    if not matches:
-        assert False, (
-            "round-driver.md: certification shapeDrivers enumeration not found "
-            "(anchor %r moved or reworded?)" % anchor_label
-        )
-    block = _one(
-        matches,
-        "shapeDrivers enumeration",
-        "round-driver.md",
-        "%s (...)" % anchor_label,
-    )
-    tokens = set(re.findall(r"`([^`]+)`", block))
-    assert tokens, (
-        "round-driver.md: certification shapeDrivers enumeration parsed to zero tokens "
-        "(regex drift or empty enumeration?)"
-    )
-    return tokens
-
-
-def _shape_drivers_copy_enumeration_in_text(text):
-    try:
-        return _certification_shape_drivers_enumeration_tokens(text)
-    except AssertionError:
-        return None
-
-
-def _assert_shape_drivers_vocabulary_matches(
-    *,
-    code_extra=None,
-    doc_extra=None,
-    doc_anchor=None,
-):
-    code = _shape_drivers_members_from_home()
-    if code_extra:
-        code = code | {code_extra}
-    doc = _read("skills/review-code/reference/round-driver.md")
-    doc_tokens = _certification_shape_drivers_enumeration_tokens(doc, anchor=doc_anchor)
-    if doc_extra:
-        doc_tokens = doc_tokens | {doc_extra}
-    missing_from_doc = sorted(code - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - code)
-    assert not missing_from_doc and not extra_in_doc, (
-        "round-driver.md certification shapeDrivers vocabulary drift from "
-        "round_driver.py shape_drivers.append sites — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
-
-
-def test_shape_drivers_channel_copy_register_census():
-    """§11: every .md carrying the certification shapeDrivers enumeration must be registered."""
-    examined = 0
-    unregistered = []
-    for path in _repo_markdown_files():
-        examined += 1
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-        if _shape_drivers_copy_enumeration_in_text(text) is None:
-            continue
-        norm = os.path.normpath(path)
-        if norm not in _SHAPE_DRIVERS_CHANNEL_COPY_REGISTER:
-            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
-            unregistered.append(rel)
-    assert examined > 0, (
-        "shapeDrivers channel census examined zero markdown files (vacuous)"
-    )
-    assert not unregistered, (
-        "unregistered shapeDrivers channel copy — add to "
-        "_SHAPE_DRIVERS_CHANNEL_COPY_REGISTER: %r" % sorted(unregistered)
-    )
-
-
-def test_shape_drivers_channel_vocabulary_in_round_driver_doc():
-    """§11: round-driver.md restates every shapeDrivers channel round_driver.py can emit."""
-    _assert_shape_drivers_vocabulary_matches()
-
-
-def test_shape_drivers_channel_vocabulary_biteproof_code_to_doc():
-    _expect_assertion_error(
-        lambda: _assert_shape_drivers_vocabulary_matches(
-            code_extra="wo-bite-throwaway-code-member",
-        ),
-        match=r"missing from doc: \['wo-bite-throwaway-code-member'\]",
-    )
-
-
-def test_shape_drivers_channel_vocabulary_biteproof_doc_to_code():
-    _expect_assertion_error(
-        lambda: _assert_shape_drivers_vocabulary_matches(
-            doc_extra="wo-bite-throwaway-doc-name",
-        ),
-        match=r"present in doc but not in home: \['wo-bite-throwaway-doc-name'\]",
-    )
-
-
-def test_shape_drivers_channel_vocabulary_biteproof_doc_anchor_non_vacuous():
-    _expect_assertion_error(
-        lambda: _assert_shape_drivers_vocabulary_matches(
-            doc_anchor="`shapeDrivers` — NO SUCH ANCHOR",
-        ),
-        match=r"anchor '`shapeDrivers` — NO SUCH ANCHOR' moved or reworded",
-    )
-
-
-# --- Cluster: review payload shape tokens (engine_adapter → auto-fix-loop.md) ---
-
-
-def _review_payload_shape_tokens_from_home():
-    import engine_adapter
-
-    return set(engine_adapter.REVIEW_PAYLOAD_SHAPES)
-
-
-def _review_payload_shape_tokens_from_auto_fix_loop_doc(doc):
-    """The payloadShape `parsed` enumeration in auto-fix-loop.md — scoped to that block only."""
-    m = re.search(
-        r"`parsed`\s*\(one of\s*(.*?)\)\s*,\s*`topLevelKeys`",
-        doc,
-        re.DOTALL,
-    )
-    assert m, (
-        "auto-fix-loop.md: payloadShape `parsed` enumeration not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
-    assert tokens, (
-        "auto-fix-loop.md: payloadShape `parsed` enumeration parsed to zero tokens "
-        "(regex drift or empty enumeration?)"
-    )
-    return tokens
-
-
-def test_review_payload_shape_tokens_in_auto_fix_loop_doc():
-    """§11: auto-fix-loop.md restates the payloadShape `parsed` vocabulary from engine_adapter."""
-    home = _review_payload_shape_tokens_from_home()
-    doc = _read("skills/review-code/reference/auto-fix-loop.md")
-    doc_tokens = _review_payload_shape_tokens_from_auto_fix_loop_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "auto-fix-loop.md payloadShape `parsed` vocabulary drift from "
-        "engine_adapter.REVIEW_PAYLOAD_SHAPES — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
-
-
-# --- Cluster: review resultKind enum (engine_adapter → doc copies) ---
-
-
-def _review_result_kind_enum_from_home():
-    import engine_adapter
-
-    return set(engine_adapter.REVIEW_RESULT_KINDS)
-
-
-def _review_result_kind_tokens_from_doc_block(block):
-    return set(re.findall(r"`([^`]+)`", block))
-
-
-def _review_result_kind_quoted_tokens_from_doc_block(block):
-    return set(re.findall(r'`"([^"]+)"`', block))
-
-
-_REVIEW_RESULT_KIND_ENUM_COPY_COUNTS = {
-    "skills/review-code/reference/auto-fix-loop.md": 3,
-    "skills/workhorse/reference/dispatch-mechanics.md": 2,
-}
-
-
-def _review_result_kind_enum_copies_from_doc(doc):
-    """Every resultKind enumeration copy in a doc file."""
-    pattern_specs = [
-        (
-            r"\(one of\s*([^)]*)\)\s*naming the payload",
-            _review_result_kind_tokens_from_doc_block,
-        ),
-        (
-            r"\(([^)]*)\)\s*naming which payload",
-            _review_result_kind_tokens_from_doc_block,
-        ),
-        (
-            r'exactly ((?:`"[^"]+"`)(?:\s+or\s+`"[^"]+"`)+)',
-            _review_result_kind_quoted_tokens_from_doc_block,
-        ),
-        (
-            r"\(`REVIEW_RESULT_KINDS`:\s*([^)]*)\)",
-            _review_result_kind_tokens_from_doc_block,
-        ),
-    ]
-    copies = []
-    for pat, tokens_from_block in pattern_specs:
-        for m in re.finditer(pat, doc):
-            tokens = tokens_from_block(m.group(1))
-            if tokens:
-                copies.append(tokens)
-    assert copies, (
-        "doc: no resultKind enumeration copies found (moved or reworded?)"
-    )
-    return copies
-
-
-def _assert_review_result_kind_enum_copies_match_home(doc_rel):
-    """§11: every pinned resultKind enum copy in doc_rel matches engine_adapter."""
-    home = _review_result_kind_enum_from_home()
-    doc = _read(doc_rel)
-    copies = _review_result_kind_enum_copies_from_doc(doc)
-    expected_count = _REVIEW_RESULT_KIND_ENUM_COPY_COUNTS[doc_rel]
-    assert len(copies) == expected_count, (
-        "%s: expected %d resultKind enum copies, found %d "
-        "(a copy dropped out of recognition or a new copy was not registered?)"
-        % (doc_rel, expected_count, len(copies))
-    )
-    for i, doc_tokens in enumerate(copies):
-        missing_from_doc = sorted(home - doc_tokens)
-        extra_in_doc = sorted(doc_tokens - home)
-        assert not missing_from_doc and not extra_in_doc, (
-            "%s resultKind enum copy %d drift from "
-            "engine_adapter.REVIEW_RESULT_KINDS — "
-            "missing from doc: %r; present in doc but not in home: %r"
-            % (doc_rel, i, missing_from_doc, extra_in_doc)
-        )
-
-
-def test_review_result_kind_enum_in_auto_fix_loop_doc():
-    """§11: every resultKind enum copy in auto-fix-loop.md matches engine_adapter."""
-    _assert_review_result_kind_enum_copies_match_home(
-        "skills/review-code/reference/auto-fix-loop.md")
-
-
-def test_review_result_kind_enum_in_dispatch_mechanics_doc():
-    """§11: every resultKind enum copy in dispatch-mechanics.md matches engine_adapter."""
-    _assert_review_result_kind_enum_copies_match_home(
-        "skills/workhorse/reference/dispatch-mechanics.md")
-
-
 def test_execution_evidence_read_values_match_engagement_read():
     """axis: execution-evidence read literals stay bound to engine_adapter.engagement_read."""
     import engine_adapter
     import round_records
 
     assert round_records.EXECUTION_EVIDENCE_READ_VALUES == engine_adapter.ENGAGEMENT_READ_VALUES
-
-
-# --- Cluster: investigation floor (engine_adapter.spot_check_investigated → prose copies) ---
-
-_DISPATCH_MECHANICS_DOC = "skills/workhorse/reference/dispatch-mechanics.md"
-_AUTO_FIX_LOOP_DOC = "skills/review-code/reference/auto-fix-loop.md"
-
-
-def _spot_check_investigated_source():
-    import inspect
-
-    import engine_adapter
-
-    try:
-        return inspect.getsource(engine_adapter.spot_check_investigated)
-    except (OSError, TypeError) as exc:
-        pytest.fail(
-            "spot_check_investigated floor could not be read from engine_adapter: %s" % exc
-        )
-
-
-def _investigation_floor_operative_clauses_from_home():
-    """Operative clauses from spot_check_investigated — fails closed when unparseable."""
-    source = _spot_check_investigated_source()
-    checks = (
-        (r"not isinstance\(investigated,\s*list\)\s+or\s+not\s+investigated", "non-empty list"),
-        (r"len\(accepted\)\s*>=\s*1", "at-least-one accepted-path threshold"),
-        (r"os\.path\.isabs\(entry\)", "absolute-path rejection"),
-        (r"not os\.path\.exists\(real\)", "missing-path rejection"),
-        (r"not os\.path\.isfile\(real\)", "regular-file requirement"),
-        (
-            r"real != root_real and not real\.startswith\(root_prefix\)",
-            "repo-confinement check",
-        ),
-        (r"generated-artifact", "generated-artifact rejection"),
-        (r"A spot check, not an audit:", "spot-check audit clause in docstring"),
-    )
-    missing = [label for pat, label in checks if not re.search(pat, source, re.I)]
-    assert not missing, (
-        "spot_check_investigated floor could not be parsed — missing: %r" % missing
-    )
-
-
-def _investigation_floor_threshold_token_from_home():
-    """Normalized quantity threshold from spot_check_investigated's docstring.
-
-    Locates the operative clause structurally (introduced by ``A spot check, not an audit:``)
-    rather than by searching for the token under test. The load-bearing agreement with
-    document copies is the quantity threshold (``at least one`` vs ``ideally one``, etc.).
-    """
-    source = _spot_check_investigated_source()
-    m = re.search(
-        r"A spot check, not an audit:\s*([^.]+)\.",
-        source,
-        re.I,
-    )
-    assert m, (
-        "spot_check_investigated floor could not be parsed — spot-check audit clause"
-    )
-    clause = m.group(1).strip()
-    token_m = re.search(
-        r"(?:at\s+least\s+one|ideally\s+one|exactly\s+one)",
-        clause,
-        re.I,
-    )
-    assert token_m, (
-        "spot_check_investigated floor could not be parsed — quantity threshold in docstring"
-    )
-    return token_m.group(0).lower()
-
-
-def _investigation_floor_threshold_token_from_prose(text, label):
-    """Normalized quantity threshold from a document's investigation-floor prose."""
-    token_m = re.search(
-        r"(?:at\s+least\s+one|ideally\s+one|exactly\s+one)",
-        text,
-        re.I,
-    )
-    assert token_m, (
-        "%s: investigation floor threshold could not be parsed from prose" % label
-    )
-    return token_m.group(0).lower()
-
-
-def _assert_investigation_floor_threshold_matches_home(home_token, doc_text, label):
-    """Home↔doc binding: quantity threshold in prose must match spot_check_investigated."""
-    doc_token = _investigation_floor_threshold_token_from_prose(doc_text, label)
-    assert home_token == doc_token, (
-        "investigation floor drift: %s and spot_check_investigated disagree on "
-        "at-least-one surviving-path threshold (home=%r, doc=%r)"
-        % (label, home_token, doc_token)
-    )
-
-
-def _dispatch_mechanics_investigated_threshold_prose(doc):
-    """Operative threshold sentence in dispatch-mechanics — scoped pin."""
-    m = re.search(
-        r"`investigated`\s+is present only when\s+(.+?)\s+spot-checking",
-        doc,
-        re.I,
-    ) or re.search(
-        r"\*\*`investigated`\*\*\s+is present only when\s+(.+?)\s+spot-checking",
-        doc,
-        re.I,
-    )
-    assert m, (
-        "dispatch-mechanics.md: investigation-floor threshold pin could not be located "
-        "(moved or reformatted?)"
-    )
-    return m.group(0)
-
-
-def _dispatch_mechanics_findings_only_section(doc):
-    """Findings-only review prompts — scoped to that subsection only."""
-    m = re.search(
-        r"### Findings-only review prompts\n(.*?)(?=\nEvery `dispatch-review`|\n### )",
-        doc,
-        re.DOTALL,
-    )
-    assert m, (
-        "dispatch-mechanics.md: Findings-only review prompts pin could not be located "
-        "(moved or reformatted?)"
-    )
-    return m.group(1)
-
-
-def _auto_fix_loop_investigation_floor_block(doc):
-    """Vacuous-forfeit requirement block — scoped to the operative clause only."""
-    m = re.search(
-        r"`findings` array is accepted as \*clean\* \*\*only\*\* when `investigated` lists "
-        r".*?\*\*vacuous forfeit\*\*",
-        doc,
-        re.DOTALL | re.I,
-    )
-    assert m, (
-        "auto-fix-loop.md: investigation-floor requirement pin could not be located "
-        "(moved or reformatted?)"
-    )
-    return m.group(0)
-
-
-def _assert_dispatch_mechanics_investigation_floor_prose(text, label):
-    """Operative prose clauses dispatch-mechanics must carry."""
-    lower = text.lower()
-    missing = []
-    if not re.search(r"populated\s+`investigated`", text, re.I):
-        missing.append("populated investigated required")
-    if "vacuous" not in lower:
-        missing.append("vacuous forfeit")
-    assert not missing, (
-        "%s: investigation floor prose drift — missing: %r" % (label, missing)
-    )
-
-
-def _assert_auto_fix_loop_investigation_floor_prose(text, label):
-    """Operative prose clauses auto-fix-loop must carry."""
-    lower = text.lower()
-    missing = []
-    if not re.search(r"`investigated`\s+lists\s+at\s+least\s+one\s+path", text, re.I):
-        missing.append("investigated lists at least one path required")
-    if "vacuous" not in lower:
-        missing.append("vacuous forfeit")
-    assert not missing, (
-        "%s: investigation floor prose drift — missing: %r" % (label, missing)
-    )
-
-
-def test_investigation_floor_prose_matches_spot_check_investigated():
-    """§11: investigation-floor guidance in every copy-holder matches spot_check_investigated.
-
-    Copy-holders: skills/workhorse/reference/dispatch-mechanics.md (Findings-only review prompts),
-    skills/review-code/reference/auto-fix-loop.md (vacuous-forfeit block).
-    """
-    _investigation_floor_operative_clauses_from_home()
-    home_threshold = _investigation_floor_threshold_token_from_home()
-
-    dispatch_doc = _read(_DISPATCH_MECHANICS_DOC)
-    dispatch_section = _dispatch_mechanics_findings_only_section(dispatch_doc)
-    _assert_dispatch_mechanics_investigation_floor_prose(
-        dispatch_section, "dispatch-mechanics.md (Findings-only review prompts)"
-    )
-    assert "spot_check_investigated" in dispatch_section, (
-        "dispatch-mechanics.md: investigation floor must name engine_adapter.spot_check_investigated"
-    )
-    assert re.search(r"repo-relative path to an existing", dispatch_section, re.I), (
-        "dispatch-mechanics.md: surviving-path entry requirements drift"
-    )
-    dispatch_threshold_prose = _dispatch_mechanics_investigated_threshold_prose(dispatch_doc)
-    _assert_investigation_floor_threshold_matches_home(
-        home_threshold,
-        dispatch_threshold_prose,
-        "dispatch-mechanics.md (investigated threshold)",
-    )
-
-    auto_fix_doc = _read(_AUTO_FIX_LOOP_DOC)
-    auto_fix_block = _auto_fix_loop_investigation_floor_block(auto_fix_doc)
-    _assert_investigation_floor_threshold_matches_home(
-        home_threshold,
-        auto_fix_block,
-        "auto-fix-loop.md (vacuous-forfeit block)",
-    )
-    _assert_auto_fix_loop_investigation_floor_prose(
-        auto_fix_block, "auto-fix-loop.md (vacuous-forfeit block)"
-    )
-    assert re.search(r"at least one path", auto_fix_block, re.I), (
-        "auto-fix-loop.md: at-least-one surviving-path threshold drift"
-    )
-
-
-def test_review_result_kind_enum_recognizer_cardinality_independent():
-    """Recognizer yields full token sets for two-member and four-member phrasings."""
-    shape_pairs = [
-        (
-            "(one of `findings`, `verdicts`) naming the payload",
-            "(one of `findings`, `verdicts`, `grouping`, `ruling`) naming the payload",
-        ),
-        (
-            "(`findings` or `verdicts`) naming which payload",
-            "(`findings` or `verdicts` or `grouping` or `ruling`) naming which payload",
-        ),
-        (
-            'exactly `"findings"` or `"verdicts"`',
-            'exactly `"findings"` or `"verdicts"` or `"grouping"` or `"ruling"`',
-        ),
-        (
-            "(`REVIEW_RESULT_KINDS`: `findings`, `verdicts`)",
-            "(`REVIEW_RESULT_KINDS`: `findings`, `verdicts`, `grouping`, `ruling`)",
-        ),
-    ]
-    for two_member, four_member in shape_pairs:
-        two_tokens = _review_result_kind_enum_copies_from_doc(two_member)[0]
-        four_tokens = _review_result_kind_enum_copies_from_doc(four_member)[0]
-        assert two_tokens == {"findings", "verdicts"}
-        assert four_tokens == {
-            "findings", "verdicts", "grouping", "ruling",
-        }
-
-
-# --- Cluster: configRead CLI field set (preflight_probe → preflight.md §B) ---
-
-
-def _config_read_fields_from_home():
-    import preflight_probe
-
-    return set(preflight_probe.CONFIG_READ_FIELDS)
-
-
-def _config_read_fields_from_preflight_doc(doc):
-    """The `configRead` field enumeration in preflight.md §B — scoped to that paragraph only."""
-    m = re.search(
-        r"`configRead`\s+object\s+[—-]\s*`\{([^}]+)\}`",
-        doc,
-    )
-    assert m, (
-        "preflight.md: configRead field enumeration not found "
-        "(moved or reworded?)"
-    )
-    tokens = {t.strip() for t in m.group(1).split(",")}
-    assert tokens, (
-        "preflight.md: configRead field enumeration parsed to zero tokens "
-        "(regex drift or empty enumeration?)"
-    )
-    return tokens
-
-
-def test_config_read_fields_in_preflight_doc():
-    """§11: preflight.md §B restates the `configRead` field vocabulary from preflight_probe."""
-    home = _config_read_fields_from_home()
-    doc = _read("skills/configure/reference/preflight.md")
-    doc_tokens = _config_read_fields_from_preflight_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "preflight.md configRead field vocabulary drift from "
-        "preflight_probe.CONFIG_READ_FIELDS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
 
 
 # --- Cluster: sanitized-view diff refusal tokens (sanitized_view → auto-fix-loop.md) ---
@@ -960,78 +434,6 @@ def test_mode_refusal_tokens_in_auto_fix_loop_doc():
 # --- Cluster: wave-watch vocabulary (wave_watch → wave-watch.md) --------------
 
 
-def _wave_watch_events_from_home():
-    import wave_watch
-
-    return set(wave_watch.EVENTS)
-
-
-def _wave_watch_refusals_from_home():
-    import wave_watch
-
-    return set(wave_watch.REFUSALS)
-
-
-def _wave_watch_degradations_from_home():
-    import wave_watch
-
-    return set(wave_watch.DEGRADATIONS)
-
-
-def _wave_watch_string_constants_by_prefix(prefix):
-    """Module-level string constants named PREFIX_* — scoped to vocabulary prefixes only."""
-    import wave_watch
-
-    derived = set()
-    for name in dir(wave_watch):
-        if not name.startswith(prefix):
-            continue
-        val = getattr(wave_watch, name)
-        if isinstance(val, str) and val:
-            derived.add(val)
-    return derived
-
-
-def _wave_watch_precedence_from_home():
-    """Precedence order from wave_watch.EVENT_PRECEDENCE — the tuple run() consumes."""
-    import wave_watch
-
-    return list(wave_watch.EVENT_PRECEDENCE)
-
-
-def _wave_watch_precedence_from_module_docstring():
-    """Precedence prose from wave_watch.py's module docstring — checked against EVENT_PRECEDENCE."""
-    text = _read("lib/wave_watch.py")
-    m = re.search(
-        r"- Precedence:\s*(.*?)\.",
-        text,
-        re.DOTALL,
-    )
-    assert m, (
-        "wave_watch.py: precedence sentence in module docstring not found "
-        "(moved or reworded?)"
-    )
-    order = []
-    for part in m.group(1).split(">"):
-        token = part.strip().split()[0]
-        order.append(token)
-    assert order, "wave_watch.py: precedence sentence parsed to zero tokens"
-    return order
-
-
-def _assert_wave_watch_precedence_order_equal(label_a, order_a, label_b, order_b):
-    assert len(order_a) == len(order_b), (
-        "wave-watch precedence length mismatch — %s: %d tokens %r; %s: %d tokens %r"
-        % (label_a, len(order_a), order_a, label_b, len(order_b), order_b)
-    )
-    for index, (left, right) in enumerate(zip(order_a, order_b)):
-        assert left == right, (
-            "wave-watch precedence order disagreement at position %d — "
-            "%s has %r, %s has %r"
-            % (index, label_a, left, label_b, right)
-        )
-
-
 def _wave_watch_verbs_from_home():
     """CLI subcommand names from argparse registration in wave_watch.py.
 
@@ -1107,33 +509,6 @@ def _wave_watch_exit_contract_from_doc(doc):
     return {True: int(m.group(1)), False: int(m.group(2))}
 
 
-def _wave_watch_suppressible_events_from_home():
-    """Suppressible event tokens from wave_watch._SUPPRESSIBLE_EVENTS."""
-    import wave_watch
-
-    return set(wave_watch._SUPPRESSIBLE_EVENTS)
-
-
-def _wave_watch_suppressible_events_from_doc(doc):
-    """Suppressible-event list from wave-watch.md — scoped to the lane-keyed sentence."""
-    m = re.search(
-        r"Only the four \*\*lane-keyed\*\* events are suppressible:\s*"
-        r"(.*?)\.\s*\n`pr-set-changed`",
-        doc,
-        re.DOTALL,
-    )
-    assert m, (
-        "wave-watch.md: suppressible-events list not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
-    assert tokens, (
-        "wave-watch.md: suppressible-events list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return tokens
-
-
 def _wave_watch_exit_contract_verbs_from_doc(doc):
     """Verbs whose intro bullets state the one-JSON-line stdout contract."""
     m = re.search(
@@ -1160,100 +535,30 @@ def _wave_watch_exit_contract_verbs_from_doc(doc):
     return covered
 
 
-def _wave_watch_events_from_doc(doc):
-    """The Events bullet list in wave-watch.md — scoped to that block only."""
-    m = re.search(
-        r"\*\*Events\*\* \(`ok=True`\):\n\n(.*?)\n\n\*\*Precedence\*\*",
-        doc,
-        re.DOTALL,
-    )
-    assert m, (
-        "wave-watch.md: Events bullet list not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE))
-    assert tokens, (
-        "wave-watch.md: Events bullet list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return tokens
-
-
-def _wave_watch_refusals_from_doc(doc):
-    """The Refusals bullet list in wave-watch.md — scoped to that block only."""
-    m = re.search(
-        r"\*\*Refusals\*\* \(exit 1, `ok=False`\):\n\n(.*?)\n\nThe pre-loop",
-        doc,
-        re.DOTALL,
-    )
-    assert m, (
-        "wave-watch.md: Refusals bullet list not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE))
-    assert tokens, (
-        "wave-watch.md: Refusals bullet list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return tokens
-
-
-def _wave_watch_degradations_from_doc(doc):
-    """The degradations bullet list in wave-watch.md — scoped to that block only."""
-    m = re.search(
-        r"\*\*Non-fatal degradations\*\* that ride on a result:\n\n(.*?)\n\nA degradation",
-        doc,
-        re.DOTALL,
-    )
-    assert m, (
-        "wave-watch.md: degradations bullet list not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE))
-    assert tokens, (
-        "wave-watch.md: degradations bullet list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return tokens
-
-
-def _wave_watch_precedence_from_doc(doc):
-    """The precedence line in wave-watch.md — scoped to that paragraph only."""
-    m = re.search(
-        r"\*\*Precedence\*\*, highest first:\n\n(.*?)\n",
-        doc,
-    )
-    assert m, (
-        "wave-watch.md: precedence line not found "
-        "(moved or reworded?)"
-    )
-    tokens = re.findall(r"`([^`]+)`", m.group(1))
-    assert tokens, (
-        "wave-watch.md: precedence line parsed to zero tokens "
-        "(regex drift or empty line?)"
-    )
-    return tokens
-
-
-def test_wave_watch_vocabulary_in_wave_watch_doc():
-    """§11: wave-watch.md restates wave_watch.py vocabulary on three registry axes and precedence.
-
-    Axis notes:
-    - Events, refusals, degradations: the doc's bullet lists must match the module's EVENTS,
-      REFUSALS, and DEGRADATIONS frozensets (token registries).
-    - Precedence: the doc precedence line and the module docstring's precedence sentence must
-      both match ``EVENT_PRECEDENCE``, the tuple ``run()`` consumes.
-    """
+def _wave_watch_string_constants_by_prefix(prefix):
+    """Module-level string constants named PREFIX_* — scoped to vocabulary prefixes only."""
     import wave_watch
 
-    home_events = _wave_watch_events_from_home()
-    home_refusals = _wave_watch_refusals_from_home()
-    home_degradations = _wave_watch_degradations_from_home()
-    home_precedence = _wave_watch_precedence_from_home()
-    module_docstring_precedence = _wave_watch_precedence_from_module_docstring()
+    derived = set()
+    for name in dir(wave_watch):
+        if not name.startswith(prefix):
+            continue
+        val = getattr(wave_watch, name)
+        if isinstance(val, str) and val:
+            derived.add(val)
+    return derived
+
+
+def test_wave_watch_vocabulary_registry_self_consistency():
+    """wave_watch EVENT_*/REFUSAL_*/DEGRADATION_* constants match their frozensets; precedence covers EVENTS."""
+    import wave_watch
+
     derived_events = _wave_watch_string_constants_by_prefix("EVENT_")
     derived_refusals = _wave_watch_string_constants_by_prefix("REFUSAL_")
     derived_degradations = _wave_watch_string_constants_by_prefix("DEGRADATION_")
+    home_events = set(wave_watch.EVENTS)
+    home_refusals = set(wave_watch.REFUSALS)
+    home_degradations = set(wave_watch.DEGRADATIONS)
     assert derived_events == home_events, (
         "wave_watch EVENT_* constants drift from wave_watch.EVENTS — "
         "symmetric difference: %r"
@@ -1269,63 +574,19 @@ def test_wave_watch_vocabulary_in_wave_watch_doc():
         "symmetric difference: %r"
         % sorted(derived_degradations ^ home_degradations)
     )
-    doc = _read("skills/showrunner/reference/wave-watch.md")
-    doc_events = _wave_watch_events_from_doc(doc)
-    missing_events = sorted(home_events - doc_events)
-    extra_events = sorted(doc_events - home_events)
-    assert not missing_events and not extra_events, (
-        "wave-watch.md Events vocabulary drift from wave_watch.EVENTS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_events, extra_events)
-    )
-    doc_refusals = _wave_watch_refusals_from_doc(doc)
-    missing_refusals = sorted(home_refusals - doc_refusals)
-    extra_refusals = sorted(doc_refusals - home_refusals)
-    assert not missing_refusals and not extra_refusals, (
-        "wave-watch.md Refusals vocabulary drift from wave_watch.REFUSALS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_refusals, extra_refusals)
-    )
-    doc_degradations = _wave_watch_degradations_from_doc(doc)
-    missing_degradations = sorted(home_degradations - doc_degradations)
-    extra_degradations = sorted(doc_degradations - home_degradations)
-    assert not missing_degradations and not extra_degradations, (
-        "wave-watch.md degradations vocabulary drift from wave_watch.DEGRADATIONS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_degradations, extra_degradations)
-    )
-    doc_precedence = _wave_watch_precedence_from_doc(doc)
-    _assert_wave_watch_precedence_order_equal(
-        "wave-watch.md",
-        doc_precedence,
-        "wave_watch.EVENT_PRECEDENCE",
-        home_precedence,
-    )
-    _assert_wave_watch_precedence_order_equal(
-        "wave_watch.py module docstring",
-        module_docstring_precedence,
-        "wave_watch.EVENT_PRECEDENCE",
-        home_precedence,
-    )
-    events_registry = set(wave_watch.EVENTS)
-    for label, precedence in (
-        ("wave_watch.py module docstring", module_docstring_precedence),
-        ("wave-watch.md", doc_precedence),
-        ("wave_watch.EVENT_PRECEDENCE", home_precedence),
-    ):
-        prec_set = set(precedence)
-        assert prec_set == events_registry and len(precedence) == len(events_registry), (
-            "wave-watch precedence tokens drift from wave_watch.EVENTS — "
-            "%s: precedence %r (set %r, len %d); EVENTS %r (len %d)"
-            % (
-                label,
-                precedence,
-                sorted(prec_set),
-                len(precedence),
-                sorted(events_registry),
-                len(events_registry),
-            )
+    precedence = list(wave_watch.EVENT_PRECEDENCE)
+    prec_set = set(precedence)
+    assert prec_set == home_events and len(precedence) == len(home_events), (
+        "wave_watch EVENT_PRECEDENCE drift from wave_watch.EVENTS — "
+        "precedence %r (set %r, len %d); EVENTS %r (len %d)"
+        % (
+            precedence,
+            sorted(prec_set),
+            len(precedence),
+            sorted(home_events),
+            len(home_events),
         )
+    )
 
 
 def test_wave_watch_verbs_in_wave_watch_doc():
@@ -1362,39 +623,36 @@ def test_wave_watch_exit_contract_in_wave_watch_doc():
     )
 
 
-def test_wave_watch_suppressible_events_in_wave_watch_doc():
-    """§11: wave-watch.md restates wave_watch._SUPPRESSIBLE_EVENTS for --ignore-event."""
-    home = _wave_watch_suppressible_events_from_home()
-    doc = _read("skills/showrunner/reference/wave-watch.md")
-    doc_tokens = _wave_watch_suppressible_events_from_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "wave-watch.md suppressible-events vocabulary drift from "
-        "wave_watch._SUPPRESSIBLE_EVENTS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
-
-
 # --- Cluster 4: negative drift scans (concrete model ids must not leak) ------
 
-_CONCRETE_MODEL_TOKENS = (
+_RETIRED_CONCRETE_MODEL_LITERALS = (
     "gpt-5.6-terra",
-    "gpt-5.6-sol",
     "gpt-5.5",
     "gpt-5.6-luna",
-    "composer-2.5",
     "composer-2.5-fast",
     "cursor-grok-4.5",
-    "cursor-grok-4.6",
-    "haiku-4.5",
-    "sonnet-5",
     "opus-4.8",
-    "opus-5",
-    "fable-5",
     "claude-fable-5-thinking",
 )
+
+
+def _registered_model_ids_for_leak_scan():
+    import model_registry
+
+    return {
+        model_id
+        for vendor in model_registry.vendors()
+        for model_id in model_registry._MODELS[vendor]
+    }
+
+
+def _concrete_model_tokens():
+    registered = _registered_model_ids_for_leak_scan()
+    return tuple(sorted(registered | set(_RETIRED_CONCRETE_MODEL_LITERALS)))
+
+
+_CONCRETE_MODEL_TOKENS = _concrete_model_tokens()
+
 
 _RETIRED_MODEL_TOKENS = (
     "gpt-5.5",
@@ -1402,6 +660,8 @@ _RETIRED_MODEL_TOKENS = (
     "composer-2.5-fast",
     "claude-fable-5-thinking",
     "opus-4.8",
+    "opus-5",
+    "fable-5",
     "cursor-grok-4.5",
 )
 
@@ -1433,33 +693,6 @@ def test_no_concrete_model_id_in_charters_or_skills():
 
 
 # --- Cluster 5: model-registry copies (ids + family vocabulary) --------------
-
-def test_concrete_model_tokens_cover_every_registered_model():
-    """§11: `_CONCRETE_MODEL_TOKENS` is a hand-maintained copy of the registry's ids — the leak scan
-    it drives silently stops covering a model the moment someone registers one without adding it
-    here. Read the home and assert coverage (retired ids may stay in the tuple; the check is
-    one-directional)."""
-    import model_registry
-
-    registered = {m for v in model_registry.vendors() for m in model_registry._MODELS[v]}
-    missing = registered - set(_CONCRETE_MODEL_TOKENS)
-    assert not missing, "registered model id absent from _CONCRETE_MODEL_TOKENS: %r" % sorted(missing)
-
-
-def test_conventions_family_keys_match_the_registry():
-    """§11: CONVENTIONS' family-key enumeration is a doc copy of the registry's family vocabulary.
-    The `cursor` key outlived the family itself until a review caught it (#651) — read the home."""
-    import model_registry
-
-    home = {rec["family"] for v in model_registry.vendors() for rec in model_registry._MODELS[v].values()}
-    text = _read("../../CONVENTIONS.md")
-    m = re.search(r"\*\*Family keys\*\*[^(]*\(([^)]*)\)", text)
-    assert m, "CONVENTIONS: family-key enumeration not found"
-    documented = set(re.findall(r"`([a-z0-9-]+)`", m.group(1)))
-    assert documented == home, (
-        "CONVENTIONS family-key list %r drifted from model_registry families %r"
-        % (sorted(documented), sorted(home)))
-
 
 def _scan_retired_tokens(rel_paths):
     hits = []
@@ -1520,7 +753,7 @@ def _retired_grok_literal():
 
 # I1: only these two tuple entries may mention the retired id anywhere in the repo.
 _INTENTIONAL_RETIRED_GROK_SITES = (
-    (os.path.join("lib", "tests", "test_ssot_drift.py"), "_CONCRETE_MODEL_TOKENS"),
+    (os.path.join("lib", "tests", "test_ssot_drift.py"), "_RETIRED_CONCRETE_MODEL_LITERALS"),
     (os.path.join("lib", "tests", "test_ssot_drift.py"), "_RETIRED_MODEL_TOKENS"),
 )
 
@@ -1790,6 +1023,27 @@ _VET_RECEIPT_MARKERS = frozenset({
     "<!-- superheroes:pending-proposals -->",
     "<!-- superheroes:advisor-vet -->",
 })
+# The LIST-MARKER family: payload-carrying markers (the build record's follow-up ids, the vet
+# receipt's disposition ids) read by lib/vet_slot.py. Their payload varies per PR, so they are not
+# exact-byte anchors: they sit outside both literal families above and are never propagated to the
+# copy-holders. test_vet_slot.py binds their taught shapes to the charters and §10.7.
+
+
+def _anchor_markers(text):
+    """Every `<!-- superheroes:... -->` literal in text, minus list-family members.
+
+    A list marker is matched by its name followed by a space, so `followupsX` stays an anchor.
+    """
+    import vet_slot
+
+    list_names = (vet_slot.FOLLOWUPS_MARKER_NAME, vet_slot.DISPOSITIONS_MARKER_NAME)
+    return [
+        m
+        for m in re.findall(r"(<!-- superheroes:[^>]+ -->)", text)
+        if not any(m.startswith("<!-- superheroes:%s " % name) for name in list_names)
+    ]
+
+
 # Closed world over BOTH families: any new marker added to §10.7 fails this test on purpose,
 # forcing a decision about whether it propagates. Never relax this to a subset check.
 _SECTION_10_7_MARKERS = _FLOOR_MARKERS | _VET_RECEIPT_MARKERS
@@ -1842,7 +1096,7 @@ def _omission_floor_expectations_from_home(home):
         terms = [t.strip() for t in re.findall(r"\*\*([^*]+)\*\*", row)]
         assert terms, "no bold load-bearing terms in floor row: %r" % row
         row_terms.append(terms)
-    markers = re.findall(r"(<!-- superheroes:[^>]+ -->)", home)
+    markers = _anchor_markers(home)
     assert set(markers) == set(_SECTION_10_7_MARKERS), (
         "unexpected §10.7 marker set: %r — a new marker must be sorted into "
         "_FLOOR_MARKERS (propagates to every copy-holder) or _VET_RECEIPT_MARKERS "
@@ -1956,19 +1210,6 @@ def _workhorse_git_identity_section2_paragraph():
     )
     assert m, (
         "workhorse/SKILL.md §2 git-identity cascade paragraph not found (moved or reworded?)"
-    )
-    return m.group(0)
-
-
-def _workhorse_git_identity_tempted_row():
-    """The tempted-table row for synthesizing git identity on commit."""
-    text = _read("skills/workhorse/SKILL.md")
-    m = re.search(
-        r'\| "Git won\'t say who I am[^|]+\|[^|]+\|',
-        text,
-    )
-    assert m, (
-        "workhorse/SKILL.md git-identity tempted-table row not found (moved or reworded?)"
     )
     return m.group(0)
 
@@ -2175,6 +1416,31 @@ def test_vet_verdict_form_prose_matches_data_file():
     )
 
 
+def test_list_markers_are_named_in_conventions_10_7():
+    """§10.7 names each list-family marker, and the family is exactly the names vet_slot reads.
+
+    The list family is the one carve-out from the §10.7 closed world, so it is pinned both ways:
+    each name must appear in §10.7 as `<!-- superheroes:<name> `, and the family must equal the
+    names lib/vet_slot.py actually parses — a rename on either side fails here.
+    """
+    import vet_slot
+
+    names = (vet_slot.FOLLOWUPS_MARKER_NAME, vet_slot.DISPOSITIONS_MARKER_NAME)
+    home = _conventions_section_10_7()
+    for name in names:
+        assert "<!-- superheroes:%s " % name in home, (
+            "CONVENTIONS §10.7 does not name the list marker %r" % name
+        )
+        literals = re.findall(r"<!-- superheroes:%s [^\n`]*?-->" % re.escape(name), home)
+        assert literals, "CONVENTIONS §10.7 shows no full %r marker example" % name
+        for literal in literals:
+            try:
+                vet_slot.read_marker_list(literal, name)
+            except vet_slot._Refusal as exc:
+                pytest.fail("CONVENTIONS §10.7 example %r does not parse: %s (%s)"
+                            % (literal, exc.reason, exc.detail))
+
+
 def test_vet_receipt_markers_match_conventions_10_7():
     """§11 + §12.3: the vet-receipt marker literals agree across every hand-maintained copy.
 
@@ -2183,7 +1449,7 @@ def test_vet_receipt_markers_match_conventions_10_7():
     names vet-receipt.md as the authoritative home; this binds the copies to it.
     """
     home = _conventions_section_10_7()
-    in_home = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", home)) - set(_FLOOR_MARKERS)
+    in_home = set(_anchor_markers(home)) - set(_FLOOR_MARKERS)
     assert in_home == set(_VET_RECEIPT_MARKERS), (
         "CONVENTIONS §10.7 names vet-receipt markers %r but _VET_RECEIPT_MARKERS is %r"
         % (sorted(in_home), sorted(_VET_RECEIPT_MARKERS))
@@ -2195,7 +1461,7 @@ def test_vet_receipt_markers_match_conventions_10_7():
     receipt = _read("skills/showrunner/reference/vet-receipt.md")
     section = re.search(r"^## Markers$\n(.*?)(?=^## )", receipt, re.MULTILINE | re.DOTALL)
     assert section, "vet-receipt.md `## Markers` section not found (moved or renamed?)"
-    in_receipt = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", section.group(1)))
+    in_receipt = set(_anchor_markers(section.group(1)))
     assert in_receipt == set(_VET_RECEIPT_MARKERS), (
         "vet-receipt.md `## Markers` lists %r but CONVENTIONS §10.7 names %r — the marker "
         "literals drifted between the home and the section that documents them"
@@ -2209,7 +1475,7 @@ def test_vet_receipt_markers_match_conventions_10_7():
     # be one §10.7 names, and the charter must carry at least one of the vet family it tells the
     # advisor to stamp.
     charter = _read("skills/showrunner/SKILL.md")
-    charter_markers = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", charter))
+    charter_markers = set(_anchor_markers(charter))
     stale = charter_markers - (in_home | set(_FLOOR_MARKERS))
     assert not stale, (
         "showrunner/SKILL.md carries marker literal(s) %r that CONVENTIONS §10.7 does not name — "
@@ -2233,38 +1499,6 @@ _PREFLIGHT_ENUM_ITEM = re.compile(
     re.MULTILINE,
 )
 _PREFLIGHT_CHECK_ID = re.compile(r"`([a-z][-a-z0-9]*)`")
-
-_NUMBER_WORDS = {
-    "zero": 0,
-    "one": 1,
-    "two": 2,
-    "three": 3,
-    "four": 4,
-    "five": 5,
-    "six": 6,
-    "seven": 7,
-    "eight": 8,
-    "nine": 9,
-    "ten": 10,
-    "eleven": 11,
-    "twelve": 12,
-}
-
-_ORDINAL_WORDS = {
-    "first": 1,
-    "second": 2,
-    "third": 3,
-    "fourth": 4,
-    "fifth": 5,
-    "sixth": 6,
-    "seventh": 7,
-    "eighth": 8,
-    "ninth": 9,
-    "tenth": 10,
-    "eleventh": 11,
-    "twelfth": 12,
-}
-
 
 def _preflight_charter_block(text):
     begin = text.find(_PREFLIGHT_CHARTER_BEGIN)
@@ -2349,56 +1583,6 @@ def test_preflight_enum_form_ids_catches_stale_inline_citation():
         assert not stale
 
 
-def test_showrunner_preflight_count_prose_matches_home():
-    """Duty 9 count words in showrunner/SKILL.md track dispatch-preflight.md's enumeration."""
-    import launch_doctrine as ld
-
-    home_text = _read("skills/showrunner/reference/dispatch-preflight.md")
-    parsed = ld.charter_checks(home_text)
-    assert parsed["ok"], parsed.get("reason")
-    check_count = len(parsed["checks"])
-    duty = _showrunner_orchestration_duty()
-
-    eight_match = re.search(r"\*\*([A-Za-z]+)\s+checks:\*\*", duty)
-    assert eight_match, (
-        "showrunner/SKILL.md duty 9 missing '<Word> checks:' count prose (moved or reworded?)"
-    )
-    eight_word = eight_match.group(1).lower()
-    assert eight_word in _NUMBER_WORDS, (
-        "showrunner/SKILL.md duty 9 uses unknown check-count word %r" % eight_word
-    )
-    assert _NUMBER_WORDS[eight_word] == check_count, (
-        "showrunner/SKILL.md duty 9 says %r checks but dispatch-preflight.md enumerates %d"
-        % (eight_word, check_count)
-    )
-
-    ninth_match = re.search(r"not an? ([a-z]+) check\b", duty, re.IGNORECASE)
-    assert ninth_match, (
-        "showrunner/SKILL.md duty 9 missing 'not a/an <ordinal> check' prose (moved or reworded?)"
-    )
-    ninth_word = ninth_match.group(1).lower()
-    assert ninth_word in _ORDINAL_WORDS, (
-        "showrunner/SKILL.md duty 9 uses unknown ordinal %r in ninth-check guard" % ninth_word
-    )
-    assert _ORDINAL_WORDS[ninth_word] == check_count + 1, (
-        "showrunner/SKILL.md 'not a %s check' no longer matches len(home)+1 (%d+1)"
-        % (ninth_word, check_count)
-    )
-
-    list_match = re.search(r"\b([a-z]+)-check list\b", duty, re.IGNORECASE)
-    assert list_match, (
-        "showrunner/SKILL.md duty 9 missing '<word>-check list' prose (moved or reworded?)"
-    )
-    list_word = list_match.group(1).lower()
-    assert list_word in _NUMBER_WORDS, (
-        "showrunner/SKILL.md duty 9 uses unknown word %r in eight-check-list guard" % list_word
-    )
-    assert _NUMBER_WORDS[list_word] == check_count, (
-        "showrunner/SKILL.md '%s-check list' no longer matches dispatch-preflight enumeration (%d)"
-        % (list_word, check_count)
-    )
-
-
 def test_stamp_instructions_name_the_body_marker_specifically():
     """§10.7 + LEDGERS row 236's named closure: both stamp instructions name the BODY marker.
 
@@ -2412,7 +1596,7 @@ def test_stamp_instructions_name_the_body_marker_specifically():
         ("showrunner/SKILL.md duty-4 slot-write bullet", _showrunner_slot_write_bullet()),
         ("workhorse/SKILL.md §11 `## Advisor vet` bullet", _workhorse_advisor_vet_bullet()),
     ):
-        found = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", text))
+        found = set(_anchor_markers(text))
         assert found == {body_marker}, (
             "%s names marker(s) %r; §10.7 says the PR-body marker is %r — a stamp instruction "
             "naming any other marker misdirects the stamp" % (label, sorted(found), body_marker)
@@ -2555,7 +1739,6 @@ def test_workhorse_git_identity_prose_matches_the_doctrine():
 
     for label, text in (
         ("workhorse/SKILL.md §2", _workhorse_git_identity_section2_paragraph()),
-        ("workhorse/SKILL.md tempted-table", _workhorse_git_identity_tempted_row()),
     ):
         missing = [t for t in required if t not in text]
         assert not missing, (
@@ -2575,27 +1758,16 @@ def _showrunner_orchestration_duty():
     return m.group(0)
 
 
-def _showrunner_provisioning_duty():
-    """Duty 10 (Provision slots for an authenticated wave) through the tempted-table heading."""
-    text = _read("skills/showrunner/SKILL.md")
-    m = re.search(
-        r"10\. \*\*Provision slots.*?(?=\n## When you're tempted)",
-        text,
-        re.DOTALL,
-    )
-    assert m, "showrunner/SKILL.md duty 10 (Provision slots) not found (moved or renumbered?)"
-    return m.group(0)
-
-
 def _showrunner_tempted_tier_row():
-    """The tempted-table row pairing account-default inheritance with the tier doctrine."""
-    text = _read("skills/showrunner/SKILL.md")
+    """The tempted-table row pairing account-default inheritance with the tier doctrine, now on
+    the excuses reference page."""
+    text = _read("skills/showrunner/reference/excuses.md")
     m = re.search(
         r"\| \"The account default tier is fine[^|]+\|[^|]+\|",
         text,
     )
     assert m, (
-        "showrunner/SKILL.md tempted-table tier row not found "
+        "skills/showrunner/reference/excuses.md tempted-table tier row not found "
         "(moved or reworded?)"
     )
     return m.group(0)
@@ -2616,13 +1788,15 @@ def _launch_doctrine_builder_dispatch_section():
     return m.group(1)
 
 
-def test_amendment_vocabulary_in_showrunner_charter():
-    """§11: showrunner charter carries post-terminal amendment vocabulary from launch_ledger."""
+def test_amendment_vocabulary_in_showrunner_orchestration_page():
+    """§11: the showrunner orchestration page carries post-terminal amendment vocabulary from
+    launch_ledger."""
     # axis: caller-writable amendment kinds, vet rulings, and the amend verb must appear in the
-    # charter pinned in their invocation context (--kind / --value lines), not merely anywhere in prose.
+    # orchestration page pinned in their invocation context (--kind / --value lines), not merely
+    # anywhere in prose.
     import launch_ledger
 
-    doc = _read("skills/showrunner/SKILL.md")
+    doc = _read("skills/showrunner/reference/orchestration.md")
     missing = []
     for kind in launch_ledger.CALLER_WRITABLE_AMENDMENT_KINDS:
         if "--kind %s" % kind not in doc:
@@ -2638,31 +1812,35 @@ def test_amendment_vocabulary_in_showrunner_charter():
     if "amend" not in doc:
         missing.append("verb 'amend'")
     assert not missing, (
-        "showrunner/SKILL.md missing amendment vocabulary from launch_ledger.py: %s"
+        "showrunner/reference/orchestration.md missing amendment vocabulary from "
+        "launch_ledger.py: %s"
         % ", ".join(missing)
     )
 
 
-def test_count_result_blocks_in_showrunner_charter():
-    """§11: showrunner charter names count-result blocks sourced from launch_ledger."""
+def test_count_result_blocks_in_showrunner_orchestration_page():
+    """§11: the showrunner orchestration page names count-result blocks sourced from launch_ledger."""
     import launch_ledger
 
-    doc = _read("skills/showrunner/SKILL.md")
-    duty = _showrunner_orchestration_duty()
+    doc = _read("skills/showrunner/reference/orchestration.md")
     missing = []
     for block in launch_ledger.CHARTER_NAMED_COUNT_BLOCKS:
-        if block not in duty:
+        if block not in doc:
             missing.append(block)
     assert not missing, (
-        "showrunner/SKILL.md duty 9 missing count-result block(s) from "
+        "showrunner/reference/orchestration.md missing count-result block(s) from "
         "launch_ledger.COUNT_RESULT_BLOCKS: %r" % missing
     )
 
 
 def test_showrunner_provisioning_duty_load_bearing_content():
-    """§11: duty 10 carries load-bearing provisioning clauses."""
-    duty = _showrunner_provisioning_duty()
-    lower = duty.lower()
+    """§11: skills/showrunner/reference/provisioning.md carries load-bearing provisioning clauses
+    moved off duty 10 by the charter restructure."""
+    # axis: presence of each of the four provisioning clauses on the page that now holds them; each
+    # clause alone must fail this guard. The launcher element guards both the heading and the
+    # operative instruction — either one going missing alone must fail this guard.
+    text = _read("skills/showrunner/reference/provisioning.md")
+    lower = re.sub(r"\s+", " ", text.lower())
     missing = []
     if "without any seeded sign-in" not in lower:
         missing.append("unauthenticated-app-first ordering")
@@ -2670,10 +1848,10 @@ def test_showrunner_provisioning_duty_load_bearing_content():
         missing.append("partial-failure no-go rule")
     if "acceptance record (who accepted, when, and why)" not in lower:
         missing.append("weaker-acceptance record")
-    if "the launcher carries the slot" not in lower:
+    if "the launcher carries the slot" not in lower or "supply the slot and generation" not in lower:
         missing.append("launcher-carries-the-slot clause")
     assert not missing, (
-        "showrunner/SKILL.md duty 10 missing load-bearing element(s): %s"
+        "skills/showrunner/reference/provisioning.md missing load-bearing element(s): %s"
         % ", ".join(missing)
     )
 
@@ -2683,7 +1861,7 @@ def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
     tier rule keyed to model_registry.FABLE_NEVER_DEFAULT — builder launches default to opus; fable
     is never a launch default. A failure means the rule drifted out of a surface the advisor or
     doctrine actually loads."""
-    # axis: each guarded region (duty-9 orchestration passage, tempted-table tier row, and the
+    # axis: each guarded region (duty-9 orchestration passage, the excuses-page tier row, and the
     # launch-doctrine artifact home) must name engine_pref.BUILDER_DISPATCH_TIER_DEFAULT and each
     # registry-refused launch tier; partial drift in any one region alone must fail this guard.
     import engine_pref
@@ -2698,7 +1876,7 @@ def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
 
     regions = (
         ("showrunner/SKILL.md duty 9 orchestration passage", _showrunner_orchestration_duty()),
-        ("showrunner/SKILL.md tempted-table tier row", _showrunner_tempted_tier_row()),
+        ("showrunner/reference/excuses.md tempted-table tier row", _showrunner_tempted_tier_row()),
         ("launch-doctrine.md artifact home", _launch_doctrine_builder_dispatch_section()),
     )
 
@@ -2766,79 +1944,6 @@ def _issue_contract_string_constants_by_prefix(prefix):
     return derived
 
 
-def _issue_contract_vocabulary_section(doc):
-    """The drift-tested vocabulary section in issue-contract.md."""
-    m = re.search(
-        r"^## Vocabulary \(drift-tested\)\s*\n(.*?)(?:\n## |\Z)",
-        doc,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert m, (
-        "issue-contract.md: ## Vocabulary (drift-tested) section not found "
-        "(moved or reworded?)"
-    )
-    return m.group(1)
-
-
-def _issue_contract_slots_from_doc(doc):
-    """Ordered slot names from the Slots bullet block — scoped to that block only."""
-    section = _issue_contract_vocabulary_section(doc)
-    m = re.search(
-        r"\*\*Slots\*\* \(in order\):\n\n(.*?)(?=\n\*\*|\n## |\Z)",
-        section,
-        re.DOTALL,
-    )
-    assert m, (
-        "issue-contract.md: Slots bullet list not found "
-        "(moved or reworded?)"
-    )
-    tokens = re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE)
-    assert tokens, (
-        "issue-contract.md: Slots bullet list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return tokens
-
-
-def _issue_contract_anchor_kinds_from_doc(doc):
-    """Anchor-kind tokens from the Anchor kinds bullet block — scoped to that block only."""
-    section = _issue_contract_vocabulary_section(doc)
-    m = re.search(
-        r"\*\*Anchor kinds\*\*.*?:\n\n(.*?)(?=\n\*\*|\n## |\Z)",
-        section,
-        re.DOTALL,
-    )
-    assert m, (
-        "issue-contract.md: Anchor kinds bullet list not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE))
-    assert tokens, (
-        "issue-contract.md: Anchor kinds bullet list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return tokens
-
-
-def _issue_contract_refusals_from_doc(doc):
-    """Refusal tokens from the Refusal reasons bullet block — scoped to that block only."""
-    section = _issue_contract_vocabulary_section(doc)
-    m = re.search(
-        r"\*\*Refusal reasons\*\*.*?:\n\n(.*?)(?=\n\*\*|\n## |\Z)",
-        section,
-        re.DOTALL,
-    )
-    assert m, (
-        "issue-contract.md: Refusal reasons bullet list not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE))
-    assert tokens, (
-        "issue-contract.md: Refusal reasons bullet list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return tokens
-
 
 def _issue_contract_refusals_from_doc_table(doc):
     """Refusal tokens from the build-ready refusal-reason table — scoped to that block only."""
@@ -2860,38 +1965,6 @@ def _issue_contract_refusals_from_doc_table(doc):
     return tokens
 
 
-def _issue_contract_rendered_header_from_doc(doc):
-    """Rendered Anchor header form from the vocabulary section — scoped to that sentence."""
-    section = _issue_contract_vocabulary_section(doc)
-    m = re.search(
-        r"The Anchor slot's rendered header form is `([^`]+)`\.",
-        section,
-    )
-    assert m, (
-        "issue-contract.md: rendered Anchor header form sentence not found "
-        "(moved or reworded?)"
-    )
-    return m.group(1)
-
-
-def _issue_contract_slot_statuses_from_doc(doc):
-    """Slot-status tokens from the Slot statuses bullet block — scoped to that block only."""
-    section = _issue_contract_vocabulary_section(doc)
-    m = re.search(
-        r"\*\*Slot statuses\*\*.*?:\n\n(.*?)(?=\n\*\*|\n## |\Z)",
-        section,
-        re.DOTALL,
-    )
-    assert m, (
-        "issue-contract.md: Slot statuses bullet list not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE))
-    assert tokens, (
-        "issue-contract.md: Slot statuses bullet list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return tokens
 
 
 def _issue_contract_slot_statuses_from_home():
@@ -2914,85 +1987,14 @@ def _issue_contract_rendered_headers_from_showrunner_skill():
     return [m.group(1), m.group(2), m.group(3)]
 
 
-def _issue_contract_rendered_headers_from_conventions():
-    """Rendered slot headers from CONVENTIONS §11 worked example 3."""
-    text = _read("../../CONVENTIONS.md")
-    m = re.search(
-        r"three slot names and their order\s*\n\(`([^`]+)`, `([^`]+)`, `([^`]+)`\)",
-        text,
-    )
-    assert m, (
-        "CONVENTIONS.md §11: issue-contract slot enumeration not found "
-        "(moved or reworded?)"
-    )
-    return [m.group(1), m.group(2), m.group(3)]
 
 
-def _issue_contract_refusals_from_conventions():
-    """Refusal tokens and count word from CONVENTIONS §11 worked example 3."""
-    import issue_contract
-
-    text = _read("../../CONVENTIONS.md")
-    m = re.search(
-        r"(\w+) build-ready\s+refusal-reason tokens \(([^)]+)\)",
-        text,
-    )
-    assert m, (
-        "CONVENTIONS.md §11: issue-contract refusal-token list not found "
-        "(moved or reworded?)"
-    )
-    count_word = m.group(1).lower()
-    assert count_word in _NUMBER_WORDS, (
-        "CONVENTIONS.md §11 uses unknown refusal-count word %r" % count_word
-    )
-    # axis: the prose count word (six, seven, …) must match len(REFUSALS) — distinct from the
-    # adjacent token-set membership check on the same passage.
-    assert _NUMBER_WORDS[count_word] == len(issue_contract.REFUSALS), (
-        "CONVENTIONS.md §11 refusal count word %r (%d) drift from "
-        "len(issue_contract.REFUSALS) (%d)"
-        % (count_word, _NUMBER_WORDS[count_word], len(issue_contract.REFUSALS))
-    )
-    tokens = re.findall(r"`([^`]+)`", m.group(2))
-    assert tokens, (
-        "CONVENTIONS.md §11: refusal-token list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return set(tokens)
-
-
-def test_issue_contract_vocabulary_in_issue_contract_doc():
-    """§11: issue-contract.md restates issue_contract.py vocabulary on three registry axes
-    plus ordered slots.
-
-    Copy-holders enumerated (§11.2 caveat — every known copy must be listed here):
-  **Names** (compared against ``issue_contract.SLOTS`` and sibling registries):
-    - skills/showrunner/reference/issue-contract.md ## Vocabulary (drift-tested) — Slots,
-      Anchor kinds, Refusal reasons bullet lists, Slot statuses bullet list
-    - skills/showrunner/reference/issue-contract.md build-ready refusal-reason table
-  **Rendered headers** (compared against ``ANCHOR_HEADER_FORM``, ``What:``, ``DoD:``):
-    - skills/showrunner/reference/issue-contract.md ## Vocabulary (drift-tested) — rendered
-      Anchor header form sentence
-    - skills/showrunner/SKILL.md duty 2 three-slot skeleton enumeration
-    - CONVENTIONS.md §11 worked example 3 slot-header enumeration
-  **Refusal count word** (compared against ``len(issue_contract.REFUSALS)``):
-    - CONVENTIONS.md §11 worked example 3 refusal-reason prose
-  **Refusal token list** (compared against ``issue_contract.REFUSALS``):
-    - CONVENTIONS.md §11 worked example 3 refusal-reason token list
-
-    Axis notes:
-    - Slots, anchor kinds, refusals, slot statuses: SLOT_/KIND_/REFUSAL_/SLOT_STATUS_* constants
-      must match the module registries; the doc bullet lists must match the home registries.
-    - Slot order: the doc Slots block is compared as an ordered sequence against SLOTS.
-    - Rendered headers: SKILL.md and CONVENTIONS §11 enumerate header forms, not bare names.
-    - ``ANCHOR_HEADER_FORM`` must start with ``SLOT_ANCHOR`` and end with ``:`` so both axes
-      move together when the Anchor slot is renamed.
-    """
+def test_issue_contract_identifiers_in_refusal_table_and_charter_skeleton():
+    """§11: refusal table and showrunner charter skeleton match issue_contract.py."""
     import issue_contract
 
     home_slots = _issue_contract_slots_from_home()
     home_rendered = _issue_contract_rendered_headers_from_home()
-    # axis: ANCHOR_HEADER_FORM must move with SLOT_ANCHOR — a slot rename cannot leave the rendered
-    # header form pointing at a stale prefix or missing the trailing colon.
     assert issue_contract.ANCHOR_HEADER_FORM.startswith(issue_contract.SLOT_ANCHOR), (
         "issue_contract.ANCHOR_HEADER_FORM must start with SLOT_ANCHOR — "
         "form: %r; anchor: %r"
@@ -3031,28 +2033,6 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
         % sorted(derived_slot_statuses ^ home_slot_statuses)
     )
     doc = _read("skills/showrunner/reference/issue-contract.md")
-    doc_slots = _issue_contract_slots_from_doc(doc)
-    assert doc_slots == home_slots, (
-        "issue-contract.md Slots order drift from issue_contract.SLOTS — "
-        "doc: %r; home: %r"
-        % (doc_slots, home_slots)
-    )
-    doc_kinds = _issue_contract_anchor_kinds_from_doc(doc)
-    missing_kinds = sorted(home_kinds - doc_kinds)
-    extra_kinds = sorted(doc_kinds - home_kinds)
-    assert not missing_kinds and not extra_kinds, (
-        "issue-contract.md Anchor kinds vocabulary drift from issue_contract.ANCHOR_KINDS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_kinds, extra_kinds)
-    )
-    doc_refusals = _issue_contract_refusals_from_doc(doc)
-    missing_refusals = sorted(home_refusals - doc_refusals)
-    extra_refusals = sorted(doc_refusals - home_refusals)
-    assert not missing_refusals and not extra_refusals, (
-        "issue-contract.md Refusal reasons vocabulary drift from issue_contract.REFUSALS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_refusals, extra_refusals)
-    )
     table_refusals = _issue_contract_refusals_from_doc_table(doc)
     missing_table = sorted(home_refusals - table_refusals)
     extra_table = sorted(table_refusals - home_refusals)
@@ -3061,53 +2041,19 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
         "missing from table: %r; present in table but not in home: %r"
         % (missing_table, extra_table)
     )
-    doc_rendered_header = _issue_contract_rendered_header_from_doc(doc)
-    assert doc_rendered_header == issue_contract.ANCHOR_HEADER_FORM, (
-        "issue-contract.md rendered Anchor header form drift from "
-        "issue_contract.ANCHOR_HEADER_FORM — doc: %r; home: %r"
-        % (doc_rendered_header, issue_contract.ANCHOR_HEADER_FORM)
-    )
-    doc_slot_statuses = _issue_contract_slot_statuses_from_doc(doc)
-    missing_statuses = sorted(home_slot_statuses - doc_slot_statuses)
-    extra_statuses = sorted(doc_slot_statuses - home_slot_statuses)
-    assert not missing_statuses and not extra_statuses, (
-        "issue-contract.md Slot statuses vocabulary drift from issue_contract.SLOT_STATUSES — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_statuses, extra_statuses)
-    )
-    # axis: SKILL.md and CONVENTIONS §11 enumerate rendered header forms, not bare slot names.
     skill_headers = _issue_contract_rendered_headers_from_showrunner_skill()
     assert skill_headers == home_rendered, (
         "showrunner/SKILL.md duty 2 rendered-header drift from issue_contract — "
         "doc: %r; home: %r"
         % (skill_headers, home_rendered)
     )
-    conventions_headers = _issue_contract_rendered_headers_from_conventions()
-    assert conventions_headers == home_rendered, (
-        "CONVENTIONS.md §11 rendered-header drift from issue_contract — "
-        "doc: %r; home: %r"
-        % (conventions_headers, home_rendered)
-    )
-    conventions_refusals = _issue_contract_refusals_from_conventions()
-    missing_conv = sorted(home_refusals - conventions_refusals)
-    extra_conv = sorted(conventions_refusals - home_refusals)
-    assert not missing_conv and not extra_conv, (
-        "CONVENTIONS.md §11 refusal vocabulary drift from issue_contract.REFUSALS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_conv, extra_conv)
-    )
     assert list(issue_contract.SLOTS) == home_slots
+
 
 
 # --- Cluster: register-check vocabulary (register_check → copy-holders) ---
 #
-# Copy-holders enumerated (§11.2 caveat — every known copy must be listed here):
-# - skills/showrunner/reference/register-check.md ## Vocabulary (drift-tested)
-# - skills/showrunner/reference/register-check.md ## The result contract Results table
-# - CONVENTIONS.md §11.2 worked example 4 inline vocabulary prose
-#
-# Drift-tested labels guarded in the vocabulary section: Schema:, Results:, Finding kinds:,
-# Undecided reasons:, Exit codes:, Result fields:, Finding fields:.
+# Copy-holders: Results table in register-check.md; verification sentence across charters.
 
 
 _REGISTER_CHECK_DOC = "skills/showrunner/reference/register-check.md"
@@ -3127,98 +2073,11 @@ def _register_check_string_constants_by_prefix(prefix):
     return derived
 
 
-def _register_check_vocabulary_section(doc):
-    """The drift-tested vocabulary section in register-check.md."""
-    headings = re.findall(
-        r"^## Vocabulary \(drift-tested\)\s*$",
-        doc,
-        re.MULTILINE,
-    )
-    assert len(headings) == 1, (
-        "register-check.md: expected exactly one "
-        "## Vocabulary (drift-tested) heading, found %d"
-        % len(headings)
-    )
-    m = re.search(
-        r"^## Vocabulary \(drift-tested\)\s*\n(.*?)(?:\n## |\Z)",
-        doc,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert m, (
-        "register-check.md: ## Vocabulary (drift-tested) section not found "
-        "(moved or reworded?)"
-    )
-    return m.group(1)
 
 
-def _register_check_tokens_under_label(section, label):
-    """Inline-code bullet tokens under a **Label:** block — order preserved."""
-    pattern = (
-        r"\*\*%s\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
-        % re.escape(label)
-    )
-    matches = list(re.finditer(pattern, section, re.DOTALL))
-    assert len(matches) == 1, (
-        "register-check.md: expected exactly one **%s:** label, found %d"
-        % (label, len(matches))
-    )
-    tokens = re.findall(r"^- `([^`]+)`", matches[0].group(1), re.MULTILINE)
-    assert tokens, (
-        "register-check.md: **%s:** bullet list parsed to zero tokens "
-        "(regex drift or empty list?)"
-        % label
-    )
-    return tokens
 
 
-def _register_check_schema_from_doc(doc):
-    section = _register_check_vocabulary_section(doc)
-    return set(_register_check_tokens_under_label(section, "Schema:"))
 
-
-def _register_check_results_from_doc(doc):
-    section = _register_check_vocabulary_section(doc)
-    return set(_register_check_tokens_under_label(section, "Results:"))
-
-
-def _register_check_finding_kinds_from_doc(doc):
-    section = _register_check_vocabulary_section(doc)
-    return set(_register_check_tokens_under_label(section, "Finding kinds:"))
-
-
-def _register_check_undecided_reasons_from_doc(doc):
-    section = _register_check_vocabulary_section(doc)
-    return set(_register_check_tokens_under_label(section, "Undecided reasons:"))
-
-
-def _register_check_exit_codes_from_doc(doc):
-    section = _register_check_vocabulary_section(doc)
-    pattern = r"\*\*Exit codes:\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
-    matches = list(re.finditer(pattern, section, re.DOTALL))
-    assert len(matches) == 1, (
-        "register-check.md: expected exactly one **Exit codes:** label, found %d"
-        % len(matches)
-    )
-    pairs = re.findall(
-        r"^- `(\d+)` — (\w+)",
-        matches[0].group(1),
-        re.MULTILINE,
-    )
-    assert pairs, (
-        "register-check.md: **Exit codes:** bullet list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return {int(code): word for code, word in pairs}
-
-
-def _register_check_result_fields_from_doc(doc):
-    section = _register_check_vocabulary_section(doc)
-    return _register_check_tokens_under_label(section, "Result fields:")
-
-
-def _register_check_finding_fields_from_doc(doc):
-    section = _register_check_vocabulary_section(doc)
-    return _register_check_tokens_under_label(section, "Finding fields:")
 
 
 def _register_check_results_table_from_doc(doc):
@@ -3256,70 +2115,7 @@ def _register_check_results_table_from_doc(doc):
     return {int(exit_code): result for result, exit_code in rows}
 
 
-def _register_check_worked_example_from_conventions():
-    """Worked example 4 prose block from CONVENTIONS §11.2."""
-    text = _read("../../CONVENTIONS.md")
-    m = re.search(
-        r"\*Worked example 4 — the register-check vocabulary\.\* (.*?)\n\n",
-        text,
-        re.DOTALL,
-    )
-    assert m, (
-        "CONVENTIONS.md §11: register-check worked example 4 not found "
-        "(moved or reworded?)"
-    )
-    return m.group(1)
 
-
-def _register_check_inline_tokens_from_conventions(prose, label_pattern):
-    """Inline backtick tokens from a worked-example 4 enumeration phrase."""
-    m = re.search(label_pattern, prose)
-    assert m, (
-        "CONVENTIONS.md §11: register-check %s enumeration not found "
-        "(moved or reworded?)"
-        % label_pattern
-    )
-    tokens = re.findall(r"`([^`]+)`", m.group(1))
-    assert tokens, (
-        "CONVENTIONS.md §11: register-check inline list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return tokens
-
-
-def _register_check_undecided_reasons_from_conventions():
-    """Undecided-reason tokens and count word from CONVENTIONS §11.2 worked example 4."""
-    import register_check
-
-    prose = _register_check_worked_example_from_conventions()
-    m = re.search(
-        r"the (\w+) undecided-reason tokens \(([^)]+)\)",
-        prose,
-    )
-    assert m, (
-        "CONVENTIONS.md §11: register-check undecided-reason list not found "
-        "(moved or reworded?)"
-    )
-    count_word = m.group(1).lower()
-    assert count_word in _NUMBER_WORDS, (
-        "CONVENTIONS.md §11 uses unknown undecided-reason count word %r" % count_word
-    )
-    # axis: the prose count word (seven, eight, …) must match len(UNDECIDED_REASONS).
-    assert _NUMBER_WORDS[count_word] == len(register_check.UNDECIDED_REASONS), (
-        "CONVENTIONS.md §11 undecided-reason count word %r (%d) drift from "
-        "len(register_check.UNDECIDED_REASONS) (%d)"
-        % (
-            count_word,
-            _NUMBER_WORDS[count_word],
-            len(register_check.UNDECIDED_REASONS),
-        )
-    )
-    tokens = re.findall(r"`([^`]+)`", m.group(2))
-    assert tokens, (
-        "CONVENTIONS.md §11: undecided-reason token list parsed to zero tokens "
-        "(regex drift or empty list?)"
-    )
-    return set(tokens)
 
 
 def _register_check_exit_codes_from_home():
@@ -3330,227 +2126,6 @@ def _register_check_exit_codes_from_home():
         register_check.EXIT_FAIL: register_check.RESULT_FAIL,
         register_check.EXIT_UNDECIDED: register_check.RESULT_UNDECIDED,
     }
-
-
-def test_register_check_schema_in_register_check_doc():
-    """§11: register-check.md restates register_check.SCHEMA."""
-    import register_check
-
-    home = {register_check.SCHEMA}
-    doc = _read(_REGISTER_CHECK_DOC)
-    doc_tokens = _register_check_schema_from_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "register-check.md Schema vocabulary drift from register_check.SCHEMA — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
-
-
-def test_register_check_results_in_register_check_doc():
-    """§11: register-check.md restates register_check.RESULTS."""
-    import register_check
-
-    home = set(register_check.RESULTS)
-    doc = _read(_REGISTER_CHECK_DOC)
-    doc_tokens = _register_check_results_from_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "register-check.md Results vocabulary drift from register_check.RESULTS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
-
-
-def test_register_check_finding_kinds_in_register_check_doc():
-    """§11: register-check.md restates register_check.FINDING_KINDS."""
-    import register_check
-
-    home = set(register_check.FINDING_KINDS)
-    doc = _read(_REGISTER_CHECK_DOC)
-    doc_tokens = _register_check_finding_kinds_from_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "register-check.md Finding kinds vocabulary drift from "
-        "register_check.FINDING_KINDS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
-
-
-def test_register_check_undecided_reasons_in_register_check_doc():
-    """§11: register-check.md restates register_check.UNDECIDED_REASONS."""
-    import register_check
-
-    home = set(register_check.UNDECIDED_REASONS)
-    doc = _read(_REGISTER_CHECK_DOC)
-    doc_tokens = _register_check_undecided_reasons_from_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "register-check.md Undecided reasons vocabulary drift from "
-        "register_check.UNDECIDED_REASONS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
-
-
-def test_register_check_exit_codes_in_register_check_doc():
-    """§11: register-check.md restates register_check exit-code mapping."""
-    home = _register_check_exit_codes_from_home()
-    doc = _read(_REGISTER_CHECK_DOC)
-    doc_mapping = _register_check_exit_codes_from_doc(doc)
-    missing_from_doc = sorted(
-        code for code in home if code not in doc_mapping
-    )
-    extra_in_doc = sorted(
-        code for code in doc_mapping if code not in home
-    )
-    value_mismatches = sorted(
-        code for code in home
-        if code in doc_mapping and doc_mapping[code] != home[code]
-    )
-    assert (
-        not missing_from_doc
-        and not extra_in_doc
-        and not value_mismatches
-    ), (
-        "register-check.md Exit codes mapping drift from register_check "
-        "EXIT_*/RESULT_* — missing from doc: %r; present in doc but not in "
-        "home: %r; value mismatches: %r"
-        % (missing_from_doc, extra_in_doc, value_mismatches)
-    )
-
-
-def test_register_check_result_fields_in_register_check_doc():
-    """§11: register-check.md restates register_check.RESULT_FIELDS in order."""
-    import register_check
-
-    home = list(register_check.RESULT_FIELDS)
-    doc = _read(_REGISTER_CHECK_DOC)
-    doc_tokens = _register_check_result_fields_from_doc(doc)
-    assert doc_tokens == home, (
-        "register-check.md Result fields drift from register_check.RESULT_FIELDS — "
-        "doc: %r; home: %r"
-        % (doc_tokens, home)
-    )
-
-
-def test_register_check_finding_fields_in_register_check_doc():
-    """§11: register-check.md restates register_check.FINDING_FIELDS in order."""
-    import register_check
-
-    home = list(register_check.FINDING_FIELDS)
-    doc = _read(_REGISTER_CHECK_DOC)
-    doc_tokens = _register_check_finding_fields_from_doc(doc)
-    assert doc_tokens == home, (
-        "register-check.md Finding fields drift from register_check.FINDING_FIELDS — "
-        "doc: %r; home: %r"
-        % (doc_tokens, home)
-    )
-
-
-def test_register_check_results_table_in_register_check_doc():
-    """§11: register-check.md Results table restates register_check result/exit mapping."""
-    home = _register_check_exit_codes_from_home()
-    doc = _read(_REGISTER_CHECK_DOC)
-    doc_mapping = _register_check_results_table_from_doc(doc)
-    missing_codes = sorted(set(home.keys()) - set(doc_mapping.keys()))
-    extra_codes = sorted(set(doc_mapping.keys()) - set(home.keys()))
-    wrong_results = sorted(
-        code
-        for code in home
-        if code in doc_mapping and doc_mapping[code] != home[code]
-    )
-    assert (
-        not missing_codes and not extra_codes and not wrong_results
-    ), (
-        "register-check.md Results table drift from register_check exit mapping — "
-        "missing exit codes: %r; extra exit codes: %r; wrong result tokens: %r"
-        % (missing_codes, extra_codes, wrong_results)
-    )
-
-
-def test_register_check_vocabulary_in_conventions():
-    """§11: CONVENTIONS §11.2 worked example 4 restates register_check vocabulary."""
-    import register_check
-
-    prose = _register_check_worked_example_from_conventions()
-    home_results = set(register_check.RESULTS)
-    home_kinds = set(register_check.FINDING_KINDS)
-    home_undecided = set(register_check.UNDECIDED_REASONS)
-    home_exit = _register_check_exit_codes_from_home()
-    home_schema = {register_check.SCHEMA}
-
-    doc_results = set(
-        _register_check_inline_tokens_from_conventions(
-            prose,
-            r"The three result tokens \(([^)]+)\)",
-        )
-    )
-    doc_kinds = set(
-        _register_check_inline_tokens_from_conventions(
-            prose,
-            r"the three finding-kind tokens \(([^)]+)\)",
-        )
-    )
-    doc_undecided = _register_check_undecided_reasons_from_conventions()
-    doc_exit_codes = {
-        int(token)
-        for token in _register_check_inline_tokens_from_conventions(
-            prose,
-            r"the three exit codes\s*\(([^)]+)\)",
-        )
-    }
-    doc_schema = set(
-        _register_check_inline_tokens_from_conventions(
-            prose,
-            r"the schema token \(([^)]+)\)",
-        )
-    )
-
-    missing_results = sorted(home_results - doc_results)
-    extra_results = sorted(doc_results - home_results)
-    assert not missing_results and not extra_results, (
-        "CONVENTIONS.md §11 register-check result vocabulary drift — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_results, extra_results)
-    )
-
-    missing_kinds = sorted(home_kinds - doc_kinds)
-    extra_kinds = sorted(doc_kinds - home_kinds)
-    assert not missing_kinds and not extra_kinds, (
-        "CONVENTIONS.md §11 register-check finding-kind vocabulary drift — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_kinds, extra_kinds)
-    )
-
-    missing_undecided = sorted(home_undecided - doc_undecided)
-    extra_undecided = sorted(doc_undecided - home_undecided)
-    assert not missing_undecided and not extra_undecided, (
-        "CONVENTIONS.md §11 register-check undecided-reason vocabulary drift — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_undecided, extra_undecided)
-    )
-
-    missing_codes = sorted(set(home_exit.keys()) - doc_exit_codes)
-    extra_codes = sorted(doc_exit_codes - set(home_exit.keys()))
-    assert not missing_codes and not extra_codes, (
-        "CONVENTIONS.md §11 register-check exit-code vocabulary drift — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_codes, extra_codes)
-    )
-
-    missing_schema = sorted(home_schema - doc_schema)
-    extra_schema = sorted(doc_schema - home_schema)
-    assert not missing_schema and not extra_schema, (
-        "CONVENTIONS.md §11 register-check schema vocabulary drift — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_schema, extra_schema)
-    )
 
 
 def test_register_check_vocabulary_completeness():
@@ -3584,6 +2159,27 @@ def test_register_check_vocabulary_completeness():
         "register_check.UNDECIDED_REASONS — "
         "missing from frozenset: %r; in frozenset but not derived: %r"
         % (missing_undecided, extra_undecided)
+    )
+
+
+def test_register_check_results_table_in_register_check_doc():
+    """§11: register-check.md Results table restates register_check result/exit mapping."""
+    home = _register_check_exit_codes_from_home()
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_mapping = _register_check_results_table_from_doc(doc)
+    missing_codes = sorted(set(home.keys()) - set(doc_mapping.keys()))
+    extra_codes = sorted(set(doc_mapping.keys()) - set(home.keys()))
+    wrong_results = sorted(
+        code
+        for code in home
+        if code in doc_mapping and doc_mapping[code] != home[code]
+    )
+    assert (
+        not missing_codes and not extra_codes and not wrong_results
+    ), (
+        "register-check.md Results table drift from register_check exit mapping — "
+        "missing exit codes: %r; extra exit codes: %r; wrong result tokens: %r"
+        % (missing_codes, extra_codes, wrong_results)
     )
 
 
@@ -3998,8 +2594,6 @@ def _anchor_extract_bullet(text, prefix, surface):
 
 
 def _anchor_resolution_section(rel):
-    if rel == "skills/workhorse/SKILL.md":
-        return _workhorse_intake_anchor_section(), rel
     if rel == "skills/showrunner/reference/issue-contract.md":
         return _issue_contract_section("## Anchor resolution"), rel
     raise ValueError("unexpected anchor resolution surface %r" % rel)
@@ -4054,21 +2648,6 @@ def _anchor_assert_resolution_bullets_complete(rel):
     )
     for prefix in _ANCHOR_BULLET_PREFIXES:
         _anchor_extract_bullet(section, prefix, surface)
-
-
-def _anchor_log_side_fails_closed_paragraph(rel):
-    section, surface = _anchor_resolution_section(rel)
-    m = re.search(
-        r"\*\*The log side fails closed too\.\*\*.*?"
-        r"(?=^\*\*(?:On any failure|Why the cursor))",
-        section,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert m, (
-        "%s: The log side fails closed too paragraph not found (moved or reworded?)"
-        % surface
-    )
-    return m.group(0)
 
 
 def _anchor_resolution_bullets(rel):
@@ -4161,64 +2740,23 @@ def _showrunner_repair_anchor_stop_paragraph():
     return m.group(0)
 
 
-def _showrunner_anchor_coverage_bullet():
-    text = _read("skills/showrunner/SKILL.md")
-    lines = text.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        if line.startswith("   - **The standing anchor-coverage row**"):
-            start = i
-            break
-    assert start is not None, (
-        "showrunner/SKILL.md: standing anchor-coverage row bullet not found "
-        "(moved or reworded?)"
-    )
-    collected = [lines[start]]
-    for j in range(start + 1, len(lines)):
-        if lines[j].startswith("   - "):
-            break
-        collected.append(lines[j])
-    bullet = "\n".join(collected)
-    assert bullet.strip(), (
-        "showrunner/SKILL.md: standing anchor-coverage row bullet is empty"
-    )
-    return bullet
-
-
-def test_anchor_resolution_bullets_match_between_home_and_workhorse():
+def test_anchor_resolution_bullets_complete_in_home():
     # axis: whitespace-normalized equality of the three resolution bullets across copies
-    workhorse = _anchor_resolution_bullets("skills/workhorse/SKILL.md")
-    home = _anchor_resolution_bullets(
+    _anchor_resolution_bullets(
         "skills/showrunner/reference/issue-contract.md"
     )
-    for i, (w, h) in enumerate(zip(workhorse, home)):
-        if w != h:
-            pytest.fail(
-                "anchor resolution bullet index %d differs — workhorse: %r; home: %r"
-                % (i, w, h)
-            )
 
 
-def test_anchor_cursor_rule_clauses_present_in_both_copies():
+def test_anchor_cursor_rule_clauses_present_in_home():
     # axis: synchronized-deletion guard — clauses must appear in the Spec-section bullet
-    workhorse_section, workhorse_surface = _anchor_resolution_section(
-        "skills/workhorse/SKILL.md"
-    )
     home_section, home_surface = _anchor_resolution_section(
         "skills/showrunner/reference/issue-contract.md"
-    )
-    workhorse_bullet = _anchor_extract_bullet(
-        workhorse_section, "- **Spec-section anchor.**", workhorse_surface
     )
     home_bullet = _anchor_extract_bullet(
         home_section, "- **Spec-section anchor.**", home_surface
     )
     for clause in _ANCHOR_CURSOR_CLAUSES:
         clause_norm = _anchor_whitespace_normalize(clause)
-        assert clause_norm in workhorse_bullet, (
-            "workhorse Spec-section anchor bullet missing cursor clause %r "
-            "(moved or reworded?)" % clause
-        )
         assert clause_norm in home_bullet, (
             "issue-contract Spec-section anchor bullet missing cursor clause %r "
             "(moved or reworded?)" % clause
@@ -4274,39 +2812,6 @@ def test_anchor_stop_and_repair_is_two_sided():
             "issue-contract.md ## Anchor resolution missing %r "
             "(moved or reworded?)" % phrase
         )
-
-
-def test_standing_anchor_coverage_row_is_standing_not_conditional():
-    # axis: every-PR grading — conditional vet wording is the silent-omission failure
-    bullet = _showrunner_anchor_coverage_bullet()
-    bullet_norm = _anchor_whitespace_normalize(bullet)
-    assert _anchor_whitespace_normalize("at **every** vet") in bullet_norm, (
-        "showrunner duty-4 bullet missing at-every-vet clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("only anchor layer that inspects the diff") in bullet_norm, (
-        "showrunner duty-4 bullet missing diff-inspection clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("reaches the owner in the owner half") in bullet_norm, (
-        "showrunner duty-4 bullet missing owner-half delivery clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("not only in your receipt") in bullet_norm, (
-        "showrunner duty-4 bullet missing not-only-receipt clause (moved or reworded?)"
-    )
-
-    home_section = _issue_contract_section("## The standing anchor-coverage vet row")
-    home_norm = _anchor_whitespace_normalize(home_section)
-    assert _anchor_whitespace_normalize("graded on every PR") in home_norm, (
-        "issue-contract.md standing anchor-coverage section missing "
-        "graded-on-every-PR clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("reaches the owner in the owner half") in home_norm, (
-        "issue-contract.md standing anchor-coverage section missing "
-        "owner-half delivery clause (moved or reworded?)"
-    )
-    assert _anchor_whitespace_normalize("not only in the advisor's own receipt") in home_norm, (
-        "issue-contract.md standing anchor-coverage section missing "
-        "not-only-receipt clause (moved or reworded?)"
-    )
 
 
 def test_anchor_recorded_at_filing_clause_in_showrunner_charter():
@@ -4373,31 +2878,6 @@ def test_superseded_ruling_notice_duty_in_showrunner_charter():
         "showrunner superseded-ruling notice paragraph missing not-only-channel clause "
         "(moved or reworded?)"
     )
-
-
-def test_anchor_log_side_fails_closed():
-    # axis: log-side fail-closed paragraph is a two-copy duplicate with four named conditions
-    workhorse_para = _anchor_log_side_fails_closed_paragraph("skills/workhorse/SKILL.md")
-    home_para = _anchor_log_side_fails_closed_paragraph(
-        "skills/showrunner/reference/issue-contract.md"
-    )
-    workhorse_norm = _anchor_whitespace_normalize(workhorse_para)
-    home_norm = _anchor_whitespace_normalize(home_para)
-    assert workhorse_norm == home_norm, (
-        "log-side fails-closed paragraph drift — workhorse: %r; home: %r"
-        % (workhorse_para, home_para)
-    )
-    for clause in (
-        "no Amendments log at all",
-        "the log cannot be read",
-        "missing its class or its touched-section list",
-        "greater than the number of entries the log holds",
-    ):
-        clause_norm = _anchor_whitespace_normalize(clause)
-        assert clause_norm in workhorse_norm, (
-            "log-side fails-closed paragraph missing condition %r (moved or reworded?)"
-            % clause
-        )
 
 
 def test_anchor_stop_terminal_and_resume_gate():
@@ -4484,14 +2964,6 @@ _PRE_DOCTRINE_ANNOTATION_FRAGMENTS = (
 
 _PRE_DOCTRINE_REGISTER_TOKEN_RE = re.compile(r"\bR\d+\b")
 
-_WORKHORSE_REPAIR_TEMPLATE_SENTINEL = "**The stop-report carries its own repair.**"
-
-_WORKHORSE_REPAIR_TEMPLATE_POINTER = (
-    "`skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues"
-)
-
-_WORKHORSE_REPAIR_FIELD_BULLET_RE = re.compile(r"^- \*\*([^*]+)\*\*", re.MULTILINE)
-
 # The home template's fenced block. The slot ORDER this cluster asserts comes from the
 # RUNTIME home — `issue_contract.SLOTS` — and the fence is checked against it; the fence
 # is itself a copy of that sequence, so deriving the order from the fence alone would
@@ -4506,12 +2978,6 @@ _PRE_DOCTRINE_TEMPLATE_FENCE_RE = re.compile(
 # `check_build_ready()` success payload, and its value spelling is read off that payload
 # rather than re-typed (see `_pre_doctrine_completion_tokens_from_home`).
 _PRE_DOCTRINE_QUOTED_RESULT_KEYS = ("ok", "reason")
-
-# The two copy-holder fields that follow the derived slots, in order. Short durable
-# tokens, not full bullet prose — rewording the bullet around them stays free.
-_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS = ("separator", "original body")
-
-_BLANK_LINE_RE = re.compile(r"^[ \t]*$", re.MULTILINE)
 
 
 def _pre_doctrine_section():
@@ -4534,39 +3000,6 @@ def _issue_contract_contents_block():
     assert m, "issue-contract.md: # Contents list not found (moved or reworded?)"
     block = m.group(1)
     assert block.strip(), "issue-contract.md: # Contents list is empty"
-    return block
-
-
-def _workhorse_repair_template_block():
-    """The stop-report repair-template paragraph plus its field bullets.
-
-    Bounded structurally at both ends: the sentinel opens it, and it closes at the
-    end of the field-bullet list (the first blank line after the last `- **…**`
-    bullet). No ordinary prose sentence is a delimiter, so rewording the paragraph
-    that follows the list does not break this reader.
-    """
-    span = _workhorse_intake_anchor_section()
-    m_start = re.search(
-        r"^\*\*The stop-report carries its own repair\.\*\*",
-        span,
-        re.MULTILINE,
-    )
-    assert m_start, (
-        "workhorse/SKILL.md: repair-template block start not found in the "
-        "anchor-intake span (moved or reworded?)"
-    )
-    tail = span[m_start.start():]
-    m_first = _WORKHORSE_REPAIR_FIELD_BULLET_RE.search(tail)
-    assert m_first, (
-        "workhorse/SKILL.md: no repair-template field bullets found after the "
-        "sentinel (bullet list removed or reshaped?)"
-    )
-    # The list runs unbroken to the first blank line after its first bullet; that
-    # blank line is the structural end of the block.
-    m_end = _BLANK_LINE_RE.search(tail, m_first.end())
-    end = m_end.start() if m_end else len(tail)
-    block = tail[:end].strip()
-    assert block, "workhorse/SKILL.md: repair-template block is empty"
     return block
 
 
@@ -4813,57 +3246,13 @@ def test_pre_doctrine_section_carries_no_register_token():
     )
 
 
-def test_workhorse_intake_repair_template_required_with_pointer():
-    # axis: the stop-report repair requirement and its section-specific pointer
-    span = _workhorse_intake_anchor_section()
-    assert _WORKHORSE_REPAIR_TEMPLATE_SENTINEL in span, (
-        "workhorse/SKILL.md anchor-intake span: missing repair-template sentinel %r "
-        "(removed or reworded?)" % _WORKHORSE_REPAIR_TEMPLATE_SENTINEL
-    )
-    span_norm = _anchor_whitespace_normalize(span)
-    pointer_norm = _anchor_whitespace_normalize(_WORKHORSE_REPAIR_TEMPLATE_POINTER)
-    assert pointer_norm in span_norm, (
-        "workhorse/SKILL.md anchor-intake span: missing pointer %r to where the "
-        "missing-slot repair recipes live (removed or reworded?)"
-        % _WORKHORSE_REPAIR_TEMPLATE_POINTER
-    )
-
-
-def test_workhorse_intake_repair_template_field_bullets_follow_home_slot_order():
+def test_pre_doctrine_template_slot_order_matches_runtime_slots():
     # axis: copy-holder ORDER — the workhorse field bullets carry the home
     # template's slot sequence, in that order, followed by the separator and
     # original-body fields. The expected sequence is the RUNTIME contract's
     # issue_contract.SLOTS — cross-checked against the fenced template in
     # issue-contract.md § Pre-doctrine issues — never hand-written here.
-    slots = _pre_doctrine_template_slot_order()
-    block = _workhorse_repair_template_block()
-    labels = _WORKHORSE_REPAIR_FIELD_BULLET_RE.findall(block)
-    expected_count = len(slots) + len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS)
-    assert len(labels) == expected_count, (
-        "workhorse/SKILL.md repair template: expected exactly %d field bullets "
-        "(%d home slots + %d trailing fields), found %d; labels: %r"
-        % (
-            expected_count,
-            len(slots),
-            len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS),
-            len(labels),
-            labels,
-        )
-    )
-    for index, slot in enumerate(slots):
-        assert re.search(r"\b%s\b" % re.escape(slot), labels[index]), (
-            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
-            "not name the %r slot — issue_contract.SLOTS declares the slot order %r "
-            "and every copy-holder must follow it"
-            % (index + 1, labels[index], slot, slots)
-        )
-    for offset, token in enumerate(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS):
-        index = len(slots) + offset
-        assert token in labels[index], (
-            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
-            "not carry the %r field (reordered, removed, or duplicated?); labels: %r"
-            % (index + 1, labels[index], token, labels)
-        )
+    _pre_doctrine_template_slot_order()
 
 
 # --- Cluster: four-route drift (register R6 → the two charters) ---------------
@@ -5988,98 +4377,3 @@ def test_grounding_stage_branch_disposition_uses_mode_branch_constant():
         assert '== "branch"' not in src and "== 'branch'" not in src, (
             "grounding_stage.%s must not compare against bare branch literal" % label
         )
-
-
-# --- Cluster: liveness-read-error constraint (liveness_cache.py → seat_map.py) ---
-
-
-_LIVENESS_READ_ERROR_CONSTRAINT_COPY_REGISTER = (
-    os.path.normpath(os.path.join(PLUGIN, "lib", "seat_map.py")),
-)
-
-
-def _liveness_read_error_constraint_from_home():
-    import liveness_cache
-
-    token = liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT
-    assert token, (
-        "liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT must be non-empty (vacuous home)"
-    )
-    return token
-
-
-def _unproven_liveness_constraint_literals_from_source(*, source_rel="lib/seat_map.py"):
-    text = _read(source_rel)
-    pattern = r"UNPROVEN_LIVENESS_CONSTRAINTS = frozenset\(\{([^}]+)\}\)"
-    matches = re.findall(pattern, text, re.DOTALL)
-    block = _one(
-        matches,
-        "UNPROVEN_LIVENESS_CONSTRAINTS",
-        source_rel,
-        "UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({...})",
-    )
-    members = set(re.findall(r'"([^"]+)"', block))
-    assert members, (
-        "%s: UNPROVEN_LIVENESS_CONSTRAINTS parsed to zero members (vacuous pin)"
-        % source_rel
-    )
-    return members
-
-
-def _liveness_read_error_constraint_literal_in_plugin_sources():
-    token = _liveness_read_error_constraint_from_home()
-    home = os.path.normpath(os.path.join(PLUGIN, "lib", "liveness_cache.py"))
-    hits = []
-    for path in _plugin_python_sources_excluding_tests():
-        with open(path, encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, start=1):
-                if token in line:
-                    hits.append((os.path.normpath(path), lineno))
-    return token, home, hits
-
-
-def _assert_liveness_read_error_constraint_pinned(*, home_token=None, source_rel=None):
-    import seat_map
-
-    token = home_token if home_token is not None else _liveness_read_error_constraint_from_home()
-    rel = source_rel if source_rel is not None else "lib/seat_map.py"
-    source_members = _unproven_liveness_constraint_literals_from_source(source_rel=rel)
-    assert token in seat_map.UNPROVEN_LIVENESS_CONSTRAINTS, (
-        "liveness-read-error producer token %r missing from "
-        "seat_map.UNPROVEN_LIVENESS_CONSTRAINTS %r"
-        % (token, sorted(seat_map.UNPROVEN_LIVENESS_CONSTRAINTS))
-    )
-    assert token in source_members, (
-        "liveness-read-error producer token %r missing from %s "
-        "UNPROVEN_LIVENESS_CONSTRAINTS literal set %r"
-        % (token, rel, sorted(source_members))
-    )
-
-
-def test_liveness_read_error_constraint_copy_register_census():
-    """§11: every non-home plugin source carrying the constraint literal must be registered."""
-    token, home, hits = _liveness_read_error_constraint_literal_in_plugin_sources()
-    assert hits, (
-        "liveness-read-error constraint literal %r not found in any plugin source (vacuous)"
-        % token
-    )
-    home_hits = [(path, lineno) for path, lineno in hits if path == home]
-    assert home_hits, (
-        "liveness-read-error constraint literal %r missing from home %s"
-        % (token, os.path.relpath(home, PLUGIN))
-    )
-    copy_hits = [(path, lineno) for path, lineno in hits if path != home]
-    unregistered = sorted(
-        os.path.relpath(path, PLUGIN)
-        for path, _lineno in copy_hits
-        if path not in _LIVENESS_READ_ERROR_CONSTRAINT_COPY_REGISTER
-    )
-    assert not unregistered, (
-        "unregistered liveness-read-error constraint copy — add to "
-        "_LIVENESS_READ_ERROR_CONSTRAINT_COPY_REGISTER: %r" % unregistered
-    )
-
-
-def test_liveness_read_error_constraint_copy_register_content():
-    """§11: liveness_cache.LIVENESS_READ_ERROR_CONSTRAINT and seat_map.py stay pinned."""
-    _assert_liveness_read_error_constraint_pinned()

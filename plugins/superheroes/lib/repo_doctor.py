@@ -338,6 +338,18 @@ def _parse_layer_provenance(text):
     return out
 
 
+def _core_verify(root):
+    """(core.md verifyCommand or None, refusal message or None). The named #1331 refusal is
+    reported, never swallowed into "no verify command"; any other read failure stays fail-open."""
+    try:
+        rec = core_md.read(root)
+    except core_md.VerifyCommandMalformed as exc:
+        return None, str(exc)
+    except Exception:
+        return None, None
+    return (rec.get("verifyCommand") if rec else None) or None, None
+
+
 def _doctor_unified(root, plugin_ver, rubric_ver, env, layer_text):
     """Staleness check for unified layout (core.md + layer) without legacy provenance."""
     prov = _parse_layer_provenance(layer_text)
@@ -353,12 +365,7 @@ def _doctor_unified(root, plugin_ver, rubric_ver, env, layer_text):
         "src-dirs": None,
         "verify-command": None,
     }
-    try:
-        rec = core_md.read(root)
-        if rec and rec.get("verifyCommand"):
-            prof["verify-command"] = rec["verifyCommand"]
-    except Exception:
-        pass
+    prof["verify-command"], refusal = _core_verify(root)
     drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env)
     signal_hash = _hash_drift(drift)
     nudge_acked = bool(signal_hash) and signal_hash in prof["nudge-ack"]
@@ -367,12 +374,12 @@ def _doctor_unified(root, plugin_ver, rubric_ver, env, layer_text):
         message = "review-crew profile drift: " + "; ".join(drift) \
             + " — consider re-running review-init"
     return {
-        "ok": True,
+        "ok": refusal is None,
         "readable": True,
         "drift": drift,
         "signal_hash": signal_hash,
         "nudge_acked": nudge_acked,
-        "message": message,
+        "message": refusal or message,
     }
 
 
@@ -404,13 +411,7 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
         return _soft_fail()
 
     try:
-        core_verify = None
-        try:
-            rec = core_md.read(root)
-            if rec and rec.get("verifyCommand"):
-                core_verify = rec["verifyCommand"]
-        except Exception:
-            core_verify = None
+        core_verify, refusal = _core_verify(root)
         if core_verify is not None:
             prof["verify-command"] = core_verify
         drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env)
@@ -421,12 +422,12 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
             message = "review-crew profile drift: " + "; ".join(drift) \
                 + " — consider re-running review-init"
         return {
-            "ok": True,
+            "ok": refusal is None,
             "readable": True,
             "drift": drift,
             "signal_hash": signal_hash,
             "nudge_acked": nudge_acked,
-            "message": message,
+            "message": refusal or message,
         }
     except Exception:
         # Internal failure mid-check → degrade to a readable-but-soft result so

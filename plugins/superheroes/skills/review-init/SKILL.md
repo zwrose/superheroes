@@ -3,7 +3,7 @@ name: review-init
 description: "Internal helper reached from `superheroes:configure` to refresh review-crew's calibration layer for a project. Not a front door; owners run `superheroes:configure` instead."
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # review-init
 
@@ -27,7 +27,7 @@ Run these and read the results; do not ask the user what you can observe:
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 # Package manager / stack
 ls "$ROOT"/package.json "$ROOT"/pyproject.toml "$ROOT"/Cargo.toml "$ROOT"/go.mod 2>/dev/null
-# Verify-command candidate (JS): a "check"/"test" script
+# Verify-command candidates (JS): a fast-check script first, else a "check"/"test" script
 [ -f "$ROOT/package.json" ] && python3 -B -c "import json;print(json.load(open('$ROOT/package.json')).get('scripts',{}))" 2>/dev/null
 # Default branch
 git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' \
@@ -39,8 +39,10 @@ ls -d "$ROOT"/src "$ROOT"/lib "$ROOT"/app 2>/dev/null
 ```
 
 Derive: **package manager / framework / test runner**; a **verify-command**
-candidate (`npm run check` → `npm test` → `pnpm/yarn` equivalents → `make check`
-→ none); **default-branch** (the `git symbolic-ref` result, else current branch);
+candidate — prefer the project's **fast iteration check**, a single script it already defines that
+runs lint, types or the touched tests (for example `check:fast` or `test:changed`); only when it has
+none, fall back to the full gate (`npm run check` → `npm test` → `pnpm/yarn` equivalents →
+`make check`) → none (`skills/configure/reference/set-up.md` § 3 says why); **default-branch** (the `git symbolic-ref` result, else current branch);
 **forge** (`github` if the remote host is github.com, `gitlab` if gitlab.*, else
 `none`); **dep-set** (top-level dependency names, with major version where cheap);
 **src-dirs**. Also **read `CLAUDE.md`** (root and any nested) to learn what
@@ -49,7 +51,7 @@ conventions/threat context it already states.
 Read the engine versions for provenance:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 sed -n '1p' "$ROOT_DIR/rubric/review-base.md"          # -> <!-- rubric-version: N -->
 python3 -B -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])"
 ```
@@ -61,7 +63,7 @@ global per-repo store). `review_store.py resolve` returns the resolved path, or
 `location: none` when no profile exists yet:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 RES=$(python3 -B "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
   || RES='{"location":"none","exists":false,"path":null}'
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
@@ -78,7 +80,7 @@ storage location and mint the path before writing:
 <!-- decision-point: id=review-init-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-crew-layer -->
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 if [ "$LOCATION" = "none" ]; then
   DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
@@ -120,7 +122,10 @@ answered.
 Defaults when detection + `CLAUDE.md` did not answer:
 
 1. **Threat model** — `strict` (provisional default when unknown).
-2. **Verify command** — if none was detected, `mode: review-only` (provisional default).
+2. **Verify command** — if none was detected, `mode: review-only` (provisional default). If
+   only a full-gate candidate was detected, propose it and disclose that
+   `skills/configure/reference/set-up.md` § 3 advises a fast iteration check, which the owner can
+   set through `/superheroes:configure`.
 3. **Scope exclusions** — none (provisional default).
 
 If **no `CLAUDE.md` exists**, record a minimal conventions pointer in `## Conventions` (point at
@@ -168,7 +173,7 @@ Fail-closed guard below — not the mechanical-carrier redesign: it refuses to e
 piped input is missing, because `write-layer` replaces the entire layer file.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 STATUS=provisional   # always on this create path; confirmed only via /superheroes:configure (FR-5)
 [ -n "$CORE_FACTS_JSON" ] && [ -n "$REVIEW_LAYER_BODY" ] || { echo "assembly produced empty payloads; halting rather than writing an empty layer" >&2; exit 1; }
 # CREATE: shared facts → core.md (lock-guarded, reuse-not-clobber FR-6/FR-7; a

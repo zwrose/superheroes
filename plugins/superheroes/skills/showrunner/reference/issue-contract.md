@@ -15,7 +15,7 @@
 - [The DoD bar](#the-dod-bar)
 - [Currency](#currency)
 - [The standing NFR vet row](#the-standing-nfr-vet-row)
-- [Vocabulary (drift-tested)](#vocabulary-drift-tested)
+- [Vocabulary](#vocabulary)
 
 # Issue contract
 
@@ -120,10 +120,10 @@ Anchor hold, the reported token is the header-form refusal.
 > not claimed as one.
 
 **Invocation:** write the issue body to a file, then run (from a plugin-cache install,
-`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/issue_contract.py" check-build-ready --body-file <path>
 ```
 
@@ -156,19 +156,19 @@ A routed issue that carries the four is gradable at vet without asking anyone wh
 
 The [priority tiers](../../../rubric/glossary.md#priority-tiers) entry defines the tiers. This
 section carries what each tier **commits to**. How a tier is graded — the evidence bar, the grid
-of severity ladder and evidence tier, and the carve-out that lets a P2 file — belongs to the intake
+of severity ladder and evidence tier, and the filing rule every tier obeys — belongs to the intake
 contract, whose one home is [`owner-decisions.md`](owner-decisions.md).
 
 **Intake grading.** Pipe the tier claim as JSON on stdin to `front_door grade` in
 [`../../../lib/front_door.py`](../../../lib/front_door.py) — from a plugin-cache install,
-`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`:
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 echo '<claim-json>' | python3 -B "$ROOT_DIR/lib/front_door.py" grade --cwd <repo> [--root <store>]
 ```
 
-reading the JSON result from stdout. **Only an outcome of `graded` may proceed to filing**; every
+reading the JSON result from stdout. **Only an outcome of `graded` may proceed toward filing**, and filing still waits on the owner's word; every
 other outcome **queues or refuses** — including the named refusal tokens `ladder-unstamped`,
 `band-unknown`, `evidence-argued`, `p0-band-excluded`, and `profile-absent`.
 
@@ -181,10 +181,10 @@ other outcome **queues or refuses** — including the named refusal tokens `ladd
 - **P1, enters the standing budget soon.** The owner's agreement, batched cheaply as a word at a
   walk. **P1s age**: at each [gardening pass](../../../rubric/glossary.md#gardening-pass) each old
   P1 is proposed for promotion, demotion, or decline. **None are immortal.**
-- **P2, should eventually happen.** The one carve-out from *no filing without the owner's word*,
-  granted by the intake contract and exercised only where that contract grants it: the item files on
-  the advisor's authority **only after intake grading returns `graded`**, with its grading recorded,
-  and the evidence bar is what earned that.
+- **P2, should eventually happen.** Graded P2 only after intake grading returns `graded`, with its
+  grading recorded, and the evidence bar is what earned that. Like every tier it files only on the
+  owner's word: the proposal waits on the collector as an owner call carrying its grading
+  ([the filing rule](owner-decisions.md#the-tiers-and-the-filing-rule)).
   Lives in the backlog, out of default views, and drains mostly through folding in.
 - **Declined, below the bar.** A line in the
   [declined registry](../../../rubric/glossary.md#declined-registry) with a named
@@ -198,15 +198,24 @@ its roadmap, and a project extends it rather than minting a second one.
 1. **At routing, any issue estimated over 1,000 non-test lines carries one of two things**: a
    **stack or layer design** (one concern per layer, merged bottom-up, using the project's
    sanctioned stacking tool) or a **recorded reason a single pull request is right**. The estimate is
-   a routing estimate, never a measurement.
+   a routing estimate, never a measurement. When the design is a stack, its planned layers are
+   filed as sub-issues per
+   [Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue).
 2. **This is a mandatory consideration with a durable trace, never a mandatory split.** A reader who
    takes this for a split rule has misread it.
 3. **The stacking tool is a project configuration item**; its home is the
    [configure profile](../../configure/SKILL.md). Name no specific tool.
-4. Mid-build growth is covered by the existing tripwire at twice the brief's estimate, which lives in
-   the [workhorse charter](../../workhorse/SKILL.md).
+4. Mid-build growth is covered by the size rule in
+   [review-discipline.md](../../../rubric/review-discipline.md#size) § Size.
 5. **The slot is recorded in the issue body beside the lane call and the presentation call**, at the
    same moment the kind label is applied.
+6. **An advisor-launched build order names the advisor session; a light order also carries an
+   estimate.** The order written into a build-ready issue names the advisor session the builder
+   messages at the size step, by the name the host's session listing shows; a build the owner drives
+   interactively has no advisor to name. A light-lane order — which gets no brief — also states its
+   non-test line estimate (§ Size). The issue body is the carrier: a launched builder
+   receives only the command, the issue pointer and the standing rulings, so the launch premise adds
+   nothing here.
 
 ## Machinery, product, and the two kind labels
 
@@ -270,7 +279,7 @@ the advisor made was material, or was craft, **that example lands in the profile
 half or in the thread. **Nothing checks it**, and a classifier for it is declined at the door.
 
 **What reads it.** The scope exception and the red-train fix in the merge doctrine, the fold rule at
-routing, the craft-versus-product boundary in the P2 carve-out, and the vet's judgment about a
+routing, and the vet's judgment about a
 deviation all turn on "material".
 
 ## Anchor resolution
@@ -516,37 +525,8 @@ requirements **by name with their fit criteria**:
   positioned everywhere as guidelines with disclosed overrides; *fit criterion:* no charter or
   gate turns either number into a hard block.
 
-## Vocabulary (drift-tested)
+## Vocabulary
 
-The Python module `issue_contract.py` is the authoritative home for these tokens; this list is
-checked against it.
-
-**Slots** (in order):
-
-- `Anchor`
-- `What`
-- `DoD`
-
-The Anchor slot's rendered header form is `Anchor (<kind>):`.
-
-**Anchor kinds** (exactly one per Anchor):
-
-- `spec-section`
-- `receipt`
-- `ruling`
-
-**Refusal reasons** (build-ready marking declined):
-
-- `anchor-slot-missing`
-- `anchor-slot-empty`
-- `anchor-kind-missing`
-- `anchor-kind-unrecognized`
-- `anchor-kind-multiple`
-- `body-unreadable`
-
-**Slot statuses** (per-slot reporting in the JSON result):
-
-- `missing` — the slot header is not present in the body
-- `empty` — the slot header is present but has no content
-- `filled` — the slot header is present and has content
-- `unknown` — the body could not be read (`body-unreadable`); no slot reading was taken
+Slots, the Anchor header form, anchor kinds, build-ready refusal reasons, and slot statuses are
+defined in `lib/issue_contract.py` (`SLOTS`, `ANCHOR_HEADER_FORM`, `ANCHOR_KINDS`, `REFUSALS`,
+`SLOT_STATUSES`).

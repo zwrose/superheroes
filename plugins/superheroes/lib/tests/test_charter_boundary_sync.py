@@ -55,12 +55,10 @@ clauses.
 Copy-holder disposition (§11.2 caveat — adding a copy means extending the table):
 
 - **``rubric/review-discipline.md``** — authoritative home for the cross-lane invariants.
-- **``skills/showrunner/SKILL.md``** — resolve-upward, not-engaged-never-passes, waiver-bounds,
-  bounded-acceptance, and third-rework-stop invariant rows.
-- **``skills/workhorse/SKILL.md``** — resolve-upward, not-engaged-never-passes, bounded-acceptance
-  (§ ``## 10. Review before handback``), and third-rework-stop (§
-  ``## 7. Delegate every implementation (lane-scoped — no size exception)``); deliberately excluded
-  from the waiver-bounds row because micro is the showrunner's lane, not an oversight.
+- **``skills/showrunner/SKILL.md``** — resolve-upward, not-engaged-never-passes, and waiver-bounds
+  invariant rows.
+- **``skills/workhorse/SKILL.md``** — resolve-upward and not-engaged-never-passes; deliberately
+  excluded from the waiver-bounds row because micro is the showrunner's lane, not an oversight.
 - **``skills/workhorse/SKILL.md``** and **``skills/detective/SKILL.md``** — the diagnosis/fix
   boundary (§ workhorse preamble and § ``## The boundary — both ways``): each charter's half of the
   two-sided fact plus the shared no-flag clause, pinned as clause-presence sentinels — paraphrases,
@@ -113,8 +111,6 @@ _EXPECTED_INVARIANT_NAMES = frozenset({
     "resolve-upward",
     "not-engaged-never-passes",
     "waiver-bounds",
-    "bounded-acceptance",
-    "third-rework-stop",
 })
 
 _EXPECTED_COPY_HOLDERS = {
@@ -129,22 +125,12 @@ _EXPECTED_COPY_HOLDERS = {
     "waiver-bounds": frozenset({
         "skills/showrunner/SKILL.md",
     }),
-    "bounded-acceptance": frozenset({
-        "skills/showrunner/SKILL.md",
-        "skills/workhorse/SKILL.md",
-    }),
-    "third-rework-stop": frozenset({
-        "skills/showrunner/SKILL.md",
-        "skills/workhorse/SKILL.md",
-    }),
 }
 
 _EXPECTED_SHARED_CLAUSE_COUNTS = {
     "resolve-upward": 5,
     "not-engaged-never-passes": 5,
     "waiver-bounds": 3,
-    "bounded-acceptance": 4,
-    "third-rework-stop": 3,
 }
 
 _EXPECTED_HOLDER_CLAUSE_COUNTS = {
@@ -173,21 +159,6 @@ _EXPECTED_HOME_SECTIONS = {
         "quiet-failure question": "### Micro — owner authorization",
         "single named exception": "### Micro — owner authorization",
     },
-    "bounded-acceptance": {
-        "no new Critical or Important finding in a review round on the final head": (
-            "### Bounded acceptance — prose-contract DoDs"
-        ),
-        "after a stated number of rounds": "### Bounded acceptance — prose-contract DoDs",
-        "with Minor residuals disclosed": "### Bounded acceptance — prose-contract DoDs",
-        "unterminating bar can only be abandoned": (
-            "### Bounded acceptance — prose-contract DoDs"
-        ),
-    },
-    "third-rework-stop": {
-        "a third rework of the same surface is the tripwire": "### The third-rework tripwire",
-        "stopping and handing the design signal up satisfies it": "### The third-rework tripwire",
-        "a formal park binds when the lane has not converged": "### The third-rework tripwire",
-    },
 }
 
 _EXPECTED_HOLDER_SECTIONS = {
@@ -201,16 +172,6 @@ _EXPECTED_HOLDER_SECTIONS = {
     },
     "waiver-bounds": {
         "skills/showrunner/SKILL.md": "## Micro — hard-line edit",
-    },
-    "bounded-acceptance": {
-        "skills/showrunner/SKILL.md": "## Your duties",
-        "skills/workhorse/SKILL.md": "## 10. Review before handback",
-    },
-    "third-rework-stop": {
-        "skills/showrunner/SKILL.md": "## Your duties",
-        "skills/workhorse/SKILL.md": (
-            "## 7. Delegate every implementation (lane-scoped — no size exception)"
-        ),
     },
 }
 
@@ -297,56 +258,6 @@ _INVARIANT_TABLE = [
                 "owner-only, per change, never a standing grant; "
                 "the risk must be stated explicitly",
             ],
-        },
-    },
-    {
-        "name": "bounded-acceptance",
-        "clauses": [
-            {
-                "text": (
-                    "no new Critical or Important finding in a review round on the final head"
-                ),
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-            {
-                "text": "after a stated number of rounds",
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-            {
-                "text": "with Minor residuals disclosed",
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-            {
-                "text": "unterminating bar can only be abandoned",
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-        ],
-        "copy_holder_sections": {
-            "skills/showrunner/SKILL.md": "## Your duties",
-            "skills/workhorse/SKILL.md": "## 10. Review before handback",
-        },
-    },
-    {
-        "name": "third-rework-stop",
-        "clauses": [
-            {
-                "text": "a third rework of the same surface is the tripwire",
-                "home_section": "### The third-rework tripwire",
-            },
-            {
-                "text": "stopping and handing the design signal up satisfies it",
-                "home_section": "### The third-rework tripwire",
-            },
-            {
-                "text": "a formal park binds when the lane has not converged",
-                "home_section": "### The third-rework tripwire",
-            },
-        ],
-        "copy_holder_sections": {
-            "skills/showrunner/SKILL.md": "## Your duties",
-            "skills/workhorse/SKILL.md": (
-                "## 7. Delegate every implementation (lane-scoped — no size exception)"
-            ),
         },
     },
 ]
@@ -1177,62 +1088,3 @@ def test_negative_empty_section_body_fails_clause_check():
     }]
     with pytest.raises(AssertionError, match=r"clause missing from .+ \(section ## Build lanes\)"):
         _check_copy_holder_clauses(table, read_text)
-
-
-def test_negative_third_rework_stop_out_of_section_match():
-    """Regression: tempted-table copy must not satisfy section 7 bounds.
-
-    Mutant axis: real workhorse charter keeps third-rework clauses only in the
-    ``## When you're tempted`` table while §7 body is stripped — the older
-    section-scope synthetic tests do not read the real charter file.
-    """
-    workhorse_rel = "skills/workhorse/SKILL.md"
-    section_heading = (
-        "## 7. Delegate every implementation (lane-scoped — no size exception)"
-    )
-    real_text = _read_plugin(workhorse_rel)
-    tempted_heading = "## When you're tempted"
-    tempted_text = _file_section(workhorse_rel, tempted_heading)
-    for clause in (
-        "a third rework of the same surface is the tripwire",
-        "stopping and handing the design signal up satisfies it",
-        "a formal park binds when the lane has not converged",
-    ):
-        assert clause in tempted_text, (
-            f"third-rework clause must remain in {workhorse_rel} {tempted_heading!r} "
-            f"for this negative test to prove section scoping — re-sync: {clause!r}"
-        )
-    lines = real_text.splitlines()
-    start = next(
-        i for i, line in enumerate(lines) if line.strip() == section_heading
-    )
-    start_level = _heading_level(lines[start])
-    end = len(lines)
-    for i in range(start + 1, len(lines)):
-        level = _heading_level(lines[i])
-        if level is not None and level <= start_level:
-            end = i
-            break
-    original_section = "\n".join(lines[start:end])
-    stripped_section = "\n".join([
-        section_heading,
-        "Delegate section without third-rework clauses here.",
-    ])
-    mutated_text = real_text.replace(original_section, stripped_section, 1)
-
-    def read_text(rel):
-        if rel == workhorse_rel:
-            return mutated_text
-        return _read_plugin(rel)
-
-    with pytest.raises(
-        AssertionError,
-        match=(
-            r"clause missing from skills/workhorse/SKILL\.md \(section ## 7\. "
-            r"Delegate every implementation \(lane-scoped — no size exception\)\)"
-        ),
-    ):
-        third_rework_table = [
-            row for row in _INVARIANT_TABLE if row["name"] == "third-rework-stop"
-        ]
-        _check_copy_holder_clauses(third_rework_table, read_text)

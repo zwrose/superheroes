@@ -60,7 +60,10 @@ def gather_signals(cwd, root=None):
     try:
         import core_md
         config_unreadable = core_md.CONFIG_UNREADABLE
-        core_rec = core_md.read(cwd, root)
+        try:
+            core_rec = core_md.read(cwd, root)
+        except core_md.VerifyCommandMalformed:
+            core_rec = None  # #1331: the gate below reports it as core-md-unreadable, named
         gate_cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)
         core_status = gate_cfg.status
         if core_status == config_unreadable:

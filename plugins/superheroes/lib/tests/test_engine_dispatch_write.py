@@ -10,6 +10,8 @@ import time
 
 import pytest
 
+from bite_support import _stamp_ended_from_native_result
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -51,6 +53,11 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
     journal_root = str(tmp_path / "dispatch-journal-root")
     os.makedirs(journal_root, exist_ok=True)
     monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
+    # #1554: the claude write sandbox resolver probes `uv`; pin it absent for determinism.
+    real_which = ED.shutil.which
+    monkeypatch.setattr(
+        ED.shutil, "which", lambda cmd, *a, **k: None if cmd == "uv" else real_which(cmd, *a, **k),
+    )
     yield
 
 
@@ -106,9 +113,25 @@ def _legacy_build_ok_stdout():
 
 
 def _contracted_fed_prompt(base):
-    if base and not base.endswith("\n"):
-        return base + "\n" + EA.WRITE_REPORT_CONTRACT
-    return base + EA.WRITE_REPORT_CONTRACT
+    order_part = base
+    if order_part and not order_part.endswith("\n"):
+        order_part = order_part + "\n"
+    prefix = order_part + ("\n" if order_part else "")
+    return prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + EA.WRITE_REPORT_CONTRACT
+
+
+def _expected_staged_write_prompt(base, contract):
+    order_part = base
+    if order_part and not order_part.endswith("\n"):
+        order_part = order_part + "\n"
+    prefix = order_part + ("\n" if order_part else "")
+    return prefix + ED.WRITE_DISPATCH_PROCESS_RULE + "\n\n" + contract
+
+
+_NO_PATTERN_KILL_RULE_LITERAL = (
+    "Never stop processes by name or pattern (`pkill`, `killall`, `kill` on a `pgrep` match); "
+    "other sessions share this machine. Stop only a PID you started yourself."
+)
 
 
 def _finish_codex_write_runner(argv, stdout, prompt_bytes=None, timed_out=False, rc=0, stderr=""):
@@ -125,12 +148,39 @@ def _resolve_native_result_path(argv, prompt_bytes=None):
     return None
 
 
+def _test_extract_write_report_tail(text):
+    """Test-local strict write-report tail JSON extraction for fake runners."""
+    try:
+        if not isinstance(text, str) or not text:
+            return None
+        lines = text.split("\n")
+        last_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == EA.WRITE_REPORT_SENTINEL:
+                last_idx = i
+        if last_idx is None:
+            return None
+        after = "\n".join(lines[last_idx + 1 :])
+        if not after:
+            return None
+        dec = json.JSONDecoder()
+        obj, end = dec.raw_decode(after.lstrip())
+        if not isinstance(obj, dict):
+            return None
+        tail = after.lstrip()[end:]
+        if tail.strip():
+            return None
+        return obj
+    except Exception:
+        return None
+
+
 def _write_native_write_result(argv, stdout, prompt_bytes=None):
     result_path = _resolve_native_result_path(argv, prompt_bytes)
     if result_path is None:
         return
     text = stdout if isinstance(stdout, str) else ""
-    obj = EA.extract_write_report(text)
+    obj = _test_extract_write_report_tail(text)
     if obj is None:
         return
     lines = text.split("\n")
@@ -790,38 +840,6 @@ def test_worktree_dirtied_refuses_retry(tmp_path):
     assert res["attempts"] == 1
 
 
-# --- WO-B: write report recovery ---------------------------------------------
-
-
-def _install_write_salvage(monkeypatch, recover):
-    monkeypatch.setattr(ED.engine_adapter, "salvage_write_report", recover, raising=False)
-
-
-def _write_report(*, ok=True):
-    return {
-        "report": {
-            "ok": ok,
-            "signal": "ok" if ok else "tests_failed",
-            "evidence": {"testFailed": not ok, "testPassed": ok},
-        },
-        "structured": True,
-        "requiresManualRead": False,
-        "salvaged": True,
-    }
-
-
-def _prose_write_report():
-    return {
-        "report": None,
-        "structured": False,
-        "requiresManualRead": True,
-        "excerpt": "scrubbed prose pointer",
-        "excerptBytes": 22,
-        "salvaged": True,
-        "truncated": False,
-    }
-
-
 def test_write_run_opened_records_fed_prompt(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     prompt_text = "Implement exactly the assigned work order.\n"
@@ -837,24 +855,10 @@ def test_write_run_opened_records_fed_prompt(tmp_path):
     records, _ = ED._journal_read(str(tmp_path / "run"))
     opened = next(record for record in records if record.get("kind") == "run-opened")
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
-    expected = prompt_text + ERC.write_result_contract_from_schema(schema)
+    expected = _expected_staged_write_prompt(
+        prompt_text, ERC.write_result_contract_from_schema(schema),
+    )
     assert opened["fedPrompt"] == expected
-
-
-def test_write_salvage_scan_exception_leaves_terminal_forfeit_unchanged(tmp_path, monkeypatch):
-    wt, _main = _linked_worktree(tmp_path)
-
-    def boom(*_args):
-        raise RuntimeError("salvage boom")
-
-    _install_write_salvage(monkeypatch, boom)
-    res = _dispatch_write(tmp_path, FakeRunner([
-        (_build_ok_stdout(), True, 0, ""),
-        (_build_ok_stdout(), True, 0, ""),
-    ]), cwd=wt, seat=_cursor_seat())
-
-    assert res["forfeited"] is True
-    assert "salvage" not in res
 
 
 def test_write_success_terminal(tmp_path):
@@ -1761,7 +1765,6 @@ def test_dispatch_mechanics_names_item_check_constants():
     tokens_end = doc.find("\n\n", tokens_start)
     tokens_span = doc[tokens_start:tokens_end]
     assert "`%s`" % ED.ITEM_DETAIL_UNDELIVERED in tokens_span
-    assert "`%s`" % ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED in tokens_span
     assert "`%s:<cause>`" % ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE in tokens_span
 
     causes_start = doc.find("causes include", tokens_start)
@@ -2052,7 +2055,9 @@ def test_write_open_contracts_prompt_once_to_journal_file_and_engine(tmp_path):
     res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path)
     assert res["ok"] is True
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_WRITE)
-    expected = base + ERC.write_result_contract_from_schema(schema)
+    expected = _expected_staged_write_prompt(
+        base, ERC.write_result_contract_from_schema(schema),
+    )
     run_dir = str(tmp_path / "run")
     records, _ = ED._journal_read(run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")
@@ -2063,6 +2068,45 @@ def test_write_open_contracts_prompt_once_to_journal_file_and_engine(tmp_path):
     with open(os.path.join(run_dir, ED.PROMPT_NAME), encoding="utf-8") as fh:
         assert fh.read() == expected
     assert fake.calls[0]["prompt_bytes"] == expected.encode("utf-8")
+
+
+@pytest.mark.parametrize("vendor", ["codex", "cursor", "claude"])
+def test_write_prompt_carries_no_pattern_kill_rule(tmp_path, monkeypatch, vendor):
+    wt, _main = _linked_worktree(tmp_path)
+    base = "Implement exactly the assigned work order.\n"
+    prompt_path = _prompt(tmp_path, base)
+    if vendor == "claude":
+        _ensure_claude_config_dir(tmp_path, monkeypatch)
+        seat = _claude_seat()
+        fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    elif vendor == "codex":
+        seat = _codex_seat()
+        fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    else:
+        seat = _cursor_seat()
+        fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path, seat=seat)
+    assert res["ok"] is True
+    run_dir = str(tmp_path / "run")
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    schema = ERC.declared_schema(vendor, ERC.RUN_KIND_WRITE)
+    delivery = ERC.result_delivery(vendor, opened.get("claudeMode") if vendor == "claude" else None)
+    contract = ERC.write_result_contract_from_schema(schema, delivery=delivery)
+    expected = _expected_staged_write_prompt(base, contract)
+    staged_path = os.path.join(run_dir, ED.PROMPT_NAME)
+    with open(staged_path, encoding="utf-8") as fh:
+        staged = fh.read()
+    assert staged == expected
+    assert opened["fedPrompt"] == expected
+    engine_prompt = fake.calls[0]["prompt_bytes"].decode("utf-8")
+    for blob in (staged, opened["fedPrompt"], engine_prompt):
+        assert blob.count(ED.WRITE_DISPATCH_PROCESS_RULE) == 1
+        assert _NO_PATTERN_KILL_RULE_LITERAL in blob
+        assert blob.startswith(base)
+        rule_at = blob.index(ED.WRITE_DISPATCH_PROCESS_RULE)
+        assert rule_at > len(base.rstrip("\n"))
+        assert blob.index(contract) > rule_at
 
 
 def test_write_contracted_report_success_end_to_end(tmp_path):
@@ -2083,303 +2127,6 @@ def test_write_contracted_report_success_end_to_end(tmp_path):
     assert res["terminal"] is True
     assert res["signal"] == "ok"
     assert res["itemCheck"]["missing"] == []
-
-
-def _report_missing_base_state(tmp_path, wt, *, expected_items=None, fed_prompt=None,
-                               deliver_expected_items=True):
-    run_dir = str(tmp_path / "run")
-    os.makedirs(run_dir, exist_ok=True)
-    wt_real = os.path.realpath(wt)
-    baseline = ED._worktree_baseline(wt_real)
-    base_prompt = "Build this.\n"
-    if fed_prompt is None:
-        fed_prompt = _contracted_fed_prompt(base_prompt)
-    opened = {
-        "runKind": ED.RUN_KIND_WRITE,
-        "engine": "codex",
-        "roleKind": "build",
-        "cwd": wt_real,
-        "fedPrompt": fed_prompt,
-        "baseSha": _git(wt, "rev-parse", "HEAD").stdout.strip(),
-        "expectedItems": expected_items,
-        "baselineDirty": {},
-    }
-    if expected_items:
-        opened["baselineDirty"] = ED._baseline_dirty_map(wt_real, expected_items) or {}
-        if deliver_expected_items:
-            for item in expected_items:
-                target = os.path.join(wt_real, item)
-                parent = os.path.dirname(target)
-                if parent:
-                    os.makedirs(parent, exist_ok=True)
-                with open(target, "w", encoding="utf-8") as fh:
-                    fh.write("new\n")
-    state = {
-        "opened": opened,
-        "attempts": {
-            1: {
-                "ended": {
-                    "exit": 0,
-                    "timedOut": False,
-                    "refusal": None,
-                },
-            },
-        },
-    }
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write("prose only, no report tail\n")
-    return run_dir, state
-
-
-def _missing_items_delivered_detail(run_dir, state, attempt):
-    got = ED._write_report_missing_items_delivered_detail(run_dir, state, attempt)
-    if got is None:
-        return None
-    return got[0]
-
-
-def test_report_missing_classifier_clause1_timed_out_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    state["attempts"][1]["ended"]["timedOut"] = True
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-
-
-def test_report_missing_classifier_clause1_refusal_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    state["attempts"][1]["ended"]["refusal"] = "attempt-died-unrecorded"
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-
-
-def test_report_missing_classifier_clause1_exit_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    state["attempts"][1]["ended"]["exit"] = 1
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-
-
-def test_report_missing_classifier_clause2_uncontracted_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-        fed_prompt="Build this.\n",
-    )
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-
-
-def test_report_missing_classifier_clause4_empty_expected_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=[],
-    )
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-
-
-def test_report_missing_classifier_clause4_absent_expected_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=None,
-    )
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-
-
-def test_report_missing_classifier_clause5_missing_path_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["missing.txt"],
-        deliver_expected_items=False,
-    )
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-
-
-def test_report_missing_classifier_clause3_gradeable_report_not_emitted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(_build_ok_stdout())
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-
-
-def test_report_missing_classifier_bite_proof_clause1_timed_out(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    # green baseline
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    # red: neutralize clause 1
-    state["attempts"][1]["ended"]["timedOut"] = True
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    # restore
-    state["attempts"][1]["ended"]["timedOut"] = False
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-
-
-def test_report_missing_classifier_bite_proof_clause1_refusal(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["attempts"][1]["ended"]["refusal"] = "attempt-died-unrecorded"
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["attempts"][1]["ended"]["refusal"] = None
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-
-
-def test_report_missing_classifier_bite_proof_clause1_exit(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["attempts"][1]["ended"]["exit"] = 1
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["attempts"][1]["ended"]["exit"] = 0
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-
-
-def test_report_missing_classifier_bite_proof_clause2_uncontracted(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["opened"]["fedPrompt"] = "Build this.\n"
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["opened"]["fedPrompt"] = _contracted_fed_prompt("Build this.\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-
-
-def test_report_missing_classifier_bite_proof_clause3_gradeable_report(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write(_build_ok_stdout())
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    with open(stdout_path, "w", encoding="utf-8") as fh:
-        fh.write("prose only, no report tail\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-
-
-def test_report_missing_classifier_bite_proof_clause4_empty_expected(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["opened"]["expectedItems"] = []
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["opened"]["expectedItems"] = ["item.txt"]
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-
-
-def test_report_missing_classifier_bite_proof_clause4_absent_expected(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    state["opened"]["expectedItems"] = None
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    state["opened"]["expectedItems"] = ["item.txt"]
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-
-
-def test_report_missing_classifier_bite_proof_clause5_missing_path(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-    os.remove(target)
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    assert _missing_items_delivered_detail(run_dir, state, 1) == (
-        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
-    )
-
-
-def test_report_missing_classifier_all_five_emit_token(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir, state = _report_missing_base_state(
-        tmp_path, wt, expected_items=["item.txt"],
-    )
-    target = os.path.join(wt, "item.txt")
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write("new\n")
-    detail = _missing_items_delivered_detail(run_dir, state, 1)
-    assert detail == ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
 
 
 def test_write_legacy_uncontracted_resume_grades_like_parse_result(tmp_path):
@@ -2458,11 +2205,13 @@ def _execution_record_completed_write_attempt(
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 1.0, "stdoutBytes": len(stdout),
         "at": time.time(),
+    }, 1)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, **ended,
     })
 
 
@@ -2532,6 +2281,7 @@ _WRITE_RESOLVED_INPUT_KEYS = frozenset({
     "preflightTimeoutSource", "mode", "modeSource", "expectedResultKind",
     "expectedResultKindSource", "baseSha", "baseShaSource", "diffBase", "diffBaseSource",
     "progressPath", "progressPathSource", "journalRoot", "journalRootSource",
+    "claudeMode", "claudeModeSource",
 })
 
 
@@ -3050,11 +2800,13 @@ def _native_write_grade_state(tmp_path, obj, *, write_result=True, schema_mutato
     ED._journal_append(run_dir, {
         "kind": "attempt-started", "attempt": 1, "childPid": 1, "at": time.time(),
     })
-    ED._journal_append(run_dir, {
-        "kind": "attempt-ended", "attempt": 1,
+    ended = _stamp_ended_from_native_result(run_dir, {
         "exit": 0, "timedOut": False, "refusal": None,
         "wallSeconds": 1.0, "stdoutBytes": 0,
         "at": time.time(),
+    }, 1)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1, **ended,
     })
     records, _ = ED._journal_read(run_dir)
     return run_dir, ED._journal_state(records)
@@ -3182,8 +2934,8 @@ def test_native_write_report_survives_item_evidence_unavailable(tmp_path, monkey
     assert res["report"] == obj["report"]
 
 
-# axis: native codex write without result file forfeits dirtied, not report-missing-items-delivered.
-def test_native_write_delivered_items_without_result_is_not_report_missing(tmp_path):
+# axis: delivered scope items with no native result file forfeit worktree-dirtied with native-result-missing.
+def test_native_write_delivered_items_without_result_forfeits_worktree_dirtied(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     target = os.path.join(wt, "delivered.txt")
 
@@ -3200,7 +2952,6 @@ def test_native_write_delivered_items_without_result_is_not_report_missing(tmp_p
     assert res["forfeited"] is True
     assert res["detail"] == "worktree-dirtied-by-attempt"
     assert res["attemptDetail"] == "native-result-missing"
-    assert res["detail"] != ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
 
 
 # axis: terminal_refusal from _admit_native_write_result carries report without forfeit.
@@ -3390,6 +3141,210 @@ def test_cursor_write_prompt_and_grading_native(tmp_path):
     assert res["signal"] == "ok"
 
 
+def _dash_free_handoff_base(tmp_path):
+    base = tmp_path / "handoffbase"
+    base.mkdir()
+    return str(base)
+
+
+def _dashdash_run_dir(tmp_path):
+    run_dir = tmp_path / "scratch--dir" / "run"
+    run_dir.mkdir(parents=True)
+    return str(run_dir)
+
+
+def _collapsed_native_write_runner():
+    def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        result_path = _resolve_native_result_path(argv, prompt_bytes)
+        collapsed = re.sub(r"-{2,}", "-", result_path)
+        native = {
+            "ok": True, "signal": "ok", "report": "Receipt prose.",
+            "evidence": {"testFailed": False, "testPassed": True},
+        }
+        os.makedirs(os.path.dirname(collapsed), exist_ok=True)
+        with open(collapsed, "w", encoding="utf-8") as fh:
+            json.dump(native, fh, separators=(",", ":"))
+            fh.write("\n")
+        return _build_ok_stdout(), False, 0, ""
+    return runner
+
+
+def test_cursor_write_dashdash_injected_seam_ok(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+    fake = _PreservingNativeWriteFakeRunner([
+        _collapsed_native_write_runner(),
+        _collapsed_native_write_runner(),
+    ])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat(),
+    )
+    assert res.get("ok") is True, res
+    records, _ = ED._journal_read(run_dir)
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    assert started.get("nativeResultHandoffPath")
+    assert list(os.listdir(handoff_base)) == []
+
+
+def test_stage_prompt_canonical_path_without_dashdash_unchanged(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "plain-run")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat(),
+    )
+    assert res["ok"] is True
+    records, _ = ED._journal_read(run_dir)
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    attempt_prompt = open(started["attemptPromptPath"], encoding="utf-8").read()
+    p = ERC.result_file_path_from_prompt(attempt_prompt)
+    assert p == ED._native_result_path(run_dir, 1)
+    assert list(os.listdir(handoff_base)) == []
+    assert "nativeResultHandoffPath" not in started
+
+
+def test_dashdash_no_safe_base_refuses_before_spawn(tmp_path, monkeypatch):
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: None)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("engine must not run")
+
+    fake = FakeRunner([boom])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat())
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "native-result-path-unsafe"
+
+
+def test_dashdash_handed_path_with_dash_run_refuses(tmp_path, monkeypatch):
+    bad_base = tmp_path / "bad--base"
+    bad_base.mkdir()
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: str(bad_base))
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("engine must not run")
+
+    fake = FakeRunner([boom])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat())
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "native-result-path-unsafe"
+    assert list(os.listdir(bad_base)) == []
+
+
+def test_dashdash_symlink_oserror_refuses_before_spawn(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+
+    def deny_symlink(*_args, **_kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(ED.os, "symlink", deny_symlink)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("engine must not run")
+
+    fake = FakeRunner([boom])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_cursor_seat())
+    assert fake.calls == []
+    records, _ = ED._journal_read(run_dir)
+    ended = next(
+        r for r in records
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "native-result-path-unsafe"
+
+
+def test_dashdash_link_removed_on_later_staging_refusal(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+    prompt_path = _prompt(tmp_path)
+    seat = _cursor_seat()
+    built = EA.build_argv_result(seat, "build", {"cwd": wt})
+    assert built["reason"] is None, built
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "cursor", list(built["argv"]), ED.RUN_KIND_WRITE,
+    )
+    assert native_err is None
+    ED._journal_append(run_dir, {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "cursor",
+        "roleKind": "build", "orderId": "occupied-handoff",
+        "argv": argv, "cwd": wt, "timeout": 30, "retryTimeout": 30,
+        "promptPath": prompt_path, "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE, "nativeSchemaPath": native_schema_path,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    })
+    with open(os.path.join(run_dir, "prompt-attempt-1.md"), "w", encoding="utf-8") as fh:
+        fh.write("occupied\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    fake = FakeRunner([])
+    ok, detail = ED._spawn_attempt(run_dir, state, 1, run_engine=fake)
+    assert ok is True
+    assert detail == ""
+    assert fake.calls == []
+    ended = next(
+        r for r in ED._journal_read(run_dir)[0]
+        if r.get("kind") == "attempt-ended" and r.get("attempt") == 1
+    )
+    assert ended["refusal"] == "attempt-prompt-occupied"
+    assert list(os.listdir(handoff_base)) == []
+
+
+def test_codex_dashdash_run_dir_creates_no_link(tmp_path, monkeypatch):
+    handoff_base = _dash_free_handoff_base(tmp_path)
+    monkeypatch.setattr(ED, "_result_handoff_base", lambda: handoff_base)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = _dashdash_run_dir(tmp_path)
+    stdout = _build_ok_stdout()
+    symlink_calls = []
+    real_symlink = ED.os.symlink
+
+    def symlink_spy(src, dst, *args, **kwargs):
+        symlink_calls.append((src, dst))
+        return real_symlink(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(ED.os, "symlink", symlink_spy)
+
+    def codex_runner(argv, prompt_bytes, timeout, progress_cb, cwd):
+        return _finish_codex_write_runner(argv, stdout, prompt_bytes)
+
+    fake = FakeRunner([codex_runner])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_codex_seat())
+    assert res["ok"] is True
+    assert list(os.listdir(handoff_base)) == []
+    argv = fake.calls[0]["argv"]
+    assert "-o" in argv
+    assert argv[argv.index("-o") + 1] == ED._native_result_path(run_dir, 1)
+    records, _ = ED._journal_read(run_dir)
+    started = next(r for r in records if r.get("kind") == "engine-started")
+    assert "nativeResultHandoffPath" not in started
+    handoff_prefix = handoff_base if handoff_base.endswith(os.sep) else handoff_base + os.sep
+    for _src, dst in symlink_calls:
+        assert not (dst == handoff_base or dst.startswith(handoff_prefix))
+
+
 def _invalid_native_write_runner():
     def runner(argv, prompt_bytes, timeout, progress_cb, cwd):
         result_path = _resolve_native_result_path(argv, prompt_bytes)
@@ -3487,6 +3442,11 @@ def _claude_seat(model="sonnet", effort="high"):
     return _seat("claude", model, effort)
 
 
+def _implementer_claude_seat():
+    cell = MR.matrix_config("implementer", "claude")
+    return {"vendor": "claude", "model": cell[0], "effort": cell[1], "role": _WRITE_ROLE}
+
+
 def _ensure_claude_config_dir(tmp_path, monkeypatch, *, relative=None):
     if relative is not None:
         rel_dir = tmp_path / relative
@@ -3563,7 +3523,10 @@ def test_claude_write_open_records_native_channel_and_config_dir(tmp_path, monke
     with open(opened["nativeSchemaPath"], encoding="utf-8") as fh:
         schema_text = fh.read().rstrip("\n")
     assert opened["argv"][-2:] == ["--json-schema", schema_text]
-    built = EA.build_argv_result(seat, "build", {"cwd": opened["cwd"]})
+    built = EA.build_argv_result(
+        seat, "build",
+        {"cwd": opened["cwd"], "claudeWriteSandbox": opened["claudeWriteSandbox"]},
+    )
     assert opened["argv"][:-2] == built["argv"]
 
 
@@ -3635,3 +3598,208 @@ def test_claude_off_allowlist_seat_refused_at_spawn_gate_write(tmp_path, monkeyp
     assert res["ok"] is False
     assert res["attempts"] == 0
     assert _OFF_ALLOWLIST_CLAUDE in res["detail"]
+
+
+# --- C14 layer 2a: caller-facing claude mode threading (#1273 WO-1) ---
+
+
+def _plant_claude_write_journal_with_claude_mode(
+    tmp_path, run_dir, wt, seat, *, config_dir, claude_mode=None, order_id="claude-mode-test",
+):
+    os.makedirs(run_dir, exist_ok=True)
+    prompt_path = _prompt(tmp_path)
+    cwd = os.path.realpath(wt)
+    opts = {"cwd": cwd}
+    argv_mode = claude_mode
+    if argv_mode is not None and argv_mode != "print":
+        argv_mode = "print"
+    if argv_mode is not None:
+        opts["claudeMode"] = argv_mode
+    sandbox, sandbox_refusal = ED._resolve_claude_write_sandbox(cwd, timeout=None)
+    assert sandbox_refusal is None, sandbox_refusal
+    opts["claudeWriteSandbox"] = sandbox
+    built = EA.build_argv_result(seat, "build", opts)
+    assert built["reason"] is None, built
+    argv = built["argv"]
+    argv, native_err, native_schema_path = ED._open_native_channel_argv(
+        run_dir, "claude", list(argv), ED.RUN_KIND_WRITE, claude_mode=argv_mode,
+    )
+    assert native_err is None, native_err
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    content = _contracted_fed_prompt(base)
+    opened = {
+        "kind": "run-opened", "runKind": ED.RUN_KIND_WRITE, "engine": "claude",
+        "roleKind": "build", "orderId": order_id,
+        "argv": argv,
+        "cwd": cwd, "timeout": 30, "retryTimeout": 30,
+        "promptPath": os.path.join(run_dir, ED.PROMPT_NAME),
+        "viewPath": None, "baseSha": "abc",
+        "channel": ERC.CHANNEL_NATIVE,
+        "configDir": config_dir,
+        "claudeWriteSandbox": sandbox,
+        "fedPrompt": content,
+        "supervisorPid": 1, "at": time.time(),
+        "resolvedInputs": _spawn_gate_resolved_inputs(seat),
+    }
+    if claude_mode is not None:
+        opened["claudeMode"] = claude_mode
+    if native_schema_path is not None:
+        opened["nativeSchemaPath"] = native_schema_path
+    ED._journal_append(run_dir, opened)
+    return opened
+
+
+def test_claude_mode_unknown_refused_before_open_write(tmp_path):
+    fake = FakeRunner([])
+    res = _dispatch_write(
+        tmp_path, fake,
+        claude_mode="bogus",
+    )
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "claude-mode-unknown:'bogus'"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_write_claude_mode_background_refuses_retired_before_spawn(tmp_path):
+    # axis: write entry retired branch refuses background before spawn
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    res = _dispatch_write(
+        tmp_path, fake, claude_mode="background", seat=_implementer_claude_seat(),
+    )
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert len(fake.calls) == 0
+
+
+def test_main_dispatch_write_claude_mode_background_refuses_retired(
+    tmp_path, monkeypatch, capsys,
+):
+    # axis: CLI dispatch-write --claude-mode background refuses at entry
+    recorder = []
+
+    def _recorder(*args, **kwargs):
+        recorder.append((args, kwargs))
+        raise AssertionError("spawn must not run")
+
+    monkeypatch.setattr(ED, "_run_engine", _recorder)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-bg-cli")
+    seat = json.dumps(_implementer_claude_seat())
+    prompt = _prompt(tmp_path)
+    rc = ED.main([
+        "dispatch-write",
+        "--seat", seat,
+        "--prompt-path", prompt,
+        "--cwd", wt,
+        "--run-dir", run_dir,
+        "--claude-mode", "background",
+    ])
+    assert rc == 1
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["entryReason"] == "claude-mode-retired"
+    assert res["detail"] == "claude-mode-retired:background"
+    assert res["attempts"] == 0
+    assert recorder == []
+
+
+@pytest.mark.parametrize("claude_mode", [None, "print"])
+def test_dispatch_write_continuation_of_background_journal_refuses_retired(
+    tmp_path, monkeypatch, claude_mode,
+):
+    # axis: write continuation refuses journal claudeMode background
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-bg-continuation")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _implementer_claude_seat()
+    planted = _plant_claude_write_journal_with_claude_mode(
+        tmp_path, run_dir, wt, seat, config_dir=cfg, claude_mode="background",
+    )
+    with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+        fh.write(planted["fedPrompt"])
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    kwargs = {
+        "cwd": wt,
+        "run_dir": run_dir,
+        "seat": seat,
+        "order_id": "claude-mode-test",
+    }
+    if claude_mode is not None:
+        kwargs["claude_mode"] = claude_mode
+    res = _dispatch_write(tmp_path, fake, **kwargs)
+    assert res["detail"] == "run-dir-claude-mode-retired"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_write_continuation_of_unknown_mode_journal_refuses_unknown(
+    tmp_path, monkeypatch,
+):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "write-bogus-continuation")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _implementer_claude_seat()
+    planted = _plant_claude_write_journal_with_claude_mode(
+        tmp_path, run_dir, wt, seat, config_dir=cfg, claude_mode="bogus",
+    )
+    with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+        fh.write(planted["fedPrompt"])
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    res = _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt,
+        run_dir=run_dir,
+        seat=seat,
+        order_id="claude-mode-test",
+    )
+    assert res["detail"] == ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_UNKNOWN
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_legacy_write_journal_without_claude_mode_continues_with_explicit_print(
+    tmp_path, monkeypatch,
+):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "legacy-explicit-print")
+    cfg = _ensure_claude_config_dir(tmp_path, monkeypatch)
+    seat = _implementer_claude_seat()
+    planted = _plant_claude_write_journal_with_claude_mode(
+        tmp_path, run_dir, wt, seat, config_dir=cfg,
+    )
+    assert "claudeMode" not in planted
+    with open(os.path.join(run_dir, ED.PROMPT_NAME), "w", encoding="utf-8") as fh:
+        fh.write(planted["fedPrompt"])
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    res = _dispatch_write(
+        tmp_path,
+        fake,
+        cwd=wt,
+        run_dir=run_dir,
+        seat=seat,
+        order_id="claude-mode-test",
+        claude_mode="print",
+    )
+    assert res.get("detail") != ED.MODE_REFUSAL_RUN_DIR_CLAUDE_MODE_MISMATCH
+    assert res["ok"] is True
+    assert res["attempts"] == 1
+    assert len(fake.calls) == 1
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["argv"] == planted["argv"]
+    assert ED._spawn_argv_coherence(opened, opened["argv"])[1] is None
+
+
+def test_claude_mode_literal_census_pins_write_path_mismatch_gate_reachability():
+    # axis: declared claude mode literals pin when write-path run-dir-claude-mode-mismatch becomes reachable
+    assert ERC.CLAUDE_MODES == ("print",), (
+        "a new dispatchable claude mode makes the write-path run-dir-claude-mode-mismatch "
+        "gate reachable; the gate now needs a real test"
+    )

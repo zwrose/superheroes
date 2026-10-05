@@ -33,8 +33,8 @@ and never checks it by tool.
 ### Priority tiers
 
 The four tiers an item can hold at the front door. P0 is the next wave. P1 is the standing
-budget, entered on the owner's batched word. P2 should eventually happen and is filed without an
-owner word. Declined is a [declined registry](#declined-registry) line with a
+budget, entered on the owner's batched word. P2 should eventually happen; like every
+tier, it files only on the owner's word. Declined is a [declined registry](#declined-registry) line with a
 [trigger](#trigger). The front door's rules for each tier live in the issue contract.
 
 ## Gardening and condition windows
@@ -270,9 +270,10 @@ child of this project is a native stack; an exception is owner-ruled and recorde
 
 ### Layer
 
-One pull request in a stack, at one position, based on the branch of the layer below. See
-[native-stacks.md](native-stacks.md) § What a layer is and the workhorse charter §2 for the lane
-lifecycle.
+One pull request in a stack, at one position, based on the branch of the layer below, with its own
+sub-issue of the feature issue it breaks down. See [Each layer is a
+sub-issue](native-stacks.md#each-layer-is-a-sub-issue), [native-stacks.md](native-stacks.md) § What a
+layer is, and the workhorse charter §2 for the lane lifecycle.
 
 ## Threat and component tags
 

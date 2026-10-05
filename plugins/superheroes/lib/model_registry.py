@@ -13,13 +13,38 @@ VENDORS = ("claude", "codex", "cursor")
 _MODELS: dict[str, dict[str, dict]] = {
     "claude": {
         "haiku-4.5": {"family": "anthropic", "dispatch": "haiku", "override_only": False},
-        "sonnet-5": {"family": "anthropic", "dispatch": "sonnet", "override_only": False},
-        "opus-5": {"family": "anthropic", "dispatch": "opus", "override_only": False},
-        "fable-5": {"family": "anthropic", "dispatch": "fable", "override_only": True},
+        "sonnet-5.5": {"family": "anthropic", "dispatch": "sonnet", "override_only": False},
+        "opus-5.5": {"family": "anthropic", "dispatch": "opus", "override_only": False},
+        "fable-5.1": {"family": "anthropic", "dispatch": "fable", "override_only": True},
     },
     "codex": {
-        "gpt-5.6-terra": {"family": "openai", "dispatch": "gpt-5.6-terra", "override_only": False},
-        "gpt-5.6-sol": {"family": "openai", "dispatch": "gpt-5.6-sol", "override_only": False},
+        "gpt-5.6-sol": {
+            "family": "openai",
+            "dispatch": "gpt-5.6-sol",
+            "override_only": False,
+            "pin_only": True,
+        },
+        "gpt-6-sol": {
+            "family": "openai",
+            "dispatch": "gpt-6-sol",
+            "override_only": False,
+            "min_cli": "0.157.0",
+            "pin_only": True,
+        },
+        "gpt-6.1-sol": {
+            "family": "openai",
+            "dispatch": "gpt-6.1-sol",
+            "override_only": False,
+            "min_cli": "0.159.0",
+            "efforts": ("low", "medium", "high", "xhigh", "max"),
+        },
+        "gpt-6-astra": {
+            "family": "openai",
+            "dispatch": "gpt-6-astra",
+            "override_only": False,
+            "efforts": ("high",),
+            "pin_roles": ("reviewer-deep",),
+        },
     },
     # family is an independence-accounting key (panel maker exclusion), not vendor attribution.
     # Both cursor first-party models share ONE family so a ladder rung-up does not change the
@@ -44,6 +69,10 @@ _MODELS: dict[str, dict[str, dict]] = {
     },
 }
 
+# Retired codex models: the replacement each name maps to. The ONE home for the retirement fact —
+# retired_model_reason() is the ONE function that builds the refusal reason from it.
+_RETIRED_MODELS: dict[str, dict[str, str]] = {"codex": {"gpt-5.6-terra": "gpt-6.1-sol"}}
+
 _EFFORT_ENUM: dict[str, tuple[str, ...]] = {
     "claude": ("low", "medium", "high", "xhigh"),
     "codex": ("none", "low", "medium", "high", "xhigh", "max"),
@@ -54,14 +83,14 @@ OVERRIDE_ONLY_EFFORTS: dict[str, tuple[str, ...]] = {"codex": ("max",)}
 _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
     "claude": (
         ("haiku-4.5", "medium"),
-        ("sonnet-5", "high"),
-        ("opus-5", "high"),
-        ("opus-5", "xhigh"),
+        ("sonnet-5.5", "high"),
+        ("opus-5.5", "high"),
+        ("opus-5.5", "xhigh"),
     ),
     "codex": (
-        ("gpt-5.6-terra", "high"),
-        ("gpt-5.6-sol", "high"),
-        ("gpt-5.6-sol", "xhigh"),
+        ("gpt-6.1-sol", "high"),
+        ("gpt-6.1-sol", "xhigh"),
+        ("gpt-6-astra", "high"),
     ),
     "cursor": (
         ("composer-2.5", None),
@@ -71,42 +100,42 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
 
 _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     "implementer": {
-        "claude": ("sonnet-5", "high"),
-        "codex": ("gpt-5.6-terra", "high"),
+        "claude": ("sonnet-5.5", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("composer-2.5", None),
     },
     "code-fixer": {
-        "claude": ("sonnet-5", "high"),
-        "codex": ("gpt-5.6-terra", "high"),
+        "claude": ("sonnet-5.5", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("composer-2.5", None),
     },
     "doc-reviser": {
-        "claude": ("opus-5", "high"),
-        "codex": ("gpt-5.6-sol", "high"),
+        "claude": ("opus-5.5", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer": {
-        "claude": ("sonnet-5", "high"),
-        "codex": ("gpt-5.6-terra", "high"),
+        "claude": ("sonnet-5.5", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer-deep": {
-        "claude": ("opus-5", "xhigh"),
-        "codex": ("gpt-5.6-sol", "xhigh"),
+        "claude": ("opus-5.5", "xhigh"),
+        "codex": ("gpt-6.1-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "verifier": {
-        "claude": ("opus-5", "high"),
-        "codex": ("gpt-5.6-sol", "high"),
+        "claude": ("opus-5.5", "high"),
+        "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "brief-check": {
-        "claude": ("opus-5", "xhigh"),
-        "codex": ("gpt-5.6-sol", "xhigh"),
+        "claude": ("opus-5.5", "xhigh"),
+        "codex": ("gpt-6.1-sol", "xhigh"),
         "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "synthesis": {
-        "claude": ("opus-5", "high"),
+        "claude": ("opus-5.5", "high"),
         "codex": None,
         "cursor": None,
     },
@@ -116,11 +145,20 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "cursor": None,
     },
     "pilot": {
-        "claude": ("sonnet-5", "high"),
+        "claude": ("sonnet-5.5", "high"),
         "codex": None,
         "cursor": None,
     },
+    "registration-probe": {
+        "claude": None,
+        "codex": ("gpt-6.1-sol", "high"),
+        "cursor": None,
+    },
 }
+
+_MATRIX["scoped-finder"] = dict(_MATRIX["reviewer-deep"])
+# auditor seats at the verifier's cells until an owner call separates them
+_MATRIX["auditor"] = dict(_MATRIX["verifier"])
 
 _ROLE_META: dict[str, dict] = {
     "orchestrator": {
@@ -154,6 +192,14 @@ _ROLE_META: dict[str, dict] = {
         "read_write": "read",
         "pin_eligible": False,
         "owner_tunable": True,
+    },
+    "auditor": {
+        "model_tier_role": False,
+        "engine_pref_key": "reviewer",
+        "codex_kind": None,
+        "read_write": "read",
+        "pin_eligible": False,
+        "owner_tunable": False,
     },
     "mechanical": {
         "model_tier_role": True,
@@ -211,7 +257,25 @@ _ROLE_META: dict[str, dict] = {
         "pin_eligible": False,
         "owner_tunable": False,
     },
+    "scoped-finder": {
+        "model_tier_role": False,
+        "engine_pref_key": "reviewer",
+        "codex_kind": "review-deep",
+        "read_write": "read",
+        "pin_eligible": False,
+        "owner_tunable": False,
+    },
+    "registration-probe": {
+        "model_tier_role": False,
+        "engine_pref_key": None,
+        "codex_kind": "review",
+        "read_write": "read",
+        "pin_eligible": False,
+        "owner_tunable": False,
+    },
 }
+
+_HOST_MODEL_PREFIX_FAMILY = (("claude-", "anthropic"), ("gpt-", "openai"))
 
 # --- Claude tier-alias resolution (verified, not assumed; issue #639) ---------------------------
 # Claude dispatch tokens are tier ALIASES (`opus`, `sonnet`, `haiku`, `fable`): the harness resolves
@@ -226,13 +290,13 @@ _ROLE_META: dict[str, dict] = {
 #
 # Probed live with `claude -p --model <alias>`; re-run and re-stamp on a harness upgrade.
 CLAUDE_ALIAS_RESOLUTION = {
-    "harness": "claude-code/2.1.219",
-    "verified": "2026-07-26",
+    "harness": "claude-code/2.1.284",
+    "verified": "2026-10-01",
     "resolved": {
         "haiku": "claude-haiku-4-5-20251001",
-        "sonnet": "claude-sonnet-5",
-        "opus": "claude-opus-5",
-        "fable": "claude-fable-5",
+        "sonnet": "claude-sonnet-5-5",
+        "opus": "claude-opus-5-5",
+        "fable": "claude-fable-5-1",
     },
 }
 
@@ -254,9 +318,9 @@ _MODEL_TIER_ROLES = (
 _CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "code-fixer", "implementer", "pilot")
 
 _CODEX_PEER_BY_CLAUDE = {
-    "sonnet": "gpt-5.6-terra",
-    "opus": "gpt-5.6-sol",
-    "haiku": "gpt-5.6-terra",
+    "sonnet": "gpt-6.1-sol",
+    "opus": "gpt-6.1-sol",
+    "haiku": "gpt-6.1-sol",
 }
 
 _COMPOSER_MODEL = "composer-2.5"
@@ -284,6 +348,58 @@ def model_family(vendor: str, model_id: str) -> str | None:
     return rec["family"] if rec else None
 
 
+def retired_model_reason(vendor: str, model_id: object) -> str | None:
+    """The ONE builder of the retired-model refusal reason. None when `model_id` is not retired
+    for `vendor`. Never raises."""
+    if not _is_str(model_id):
+        return None
+    replacement = _RETIRED_MODELS.get(vendor, {}).get(model_id)
+    if replacement is None:
+        return None
+    return "model-retired: %s is retired; use %s" % (model_id, replacement)
+
+
+def pin_only_models(vendor: str) -> tuple[str, ...]:
+    """Models registered for `vendor` that are pinnable but never appear in the ladder, a matrix
+    cell, a peer, or an escalate result — in registry order."""
+    return tuple(
+        model_id
+        for model_id, rec in _MODELS.get(vendor, {}).items()
+        if rec.get("pin_only")
+    )
+
+
+def codex_min_cli() -> tuple[str, str] | None:
+    """(version, model_id) for the highest `min_cli` floor declared among the codex models actually
+    reachable by default selection (any matrix cell, raw ladder rung, or peer value). Compared
+    numerically (never as a string). None when no such model declares a floor. Never raises."""
+    reachable: set[str] = set()
+    for row in _MATRIX.values():
+        cell = row.get("codex")
+        if cell is not None:
+            reachable.add(cell[0])
+    for model_id, _effort in _LADDERS.get("codex", ()):
+        reachable.add(model_id)
+    reachable.update(_CODEX_PEER_BY_CLAUDE.values())
+    best: tuple[str, str] | None = None
+    best_key: tuple[int, ...] | None = None
+    for model_id in reachable:
+        rec = _MODELS.get("codex", {}).get(model_id)
+        if not rec:
+            continue
+        version = rec.get("min_cli")
+        if not isinstance(version, str) or not version:
+            continue
+        try:
+            key = tuple(int(part) for part in version.split("."))
+        except ValueError:
+            continue
+        if best_key is None or key > best_key:
+            best_key = key
+            best = (version, model_id)
+    return best
+
+
 def matrix_config(role: str, vendor: str) -> tuple[str, str | None] | None:
     row = _MATRIX.get(role)
     if row is None:
@@ -292,7 +408,14 @@ def matrix_config(role: str, vendor: str) -> tuple[str, str | None] | None:
 
 
 def ladder(vendor: str) -> tuple[tuple[str, str | None], ...]:
-    return _LADDERS.get(vendor, ())
+    raw = _LADDERS.get(vendor, ())
+    out: list[tuple[str, str | None]] = []
+    for model_id, effort in raw:
+        rec = _MODELS.get(vendor, {}).get(model_id, {})
+        if rec.get("registration") == "probe-pending":
+            continue
+        out.append((model_id, effort))
+    return tuple(out)
 
 
 def effort_enum(vendor: str) -> tuple[str, ...]:
@@ -344,6 +467,9 @@ def validate_config(
 ) -> tuple[bool, str | None]:
     if vendor not in VENDORS:
         return False, f"unknown vendor {vendor!r}"
+    retired_reason = retired_model_reason(vendor, model_id)
+    if retired_reason is not None:
+        return False, retired_reason
     vendor_models = _MODELS.get(vendor, {})
     if model_id not in vendor_models:
         return False, f"model {model_id!r} is not registered for vendor {vendor!r}"
@@ -372,7 +498,7 @@ def validate_config(
 def escalate(
     vendor: str, model_id: str, effort: str | None
 ) -> tuple[str, str, str | None] | None:
-    rungs = _LADDERS.get(vendor)
+    rungs = ladder(vendor)
     if not rungs:
         return None
     pos = None
@@ -387,7 +513,10 @@ def escalate(
         return (vendor, nxt_m, nxt_e)
     vi = VENDORS.index(vendor)
     next_vendor = VENDORS[(vi + 1) % len(VENDORS)]
-    first_m, first_e = _LADDERS[next_vendor][0]
+    next_rungs = ladder(next_vendor)
+    if not next_rungs:
+        return None
+    first_m, first_e = next_rungs[0]
     return (next_vendor, first_m, first_e)
 
 
@@ -454,7 +583,12 @@ def codex_efforts() -> tuple[str, ...]:
 
 
 def codex_model_strength() -> tuple[str, ...]:
+    """Weakest -> strongest: pin-only models first (never in the ladder, so undominated by rung
+    order), then the raw ladder's models in ladder order."""
     seen: list[str] = []
+    for model_id in pin_only_models("codex"):
+        if model_id not in seen:
+            seen.append(model_id)
     for model_id, _ in _LADDERS["codex"]:
         if model_id not in seen:
             seen.append(model_id)
@@ -478,11 +612,67 @@ def codex_peer_for_claude_tier(claude_short: str) -> str:
         )
     if claude_short in _CODEX_PEER_BY_CLAUDE:
         return _CODEX_PEER_BY_CLAUDE[claude_short]
-    return "gpt-5.6-sol"
+    return _CODEX_PEER_BY_CLAUDE["opus"]
 
 
 def codex_pin_roles() -> tuple[str, ...]:
     return _CODEX_PIN_ROLES
+
+
+def codex_pin_verdict(role: object, model: object) -> tuple[bool, str | None]:
+    """The ONLY place a codex per-role pin is judged. Never raises. The pin must resolve on the role's own codex allowlist so the writer, the composer and the dispatch guard agree."""
+    if not _is_str(role):
+        return False, "unknown role %r rejected" % role
+    if not _is_str(model):
+        return False, "unknown model %r rejected" % model
+    if role not in _CODEX_PIN_ROLES:
+        return False, "unknown role %r rejected" % role
+    retired_reason = retired_model_reason("codex", model)
+    if retired_reason is not None:
+        return False, retired_reason
+    codex_models = _MODELS.get("codex", {})
+    if model not in codex_models:
+        return False, "unknown model %r rejected" % model
+    rec = codex_models[model]
+    if rec.get("registration") == "probe-pending":
+        return (
+            False,
+            "pin-probe-pending: %s is not yet a valid pin — its registration waits on the "
+            "security-lens probe's recorded pass" % model,
+        )
+    pin_roles = rec.get("pin_roles")
+    if pin_roles and role not in pin_roles:
+        eligible = ", ".join(pin_roles)
+        return (
+            False,
+            "pin-role-not-eligible: %s is a valid pin only for %s" % (model, eligible),
+        )
+    resolved = resolve_dispatch(role, "codex", model, None)
+    if not resolved.get("ok"):
+        return (
+            False,
+            "pin-not-on-allowlist: %s is not on the %s codex allowlist [%s]"
+            % (model, role, _allowlist_park_text(allowlist(role, "codex"))),
+        )
+    return True, None
+
+
+def host_family(model_str: object) -> str | None:
+    """Map a host model id or dispatch token to its maker family. Never raises."""
+    if not _is_str(model_str) or not model_str:
+        return None
+    s = model_str
+    bracket = s.rfind("[")
+    if bracket != -1:
+        s = s[:bracket]
+    for vendor in VENDORS:
+        for model_id, rec in _MODELS[vendor].items():
+            if s == model_id or s == rec.get("dispatch"):
+                return rec["family"]
+    for prefix, family in _HOST_MODEL_PREFIX_FAMILY:
+        if s.startswith(prefix):
+            return family
+    return None
 
 
 def codex_role_kind() -> dict[str, str]:
@@ -544,6 +734,21 @@ def family_for(role: str, vendor: str) -> str | None:
     return model_family(vendor, model_id)
 
 
+def _append_codex_pin_only(role: str, vendor: str, cell: tuple[str, str | None], out: list) -> None:
+    """I3: a codex pin role whose codex cell exists also allows every pin-only codex model, at the
+    cell's own effort, appended after the ladder slice — never widening any other role/vendor."""
+    if vendor != "codex" or role not in _CODEX_PIN_ROLES:
+        return
+    _model, effort = cell
+    for pin_model in pin_only_models("codex"):
+        candidate = (pin_model, effort)
+        if candidate in out:
+            continue
+        ok, _ = validate_config(vendor, pin_model, effort, allow_override_only=True)
+        if ok:
+            out.append(candidate)
+
+
 def allowlist(role: str, vendor: str) -> tuple[tuple[str, str | None], ...]:
     if not _is_str(role) or not _is_str(vendor):
         return ()
@@ -561,14 +766,17 @@ def allowlist(role: str, vendor: str) -> tuple[tuple[str, str | None], ...]:
         if not is_registered(vendor, model_id):
             return ()
         ok, _ = validate_config(vendor, model_id, effort, allow_override_only=True)
-        return (cell,) if ok else ()
-    out: list[tuple[str, str | None]] = []
+        out = [cell] if ok else []
+        _append_codex_pin_only(role, vendor, cell, out)
+        return tuple(out)
+    out = []
     for model_id, effort in rungs[index:]:
         if not is_registered(vendor, model_id):
             continue
         ok, _ = validate_config(vendor, model_id, effort, allow_override_only=True)
         if ok:
             out.append((model_id, effort))
+    _append_codex_pin_only(role, vendor, cell, out)
     return tuple(out)
 
 
@@ -711,6 +919,20 @@ def resolve_dispatch(
             f"effort must be a str or None, got {type(effort).__name__}",
             pairs,
         )
+
+    if model is not None:
+        # A retired model can already be off every allowlist and out of the registry
+        # entirely (`is_registered` false), so the by_id/parse_dispatch_token lookup below
+        # would otherwise fall through to the generic "not on the allowlist" park instead of
+        # naming the retirement and its replacement. Check the EXPLICIT model the caller
+        # passed in — not one this function later derives from a seat default, which is a
+        # registry pick and never retired. This must run before the empty-allowlist early
+        # return below: a role with no sanctioned model (e.g. codex `pilot`) must still
+        # surface `model-retired` for an explicitly named retired model, not the generic
+        # "no sanctioned model" park.
+        retired_reason = retired_model_reason(vendor, model)
+        if retired_reason is not None:
+            return _resolve_dispatch_fail(retired_reason, pairs)
 
     if not pairs:
         return _resolve_dispatch_fail(

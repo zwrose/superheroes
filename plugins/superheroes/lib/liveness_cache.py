@@ -11,6 +11,7 @@ import tempfile
 from collections import Counter
 
 import mode_registry
+import model_registry
 
 # Bump when probe configuration semantics change so legacy receipts cannot be
 # reused (#711: effort is now enforced per (model, effort) pair; v1 receipts
@@ -554,8 +555,9 @@ def live_from(liveness, needed):
     if reconcile_error is not None:
         dead_notes.append(_liveness_read_error_note(str(reconcile_error), stage="reconcile"))
 
-    if "claude" not in live:
-        live.append("claude")
+    _claude_vendor = model_registry.VENDORS[0]
+    if _claude_vendor not in live:
+        live.append(_claude_vendor)
     live_cells.sort(key=_live_cell_sort_key)
     return (sorted(live), live_cells, dead_notes)
 

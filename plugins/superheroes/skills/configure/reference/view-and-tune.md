@@ -10,7 +10,7 @@ Reached from `configure` when a project is configured and healthy (FR-1). Render
 calibration on one screen and offers a small menu of targeted changes. A view-only run on an
 up-to-date project changes nothing (FR-12).
 
-`ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash block below.
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"` is assigned once per bash block below.
 
 Gate write-downs on this path are written down in the run output and are never written into a
 hero layer — their payloads carry machine-local absolute paths that must not reach a collaborator-visible in-repo file, and `write-layer` replaces a layer wholesale.
@@ -18,14 +18,18 @@ hero layer — their payloads carry machine-local absolute paths that must not r
 ## 1 — Render the combined view (FR-4) + drift notice (FR-7)
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B -c "
 import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import configure_view
 print(configure_view.render('.'))"
 ```
 
 One plain-text screen, top to bottom: the project's core facts (including the **Show-it surface**
-declaration when present), the **Dispatch calibration** (the
+declaration when present and the declared **Vet checks** block with any malformed or unreadable
+calibration flagged), the **Sandbox access** block (`all off (offline)` when nothing is set, with any
+malformed or unreadable value flagged), the **Size count exclusions** block (the declared path globs,
+`(none — …)` when nothing is declared, with any malformed or unreadable value flagged), the
+**Dispatch calibration** (the
 effective engine + model for every v2 dispatch role) and its Codex model-pin detail, each hero's
 layer, the pinned patterns, and the **Model tiers** block — "here is everything superheroes knows
 about this project," not a list of files. Any current staleness/drift is shown as a **single,
@@ -38,14 +42,19 @@ calibration (FR-18).
 Present, inline beneath the view, the things the owner can change — each routed to the **smallest**
 action that owns it, leaving the rest of the calibration untouched:
 
-- **Change a single discrete field** (the verify command, the threat model) → a focused guided edit
-  through `core_md`.
+- **Change the verify command** → there is no write verb for it: edit `verifyCommand` in the
+  calibration file's `superheroes-core` json block directly (a non-empty string, or `null` for
+  none), then run the view again and confirm it reads back. A wrong-typed, empty, or
+  whitespace-only value is refused by name (`verify-command-malformed`) on every read until fixed.
+  Set it to the fast iteration check (lint, types, the touched tests), not the full gate; set-up § 3
+  says why.
+- **Change the threat model** → `core_md.write_threat_model`, which replaces only that section.
 - **Change one project-configuration item** → write only that item's home through `project_config`.
   Show the current value from the view first, then pipe the new value on stdin. A refusal is
   reported to the owner and never worked around.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '"gh-stack"' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item stackingTool --cwd .
   ```
 
@@ -66,7 +75,7 @@ action that owns it, leaving the rest of the calibration untouched:
   never guess which heroes apply:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/hero_setup.py" offerable --cwd .
   ```
 
@@ -84,7 +93,7 @@ action that owns it, leaving the rest of the calibration untouched:
   output, and hand back — do **not** run `store_sweep.py sweep` on the default path.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/store_sweep.py" report
   ```
 
@@ -96,7 +105,7 @@ action that owns it, leaving the rest of the calibration untouched:
   **Only when the owner authorizes deletion in this turn** — not the default path — run:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/store_sweep.py" sweep
   ```
 
@@ -128,14 +137,14 @@ action that owns it, leaving the rest of the calibration untouched:
   judgment-seat tier, never a launch default.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' 'sonnet' | python3 -B "$ROOT_DIR/lib/core_md.py" write-builder-tier --cwd .
   ```
 
   To clear (empty stdin returns the project to the `opus` default):
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '' | python3 -B "$ROOT_DIR/lib/core_md.py" write-builder-tier --cwd .
   ```
 
@@ -157,7 +166,7 @@ action that owns it, leaving the rest of the calibration untouched:
   returns the project to `none`:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '<Level/What-the-owner-does/Notes prose>' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
   ```
@@ -165,7 +174,7 @@ action that owns it, leaving the rest of the calibration untouched:
   To clear:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '' | python3 -B "$ROOT_DIR/lib/core_md.py" write-show-it --cwd .
   ```
 
@@ -174,16 +183,137 @@ action that owns it, leaving the rest of the calibration untouched:
   `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command
   exits 0 either way, so check `action`, not exit status.
 
+- **Declare or change the project's vet checks** → write **only** the `vetChecks` key in `core.md`'s
+  JSON block, leaving every other key untouched. Stdin carries a JSON list; empty stdin is refused
+  (use `--clear` to remove the key):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' '[{"name":"Example check","evidence":"PR body · Build record","records":"what was read and what the vet recorded"}]' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-vet-checks --cwd .
+  ```
+
+  To clear:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" write-vet-checks --cwd . --clear
+  ```
+
+  **Read the result, don't assume success.** `write-vet-checks` returns `{action, reason?,
+  malformed?}`. Only `written` or `noop` means the list was saved — surface any other `action`
+  (`refused`, `deferred`, `behind`) to the owner with its `reason`; refusal `vet-checks-malformed`
+  carries `malformed` for the owner to fix. Refusal reasons also include `vet-checks-input-unparseable`,
+  `duplicate-core-key:<key>`, `core-md-absent`, `core-md-unparseable`, and
+  `vet-checks-round-trip-refused`. The command exits 0 either way, so check `action`, not exit
+  status. List shape: `skills/showrunner/reference/vet-receipt.md` § Project vet checks.
+
+- **Open sandbox access for the claude implementer** → write **only** the `sandboxAccess` key in
+  `core.md`'s JSON block, leaving every other key untouched. Every field is optional and a missing
+  field is off. `allowedDomains` lets sandboxed commands reach those hosts; `localPorts` allows
+  listening and connecting on loopback, including a bind on 0.0.0.0; `localSockets` allows
+  Unix-domain sockets in the sandbox's per-user temp dir; `extraWritePaths` adds writable paths, and
+  the deny list (the git hooks, the git config files, the worktree identity files) still wins over
+  any extra path. Writes under `/tmp` and localhost binding (macOS) are already on by default for
+  every project, so `localPorts` is redundant on macOS; elsewhere it is still refused with
+  `sandbox-access-unsupported-platform`. The Claude Code setting each one maps to is in
+  `skills/workhorse/reference/dispatch-mechanics.md` § The claude write sandbox.
+  Show the current value from the view's **Sandbox access** block first. Stdin carries a JSON
+  object; empty stdin is refused (use `--clear` to remove the key):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' '{"allowedDomains":["pypi.org"],"localPorts":true,"localSockets":true,"extraWritePaths":["/Users/me/Library/Caches/ms-playwright"]}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-sandbox-access --cwd .
+  ```
+
+  To clear:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" write-sandbox-access --cwd . --clear
+  ```
+
+  To read the saved value:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" sandbox-access --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-sandbox-access` returns `{action, reason?,
+  malformed?}`. Only `written` or `noop` means the object was saved — surface any other `action`
+  (`refused`, `deferred`, `behind`) to the owner with its `reason`; refusal `sandbox-access-malformed`
+  carries `malformed` for the owner to fix, each item naming its field, its reason, and the accepted
+  shape. Refusal reasons also include `sandbox-access-input-unparseable`, `duplicate-core-key:<key>`,
+  `core-md-absent`, `core-md-unparseable`, and `sandbox-access-round-trip-refused`. The command exits
+  0 either way, so check `action`, not exit status. A claude write run reads the value once when it
+  opens, so a run already open keeps the access it opened with and an edit applies to the next run.
+  A malformed saved value refuses the next claude write open with
+  `engine-config:sandbox-access-malformed`.
+
+- **Leave paths out of the size count** → write **only** the `sizeExclude` key in `core.md`'s JSON
+  block, leaving every other key untouched. The value is a JSON list of repo-relative path globs,
+  such as `["docs/**", "*.generated.ts"]`. A glob is matched with Python `fnmatch`, case-sensitive,
+  against the repo-relative path, and `*` also crosses `/`. A matched path is left out of both size
+  counts and is listed with its line counts. Lockfiles are always left out without any setting. A
+  project that wants test-pilot plans left out lists `.claude/test-pilot/**` itself. An absolute
+  glob (a leading `/`) can never match a repo-relative path and is refused; `[]` declares that
+  nothing extra is excluded. Show the current value from the view's **Size count exclusions** block
+  first. Stdin carries a JSON list; empty stdin is refused (use `--clear` to remove the key):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' '["docs/**","*.generated.ts"]' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-size-exclude --cwd .
+  ```
+
+  To clear:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" write-size-exclude --cwd . --clear
+  ```
+
+  To read the saved value:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  python3 -B "$ROOT_DIR/lib/core_md.py" size-exclude --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-size-exclude` returns `{action, reason?,
+  malformed?}`. Only `written` or `noop` means the list was saved — surface any other `action`
+  (`refused`, `deferred`, `behind`) to the owner with its `reason`; refusal `size-exclude-malformed`
+  carries `malformed` for the owner to fix, each item naming its index, its reason
+  (`size-exclude-not-a-list`, `size-exclude-entry-not-a-nonempty-string`, or
+  `size-exclude-entry-absolute`), and the accepted shape. Refusal reasons also include
+  `size-exclude-input-unparseable`, `duplicate-core-key:<key>`, `core-md-absent`,
+  `core-md-unparseable`, and `size-exclude-round-trip-refused`. The command exits 0 either way, so
+  check `action`, not exit status. The read verb never raises: a saved value that cannot be read
+  comes back `globs` null with reason `size-exclude-unreadable` and a `detail`, and a malformed
+  saved value comes back `size-exclude-malformed`.
+
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
   `reviewer`, `reviewer-deep`, `code-fixer`, `implementer`, and `pilot`; valid
-  model IDs are `gpt-5.6-terra` and `gpt-5.6-sol`. Codex tier map:
-  haiku=gpt-5.6-terra, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol.
-  Show the current engine preferences and
-  effective model first, merge only the requested role into the existing object, and preserve every
-  sibling key. Before writing, validate the selected model/effort with
-  `engine_pref.valid_codex_model_effort`; reject an invalid (model, effort) pair and leave the prior
-  valid config unchanged. `max` is owner opt-in only — never proposed as a default.
+  model IDs are `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for
+  `reviewer-deep` at effort `high`; pinning it on any other role is refused
+  `pin-role-not-eligible`). A pin to the retired `gpt-5.6-terra` is refused at write time
+  (`model-retired`; `model_registry.retired_model_reason` names the text). A pin must
+  also resolve on its role's own codex allowlist, else it is refused `pin-not-on-allowlist`
+  (any model on `pilot`, which has no codex cell — it remains a valid role key
+  but admits no codex model).
+  Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none; an unpinned project never
+  dispatches Astra and gpt-6.1-sol is the default deep cell. A pinned model runs at the effort its role's
+  registry allowlist resolves for it — gpt-6.1-sol, gpt-6-sol and gpt-5.6-sol at `high` on `reviewer`, `code-fixer`
+  and `implementer` and `xhigh` on `reviewer-deep`, and Astra at `high` — the
+  role's `enginePreferences.effort` setting is not
+  consulted for a pinned model. Show the current engine preferences and effective model first, merge
+  only the requested role into the existing object, and preserve every sibling key. Before writing,
+  validate the selected model with `model_registry.codex_pin_verdict`; reject an invalid model
+  and leave the prior valid config unchanged. `max` is owner opt-in only — never proposed as a
+  default.
 
   ```json
   {
@@ -192,28 +322,32 @@ action that owns it, leaving the rest of the calibration untouched:
       "implementation": "codex",
       "briefCheck": "codex",
       "effort": {"review": "high"},
-      "codexModels": {"reviewer": "gpt-5.6-terra"}
+      "codexModels": {"reviewer": "gpt-5.6-sol"}
     }
   }
   ```
 
   A Codex pin applies only while that role's engine is `codex`; switching the role to Claude or
-  Cursor ignores it. Per-run preflight model overrides have highest precedence, followed by this
-  persistent pin, then the shared-tier GPT-5.6 mapping.
+  Cursor ignores it. For `reviewer` and `reviewer-deep`, the pin now reaches the review panel's
+  codex seat — it no longer only changes the calibration readout; when the pinned cell is not live
+  the seat falls back to the default cell with a `role-pin-not-live` degradation, and a pin the
+  tier's allowlist does not admit falls back with `role-pin-not-honorable` carrying the refusal's
+  reason. Per-run preflight model
+  overrides have highest precedence, followed by this persistent pin, then the shared-tier codex
+  mapping.
 
 - **`enginePreferences.effort`** — a `{role_kind: effort_token}` map under `core.md`'s
   `enginePreferences` block. Valid role-kind keys are `review`, `review-deep`, `build`, `fix`,
   `brief-check`, and `pilot` (role **kinds**, not dispatch role names — `build`, never
-  `implementation`). This map governs **Codex model-pin validation** (`engine_pref.normalize_codex_pin_map`
-  calls `resolve_effort` to decide whether a pinned model + effort pair is valid) and **configure
-  display** only — it does **not** set the effort a dispatch actually runs at. Dispatch effort comes
-  from the registry or a per-seat pin (`enginePreferences.seatPins`), resolved through
-  `dispatch_guard` / `seat_map`; use the per-role engine and model-tier tune actions above for
-  those knobs.
+  `implementation`). This map governs **configure display** and non-pin Codex effort resolution only
+  — it does **not** set the effort a **pinned** model runs at (that comes from the model's own
+  registry rung). Dispatch effort for unpinned roles comes from the registry or a per-seat pin
+  (`enginePreferences.seatPins`), resolved through `dispatch_guard` / `seat_map`; use the per-role
+  engine and model-tier tune actions above for those knobs.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-  printf '%s\n' '{"reviewer": "gpt-5.6-terra"}' | \
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+  printf '%s\n' '{"reviewer": "gpt-5.6-sol"}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
   ```
 
@@ -226,7 +360,7 @@ action that owns it, leaving the rest of the calibration untouched:
   returned `noop` does not mean a clear-all succeeded.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '{"reviewer": null}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key codexModels --cwd .
   ```
@@ -237,7 +371,7 @@ action that owns it, leaving the rest of the calibration untouched:
   exits 0 either way, so check `action`, not exit status.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" show
   ```
 
@@ -250,7 +384,7 @@ action that owns it, leaving the rest of the calibration untouched:
   accepted as a legacy alias for `code-fixer` (read, write, and clear):
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=sonnet --clear code-fixer
   ```
 
@@ -273,7 +407,7 @@ action that owns it, leaving the rest of the calibration untouched:
   existing `seatPins` object, and preserve every sibling key.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '{"security-reviewer": {"vendor": "claude"}}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key seatPins --cwd .
   ```
@@ -287,7 +421,7 @@ action that owns it, leaving the rest of the calibration untouched:
   returned `noop` does not mean a clear-all succeeded.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '{"security-reviewer": null}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-engine-pins --key seatPins --cwd .
   ```
@@ -311,9 +445,16 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Pre-authorize owner-judgment review gates** → write a narrow `gate-policy/1` overlay under
   `core.md`'s `reviewGatePolicy` key (a sibling of `enginePreferences`, not inside it). The
   shipped default pre-authorizes nothing — every rule added here is a narrow pre-authorization of
-  a gate the driver would otherwise park on. Show the resolved policy layers and rule counts
-  first, then merge only the requested overlay document. Pass `null` (or empty stdin) to remove
-  the overlay and return to shipped-defaults-only.
+  a gate the driver would otherwise park on. A `skip` (or stall `accept-the-disclosed-risk`) rule
+  may carry a `followUp` `{item, revisitTrigger, classClosure}`; a new follow-up must include a
+  nonblank `item`. A present but malformed `followUp` (missing or blank `item`, missing
+  `revisitTrigger`, missing `classClosure`, wrong shape) is refused at overlay load and at
+  calibration write and never reaches resolution; only an absent `followUp` lets the rule
+  resolve and record the disposition, after which certification refuses it for the missing
+  follow-up. A `followUp` may ride only a judgment `skip` or a stall
+  `accept-the-disclosed-risk` rule; on any other disposition it is `layer-follow-up-not-allowed`.
+  Show the resolved policy layers and rule counts first, then merge only the requested overlay
+  document. Pass `null` (or empty stdin) to remove the overlay and return to shipped-defaults-only.
 
 <!-- decision-point: id=configure-tune-gate-policy mode=proceed kind=owner-gate default="retain shipped-defaults-only gate policy overlay" carrier=run-output -->
 
@@ -323,7 +464,7 @@ action that owns it, leaving the rest of the calibration untouched:
   `/superheroes:configure`.
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf '%s\n' '{"schema":"gate-policy/1","default":"park","rules":[{"gate":"present-judgment","findingClass":"judgment:important","disposition":"skip"}]}' | \
     python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
   ```
@@ -331,7 +472,7 @@ action that owns it, leaving the rest of the calibration untouched:
   To clear the overlay:
 
   ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   printf 'null\n' | python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
   ```
 
@@ -351,7 +492,7 @@ preview only, write the exact move list down in the run output, and hand back �
 `execute` on the default path.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" preview --cwd . --target <in-repo|global>
 ```
 
@@ -362,7 +503,7 @@ collaborator-visibility note.
 the authorization — run:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global> --owner-authorized true
 ```
 

@@ -79,9 +79,8 @@ issues, drafts each builder's launch prompt as just the command and the issue po
 durable lives in the issue), vets
 every PR from its artifacts — the diff, the issue/spec, the build brief — against what was
 asked and what was proposed, diagnoses anomalies from artifacts, and coordinates releases. It
-keeps **merge approval** with the owner — a scoped word in chat after the PRs are talked
-through — and may **execute merges inside that scope** after the lane's review and
-verification evidence, CI green on the recorded head, and a current branch. A wave preflight runs the
+keeps **merge approval** with the owner; the merge policy is stated once, in duty 6 of
+[`plugins/superheroes/skills/showrunner/SKILL.md`](plugins/superheroes/skills/showrunner/SKILL.md). A wave preflight runs the
 conformance probe once per dispatchable engine before any builder launches.
 
 | Command | Use it to… |
@@ -90,6 +89,7 @@ conformance probe once per dispatchable engine before any builder launches.
 | `/superheroes:showrunner-handoff` | Hand the advisor seat over deliberately before this session goes dark. |
 | `/superheroes:showrunner-resume` | Pick the advisor seat back up from durable state in a new or restarted session. |
 | `/superheroes:checkpoint` | Freshen live state and emit a ready-to-paste `/compact` command before compaction. |
+| `/superheroes:adopt-version` | Take up a newly installed superheroes version in this live seat — diff, re-read what changed, run the upgrade checklist, and brief the owner — with no handoff. Works in any charter seat. |
 | `/superheroes:discuss-open-decisions` | Walk the owner through open decisions that are theirs — standing proposals, open parks, anything pending — filtered to what is genuinely theirs, in two batches with the blocking ones first. |
 
 ## Workhorse — the builder session

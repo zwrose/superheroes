@@ -35,6 +35,9 @@ import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from session_checkout import enter_checkout  # noqa: E402
 
 
 def _load(name):
@@ -71,7 +74,7 @@ V2_STATE = {
 }
 V2_STATE_HASH_BEFORE_723 = "e39a8e3163d24fb114d1ac95d8e7c9bfbea2d0baef1240a4f7c9c33e85ca780a"
 
-SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
                       for dim in RD.DIMENSIONS}}
 
 
@@ -293,7 +296,7 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
         "seat": seat,
         "attempt": pend["attempt"],
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": manifest_sha,
         "orderSha256": order_sha,
         "manifestSha256": manifest_sha,
@@ -923,7 +926,7 @@ def test_record_result_refuses_bare_payload_fault(tmp_path, adapters):
         "seat": "code-reviewer",
         "attempt": pend["attempt"],
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": manifest_sha,
         "orderSha256": order_sha,
         "manifestSha256": manifest_sha,
@@ -1598,7 +1601,11 @@ def _advance(d, tmp_path, **kw):
 
 
 def _pending_at_run_verify(session_dir):
-    """Park a session on the advance path at run-verify with no orders manifest."""
+    """Park a session on the advance path at run-verify with no orders manifest.
+
+    The verify fold reads the fix-fold head from the cwd's repository, so the session runs inside a
+    real checkout — `checkout` beside the session dir (`tmp_path/checkout`) — as in production."""
+    enter_checkout(os.path.join(os.path.dirname(session_dir), "checkout"))
     state = _state(session_dir)
     state["step"] = RD.P_VERIFY
     state["_advanceUsed"] = True
@@ -1940,7 +1947,7 @@ def test_vendor_gap_rows_from_two_phases_do_not_collide(tmp_path, adapters):
     assert len(state["rounds"]["1"]["orderVendorProvenanceGaps"]) == 2
 
 
-def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(tmp_path, adapters):
+def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(tmp_path, adapters, monkeypatch):
     """The refusal does not exempt the record this path itself wrote.
 
     axis: that the invariant is UNCONDITIONAL. An earlier revision carried a `replay` escape hatch
@@ -1950,6 +1957,11 @@ def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(t
     make progress anyway — a duplicate `submit` returns before `pending` is cleared — so the loud
     refusal is both the ratified behaviour and the honest one.
     """
+    monkeypatch.setattr(
+        RD,
+        "_derive_panel_diff_at_head",
+        lambda _config, _head: ("diff --git a/x b/x\n", None),
+    )
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
     _write_verify_payload(d, {"result": "pass"})
@@ -2585,7 +2597,9 @@ def test_advance_judgment_auto_applies_calibration_overlay(tmp_path, adapters):
 
 def test_advance_judgment_colliding_identity_severity_policy_dispositions_not_collapse(
         tmp_path, adapters):
-    """Policy advance must not collapse dispositions when two same-location findings differ in severity."""
+    """Fixtures are two tradeoff findings at one location whose long titles agree past the title
+    clamp (alpha/bravo suffixes) and separate by the content-hash disambiguator; severity is what
+    the assertion then reads per row — severity is not the distinguishing axis."""
     repo = _repo_with_gate_policy(tmp_path, [
         {"gate": "present-judgment", "findingClass": "judgment:critical",
          "disposition": "fix-as-suggested"},
@@ -2596,8 +2610,8 @@ def test_advance_judgment_colliding_identity_severity_policy_dispositions_not_co
     state = _state(d)
     state["config"]["repoRoot"] = repo
     state["_judgmentFindings"] = [
-        {"title": "widen the API", "severity": "Critical", "file": "f.py", "line": 1, "tradeoff": True},
-        {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1, "tradeoff": True},
+        {"title": "widen the API " + "x" * 205 + " alpha", "severity": "Critical", "file": "f.py", "line": 1, "tradeoff": True},
+        {"title": "widen the API " + "x" * 205 + " bravo", "severity": "Important", "file": "f.py", "line": 1, "tradeoff": True},
     ]
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
@@ -2848,7 +2862,7 @@ def test_advance_owner_gate_fold_refused_leaves_session_unblocked(tmp_path, adap
     pend = RD.cmd_next(d)
     hand = RD.cmd_submit(d, pend["phase"], pend["attempt"], pend["expectedStateHash"],
                          {"dispositions": [
-                             {"id": RD._location_id(state["_judgmentFindings"][0]),
+                             {"id": RD._finding_key_of(state["_judgmentFindings"][0]),
                               "disposition": "fix-as-suggested"},
                          ]})
     assert hand["ok"] is True, hand
@@ -2949,7 +2963,7 @@ def _write_owner_artifact(tmp_path, artifact, name="owner-artifact.json"):
 
 def _judgment_dispositions_artifact(state):
     finding = state["_judgmentFindings"][0]
-    return {"dispositions": [{"id": RD._location_id(finding),
+    return {"dispositions": [{"id": RD._finding_key_of(finding),
                               "disposition": "fix-as-suggested"}]}
 
 
@@ -4056,7 +4070,7 @@ def _commit_dirs_with_done(session_dir):
 def _judgment_submit_artifact(session_dir):
     state = _state(session_dir)
     return {"dispositions": [
-        {"id": RD._location_id(state["_judgmentFindings"][0]), "disposition": "skip"},
+        {"id": RD._finding_key_of(state["_judgmentFindings"][0]), "disposition": "skip"},
     ]}
 
 

@@ -141,6 +141,8 @@ overrunning or silently truncating.
 - **If you could not run it, say so — never narrate a run you did not make.** Precedence rungs 1–7;
   apply the **reporting obligation** for each named command. Your shell may be unavailable —
   rejected, sandboxed, or absent. This is a **normal, reportable outcome and not a failure of yours**.
+  On a sandboxed shell an env-var prefix outside the harness's safe list (`FOO=1 cmd`) is refused;
+  set the variable inside the test instead.
   A rejection of one command never suppresses another's receipt; say **you ran nothing** only when
   nothing ran. **A rejected command did not run, and that is different from a command that ran and
   failed.** Never infer, estimate, or describe what a run "would have" shown. **Untested work, clearly labelled
@@ -172,7 +174,7 @@ overrunning or silently truncating.
   **never proceed on a guessed premise** applied to a document instead of a command, and it is not a
   seventh validity rule — the six below are unchanged.
 - **Your order was linted before it reached you — say so when it plainly was not.** The orchestrator
-  runs `lib/order_lint.py check` and the semantic seat where the host has a mechanical cell before
+  runs `lib/order_lint.py check` and the read-only `order-linter` seat where the host has a mechanical cell before
   dispatch; when the host does not, the order's dispatch-provenance row records
   `semantic-lint-unavailable:<vendor>`. An order
   that still carries an unfilled `{{NAME}}` or `{name}` placeholder, cites a slashed path that does

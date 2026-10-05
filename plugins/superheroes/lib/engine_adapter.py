@@ -14,6 +14,8 @@ import re
 import stat as _stat
 import subprocess
 import sys
+import time
+import uuid
 from collections import namedtuple
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,12 +39,18 @@ import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import 
 import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
 import review_findings_schema  # noqa: E402  (findings-member schema home; #1145)
 import round_phases  # noqa: E402  (verifier-verdict enum home; verification.VERDICTS re-exports same tuple)
+import claude_modes  # noqa: E402  (claude dispatch-mode vocabulary home; re-exported below)
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
 # Re-export result-kind enum for consumers (CONVENTIONS §11 Pattern 1). Producers emit these
 # literals; engine_dispatch and drift tests import this name, never restate the tuple.
 REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
+
+# Claude dispatch modes — home is claude_modes.py; engine_adapter re-exports for consumers
+# (CONVENTIONS §11); engine_result_channel re-exports from here.
+MODE_PRINT = claude_modes.MODE_PRINT
+CLAUDE_MODES = claude_modes.CLAUDE_MODES
 
 # Write tail signals graded by _grade_build_report_obj (CONVENTIONS §11).
 WRITE_SIGNAL_ENUM = ("ok", "plan_wrong", "needs_context")
@@ -63,6 +71,8 @@ SHAPE_OBJECT_VERDICTS_NOT_A_LIST = "object-verdicts-not-a-list"
 SHAPE_ARRAY_NOT_ALL_OBJECTS = "array-not-all-objects"
 SHAPE_FINDINGS_HOLLOW_MEMBER = "findings-hollow-member"
 SHAPE_VERDICTS_HOLLOW_MEMBER = "verdicts-hollow-member"
+SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER = "findings-partial-hollow-member"
+SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER = "verdicts-partial-hollow-member"
 SHAPE_PLACEHOLDER_LITERAL_REFUSAL = "placeholder-literal-refusal"
 SHAPE_NO_PARSEABLE_JSON = "no-parseable-json"
 SHAPE_EMPTY_STDOUT = "empty-stdout"
@@ -74,8 +84,10 @@ REVIEW_PAYLOAD_SHAPES = (
     SHAPE_OBJECT_FINDINGS_NOT_A_LIST,   # a JSON object parsed with a `findings` key that is not a list
     SHAPE_OBJECT_VERDICTS_NOT_A_LIST,   # a JSON object parsed with a `verdicts` key that is not a list
     SHAPE_ARRAY_NOT_ALL_OBJECTS,        # a bare top-level array parsed, but not every element is an object
-    SHAPE_FINDINGS_HOLLOW_MEMBER,       # a findings array parsed with at least one hollow object member
-    SHAPE_VERDICTS_HOLLOW_MEMBER,       # a verdicts array parsed with at least one hollow object member
+    SHAPE_FINDINGS_HOLLOW_MEMBER,       # a findings array parsed with only hollow object members
+    SHAPE_VERDICTS_HOLLOW_MEMBER,       # a verdicts array parsed with only invalid members
+    SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER,  # findings list carries substantive and hollow members
+    SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER,  # verdicts list carries valid and invalid members
     SHAPE_PLACEHOLDER_LITERAL_REFUSAL,  # an item carries a review-base template literal in id or severity
     SHAPE_NO_PARSEABLE_JSON,            # stdout was non-empty but held no parseable top-level JSON value
     SHAPE_EMPTY_STDOUT,                 # stdout was empty or whitespace only
@@ -187,40 +199,162 @@ def REVIEW_RESULT_CONTRACT(expected_result_kind=None):
     return "\n".join(lines) + "\n"
 
 
-# #747 WO-4a: pure engaged-artifact detector thresholds. Measured 2026-07-31 on the preserved
-# dispatch corpus (harness 2.1.219, plugin 0.23.0): all seven prose specimens score ≥2 signals
-# under the two-of-three rule; the preserved cursor stream log (66,821 B raw) scores 1 signal and
-# is correctly rejected. Smallest genuine prose specimen is 661 B; the floor rejects one-line errors.
-ARTIFACT_MIN_RESIDUE_BYTES = 200
-ARTIFACT_EXCERPT_BYTES = 2000
-ARTIFACT_MIN_SIGNALS = 2  # of citations / enumerations / sections — never one signal alone (BC-5)
-ARTIFACT_SECTION_NAMES = (
-    "findings",
-    "investigation record",
-    "verdict",
-    "no blocking findings",
-    "blocking",
-    "summary",
-)
-_ARTIFACT_CITATION_RE = re.compile(r"[\w./\\-]+\.[\w]+:\d+")
-_ARTIFACT_ENUM_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+", re.MULTILINE)
-_ARTIFACT_TRACEBACK_FIRST_LINE_RE = re.compile(
-    r"^(?:Traceback \(most recent call last\)|panic:|error\[E\d+\])",
-    re.IGNORECASE,
-)
-
+REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE = "sandbox-roots-unresolvable"
+REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE = "sandbox-uv-cache-unresolvable"
+REFUSAL_SANDBOX_ACCESS_MALFORMED = "sandbox-access-malformed"
+REFUSAL_SANDBOX_ACCESS_UNREADABLE = "sandbox-access-unreadable"
+REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM = "sandbox-access-unsupported-platform"
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
 BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     "unknown-engine",
     "unknown-claude-tier",
+    "unknown-claude-mode",
     "fable-unrunnable",
     "unregistered-engine-model",
     "engine-model-effort-conflict",
     "invalid-model-effort",
     "untokenizable",
+    "builder-prompt-missing",
+    "builder-session-id-invalid",
+    "sandbox-roots-missing",
+    "sandbox-process-listing-unavailable",
+    REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE,
+    REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE,
+    REFUSAL_SANDBOX_ACCESS_MALFORMED,
+    REFUSAL_SANDBOX_ACCESS_UNREADABLE,
+    REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM,
 })
+
+REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
+REFUSAL_BUILDER_SESSION_ID_INVALID = "builder-session-id-invalid"
+CLAUDE_EXECUTABLE = "claude"
+CLAUDE_WRITE_TOOLS = "Bash,Edit,Write,Read,Grep,Glob"
+
+
+def _abs_str(value):
+    return isinstance(value, str) and os.path.isabs(value)
+
+
+# The sandbox runtime reads an allowWrite entry as a glob, and a trailing `/**` strips to the
+# directory (to `/` when nothing remains), so a glob spelling can widen a grant past its literal path.
+_SANDBOX_GLOB_CHARS = frozenset("*?[]{}")
+
+
+def sandbox_path_has_glob(path):
+    """True when ``path`` carries a character the sandbox runtime would read as a glob."""
+    return any(ch in _SANDBOX_GLOB_CHARS for ch in path)
+
+
+def claude_write_sandbox_valid(sandbox):
+    """True when ``sandbox`` is a well-formed journaled claude write sandbox dict (#1554)."""
+    if not isinstance(sandbox, dict):
+        return False
+    roots = sandbox.get("writeRoots")
+    if not isinstance(roots, list) or not roots or not all(_abs_str(r) for r in roots):
+        return False
+    deny = sandbox.get("denyWrite")
+    if not isinstance(deny, list) or not all(_abs_str(d) for d in deny):
+        return False
+    uv_cache = sandbox.get("uvCacheDir")
+    if uv_cache is not None and not _abs_str(uv_cache):
+        return False
+    tmp_base = sandbox.get("claudeTmpBase")
+    if tmp_base is not None and not _abs_str(tmp_base):
+        return False
+    if "tmpWriteRoots" in sandbox:
+        tmp_roots = sandbox["tmpWriteRoots"]
+        if not isinstance(tmp_roots, list) or not all(_abs_str(p) for p in tmp_roots):
+            return False
+        if any(sandbox_path_has_glob(p) for p in tmp_roots):
+            return False
+    if "localBinding" in sandbox and type(sandbox["localBinding"]) is not bool:
+        return False
+    return _sandbox_access_valid(sandbox.get("access"))
+
+
+_SANDBOX_ACCESS_KEYS = frozenset({
+    "allowedDomains", "localPorts", "localSocketDirs", "extraWritePaths",
+})
+
+
+def _sandbox_access_valid(access):
+    """The journaled ``access`` object (#1562): absent or None is all-off, a pre-field run."""
+    if access is None:
+        return True
+    if not isinstance(access, dict) or set(access) != _SANDBOX_ACCESS_KEYS:
+        return False
+    domains = access["allowedDomains"]
+    if not isinstance(domains, list) or not all(isinstance(d, str) and d for d in domains):
+        return False
+    for key in ("localSocketDirs", "extraWritePaths"):
+        paths = access[key]
+        if not isinstance(paths, list) or not all(_abs_str(p) for p in paths):
+            return False
+    if any(sandbox_path_has_glob(p) for p in access["extraWritePaths"]):
+        return False
+    return type(access["localPorts"]) is bool
+
+
+# WORKAROUND: the harness's sandbox auto-allow misses command shapes its safety check flags (`-X` on
+# a Python call, `$?`), so the write channel allows the project's Python, pytest, echo, node
+# toolchain (npm, npx, node, pnpm, yarn) and `ps` command families by rule and lets the sandbox
+# confine them
+# delete-when: `autoAllowBashIfSandboxed` auto-approves every sandboxed command shape on the Claude
+# Code version the channel runs
+# axis: the rules cover only the named command families; every other shape keeps the harness's
+# auto-allow, and a command managed policy excludes from the sandbox and that matches a rule runs
+# unprompted outside it (the disclosed residual)
+CLAUDE_WRITE_BASH_ALLOW = (
+    "Bash(python:*)",
+    "Bash(python3:*)",
+    "Bash(pytest:*)",
+    "Bash(scripts/pinned-python:*)",
+    "Bash(echo:*)",
+    "Bash(npm:*)",
+    "Bash(npx:*)",
+    "Bash(node:*)",
+    "Bash(pnpm:*)",
+    "Bash(yarn:*)",
+    "Bash(ps:*)",
+)
+
+
+def claude_write_sandbox_settings(sandbox):
+    """The inline ``--settings`` JSON for the claude write channel's sandboxed shell (#1554).
+
+    Pure: built only from the journaled ``sandbox`` dict, never the ambient environment."""
+    uv_cache = sandbox.get("uvCacheDir")
+    access = sandbox.get("access") or {}
+    domains = access.get("allowedDomains") or []
+    socket_dirs = access.get("localSocketDirs") or []
+    extra_paths = access.get("extraWritePaths") or []
+    env = {} if domains else {"UV_OFFLINE": "1"}
+    allow_write = list(sandbox["writeRoots"])
+    if uv_cache is not None:
+        env["UV_CACHE_DIR"] = uv_cache
+        allow_write.append(uv_cache)
+    allow_write.extend(sandbox.get("tmpWriteRoots") or [])
+    allow_write.extend(extra_paths)
+    network = {"allowedDomains": list(domains), "strictAllowlist": True}
+    if sandbox.get("localBinding") is True or access.get("localPorts"):
+        network["allowLocalBinding"] = True
+    if socket_dirs:
+        network["allowUnixSockets"] = list(socket_dirs)
+    obj = {
+        "env": env,
+        "permissions": {"allow": list(CLAUDE_WRITE_BASH_ALLOW), "deny": ["WebFetch", "WebSearch"]},
+        "sandbox": {
+            "enabled": True,
+            "failIfUnavailable": True,
+            "autoAllowBashIfSandboxed": True,
+            "allowUnsandboxedCommands": False,
+            "network": network,
+            "filesystem": {"allowWrite": allow_write, "denyWrite": list(sandbox["denyWrite"])},
+        },
+    }
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
 def _refuse(reason, *, detail=None):
@@ -445,6 +579,21 @@ def build_argv_result(seat, role_kind, opts):
     cwd = opts.get("cwd")
     is_read = role_kind == "review"
     claude_tier = opts.get("model")
+    claude_mode = opts.get("claudeMode")
+    if claude_mode is not None and claude_mode != MODE_PRINT:
+        modes_label = ", ".join(CLAUDE_MODES)
+        if not isinstance(claude_mode, str):
+            return _refuse(
+                "unknown-claude-mode",
+                detail="unknown claude mode %r; accepted modes: %s"
+                % (claude_mode, modes_label),
+            )
+        if claude_mode not in CLAUDE_MODES:
+            return _refuse(
+                "unknown-claude-mode",
+                detail="unknown claude mode %r; accepted modes: %s"
+                % (claude_mode, modes_label),
+            )
     if claude_tier is not None:
         if not isinstance(claude_tier, str) or claude_tier not in model_registry.known_claude_models():
             return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(claude_tier))
@@ -513,12 +662,27 @@ def build_argv_result(seat, role_kind, opts):
         ]
         return _ok(argv)
     if vendor == "claude":
+        if not is_read:
+            if opts.get("requiresProcessListing") is True:
+                return _refuse(
+                    "sandbox-process-listing-unavailable",
+                    detail="the claude write channel runs a sandboxed shell that denies "
+                           "process listing (ps)",
+                )
+            if not claude_write_sandbox_valid(opts.get("claudeWriteSandbox")):
+                return _refuse(
+                    "sandbox-roots-missing",
+                    detail="a claude write needs journaled sandbox roots "
+                           "(claudeWriteSandbox) resolved at run open",
+                )
         engine_model, _source, refusal_reason, refusal_detail = _resolve_engine_model_pin(
             vendor, model_id, claude_tier,
         )
         if refusal_reason is not None:
             return _refuse(refusal_reason, detail=refusal_detail)
-        if engine_model == "fable-5":
+        fable_parsed = model_registry.parse_dispatch_token("claude", "fable")
+        fable_id = fable_parsed[0] if fable_parsed else None
+        if fable_id is not None and engine_model == fable_id:
             return _refuse("fable-unrunnable", detail=_fable_unrunnable_detail("fable"))
         ok, _reason = model_registry.validate_config("claude", engine_model, effort)
         if not ok:
@@ -533,15 +697,49 @@ def build_argv_result(seat, role_kind, opts):
                 detail=_untokenizable_detail("claude", engine_model, effort),
             )
         argv = [
-            "claude", "-p", "--model", tok, "--effort", effort,
+            CLAUDE_EXECUTABLE, "-p", "--model", tok, "--effort", effort,
             "--output-format", "stream-json", "--verbose",
         ]
         if is_read:
             argv += ["--restricted"]
         else:
-            argv += ["--permission-mode", "acceptEdits", "--restricted"]
+            argv += [
+                "--permission-mode", "acceptEdits", "--restricted",
+                "--tools", CLAUDE_WRITE_TOOLS,
+                "--strict-mcp-config",
+                "--settings", claude_write_sandbox_settings(opts["claudeWriteSandbox"]),
+            ]
         return _ok(argv)
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
+
+
+def claude_builder_argv(token, session_id, prompt):
+    """Build the print-mode claude argv for a builder session. Never raises."""
+    if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
+        return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
+    if not isinstance(session_id, str):
+        return _refuse(
+            REFUSAL_BUILDER_SESSION_ID_INVALID,
+            detail="a canonical lowercase UUID string",
+        )
+    try:
+        canonical = str(uuid.UUID(session_id))
+    except (ValueError, AttributeError, TypeError):
+        canonical = None
+    if canonical is None or canonical != session_id:
+        return _refuse(
+            REFUSAL_BUILDER_SESSION_ID_INVALID,
+            detail="a canonical lowercase UUID string",
+        )
+    if not isinstance(prompt, str) or not prompt.strip():
+        return _refuse(
+            REFUSAL_BUILDER_PROMPT_MISSING,
+            detail="builder prompt must be a non-empty string",
+        )
+    argv = [
+        CLAUDE_EXECUTABLE, "--model", token, "--session-id", session_id, "-p", prompt,
+    ]
+    return _ok(argv)
 
 
 def build_argv(seat, role_kind, opts):
@@ -618,47 +816,6 @@ def _last_json_array(stdout):
     return _last_top_level_json(stdout, list)
 
 
-def write_prompt_is_contracted(fed_prompt):
-    """True when the fed write prompt carries the write-report contract.
-
-    Keyed on WRITE_REPORT_SENTINEL (stable) rather than WRITE_REPORT_CONTRACT prose
-    (expected to be edited). Fail-closed: a prompt that merely mentions the sentinel
-    is treated as contracted and routes to strict tail grading."""
-    if not isinstance(fed_prompt, str) or not fed_prompt:
-        return False
-    return WRITE_REPORT_SENTINEL in fed_prompt
-
-
-def extract_write_report(text):
-    """Strict tail grammar: sentinel line + one JSON object + trailing whitespace only.
-
-    Input must already be envelope-unwrapped and echo-stripped. Returns the decoded object
-    or None. Never raises."""
-    try:
-        if not isinstance(text, str) or not text:
-            return None
-        lines = text.split("\n")
-        last_idx = None
-        for i, line in enumerate(lines):
-            if line.strip() == WRITE_REPORT_SENTINEL:
-                last_idx = i
-        if last_idx is None:
-            return None
-        after = "\n".join(lines[last_idx + 1:])
-        if not after:
-            return None
-        dec = json.JSONDecoder()
-        obj, end = dec.raw_decode(after.lstrip())
-        if not isinstance(obj, dict):
-            return None
-        tail = after.lstrip()[end:]
-        if tail.strip():
-            return None
-        return obj
-    except Exception:
-        return None
-
-
 def _grade_build_report_obj(obj):
     """Single home for build|fix report-object grading (CONVENTIONS §11). Never raises."""
     if not isinstance(obj, dict):
@@ -671,34 +828,6 @@ def _grade_build_report_obj(obj):
                else WRITE_SIGNAL_NEEDS_CONTEXT)
         return {"ok": False, "signal": sig, "reason": sig, "evidence": evidence}
     return {"ok": True, "signal": WRITE_SIGNAL_OK, "evidence": evidence}
-
-
-def grade_write_report(engine, role_kind, stdout, fed_prompt):
-    """Grade a write dispatch stdout. Contracted prompts require the strict tail report;
-    uncontracted prompts delegate to parse_result (byte-identical legacy). Never raises."""
-    try:
-        text = stdout if isinstance(stdout, str) else ""
-        text = _unwrap_stream_envelope(text)
-        if not isinstance(text, str):
-            text = ""
-        prompt = fed_prompt if isinstance(fed_prompt, str) else ""
-        stripped = strip_echoed_prompt(text, prompt)
-        if not isinstance(stripped, str):
-            stripped = ""
-        stripped = stripped.replace(WRITE_REPORT_CONTRACT, "")
-        if write_prompt_is_contracted(prompt):
-            obj = extract_write_report(stripped)
-            # Prompt-example guard applies only to the extracted tail object, not prose
-            # elsewhere in the output. Safe because the contract's example is non-decodable
-            # (test_write_report_contract_has_no_extractable_report), and the tail must
-            # carry the sentinel and satisfy strict grammar.
-            if obj is None or any(obj == prompt_object[0]
-                                  for prompt_object in _top_level_json_matches(prompt, dict)):
-                return {"ok": False, "reason": "unreadable"}
-            return _grade_build_report_obj(obj)
-        return parse_result(engine, role_kind, stdout)
-    except Exception:
-        return {"ok": False, "reason": "unreadable"}
 
 
 def strip_echoed_prompt(stdout, prompt_text):
@@ -736,8 +865,8 @@ def _is_codex_event_object(obj):
     return isinstance(obj, dict) and obj.get("type") in _CODEX_EVENT_TYPES
 
 
-def _iter_codex_event_lines(stdout):
-    """Yield parsed JSON objects from codex JSONL stdout. Never raises."""
+def _iter_jsonl_dict_lines(stdout):
+    """Yield parsed JSON dicts from JSONL stdout; skip unparseable and non-dict lines. Never raises."""
     if not isinstance(stdout, str) or not stdout:
         return
     for line in stdout.splitlines():
@@ -759,22 +888,6 @@ def _is_claude_event_object(obj):
     return isinstance(obj, dict) and obj.get("type") in _CLAUDE_EVENT_TYPES
 
 
-def _iter_claude_event_lines(stdout):
-    """Yield parsed JSON objects from claude stream-json stdout. Never raises."""
-    if not isinstance(stdout, str) or not stdout:
-        return
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(obj, dict):
-            yield obj
-
-
 def claude_tool_calls(stdout):
     """Count distinct tool_use ids in claude stream-json stdout; int or None. Never raises.
 
@@ -784,7 +897,7 @@ def claude_tool_calls(stdout):
             return None
         parsed_any = False
         tool_ids = set()
-        for obj in _iter_claude_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not _is_claude_event_object(obj):
                 continue
             parsed_any = True
@@ -818,11 +931,45 @@ def claude_result_envelope(stdout):
         if not isinstance(stdout, str) or not stdout:
             return None
         last = None
-        for obj in _iter_claude_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not isinstance(obj, dict) or obj.get("type") != "result":
                 continue
             last = obj
         return last
+    except Exception:
+        return None
+
+
+def claude_transcript_tool_calls(rows):
+    """Count distinct non-StructuredOutput tool_use ids in transcript rows; int or None."""
+    try:
+        if not isinstance(rows, list):
+            return None
+        parsed_any = False
+        tool_ids = set()
+        for row in rows:
+            if not _is_claude_event_object(row):
+                continue
+            parsed_any = True
+            if row.get("type") != "assistant":
+                continue
+            message = row.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") == "StructuredOutput":
+                    continue
+                block_id = block.get("id")
+                if isinstance(block_id, str) and block_id:
+                    tool_ids.add(block_id)
+        if not parsed_any:
+            return None
+        return len(tool_ids)
     except Exception:
         return None
 
@@ -832,7 +979,7 @@ def is_codex_event_stream(stdout):
     try:
         if not isinstance(stdout, str) or not stdout:
             return False
-        for obj in _iter_codex_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if _is_codex_event_object(obj):
                 return True
         return False
@@ -847,7 +994,7 @@ def codex_tool_calls(stdout):
             return None
         count = 0
         parsed_any = False
-        for obj in _iter_codex_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not _is_codex_event_object(obj):
                 continue
             parsed_any = True
@@ -872,7 +1019,7 @@ def codex_event_tokens(stdout):
             return None
         parsed_any = False
         last_usage = None
-        for obj in _iter_codex_event_lines(stdout):
+        for obj in _iter_jsonl_dict_lines(stdout):
             if not _is_codex_event_object(obj):
                 continue
             parsed_any = True
@@ -949,6 +1096,149 @@ def _cursor_shell_call_delivers_excluded_path(
     except Exception:
         pass
     return False
+
+
+_CMD_LINE_LIMIT = 1024 * 1024
+_CMD_HEAD_KEEP = 4096
+_CMD_TAIL_KEEP = 512
+_CMD_MAX_OPEN = 10000
+_CMD_MAX_CLOSED = 100000
+# Bounded scan for cursor_command_time on uncapped on-disk stdout (#1467 / #563 class).
+CURSOR_COMMAND_TIME_MAX_BYTES = 64 * 1024 * 1024
+CURSOR_COMMAND_TIME_MAX_SECONDS = 5.0
+_CMD_OVERLONG_SUBTYPE_RE = re.compile(rb'"subtype":"(started|completed)"')
+_CMD_OVERLONG_CALL_ID_RE = re.compile(rb'"call_id":"([^"]*)"')
+_CMD_OVERLONG_TOOL_RE = re.compile(rb'"tool_call":\{"([A-Za-z0-9_]+)"')
+_CMD_TAIL_RE = re.compile(rb'"timestamp_ms":(\d+)\}\s*$')
+
+
+def _cursor_overlong_tool_call(head, tail):
+    """Classify an over-1 MiB tool_call line by head/tail snippets; field order agnostic."""
+    if b'"type":"tool_call"' not in head and b'"type": "tool_call"' not in head:
+        return None
+    sm = _CMD_OVERLONG_SUBTYPE_RE.search(head)
+    cm = _CMD_OVERLONG_CALL_ID_RE.search(head)
+    tm_tool = _CMD_OVERLONG_TOOL_RE.search(head)
+    tm_ts = _CMD_TAIL_RE.search(tail)
+    if not (sm and cm and tm_tool and tm_ts):
+        return None
+    return (
+        sm.group(1).decode("ascii"),
+        cm.group(1).decode("utf-8", "replace"),
+        tm_tool.group(1).decode("ascii"),
+        int(tm_ts.group(1)),
+    )
+
+
+def _union_seconds(intervals):
+    total = 0.0
+    cur_s = cur_e = None
+    for s, e in sorted(intervals):
+        if cur_e is None or s > cur_e:
+            if cur_e is not None:
+                total += cur_e - cur_s
+            cur_s, cur_e = s, e
+        elif e > cur_e:
+            cur_e = e
+    if cur_e is not None:
+        total += cur_e - cur_s
+    return total
+
+
+def cursor_command_time(stdout_path, end_epoch_ms):
+    """Measured tool-call time of a cursor stream-json stdout file; dict or None. Never raises.
+
+    Streams the file in binary (bounded lines; over-long lines classified by head and tail), pairs
+    started/completed by call_id, and totals the UNION of call intervals so parallel calls are not
+    counted twice. None when the file is missing or unreadable."""
+    try:
+        open_calls = {}
+        closed = []
+        untimed = unparsed = 0
+        complete = True
+        bytes_read = 0
+        deadline = time.monotonic() + CURSOR_COMMAND_TIME_MAX_SECONDS
+        with open(stdout_path, "rb") as fh:
+            while True:
+                if bytes_read >= CURSOR_COMMAND_TIME_MAX_BYTES or time.monotonic() >= deadline:
+                    complete = False
+                    break
+                raw = fh.readline(_CMD_LINE_LIMIT)
+                if not raw:
+                    break
+                bytes_read += len(raw)
+                if len(raw) >= _CMD_LINE_LIMIT and not raw.endswith(b"\n"):
+                    head = raw[:_CMD_HEAD_KEEP]
+                    tail = raw[-_CMD_TAIL_KEEP:]
+                    while True:
+                        if bytes_read >= CURSOR_COMMAND_TIME_MAX_BYTES or time.monotonic() >= deadline:
+                            complete = False
+                            break
+                        chunk = fh.readline(_CMD_LINE_LIMIT)
+                        if not chunk:
+                            break
+                        bytes_read += len(chunk)
+                        tail = (tail + chunk)[-_CMD_TAIL_KEEP:]
+                        if chunk.endswith(b"\n"):
+                            break
+                    if not complete:
+                        break
+                    parsed = _cursor_overlong_tool_call(head, tail)
+                    if parsed is None:
+                        unparsed += 1
+                        continue
+                    subtype, cid, tool, ts = parsed
+                else:
+                    if b'"tool_call"' not in raw:
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except ValueError:
+                        unparsed += 1
+                        continue
+                    if not isinstance(obj, dict) or obj.get("type") != "tool_call":
+                        continue
+                    subtype = obj.get("subtype")
+                    cid = obj.get("call_id")
+                    tc = obj.get("tool_call")
+                    tool = next(iter(tc), None) if isinstance(tc, dict) and tc else None
+                    ts = obj.get("timestamp_ms")
+                    if isinstance(ts, bool) or not isinstance(ts, int):
+                        ts = None
+                    if subtype not in ("started", "completed") or not isinstance(cid, str):
+                        untimed += 1
+                        continue
+                if ts is None:
+                    untimed += 1
+                    continue
+                if subtype == "started":
+                    if cid in open_calls:
+                        continue
+                    if len(open_calls) >= _CMD_MAX_OPEN:
+                        untimed += 1
+                        continue
+                    open_calls[cid] = (ts, tool)
+                else:
+                    began = open_calls.pop(cid, None)
+                    if began is None or len(closed) >= _CMD_MAX_CLOSED:
+                        untimed += 1
+                        continue
+                    closed.append((began[0], max(ts, began[0]), began[1] or tool))
+        end_ms = int(end_epoch_ms)
+        for start_ms, tool in open_calls.values():
+            closed.append((start_ms, max(end_ms, start_ms), tool))
+        return {
+            "source": "cursor-stream-json",
+            "toolSeconds": round(_union_seconds([(s, e) for s, e, _t in closed]) / 1000.0, 1),
+            "shellSeconds": round(_union_seconds(
+                [(s, e) for s, e, t in closed if t == "shellToolCall"]) / 1000.0, 1),
+            "openCalls": len(open_calls),
+            "untimedCalls": untimed,
+            "unparsedLines": unparsed,
+            "complete": complete,
+        }
+    except Exception:
+        return None
 
 
 def cursor_tool_calls(stdout, exclude_paths=()):
@@ -1289,14 +1579,6 @@ def _scrub_mapping(obj):
     if isinstance(obj, list):
         return [_scrub_mapping(x) for x in obj]
     return obj
-
-
-def scrub_salvage_block(salvage):
-    """Scrub every string in a salvage block for durable export. Never raises."""
-    # axis: that every string leaving salvage is scrubbed — keys, structural values, all fields.
-    if not isinstance(salvage, dict):
-        return salvage
-    return _scrub_mapping(salvage)
 
 
 _INVESTIGATED_LOCATOR_SUFFIX_RE = re.compile(r":(\d+)(?::(\d+))?$")
@@ -1699,6 +1981,17 @@ _REVIEW_PAYLOAD_SEMANTICS = {
 }
 
 
+def review_payload_key(kind):
+    """Return the payload key for kind from the home registry. Never raises."""
+    try:
+        record = _REVIEW_PAYLOAD_SEMANTICS.get(kind)
+        if record is None:
+            return None
+        return record.key
+    except Exception:
+        return None
+
+
 def review_payload_carried(result, kind):
     """Whether a review result carries a payload for kind, and the value. Never raises."""
     try:
@@ -1769,6 +2062,101 @@ def _bound_top_level_keys(obj):
     return keys, keys_truncated
 
 
+def _findings_list_member_counts(findings, *, echo_nonce=None):
+    """Return (substantive, hollow) dict-member counts for a findings list."""
+    substantive = 0
+    hollow = 0
+    if not isinstance(findings, list):
+        return substantive, hollow
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        if _finding_is_substantive(item, echo_nonce=echo_nonce):
+            substantive += 1
+        else:
+            hollow += 1
+    return substantive, hollow
+
+
+def _findings_list_hollow_grade(findings, *, echo_nonce=None):
+    """Return 'plain' or 'partial' when a findings list has hollow members, else None."""
+    substantive, hollow = _findings_list_member_counts(findings, echo_nonce=echo_nonce)
+    if hollow == 0:
+        return None
+    if substantive > 0:
+        return "partial"
+    return "plain"
+
+
+def _findings_list_shape_got(findings, *, echo_nonce=None):
+    """Bounded member-shape summary for a findings list."""
+    count = len(findings) if isinstance(findings, list) else 0
+    substantive, hollow = _findings_list_member_counts(findings, echo_nonce=echo_nonce)
+    return "list:count=%d,hollow=%d,substantive=%d" % (count, hollow, substantive)
+
+
+def _verdicts_list_member_counts(verdicts):
+    """Return (valid, invalid) member counts for a verdicts list."""
+    valid = 0
+    invalid = 0
+    if not isinstance(verdicts, list):
+        return valid, invalid
+    for item in verdicts:
+        if _verdict_is_valid(item):
+            valid += 1
+        else:
+            invalid += 1
+    return valid, invalid
+
+
+def _verdicts_list_hollow_grade(verdicts):
+    """Return 'plain' or 'partial' when a verdicts list has invalid members, else None."""
+    valid, invalid = _verdicts_list_member_counts(verdicts)
+    if invalid == 0:
+        return None
+    if valid > 0:
+        return "partial"
+    return "plain"
+
+
+def _verdicts_list_shape_got(verdicts):
+    """Bounded member-shape summary for a verdicts list."""
+    count = len(verdicts) if isinstance(verdicts, list) else 0
+    valid, invalid = _verdicts_list_member_counts(verdicts)
+    return "list:count=%d,invalid=%d,valid=%d" % (count, invalid, valid)
+
+
+def _investigated_list_shape_got(paths, *, echo_nonce=None):
+    """Bounded member-shape summary for an investigated path list."""
+    if not isinstance(paths, list):
+        return "not-a-list"
+    count = len(paths)
+    placeholder = sum(
+        1 for path in paths
+        if _investigated_path_is_placeholder_echo(path, echo_nonce=echo_nonce)
+    )
+    return "list:count=%d,placeholder-echo=%d" % (count, placeholder)
+
+
+def _hollow_family_diagnostic(list_kind, grade, *, member_shape_wanted, member_shape_got):
+    """Single mint for hollow-family payload-shape diagnostics. Never raises."""
+    if list_kind == "findings":
+        parsed = (SHAPE_FINDINGS_PARTIAL_HOLLOW_MEMBER if grade == "partial"
+                  else SHAPE_FINDINGS_HOLLOW_MEMBER)
+    elif list_kind == "verdicts":
+        parsed = (SHAPE_VERDICTS_PARTIAL_HOLLOW_MEMBER if grade == "partial"
+                  else SHAPE_VERDICTS_HOLLOW_MEMBER)
+    else:
+        parsed = SHAPE_FINDINGS_HOLLOW_MEMBER
+    return {
+        "parsed": parsed,
+        "topLevelKeys": [],
+        "keysTruncated": False,
+        "memberShapeWanted": member_shape_wanted,
+        "memberShapeGot": member_shape_got,
+    }
+
+
 def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
     """Findings-kind shape diagnostic for a recognised review object. Never raises."""
     if "findings" not in obj:
@@ -1777,8 +2165,12 @@ def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
             accepted, _ = _scrub_investigated(investigated)
             if accepted:
                 if _investigated_list_all_placeholder_echo(accepted, echo_nonce=echo_nonce):
-                    return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                            "topLevelKeys": [], "keysTruncated": False}
+                    return _hollow_family_diagnostic(
+                        "investigated", "plain",
+                        member_shape_wanted="non-placeholder-investigated-path",
+                        member_shape_got=_investigated_list_shape_got(
+                            accepted, echo_nonce=echo_nonce),
+                    )
                 return None
         top_keys, keys_truncated = _bound_top_level_keys(obj)
         return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
@@ -1791,15 +2183,22 @@ def _review_payload_shape_findings_obj(obj, *, echo_nonce=None):
         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                 "topLevelKeys": [], "keysTruncated": False}
     if _findings_list_has_hollow_member(findings, echo_nonce=echo_nonce):
-        return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                "topLevelKeys": [], "keysTruncated": False}
+        return _hollow_family_diagnostic(
+            "findings", _findings_list_hollow_grade(findings, echo_nonce=echo_nonce),
+            member_shape_wanted="engaged-finding-member",
+            member_shape_got=_findings_list_shape_got(findings, echo_nonce=echo_nonce),
+        )
     investigated = obj.get("investigated")
     if isinstance(investigated, list) and investigated:
         accepted, _ = _scrub_investigated(investigated)
         if accepted and _investigated_list_all_placeholder_echo(
                 accepted, echo_nonce=echo_nonce):
-            return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                    "topLevelKeys": [], "keysTruncated": False}
+            return _hollow_family_diagnostic(
+                "investigated", "plain",
+                member_shape_wanted="non-placeholder-investigated-path",
+                member_shape_got=_investigated_list_shape_got(
+                    accepted, echo_nonce=echo_nonce),
+            )
     return None
 
 
@@ -1813,8 +2212,11 @@ def _review_payload_shape_verdicts_obj(obj):
         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                 "topLevelKeys": [], "keysTruncated": False}
     if _verdicts_list_has_hollow_member(verdicts):
-        return {"parsed": SHAPE_VERDICTS_HOLLOW_MEMBER,
-                "topLevelKeys": [], "keysTruncated": False}
+        return _hollow_family_diagnostic(
+            "verdicts", _verdicts_list_hollow_grade(verdicts),
+            member_shape_wanted="valid-verdict-member",
+            member_shape_got=_verdicts_list_shape_got(verdicts),
+        )
     return None
 
 
@@ -1850,7 +2252,9 @@ def review_payload_shape(stdout, fed_prompt=None, *, echo_nonce=None):
     Returns {"parsed": <one of REVIEW_PAYLOAD_SHAPES>,
              "topLevelKeys": [str, ...],      # [] unless `parsed` is object-without-findings
                                                # or object-both-payload-keys
-             "keysTruncated": bool}
+             "keysTruncated": bool,
+             "memberShapeWanted": str,          # hollow-family only — required member shape
+             "memberShapeGot": str}            # hollow-family only — bounded shape read
     Returns None when `stdout` DOES parse as a valid review payload — there is nothing to diagnose.
     Never raises."""
     try:
@@ -1886,8 +2290,12 @@ def review_payload_shape(stdout, fed_prompt=None, *, echo_nonce=None):
                         return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
                                 "topLevelKeys": [], "keysTruncated": False}
                     if _findings_list_has_hollow_member(arr, echo_nonce=echo_nonce):
-                        return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
-                                "topLevelKeys": [], "keysTruncated": False}
+                        return _hollow_family_diagnostic(
+                            "findings", _findings_list_hollow_grade(arr, echo_nonce=echo_nonce),
+                            member_shape_wanted="engaged-finding-member",
+                            member_shape_got=_findings_list_shape_got(
+                                arr, echo_nonce=echo_nonce),
+                        )
                     return None
                 return {"parsed": SHAPE_ARRAY_NOT_ALL_OBJECTS,
                         "topLevelKeys": [], "keysTruncated": False}
@@ -1899,287 +2307,6 @@ def review_payload_shape(stdout, fed_prompt=None, *, echo_nonce=None):
         # A diagnostic that cannot diagnose says nothing — never fabricate a parsed label from an
         # internal error (no-parseable-json is a finding about stdout, not a guess after failure).
         return None
-
-
-def _review_residue(stdout, fed_prompt):
-    """Unwrap stream-json envelope, strip echoed prompt, return graded residue. Never raises."""
-    try:
-        norm = normalize_review_stdout(stdout, fed_prompt)
-        return norm["text"] if norm["text"].strip() else ""
-    except Exception:
-        return ""
-
-
-def salvage_write_report(engine, role_kind, stdout, fed_prompt):
-    """Recover a build/fix implementer's report from raw engine stdout. Never raises.
-
-    In the prose tier, `truncated` means the manual-read excerpt was capped by byte length
-    on the scrubbed residue (the excerpt carries the tail of the scrubbed text, where the
-    report usually lives). `excerptBytes` counts bytes from that scrubbed tail slice.
-    """
-    try:
-        if role_kind == "review" or not isinstance(stdout, str) or not stdout.strip():
-            return None
-        text = _unwrap_stream_envelope(stdout)
-        if not isinstance(text, str):
-            return None
-        prompt = fed_prompt if isinstance(fed_prompt, str) else ""
-        residue = strip_echoed_prompt(text, prompt)
-        if not isinstance(residue, str) or not residue.strip():
-            return None
-        residue = residue.replace(WRITE_REPORT_CONTRACT, "")
-
-        # A partial prompt echo can retain its example verdict even when the wider prompt was not
-        # removable verbatim. Do not turn that template object into an implementer claim.
-        # Salvage is deliberately stricter than grading — the broad guard was kept while grading
-        # was narrowed (PR #969); the divergence is accepted, and the fail direction is a lost
-        # recovery aid on an already-forfeited path, never a false success.
-        residue_objects = _top_level_json_matches(residue, dict)
-        prompt_objects = _top_level_json_matches(prompt, dict)
-        if (_artifact_is_prompt_echo_residue(residue, prompt) or
-                any(residue_object[0] == prompt_object[0]
-                    for residue_object in residue_objects
-                    for prompt_object in prompt_objects)):
-            return None
-
-        report_obj = extract_write_report(residue)
-        if report_obj is not None:
-            parsed = _grade_build_report_obj(report_obj)
-            if parsed.get("reason") == "unreadable":
-                return None
-            report = {
-                "ok": parsed.get("ok") is True,
-                "signal": parsed.get("signal"),
-                "evidence": {
-                    "testFailed": bool(parsed.get("evidence", {}).get("testFailed")),
-                    "testPassed": bool(parsed.get("evidence", {}).get("testPassed")),
-                },
-            }
-            if not isinstance(report["signal"], str):
-                return None
-            return scrub_salvage_block({
-                "report": report,
-                "structured": True,
-                "requiresManualRead": False,
-                "salvaged": True,
-            })
-
-        residue_bytes = len(residue.encode("utf-8"))
-        if (residue_bytes < ARTIFACT_MIN_RESIDUE_BYTES or
-                _artifact_is_prompt_echo_residue(residue, prompt) or
-                _artifact_is_traceback_residue(residue)):
-            return None
-        residue_scrubbed = _scrub(residue)
-        residue_scrubbed_encoded = residue_scrubbed.encode("utf-8")
-        truncated = len(residue_scrubbed_encoded) > ARTIFACT_EXCERPT_BYTES
-        if truncated:
-            excerpt_raw = residue_scrubbed_encoded[-ARTIFACT_EXCERPT_BYTES:]
-        else:
-            excerpt_raw = residue_scrubbed_encoded
-        return {
-            "report": None,
-            "structured": False,
-            "requiresManualRead": True,
-            "excerpt": excerpt_raw.decode("utf-8", errors="ignore"),
-            "excerptBytes": len(excerpt_raw),
-            "salvaged": True,
-            "truncated": truncated,
-        }
-    except Exception:
-        return None
-
-
-def _artifact_residue_bytes(residue):
-    if not isinstance(residue, str):
-        return 0
-    return len(residue.encode("utf-8"))
-
-
-def _artifact_citations(residue):
-    if not isinstance(residue, str) or not residue:
-        return 0
-    return len(set(_ARTIFACT_CITATION_RE.findall(residue)))
-
-
-def _artifact_enumerations(residue):
-    if not isinstance(residue, str) or not residue:
-        return 0
-    return len(_ARTIFACT_ENUM_LINE_RE.findall(residue))
-
-
-def _artifact_sections(residue):
-    """Recognised review section headings, lowercased, in document order. Never raises."""
-    if not isinstance(residue, str) or not residue:
-        return []
-    found = []
-    seen = set()
-    for line in residue.splitlines():
-        line_stripped = line.strip()
-        if not line_stripped:
-            continue
-        line_lower = line_stripped.lower()
-        for name in ARTIFACT_SECTION_NAMES:
-            if name in seen:
-                continue
-            if re.match(r"#+\s*" + re.escape(name) + r"\s*:?\s*$", line_lower):
-                found.append(name)
-                seen.add(name)
-            elif line_lower.rstrip(":") == name:
-                found.append(name)
-                seen.add(name)
-    return found
-
-
-def _artifact_is_prompt_echo_residue(residue, fed_prompt):
-    """Reject residue that is an echoed fragment of the fed prompt (BC-5 partial-echo case)."""
-    if not isinstance(residue, str) or not residue:
-        return False
-    if not isinstance(fed_prompt, str) or not fed_prompt:
-        return False
-    return residue in fed_prompt
-
-
-def _artifact_is_traceback_residue(residue):
-    if not isinstance(residue, str) or not residue:
-        return False
-    for line in residue.splitlines():
-        if line.strip():
-            return _ARTIFACT_TRACEBACK_FIRST_LINE_RE.match(line.strip()) is not None
-    return False
-
-
-def review_artifact_shape(stdout, fed_prompt):
-    """Detect whether stdout holds a review-shaped artifact after prompt echo is stripped.
-
-    Unwraps a cursor stream-json envelope first, then applies the same echo strip as
-    ``engine_dispatch._grade_review_attempt`` (``strip_echoed_prompt`` on the unwrapped text).
-    When the strip yields empty-or-whitespace, the residue is empty and the artifact is **not**
-    engaged — never fall back to raw stdout.
-
-    Citations match a ``path.ext:line`` shape anywhere in the residue, **including inside fenced
-    code blocks** (a citation-shaped token in a fence is counted).
-
-    Engaged when ``residueBytes >= ARTIFACT_MIN_RESIDUE_BYTES`` and at least two of: citations ≥ 1,
-    enumerations ≥ 2, sections ≥ 1. ``basis`` names which signals held (sorted); otherwise
-    ``engaged: False`` and ``basis: None``.
-
-    Error direction (honest): a long engine error dump that happens to carry citations and bullets
-    can read as engaged. That is bounded, not fixed, here — consumers keep the outcome a forfeit,
-    never credit the seat, and verify any finding independently. This must **never** be read as
-    evidence a seat was *inert* (``engagement_read`` already refuses ``inert``).
-
-    Never raises."""
-    try:
-        residue = _review_residue(stdout, fed_prompt)
-        residue_bytes = _artifact_residue_bytes(residue)
-        citations = _artifact_citations(residue)
-        enumerations = _artifact_enumerations(residue)
-        sections = _artifact_sections(residue)
-        shape = {
-            "engaged": False,
-            "residueBytes": residue_bytes,
-            "citations": citations,
-            "enumerations": enumerations,
-            "sections": sections,
-            "basis": None,
-        }
-        if not residue.strip():
-            return shape
-        if _artifact_is_prompt_echo_residue(residue, fed_prompt):
-            return shape
-        if _artifact_is_traceback_residue(residue):
-            return shape
-        if residue_bytes < ARTIFACT_MIN_RESIDUE_BYTES:
-            return shape
-        signals = []
-        if citations >= 1:
-            signals.append("citations")
-        if enumerations >= 2:
-            signals.append("enumerations")
-        if len(sections) >= 1:
-            signals.append("sections")
-        if len(signals) >= ARTIFACT_MIN_SIGNALS:
-            shape["engaged"] = True
-            shape["basis"] = sorted(signals)
-        return shape
-    except Exception:
-        return {
-            "engaged": False,
-            "residueBytes": 0,
-            "citations": 0,
-            "enumerations": 0,
-            "sections": [],
-            "basis": None,
-        }
-
-
-def salvage_from_artifact(stdout, fed_prompt, *, echo_nonce=None):
-    """Salvage structured findings or a scrubbed prose excerpt from review stdout.
-
-    Uses the same residue path as ``review_artifact_shape``. When ``parse_result`` yields
-    non-empty findings, returns them (``structured: True``). **Never** heuristically splits prose
-    into findings — manufacturing claims from prose is worse than handing over the artifact.
-
-    ``structured: True`` means findings were genuinely parsed — not merely that ``parse_result``
-    returned ok. When ``parse_result`` returns ok with an **empty** findings list on residue that
-    ``review_artifact_shape`` reports as **engaged**, that is a false clean (e.g. incidental bare
-    ``[]`` in prose): return ``structured: False``, ``requiresManualRead: True``, and the excerpt.
-    Genuinely structured empty JSON (non-engaged residue) may still report ``structured: True``
-    with zero findings.
-
-    When ``review_artifact_shape`` reports ``engaged: True`` but this returns ``structured: False``,
-    callers must treat ``requiresManualRead: True`` and use ``excerpt`` as the human/orchestrator
-    pointer — do not coerce prose into the findings transport.
-
-    Every returned string (``excerpt`` and all free-text in structured ``findings``) passes through
-    the module's existing scrub seam (``_scrub`` / ``_scrub_findings``). Never raises."""
-    try:
-        residue = _review_residue(stdout, fed_prompt)
-        excerpt_raw = residue.encode("utf-8")[:ARTIFACT_EXCERPT_BYTES]
-        excerpt = _scrub(excerpt_raw.decode("utf-8", errors="ignore"))
-        excerpt_bytes = len(excerpt_raw)
-        parsed = parse_result("codex", "review", residue, echo_nonce=echo_nonce)
-        if parsed.get("ok") and isinstance(parsed.get("findings"), list):
-            findings = parsed["findings"]
-            if findings:
-                return scrub_salvage_block({
-                    "findings": findings,
-                    "structured": True,
-                    "requiresManualRead": False,
-                    "excerptBytes": excerpt_bytes,
-                    "excerpt": excerpt,
-                })
-            engaged = review_artifact_shape(stdout, fed_prompt).get("engaged")
-            if engaged:
-                return scrub_salvage_block({
-                    "findings": [],
-                    "structured": False,
-                    "requiresManualRead": True,
-                    "excerptBytes": excerpt_bytes,
-                    "excerpt": excerpt,
-                })
-            return scrub_salvage_block({
-                "findings": [],
-                "structured": True,
-                "requiresManualRead": False,
-                "excerptBytes": excerpt_bytes,
-                "excerpt": excerpt,
-            })
-        return {
-            "findings": [],
-            "structured": False,
-            "requiresManualRead": bool(residue.strip()),
-            "excerptBytes": excerpt_bytes,
-            "excerpt": excerpt,
-        }
-    except Exception:
-        return {
-            "findings": [],
-            "structured": False,
-            "requiresManualRead": False,
-            "excerptBytes": 0,
-            "excerpt": "",
-        }
 
 
 ENGAGEMENT_READ_VALUES = frozenset(("engaged", "unknown"))

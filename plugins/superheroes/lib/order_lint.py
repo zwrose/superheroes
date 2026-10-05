@@ -1,7 +1,9 @@
-"""Deterministic half of order lint (#1339); semantic half is a Haiku seat
-(prompt: ``rubric/orders/order-lint-semantic.md``).
+"""Deterministic half of order lint (#1339); the semantic half is the read-only
+``agents/order-linter.md`` seat (prompt: ``rubric/orders/order-lint-semantic.md``).
 
-Reads the authored order text only — never the runner-augmented prompt.
+Reads the authored order text only — never the runner-augmented prompt. Every verbatim
+copy of the shipped ``agents/implementer.md`` body (frontmatter stripped, read from this
+plugin — never a kept copy) is masked before any check; an altered copy is authored text.
 ``--expect-item`` paths arrive as declarations, not as citations to resolve.
 Tokens (one finding each when triggered):
 - ``order-unreadable`` — the order file is missing, empty, or not UTF-8 text.
@@ -14,6 +16,8 @@ Tokens (one finding each when triggered):
 - ``order-result-shape-ambiguous`` — the write-report sentinel sits beside a native-typed
   literal (``"resultKind"`` or ``--output-schema``), or the fixer literal ``{"fixes"`` appears
   while ``--expect-item`` declarations were passed.
+- ``order-result-shape-authored`` — a fixer order names a graded result shape in the driver's
+  text (the fixer literal or a ``## Payload contract`` heading).
 - ``order-budget-missing`` — an implementer order lacks a command-budget declaration.
 - ``order-kind-unknown`` — ``--kind`` is not ``implementer`` or ``fixer``.
 Per-kind table:
@@ -24,6 +28,7 @@ Per-kind table:
 | order-path-unresolved | yes | yes |
 | order-placeholder-unfilled | yes | yes |
 | order-result-shape-ambiguous | yes | yes |
+| order-result-shape-authored | no | yes |
 | order-budget-missing | yes | no |
 | order-kind-unknown | other kind; alone | |
 
@@ -44,18 +49,20 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import guardian_lens_docs  # noqa: E402
+import order_contract  # noqa: E402
 
 TOKEN_UNREADABLE = "order-unreadable"
 TOKEN_REPO_ROOT_UNRESOLVED = "order-repo-root-unresolved"
 TOKEN_PATH_UNRESOLVED = "order-path-unresolved"
 TOKEN_PLACEHOLDER_UNFILLED = "order-placeholder-unfilled"
 TOKEN_RESULT_SHAPE_AMBIGUOUS = "order-result-shape-ambiguous"
+TOKEN_RESULT_SHAPE_AUTHORED = "order-result-shape-authored"
 TOKEN_BUDGET_MISSING = "order-budget-missing"
 TOKEN_KIND_UNKNOWN = "order-kind-unknown"
 TOKENS = (
     TOKEN_UNREADABLE, TOKEN_REPO_ROOT_UNRESOLVED, TOKEN_PATH_UNRESOLVED,
-    TOKEN_PLACEHOLDER_UNFILLED, TOKEN_RESULT_SHAPE_AMBIGUOUS, TOKEN_BUDGET_MISSING,
-    TOKEN_KIND_UNKNOWN,
+    TOKEN_PLACEHOLDER_UNFILLED, TOKEN_RESULT_SHAPE_AMBIGUOUS,
+    TOKEN_RESULT_SHAPE_AUTHORED, TOKEN_BUDGET_MISSING, TOKEN_KIND_UNKNOWN,
 )
 KINDS = ("implementer", "fixer")
 EXTENSIONS = (
@@ -77,6 +84,38 @@ _TRAIL_PUNCT = re.compile(r"[.,;:!?)}\]]+$")
 _NATIVE = ('"resultKind"', "--output-schema")
 # Driver-bound verify-command token — not an unfilled order placeholder.
 _DRIVER_PH = frozenset({"baseRef"})
+_TEMPLATE_PATH = os.path.join(os.path.dirname(_LIB_DIR), "agents", "implementer.md")
+
+
+def _template_body():
+    """The shipped implementer template minus its frontmatter; None when unreadable."""
+    try:
+        with open(_TEMPLATE_PATH, encoding="utf-8", errors="strict") as fh:
+            raw = fh.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if raw.startswith("---\n"):
+        end = raw.find("\n---\n", 4)
+        if end < 0:
+            return None
+        raw = raw[end + 5:]
+    return raw.strip() or None
+
+
+def normalize_newlines(text):
+    """Fold CRLF and CR to LF — the lint's single newline policy."""
+    # One newline policy for both doors: the CLI's universal-newline read folds CRLF and CR to LF.
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def mask_template(text):
+    """Blank every verbatim template copy (line count kept); return (text, copies masked)."""
+    text = normalize_newlines(text)
+    body = _template_body()
+    n = text.count(body) if body else 0
+    if n:
+        text = text.replace(body, "\n" * (body.count("\n") + 2))
+    return text, n
 
 
 def _load_result_vocab():
@@ -91,6 +130,7 @@ def _load_result_vocab():
 
 _WRITE_SENTINEL, _FIXER_LITERAL = _load_result_vocab()
 _FIXER_OBJECT = re.compile(r'\{\s*"' + re.escape(_FIXER_LITERAL[2:].strip('"')) + r'"')
+_PAYLOAD_CONTRACT_HEADING = order_contract.PAYLOAD_CONTRACT_HEADING
 _STDOUT_PROTOCOL = (_WRITE_SENTINEL, _FIXER_LITERAL)
 
 
@@ -269,12 +309,17 @@ def _placeholders(text):
     return out, len(seen)
 
 
-def _shape(text, expect_items):
+def _shape(text, expect_items, kind="implementer", allow_payload_contract=False):
     native = [s for s in _NATIVE if s in text]
     if _WRITE_SENTINEL in text and native:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, "+".join([_WRITE_SENTINEL] + native))
     if _FIXER_OBJECT.search(text) and expect_items:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, _FIXER_LITERAL + "+expect-item")
+    if kind == "fixer":
+        if not allow_payload_contract and _PAYLOAD_CONTRACT_HEADING in text:
+            return _f(TOKEN_RESULT_SHAPE_AUTHORED, "payload-contract-heading")
+        if _FIXER_OBJECT.search(text):
+            return _f(TOKEN_RESULT_SHAPE_AUTHORED, _FIXER_LITERAL)
     return None
 
 
@@ -286,13 +331,15 @@ def _root_ok(path):
     return isinstance(path, str) and path and os.path.isdir(path) and os.access(path, os.R_OK)
 
 
-def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer"):
+def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer",
+               allow_payload_contract=False):
     if not isinstance(text, str):
         return _refuse(kind, TOKEN_UNREADABLE, "not-text")
     if not text.strip():
         return _refuse(kind, TOKEN_UNREADABLE, "empty")
     if kind not in KINDS:
         return _refuse(kind, TOKEN_KIND_UNKNOWN, kind)
+    text, template_n = mask_template(text)
     findings, skip, roots = [], False, []
     if not _root_ok(repo_root):
         findings.append(_f(TOKEN_REPO_ROOT_UNRESOLVED, str(repo_root)))
@@ -315,17 +362,19 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
     findings.extend(ph)
     pf, path_n = _paths(text, expect, roots, skip)
     findings.extend(pf)
-    amb = _shape(text, expect_items)
+    amb = _shape(text, expect_items, kind=kind,
+                 allow_payload_contract=allow_payload_contract)
     if amb:
         findings.append(amb)
     if kind == "implementer" and not _budget_ok(text):
         findings.append(_f(TOKEN_BUDGET_MISSING, ""))
     return {"ok": not findings, "kind": kind, "findings": findings,
             "checked": {"paths": path_n, "placeholders": pc},
-            "vocabSource": "canonical"}
+            "vocabSource": "canonical", "templateCopiesMasked": template_n}
 
 
-def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer"):
+def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer",
+          allow_payload_contract=False):
     try:
         with open(order_path, encoding="utf-8", errors="strict") as fh:
             text = fh.read()
@@ -337,7 +386,8 @@ def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implemente
         return _refuse(kind, TOKEN_UNREADABLE, str(exc))
     if not text.strip():
         return _refuse(kind, TOKEN_UNREADABLE, "empty")
-    return check_text(text, repo_root, expect_items, alt_roots, kind)
+    return check_text(text, repo_root, expect_items, alt_roots, kind,
+                      allow_payload_contract=allow_payload_contract)
 
 
 class _LintArgumentParser(argparse.ArgumentParser):

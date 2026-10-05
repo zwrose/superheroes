@@ -14,6 +14,8 @@ import time
 
 import pytest
 
+from bite_support import _stamp_ended_from_native_result
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 
@@ -36,7 +38,7 @@ RC = RD.round_commit
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
 
-SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "claude"}
+SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
                       for dim in RD.DIMENSIONS}}
 
 
@@ -121,6 +123,11 @@ def _session(tmp_path, name="s", **cfg_over):
   return d
 
 
+def _session_with_anchor_head(tmp_path, name="s", **cfg_over):
+  # Review-run evidence binding needs an anchor head to compare the runner-observed view head against (C13 layer 1c); literal matches _execution_run_dir view meta.
+  return _session(tmp_path, name=name, headSha="abc123fake", **cfg_over)
+
+
 def _state(session_dir):
   ok, state = RD.load_state(session_dir)
   assert ok, state
@@ -178,7 +185,7 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, *
     "seat": seat,
     "attempt": pend["attempt"],
     "vendor": "claude",
-    "model": "sonnet-5",
+    "model": "sonnet-5.5",
     "dispatchRef": manifest_sha,
     "orderSha256": order_sha,
     "manifestSha256": manifest_sha,
@@ -526,7 +533,7 @@ def _dispatch_observed_land(session_dir, seat, payload=None, pend=None, **over):
     "seat": seat,
     "attempt": pend["attempt"],
     "vendor": "claude",
-    "model": "sonnet-5",
+    "model": "sonnet-5.5",
     "dispatchRef": manifest_sha,
     "orderSha256": order_sha,
     "manifestSha256": manifest_sha,
@@ -642,11 +649,13 @@ def _execution_run_dir(tmp_path, order_path, echo_nonce="nonce-1", name="run",
   assert ok, detail
   _write_native_review_result(run_dir, repo_root, findings=[])
   stdout = _codex_event_stream_with_tool_call()
-  ED._journal_append(run_dir, {
-    "kind": "attempt-ended", "attempt": 1,
+  ended = _stamp_ended_from_native_result(run_dir, {
     "exit": 0, "timedOut": False, "refusal": None,
     "wallSeconds": 0.1, "stdoutBytes": len(stdout),
     "at": time.time(),
+  }, 1)
+  ED._journal_append(run_dir, {
+    "kind": "attempt-ended", "attempt": 1, **ended,
   })
   open(os.path.join(run_dir, "attempt-1.stdout"), "wb").write(stdout.encode("utf-8"))
   open(os.path.join(run_dir, "attempt-1.stderr"), "wb").write(b"")
@@ -742,7 +751,7 @@ def test_seam_a_record_ingest_recovers_via_driver_command(tmp_path, adapters, mo
 
 
 def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, adapters):
-  d = _session(tmp_path, name="ev-stamp")
+  d = _session_with_anchor_head(tmp_path, name="ev-stamp")
   pend = _pending(d)
   path, _env, before = _dispatch_observed_land(d, "code-reviewer")
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
@@ -763,10 +772,12 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   assert ev_err is None
   after_obj, after_err = RR.read_json(path)
   assert after_err is None
-  assert set(after_obj) - set(_env) == {"executionEvidence", "payloadHashSource"}
+  # citedHeadSource: durable cited-head derivation layer 1c binds onto a stored envelope;
+  # headSha: runner-observed cited head that layer 1c carries onto a review-run envelope
+  assert set(after_obj) - set(_env) == {
+      "executionEvidence", "payloadHashSource", "headSha", "citedHeadSource"}
   assert set(_env) - set(after_obj) == set()
-  assert after_obj["executionEvidence"] == {
-      key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
+  assert after_obj["executionEvidence"] == RR.execution_evidence_fields(record)
   assert after_obj["envelopeSha256"] == RR.envelope_sha256(
       after_obj["payload"], after_obj["executionEvidence"])
   assert after_obj["payloadHashSource"] == "seat-declared"
@@ -811,7 +822,7 @@ def test_seam_a_record_result_refusal_evidence_run_dir_unreadable_leaves_landing
 
 def test_seam_a_record_result_evidence_binding_accepts_genuine_run(tmp_path, adapters):
   # axis: binding accepts a run directory opened over the real order file
-  d = _session(tmp_path, name="ev-binding-ok")
+  d = _session_with_anchor_head(tmp_path, name="ev-binding-ok")
   pend = _pending(d)
   _dispatch_observed_land(d, "code-reviewer")
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
@@ -828,8 +839,7 @@ def test_seam_a_record_result_evidence_binding_accepts_genuine_run(tmp_path, ada
   assert "executionEvidence" in stored
   record, ev_err = ED.run_execution_record(run_dir)
   assert ev_err is None
-  assert stored["executionEvidence"] == {
-      key: record[key] for key in RR.EXECUTION_EVIDENCE_FIELDS}
+  assert stored["executionEvidence"] == RR.execution_evidence_fields(record)
 
 
 def test_seam_a_evidence_result_digest_mismatch_refuses(tmp_path, adapters):
@@ -878,7 +888,7 @@ def test_seam_a_evidence_result_binding_incomplete_refuses(tmp_path, adapters):
 
 
 def test_seam_a_zero_finding_review_still_stamps(tmp_path, adapters):
-  d = _session(tmp_path, name="ev-zero-findings")
+  d = _session_with_anchor_head(tmp_path, name="ev-zero-findings")
   pend = _pending(d)
   path, _env, before = _dispatch_observed_land(d, "code-reviewer", payload={"findings": []})
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],
@@ -961,7 +971,7 @@ def test_seam_a_record_result_refusal_commit_refused_leaves_landing_bytes(tmp_pa
 
 
 def test_seam_a_recorded_journal_agrees_with_store(tmp_path, adapters):
-  d = _session(tmp_path, name="journal-agree")
+  d = _session_with_anchor_head(tmp_path, name="journal-agree")
   pend = _pending(d)
   _dispatch_observed_land(d, "code-reviewer")
   order_path = RR.order_prompt_path(d, pend["round"], pend["phase"],

@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -10,6 +11,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import heartbeat as _heartbeat  # noqa: E402  (needs the sys.path insert above)
+import round_driver as _round_driver  # noqa: E402
 
 _TMP_BASE = os.path.realpath(tempfile.gettempdir())
 
@@ -79,7 +81,11 @@ def _isolate_store_root(monkeypatch, tmp_path):
 
     Drop SUPERHEROES_STORE_ROOT before pinning WORKHORSE_STORE_ROOT: control_plane prefers the former,
     so an exported SUPERHEROES_STORE_ROOT would bypass this isolation. A test that sets its own store
-    env still wins (applies after this fixture)."""
+    env still wins (applies after this fixture).
+
+    #1379: also strip the ambient inputs repository discovery reads — the cwd (moved to tmp_path)
+    and every inherited GIT_* variable (dropped) — so a session started without a repoRoot
+    resolves no real checkout's review-scope marker."""
     monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
     monkeypatch.setenv("WORKHORSE_STORE_ROOT", _isolated_default_store_root_path(tmp_path))
     monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(tmp_path / "_worktrees_isolation"))
@@ -108,3 +114,98 @@ def _isolate_store_root(monkeypatch, tmp_path):
     # (it applies after this fixture).
     monkeypatch.delenv(_HEARTBEAT_ROOT_ENV, raising=False)
     monkeypatch.delenv(_LAUNCH_ID_ENV, raising=False)
+    # #1379: the review-session marker bootstrap falls back to the repository of the process cwd
+    # when a session's meta carries no repoRoot, so a test sitting in the real checkout wrote its
+    # marker into that checkout's git-dir. Run every test from its own tmp_path, which is in no
+    # repository, so that fallback resolves nothing (_tmp_base_outside_any_repository below
+    # refuses the session when that does not hold). A test that needs another cwd sets its own
+    # (applies after this fixture); _guard_real_review_marker below catches any path that
+    # still reaches the real checkout.
+    monkeypatch.chdir(tmp_path)
+    # #1379 review-004 / review-005: git honours inherited GIT_* inputs over the cwd — GIT_DIR and
+    # GIT_WORK_TREE name another checkout outright, GIT_DISCOVERY_ACROSS_FILESYSTEM lets discovery
+    # climb from tmp_path into a checkout on another mount — and the guard (watching this checkout
+    # only) never sees a marker written there. Strip every inherited GIT_* (the same rule
+    # _neutral_git applies to the probes) so the cwd above is the only input repository discovery
+    # gets; no list to extend. A test that needs one sets its own (applies after this fixture).
+    for var in [name for name in os.environ if name.startswith("GIT_")]:
+        monkeypatch.delenv(var, raising=False)
+
+
+def _neutral_git(cwd, *args):
+    """Run git by path discovery alone: the two #1379 probes must see the repository a test's
+    cwd would resolve once a test clears GIT_DIR/GIT_WORK_TREE (some do), so every inherited
+    GIT_* variable is dropped, and LC_ALL=C keeps the not-a-repository message matchable.
+    Returns the CompletedProcess, or None when git is not installed (then nothing can resolve
+    a repository, the marker bootstrap included)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["LC_ALL"] = "C"
+    try:
+        return subprocess.run(["git", "-C", cwd] + list(args), capture_output=True, text=True,
+                              check=False, env=env)
+    except FileNotFoundError:
+        return None
+
+
+def _is_not_a_repository(proc):
+    return proc is None or (proc.returncode != 0 and "not a git repository" in proc.stderr)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _tmp_base_outside_any_repository(tmp_path_factory):
+    """#1379: the chdir(tmp_path) above isolates only when pytest's base temp directory has no
+    git ancestor. A --basetemp pointing inside a checkout (directly or via PYTEST_ADDOPTS) would
+    put every test's cwd back in that repository, so refuse the run before any test executes.
+    Fails closed: only git's own not-a-repository answer lets the run proceed.
+    Bites on: a base temp directory that git does not answer "not a git repository" for."""
+    base = str(tmp_path_factory.getbasetemp())
+    proc = _neutral_git(base, "rev-parse", "--show-toplevel")
+    if not _is_not_a_repository(proc):
+        pytest.fail("pytest's base temp directory %s is not provably outside every git repository "
+                    "(git rev-parse --show-toplevel: rc=%s, out=%r, err=%r), so running tests from "
+                    "tmp_path would not isolate the review scope marker; point --basetemp outside "
+                    "every repository" % (base, proc.returncode, proc.stdout.strip(),
+                                          proc.stderr.strip()))
+
+
+def _real_review_marker_path():
+    """The review-session marker path of the checkout this suite runs in, or None when this
+    tree is not a git checkout (then no marker can be written into it either). A git failure
+    other than not-a-repository fails the collection rather than silently disarming the guard."""
+    proc = _neutral_git(_LIB, "rev-parse", "--absolute-git-dir")
+    if _is_not_a_repository(proc):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise RuntimeError("cannot resolve the git dir of %s for the review-marker guard: rc=%s "
+                           "err=%r" % (_LIB, proc.returncode, proc.stderr.strip()))
+    return os.path.join(proc.stdout.strip(), _round_driver.SIDECAR_DIRNAME,
+                        _round_driver._REVIEW_SESSION_MARKER)
+
+
+_REAL_REVIEW_MARKER = _real_review_marker_path()
+
+
+def _read_marker(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _guard_real_review_marker(request):
+    """#1379 detector: fail the test during which the real checkout's review-session marker
+    changed (created, rewritten, or removed). Every test that wrote it is named; so is any test
+    whose window overlapped a write from elsewhere — another xdist worker, or a real review
+    session started in this checkout while the suite ran — so read the failures as candidates.
+    Bites on: any byte-level change (or presence change) of that one marker file."""
+    if _REAL_REVIEW_MARKER is None:
+        yield
+        return
+    before = _read_marker(_REAL_REVIEW_MARKER)
+    yield
+    if _read_marker(_REAL_REVIEW_MARKER) != before:
+        pytest.fail("review scope marker of the real checkout (%s) changed while %s ran "
+                    "(that test, or a writer overlapping it)"
+                    % (_REAL_REVIEW_MARKER, request.node.nodeid))

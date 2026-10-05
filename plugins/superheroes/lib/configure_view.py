@@ -344,6 +344,106 @@ def _review_gate_policy_lines(data):
     return lines
 
 
+def _vet_checks_view_lines(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    reason = payload.get("reason")
+    lines = ["### Vet checks"]
+    if reason:
+        if reason == core_md.BUILDER_DISPATCH_REASON_ABSENT:
+            lines.append("(none declared — the vet runs no project vet checks)")
+            return lines
+        lines.append("⚠ vet checks unreadable: %s" % reason)
+        if reason == core_md.VET_CHECKS_REASON_MALFORMED:
+            for item in payload.get("malformed") or []:
+                field = item.get("field")
+                if field is not None:
+                    lines.append(
+                        "⚠ malformed entry %s field %s: %s"
+                        % (item.get("index"), field, item.get("reason")))
+                else:
+                    lines.append(
+                        "⚠ malformed entry %s: %s"
+                        % (item.get("index"), item.get("reason")))
+        return lines
+    if not payload.get("declared"):
+        lines.append("(none declared — the vet runs no project vet checks)")
+        return lines
+    checks = payload.get("checks") or []
+    if not checks:
+        lines.append("(declared empty — zero vet checks)")
+        return lines
+    for check in checks:
+        lines.append("- %s" % _one_line_prose(check.get("name", "")))
+        lines.append("  evidence: %s" % _one_line_prose(check.get("evidence", "")))
+        lines.append("  the vet records: %s" % _one_line_prose(check.get("records", "")))
+    return lines
+
+
+def _sandbox_access_view_lines(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    reason = payload.get("reason")
+    lines = ["### Sandbox access"]
+    access = payload.get("access")
+    if reason and reason != core_md.BUILDER_DISPATCH_REASON_ABSENT:
+        lines.append("⚠ sandbox access unreadable: %s" % reason)
+        if reason == core_md.SANDBOX_ACCESS_REASON_MALFORMED:
+            accepted = []
+            for item in payload.get("malformed") or []:
+                lines.append(
+                    "⚠ malformed item field %s index %s: %s"
+                    % (item.get("field"), item.get("index"), item.get("reason")))
+                if item.get("accepted") and item["accepted"] not in accepted:
+                    accepted.append(item["accepted"])
+            for shape in accepted:
+                lines.append("accepted: %s" % shape)
+        return lines
+    if not isinstance(access, dict):
+        access = core_md.sandbox_access_all_off()
+    domains = access.get("allowedDomains") or []
+    paths = access.get("extraWritePaths") or []
+    ports = bool(access.get("localPorts"))
+    sockets = bool(access.get("localSockets"))
+    if not (domains or paths or ports or sockets):
+        lines.append("all off (offline)")
+        return lines
+    lines.append("allowed domains: %s" % (", ".join(domains) or "(none)"))
+    lines.append("local ports: %s" % ("on" if ports else "off"))
+    lines.append("local sockets: %s" % ("on" if sockets else "off"))
+    lines.append("extra writable paths: %s" % (", ".join(paths) or "(none)"))
+    return lines
+
+
+def _size_exclude_view_lines(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    reason = payload.get("reason")
+    lines = ["### Size count exclusions"]
+    if reason and reason != core_md.BUILDER_DISPATCH_REASON_ABSENT:
+        lines.append("⚠ size count exclusions unreadable: %s" % reason)
+        if reason == core_md.SIZE_EXCLUDE_REASON_MALFORMED:
+            accepted = []
+            for item in payload.get("malformed") or []:
+                lines.append(
+                    "⚠ malformed item index %s: %s" % (item.get("index"), item.get("reason")))
+                if item.get("accepted") and item["accepted"] not in accepted:
+                    accepted.append(item["accepted"])
+            for shape in accepted:
+                lines.append("accepted: %s" % shape)
+        elif isinstance(payload.get("detail"), str):
+            token = payload["detail"].split(":", 1)[0].strip()
+            if token:
+                lines.append("cause: %s" % token)
+        return lines
+    globs = payload.get("globs")
+    if not payload.get("declared") or not isinstance(globs, list):
+        lines.append("(none — every non-test path counts; lockfiles are always left out)")
+    elif not globs:
+        lines.append("(declared empty — nothing extra excluded; lockfiles are always left out)")
+    else:
+        for glob in globs:
+            lines.append("- %s" % glob)
+    return lines
+
+
 def collect(cwd, root=None):
     """Gather everything the view renders (read-only): the core facts, each hero layer's text,
     the pinned patterns, the resolved storage mode, the coalesced drift notice, the effective
@@ -432,12 +532,26 @@ def collect(cwd, root=None):
             "overlayParse": None,
             "shipped": review_gate_policy.load_shipped_layer(),
         }
+    try:
+        vet_checks = core_md.read_vet_checks(cwd, root)
+    except Exception:
+        vet_checks = {"reason": "vet-checks-read-failed", "declared": False, "checks": []}
+    try:
+        sandbox_access = core_md.read_sandbox_access(cwd, root)
+    except Exception:
+        sandbox_access = {"reason": "sandbox-access-read-failed", "declared": False,
+                          "access": None}
+    try:
+        size_exclude = core_md.read_size_exclude(cwd, root)
+    except Exception:
+        size_exclude = {"reason": "size-exclude-read-failed", "declared": False, "globs": None}
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
             "modelTierRefusal": model_tier_refusal,
             "enginePrefs": engine_prefs, "guardian": guardian,
-            "reviewGatePolicy": review_gate}
+            "reviewGatePolicy": review_gate, "vetChecks": vet_checks,
+            "sandboxAccess": sandbox_access, "sizeExclude": size_exclude}
 
 
 def _health_line(counts):
@@ -494,6 +608,15 @@ def render(cwd, *, root=None):
         out.append("(no core calibration yet)")
         _append_builder_dispatch_row(out, cwd, root)
         out.append("")
+        for line in _vet_checks_view_lines(data.get("vetChecks")):
+            out.append(line)
+        out.append("")
+        for line in _sandbox_access_view_lines(data.get("sandboxAccess")):
+            out.append(line)
+        out.append("")
+        for line in _size_exclude_view_lines(data.get("sizeExclude")):
+            out.append(line)
+        out.append("")
         out.append("## Review gate policy")
         for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
             out.append(line)
@@ -511,6 +634,15 @@ def render(cwd, *, root=None):
             out.append(show_it)
         else:
             out.append('(not declared — the presentation level for this project is "none")')
+        out.append("")
+        for line in _vet_checks_view_lines(data.get("vetChecks")):
+            out.append(line)
+        out.append("")
+        for line in _sandbox_access_view_lines(data.get("sandboxAccess")):
+            out.append(line)
+        out.append("")
+        for line in _size_exclude_view_lines(data.get("sizeExclude")):
+            out.append(line)
         prefs = core.get("enginePreferences")
         prefs = prefs if isinstance(prefs, dict) else {}
         out.append("")
@@ -547,7 +679,7 @@ def render(cwd, *, root=None):
             for role, model in sorted(codex_models.items()):
                 out.append(f"  {role}: {model}")
         else:
-            out.append("  (none; GPT-5.6 models derive from shared tiers)")
+            out.append("  (none; codex models derive from shared tiers)")
         rejected = eng.get("invalidCodexModels") if isinstance(eng.get("invalidCodexModels"), dict) else {}
         if rejected:
             out.append("Rejected Codex model pins (not applied — dispatch falls to the tier default):")

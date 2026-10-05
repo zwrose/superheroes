@@ -7,7 +7,345 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
-## Unreleased
+## 0.40.0
+
+### Before you upgrade
+
+- **Finish or abandon in-flight claude write runs.** A claude write run opened under 0.39.0 refuses its continuation, because its stored sandbox settings lack the new allow rules; open a fresh dispatch. No setting is rewritten.
+- **Claude write sandbox defaults widen for every project:** `npm`, `npx`, `node`, `pnpm`, `yarn` and `ps` run without a prompt (`ps` stays blocked by the sandbox itself), writes under `/tmp` are allowed, and on macOS localhost binding is on (it also allows a bind on 0.0.0.0). Unix-domain socket binds under `/tmp` stay denied. There is no switch back.
+- **Size count:** every project's count now leaves package-manager lockfiles out (listed, with their line counts). A project that wants other paths left out sets `sizeExclude` through configure; nothing else is excluded until it does.
+- **Implementer dispatches:** to get the size tripwire reported at every fold, pass `--size-base` and `--size-line` on each `dispatch-write` (workhorse dispatch doctrine). A run opened without them, including one opened under 0.39.0, folds as before plus `sizeTripwireAbsent`.
+- **Stack layers:** stacks opened on 0.39.0 or earlier keep their "part of" layer links until their PR bodies are edited. A project that already ran "a layer PR closes its own sub-issue" as a recorded override can drop the override.
+- **Verify command:** if your calibrated verify command is your full gate, consider changing it to your fast iteration check through configure's "Change the verify command". Existing calibrations aren't rewritten.
+
+### dispatch-write reports the size tripwire at fold
+
+- `dispatch-write` takes two new flags, `--size-base <commit>` and `--size-line <non-negative integer>`. Pass both on every implementer dispatch, launch and continuation. The runner counts the worktree against the base at fold: committed, uncommitted, and untracked files, read-only.
+- A folded write run gains `sizeTripwire`. Counted: `{"status": "ok", "base", "line", "tripwireCount", "crossed", "barCount", "deletedFiles", "binary", "untrackedRepos"}`, plus `barExcluded`, `lockfilesExcluded` and `pathsExcluded` when reported; `crossed` is `tripwireCount > line`. Not counted: `{"status": "indeterminate", "base", "line", "reason"}`, plus `detail` when given.
+- Five new open-time refusals, reason `unrunnable`, each opening nothing: `size-inputs-incomplete`, `size-line-invalid`, `size-base-not-an-object-id`, `size-base-unresolvable`, and `size-inputs-mismatch` (a continuation passing different values than the run opened with).
+- A run opened without the flags, including one opened by an older plugin, folds with `sizeTripwireAbsent: "size-inputs-not-supplied"` instead of `sizeTripwire`. Passing the flags on a later continuation of such a run does not refuse; the flags are ignored. A review run carries neither key.
+- Commits the orchestrator types itself are not counted by this, so the builder still counts at each commit.
+
+### Configure advice: the verify command is the fast iteration check
+
+- Configure now advises that the calibrated verify command be the project's fast iteration check (lint, types, the tests the change touched), not its full gate. A build re-runs the verify command after every review fix round and on the final head.
+- Setup's verify-command detection now prefers a fast-check script the project already defines; when only a full gate is found, it proposes that and discloses that the owner can replace it.
+- Workhorse §8 now says the project's full local gate runs at most once per build, at the final head, and not at all when CI already passed that head; CI is the final word on the suite.
+- Existing calibrations are not rewritten. A project whose verify command is its full gate keeps paying for it on every run until its owner changes it, through configure's "Change the verify command" tune item (an explicit `verifyCommand` edit).
+
+### Size count: lockfiles and project-listed paths are left out
+
+- The size count (`lib/size_count.py`) now leaves common package-manager lockfiles out of both `tripwireCount` and `barCount` for every project: `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lockb`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock` and `go.sum`, matched on the file's base name at any depth. They are listed under the new `lockfilesExcluded` result key (`[{"path", "lines"}]`), present only when non-empty.
+- New optional `sizeExclude` key in the `superheroes-core` block of `core.md`: a list of repo-relative globs matched with `fnmatch` against the path, where `*` also crosses `/`. Set and viewed through configure. Matching paths are left out of both counts and listed under the new `pathsExcluded` result key (`[{"path", "lines", "glob"}]`, the first matching glob), present only when the key is declared (`[]` when nothing matched).
+- Refusals at read and write: `size-exclude-malformed`, with items `size-exclude-not-a-list`, `size-exclude-entry-not-a-nonempty-string` and `size-exclude-entry-absolute`. On write only: `size-exclude-input-unparseable`.
+- `size_count` itself now refuses with `ok: false` and `size-exclude-malformed` (with the `malformed` items) or `size-exclude-unreadable` (with a `detail`) when `core.md` holds a bad or unreadable `sizeExclude`, instead of counting.
+- Who sees a change: every project whose diffs touch a lockfile. Only projects that set `sizeExclude` see changes in what else counts. A project wanting test-pilot plans excluded lists `.claude/test-pilot/**` itself.
+- The profile schema version is unchanged, so an older plugin that re-calibrates from scratch can drop the key.
+
+### Stack layers close their own sub-issues
+
+- A stack-layer pull request now opens with `Closes #<its own layer sub-issue>` and names the feature issue only with "part of". GitHub shows the link natively and closes the layer's sub-issue when the layer lands on the default branch. No layer merge closes the feature issue. The rule's home is `rubric/native-stacks.md` § Each layer is a sub-issue, item 6.
+- The advisor's post-merge step changes from closing each layer sub-issue by hand to reading back that each landed layer's sub-issue is `CLOSED`, closing any GitHub did not close. Every landed layer's sub-issue still gets the merge receipt comment. The feature issue's close stays the advisor's manual step, with its receipt.
+- Stacks opened on 0.39.0 or earlier keep their "part of" layer links until a builder or the advisor edits those pull request bodies; the advisor's read-back closes any sub-issue GitHub did not close. A project that already runs this shape as a recorded override can drop the override once it adopts this release.
+
+### Claude write sandbox: node toolchains, localhost and /tmp by default
+
+- The claude write channel now allows the `npm`, `npx`, `node`, `pnpm`, `yarn` and `ps` command families by rule. A rule only skips the approval prompt; the sandbox still confines the command.
+- Two defaults are on for every project, with no calibration: localhost binding (macOS only; it also allows a bind on 0.0.0.0), and writes under `/tmp` and `/private/tmp`.
+- Still denied: the network beyond the calibrated domains, writes outside the worktree, the git dirs and the temp dirs, writes to `.git/hooks`, the git config files and the worktree pointer files, the runner's own state (the run dir, the supervisor journal root, the worktree lease and the launch ledger root, denied at run open so the `/tmp` default cannot reach them), WebFetch and WebSearch, and any unsandboxed fallback.
+- Unix-domain socket binds under `/tmp` stay denied: the runtime's socket grant is a path prefix that would also let a sandboxed command connect to any host process's socket there. A tool that binds a socket in `/tmp` needs a project-side setting (for example mongod `--nounixsocket`, or passing `TMPDIR` through).
+- `ps` is still blocked by the sandbox itself, and the `--requires-process-listing` refusal is unchanged.
+- The run-opened record gains `claudeWriteSandbox.tmpWriteRoots` and `claudeWriteSandbox.localBinding`, resolved once at open. A record without them emits neither default. Its `claudeWriteSandbox.denyWrite` also lists the runner-state paths above; a run dir, journal root, lease path or ledger root whose resolved path carries a glob character refuses `engine-config:sandbox-roots-unresolvable` at open.
+- There is no switch back to the stricter posture; none was asked for.
+- Codex and Cursor are unchanged.
+- **Finish or abandon in-flight claude write runs before upgrading.** A run opened by an older plugin refuses its continuation, because its stored settings lack the new rules.
+
+## 0.39.0
+
+### Before you upgrade
+
+- **Finish or abandon in-flight claude write runs opened under 0.38.0** before upgrading. A 0.39.0 runner refuses their continuation (see the write-channel section below).
+- A project without `sandboxAccess` stays offline. The one default change is the write channel's new Python command allowances (below); nothing else needs action.
+
+### Claude write channel: implementers can run their own Python tests
+
+- Sandboxed Claude implementers now run the commands their orders name for Python tests. Before, python `-X` flags (including the pinned gate command `scripts/pinned-python -B -X pycache_prefix=… -m pytest …`) and `; echo "exit=$?"` were refused with "This command requires approval", and implementers handed back untested work. The channel now allows the `python`, `python3`, `pytest`, `scripts/pinned-python` and `echo` command families by rule. The sandbox still denies the network, writes outside the build roots, and writes to the git hooks and config.
+- Still refused: an env-var prefix outside the harness's safe list (`FOO=1 cmd`, `export FOO=1 && cmd`). Set the variable inside the test, or use Python's own `PYTHON*` variables.
+- Every project's claude write sandbox settings, configured or not, gain these `permissions.allow` rules; nothing else in the default settings changes.
+- On a machine whose managed Claude Code policy excludes one of those commands from the sandbox, that command now runs outside the sandbox without a prompt, as the policy says.
+- **Finish or abandon in-flight claude write runs before upgrading.** A claude write run opened by an older plugin refuses its continuation (its stored sandbox settings lack the new allow rules, so the spawn argv check fails); open a fresh dispatch.
+- The channel no longer leaves empty `.claude/.cc-writes` directories in the build worktree. They are swept when the run folds, and the folded result gains `ccWritesSweep`. A run that is abandoned rather than folded can still leave them.
+
+### Claude write sandbox: four access options, offline by default
+
+- The sandbox is still offline by default. A project without `sandboxAccess` sees byte-identical sandbox settings.
+- A new top-level key, `sandboxAccess`, in `core.md`'s `superheroes-core` JSON block opens access. It has four optional fields: `allowedDomains` (a list of hostnames), `localPorts` (true or false), `localSockets` (true or false), and `extraWritePaths` (a list of absolute paths). A missing key, a missing field, or an absent `core.md` is all off. Set it through configure's view-and-tune; `configure_view.render` shows a `### Sandbox access` block.
+- The run-opened record gains `claudeWriteSandbox.access`, the resolved values read once at open. Continuations and spawns reuse it, so a calibration edit does not change a running run. A run opened by 0.38.0 has no such field and continues as all off.
+- Two new open-time refusals, each opening nothing: `engine-config:sandbox-access-malformed`, and `engine-config:sandbox-access-unreadable` for a `core.md` that exists but cannot be read, parsed, or resolved. An absent `core.md` is all off, not a refusal.
+- Malformed values are refused when the calibration is read, each item naming its field, its reason, and the accepted shape. The reason tokens are `sandbox-access-not-an-object`, `sandbox-access-unknown-field` (a misspelled key is refused, never ignored), `sandbox-access-not-a-list`, `sandbox-access-domain-invalid`, `sandbox-access-not-a-bool`, `sandbox-access-path-not-absolute`, and `sandbox-access-path-is-root`.
+- The profile schema version is unchanged, so an older plugin that re-calibrates from scratch can drop the `sandboxAccess` key.
+
+### Review panels consider every installed cross-vendor engine
+
+- Review composition now probes every cross-vendor engine whose CLI is installed (`codex`, `cursor-agent`) plus any a calibration role names, not only the role-named ones. An installed engine that fails its probe stays out of the panel.
+- A project with cursor or codex installed but named by no role now gets that engine's seats, at its usage cost. To keep an engine off the panel, uninstall its CLI or pin the seats you need held.
+- `compose-liveness`'s `crossVendorEngines` now reports that set. `run`'s `crossVendorEngines` is unchanged.
+- A liveness receipt written by 0.38.0 that lacks a newly considered engine re-probes once.
+
+## 0.38.0
+
+### Before you upgrade
+
+- **A project with no implementer setting now gets the sandboxed Claude implementer.** `enginePreferences.implementation` unset (or `claude`) now runs implementer orders through the sandboxed Claude write channel: no network, offline uv, `ps` blocked. Orders whose verification needs the network, uncached Python dependencies or `ps` fail or are refused up front. To use another engine, set `implementation` to `cursor` or `codex` before upgrading.
+- **Rename `sonnet-5` pins to `sonnet-5.5`.** A pin or config naming `sonnet-5` is refused as unregistered.
+- **Finish or abandon in-flight claude write runs first.** A claude write run opened by an older plugin, or one journaled under `sonnet-5`, cannot be continued; open a fresh dispatch.
+
+### Wave watch: a missing launch ledger refuses
+
+- An arm against a resolved ledger root whose ledger file does not exist now refuses `ledger-unreadable` instead of returning a clean `timer`. A ledger file that exists but holds no records stays clean.
+- Every `ledger-unreadable` refusal from `run`, `watch_arm` and `loop` now carries `ledgerPath`, the path the watcher read.
+
+### Claude write channel: a sandboxed shell
+
+- The claude write argv is now `claude -p --model <tok> --effort <effort> --output-format stream-json --verbose --permission-mode acceptEdits --restricted --tools Bash,Edit,Write,Read,Grep,Glob --strict-mcp-config --settings <inline JSON>`, then `--json-schema` at run-open. It replaces the edit-only argv with no shell. The review argv is unchanged.
+- The run-opened record gains `claudeWriteSandbox`, the writable roots resolved once at open. Read it there; continuations and spawns reuse it.
+- Four new refusals: `engine-config:sandbox-roots-missing`, `engine-config:sandbox-roots-unresolvable`, `engine-config:sandbox-uv-cache-unresolvable`, and `engine-config:sandbox-process-listing-unavailable`. The two `-unresolvable` refusals open nothing.
+- `dispatch-write` gains `--requires-process-listing`. Pass it when the order's verification lists processes; a claude write then refuses `engine-config:sandbox-process-listing-unavailable` before any run opens. Codex and cursor ignore it.
+- A claude write run opened by an older plugin cannot be continued: it refuses `engine-config:sandbox-roots-missing`. Open a fresh dispatch.
+- Sandbox limits: the network is off, uv runs offline (`UV_OFFLINE=1`, so dependencies must already be in the uv cache), `ps` is blocked, and the sandbox's per-user temp dir stays writable (`/tmp/claude-<uid>`), where other Claude sessions' scratch can live.
+
+### Registry: the sonnet row is sonnet-5.5
+
+- The registry id `sonnet-5` is now `sonnet-5.5`, and the alias record reads `sonnet → claude-sonnet-5-5` (harness 2.1.284).
+- A pin or config naming `sonnet-5` is refused as unregistered. Name `sonnet-5.5`.
+- A run journaled under `sonnet-5` is refused at continuation (`run-dir-seat-mismatch`). Open a fresh dispatch, the same rule the earlier `opus-5` to `opus-5.5` rename followed.
+- The `sonnet` dispatch token is unchanged.
+
+### Implementer routing: claude means the sandboxed channel
+
+- `enginePreferences.implementation: claude`, which is also the default when it is unset, now sends implementer orders through `dispatch-write --engine claude`, the sandboxed channel. Before, `claude` meant a native Claude subagent.
+- What changes for an unconfigured project: implementers move from native subagents with network access to a sandboxed Claude CLI with no network, offline uv, and `ps` blocked, and every order now leaves a runner journal and `--expect-item` grading.
+- To keep cursor or codex as the implementer, set `implementation` to that engine; nothing else changes for those projects.
+- `seat_map compose --implementation-engine claude` now reads author family `anthropic` whatever the host model; before, it took the host's family.
+- On a known non-Claude host with a claude implementer, the host's family is also excluded from the lens and grounding seats, because review-code's native fixer writes as the host family (degradation `maker-family-split`; `secondary-maker-seated` when no other family is live). Two known limits ship open, owner-accepted: the diversity check still counts the excluded host family as available, so a correct single-family panel is flagged `critical-diversity` (F1); and certification does not refuse a `secondary-maker-seated` seat (F2). Claude hosts are unaffected.
+
+## 0.37.0
+
+### Before you upgrade
+
+- **Update the Codex CLI to 0.159.0 or later.** The codex default is now `gpt-6.1-sol` (GPT-6.1
+  Sol) in every codex seat, at each seat's existing effort. An older CLI is refused at preflight
+  with `codex-cli-too-old`, before any codex seat runs; Codex CLI 0.158.0 and older cannot dispatch
+  `gpt-6.1-sol` under a ChatGPT account.
+- **A `gpt-6-sol` pin keeps working.** `gpt-6-sol` is now pin-only, like `gpt-5.6-sol`: a pin runs
+  it at the pinned role's own effort, and no default names it. A `gpt-5.6-terra` pin is still
+  refused, and the refusal now names `gpt-6.1-sol` as the replacement.
+
+### Control probe: plant detection
+
+- The planted-defect control probe counts a Critical finding on the planted file at a line inside the planted hunk as catching the plant, alongside a finding that names `verify_submission`; a finding on another file, outside the hunk, or below Critical does not count.
+
+### Engine dispatch: result rewrites, dirtied paths, attempt telemetry
+
+- A native result file rewritten with different valid content before the deadline is now admitted. The completion stamp follows the latest content observed at or before the deadline. Content first seen after the deadline still forfeits `result-completion-payload-mismatch`.
+- A `worktree-dirtied-by-attempt` forfeit now carries `dirtiedPaths`: `status`, `paths`, `headMoved` and `truncated`, or `status: indeterminate` with a `reason`. It lists paths whose git status changed plus paths the attempt committed. An edit to a file already dirty at open whose status did not change is not listed.
+- Every `attempt-ended` journal record now carries `hostLoadAtOpen`, `hostLoadAtEnd` (1/5/15-minute load, or `null`) and `commandTime` (cursor stream tool and shell seconds, or `null`), and `engine-started` carries `hostLoadAtOpen`. The 900 s default timeout is unchanged.
+
+### Size counter: test-support directories
+
+- The size counter (`lib/size_count.py`) now treats files under a `test-utils`, `test_utils`, `testutils`, `test-helpers`, `test_helpers` or `test-support` directory (any case) as test code, so hand-written test doubles there no longer count toward the non-test size.
+
+## 0.36.0
+
+### Cursor dash-free native result handoff
+
+- Cursor attempts whose canonical native result path contains a run of two or more dashes (`--`)
+  now name a dash-free symlink path to that file in the prompt's result line (the bytes still land
+  in the run directory at the canonical path).
+- The `engine-started` journal record may carry `nativeResultHandoffPath` alongside
+  `nativeResultPath` when that handoff is used.
+- A new pre-spawn refusal token `native-result-path-unsafe` may appear on cursor attempts when the
+  runner cannot create a safe handoff path.
+- A killed or interrupted attempt can leave a dangling `superheroes-result-*` symlink in the temp
+  directory; deleting it is safe.
+
+## 0.35.1
+
+### Claude background dispatch mode retired
+
+Upgrading from 0.35.0 changes how claude dispatch modes work:
+
+- **Print is the only claude dispatch mode.** Omit `--claude-mode` or pass `--claude-mode print`.
+  `--claude-mode` still accepts the retired value `background` only so callers receive a named
+  refusal: on `dispatch-review` and `dispatch-write` it refuses before anything spawns with
+  `entryReason: claude-mode-retired`, `detail: claude-mode-retired:background`, `attempts: 0` —
+  it never falls back to print.
+- **Continuing a run opened in background mode is refused.** Re-invoking either dispatch verb on a
+  run directory whose journal was opened with `claudeMode: background` refuses with
+  `detail: run-dir-claude-mode-retired`, `attempts: 0`; nothing re-opens or spawns.
+- **The conformance probe probes only print for claude** (`probedModes: ["print"]`).
+
+Removed with no replacement — print mode has none of them:
+
+- The `claude --bg` launch path and transcript-based result delivery.
+- Session suspend, re-attach, and stop-and-confirm of background sessions.
+- The `claude-mode-background-write` refusal and the seven `background-*` attempt refusals
+  (`lib/background_outcome.py` is deleted).
+- Result and journal fields `bgStop`, `backgroundStopUnconfirmed`, `transcriptResult`, and
+  `transcriptToolCalls`.
+- `dispatch-abandon` stopping a claude session (the runner no longer stops detached background
+  sessions).
+
+#### Before you upgrade
+
+- **Re-run the conformance probe for claude into a fresh run directory after upgrading.** A saved
+  0.35.0 claude probe result that lists both modes is refused by the preflight entry as
+  `probe-result-malformed:<path>`; a caller-supplied probe run directory that still holds a
+  `background/` subdirectory refuses `run-dir-not-empty-unopened`.
+- **Run operator cleanup once for any detached background session a 0.35.0 run may have left.**
+  List sessions with `claude agents --json` (per `CLAUDE_CONFIG_DIR`), and stop any row of kind
+  `background` whose cwd is a dispatch sanitized view with `claude stop <id>`. The runner no longer
+  does this.
+- **Fold any run directory that 0.35.0 opened in background mode.** Run
+  `dispatch-abandon --run-dir <dir>` once on each such directory. Until you do,
+  `dispatch-poll` still reports the run as running, because a continuation now refuses without
+  closing it.
+
+## 0.35.0
+
+### Before you upgrade
+
+Check these in a consuming project before it takes 0.35.0:
+
+- **Read liveness from the watcher, not the heartbeat sweep.** `heartbeat.py sweep` now classes a
+  record as `terminal`, `nonterminal`, or `unknown`; the old fresh and stale classes are gone, and
+  a script matching them must be updated. See [Heartbeat sweep classes](#heartbeat-sweep-classes).
+- **Update a script that matches an `astra-probe-*` refusal token.** The registration probe's
+  refusal tokens are now `registration-probe-*`, with no alias. See
+  [Registration probe tokens](#registration-probe-tokens).
+- **An adoption launch passes `adopts` to re-occupy its own stack position.** Without it the launch
+  still refuses `layer-position-occupied`; four new refusal tokens come with it. See
+  [Launcher adoption premise](#launcher-adoption-premise).
+- **Accept `survivingNonBlocking` in a v5 certification receipt, and never hand-edit
+  `rulingsLog`.** The certification loop ships through its rulings channel with one disclosed
+  fail-open on a malformed `rulingsLog`. See
+  [Certification receipt and the rulings channel](#certification-receipt-and-the-rulings-channel).
+- **Accept vet receipt spine fields 9 and 10 in a template or reader of your own.** Every vet
+  receipt now carries **Lane** and **Misses-log appends**. See
+  [Vet receipt spine fields 9 and 10](#vet-receipt-spine-fields-9-and-10).
+
+### Heartbeat sweep classes
+
+`heartbeat.py sweep` classes each record as `terminal` (the builder stamped `parked` or
+`handback`), `nonterminal` (a valid record whose state is not terminal — it says nothing about
+liveness), or `unknown`. The old fresh and stale classes are removed, because a builder no longer
+promises a stamp cadence: `stamp` still accepts its old cadence argument from older callers and
+ignores it, and the window a stamped record carries is always `LIVENESS_QUIET_WINDOW_SECONDS`
+(2700 seconds). Liveness has one signal: `wave_watch.py` raises `lane-stale` when a lane's process
+is live and the watcher cannot establish that its own session transcript was written within that
+window. A cold transcript alerts, and so does an ambiguous or unreadable lookup; a transcript that
+does not exist yet alerts only once the same window has passed since the lane's recorded start. The
+event means no fresh transcript could be established, not proof of inactivity. A consumer that matched
+the old fresh or stale class from the sweep must match `nonterminal` for an unended lane and take
+liveness from `lane-stale`.
+
+### Registration probe tokens
+
+One entry changes on the surface listed under
+[Astra and the codex role pin](#astra-and-the-codex-role-pin):
+
+- `conformance_probe registration-probe` (`astra-probe` still works as a legacy alias of the verb;
+  refusal token `registration-probe-wave-already-attempted` when the same wave is re-attempted with
+  a different run dir). The probe's refusal tokens were renamed from `astra-probe-*` to
+  `registration-probe-*` with no alias: `registration-probe-scale-unreadable`,
+  `registration-probe-ledger-unreadable`, `registration-probe-record-write-failed`,
+  `registration-probe-wave-already-attempted`, `registration-probe-seat-unresolved`, and
+  `registration-probe-claim-unreadable`. A script that matches an old `astra-probe-*` refusal token
+  must be updated.
+
+### Launcher adoption premise
+
+A stacked premise (see [Launcher stacked premise](#launcher-stacked-premise)) may now carry
+`adopts`: the pull request number of the existing member an adoption takes over at its own
+`layerPosition`. `validate_premise` copies it into the stamped premise like every other key.
+
+`launcher.py launch` narrows one refusal and adds four tokens: `layer-position-occupied` when the
+claimed `layerPosition` is already held by an existing member (`layerPosition >= 2` only) and the
+premise's `adopts` does not name that member on the layer below's branch; `adopts-occupant-missing`
+when `adopts` names a pull request but the claimed position is empty;
+`premise-adopts-without-stack`, `premise-adopts-invalid`, and `premise-adopts-bottom-layer` when
+`adopts` lacks the stack pair, is not a positive integer, or is on the bottom layer.
+
+### Certification receipt and the rulings channel
+
+On success, `certification-receipt.json` (see
+[Certification receipt artifact](#certification-receipt-artifact)) carries the `disclosures` block
+with `importantOutOfScope` for Important out-of-scope deferrals and, for a session at state schema
+v5, `survivingNonBlocking` for surviving Minor or Nit findings without disposition. A receipt from
+an earlier schema (v2–v4, still supported) omits `survivingNonBlocking`. A consumer that enumerates
+the block's keys strictly must accept the new one when present.
+
+The certification loop ships through layer 4d-2, where rulings reach the round driver as a declared
+input through `round_driver.py rule`. One fail-open ships disclosed: when a session's `rulingsLog`
+is malformed, the driver reads it as empty, so an out-of-scope ruling does not hold and its finding
+can reach the fixer. Only corrupted or hand-edited state reaches it — `rule` itself refuses
+`rulings-log-malformed` rather than write to a malformed log. Record rulings through `rule`; never
+edit `rulingsLog` by hand.
+
+### The covenant's merge wording
+
+`rubric/covenant.md` keeps its rule and drops its restatement: promise 1 and the first hard line now
+say that nothing merges, releases, publishes, or force-pushes without the owner's word, and point
+to `skills/showrunner/SKILL.md` duty 6 as the merge policy's one full statement. Every Claude Code
+session on a calibrated project gets the new text from the installed plugin through the
+SessionStart bootstrap, so nothing is refreshed by hand there. `configure`'s durable `CLAUDE.md`
+offer writes the review-discipline section, not the covenant, and that section's source changed by
+one pointer line; a project that took it needs no action. A project that pasted the covenant into
+its own `CLAUDE.md` by hand (the only carrier on Codex) holds the longer old wording, which states
+the same rule; replacing it with the new `rubric/covenant.md` is optional.
+
+### Skill descriptions as pointers
+
+The skill descriptions are shortened toward when-to-load pointers: each leads with when the skill
+applies, and most of the mechanism moves to the skill body, though some descriptions still
+summarize what the skill does. No skill name, command, or
+`user-invocable` flag changed, so a consuming project has nothing to update.
+
+### Charters as maps
+
+The workhorse, showrunner, and detective charters keep their sections and duties, and much of
+their mechanism, including the workhorse and detective excuse tables, moves to reference pages the session reads on demand: `skills/workhorse/reference/`
+gains `intake.md`, `orders.md`, `handback.md`, and `excuses.md`; `skills/showrunner/reference/`
+gains `routing.md`, `vetting.md`, `orchestration.md`, `provisioning.md`, and `excuses.md`;
+`skills/detective/reference/` gains `excuses.md`. Nothing was removed or renamed, and no command or
+path a consuming project calls changed. This is informational.
+
+### Vet receipt spine fields 9 and 10
+
+The vet receipt's always-present spine (`skills/showrunner/reference/vet-receipt.md`) grows from
+eight fields to ten. Field 9, **Lane**, records the lane the PR ran (`full`, `light`, or `micro`),
+with a note when the build escalated. Field 10, **Misses-log appends**, records each misses-log
+append the vet made and its class, or `None`. Like every spine field, each is filled or written as
+`None`. An advisor session reads the new shape from the installed plugin. A project whose own
+template, script, or reader expects exactly eight spine fields must add or accept the two new ones.
+
+## 0.34.0
+
+### Before you upgrade
+
+Check these in a consuming project before it takes 0.34.0:
+
+- **Update the Codex CLI to 0.157.0 or later.** The codex default is now `gpt-6-sol`, and the
+  preflight otherwise refuses `codex-cli-too-old`. See
+  [Astra and the codex role pin](#astra-and-the-codex-role-pin).
+- **Move a `gpt-5.6-terra` pin to `gpt-6-sol`.** A pin or config naming `gpt-5.6-terra` now refuses
+  `model-retired`; `gpt-5.6-sol` stays a valid pin. See
+  [Astra and the codex role pin](#astra-and-the-codex-role-pin).
+- **The owner-authority gate is retired.** Merges run on the owner's scoped word under the merge
+  covenant; the hook no longer asks. See [Owner-authority gate retired](#owner-authority-gate-retired).
+- **Dispatch CLIs take `--seat` as four-key JSON.** The old `--engine`, `--model`, `--effort`,
+  `--engine-model`, `--vendor` and `--role` flags refuse. See
+  [Dispatch CLI arguments](#dispatch-cli-arguments).
 
 ### Launcher stacked premise
 
@@ -86,6 +424,15 @@ whose stack is already complete, or that already carries the idle-seat flag
 (`FLAG_IDLE_SEAT_LAUNCHABLE_CHILD` in `lib/wave_watch.py`), reports `stack-state-changed` on its
 first arm.
 
+### `wave_watch.py` loop and run
+
+`run` drops `--max-seconds` and `--interval-seconds` (and the Python `run()` loses `max_seconds`,
+`interval_seconds`, and `sleep`; the old windowed function is `watch_arm()`). `run` returns at once
+— one ledger read and at most one open-PR read, no waiting. `loop` no longer returns on
+`pr-set-changed` or `stack-state-changed`; those are benign wakes passed over and reported at exit.
+Every `loop` result gains `passedOver` and `passedOverCount`; a `loop-already-live` refusal gains
+`liveLoop`. New refusal tokens: `loop-already-live` and `loop-lock-unavailable`.
+
 ### Launcher premise `dependency` field
 
 `validate_premise` accepts an optional `dependency` field on the premise — a positive integer pull
@@ -137,7 +484,9 @@ needing to run commands does not route to claude today. `<tok>` is the registry'
 token (`haiku`, `sonnet`, `opus`); `fable` refuses `fable-unrunnable`.
 
 The typed result is the `structured_output` member of the **last** `{"type":"result"}` event on
-stdout — the final response `--json-schema` governs. The runner **materializes** it to
+stdout — the final response `--json-schema` governs. That same observation records
+`resultCompleteAt`, `resultCompleteEpoch`, and `resultCompleteSha256` on the attempt-ended record
+before the process is terminated. The runner **materializes** it to
 `<run-dir>/native-result-<n>.json` at attempt end; `attempt-ended.stdoutResult` records
 `materialized`, `absent`, `error`, or `occupied`. Only a `materialized` attempt is loaded;
 `occupied` forfeits `native-result-path-occupied`; `absent` (no `result` event, `is_error: true`,
@@ -156,14 +505,69 @@ open with `config-dir-unusable:<why>` (`attempts: 0`). At spawn the same value i
 child env together with `CLAUDE_CODE_EFFORT_LEVEL=<seat effort>`, and `engine-started.env` records
 both pins.
 
-Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`, plus the shared native
-family `native-result-missing`, `native-result-oversized`, `native-result-malformed`,
-`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`,
-`native-schema-unreadable`, `marker-channel-retired`; the adapter refusals `unregistered-engine-model`,
-`fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
+Two dispatch modes via `--claude-mode {print,background}` (default `print`). **Print** delivers
+through stdout: the runner materializes the last `{"type":"result"}` envelope's
+`structured_output` to `<run-dir>/native-result-<n>.json`. **Background** delivers through the
+session transcript on `dispatch-review` only — a write dispatch in background mode refuses
+`claude-mode-background-write` before spawn; a continuation with a disagreeing mode refuses
+`run-dir-claude-mode-mismatch`. Background attempt outcomes can carry
+the refusal tokens in `lib/background_outcome.py` (`ALL_REFUSALS`).
+Background telemetry is read from the session
+transcript's tool calls, not from stdout.
 
-Not in this release: background mode (`claude --bg`), the launcher's hand-built argv retiring into
-the adapter, the watcher and the steer channel, Astra.
+Refusal tokens a consumer can meet on claude: `config-dir-unusable:<why>`,
+`claude-mode-background-write`, `run-dir-claude-mode-mismatch`, the background attempt refusals
+above, plus the shared native family `native-result-missing`, `native-result-oversized`,
+`native-result-malformed`, `native-result-schema-invalid`, `native-result-report-blank`,
+`native-result-path-occupied`, `result-completion-unrecorded`, `result-completion-after-deadline`,
+`result-completion-payload-mismatch`, `timeout-deadline-unrecorded`, `native-schema-unreadable`,
+`marker-channel-retired`; the adapter
+refusals `unregistered-engine-model`, `fable-unrunnable`, `invalid-model-effort`, `untokenizable`.
+
+### Builder launch
+
+Builders stay on `claude -p`. The launcher builds the builder command through
+`engine_adapter.claude_builder_argv(token, session_id, prompt)` — the one home for every claude
+command — whose argv is unchanged (`claude --model <tok> --session-id <uuid> -p <prompt>`; effort
+remains pinned through `CLAUDE_CODE_EFFORT_LEVEL`). A caller of `claude_builder_argv` meets the
+signature without `effort` or `--bg` and the refusal `builder-session-id-invalid`.
+
+`launcher.py canary --repo-root <r> --launch-id <id>` reports whether a builder lane is engaged from
+tool calls in that lane's own session transcript. On success the JSON carries `ok`, `reason` (null),
+`launchId`, `sessionId`, `configDir`, `transcriptPath`, `toolCalls`, `truncated`, and `engaged`.
+Refusal tokens: `canary-ledger-unreadable:<state>`, `canary-ledger-fold-refused:<reason>`,
+`canary-lane-unknown`, `canary-session-id-absent`, `canary-config-dir-absent`,
+`canary-transcript-missing`, `canary-transcript-ambiguous`, `canary-transcript-unreadable`,
+`canary-transcript-truncated`. A running builder is steered by a message to its registered session
+name. Background mode remains a review-seat mode only (`--claude-mode background`).
+
+### Astra and the codex role pin
+
+`gpt-6-astra` is registered as the codex top rung and a valid `reviewer-deep` pin at effort `high`.
+A consumer meets:
+
+- the `registration-probe` role the registration probe dispatches under — its cell is now
+  `gpt-6-sol` at `high`, which has passed; it stays for any model registered
+  probe-pending later;
+- `conformance_probe astra-probe` (refusal token `astra-probe-wave-already-attempted` when the same
+  wave is re-attempted with a different run dir);
+- pin refusal tokens `pin-probe-pending` (for a future probe-pending model), `pin-role-not-eligible`,
+  and `pin-not-on-allowlist` (a codex role pin must resolve on its role's own codex allowlist — every
+  codex `pilot` pin is refused);
+- `model-retired`, refused for any pin or config naming a retired codex model (`gpt-5.6-terra`)
+  at load, at the configure write, and at dispatch validation;
+- `codex-cli-too-old` and `codex-cli-version-unknown`, refused by the preflight and the
+  composition-liveness check when the installed Codex CLI falls short of the registry's floor for
+  the models the codex defaults use, or when its version can't be parsed;
+- `gpt-5.6-sol`, registered pin-only: never a default, ladder rung, peer, or escalation target, but
+  a valid pin for any codex pin role that has a codex cell (reviewer, reviewer-deep, code-fixer,
+  implementer), at that role's own effort;
+- `seat_map compose` flags `--host-model` and `--implementation-engine` and degradations
+  `host-model-unknown`, `role-pin-not-live`, `role-pin-not-honorable`;
+- `SUPERHEROES_HOST_MODEL`, exported by the session-start hook from the host payload (empty when
+  absent or malformed);
+- the receipt's per-seat `model` field (read from the dispatch record, `null` when unrecorded) and
+  its unprobed-native disclosure line for claude seats with no runner execution evidence.
 
 ### Dispatch CLI arguments
 
@@ -310,7 +714,9 @@ run that predates the field reads as marker.
 On a successful codex write, the terminal result carries `report` (the scrubbed report text). On
 forfeit, it carries `detail` from the native admission vocabulary: `native-schema-unreadable`,
 `native-result-missing`, `native-result-oversized`, `native-result-malformed`,
-`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`, or
+`native-result-schema-invalid`, `native-result-report-blank`, `native-result-path-occupied`,
+`result-completion-unrecorded`, `result-completion-after-deadline`,
+`result-completion-payload-mismatch`, `timeout-deadline-unrecorded`, or
 `marker-channel-retired`. The dirty-tree forfeit keeps `detail: worktree-dirtied-by-attempt` and
 carries `attemptDetail`.
 
@@ -347,7 +753,9 @@ binds the attempt prompt for cursor (`orderPromptSha256` is the caller's order i
 
 Refusal tokens a consumer can now meet on cursor: `native-result-missing`,
 `native-result-oversized`, `native-result-malformed`, `native-result-schema-invalid`,
-`native-result-report-blank`, `native-result-path-occupied`, `attempt-prompt-occupied`,
+`native-result-report-blank`, `native-result-path-occupied`, `result-completion-unrecorded`,
+`result-completion-after-deadline`, `result-completion-payload-mismatch`,
+`timeout-deadline-unrecorded`, `attempt-prompt-occupied`,
 `attempt-prompt-unwritable`, `native-schema-unreadable`, `prompt-unreadable`,
 `prompt-tampered`,
 `marker-channel-retired`. Tokens that
@@ -370,3 +778,11 @@ A runner-journal line that is valid JSON but not an object now counts as interio
 the class `journal-line-not-object`. The launcher's `preflight-failed:<id>` refusal now carries the
 walked `checks`, including the failing entry, so the launch ledger keeps the probe's evidence on
 refusal.
+
+### Owner-authority gate retired
+
+The `PreToolUse` hook `hooks/owner_authority_gate.py` and its classifier `lib/owner_authority.py`
+are gone, so a merge, release, publish, force-push, push-to-default or workflow-run command no
+longer stops at a gate prompt. A project store's `owner-authority-allow.json` is no longer read;
+it can be deleted. Approval is the owner's scoped word in chat, and merges execute inside it under
+the merge covenant (`rubric/covenant.md`, the hard lines).

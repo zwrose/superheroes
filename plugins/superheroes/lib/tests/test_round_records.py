@@ -30,6 +30,9 @@ def _load(name):
 
 
 RR = _load("round_records")
+MR = _load("model_registry")
+
+_CODEX_REVIEW_MODEL = MR.matrix_config("reviewer", "codex")[0]
 
 SESSION = "s" * 32
 PHASE = "dispatch-verifiers"
@@ -59,7 +62,7 @@ def _env(payload=None, **over):
         "seat": SEAT,
         "attempt": 1,
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": "dispatch-abc",
         "orderSha256": RR.NOT_EMITTED,
         "manifestSha256": RR.NOT_EMITTED,
@@ -1459,7 +1462,7 @@ def _stub_header(sd, seat=SEAT, order_sha="o" * 64, manifest_sha="m" * 64, attem
         "seat": seat,
         "attempt": attempt,
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "dispatchRef": manifest_sha,
         "orderSha256": order_sha,
         "manifestSha256": manifest_sha,
@@ -2073,6 +2076,45 @@ def test_v2_execution_evidence_observation_extra_key_refuses_unknown_field(tmp_p
     assert plan is None and refusal["reason"] == "execution-evidence-unknown-field"
     assert refusal["field"] == "investigated"
     assert refusal["location"] == "observation"
+
+
+def test_execution_evidence_fields_tuple_unchanged():
+    assert RR.EXECUTION_EVIDENCE_FIELDS == (
+        "source",
+        "runnerNonce",
+        "recordDigest",
+        "resultDigest",
+        "resultKind",
+        "observation",
+    )
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+def test_v2_execution_evidence_optional_engine_model_accepted(tmp_path, provenance):
+    sd = _session(tmp_path)
+    env = _v2_env(
+        provenance=provenance,
+        execution_evidence=_execution_evidence(engineModel=_CODEX_REVIEW_MODEL),
+    )
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert refusal is None and plan is not None
+    assert plan["envelope"]["executionEvidence"]["engineModel"] == _CODEX_REVIEW_MODEL
+
+
+@pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)
+@pytest.mark.parametrize("bad_value", ["", 7, None, [], {}])
+def test_v2_execution_evidence_optional_engine_model_refused_when_invalid(
+    tmp_path, provenance, bad_value,
+):
+    sd = _session(tmp_path)
+    env = _v2_env(
+        provenance=provenance,
+        execution_evidence=_execution_evidence(engineModel=bad_value),
+    )
+    _land(sd, env)
+    plan, refusal = _validate(sd, seat_result_schema=RR.SEAT_RESULT_SCHEMA_V2)
+    assert plan is None and refusal["reason"] == "execution-evidence-malformed"
 
 
 @pytest.mark.parametrize("provenance", RR.EVIDENCE_BEARING_PROVENANCE)

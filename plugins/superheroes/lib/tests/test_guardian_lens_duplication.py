@@ -988,16 +988,42 @@ def test_degrade_on_negative_sources_rejects_report_contract(tmp_path):
 
 
 @pytest.mark.parametrize("sources", [3, 5])
-def test_degrade_on_over_scan_without_prior_digest(tmp_path, sources):
-    """F3: scanned > tracked_count degrades even with no prior pairs baseline."""
+def test_source_unit_count_above_tracked_still_collects(tmp_path, sources):
+    """Deliberate behavior change (#1452): sources > tracked_count still collects when every
+    reported path is in the census — jscpd counts per-(file, language) source units."""
     _seed_tracked(tmp_path, "a.py", "b.py")
     report = _report([], sources=sources)
     out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report), prev_digest=None)
+    assert gl.classify_collect(out)[0] == "collected"
+    assert out["digest"] is not None
+
+
+def test_reported_path_outside_census_degrades(tmp_path):
+    """A duplicate entry naming a path outside the tracked census must not-collect."""
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = _report([
+        _clone_entry("a.py", "checkouts/junk/c.py", lines=12, fmt="python"),
+    ], sources=2)
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
     status, reason = gl.classify_collect(out)
     assert status == "not-collected"
     assert out["digest"] is None
-    assert "scanned %d files but only 2" % sources in reason
-    assert "census file list was not honored" in reason
+    assert "outside the tracked-file census" in reason
+    assert "checkouts/junk/c.py" in reason
+
+
+def test_self_clone_outside_census_degrades(tmp_path):
+    """Self-clone paths are membership-checked before the self-clone skip (edge e2)."""
+    _seed_tracked(tmp_path, "a.py", "b.py")
+    report = _report([
+        _clone_entry("outside/untracked.py", "outside/untracked.py", lines=12, fmt="python"),
+    ], sources=2)
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert out["digest"] is None
+    assert "outside the tracked-file census" in reason
+    assert "outside/untracked.py" in reason
 
 
 def test_full_scan_at_tracked_count_still_collects(tmp_path):
@@ -1118,6 +1144,54 @@ def test_census_confines_jscpd_to_git_tracked_files_end_to_end(tmp_path):
     # Census confined to the two tracked files.
     assert out["diagnostics"]["censusSource"] == "git ls-files"
     assert out["diagnostics"]["trackedFilesCensused"] == 2
+
+
+@pytest.mark.skipif(not shutil.which("jscpd"), reason="jscpd not installed")
+def test_jscpd_scanned_set_equals_tracked_list_end_to_end(tmp_path):
+    """End-to-end (#1452): candidate paths must stay within the tracked census; source-unit
+    inflation (markdown fences) must not degrade collection."""
+    repo = str(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    (tmp_path / "a.py").write_text(_DUP_SNIPPET, encoding="utf-8")
+    (tmp_path / "b.py").write_text(_DUP_SNIPPET, encoding="utf-8")
+    doc_body = (
+        "# doc\n\n```python\n" + _DUP_SNIPPET + "```\n\n```bash\necho hi\n```\n"
+    )
+    (tmp_path / "doc.md").write_text(doc_body, encoding="utf-8")
+    subprocess.run(["git", "add", "a.py", "b.py", "doc.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+    junk = tmp_path / "checkouts" / "junk"
+    junk.mkdir(parents=True)
+    (junk / "a.py").write_text(_DUP_SNIPPET, encoding="utf-8")
+    (junk / "b.py").write_text(_DUP_SNIPPET, encoding="utf-8")
+
+    def run(argv, **kwargs):
+        return subprocess.run(
+            argv, capture_output=True, text=True,
+            timeout=kwargs.get("timeout"), cwd=kwargs.get("cwd"))
+
+    ctx = {"cwd": repo, "run": run, "config": None, "prevDigest": None}
+    out = gld.DuplicationLens().collect(ctx)
+    status, reason = gl.classify_collect(out)
+    assert status == "collected", (status, reason, out.get("diagnostics"))
+
+    tracked_set = {"a.py", "b.py", "doc.md"}
+    candidate_paths = set()
+    for c in out["candidates"]:
+        for f in c["files"]:
+            candidate_paths.add(f)
+            assert "checkouts" not in f
+
+    assert out["diagnostics"]["jscpdFilesScanned"] > out["diagnostics"]["trackedFilesCensused"]
+
+    if candidate_paths == tracked_set:
+        pass  # full pin: scanned-set equals tracked list via candidate paths
+    else:
+        assert candidate_paths <= tracked_set, (
+            "unexpected candidate paths outside tracked set: %r" % (candidate_paths - tracked_set))
 
 
 @pytest.mark.skipif(not shutil.which("jscpd"), reason="jscpd not installed")

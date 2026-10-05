@@ -150,12 +150,10 @@ def canonical_codex_pin_role(role):
     return _LEGACY_CODEX_PIN_ALIAS.get(role, role)
 
 
-def normalize_codex_pin_map(raw, effort_map=None):
+def normalize_codex_pin_map(raw):
     """→ {"pins": {role: model}, "invalid": {role: reason_string}}"""
     if not isinstance(raw, dict):
         return {"pins": {}, "invalid": {}}
-    if not isinstance(effort_map, dict):
-        effort_map = {}
     pins = {}
     invalid = {}
     for role, model in raw.items():
@@ -166,14 +164,14 @@ def normalize_codex_pin_map(raw, effort_map=None):
         if role not in CODEX_PIN_ROLES:
             invalid[role] = "unknown role %r rejected" % role
             continue
-        if not isinstance(model, str) or model not in CODEX_MODELS:
+        if not isinstance(model, str):
             invalid[role] = "unknown model %r rejected" % model
             continue
-        role_effort = resolve_effort("codex", CODEX_ROLE_KIND[role], effort_map)
-        if valid_codex_model_effort(model, role_effort):
+        ok, reason = model_registry.codex_pin_verdict(role, model)
+        if ok:
             pins[role] = model
         else:
-            invalid[role] = "%s + %s is invalid" % (model, role_effort)
+            invalid[role] = reason
     return {"pins": pins, "invalid": invalid}
 
 
@@ -203,6 +201,11 @@ def normalize_seat_pin_map(raw):
         if bad_opt is not None:
             invalid[seat] = "invalid %s (must be a non-empty string)" % bad_opt
             continue
+        if cleaned["vendor"] == "codex" and "model" in cleaned:
+            retired_reason = model_registry.retired_model_reason("codex", cleaned["model"])
+            if retired_reason is not None:
+                invalid[seat] = retired_reason
+                continue
         pins[seat] = cleaned
     return {"pins": pins, "invalid": invalid}
 
@@ -455,7 +458,7 @@ def dispatch_calibration_rows(prefs, tiers):
 # effort defaults per engine. codex is effort-tiered; cursor is one composer model
 # (FR-10, exempt); claude defers to model_tier (None). Depth-aware review: the deep reviewers
 # (security/architecture — the reviewer-deep model tier) dispatch at 'review-deep' -> xhigh;
-# regular review -> high. GPT-5.6 additionally accepts max, but max is owner opt-in only.
+# regular review -> high. Codex additionally accepts max, but max is owner opt-in only.
 _CODEX_EFFORT = {
     k: model_registry.codex_effort_for_kind(k)
     for k in ("review", "review-deep", "build", "fix", "brief-check", "pilot")
@@ -521,17 +524,19 @@ def resolve_effort(engine, role_kind, overrides=None):
 def resolve_engine_model(engine, tier_role, tier_model, prefs=None):
     """Return the concrete Codex model for a role, or None for another engine.
 
-    A valid per-role persistent pin wins. Otherwise a known shared tier maps to its GPT-5.6
-    capability peer. An unknown tier fails open to Sol, the capable default; it never reuses an
-    invalid owner pin and never changes another provider's model selection.
+    A valid per-role persistent pin wins. Otherwise a known shared tier maps to its codex
+    capability peer from the registry; an unknown tier fails open to the registry's opus peer. It
+    never reuses an invalid owner pin and never changes another provider's model selection.
     """
     if engine != "codex":
         return None
     pins = prefs.get("codexModels") if isinstance(prefs, dict) else None
     if isinstance(pins, dict):
         pinned = pins.get(tier_role)
-        if isinstance(pinned, str) and pinned in CODEX_MODELS:
-            return pinned
+        if isinstance(pinned, str):
+            ok, _ = model_registry.codex_pin_verdict(tier_role, pinned)
+            if ok:
+                return pinned
     try:
         return model_registry.codex_peer_for_claude_tier(tier_model)
     except ValueError:
@@ -541,12 +546,11 @@ def resolve_engine_model(engine, tier_role, tier_model, prefs=None):
 def codex_write_probe_model(prefs):
     """The Codex model the build/fix write-auth probe should dispatch (#409): the strongest model the
     implementation role will actually RUN. Each write role (build, fix) contributes its explicit pin
-    when set, else the sol capability floor — an UNPINNED codex write role derives a GPT-5.6 tier model
-    (up to sol), so it must keep the floor in the max, never under-testing the real dispatch. A project
-    whose write roles are pinned ENTIRELY to the weaker registered model (gpt-5.6-terra) therefore
-    probes that model (not falsely failed by a hard sol probe), while any unpinned write role clamps
-    the probe up
-    to sol — preserving the original rationale (an old CLI must not falsely pass). Takes a
+    when set, else the registry's opus peer floor — an UNPINNED codex write role derives that peer,
+    so it must keep the floor at the max, never under-testing the real dispatch. A project whose
+    write roles are pinned ENTIRELY to the pin-only model therefore probes that model (not falsely
+    failed by a hard floor probe), while any unpinned write role clamps the probe up to the floor —
+    preserving the original rationale (an old CLI must not falsely pass). Takes a
     load_engine_prefs() result (so pins are already validity-filtered). Pure; never raises; always
     returns a valid model in CODEX_MODEL_STRENGTH."""
     pins = prefs.get("codexModels") if isinstance(prefs, dict) else None
@@ -613,7 +617,7 @@ def _normalize_engine_preferences_block(prefs):
            "effort": dict(effort) if isinstance(effort, dict) else {}}
     codex_models = prefs.get("codexModels")
     if isinstance(codex_models, dict):
-        codex_result = normalize_codex_pin_map(codex_models, out["effort"])
+        codex_result = normalize_codex_pin_map(codex_models)
         if codex_result["pins"]:
             out["codexModels"] = codex_result["pins"]
         if codex_result["invalid"]:

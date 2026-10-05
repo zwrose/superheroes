@@ -115,6 +115,9 @@ def _resolve_commit_reason(ref, repo_root, run):
     return pin, None
 
 
+resolve_commit_reason = _resolve_commit_reason
+
+
 def parse_pr_base_repo(url):
     """Extract normalized base repo from a PR URL.
 

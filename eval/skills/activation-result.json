@@ -1,7 +1,175 @@
 {
-  "recordedAt": "2026-09-18",
+  "recordedAt": "2026-09-27",
   "observations": [
     {
+      "skill": "superheroes/adopt-version",
+      "phrase": "a new superheroes version just got installed — adopt it in this seat without a handoff",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "a new superheroes version just got installed — adopt it in this seat without a handoff",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "a new superheroes version just got installed — adopt it in this seat without a handoff",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "I updated the plugin; take up 0.36.0 in this live advisor session",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "I updated the plugin; take up 0.36.0 in this live advisor session",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "I updated the plugin; take up 0.36.0 in this live advisor session",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "switch this builder session to the newly installed plugin version",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "switch this builder session to the newly installed plugin version",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "switch this builder session to the newly installed plugin version",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "diff the plugin versions and run the upgrade checklist in this live workhorse seat",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "diff the plugin versions and run the upgrade checklist in this live workhorse seat",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "diff the plugin versions and run the upgrade checklist in this live workhorse seat",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "run checkpoint before I compact this showrunner session",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "run checkpoint before I compact this showrunner session",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "run checkpoint before I compact this showrunner session",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "pick the advisor seat back up in this new session",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "pick the advisor seat back up in this new session",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "pick the advisor seat back up in this new session",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "I'm handing the advisor seat over to a new session — prepare this one",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "I'm handing the advisor seat over to a new session — prepare this one",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "I'm handing the advisor seat over to a new session — prepare this one",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/adopt-version",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
       "skill": "superheroes/architect-discovery",
       "phrase": "I have a new piece of work and need an owner-approved requirements spec",
       "direction": "should_fire",
@@ -549,21 +717,21 @@
     },
     {
       "skill": "superheroes/checkpoint",
-      "phrase": "I need to compact soon \u2014 update the resume point and give me /compact text",
+      "phrase": "I need to compact soon — update the resume point and give me /compact text",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/checkpoint",
-      "phrase": "I need to compact soon \u2014 update the resume point and give me /compact text",
+      "phrase": "I need to compact soon — update the resume point and give me /compact text",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/checkpoint",
-      "phrase": "I need to compact soon \u2014 update the resume point and give me /compact text",
+      "phrase": "I need to compact soon — update the resume point and give me /compact text",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -1746,21 +1914,21 @@
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "orchestrate the build for this issue \u2014 brief, delegate, review, ready PR",
+      "phrase": "orchestrate the build for this issue — brief, delegate, review, ready PR",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "orchestrate the build for this issue \u2014 brief, delegate, review, ready PR",
+      "phrase": "orchestrate the build for this issue — brief, delegate, review, ready PR",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/workhorse",
-      "phrase": "orchestrate the build for this issue \u2014 brief, delegate, review, ready PR",
+      "phrase": "orchestrate the build for this issue — brief, delegate, review, ready PR",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -1977,63 +2145,63 @@
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what decisions are waiting on me right now \u2014 sweep everything and give me batch 1",
+      "phrase": "what decisions are waiting on me right now — sweep everything and give me batch 1",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what decisions are waiting on me right now \u2014 sweep everything and give me batch 1",
+      "phrase": "what decisions are waiting on me right now — sweep everything and give me batch 1",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what decisions are waiting on me right now \u2014 sweep everything and give me batch 1",
+      "phrase": "what decisions are waiting on me right now — sweep everything and give me batch 1",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "I was away for a week \u2014 walk me through the open decisions that need my ruling",
+      "phrase": "I was away for a week — walk me through the open decisions that need my ruling",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "I was away for a week \u2014 walk me through the open decisions that need my ruling",
+      "phrase": "I was away for a week — walk me through the open decisions that need my ruling",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "I was away for a week \u2014 walk me through the open decisions that need my ruling",
+      "phrase": "I was away for a week — walk me through the open decisions that need my ruling",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "undelivered owner calls have piled up \u2014 run the collector and deliver what's blocking you",
+      "phrase": "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "undelivered owner calls have piled up \u2014 run the collector and deliver what's blocking you",
+      "phrase": "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "undelivered owner calls have piled up \u2014 run the collector and deliver what's blocking you",
+      "phrase": "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -2061,21 +2229,21 @@
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what's blocking the advisor that needs my decision \u2014 standing proposals first, batch 1 only",
+      "phrase": "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what's blocking the advisor that needs my decision \u2014 standing proposals first, batch 1 only",
+      "phrase": "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what's blocking the advisor that needs my decision \u2014 standing proposals first, batch 1 only",
+      "phrase": "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -2166,21 +2334,21 @@
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "why did this break \u2014 demonstrate the cause before scoping any fix",
+      "phrase": "why did this break — demonstrate the cause before scoping any fix",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "why did this break \u2014 demonstrate the cause before scoping any fix",
+      "phrase": "why did this break — demonstrate the cause before scoping any fix",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "why did this break \u2014 demonstrate the cause before scoping any fix",
+      "phrase": "why did this break — demonstrate the cause before scoping any fix",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -2208,42 +2376,42 @@
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "we already tried a fix and the failure came back \u2014 find the real cause",
+      "phrase": "we already tried a fix and the failure came back — find the real cause",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "we already tried a fix and the failure came back \u2014 find the real cause",
+      "phrase": "we already tried a fix and the failure came back — find the real cause",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "we already tried a fix and the failure came back \u2014 find the real cause",
+      "phrase": "we already tried a fix and the failure came back — find the real cause",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "the same failure shows up in CI and locally \u2014 investigate the cause before anyone writes a fix",
+      "phrase": "the same failure shows up in CI and locally — investigate the cause before anyone writes a fix",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "the same failure shows up in CI and locally \u2014 investigate the cause before anyone writes a fix",
+      "phrase": "the same failure shows up in CI and locally — investigate the cause before anyone writes a fix",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "the same failure shows up in CI and locally \u2014 investigate the cause before anyone writes a fix",
+      "phrase": "the same failure shows up in CI and locally — investigate the cause before anyone writes a fix",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -2355,63 +2523,63 @@
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "fix the null dereference in OrderService.validate \u2014 the stack trace points at line 42, patch it and ship the PR",
+      "phrase": "fix the null dereference in OrderService.validate — the stack trace points at line 42, patch it and ship the PR",
       "direction": "should_not_fire",
       "run": 0,
       "activated": false
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "fix the null dereference in OrderService.validate \u2014 the stack trace points at line 42, patch it and ship the PR",
+      "phrase": "fix the null dereference in OrderService.validate — the stack trace points at line 42, patch it and ship the PR",
       "direction": "should_not_fire",
       "run": 1,
       "activated": false
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "fix the null dereference in OrderService.validate \u2014 the stack trace points at line 42, patch it and ship the PR",
+      "phrase": "fix the null dereference in OrderService.validate — the stack trace points at line 42, patch it and ship the PR",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "I'm on the OAuth migration build and pytest fails on test_callback \u2014 figure out which mock is wrong and get the PR ready",
+      "phrase": "I'm on the OAuth migration build and pytest fails on test_callback — figure out which mock is wrong and get the PR ready",
       "direction": "should_not_fire",
       "run": 0,
       "activated": false
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "I'm on the OAuth migration build and pytest fails on test_callback \u2014 figure out which mock is wrong and get the PR ready",
+      "phrase": "I'm on the OAuth migration build and pytest fails on test_callback — figure out which mock is wrong and get the PR ready",
       "direction": "should_not_fire",
       "run": 1,
       "activated": false
     },
     {
       "skill": "superheroes/detective",
-      "phrase": "I'm on the OAuth migration build and pytest fails on test_callback \u2014 figure out which mock is wrong and get the PR ready",
+      "phrase": "I'm on the OAuth migration build and pytest fails on test_callback — figure out which mock is wrong and get the PR ready",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
     },
     {
       "skill": "superheroes/showrunner-handoff",
-      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "phrase": "I'm handing the advisor seat over to a new session — prepare this one",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/showrunner-handoff",
-      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "phrase": "I'm handing the advisor seat over to a new session — prepare this one",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/showrunner-handoff",
-      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "phrase": "I'm handing the advisor seat over to a new session — prepare this one",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -2544,21 +2712,21 @@
     },
     {
       "skill": "superheroes/showrunner-resume",
-      "phrase": "the advisor session died \u2014 resume the seat from durable state",
+      "phrase": "the advisor session died — resume the seat from durable state",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/showrunner-resume",
-      "phrase": "the advisor session died \u2014 resume the seat from durable state",
+      "phrase": "the advisor session died — resume the seat from durable state",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/showrunner-resume",
-      "phrase": "the advisor session died \u2014 resume the seat from durable state",
+      "phrase": "the advisor session died — resume the seat from durable state",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -2586,21 +2754,21 @@
     },
     {
       "skill": "superheroes/showrunner-resume",
-      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "phrase": "I'm handing the advisor seat over to a new session — prepare this one",
       "direction": "should_not_fire",
       "run": 0,
       "activated": false
     },
     {
       "skill": "superheroes/showrunner-resume",
-      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "phrase": "I'm handing the advisor seat over to a new session — prepare this one",
       "direction": "should_not_fire",
       "run": 1,
       "activated": false
     },
     {
       "skill": "superheroes/showrunner-resume",
-      "phrase": "I'm handing the advisor seat over to a new session \u2014 prepare this one",
+      "phrase": "I'm handing the advisor seat over to a new session — prepare this one",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false

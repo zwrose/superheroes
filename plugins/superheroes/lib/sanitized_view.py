@@ -5,6 +5,7 @@ Config path matching folds ASCII A–Z to a–z on every platform (including
 case-sensitive filesystems) so behavior is predictable and case-variant agent
 config cannot leak. Non-ASCII letters are not folded.
 """
+import json
 import os
 import re
 import select
@@ -18,6 +19,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import git_routing  # noqa: E402  the one home of the git routing-var list
 from guardian_tools import path_is_confidently_under, path_is_under_repo  # noqa: E402
 
 SANITIZED_VIEW_STRATEGY = "git-tree-export"
@@ -61,6 +63,7 @@ _GIT_IDENTITY = (
 )
 
 _CATFILE_READ_CHUNK = 1024 * 1024
+_BINARY_SNIFF_BYTES = 8000
 SANITIZED_VIEW_MAX_SYMLINK_TARGET_BYTES = 8 * 1024
 
 REVIEW_DIFF_FILE_NAME = "SUPERHEROES_REVIEW_DIFF.patch"
@@ -88,20 +91,7 @@ REVIEW_MODES = (MODE_REVIEW, MODE_BRIEF_CHECK)
 _REVIEW_DIFF_ARGV_MAX_BYTES = 128 * 1024
 _REVIEW_DIFF_ARGV_MARGIN = 8 * 1024
 
-_GIT_ROUTING_VARS = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_CONFIG",
-    "GIT_CONFIG_GLOBAL",
-    "GIT_CONFIG_SYSTEM",
-    "GIT_COMMON_DIR",
-    "GIT_NAMESPACE",
-    "GIT_EXTERNAL_DIFF",
-    "GIT_REPLACE_REF_BASE",
-)
+_GIT_ROUTING_VARS = git_routing.GIT_ROUTING_VARS
 
 # Reader-wide security pin carried by every source-repository command that peels
 # a commit (head export, head census, review-diff census, diff-base verify,
@@ -176,6 +166,9 @@ def _is_git_object_id_hex(value):
   return all(c in "0123456789abcdef" for c in value.lower())
 
 
+DIFF_BASE_ABBREVIATED_DETAIL = "sanitized-view-diff-base-abbreviated"
+
+
 def _require_pinned_commit_oid(value):
     """Return the pinned commit object id in ``value``, or refuse.
 
@@ -189,7 +182,12 @@ def _require_pinned_commit_oid(value):
     if not isinstance(value, str) or not value.strip():
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     value = value.strip()
-    if value.startswith("-") or not _is_git_object_id_hex(value):
+    if value.startswith("-"):
+        raise SanitizedViewError("sanitized-view-diff-base-unresolved")
+    if all(c in "0123456789abcdef" for c in value.lower()):
+        if 4 <= len(value) <= 39:
+            raise SanitizedViewError("sanitized-view-diff-base-abbreviated")
+    if not _is_git_object_id_hex(value):
         raise SanitizedViewError("sanitized-view-diff-base-unresolved")
     return value
 
@@ -291,7 +289,9 @@ def sanitized_view_notice(view, *, mode="review"):
         lines.append(
             "The change under review is the patch at %s — read it first. It is a generated "
             "artifact, not repository source; do not review the patch file itself, do not list "
-            "it in your investigated array, and exclude it from repo-wide searches.\n"
+            "it in your investigated array, and exclude it from repo-wide searches. "
+            "A binary file in the change appears as a placeholder line naming its path and "
+            "change kind; its content is not shown, and that absence is not a finding.\n"
             % diff_path
         )
     withheld = view.get("diffWithheldCount") or 0
@@ -507,14 +507,22 @@ def _git_tree_entries(repo_real, sha, started):
     return entries
 
 
-def _changed_tree_entries(repo_real, base_sha, head_sha, started):
-    """Return sorted paths whose (mode, type, oid) differ between two commits."""
+def _changed_tree_maps(repo_real, base_sha, head_sha, started):
+    """Return changed paths and the two commit tree maps."""
     base_map = _git_tree_entries(repo_real, base_sha, started)
     head_map = _git_tree_entries(repo_real, head_sha, started)
     all_paths = set(base_map) | set(head_map)
     changed = [
         p for p in sorted(all_paths) if base_map.get(p) != head_map.get(p)
     ]
+    return changed, base_map, head_map
+
+
+def _changed_tree_entries(repo_real, base_sha, head_sha, started):
+    """Return sorted paths whose (mode, type, oid) differ between two commits."""
+    changed, _base_map, _head_map = _changed_tree_maps(
+        repo_real, base_sha, head_sha, started
+    )
     return changed
 
 
@@ -734,6 +742,48 @@ class _CatFileBatch:
         except OSError as exc:
             raise SanitizedViewError("sanitized-view-export-failed") from exc
         return b"".join(chunks), total_bytes
+
+    def read_blob_prefix(self, oid, started, prefix_bytes):
+        _check_export_deadline(started)
+        try:
+            self._stdin.write(oid.encode("ascii") + b"\n")
+            self._stdin.flush()
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        size = self._read_header(oid)
+        retain = min(size, prefix_bytes)
+        chunks = []
+        remaining = size
+        retain_left = retain
+        while retain_left > 0 and remaining > 0:
+            _check_export_deadline(started)
+            to_read = min(remaining, retain_left, _CATFILE_READ_CHUNK)
+            try:
+                data = self._stdout.read(to_read)
+            except OSError as exc:
+                raise SanitizedViewError("sanitized-view-export-failed") from exc
+            if len(data) != to_read:
+                raise SanitizedViewError("sanitized-view-export-failed")
+            chunks.append(data)
+            retain_left -= len(data)
+            remaining -= len(data)
+        while remaining > 0:
+            _check_export_deadline(started)
+            to_read = min(remaining, _CATFILE_READ_CHUNK)
+            try:
+                data = self._stdout.read(to_read)
+            except OSError as exc:
+                raise SanitizedViewError("sanitized-view-export-failed") from exc
+            if len(data) != to_read:
+                raise SanitizedViewError("sanitized-view-export-failed")
+            remaining -= to_read
+        try:
+            trailing = self._stdout.read(1)
+            if trailing != b"\n":
+                raise SanitizedViewError("sanitized-view-export-failed")
+        except OSError as exc:
+            raise SanitizedViewError("sanitized-view-export-failed") from exc
+        return b"".join(chunks)
 
     def write_blob_to_file(self, oid, dest_fh, started, total_bytes):
         _check_export_deadline(started)
@@ -1213,13 +1263,15 @@ def _split_patch_sections(patch_bytes):
     return sections, unrecognized_spans
 
 
-def _filter_patch_sections(patch_bytes):
+def _filter_patch_sections(patch_bytes, is_genuinely_binary=None):
     """Output-side gate for ``SUPERHEROES_REVIEW_DIFF.patch``.
 
     Invariant: no patch section whose resolved path would be stripped by
-    ``_rel_path_would_be_stripped`` reaches the written patch, and a patch whose
-    surviving sections contain opaque (binary) content is refused with
-    ``sanitized-view-diff-opaque``.
+    ``_rel_path_would_be_stripped`` reaches the written patch. Opaque (binary)
+    sections are refused with ``sanitized-view-diff-opaque`` unless
+    ``is_genuinely_binary`` confirms every present side is a regular-file blob
+    whose prefix matches ``_blob_prefix_is_genuine_binary`` — those sections
+    become placeholder lines instead. Text sections pass byte-identical.
     """
     if not patch_bytes:
         return b""
@@ -1234,11 +1286,114 @@ def _filter_patch_sections(patch_bytes):
         if _rel_path_would_be_stripped(path):
             continue
         kept.append(section)
-    if any(_section_is_opaque(section) for section in kept):
-        raise SanitizedViewError("sanitized-view-diff-opaque")
-    if not kept:
+    filtered = []
+    for section in kept:
+        if not _section_is_opaque(section):
+            filtered.append(section)
+            continue
+        path = _paths_from_diff_section(section)
+        kind = _section_change_kind(section)
+        if is_genuinely_binary is None or not is_genuinely_binary(path, kind):
+            raise SanitizedViewError("sanitized-view-diff-opaque")
+        filtered.append(_binary_placeholder_section(section, path, kind))
+    if not filtered:
         return b""
-    return b"".join(kept)
+    return b"".join(filtered)
+
+
+def _section_change_kind(section):
+    """Return ``added``, ``deleted``, or ``modified`` from pre-hunk header lines."""
+    for line in section.split(b"\n"):
+        if line.startswith(b"@@"):
+            break
+        if line.startswith(b"new file mode "):
+            return "added"
+        if line.startswith(b"deleted file mode "):
+            return "deleted"
+    return "modified"
+
+
+def _decode_utf8_allow_trailing_truncation(data):
+    """Decode UTF-8, allowing only an incomplete multibyte sequence at the end."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        if exc.reason != "unexpected end of data":
+            return None
+        trimmed = data[: exc.start]
+        if not trimmed:
+            return None
+        try:
+            return trimmed.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+
+def _looks_like_text_blob_prefix(prefix):
+    """Return whether a sniff-window prefix should be treated as text, not opaque binary.
+
+    A prefix is text when it starts with a UTF-16/UTF-32 byte-order mark, or when
+    every NUL byte is removed and the remainder is non-empty UTF-8 (a truncated
+    multi-byte sequence is allowed only at the very end) with no C0 control character
+    other than tab, LF, CR, VT, FF, and ESC. BOM-less UTF-16 ASCII and NUL-salted
+    source are covered by the NUL-stripping rule.
+    """
+    if prefix.startswith(
+        (b"\xff\xfe", b"\xfe\xff", b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")
+    ):
+        return True
+    stripped = prefix.replace(b"\x00", b"")
+    if not stripped:
+        return False
+    text = _decode_utf8_allow_trailing_truncation(stripped)
+    if text is None:
+        return False
+    for ch in text:
+        if ord(ch) < 32 and ch not in "\t\n\r\x0b\x0c\x1b":
+            return False
+    return True
+
+
+def _blob_prefix_is_genuine_binary(prefix):
+    """True when a blob prefix is opaque binary data (NUL present and not text-like).
+
+    A side is genuine binary only when its first ``_BINARY_SNIFF_BYTES`` contain a
+    NUL and ``_looks_like_text_blob_prefix`` is false — UTF-16/UTF-32 BOM prefixes,
+    BOM-less UTF-16 ASCII, and NUL-salted UTF-8 source stay text and refuse
+    placeholding (``sanitized-view-diff-opaque``).
+    """
+    if b"\0" not in prefix:
+        return False
+    if _looks_like_text_blob_prefix(prefix):
+        return False
+    return True
+
+
+def _binary_placeholder_section(section, path, kind):
+    placeholder = (
+        b"# superheroes: binary file "
+        + kind.encode("ascii")
+        + b": "
+        + json.dumps(path, ensure_ascii=True).encode("ascii")
+        + b" (binary content not shown)\n"
+    )
+    header_lines = []
+    for line in section.split(b"\n"):
+        if line.startswith(b"@@"):
+            break
+        if line.startswith(b"Binary files ") and line.endswith(b" differ"):
+            break
+        if line.startswith(b"GIT binary patch"):
+            break
+        header_lines.append(line)
+    if not header_lines:
+        first_nl = section.find(b"\n")
+        if first_nl == -1:
+            header = section + b"\n"
+        else:
+            header = section[: first_nl + 1]
+        return header + placeholder
+    return b"\n".join(header_lines) + b"\n" + placeholder
 
 
 def _argv_byte_size(argv):
@@ -1351,8 +1506,8 @@ def _stage_config_changes(repo_real, merge_base, head_sha, view_root, withheld, 
 
     patch_bytes = b"".join(patch_parts)
     # Deliberate asymmetry: _filter_patch_sections keeps stripped paths *out* of the
-    # review patch; here they are the entire point — do not filter. The opaque check
-    # is shared; the stripped-path filter is not.
+    # review patch; here they are the entire point — do not filter. The config file
+    # is data a reviewer must read whole, so any binary section there still refuses.
     sections, _unrecognized_spans = _split_patch_sections(patch_bytes)
     if any(_section_is_opaque(section) for section in sections):
         raise SanitizedViewError("sanitized-view-diff-opaque")
@@ -1593,7 +1748,9 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
 
     merge_base = _authoritative_merge_base(repo_real, base_sha, head_sha, started)
 
-    changed = _changed_tree_entries(repo_real, merge_base, head_sha, started)
+    changed, base_map, head_map = _changed_tree_maps(
+        repo_real, merge_base, head_sha, started
+    )
     withheld = [p for p in changed if _rel_path_would_be_stripped(p)]
     survivors = [p for p in changed if not _rel_path_would_be_stripped(p)]
 
@@ -1615,7 +1772,47 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
         patch_parts.append(chunk)
 
     patch_bytes = b"".join(patch_parts)
-    patch_bytes = _filter_patch_sections(patch_bytes)
+    cat_batch = None
+
+    def is_genuinely_binary(path, kind):
+        nonlocal cat_batch
+        if kind == "added":
+            side_maps = [head_map]
+        elif kind == "deleted":
+            side_maps = [base_map]
+        else:
+            side_maps = [base_map, head_map]
+        for entry_map in side_maps:
+            entry = entry_map.get(path)
+            if entry is None:
+                return False
+            mode, obj_type, oid = entry
+            if mode not in ("100644", "100755") or obj_type != "blob":
+                return False
+            try:
+                if cat_batch is None:
+                    cat_batch = _CatFileBatch(repo_real)
+                prefix = cat_batch.read_blob_prefix(
+                    oid, started, _BINARY_SNIFF_BYTES
+                )
+            except SanitizedViewError as exc:
+                if exc.detail in (
+                    "sanitized-view-export-failed",
+                    "sanitized-view-export-too-large",
+                ):
+                    raise SanitizedViewError(
+                        "sanitized-view-diff-failed"
+                    ) from exc
+                raise
+            if not _blob_prefix_is_genuine_binary(prefix):
+                return False
+        return True
+
+    try:
+        patch_bytes = _filter_patch_sections(patch_bytes, is_genuinely_binary)
+    finally:
+        if cat_batch is not None:
+            cat_batch.close()
 
     if not patch_bytes:
         raise SanitizedViewError("sanitized-view-diff-empty")

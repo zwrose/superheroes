@@ -5,7 +5,7 @@
 - [The per-item spine](#the-per-item-spine)
 - [The front door](#the-front-door)
 - [The grid and its two instruments](#the-grid-and-its-two-instruments)
-- [The tiers and the P2 carve-out](#the-tiers-and-the-p2-carve-out)
+- [The tiers and the filing rule](#the-tiers-and-the-filing-rule)
 - [Every grading keeps its scoring, and the misses log](#every-grading-keeps-its-scoring-and-the-misses-log)
 - [The declined registry and its triggers](#the-declined-registry-and-its-triggers)
 - [The launch door](#the-launch-door)
@@ -24,15 +24,13 @@
 
 # The owner-decisions delivery contract
 
-Open owner decisions have been dispositioned inconsistently session to session — the owner has had to
-course-correct repeatedly. Across advisor sessions 2026-07 → 2026-08 the full-rigor format (context,
-options, a recommendation for each) was **requested by the owner ~10+ times** rather than delivered
-by default. The sharpest corrections, verbatim: *"you didn't give me nearly enough context"*; *"stop
-with this 'one word' stuff, I'm not a rubber stamp"*; *"only recommend high value actions — we don't
-need to file and fix every tiny bug ever"*; *"pressure test them for actual impact... make sure they
-earn their keep"*; *"walk me through them in chat, do not use ask user question."* The inverse failure
-also appeared — over-filtering: *"I'm a bit concerned that the collector is empty given that there
-seem to be unfiled followups."* The sentence this file exists to prevent: **the owner becomes the
+Open owner decisions get dispositioned inconsistently session to session, and the owner ends up
+course-correcting: asking for the full-rigor format (context, options, a recommendation for each)
+instead of getting it by default. The failures run in both directions. Too little context; a
+recommendation that treats the owner as a rubber stamp; low-value actions recommended as if every
+small bug earned a filing; a structured-question widget where a walk-through in chat was wanted —
+and the inverse, over-filtering, where the collector reads empty while unfiled follow-ups exist.
+The sentence this file exists to prevent: **the owner becomes the
 backstop for delivery quality on exactly the surface — decisions that are theirs to make — where the
 covenant says they should never be the backstop.**
 
@@ -56,12 +54,13 @@ are showrunner duty 5's; cite that duty rather than restating the tests here.
 
 **List filtered items with a one-line reason** — never swallow them. **Present filtered items in a
 separate short list before batch 1** — so the owner sees disposition rather than absence. The
-recorded inverse failure is over-filtering — *"I'm a bit concerned that the collector is empty given
-that there seem to be unfiled followups"* — and a filter nobody can see is indistinguishable from a
-quiet week.
+inverse failure is over-filtering, and a filter nobody can see is indistinguishable from a quiet
+week.
 
 **State grounds per item, not once per batch.** A single preamble that says "these are all taste
 calls" does not substitute for naming the ground on each item.
+
+**Grade at delivery.** Duty 5's two tests, and the project's [material-consequence](../../../rubric/glossary.md#material-consequence) line (the plugin default when the project sets none), are applied at the moment of delivery, to the item as it stands then — not as it stood when it was filed or routed.
 
 **The advisor derives the grading, and never inherits it.** An item's tier, and whether it is a
 craft call or an owner call, is the advisor's own read of the ratified text — this filter, the two
@@ -69,11 +68,13 @@ tests it cites, and the project's
 [material-consequence](../../../rubric/glossary.md#material-consequence) line — applied to the item
 in front of them. How the item was **framed by whoever raised it** — a builder's follow-up line, a
 reviewer's severity word, an issue title that calls something a decision — is **input to that read,
-never the grading itself**. A grading inherited from the raiser is how a craft call arrives at the
+never the grading itself**. Earlier routing is input in the same way, **the advisor's own included**: a bound the advisor wrote ("park for the owner"), a collector entry appended as an owner call, a builder's or a review driver's "owner gate" — each is evidence about the item, re-graded at delivery, never the grading. A grading inherited from the raiser is how a craft call arrives at the
 owner dressed as a product call, and how a real trade arrives filed as a minor note; in both
 directions the owner pays for someone else's framing. The framing is still worth reading: it is
 evidence about the item, and where it disagrees with the advisor's own read, saying so in the item's
 *why it is yours* is more useful to the owner than a silent re-grade.
+
+**"Why it is yours" names the ground.** It names the specific taste, trade or commitment, or the consequence that crosses the material-consequence line. "It was routed to the owner" is not a ground; an item whose only ground is its routing is a craft call and leaves the owner's list.
 
 ## The per-item spine
 
@@ -82,14 +83,14 @@ Five parts, in this order, on every item that passes the filter:
 1. **Why it is yours** — the ground from the filter: which taste, trade, or commitment call this is,
    stated for this item alone.
 2. **Context** — what happened, in plain language, enough that the owner does not have to reconstruct
-   anything. The recorded failure here is *not nearly enough context*; the floor is that the owner can
-   rule without opening another artifact.
+   anything. Too little context is the failure here; the floor is that the owner can rule without
+   opening another artifact.
 3. **Options with consequences** — real options, one bullet each, lettered **`a`, `b`, `c`…** in
    delivery order, each carrying what it costs and what accepting it means. Two options where one is a
    straw man is one option.
 4. **Cost of inaction** — what breaks or is lost if we defer this long-term, or never file it at all.
 5. **Recommendation, with the why and the cost named** — name the choice by key:
-   **`Recommendation: b — …`**. *"Only recommend high value actions"* is not a separate filter; it is
+   **`Recommendation: b — …`**. Recommending only high-value actions is not a separate filter; it is
    how the recommendation is written.
 
 **State empty spine sections with the reason** — never drop them. The same discipline
@@ -163,7 +164,7 @@ declined with a trigger by default.
    | Bottom band, for example internal quality | P2 | P2 | P2 |
 
    The top-band lab-only cell is deliberately **P1**, so a reproduced hole in a dangerous surface
-   reaches the owner in the next batch instead of filing silently.
+   reaches the owner in the next batch as a tier-proposed call rather than resting unseen at P2.
 6. What each tier commits to is not stated here. See [issue-contract.md](issue-contract.md).
 7. **The door helper.** A session reaches for `lib/front_door.py` and its `front_door.grade` entry
    point when it validates a **claimed** grading — the band, tier, and evidence the caller supplies
@@ -178,29 +179,42 @@ declined with a trigger by default.
    and `argued` — are coarser than the grid's evidence tiers, so the tier a session records on the
    item comes from the grid, not from what the helper was handed.
 
-## The tiers and the P2 carve-out
+## The tiers and the filing rule
 
 1. **A P1 or P0 grade waits on the owner's word to hold that tier.** A cleared item may rest at P2
-   with no owner involvement. An item graded P1 or P0 whose word has not landed is **tier-proposed**,
-   not P2. It is not filed. It waits on the collector as a tier-proposed entry, and it is counted
+   without a tier word. An item graded P1 or P0 whose word has not landed is **tier-proposed**,
+   not P2. It waits on the collector as a tier-proposed entry, and it is counted
    in the gardening record's [pending-words line](../../../rubric/glossary.md#pending-words-line). A
    P1 waits for the next walk's batch. **A P0 never waits for a walk**. The advisor raises it to
    the owner at once, through whatever channel reaches them, ahead of any batch. The most severe
    grades must not rest in the least visible state while they wait.
-2. **The P2 carve-out.** This amends the standing filing rule in this same file. **A filing whose
-   item clears the evidence bar and grades P2 may be filed by the advisor**, with the grading
-   record on the item. **The advisor is the only grantee**. Any other session routes through the
-   collector exactly as before. Everything else about the standing contract holds. Owner calls above
-   P2 still bind. The owner-absent collector still appends. The append-always clause still binds.
-   The venue ladder still applies.
+2. **Every new filing waits on the owner's word, at every tier.** No session files a new issue on
+   its own authority, and a P2 grade does not change that: the tier says what the item commits to,
+   never who may file it. An item the door grades P2 lands on the collector as an **owner call
+   carrying its grading** — band, evidence tier, and resulting tier — and it files when the owner's
+   word for that filing lands. The word is recorded where the owner gave it. Everything else about
+   the standing contract holds: the owner-absent collector still appends, the append-always clause
+   still binds, and the venue ladder still applies.
 
-   **Venue-3 filings are always owner calls.** A new issue spends board attention, a commitment call by definition, even when its content is craft, except a machinery filing that clears the evidence bar and grades P2, which the advisor may file with the grading record on the item.
+   **Venue-3 filings are always owner calls.** A new issue spends board attention, a commitment
+   call by definition, even when its content is craft.
 
-3. **The no-ladder rider, stated as a fail direction.** **The carve-out is inactive in a project
-   with no stamped severity ladder.** With no ladder there is no band to cite, so no P0 or P1 can
-   be claimed and no item can be graded P2 through the door. Cleared items **queue at the door for
-   the owner's word** and nothing files. Missing configuration fails closed for anything that would
-   expand authority.
+   **The one exception: layer sub-issues of a stack.** Filing the layer sub-issues of a stack is
+   board wiring, not a new filing, and needs no further word — whether the owner approved the
+   stack's shape or the advisor ruled a size split, recorded on the issue for the owner's veto. How
+   a layer files and wires is in
+   [Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue). A layer
+   that carries scope the owner has not approved is a new filing, and its scope waits for the word.
+
+   **A word already given covers what it approved.** An owner-approved spec is the word for the
+   children that allocate it, so they file without a further word. A replacement for an abandoned
+   child that carries only that child's approved criteria files the same way; anything beyond them
+   waits for the word. A repair issue for a failing validation run files at the owner's decision to
+   repair ([closure.md](closure.md)).
+3. **The no-ladder rider, stated as a fail direction.** With no stamped severity ladder there is no
+   band to cite, so no P0 or P1 can be claimed and no item can be graded P2 through the door.
+   Cleared items **queue at the door for the owner's word**. Missing configuration fails closed for
+   anything that would expand authority.
 4. For the tier vocabulary, see [issue-contract.md](issue-contract.md).
 
 ## Every grading keeps its scoring, and the misses log
@@ -215,9 +229,8 @@ declined with a trigger by default.
    own filled-or-`None` convention. The same line rides the durable record of any field-report
    processing or incident response — so a quiet log is visibly claimed quiet by each observing act
    rather than silently unappended, and the advisor's sole-appender role is auditable from the
-   receipts. **This file states the obligation; the owner of
-   `skills/showrunner/reference/vet-receipt.md` must land the field on that receipt per its own
-   contract.** **The gardening record**, not the vet receipt, is where the window's appends are
+   receipts. The receipt carries it as spine field 10 (`skills/showrunner/reference/vet-receipt.md`).
+   **The gardening record**, not the vet receipt, is where the window's appends are
    accounted for.
 4. **A mis-tiered finding re-scores the item itself** at the same gardening pass. The grid re-runs
    with corrected inputs, alongside any recalibration of the instruments. Recalibrations reach the
@@ -229,9 +242,8 @@ declined with a trigger by default.
    comment. One surface, one pin, already read at every vet. The **gardening record** lands as a
    durable comment on the collector at each pass.
 7. **The lane is a recorded field — the routing record and every vet receipt name the lane the work
-   ran in, full, light, or micro,** so the receipt corpus can be read by lane. **This file states
-   the obligation; the owner of `skills/showrunner/reference/vet-receipt.md` must land the field on
-   that receipt per its own contract.** **The grading record does not carry it**, because no lane
+   ran in, full, light, or micro,** so the receipt corpus can be read by lane. The receipt carries it
+   as spine field 9 (`skills/showrunner/reference/vet-receipt.md`). **The grading record does not carry it**, because no lane
    exists at intake.
 
 ## The declined registry and its triggers
@@ -254,7 +266,7 @@ declined with a trigger by default.
 
 ## The launch door
 
-1. **Filing is cheap. Launching is the guarded act.** The budget is [N](../../../rubric/glossary.md#n)
+1. **Filing waits on the owner's word; launching spends the capacity.** The budget is [N](../../../rubric/glossary.md#n)
    machinery lanes in flight at once, counted by the advisor at the launch word. A lane is in flight
    until its outcome is recorded, which the launch doctrine already requires. **That is the whole of
    the slot accounting.**
@@ -284,8 +296,8 @@ declined with a trigger by default.
    the pass from the launch ledger. **The dial is never a launcher check, a preflight item, or a
    script**, and a filing to make it one is declined at the door. A checked dial is the grid
    instrumenting itself.
-6. **Tiers order entry through the door. The owner's word sits at launch**, where the capacity is
-   actually spent.
+6. **Tiers order entry through the door. Filing waits on the owner's word; the launch word**
+   spends the capacity where it is actually spent.
 7. **No exemption for correctness.** Every epic and milestone is product-forward and is labeled so
    by the owner at ratification. **The advisor never makes that call.** Machinery then arrives only
    as a standalone lane through the door under the dial, or as a backlog item folded into a product
@@ -368,7 +380,7 @@ finding, a follow-up idea, or a hardening proposal.
 
 Residuals that once carried a separate disposition test now route through the door's one decision:
 classify the item's kind as machinery or product, apply the evidence bar and the grid where the kind
-requires it, then apply the resulting tier's owner-word or filing rule. Each legacy class is walked on
+requires it, then apply the resulting tier's owner-word rule and the [filing rule](#the-tiers-and-the-filing-rule). Each legacy class is walked on
 its own — none inherits another class's verdict. A **venue-1 continuation** is machinery that cleared
 the bar, graded on the grid, and whose cheapest venue is continuing in-lane; the door yields a craft
 call. A **craft decline** is machinery the bar or grid declined with a trigger; the door yields a
@@ -398,7 +410,7 @@ owner is sitting right here.
 
 **Every owner call is appended to the collector at vet time, unconditionally, so the collector is the complete register by construction; owner attendance governs only when discussion happens — attended, the item is proposed in the vet-delivery message and may be struck minutes after it was appended; absent, it awaits the batch.**
 
-**Each append carries its door grading for a machinery item — the band, the evidence tier, and the resulting tier the front door recorded — and for a product item the classification and the ratification it rides, since no evidence bar applied to it; each append also carries its venue recommendation, so the owner's batch is one word per item.**
+**Each append carries its door grading for a machinery item — the band, the evidence tier, and the resulting tier the front door recorded — and for a product item the classification and the ratification it rides, since no evidence bar applied to it; each append also carries its venue recommendation, so the owner's batch is one word per item. When a machinery item's door grading is uncertain, each of its band, evidence tier, and resulting tier that is not yet settled reads `grading not yet settled`, and each settled one keeps its value; when a product item rides no ratified milestone, its ratification reads `grading not yet settled`. Both still append — they are owner calls until the grading is clear.**
 
 An append made outside a vet — `/superheroes:discuss-open-decisions`, a park sitting, any non-vet
 session applying these primitives — is the non-vet complement of the vet-time clause above, not an
@@ -407,16 +419,9 @@ Such an append carries the **latest existing vet ordinal, marked non-vet** besid
 marked ordinal stands in for the proposing vet's ordinal everywhere this contract reads one — so
 age stays a subtraction over ordinals and no phantom vet is minted; before
 appending, the session checks the collector for an existing entry covering the same residual and
-**updates that entry in place** rather than adding a second (owner ruling 2026-08-24, recorded on
-the collector —
-[issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)).
+**updates that entry in place** rather than adding a second.
 On a project with no vet yet, the append carries ordinal 0, marked non-vet — the first real vet is
 ordinal 1 and the age subtraction proceeds unchanged.
-
-Deferring the append is what two independent sessions did on 2026-08-02, and it is the evaporation
-class recorded as we#526 and we#527 — items that lived only in individual receipts while the
-collector read empty. That history is why append-always is unconditional; it is not a live branching
-rule.
 
 ## The revisit-trigger registry
 
@@ -444,10 +449,8 @@ owner's word.
 
 Archiving a decline is two writes with no transaction — the registry row and, where the declined
 item has a collector entry, its strike (a craft-call decline that never reached the collector has
-only the row, which lands at determination time). The order is fixed (owner ruling 2026-08-24,
-recorded on the collector —
-[issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)):
-the **registry row lands first** — keyed by the item's collector number where one exists (collector
+only the row, which lands at determination time). The order is fixed: the **registry row lands
+first** — keyed by the item's collector number where one exists (collector
 numbers are assigned once at append, written into the entry itself, and never reused, so the key is
 durable across sessions), otherwise by the determination record the row points to; a writer finding
 its key already in the registry updates that row rather than adding a second, which is what makes a
@@ -529,8 +532,8 @@ advisor run together to keep calibration honest.
    sweep in the pass and triage its report in the same sitting**. **Sweep and triage are one duty**. If
    the sitting ends before triage is recorded, the record carries the untriaged report as a pending item
    and **the staleness clock does not reset**. The sweep needs no owner word. **Filing from it goes
-   through the front door like anything else**. A P2 files on the advisor's authority. Higher tiers
-   wait for a word. **Nothing reads guardian staleness between passes.**
+   through the front door like anything else**. Every filing from it,
+   P2 included, waits for the owner's word. **Nothing reads guardian staleness between passes.**
 7. **Classify the window's red continuous-integration runs and fix pull requests** by the verification
    policy's classes: own broken test, real catch, infrastructure, flake, and escape. **Credit each real
    catch to the test file that caught it.** **One rate comes out of it: the escape rate**, escapes over
@@ -662,8 +665,7 @@ decided for the owner this window, are each a fact worth stating rather than a b
 
 Separate the why-it's-yours, the context, each option, the cost of inaction, and the recommendation as
 **visually distinct blocks — their own line or paragraph** — never one run-on paragraph. **A
-walkthrough the owner has to re-read is the failure this whole contract exists to prevent.** (Owner
-correction, 2026-08-07.)
+walkthrough the owner has to re-read is the failure this whole contract exists to prevent.**
 
 ## Where the items come from, and the bound on that sweep
 
@@ -687,11 +689,11 @@ collector entry where it has one.
 ## What batch-1 execution may and may not do
 
 Executing what a ruling unblocked is **advisor-side work only**: writes, filings, routings, board
-wiring, dispatches. It **never** includes the acts the covenant's first promise and showrunner duty
-6 reserve — **merge, release, publish, force-push**. **A ruling on a decision never
-authorizes any of the four.** Who may do each one, and on what authority, is the covenant's first
-promise and showrunner duty 6 to say, and they say it differently for each act: read
-`rubric/covenant.md` and duty 6 in `skills/showrunner/SKILL.md` rather than a restatement here.
+wiring, dispatches. It **never** includes the four acts showrunner duty 6 reserves — **merge,
+release, publish, force-push**. **A ruling on a decision never authorizes any of the four.** Who may
+do each one, and on what authority, is stated once, in duty 6 of `skills/showrunner/SKILL.md`
+("Coordinate releases and drive the merge train"), and it differs by act; the covenant's first
+promise points there too. Read duty 6 rather than a restatement here.
 
 ## The collector preamble — canonical snippet
 
@@ -722,13 +724,16 @@ whoever raised the item framed it, and that framing is input, never the grading.
 consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by key, with the why and
 the cost named — Recommendation: b — …. Empty sections stated empty, never dropped.
 
-**Residual disposition:** machinery: front door evidence bar (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) → venue ladder once past the bar; product: owner ratification, same venue ladder (continue → fold → file, bundled by surface); decline with a revisit trigger when every venue fails the bar.
-**Call:** at a craft call the advisor executes and records for veto — the standing order is always on, at every hour, attended or not; at an owner call the owner's word via the collector; a filing whose item clears the evidence bar and grades P2 is the advisor's, and every other filing is an owner call; doubt upward.
+**Residual disposition:** machinery: the front door evidence bar first, before any venue (executed evidence on a live surface; dark and future surfaces fail; in-envelope variance is not defect evidence) — an item that fails the bar is declined with a revisit trigger; past the bar → venue ladder (continue → fold → file, bundled by surface); product: never takes the bar — owner ratification, same venue ladder; a product decline is an owner call.
+**Call:** at a craft call the advisor executes and records for veto — the standing order is always on, at every hour, attended or not; at an owner call the owner's word via the collector; every new filing is an owner call, whatever its tier, except the layer sub-issues of an approved stack shape or a size split, and what an owner word already approved; a new-scope layer waits for the word; doubt upward.
 **Follow-up on live work:** first match decides — above the material line, or a child past three
 lanes → file its own issue; else a new surface → stack a layer; else same surface and below the
 line → fold into the child; the gardening record carries both counts.
 **Append-always at vet:** every owner call to the collector with door grading (machinery: band,
-evidence tier, resulting tier; product: classification and ratification) and venue on each append.
+evidence tier, resulting tier; product: classification and ratification) and venue on each append;
+an uncertain machinery grading marks each unsettled field `grading not yet settled` and keeps each
+settled one; a product item on no ratified milestone marks its ratification the same way; either
+still appends.
 **Registry:** `<!-- superheroes:revisit-registry -->` — one pinned comment, one line per declined
 item.
 

@@ -33,24 +33,24 @@
 
 ## Setup resolution — run these in order
 
-**Resolve the base rubric path once.** The base rubric is bundled at `$ROOT_DIR/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+**Resolve the base rubric path once.** The base rubric is bundled at `$ROOT_DIR/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
 **Resolve the repo root once.** Subagents do not inherit `$REPO_ROOT`, so compute its absolute value here (in the orchestrator's context, where it expands) for embedding into subagent prompts — the same way `RUBRIC`/`PROFILE` are embedded as expanded absolute paths:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern
 ```
 
 **Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt rather than assuming uncalibrated.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 CAL=$(python3 -B "$ROOT_DIR/lib/calibration_resolve.py" resolve) || { echo "calibration_resolve resolve exited non-zero (exit $?); halting rather than assuming uncalibrated" >&2; exit 1; }
 CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
 LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
@@ -68,7 +68,7 @@ NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | j
 Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `$ROOT_DIR/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 PLUGIN_VERSION=$(python3 -B -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$ROOT_DIR/.claude-plugin/plugin.json")
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
@@ -76,7 +76,7 @@ RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" 
 **Resolve model tiers.** Specialists at `reviewer` (`reviewer-deep` for security/architecture); triage + fixer at `mechanical`:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 MT="$ROOT_DIR/lib/model_tier_resolve.py"   # resolved like $RUBRIC
 OV=$(python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
 REVIEWER_MODEL=$(python3 -B "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
@@ -90,13 +90,13 @@ FIXER_MODEL=$(python3 -B "$MT" --role code-fixer --overrides "$OV" | jq -r '.mod
 **Resolve per-role engine (FR-15).** Default `claude` when unset.
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 EP=$(python3 -B "$ROOT_DIR/lib/engine_pref_load.py")            # {"reviewer","implementation"} (both "claude" if unset)
 REVIEWER_ENGINE=$(echo "$EP" | jq -r '.reviewer // "claude"')
 IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 ```
 
-**Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. Optional per-seat pins come from `enginePreferences.seatPins` in `$EP`; pins the account cannot honor stay loud via the shipped seat-map machinery (degradations in the receipt, seat falls back to rotation). `$AUTHOR_FAMILY` is the implementation engine's maker family; the narrative family is this orchestrator (`anthropic`). The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `skills/review-code/reference/auto-fix-loop.md`.
+**Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. Optional per-seat pins come from `enginePreferences.seatPins` in `$EP`; pins the account cannot honor stay loud via the shipped seat-map machinery (degradations in the receipt, seat falls back to rotation). Author and narrative families come from the host model the session-start hook read (`SUPERHEROES_HOST_MODEL`) and the implementation engine; an unreadable host model is disclosed on the map as unknown; its family is never assumed, the author family is always the implementation engine's family (a `claude` implementation engine reads anthropic whatever the host), so the maker is still kept off the panel. When the implementation engine is `claude` and the host family is known and differs, compose also keeps the host family off the panel as a second maker family (review-code's native fixer writes on the host family) and records a `maker-family-split` degradation. Liveness is probed for every cross-vendor engine whose CLI is installed plus any a calibration role names, whatever the roles say, so the panel's independence does not depend on which engine an unrelated role names; an installed engine that fails its probe is not live. A `codexModels` role pin for `reviewer` or `reviewer-deep` seats a codex seat on the pinned model at that model's own effort when live, else falls back with a disclosure. The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `skills/review-code/reference/auto-fix-loop.md`.
 
 **What `--pins` does and does not do (#1039).** A pin value is `{vendor, model?, effort?}`; a **bare
 string is the documented shorthand** for `{"vendor": "<string>"}` and resolves down the identical
@@ -111,12 +111,8 @@ does not hold the others** — every unpinned seat stays in the normal seeded as
 vendors are eligible for it, so an operator excluding a second maker family must pin **every** seat
 they need held; there is no hold-the-rest knob.
 
-An empty `$AUTHOR_FAMILY` composes an unjudgeable seat map — the constraint surfaces only later at the backstop — so composition refuses here (guard covers unresolved/empty only, not whether a non-empty family is correct):
-
 ```bash
-CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))" "$ROOT_DIR")
-AUTHOR_FAMILY=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import model_registry as m;print(m.family_for('code-fixer',sys.argv[2]) or '')" "$ROOT_DIR" "$IMPL_ENGINE")
-[ -n "$AUTHOR_FAMILY" ] || { echo "author-family-unresolved: no maker family for implementation engine '$IMPL_ENGINE'" >&2; exit 1; }
+CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.review_cross_vendor_engines(p)))" "$ROOT_DIR") || { echo "review engine set failed (exit $?) — see its error above" >&2; exit 1; }
 SEAT_PINS=$(echo "$EP" | jq -c 'if (.seatPins // {}) == {} then empty else .seatPins end')  # owner per-seat pins (#607); empty/absent → omit --pins
 PINS_ARGS=()
 [ -n "$SEAT_PINS" ] && PINS_ARGS=(--pins "$SEAT_PINS")
@@ -124,7 +120,16 @@ PINS_ARGS=()
 # otherwise. Every review-code path dispatches a panel, so there is no receipt-only mode to
 # select: seat_map's `cache-only` probe mode lost its last caller when --post was removed
 # (#1121) and was reaped in #1138.
-SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to the host model"}]}')
+SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --implementation-engine "$IMPL_ENGINE" --host-model "${SUPERHEROES_HOST_MODEL:-}" --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT") || { echo "seat map compose failed (exit $?) — see its error above" >&2; exit 1; }
+AUTHOR_FAMILY=$(echo "$SEAT_MAP" | jq -r '.authorFamily // empty')
+```
+
+A compose failure halts setup with compose's own error on stderr; there is no fall-open seat map.
+
+An empty author family refuses before any seat is dispatched — the composed map would be unjudgeable for maker-family constraints.
+
+```bash
+[ -n "$AUTHOR_FAMILY" ] || { echo "author-family-unresolved: the composed seat map has no author family" >&2; exit 1; }
 ```
 
 When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
@@ -132,7 +137,7 @@ When dispatching specialists, map each panel seat's **tier** to a model — `rev
 **Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. Read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 if [ "$EXISTS" = "true" ]; then
   DOCTOR_JSON=$(python3 -B "$ROOT_DIR/lib/repo_doctor.py" \
     "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION")
@@ -146,7 +151,7 @@ Capture `DOCTOR_JSON`; on `readable: false`, tell the user to re-run `/superhero
 <!-- decision-point: id=review-code-setup-storage-location mode=notify kind=storage-location default="returned .mode (recorded when configured, else the lib's provisional default)" carrier=review-code-meta -->
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 if [ "$LOCATION" = "none" ]; then
   DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
@@ -167,16 +172,17 @@ When `$LOCATION` was `none`, run review-init inline (`skills/review-init/SKILL.m
 **Read the verify story from core calibration** via `review_code_config.py` — `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`. Sets `VERIFY_CMD` for the verify gate and fixer:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 VERIFY_JSON=$(python3 -B "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null) || VERIFY_JSON='{}'
 VERIFY_CMD=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyCommand // empty')
 VERIFY_MODE=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyMode // empty')
 REFUSAL=$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.remedy // empty')
+[ "$(printf '%s' "$VERIFY_JSON" | jq -r '.calibrationRefusal.reason // empty')" = "verify-command-malformed" ] && { echo "$REFUSAL" >&2; exit 1; }
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
 ```
 
 `{baseRef}` in the calibrated command is the pinned base commit: the substitution runs in SKILL.md's base-resolution block, after `$BASE_REF` is validated (never here — this block runs before the base is pinned), and only when `$BASE_REF` is a full 40- or 64-hex object id; otherwise the token stays in place and the gate's own unresolvable-ref refusal is the loud failure. The driver binds the same token in its `run-verify` payload (`round_driver._verify_command`).
 
-When `REFUSAL` is non-empty, `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate — there is no verify command and no implied test receipt. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation. For what grounds a test-pass claim versus a verify receipt, read `rubric/test-receipt-evidence.md`.
+A `verify-command-malformed` refusal halts the review: `core.md`'s `verifyCommand` is present but not a non-empty string, so quote the remedy and stop — never run the review unverified on it. Any other non-empty `REFUSAL` means `core.md` calibration was not read and the legacy profile is unsupported — state that, quote the remedy, and note the legacy profile may still have supplied `VERIFY_CMD` and per-role tier overrides; say which values differ from band defaults rather than asserting they all came from the legacy file. When `VERIFY_MODE` is `unverified`, skip the verify gate — there is no verify command and no implied test receipt. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation. For what grounds a test-pass claim versus a verify receipt, read `rubric/test-receipt-evidence.md`.
 
 **Refresh dispatch paths before specialists.** Re-run the `calibration_resolve.py` jq block above once after bootstrap.

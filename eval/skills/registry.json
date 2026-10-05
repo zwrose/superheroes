@@ -5,6 +5,11 @@
     "superheroes/audit-debt": 459
   },
   "requiredPhrases": {
+    "superheroes/adopt-version": [
+      "adopt it in place, no handoff and resume",
+      "runs TRANSITION's checklist",
+      "Not checkpoint or resume"
+    ],
     "superheroes/audit-debt": [
       "periodically sweeping a whole repository",
       "accumulated technical, security, and architectural debt",

@@ -12,7 +12,8 @@ new issues.
 - Target identifier (echo verbatim in your result): finding::auth.py::12
 
 ## Independence
-You are **never** the fixer's vendor. Judge only from the diff, the repo, and the target record.
+When an independent runner-channel vendor is live, you are never the fixer's vendor. Judge only from
+the diff, the repo, and the target record.
 
 ## Your task
 Return exactly one audit result for this target. Judge whether the fix clearly addresses the
@@ -21,7 +22,10 @@ finding and whether any new issues were introduced. Cite quoted support for ever
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.
 - **Never change the repository, and never claim a run you did not make.**
-- Transport keys use the per-location target identifier — never a line-less identity alias.
+- Transport keys use the per-location target identifier — never a line-less identity alias. Cite
+  `line` as an integer (a JSON number, e.g. `"line": 291`). A numeric
+  string (`"291"`) is coerced to its integer; any other non-integer line is refused at compile
+  (`line is not an integer`) and the finding is dropped.
 
 ## Ratified residuals (owner-ratified, quoted data)
 

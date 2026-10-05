@@ -28,12 +28,11 @@ still choose the dispatch mechanism (`dispatch-review` vs native subagent) per t
 ## Mechanical focus flags
 
 Before dispatching the round's specialists, the orchestrator runs the deterministic
-mechanical-focus-flag detector over the round diff (design authority: ratified #474,
-position 15 — grep-detected **additive** brief flags; **additions only, never
-classifier-driven lens removal**):
+mechanical-focus-flag detector over the round diff (grep-detected **additive** brief flags;
+**additions only, never classifier-driven lens removal**):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/focus_flags.py" "$SESSION_DIR/round-<round>/diff.txt"
 ```
 
@@ -41,16 +40,16 @@ It prints zero or more flag lines (a changed migration file → rollback/data-sa
 emphasis; a changed dependency lockfile → supply-chain check). **Append** each emitted
 line into every specialist's `Focus:` context block, alongside any `--focus` notes — an
 addition that never replaces the `--focus` notes and never removes or down-scopes a lens
-(that classifier-driven lens-removal is banned by #474). If nothing is emitted, append
+(classifier-driven lens removal is banned). If nothing is emitted, append
 nothing. The detector is grep-grounded and has no authority to drop a finding or a lens.
 
-> **External-engine reviewers — stdout channel grading mechanics (#38, #196, #666).** When `$REVIEWER_ENGINE` is
+> **External-engine reviewers — stdout channel grading mechanics.** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
 > instead of a named subagent, and it returns its payload on **stdout** rather than writing a
 > findings file. Panel seats emit `{"findings": [...], "investigated": [...]}`; verifier seats emit
 > `{"verdicts": [...], "investigated": [...]}`; synthesis judges emit `{"grouping": [...]}`; fix
 > auditors emit `{id, ruling, reason}`. The graded result carries **`resultKind`** (one of
-> `findings`, `verdicts`, `grouping`, `ruling`) naming which payload key survived. A non-empty
+> `REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`) naming which payload key survived. A non-empty
 > payload succeeds without `investigated`; only an **empty** payload needs a surviving
 > `investigated` path (see below). **Findings-only prompt authoring** (caller side): cite
 > `skills/workhorse/reference/dispatch-mechanics.md` § *Findings-only review prompts* — a prompt
@@ -60,23 +59,23 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > dispatch prompt's `## Output` block names the seat's channel — this block is how the runner grades
 > what the rubric already specified. `engine_adapter.parse_result` scans stdout for the **last
 > top-level JSON value**, so incidental trailing prose after a valid object is tolerated. An **empty**
-> `findings` array is accepted as *clean* **only** when `investigated` lists at least one path that
-> survives the runner's spot-check (the path must resolve inside the sanitized review view root and
-> exist on disk). A seat that returns empty findings with no verifiable `investigated` record is a
+> `findings` array is accepted as *clean* **only** when its `investigated` list survives the
+> runner's investigation floor (`engine_adapter.spot_check_investigated` in `lib/engine_adapter.py`).
+> A seat that returns empty findings with no verifiable `investigated` record is a
 > **vacuous forfeit** — a named cause (`reason: "vacuous"` from `dispatch-review`): treated as a seat
 > that **never ran**, not as a clean review; the orchestrator submits the folded seat with
 > `vacuous: true` (or `reason: "vacuous"`). Engine telemetry (token spend, tool calls, wall time) is
 > **corroborating evidence only** and can never satisfy that investigation floor. The parser also
-> **tolerates a bare top-level array** `[...]` of finding objects as of #196, but anything else
+> **tolerates a bare top-level array** `[...]` of finding objects, but anything else
 > (prose with no parseable JSON object/array, an empty stream, an array of non-objects) parses as
-> `unreadable`, which forfeits the slot to a re-run on the host model (UFR-7) and silently doubles the
+> `unreadable`, which forfeits the slot to a re-run on the host model and silently doubles the
 > round's cost.
 
-> **Reviewer-seat dispatch runs through the dispatch RUNNER (#563 DoD 2/4) — reviewer role ONLY.**
+> **Reviewer-seat dispatch runs through the dispatch RUNNER — reviewer role ONLY.**
 > When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each read-only reviewer seat through
 > `lib/engine_dispatch.py dispatch-review` (not a hand-rolled `codex exec` / `cursor-agent` shell
 > line). The runner owns the previously per-session dispatch mechanics as **machinery**: it prepends
-> the anti-hijack preamble (the mode-7 hardening that stops the codex SessionStart/skill-selection
+> the anti-hijack preamble (the hardening that stops the codex SessionStart/skill-selection
 > derail), feeds the prompt via the `- < realfile` stdin form behind the `_prompt_path_ok`
 > empty-prompt guard, builds a **disposable sanitized export** of the repository named by
 > `--repo-root` and pins the dispatch to that view (codex `-C`, cursor's subprocess cwd — not the
@@ -88,15 +87,16 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still yields
 > `vacuous`, not only a double vacuous forfeit; or `reason: "forfeit-with-engaged-artifact"` when
 > stdout was engaged but our transport could not grade it — still a forfeit, the seat does not count
-> toward the panel, and the loop's behaviour is unchanged). A forfeit → the seat falls open to a re-run on the host model (UFR-7) and the
-> orchestrator **discloses** the degraded vendor mix (the `disclosure` string); making that fall-open
-> loud by machinery in the receipt is #563 PR C.
+> toward the panel, and the loop's behaviour is unchanged). A forfeit → the seat falls open to a re-run on the host model and the
+> orchestrator **discloses** the degraded vendor mix (the `disclosure` string); the driver also records
+> the fall-open on the receipt from the orchestrator's `ranManifest` (`round-driver.md`,
+> `dispatch-panel`).
 >
-> **Sanitized review view (#684).** The seat does not run inside the owner's checkout. The runner
+> **Sanitized review view.** The seat does not run inside the owner's checkout. The runner
 > materializes a fresh single-commit git repo at `headSha` holding the reviewed tree, with the named
 > repo-local agent-config surface removed (`AGENTS.md`, `.cursor/`, `CLAUDE.md`, and the other basenames
 > the runner strips at every directory level). That config is **not discoverable** from the seat's cwd —
-> which is the point of #684. Reading ordinary source files and `git grep` work; **`git log`,
+> which is the point of the view. Reading ordinary source files and `git grep` work; **`git log`,
 > `git blame`, `git diff <ref>`, and `git show <ref>` do not** — the view has no `origin/main`, no
 > remote, and no parent commit (one synthetic commit, no history). The dispatch prompt's auto-prepended
 > notice states this prohibition to the seat explicitly. Paths the runner stripped are **unreadable**
@@ -114,7 +114,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > (a journal written before this change, with no `mode` key, normalizes to `review`); when inherited
 > mode is `brief-check` and `--mode` is omitted, `--diff-base` stays accepted-and-ignored. Every
 > `dispatch-review` result carries a top-level **`mode`** string — success, forfeit, and every
-> pre-spawn refusal alike. Registry/model gate, sanitized-view export and config strip, the #666
+> pre-spawn refusal alike. Registry/model gate, sanitized-view export and config strip, the
 > investigation floor, engagement read, and vacuous-forfeit accounting are unchanged in both modes.
 >
 > **`--diff-base <commit-oid>` (optional).** Omitted → nothing is staged and the six receipt keys
@@ -137,7 +137,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > journal is read.
 >
 > The staged review patch, the review-only configuration-changes file, and the staged PR body are
-> **rejected from the #666 investigation floor**: a seat whose `investigated` array cites only these
+> **rejected from the investigation floor**: a seat whose `investigated` array cites only these
 > artifacts fails the floor and forfeits vacuously, exactly as if it had cited nothing.
 > Rejection is by resolved file identity, so `./NAME`, `a/../NAME` and a symlink to it are all
 > rejected. The rejection reason string is `generated-artifact`.
@@ -149,7 +149,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `diffBase` | the resolved **merge-base** sha the patch is against (40 hex chars, or 64 in a SHA-256 repository) |
 > | `diffPath` | `SUPERHEROES_REVIEW_DIFF.patch`, relative to the view root |
 > | `diffBytes` | patch size in bytes |
-> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; undecodable paths, unrecognized spans, unaccounted census entries, and opaque content **refuse the dispatch** rather than being counted here — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
+> | `diffWithheldCount` | **only** the changed non-tree entries the stripped-config policy withheld; undecodable paths, unrecognized spans, and unaccounted census entries **refuse the dispatch** rather than being counted here — opaque review-patch content refuses unless it is a genuine binary blob (placeholder line); opaque content in the configuration-changes file still refuses — this is what keeps the reviewer-facing "the absence is not a finding" statement true |
 > | `configDiffPath` | `SUPERHEROES_CONFIG_CHANGES_UNDER_REVIEW.txt`, relative to the view root, when withheld configuration hunks were staged; `null` when nothing was withheld |
 > | `configDiffBytes` | size in bytes of that configuration-changes file; `null` when `configDiffPath` is `null` |
 >
@@ -163,14 +163,16 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > added or removed in a commit is a tree-only change carrying no file, symlink or gitlink content,
 > `git diff` renders nothing for it either, and it is therefore outside this contract. Opaque or
 > unaccounted content returns a named terminal refusal (`attempts: 0`) that is never interpreted as
-> zero findings or a clean review; there is no automatic fallback.
+> zero findings or a clean review; genuine binary blobs in the review patch appear as placeholder
+> lines instead. There is no automatic fallback.
 >
 > **Diff refusals** (all `attempts: 0`, no token spend), joining the existing `sanitized-view-*`
 > family:
 >
 > | token | when |
 > |---|---|
-> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a pinned 40-/64-hex commit object id, does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, or the merge-base cannot be established |
+> | `sanitized-view-diff-base-abbreviated` | the base is an abbreviated hex commit id; pass the full 40- or 64-character id |
+> | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a full 40-/64-hex commit object id (non-hex, fewer than four hex digits, or hex lengths of 41–63 or 65 or more), does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, or the merge-base cannot be established |
 > | `sanitized-view-diff-base-shallow` | the reviewed repository is a shallow clone, so the genuine merge-base cannot be established from its object store; fetch full history (for example `fetch-depth: 0` or `git fetch --unshallow`) and dispatch again |
 > | `sanitized-view-diff-empty` | a base was requested and the resulting patch is empty with nothing withheld |
 > | `sanitized-view-diff-fully-withheld` | every changed path was withheld as stripped config — an external seat could not review this change at all |
@@ -179,7 +181,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `sanitized-view-diff-config-path-collision` | the review-only configuration-changes file could not be created at its name in the view, or did not read back as written |
 > | `sanitized-view-diff-config-too-large` | the assembled review-only configuration-changes file exceeds its size cap, or patch streaming hits its byte ceiling while those hunks are being generated |
 > | `sanitized-view-diff-failed` | a git subprocess failed while resolving ancestry or generating the patch (spawn error, non-zero exit, timeout) — command failure only |
-> | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
+> | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks — when it is not a genuine binary blob placeholder, or in the configuration-changes file |
 > | `sanitized-view-diff-unaccounted` | a census tree containing the same path more than once, a patch section whose path cannot be decoded, or an unrecognized span in the patch text |
 >
 > **Mode refusals** (all `attempts: 0`, no spawn — not members of the `sanitized-view-*`
@@ -190,12 +192,16 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `mode-invalid` | `--mode` is not a string in `{review,brief-check}` — top-level `mode` stays canonical (`review`); the rejected value is in `rejectedMode` |
 > | `mode-brief-check-with-diff-base` | `--mode brief-check` and `--diff-base` were both explicitly supplied |
 > | `run-dir-mode-mismatch` | continuation with an explicitly disagreeing `--mode` |
+> | `run-dir-claude-mode-mismatch` | a continuation supplies a `--claude-mode` that disagrees with the one the run was opened with; refused with `attempts: 0`, nothing spawned |
+> | `claude-mode-retired` | `--claude-mode background` on either `dispatch-review` or `dispatch-write` — background mode is retired; refused with `attempts: 0`, nothing spawned, never falls back to print |
+> | `run-dir-claude-mode-retired` | a continuation of a run opened in background mode; refused with `attempts: 0`, nothing re-opened or spawned |
+> | `run-dir-claude-mode-unknown` | a continuation of a run whose journal records a claude mode that is neither declared nor retired; refused with `attempts: 0`, nothing re-opened or spawned |
 >
-> **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
+> **Investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to the host model), never a
 > false clean.
 >
-> **#685 CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the
+> **CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the
 > dispatched prompt, so it performs **no echo strip**. An **empty-findings result from that path is
 > unverified** — apply the investigation floor **manually**. The runner path (`engine_dispatch.py
 > dispatch-review`) parses raw stdout first; only when that parse yields no findings does it strip
@@ -232,14 +238,12 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > Every result also carries **`terminal`**, **`argv`** (the exact spawned command), **`runDir`**, and
 > top-level **`mode`** (`review` or `brief-check`).
 >
-> **Result shape — top-level, no wrapper (#687).** Every `dispatch-review` result object carries
+> **Result shape — top-level, no wrapper.** Every `dispatch-review` result object carries
 > **`ok`**, **`terminal`**, **`runDir`**, **`argv`**, and **`mode`** at the top level. On a failure it also
 > carries **`reason`** (and usually **`detail`**). On success it also carries **`resultKind`**
-> (one of `findings`, `verdicts`, `grouping`, `ruling`) naming the payload, plus **exactly one**
+> (one of `REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`) naming the payload, plus **exactly one**
 > payload key of that name.
-> **`investigated`** is present only when at least one claimed path survives the runner's spot-check
-> (resolves inside the sanitized review view and exists on disk); a normal non-empty payload reply
-> omits it. Outcome-dependent keys also include **`engagement`** and
+> **`investigated`** is present only when a claimed path survives the runner's investigation floor (`engine_adapter.spot_check_investigated`); a normal non-empty payload reply omits it. Outcome-dependent keys also include **`engagement`** and
 > **`sanitizedView`**. A consumer must **not** read an absent `findings` as "zero findings" — an
 > absent `findings` may mean a different `resultKind` instead; that is the fail-open reading this
 > subsystem exists to prevent. An object carrying **more than one** payload key from
@@ -254,10 +258,10 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > forfeit carries no `findings`/`investigated`. There is no `result` wrapper; parsing
 > `result.findings` reads nothing.
 >
-> **Review payload transport (#687).** The runner accepts **four** result kinds on stdout
-> (`REVIEW_RESULT_KINDS`: `findings`, `verdicts`, `grouping`, `ruling`). Every
+> **Review payload transport.** The runner accepts result kinds on stdout
+> (`REVIEW_RESULT_KINDS` in `lib/engine_adapter.py`). Every
 > `ok: true` review result carries **`resultKind`** naming exactly one payload key of that name;
-> **`investigated`** is attached only when at least one claimed path survives spot-checking.
+> **`investigated`** is attached only when a claimed path survives the investigation floor.
 > **Recognition is not gradeability** — widening what the transport can read changes nothing about
 > what it will certify: the investigation floor still forfeits an empty payload with no surviving
 > `investigated` path for **every** kind including `grouping`, and an `--expected-result-kind`
@@ -271,7 +275,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `attempts: 0`, no spawn — a run's identity is fixed at open. **Review panel** seats pass the
 > **`findings`** pin; the **verify phase** passes the
 > **`verdicts`** pin. When no pin is set the transport accepts any of the four kinds, each graded by
-> its own engagement floor; #687's findings-only posture for panel seats is carried by the pin those
+> its own engagement floor; the findings-only posture for panel seats is carried by the pin those
 > seats pass, not by a transport default. Any other `expected_result_kind` value is refused before
 > dispatch on either route — neither silently ignores it. The **library** API (`expected_result_kind=`)
 > returns a structured refusal with `attempts: 0`, `detail: "expected-result-kind-invalid"`, and the
@@ -290,23 +294,24 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > stays the driver's channel (`round-driver.md`). For verifier delivery channels, see
 > `verification-pass.md`.
 >
-> **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
+> **`engagement.read`.** When the result carries an **`engagement`** block with a non-`null`
 > value (present only when the attempt produced stdout that was graded), `engagement.read` is
 > `"engaged"` when the seat demonstrably acted: at least
 > one finding returned, or `engagement.toolCalls` is not
 > `None` and `>= 1`. Otherwise it is `"unknown"`. A seat's `investigated` list is **disclosure**,
-> not engagement evidence (register R7); the runner still spot-checks it. On a timeout, refusal, nonzero-exit, or
+> not engagement evidence; the runner still spot-checks it. On a timeout, refusal, nonzero-exit, or
 > missing-stdout forfeit the `engagement` key is **present with the value `null`** (there was no graded
 > stdout to measure), so `engagement.read` is unavailable — `result.get("engagement", {})` is
 > **unsafe** because the key may carry `null`, not merely be missing; consumers must handle a `null`
 > value. The runner **never** reports `"inert"` — absence of positive evidence is not proof of
 > inaction, because a correct payload the transport could not read looks identical to a seat that never
-> ran. Only `seat_canary probe` can justify calling a seat inert.
+> ran. Whether a seat actually looked is proven only by that seat's runner telemetry (recorded tool
+> calls and reads). The control probe never decides engagement.
 >
-> **Tokens are corroborating evidence only — measured (#687).** Engine telemetry (token spend, tool
+> **Tokens are corroborating evidence only — measured.** Engine telemetry (token spend, tool
 > calls, wall time) remains **corroborating evidence only** and can never satisfy the investigation
 > floor — the field heuristic that "~23K tokens means vacuous, ~83–175K means real work" is refuted.
-> Through the identical `dispatch-review` path on 2026-07-31 with the calibrated codex reviewer seat
+> Through the identical `dispatch-review` path with the calibrated codex reviewer seat
 > at maximal effort:
 >
 > | Dispatch | Outcome | Tokens |
@@ -319,17 +324,15 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > A 23K token floor would have discarded the Critical. Cross-path comparison is worse: the
 > preflight's "reply with the single word READY" cost 20,388 tokens because it runs in the real repo
 > cwd where SessionStart hooks load, while `dispatch-review` runs in the sanitized view with
-> `CLAUDE.md` stripped (#684).
+> `CLAUDE.md` stripped.
 >
-> **`payloadShape` on shape-unreadable forfeit (#687).** When the **last** attempt forfeits because
+> **`payloadShape` on shape-unreadable forfeit.** When the **last** attempt forfeits because
 > stdout was shape-unreadable, the result may carry `payloadShape`: a mapping with `parsed` (one of
-> `object-without-findings`, `object-both-payload-keys`, `object-findings-not-a-list`,
-> `object-verdicts-not-a-list`, `array-not-all-objects`, `findings-hollow-member`,
-> `verdicts-hollow-member`, `placeholder-literal-refusal`, `no-parseable-json`, `empty-stdout`, or
-> `prompt-echo-only`), `topLevelKeys` (a list of strings,
+> the tokens in `engine_adapter.REVIEW_PAYLOAD_SHAPES` — the one home for this enumeration;
+> read it there rather than a restated list here), `topLevelKeys` (a list of strings,
 > populated only when
-> `parsed` is `object-without-findings` or `object-both-payload-keys`), and `keysTruncated` (bool; signals the key list was
-> capped). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
+> `parsed` is `object-without-findings` or `object-both-payload-keys`), `keysTruncated` (bool; signals the key list was
+> capped), and on hollow-family diagnostics only (the `*-hollow-member` / `*-partial-hollow-member` shapes — read the token enumeration in `engine_adapter.REVIEW_PAYLOAD_SHAPES` rather than a restated list here) `memberShapeWanted` and `memberShapeGot` (each a short bounded token naming the member shape the grader **wanted** and **got**, respectively). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
 > vacuous forfeit and on success.
 >
 > **Originating-verb continuation loop.** Open with `--run-dir` (or omit it for a private temp run dir
@@ -339,11 +342,10 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `--max-wait 540` while `.terminal` is false. A non-terminal
 > `{"reason": "running", "terminal": false}` is **not** a forfeit. `dispatch-poll` is observational
 > and never spawns; `dispatch-abandon` is how a run directory is abandoned. Omitting `--max-wait`
-> loops until terminal in 540 s slices — below the **600 s foreground-conversion boundary on harness
-> 2.1.219**.
+> loops until terminal in 540 s slices — below the **600 s foreground-conversion boundary**.
 >
 > ```bash
-> ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 > # Per external seat — the orchestrator sets these before this recipe runs:
 > #   $SEAT_KEY       roster seat key (e.g. code-reviewer) — indexes $SEAT_MAP.seats
 > #   $SEAT_PROMPT    emitted order path for this seat
@@ -407,9 +409,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > an executable at any matching path would be covered by the same rule; owners who want script
 > identity should pin the absolute installed plugin path in their own rule. **Absent grant → fail closed:** with no matching grant
 > the dispatch does not run, no engine is spawned, nothing is written, and the caller **parks loudly**
-> — never a soft failure, never a silent fall-open. A `configure` onboarding offer for the rule is
-> deferred to [#549](https://github.com/zwrose/superheroes/issues/549); the owner pastes the rule by
-> hand.
+> — never a soft failure, never a silent fall-open. `configure` does not offer the rule; the owner
+> pastes it by hand.
 >
 > **Why the in-place fixer is not a `dispatch-write` consumer.** review-code's auto-fix path
 > deliberately runs in the checked-out branch of the **current checkout** (see
@@ -417,26 +418,48 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > path). `dispatch-write` refuses a primary checkout (`cwd-primary-checkout`), so the in-place fixer
 > path is **unchanged** and is **not** a consumer of the write verb. Do not imply otherwise.
 >
-> **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
-> panel's seats that **ran** with zero findings on that vendor's seat(s), run the planted-defect
-> control probe **once per such vendor** before treating those seats as clean. Select and
-> deduplicate canaries using the same effective-vendor rule as `round_driver.canary_liveness` —
+> **Cross-vendor control probe.** The planted-defect control probe is a **sampled competence
+> probe**: it measures whether a cross-vendor seat would catch an obvious planted defect, not whether
+> the seat engaged. It runs **after certification**, never during a panel fold and never before the
+> session reaches a **certified** terminal state — uncertified reviews are never probed.
+>
+> **Sampling — outside the loop.** The review loop **does not decide** whether a review is sampled and
+> **does not record** that decision. No panel fold runs the probe and no loop artifact carries a sampling
+> flag. After a review **certifies**, whoever runs the post-cert competence probe decides whether this
+> review is in the sample (for example the advisor at wave preflight or at vet). When a sample runs,
+> save the result beside the receipt as `$SESSION_DIR/control-probe-sample.json`: the probe JSON per
+> cross-vendor vendor plus the receipt's `terminalState`. **No file means no sample ran.** That file is
+> **never** read into a verdict and **never** edits the receipt. Because the probe is not a gate, a lost
+> or skipped sample costs one competence data point and never a certification — there is no durable
+> in-loop sampling flag.
+>
+> **Panel fold — no probe, no `canaryResult`.** On every loop that follows this doc, no panel fold
+> runs the probe and no panel artifact carries `canaryResult`. The driver's `controlProbe` fold stays a
+> **tolerant recorder** for a legacy `canaryResult` when one is still submitted on an older path; when
+> absent it records `controlProbe: {"submitted": false, "vendors": {}}`. Use
+> `control-probe-sample.json` to audit which post-cert probes ran — not the receipt's `controlProbe` alone.
+>
+> **Post-certification probe selection.** When a sample runs on a **certified** review, run the probe
+> **once per distinct cross-vendor vendor** among seats that **ran** with zero findings on that vendor's
+> seat(s). Select and deduplicate canaries using the same effective-vendor rule as
+> `round_driver.canary_liveness` —
 > trusted `ranManifest` first, configured vendor otherwise — and resolve that effective vendor's
 > model and effort for the seat tier before probing. Exclude seats whose status is not `run`. A seat
 > whose registry config is **effort-less** — one the model
-> registry records with no effort at all — is expressed by **omitting `--effort`** (#963), never by an
+> registry records with no effort at all — is expressed by **omitting `--effort`**, never by an
 > effort string: `probe`'s `--effort` is optional and defaults to `None`, the registry's own value.
 > Passing an empty `--effort ""` is not the same thing and still refuses at
 > `engine-config:invalid-model-effort`, so the loop omits the flag rather than passing an empty one.
 >
 > ```bash
-> ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-> # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object you
-> # submit on `dispatch-panel`). $PANEL_SEAT_STATUS — per-dimension status map (`run` / `missing` /
-> # etc.) for the same round. $RAN_MANIFEST — trusted `{<dim>: <vendor>}` record of which vendor
-> # produced each seat's folded findings (omit or `{}` when none fell open). One representative seat
-> # per effective cross-vendor vendor that ran with zero usable findings (dict members only — mirrors
-> # `round_driver._usable_findings`).
+> ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+> # Run only after a certified terminal receipt, when the operator chose to sample this review.
+> # $PANEL_SEATS — folded per-dimension panel payloads keyed by seat name (the `seats` object from
+> # the certified session's round-1 panel fold). $PANEL_SEAT_STATUS — per-dimension status map
+> # (`run` / `missing` / etc.) for that round. $RAN_MANIFEST — trusted `{<dim>: <vendor>}` record
+> # of which vendor produced each seat's folded findings (omit or `{}` when none fell open). One
+> # representative seat per effective cross-vendor vendor that ran with zero usable findings (dict
+> # members only — mirrors `round_driver._usable_findings`).
 > RAN_MANIFEST_JSON="${RAN_MANIFEST:-}"
 > if [ -z "$RAN_MANIFEST_JSON" ]; then RAN_MANIFEST_JSON="{}"; fi
 > PANEL_SEAT_STATUS_JSON="${PANEL_SEAT_STATUS:-}"
@@ -524,42 +547,49 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > done
 > ```
 >
-> Submit the probe JSON objects as a **list** on the panel artifact as `canaryResult` (a single
-> dict is still accepted when only one cross-vendor vendor needs a probe). Each result must carry
-> its `engine` field matching the vendor you probed. The probe is scored on **two axes**:
+> Persist the probe JSON objects in `$SESSION_DIR/control-probe-sample.json`'s `probes` array (one
+> object per cross-vendor vendor probed). Each result must carry its `engine` field matching the
+> vendor you probed. The driver may still fold a legacy panel `canaryResult` into a per-round
+> `controlProbe` record on the receipt's `rounds[]` entry when that legacy path submits one — shape
+> in `receipt_disclosures.control_probe_shape`:
+> `{"submitted": <bool>, "vendors": {<engine>: <outcome token> | "malformed"}}`, where the token is
+> the probe's normalized outcome (`ok`, `plant-undetected`, `not-engaged`, or a dispatch-failure
+> outcome such as `forfeited`, `vacuous`, `forfeit-with-engaged-artifact`, `unrunnable`),
+> `submitted: false` with empty `vendors` when no legacy `canaryResult` was submitted, and
+> `"malformed"` for an unreadable probe entry. The probe result is **recorded** and **never a gate**
+> — a missing, fizzled, or plant-undetected probe never blocks, degrades, or refuses certification,
+> never changes a seat's status, and never makes a round partial. Legacy per-round keys
+> (`canaryUnverified`, `canaryFailed`, `canaryOutcomeFailed`, `canaryPlantUndetected`,
+> `canaryVerified`) may still be written as disclosures; they no longer gate anything.
 >
-> - **Liveness / engagement** — the seat must show a verifiable investigation record: at least one
->   accepted, non-empty `investigated` path. Findings alone are not enough, and tool calls alone
->   are not enough (this is where the canary deliberately diverges from `engagement_read`). Token
->   spend and wall time are recorded but are deliberately not a pass branch, because they classify
->   backwards (a genuinely engaged clean review here spent 2,460 tokens while the field's vacuous
->   seat spent about ten times that, and an 8-second dispatch returned a Critical). This axis
->   **never** scores plant detection: a demonstrably live seat that misses the plant is **not**
->   called inert and its seats are **not** downgraded to never-ran (measured twice: PR #667's
->   round-1 control, and this build's own live probe, which spent 14,980 tokens and ran three repo
->   commands while missing it).
-> - **Outcome** — an engaged probe that misses the plant is `plant-undetected`, which is **not a
->   pass**, withholds panel certification, and is disclosed as `canaryPlantUndetected`. An engaged
->   probe whose dispatch failed (`forfeited`, `vacuous`, `forfeit-with-engaged-artifact`, or
->   `unrunnable`) is disclosed as `canaryOutcomeFailed` (also not a pass). A probe with no
->   engagement evidence is `not-engaged` (also not a pass).
+> The probe is scored on **two axes** — these describe what the recorded outcome **means**, not
+> what the receipt may do with it:
 >
-> Without a probe, the round records `canaryUnverified` and the receipt carries a degraded
-> disclosure; a probe that shows no engagement downgrades those seats to never-ran.
+> - **Liveness / engagement** — whether the probe dispatch shows a verifiable investigation record:
+>   at least one accepted, non-empty `investigated` path. Findings alone are not enough, and tool
+>   calls alone are not enough (this is where the canary deliberately diverges from
+>   `engagement_read`). Token spend and wall time are recorded but are deliberately not a pass
+>   branch, because they classify backwards (a genuinely engaged clean review here spent 2,460
+>   tokens while the field's vacuous seat spent about ten times that, and an 8-second dispatch
+>   returned a Critical). This axis **never** scores plant detection.
+> - **Outcome** — an engaged probe that misses the plant is `plant-undetected` (disclosed as
+>   `canaryPlantUndetected`). An engaged probe whose dispatch failed (`forfeited`, `vacuous`,
+>   `forfeit-with-engaged-artifact`, or `unrunnable`) is disclosed as `canaryOutcomeFailed`. A probe
+>   with no engagement evidence is `not-engaged` (disclosed as `canaryFailed` when submitted).
 
-> **External-engine dispatches — timeout is structural, an expired slot is `unreadable` (#202, #204).**
+> **External-engine dispatches — timeout is structural, an expired slot is `unreadable`.**
 > Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —
 > runs as a Bash tool call, so its timeout is already **structural, not prompted**: the plugin's
-> `PreToolUse(Bash)` floor (`hooks/bash_timeout.py`, #204) injects a 600s `timeout` on any dispatch
+> `PreToolUse(Bash)` floor (`hooks/bash_timeout.py`) injects a 600s `timeout` on any dispatch
 > that carries none, so a wedged engine CLI is bounded and killed instead of blocking the panel's
 > `wait` forever (a hang is **not** fail-open — CONVENTIONS `§7.5`). You do **not** compose a
 > per-dispatch watchdog. What this file owns is the **expiry contract**: treat a killed/timed-out
 > dispatch as an **expired slot** — its stdout is absent or partial, so `engine_adapter.parse_result`
-> returns `unreadable`. A timed-out **reviewer** then takes the existing UFR-7 re-run-on-the-host-model path;
+> returns `unreadable`. A timed-out **reviewer** then takes the existing re-run-on-the-host-model path;
 > a timed-out **fixer** commits no external write and the fix falls open to the host model. A hang becomes a
 > bounded cost, never a stuck loop.
 >
-> **Settled dispatch contract (issue #865).** The reconciliation between this skill's dispatch
+> **Settled dispatch contract.** The reconciliation between this skill's dispatch
 > behaviour and the builder's native-shape rule is **closed** — not an open migration:
 >
 > 1. **External-engine seats (`codex`/`cursor`) satisfy the native-shape rule.** Each **launches**
@@ -585,7 +615,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >    (`--run-dir`, `--max-wait`, originating-verb continuation) — a round that used it **still owes
 >    that disclosure**.
 >
-> **Hand-rolled engine dispatch — stdin form, empty-prompt guard, portable timeout (#563).** Prefer the
+> **Hand-rolled engine dispatch — stdin form, empty-prompt guard, portable timeout.** Prefer the
 > supervised runner above; when a builder hand-rolls an engine CLI dispatch (exactly when the adapter
 > path fails), three verified rules keep it from wedging:
 > 1. **Always feed the prompt from a real file over redirected stdin — `codex exec … - < promptfile`
@@ -593,7 +623,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >    positional prompt, or even an empty-string positional; if that stdin is an open source that
 >    never delivers data or EOF (the inherited stdin of a headless dispatch with no `< file`
 >    redirect), codex **hangs forever**. An EOF-closed empty stdin (`< /dev/null`) does not hang — it
->    errors fast. Repro'd 2026-07-23 against codex 0.144.1.
+>    errors fast.
 > 2. **Reject an empty/missing prompt before dispatch.** `engine_adapter.py build-argv --prompt-path
 >    PATH` fails closed (emitting `{"ok":false,"reason":"empty-prompt",…}` instead of argv) unless
 >    PATH is a readable regular file with non-whitespace content. The caller MUST redirect **that same
@@ -612,16 +642,13 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >    (exit 124 = timed out.) Watch the process's **CPU-time column, not elapsed** — an engine CLI can
 >    sit at ~0% CPU for minutes and still be live.
 >
-> **Dispatch-runner scope boundary (#563).** The supervised runner now supervises **both**
+> **Dispatch-runner scope boundary.** The supervised runner supervises **both**
 > `dispatch-review` and `dispatch-write`; each is a **distinct subcommand** with its **own** host
-> grant string, so write autonomy is revocable on its own — that **is** the fresh authz design the
-> earlier text here asked for, ratified in [#623](https://github.com/zwrose/superheroes/issues/623)
-> and re-based by [#702](https://github.com/zwrose/superheroes/issues/702). (The paragraph's earlier
-> prohibition against folding the write path into a Python runner is **superseded**.) The host
+> grant string, so write autonomy is revocable on its own. The host
 > permission classifier still gates the dispatch **at the Bash call** — absent a matching grant
-> nothing spawns and the caller parks loudly. CONVENTIONS `§7.5` still holds and still means what it
-> always meant: engine **selection** fails open when a seat is unavailable, a completed external
-> **result** fails closed. It never said the write path may not be supervised.
+> nothing spawns and the caller parks loudly. CONVENTIONS `§7.5` holds: engine **selection** fails
+> open when a seat is unavailable, a completed external **result** fails closed. It does not forbid
+> supervising the write path.
 
 After dispatch, wait for all five agents to return. A file-channel seat's findings are read from
 `$SESSION_DIR/round-<round>/findings-<agent>.json`; a stdout-channel seat's findings come from the
@@ -684,10 +711,14 @@ Write $SESSION_DIR/round-<N>/triage.json — every listed finding id exactly onc
 `round_orders.render_order` on each `next` for `dispatch-fixer`. The orchestrator **dispatches the
 emitted order file** — do not hand-compose from a fenced template.
 
+The fixer's verify budget is **scoped** — its target files' referencing tests plus the static
+validators — never the project's full verify command; the orchestrator's `run-verify` is the
+round's one full run (§ Round economy in `round-driver.md`).
+
 The authoritative template body lives at `rubric/orders/dispatch-fixer.md` under the plugin
 root. The fenced block below is illustrative only.
 
-**The rendered fixer order is linted at emission.** `round_driver._emit_orders_manifest` runs `order_lint.check_text(…, kind="fixer")` over every rendered `dispatch-fixer` order and refuses the whole emission as `order-render-refused:<skey>:order-lint:<token>` on any finding — an unfilled placeholder, a cited slashed path that does not resolve under the repo root, or two result contracts named at once (`{"fixes"` beside a native typed shape); the fixer kind carries no command budget, so `order-budget-missing` never applies here. This is the deterministic half only; the semantic half (a Haiku seat, `rubric/orders/order-lint-semantic.md`) is the workhorse's step over orders it authors, and a driver-rendered order has no author to send a finding back to. Cite the module as `lib/order_lint.py` (plugin-relative, as this file's other citations are).
+**The rendered fixer order is linted at emission.** `round_driver._emit_orders_manifest` runs `order_lint.check_text(…, kind="fixer")` over every rendered `dispatch-fixer` order and refuses the whole emission as `order-render-refused:<skey>:order-lint:<token>` on any finding — an unfilled placeholder, a cited slashed path that does not resolve under the repo root, or two result contracts named at once (`{"fixes"` beside a native typed shape); the fixer kind carries no command budget, so `order-budget-missing` never applies here. This is the deterministic half only; the semantic half (the read-only `order-linter` seat, `agents/order-linter.md`, with the prompt `rubric/orders/order-lint-semantic.md`) is the workhorse's step over orders it authors, and a driver-rendered order has no author to send a finding back to. Cite the module as `lib/order_lint.py` (plugin-relative, as this file's other citations are).
 
 ```
 You are the fixer for one round of an auto-fix code-review loop.
@@ -699,16 +730,19 @@ You are the fixer for one round of an auto-fix code-review loop.
   severity/format from the base rubric (<absolute RUBRIC path>)
 - Work in the current branch's working tree at <cwd>
 - Repo root: <absolute REPO_ROOT>
-- Verify command: <VERIFY_CMD, or the literal "none" when the profile is mode: unverified>
+- Verify budget: <the scoped budget the driver renders — target files, referencing tests, static validators; the full command named as the orchestrator's>
 
 ## Your job
 1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
    canonical patterns. Never push/merge/deploy (those stay user-gated).
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
-3. If a verify command was provided, run it. If it fails, fix the failure and
-   retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
-   output — never commit broken code. If the verify command is "none"
-   (unverified profile), skip this check entirely.
+3. Run the scoped verify budget above — the tests that reference your target files plus the
+   project's static validators, at most once each; never the project's full verify command (the
+   orchestrator runs that once after this round's fix batch lands, and a fixer attempt that runs it
+   forfeits on the attempt cap before its work is collected). If the budget's run fails, fix the
+   failure and retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
+   output — never commit broken code. If the full verify command in the budget reads "none"
+   (unverified profile), skip the static validators and run only the referencing tests, if any.
    When you need to verify something by *running* it, choose a throwaway test file path inside
    the build worktree, named with the fixed prefix `autofix-probe-` so a leftover one is
    identifiable. **Before writing it, check that the chosen path does not already exist** — a
@@ -776,9 +810,9 @@ These are the base rubric's binding verification rules, restated in every subage
 | Using diff.txt line numbers as file line numbers        | Diff line numbers and file line numbers are different. A finding must cite the FILE line; `lib/diff_scope.py` parses `@@` hunk headers to derive which file lines the round diff makes anchorable, and the compile step drops a finding that misses them. |
 | Re-flagging issues the author already justified         | PR mode: raise the finding and note the prior justification; the post-verification filter drops only non-CONFIRMED findings (see `round-driver.md`). |
 | Dropping resolved Important findings silently           | If reachability or the post-verification author-justification filter drops an Important, mention it — the justification is quoted in the record.                      |
-| Tiering or skipping specialists based on "what changed" | Round 1 is always the full panel; later rounds follow `round_driver.py` `next` (delta audits + scoped finder, or a full panel on #174/unknown). Never skip by eye. |
-| **Continuing when `$BASE_REF` is not a commit**         | An empty `$BASE_REF` makes `git diff "$BASE_REF"...HEAD` argv `...HEAD` — git reads it as `HEAD...HEAD` and emits a **zero-line diff at exit 0**, so the panel reviews nothing and the loop certifies clean. The literal string `null` (what `jq -r` prints for an absent key) is non-empty, so a `[ -n … ]` test passes it while `git diff null...HEAD` exits 128 and still leaves an empty artifact. Setup validates with `git rev-parse --verify --quiet "$BASE_REF^{commit}"` — which rejects empty, `null`, a deleted branch, and a non-commit tag — and every consumer uses the guarded diff command that halts on a failed OR empty diff. Never substitute a branch name to "recover" (#637). |
-| **Diffing against the worktree's local base branch**    | A long-lived worktree's local `main` goes stale as a matter of course; three-dot diff then walks back to a stale merge-base and drags already-merged work into the review (#637 — ~6,600 contaminated lines against 2,931 real). The bootstrap fetches the base and pins it to a commit; never re-resolve the base from a branch name mid-run. |
+| Tiering or skipping specialists based on "what changed" | Round 1 is always the full panel; later rounds follow `round_driver.py` `next` (delta audits + scoped finder, or a full panel on cross-cutting rework or an unknown surface). Never skip by eye. |
+| **Continuing when `$BASE_REF` is not a commit**         | An empty `$BASE_REF` makes `git diff "$BASE_REF"...HEAD` argv `...HEAD` — git reads it as `HEAD...HEAD` and emits a **zero-line diff at exit 0**, so the panel reviews nothing and the loop certifies clean. The literal string `null` (what `jq -r` prints for an absent key) is non-empty, so a `[ -n … ]` test passes it while `git diff null...HEAD` exits 128 and still leaves an empty artifact. Setup validates with `git rev-parse --verify --quiet "$BASE_REF^{commit}"` — which rejects empty, `null`, a deleted branch, and a non-commit tag — and every consumer uses the guarded diff command that halts on a failed OR empty diff. Never substitute a branch name to "recover". |
+| **Diffing against the worktree's local base branch**    | A long-lived worktree's local `main` goes stale as a matter of course; three-dot diff then walks back to a stale merge-base and drags already-merged work into the review, burying the real change. The bootstrap fetches the base and pins it to a commit; never re-resolve the base from a branch name mid-run. |
 | Using `gh pr diff` inside the loop                      | Rounds 2+ have local fix commits not on the remote. Always recompute the diff locally each round **with the guarded per-round command from the SKILL's Setup** — `git diff "$BASE_REF"...HEAD` against the **pinned remote base commit**, including its failed-diff and empty-diff halts — never a branch name and never a bare copy.                                               |
 | Auto-fixing a PR you don't have checked out             | Auto-fix needs the PR's branch as the current branch **or** an adopted build (tracks remote `origin` with merge ref `refs/heads/<PR branch>` **and** `HEAD` == the PR's `headRefOid`); anything else — detached HEAD, an unrelated branch, a stale adopted branch — stops and goes to `--review-only`.                                        |
 | Re-reviewing on a broken tree                           | If `VERIFY_CMD` fails after a fix, HALT. Never run the next review round on code that doesn't pass verification. (No gate when the profile is `mode: unverified`.) |
@@ -791,7 +825,7 @@ These are the base rubric's binding verification rules, restated in every subage
 
 ---
 
-## Per-seat dispatch + the seat map (#510)
+## Per-seat dispatch + the seat map
 
 The round-1 panel composes over live vendors via a per-seat **seat map** (`lib/seat_map.py`,
 computed once in the SKILL as `$SEAT_MAP`). Each of the five lens seats plus the grounding seat
@@ -813,25 +847,24 @@ carries `{vendor, model, effort, tier, family, source}`:
 - **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is *assigned* a vendor by the seat map
   — chosen to be independent of both the author (code) and narrative (PR text) families — and that
   assignment is recorded in the receipt. On the **read-only path** (`--review-only`) it
-  is **live-dispatched under #609** with the PR body staged as seat-readable input — full contract:
+  is **live-dispatched** with the PR body staged as seat-readable input — full contract:
   `grounding-seat.md`. The driver-owned auto-fix loop does **not** run SKILL step 8 today,
   so on that path the seat does not influence certification.
 - **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5), and **cursor's
   first-party models are ONE family**: the token-efficient implementer and grok judge models both
-  carry the `xai` independence-accounting key (#651, owner-ratified 2026-07-26; post-acquisition
-  affiliation as of 2026-08-14 — **behaviour unchanged**). A `cursor` review seat is therefore NOT independent of a
+  carry the `xai` independence-accounting key. A `cursor` review seat is therefore NOT independent of a
   cursor/composer implementer — a composer-made diff stamps `authorFamily = xai`, so the seat map
   excludes the maker family from **rotation** onto every panel seat — all five lens seats
   (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`,
-  `premortem-reviewer`) **and** the `grounding-seat` (#670, owner-ratified 2026-07-26), not
+  `premortem-reviewer`) **and** the `grounding-seat`, not
   merely from strong-tier, critical, and grounding. An owner pin can still seat the maker family;
   `verify()` flags a `maker-family` violation and records `pin-breaks-constraint` for that seat.
   Where an alternative family is live, the maker family never seats through rotation and such a
   panel buys its independence from anthropic/openai instead; where
   none is live, the seat still fills with the maker family and the map records a disclosed
   `same-family` degradation, which rides the certification shape (`-degraded`) alongside
-  `independenceDegraded` and `baseDegraded`. The `verify()` result (the #547c
-  maker-family-vs-seat check) now separates a **violation** (maker family seated when an
+  `independenceDegraded` and `baseDegraded`. The `verify()` result (the
+  maker-family-vs-seat check) separates a **violation** (maker family seated when an
   alternative was reachable) from that unavoidable **degradation**; unusable liveness evidence
   fails closed to violation. Every degradation / unhonorable-pin fallback is recorded in the
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.

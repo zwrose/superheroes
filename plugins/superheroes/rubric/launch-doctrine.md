@@ -91,6 +91,10 @@ pair keys are absent, while exactly one pair key present, with or without `layer
 `premise-stack-fields-incomplete`; for `layerPosition >= 2`, launch refuses unless the
 resolved base commit is the current head of the stack member at position `layerPosition - 1`
 (`base-not-layer-head`, `stack-read-unavailable`, `order-mismatch`, `layer-position-occupied`).
+An optional `adopts` names the pull request an adoption takes over at its own position; it requires
+the stack pair, a positive integer, and a layer above the bottom (`premise-adopts-without-stack`,
+`premise-adopts-invalid`, `premise-adopts-bottom-layer`) —
+see Recovery for the adoption premise.
 An optional `dependency` names an open pull request whose READY vet the launch must be based on
 (`premise-dependency-invalid`, `dependency-closed-unmerged`, `dependency-open-ready-pr`,
 `dependency-read-unavailable`). **`launch` also refuses a
@@ -120,7 +124,10 @@ into the machine-parsed blocks above; nothing at launch reads prose outside thos
 
 A headless builder session (`claude -p`) **exits when its turn ends** — so until the durable
 handback comment or a durable park is posted, every turn ends with a tool call; a standalone narrative
-message is a session exit, not a pause. **`Monitor`, harness background-run completion, and wakeup
+message is a session exit, not a pause. Builders run as `claude -p` sessions; the launcher builds
+their command through the engine adapter, the one home for every claude command; the `canary` verb
+reads a lane's transcript tool calls to show it engaged; a builder is steered by a message addressed
+to its registered session name. **`Monitor`, harness background-run completion, and wakeup
 scheduling cannot wake a headless session** and are never a turn's exit plan. On the night of
 **2026-08-02**, three headless builder sessions died in two lanes from this class of failure (one
 waiting on `Monitor`, two on standalone narrative with nothing in flight); all were recovered with
@@ -132,10 +139,11 @@ detaching buys survivability; the in-turn poll is still the duty; skill-owned se
 panel and fixer) keep that skill's own dispatch contract. Park is what happens when the in-turn poll genuinely cannot fit the
 turn; it is not the automatic consequence of detaching.
 
-This section is the doctrine artifact's home for those rules. The operative copy a builder session
-loads — the full mechanism, the detached-shape contract, and the field evidence — is workhorse charter
-§7 (`skills/workhorse/SKILL.md`) — do not consolidate the mechanism back into the machine-parsed
-blocks above. The `await-dispatches` ruling in the machine-parsed block above carries the turn-end rule,
+This section is the doctrine artifact's home for those rules. A builder session loads the rule
+from workhorse charter §7 (`skills/workhorse/SKILL.md`); the full mechanism, the detached-shape
+contract, and the field evidence are in `skills/workhorse/reference/dispatch-mechanics.md` §
+Awaiting a dispatch — the in-turn contract — do not consolidate the mechanism back into the
+machine-parsed blocks above. The `await-dispatches` ruling in the machine-parsed block above carries the turn-end rule,
 the poll contract for external engine dispatches the builder invokes directly (skill-owned seats
 and native subagents keep their own lifecycle), the park escape, the concurrent-batch shape, and
 the invariant it preserves, so a launched builder receives them in its composed prompt.
@@ -160,9 +168,25 @@ from the dead session's head. Across a different instance or account, **adoption
 because sessions do not transfer across config dirs; do not reach for resume there and do not
 quietly relaunch the work on the recovering session's own account.
 
+**An adoption of a stack layer keeps the stack fields.** The adoption premise names the layer's own
+`stack` and `layerPosition`. When a pull request already occupies that position (layer 2 and up),
+it adds `adopts: <PR number>` naming it; the launcher lets it through only when that exact pull
+request is the member at `layerPosition` and sits on the layer below's head branch — any other
+occupant, or none, refuses (`layer-position-occupied`, `adopts-occupant-missing`). When no pull
+request holds the position yet, or the lane is the bottom layer, omit `adopts`
+(`premise-adopts-bottom-layer`). Never drop the stack fields to get past the gate: the ledger then
+loses the lane's stack membership.
+
 **Every claim inherited from the dead session is unverified until re-run.** A commit message
 asserting tests passed, a PR body asserting a panel ran, or a comment asserting a gate was probed
 are **inputs, not receipts** — adopt the artifacts, re-earn the claims.
+
+### Arm the watcher on the launching seat's ledger
+
+A takeover seat that arms `wave_watch` over a batch it did not launch carries the launching seat's
+`SUPERHEROES_LAUNCH_LEDGER_ROOT`, or locates the real ledger before arming. The default root sits
+under each seat's own temp directory, so a takeover seat's default can resolve to a store with no
+ledger. The watcher then refuses `ledger-unreadable` and names the `ledgerPath` it read.
 
 ### Sweep for unpushed work before adopting
 

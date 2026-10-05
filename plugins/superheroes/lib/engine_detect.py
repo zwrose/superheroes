@@ -31,6 +31,13 @@ def _remediation(engine, cause):
     return "verify the engine CLI is installed and signed in, then retry"
 
 
+def installed_engines(which=None):
+    """Sorted engines whose CLI binary resolves on PATH (via `which`, default shutil.which).
+    Presence only — runs no auth command, so an installed engine may still be signed out."""
+    which = which or shutil.which
+    return sorted(engine for engine, (binary, _auth) in _CLI.items() if which(binary))
+
+
 def _probe_one(engine, root, run):
     binary, auth_argv = _CLI[engine]
     rec = {"installed": False, "authed": False, "error": None}

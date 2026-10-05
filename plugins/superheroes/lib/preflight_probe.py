@@ -28,6 +28,7 @@ if _LIB_DIR not in sys.path:
 
 import core_md                 # noqa: E402
 import engine_adapter          # noqa: E402
+import engine_detect           # noqa: E402
 import engine_dispatch         # noqa: E402
 import engine_pref            # noqa: E402
 import liveness_cache          # noqa: E402
@@ -129,6 +130,73 @@ def gh_auth_probe(run=None):
     return probe_command("gh auth", list(DEFAULT_GH_ARGV), run)
 
 
+_CODEX_CLI_TOOL = "cross-vendor-cli:codex"
+# Group 1 is the numeric core; group 2 (optional) is a `-prerelease` suffix, which marks the
+# build as BELOW a floor sharing the same numeric core (e.g. `0.157.0-alpha.1` < `0.157.0`). An
+# optional trailing `+build` suffix is matched but never lowers the version on its own.
+_CODEX_VERSION_RE = re.compile(r"\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?(?:\+[0-9A-Za-z.]+)?")
+_CODEX_VERSION_CORE_RE = re.compile(r"\d+\.\d+\.\d+")
+
+
+def codex_cli_floor_probe(run=None):
+    """Refuse a Codex CLI whose ``codex --version`` is below ``model_registry.codex_min_cli()``'s
+    declared floor, or unreadable. Returns None when no floor is declared, or the installed CLI
+    meets/exceeds it; returns a probe-shaped refusal dict otherwise. Never raises (fail-closed:
+    any unreadable/unparseable version is treated as below floor, never as passing)."""
+    try:
+        floor = model_registry.codex_min_cli()
+        if floor is None:
+            return None
+        floor_version, floor_model = floor
+        floor_key = tuple(int(part) for part in floor_version.split("."))
+        result = probe_command(_CODEX_CLI_TOOL, ("codex", "--version"), run)
+        match = None if not result.get("ok") else _CODEX_VERSION_RE.search(result.get("detail") or "")
+        if match is None:
+            return {
+                "tool": _CODEX_CLI_TOOL,
+                "ok": False,
+                "exit": result.get("exit"),
+                "detail": (
+                    "codex-cli-version-unknown: could not read a version from codex --version; "
+                    "upgrade the Codex CLI to %s or later" % floor_version
+                ),
+            }
+        found_version = match.group(0)
+        found_core = _CODEX_VERSION_CORE_RE.match(found_version).group(0)
+        found_key = tuple(int(part) for part in found_core.split("."))
+        is_prerelease = match.group(1) is not None
+        if found_key > floor_key:
+            return None
+        if found_key == floor_key and not is_prerelease:
+            return None
+        return {
+            "tool": _CODEX_CLI_TOOL,
+            "ok": False,
+            "exit": result.get("exit"),
+            "detail": (
+                "codex-cli-too-old: codex-cli %s is older than %s, the minimum for %s; "
+                "upgrade the Codex CLI to %s or later"
+                % (found_version, floor_version, floor_model, floor_version)
+            ),
+        }
+    except Exception:
+        floor_version = None
+        try:
+            floor = model_registry.codex_min_cli()
+            floor_version = floor[0] if floor else None
+        except Exception:
+            floor_version = None
+        return {
+            "tool": _CODEX_CLI_TOOL,
+            "ok": False,
+            "exit": None,
+            "detail": (
+                "codex-cli-version-unknown: could not read a version from codex --version; "
+                "upgrade the Codex CLI to %s or later" % (floor_version or "the required version")
+            ),
+        }
+
+
 def cross_vendor_cli_probe(engine, run=None, argv=None):
     """One harmless authenticated no-op for the cross-vendor CLI `engine` will dispatch (the
     brief-check reviewer, or any external-engine implementer). `argv` overrides the default
@@ -138,6 +206,10 @@ def cross_vendor_cli_probe(engine, run=None, argv=None):
     engine = str(engine)
     argv = list(argv or cross_vendor_no_op_argv(engine))
     tool = "cross-vendor-cli:" + engine
+    if engine == "codex":
+        floor_refusal = codex_cli_floor_probe(run)
+        if floor_refusal is not None:
+            return floor_refusal
     if engine in ("codex", "cursor"):
         return _engine_probe_in_scratch_repo(tool, argv, run, probe_prompt())
     return probe_command(tool, argv, run)
@@ -448,9 +520,17 @@ def needed_configs_for(tiers, vendors):
     return out
 
 
-def composition_liveness(needed_configs, run=None):
+_UNSET = object()
+
+
+def composition_liveness(needed_configs, run=None, codex_floor_refusal=_UNSET):
     """Per-vendor composition liveness: auth is all-or-nothing per vendor, layered with per-model
-    adequacy. Returns {vendor: {"live": bool, "models": {model: {"ok", "detail"}}, "cells": [...]}}."""
+    adequacy. Returns {vendor: {"live": bool, "models": {model: {"ok", "detail"}}, "cells": [...]}}.
+
+    `codex_floor_refusal` lets a caller that already ran `codex_cli_floor_probe` this
+    composition thread that SAME observation in, instead of this function sampling the
+    `codex --version` boundary again (two separate subprocess calls can disagree). Omit it
+    (the default) to have this function probe the floor itself, as a standalone call does."""
     if not isinstance(needed_configs, dict):
         return {}
     result = {}
@@ -460,6 +540,17 @@ def composition_liveness(needed_configs, run=None):
             continue
         models = {}
         cells = []
+        if vendor == "codex" and configs:
+            floor_refusal = (
+                codex_cli_floor_probe(run) if codex_floor_refusal is _UNSET else codex_floor_refusal
+            )
+            if floor_refusal is not None:
+                detail = floor_refusal["detail"]
+                for model, effort in configs:
+                    models[model] = {"ok": False, "detail": detail}
+                    cells.append({"model": model, "effort": effort, "ok": False, "detail": detail})
+                result[vendor] = {"live": False, "models": models, "cells": cells}
+                continue
         for model, effort in configs:
             argv = model_no_op_argv(vendor, model, effort)
             if argv is None:
@@ -513,7 +604,9 @@ def live_vendors_for_composition(
     needed = needed_override if needed_override is not None else needed_configs_for(tiers, configured_vendors)
     notes = []
 
-    if cache_path is not None and now is not None:
+    codex_floor_refusal = codex_cli_floor_probe(run) if needed.get("codex") else None
+
+    if codex_floor_refusal is None and cache_path is not None and now is not None:
         rec = liveness_cache.read(cache_path, now=now)
         if rec is not None and liveness_cache.covers(rec.get("needed", {}), needed):
             live, live_cells, dead_notes = liveness_cache.live_from(rec["liveness"], needed)
@@ -538,8 +631,10 @@ def live_vendors_for_composition(
                 _cached_cache_provenance(rec, now),
             )
 
-    liveness = composition_liveness({**needed, "claude": []}, run)
-    if cache_path is not None and now is not None:
+    liveness = composition_liveness(
+        {**needed, "claude": []}, run, codex_floor_refusal=codex_floor_refusal,
+    )
+    if codex_floor_refusal is None and cache_path is not None and now is not None:
         wrote = liveness_cache.write(liveness, needed, path=cache_path, now=now)
         if not wrote:
             notes.append({
@@ -570,6 +665,19 @@ def configured_cross_vendor_engines(prefs):
     return sorted(e for e in engines if e in ("codex", "cursor"))
 
 
+def review_cross_vendor_engines(prefs, which=None):
+    """The cross-vendor engines review composition probes for liveness: every engine a calibration
+    role names (configured_cross_vendor_engines) UNION every engine whose CLI resolves on PATH
+    (engine_detect.installed_engines). Review independence therefore does not depend on which engine
+    an unrelated role names; a role-named engine whose CLI is missing stays in the set so its probe
+    fails loudly, and an installed engine whose probe fails is simply not live. The `run` gate keeps
+    configured_cross_vendor_engines: it verifies only what the project will dispatch through, and
+    must not fail setup over an engine no role uses. Pure apart from PATH lookup; tolerant of
+    non-dict prefs."""
+    engines = set(configured_cross_vendor_engines(prefs)) | set(engine_detect.installed_engines(which))
+    return sorted(e for e in engines if e in ("codex", "cursor"))
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="preflight_probe")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -588,7 +696,7 @@ def main(argv):
 
         snap = readout_config(args.cwd)
         prefs = snap["prefs"]
-        configured = configured_cross_vendor_engines(prefs)
+        configured = review_cross_vendor_engines(prefs)
         needed_override = None
         if args.pins:
             import seat_map  # noqa: E402 — lazy: breaks import cycle with seat_map

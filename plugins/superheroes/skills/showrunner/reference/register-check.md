@@ -1,10 +1,11 @@
 # Contents
 
 - [What this check is](#what-this-check-is)
+- [Stack layer inputs](#stack-layer-inputs)
 - [The invocation](#the-invocation)
 - [The result contract](#the-result-contract)
 - [What counts as a quoted register block](#what-counts-as-a-quoted-register-block)
-- [Vocabulary (drift-tested)](#vocabulary-drift-tested)
+- [Vocabulary](#vocabulary)
 - [The three invocation points](#the-three-invocation-points)
 - [What this check does not do](#what-this-check-does-not-do)
 
@@ -19,13 +20,20 @@ and an epic package read's verification pass. **Register-to-child text agreement
 work, never model judgment** — the script reports pass, fail, or undecided; the charters decide
 what to do with the result.
 
+## Stack layer inputs
+
+For a **stack layer**, run `--child` with the **feature issue's child token** and pass the **feature
+issue's body** to `--body-file`, not the layer sub-issue's body — register entries stay quoted on the
+feature issue ([Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue)).
+The layer's body states that the check uses those inputs.
+
 ## The invocation
 
 The stable invocation (from a plugin-cache install, `ROOT_DIR` is
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+`${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/register_check.py" check \
   --register <path to the register .md> \
   --body-file <path to the consumer body .md> \
@@ -87,7 +95,7 @@ resolves register paths from prose.
 
 Every **`check`** invocation emits exactly one JSON object on stdout — including every failure
 and every `undecided` path — with every key present; see **Result fields** in
-[Vocabulary (drift-tested)](#vocabulary-drift-tested) for the authoritative field list.
+`RESULT_FIELDS` in `lib/register_check.py` for the authoritative field list.
 `--help` prints usage and exits 0 without JSON. `ok` is true only on `pass`. `reason` is null
 except on `undecided`. `registerCopy` is `"main"` or `"worktree"` — the copy that was selected.
 `registerRef` is the ref actually read (`"origin/main"` or `"main"`), or `null` for the worktree
@@ -103,7 +111,7 @@ infer which copy a refusal is about. `firstDifference` is the first `text-drift`
 | `undecided` | 2 | The check could not run to a pass/fail verdict |
 
 A finding object carries the fields listed under **Finding fields** in
-[Vocabulary (drift-tested)](#vocabulary-drift-tested). For `text-drift`, `line` is 1-based
+`FINDING_FIELDS` in `lib/register_check.py`. For `text-drift`, `line` is 1-based
 **within the quoted block** and `column` is the 1-based first differing character — the
 pass/fail result names the first differing line.
 
@@ -165,85 +173,22 @@ A register entry's **quotable text is a single paragraph** — the entry header 
 immediately following it, up to the first blank line, italic metadata line, `---`, or heading.
 Text after a blank line is trailer, not quotable.
 
-## Vocabulary (drift-tested)
+## Vocabulary
 
-The Python module `register_check.py` is the authoritative home for these tokens; this list is
-checked against it by `lib/tests/test_ssot_drift.py` per CONVENTIONS §11.2.
-
-**Schema:**
-
-- `register-check/1`
-
-**Results:**
-
-- `pass`
-- `fail`
-- `undecided`
-
-**Finding kinds:**
-
-- `text-drift`
-- `missing-quote`
-- `unknown-entry`
-
-**Undecided reasons:**
-
-- `register-unreadable`
-- `body-unreadable`
-- `register-empty`
-- `register-malformed` — a `*Consumers:*` line before any entry header; a duplicate entry id; an
-  entry with empty quotable text; multiple `*Consumers:*` lines in one entry's trailer; or an
-  unterminated code fence in the register (reported at the fence **opener's** line number)
-- `body-malformed` — an unterminated code fence in the consumer body (reported at the fence
-  **opener's** line number)
-- `child-unrecognized`
-- `usage`
-- `internal-error`
-
-**Exit codes:**
-
-- `0` — pass
-- `1` — fail
-- `2` — undecided
-
-**Result fields:**
-
-- `schema`
-- `result`
-- `ok`
-- `reason`
-- `detail`
-- `child`
-- `register`
-- `registerCopy`
-- `registerRef`
-- `body`
-- `registerEntries`
-- `requiredEntries`
-- `quotedEntries`
-- `duplicateQuoteIds`
-- `entriesWithoutConsumers`
-- `findings`
-- `firstDifference`
-
-**Finding fields:**
-
-- `kind`
-- `entry`
-- `line`
-- `column`
-- `expected`
-- `actual`
-- `detail`
+The schema token, result tokens, finding kinds, undecided reasons, exit codes (`EXIT_PASS`,
+`EXIT_FAIL`, `EXIT_UNDECIDED`), result fields, and finding fields are defined in
+`lib/register_check.py` (`SCHEMA`, `RESULTS`, `FINDING_KINDS`, `UNDECIDED_REASONS`, `EXIT_PASS`,
+`EXIT_FAIL`, `EXIT_UNDECIDED`, `RESULT_FIELDS`, `FINDING_FIELDS`).
 
 ## The three invocation points
 
 **Child filing (showrunner duty 2).** When the advisor files a **register-consuming child** — an
 epic child of a package that has a register, or a single-issue child standing in for one under
 FR-36 — run the check against the body **before filing**, whether or not the body contains a
-quoted block; a body with zero quoted blocks is exactly the case the check is there to fail.
-Where applicability cannot be derived from the issue alone, the route names the register and
-child token at routing for the builder to pass. On `fail`, fix the body — do not file a drifted
+quoted block; a body with zero quoted blocks is exactly the case the check is there to fail. For a
+stack layer, use the [stack layer inputs](#stack-layer-inputs). Where applicability cannot be
+derived from the issue alone, the route names the register and child token at routing for the
+builder to pass. On `fail`, fix the body — do not file a drifted
 quote. On `pass`, record the check's own output in the filing note — the `result` line, or `pass`
 together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When the register path and child
 token are known — the route names them or they are derivable — **run the check**; an `undecided`
@@ -256,7 +201,8 @@ the child token is recognized, exactly like `fail`. See the showrunner charter's
 for the filing obligation.
 
 **Child build intake (workhorse §1).** When the routed issue is a **register-consuming child**,
-run the check at intake before the brief, whether or not the body contains a quoted block. On
+run the check at intake before the brief, whether or not the body contains a quoted block. For a
+stack layer, use the [stack layer inputs](#stack-layer-inputs). On
 `fail`, **park** — the quoted text is the contract the build is graded on, so a drifted quote is
 not a buildable surface. On `pass`, record the check's own output in the intake note — the
 `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran. When
@@ -271,7 +217,8 @@ park obligation.
 
 **Package-read verification pass (showrunner duty 3).** At an epic package read's verification
 pass, re-run the check per **register-consuming child** across **both** directions, whether or
-not each body contains a quoted block. On `fail`, record a blocking package-read finding and do
+not each body contains a quoted block. For a stack layer, use the [stack layer
+inputs](#stack-layer-inputs). On `fail`, record a blocking package-read finding and do
 not treat the package as verified. On `pass`, record the check's own output in the package-read
 verification record — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a
 claim that it ran. When the register path and child token are known — the route names them or they

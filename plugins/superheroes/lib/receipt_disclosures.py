@@ -2,6 +2,7 @@
 """Disclosure-channel vocabulary, selection rule, and degraded-prose collector — leaf module."""
 import model_registry
 import seat_map_receipts
+import session_contract
 
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
@@ -42,6 +43,17 @@ def canary_failed_shape(value):
 
 def canary_verified_shape(value):
     return isinstance(value, dict) and all(isinstance(k, str) for k in value)
+
+
+def control_probe_shape(value):
+    if not isinstance(value, dict):
+        return False
+    if not isinstance(value.get("submitted"), bool):
+        return False
+    vendors = value.get("vendors")
+    if not isinstance(vendors, dict):
+        return False
+    return all(isinstance(k, str) and isinstance(v, str) for k, v in vendors.items())
 
 
 def adapter_provenance_shape(value):
@@ -94,6 +106,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "canaryOutcomeFailed": canary_failed_shape,
     "canaryPlantUndetected": canary_failed_shape,
     "canaryVerified": canary_verified_shape,
+    "controlProbe": control_probe_shape,
     "adapterProvenance": adapter_provenance_shape,
     "recordOrphansIgnored": str_list,
     "orderVendorProvenanceGaps": order_vendor_provenance_gaps_shape,
@@ -102,6 +115,16 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
 }
+
+# Ride the receipt's per-round entries; never read into a verdict or a degraded line.
+RECORD_ONLY_DISCLOSURE_CHANNELS = (
+    "canaryUnverified",
+    "canaryFailed",
+    "canaryOutcomeFailed",
+    "canaryPlantUndetected",
+    "canaryVerified",
+    "controlProbe",
+)
 
 
 def _state_version(state):
@@ -167,6 +190,39 @@ def receipt_round_disclosures(entry, form, state):
     return {chan: value
             for chan, value in declared_disclosures(entry).items()
             if round_entry_key_allowed(chan, form, state)}
+
+
+def live_vendors(config):
+    vendors = config.get("vendors") if isinstance(config, dict) else None
+    if not isinstance(vendors, list) or not vendors:
+        return ["claude"]
+    seen = set()
+    out = []
+    for v in vendors:
+        if isinstance(v, str) and v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def independent_auditor(config, fixer_vendor, runner_only=False):
+    fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
+    if fixer_fam is None:
+        return None, None
+    for v in live_vendors(config):
+        if runner_only and not session_contract.runner_channel_vendor(v):
+            continue
+        if v != fixer_vendor:
+            cand_fam = model_registry.family_for("auditor", v)
+            if cand_fam is not None and cand_fam != fixer_fam:
+                return v, fixer_fam
+    return None, fixer_fam
+
+
+def independent_auditor_available(config):
+    fixer = config.get("fixerVendor") if isinstance(config, dict) else None
+    vendor, fam = independent_auditor(config, fixer)
+    return (vendor is not None, fam)
 
 
 def degraded(state):
@@ -268,7 +324,62 @@ def seat_map_unjudgeable(state):
     return bool(seat_map_receipts.unjudgeable_receipts(state, author_family(state)))
 
 
-def build_degraded_prose(state, form):
+def latest_recorded_events(journal):
+    if not isinstance(journal, list):
+        return []
+    latest = {}
+    for event in journal:
+        if not isinstance(event, dict) or event.get("outcome") != "recorded":
+            continue
+        seat = event.get("seat")
+        phase = event.get("phase")
+        rnd = event.get("round")
+        attempt = event.get("attempt")
+        provenance = event.get("provenance")
+        if not isinstance(seat, str) or not seat:
+            ident = event.get("recordIdentity")
+            if isinstance(ident, dict):
+                seat = ident.get("seat")
+                phase = ident.get("phase", phase)
+                attempt = ident.get("attempt", attempt)
+        if not isinstance(seat, str) or not seat:
+            continue
+        occurrence = event.get("occurrence", 0)
+        key = (phase, rnd, attempt, seat, occurrence)
+        identity = {
+            "seat": seat,
+            "phase": phase,
+            "round": rnd,
+            "attempt": attempt,
+            "occurrence": occurrence,
+            "provenance": provenance,
+        }
+        latest[key] = (identity, event)
+    return list(latest.values())
+
+
+def _is_missing_seat_record(event):
+    return (event.get("cmd") == "record-missing"
+            or event.get("casToken") == session_contract.SEAT_MISSING_SCHEMA)
+
+
+def _native_in_session_seats(journal):
+    disclosed = set()
+    for identity, event in latest_recorded_events(journal):
+        if _is_missing_seat_record(event):
+            continue
+        seat = identity["seat"]
+        transport = event.get(session_contract.SEAT_TRANSPORT_KEY)
+        if transport in session_contract.SEAT_TRANSPORTS_DISCLOSED:
+            disclosed.add(seat)
+        elif transport in session_contract.SEAT_TRANSPORTS:
+            continue
+        else:
+            disclosed.add(seat)
+    return sorted(disclosed)
+
+
+def build_degraded_prose(state, form, journal=None):
     cfg = state.get("config") or {}
     degraded_out = []
     if degraded(state):
@@ -349,113 +460,6 @@ def build_degraded_prose(state, form):
                 "engaged-artifact-seat (round %s): seat(s) %s produced a review our transport "
                 "could not carry — they do not count toward certification; salvaged artifacts "
                 "are available for independent verification" % (rkey, ", ".join(eng_art)))
-        cuv = declared.get("canaryUnverified")
-        if cuv:
-            cv = declared.get("canaryVerified")
-            verified_vendors = []
-            if isinstance(cv, dict):
-                if cv and all(isinstance(v, dict) for v in cv.values()):
-                    verified_vendors = sorted(cv)
-                elif cv:
-                    verified_vendors = ["(probe submitted)"]
-            probe_note = ""
-            if verified_vendors:
-                probe_note = " (engaged probe recorded for vendor(s) %s)" % ", ".join(verified_vendors)
-            degraded_out.append(
-                "canary-unverified (round %s): cross-vendor seat(s) %s returned zero findings "
-                "with no engaged control probe for their vendor%s — external-seat liveness unverified"
-                % (rkey, ", ".join(cuv), probe_note))
-        cf = declared.get("canaryFailed")
-        if cf:
-            seats_down = cf.get("seats") if isinstance(cf, dict) else []
-            detail = cf.get("detail") if isinstance(cf, dict) else None
-            evidence = cf.get("evidence") if isinstance(cf, dict) else None
-            engaged_failure = isinstance(cf, dict) and cf.get("engagedFailure") is True
-            if isinstance(cf, dict) and isinstance(cf.get("vendors"), dict):
-                parts = []
-                for vendor, vinfo in sorted(cf["vendors"].items()):
-                    if not isinstance(vinfo, dict):
-                        continue
-                    ev = vinfo.get("evidence")
-                    ev_note = ""
-                    if isinstance(ev, dict) and ev:
-                        ev_note = "; evidence=%s" % ev
-                    default_detail = "outcome failure" if engaged_failure else "engaged not true"
-                    parts.append(
-                        "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or default_detail, ev_note))
-                default_detail = "outcome failure" if engaged_failure else "engaged not true"
-                detail_str = "; ".join(parts) if parts else (detail or default_detail)
-            else:
-                default_detail = "outcome failure" if engaged_failure else "engaged not true"
-                detail_str = detail or default_detail
-                if evidence and isinstance(evidence, dict):
-                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            if engaged_failure:
-                degraded_out.append(
-                    "canary-outcome-failed (round %s): the control probe was engaged but "
-                    "reported outcome failure (%s) — cross-vendor seat(s) %s remain run; panel "
-                    "certification withheld" % (
-                        rkey, detail_str, ", ".join(seats_down or [])))
-            else:
-                degraded_out.append(
-                    "canary-failed (round %s): the control probe showed no engagement (%s) — "
-                    "cross-vendor seat(s) %s downgraded to never-ran" % (
-                        rkey, detail_str, ", ".join(seats_down or [])))
-        cof = declared.get("canaryOutcomeFailed")
-        if cof:
-            seats_outcome_failed = cof.get("seats") if isinstance(cof, dict) else []
-            detail = cof.get("detail") if isinstance(cof, dict) else None
-            evidence = cof.get("evidence") if isinstance(cof, dict) else None
-            if isinstance(cof, dict) and isinstance(cof.get("vendors"), dict):
-                parts = []
-                for vendor, vinfo in sorted(cof["vendors"].items()):
-                    if not isinstance(vinfo, dict):
-                        continue
-                    ev = vinfo.get("evidence")
-                    ev_note = ""
-                    if isinstance(ev, dict) and ev:
-                        ev_note = "; evidence=%s" % ev
-                    parts.append(
-                        "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or "outcome failure", ev_note))
-                detail_str = "; ".join(parts) if parts else (detail or "outcome failure")
-            else:
-                detail_str = detail or "outcome failure"
-                if evidence and isinstance(evidence, dict):
-                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            degraded_out.append(
-                "canary-outcome-failed (round %s): the control probe was engaged but "
-                "reported outcome failure (%s) — cross-vendor seat(s) %s remain run; panel "
-                "certification withheld" % (
-                    rkey, detail_str, ", ".join(seats_outcome_failed or [])))
-        cpu = declared.get("canaryPlantUndetected")
-        if cpu:
-            seats_undetected = cpu.get("seats") if isinstance(cpu, dict) else []
-            detail = cpu.get("detail") if isinstance(cpu, dict) else None
-            evidence = cpu.get("evidence") if isinstance(cpu, dict) else None
-            if isinstance(cpu, dict) and isinstance(cpu.get("vendors"), dict):
-                parts = []
-                for vendor, vinfo in sorted(cpu["vendors"].items()):
-                    if not isinstance(vinfo, dict):
-                        continue
-                    ev = vinfo.get("evidence")
-                    ev_note = ""
-                    if isinstance(ev, dict) and ev:
-                        ev_note = "; evidence=%s" % ev
-                    parts.append(
-                        "vendor %s (%s%s)" % (
-                            vendor, vinfo.get("detail") or "plant not detected", ev_note))
-                detail_str = "; ".join(parts) if parts else (detail or "plant not detected")
-            else:
-                detail_str = detail or "plant not detected"
-                if evidence and isinstance(evidence, dict):
-                    detail_str = "%s; evidence=%s" % (detail_str, evidence)
-            degraded_out.append(
-                "canary-plant-undetected (round %s): the control probe was engaged but missed "
-                "the planted defect (%s) — cross-vendor seat(s) %s remain run; panel "
-                "certification withheld" % (
-                    rkey, detail_str, ", ".join(seats_undetected or [])))
         roi = declared.get("recordOrphansIgnored")
         if roi:
             degraded_out.append(
@@ -513,8 +517,8 @@ def build_degraded_prose(state, form):
                     "ranManifest/collectionManifest omitted" % (rkey, phase_name))
             mismatch = prov.get("vendorEchoMismatch")
             if isinstance(mismatch, list) and mismatch:
-                parts = ["%s echo=%r manifest=%r" % (row.get("seat"), row.get("echo"),
-                                                     row.get("manifest"))
+                parts = ["%s echo=%r trusted=%r" % (row.get("seat"), row.get("echo"),
+                                                     row.get("recorded", row.get("manifest")))
                          for row in mismatch if isinstance(row, dict)]
                 degraded_out.append(
                     "adapter-provenance (round %s, %s): vendor echo mismatch on seat(s): %s"
@@ -527,6 +531,13 @@ def build_degraded_prose(state, form):
     )
     if _run_unj and seat_map_unjudgeable(state):
         degraded_out.append(_run_unj)
+    native_seats = _native_in_session_seats(journal)
+    if native_seats:
+        degraded_out.append(
+            "unprobed native seat(s) %s: seats with no runner execution record — run in-session on "
+            "the host model, fallen open to it, or landed by hand — are declared live, never "
+            "probed; their engagement rests on the seat's own record"
+            % ", ".join(native_seats))
     return degraded_out, skipped_blockers
 
 
@@ -535,12 +546,14 @@ __all__ = (
     "ROUND_ENTRY_KEY_FORMS",
     "DISCLOSE_ON_PRESENCE",
     "RESUMABLE_DISCLOSURE_CHANNELS",
+    "RECORD_ONLY_DISCLOSURE_CHANNELS",
     "VENDOR_SOURCE_DEFAULTED",
     "str_list",
     "dict_list",
     "bool_value",
     "canary_failed_shape",
     "canary_verified_shape",
+    "control_probe_shape",
     "adapter_provenance_shape",
     "order_vendor_provenance_gaps_shape",
     "normalize_adapter_provenance",
@@ -548,6 +561,9 @@ __all__ = (
     "round_entry_key_declared",
     "round_entry_key_allowed",
     "receipt_round_disclosures",
+    "live_vendors",
+    "independent_auditor",
+    "independent_auditor_available",
     "degraded",
     "base_degraded",
     "author_family",

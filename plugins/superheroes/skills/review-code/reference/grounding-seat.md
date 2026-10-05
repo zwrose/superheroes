@@ -14,7 +14,7 @@ Live-dispatched grounding seat on the review-code compile leg (#609).
 - [Seat-map vendor](#seat-map-vendor)
 - [Known limitation — auto-fix loop path](#known-limitation--auto-fix-loop-path)
 
-`$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`. Fail-closed rules live in
+`$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`. Fail-closed rules live in
 `lib/grounding_stage.py` — do not judge reachability yourself and do not reimplement them
 here or in a second script.
 
@@ -47,7 +47,7 @@ Branch mode has no PR body — skip staging and both grounding legs.
 The `stage` command:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/grounding_stage.py" stage --session-dir "$SESSION_DIR"
 ```
 
@@ -55,8 +55,8 @@ python3 -B "$ROOT_DIR/lib/grounding_stage.py" stage --session-dir "$SESSION_DIR"
 
 An **engine** seat reads `SUPERHEROES_PR_BODY.md` relative to its working directory (the
 sanitized view root), materialized by
-`dispatch-review --pr-body-path <file> --session-dir "$SESSION_DIR"`; **those two flags are
-an inseparable pair — supplying one without the other is refused.** A **native host** seat
+`dispatch-review --pr-body-path <file> --session-dir "$SESSION_DIR"` (the pairing and its
+refusal token are declared at `skills/workhorse/reference/dispatch-entry.md`). A **native host** seat
 reads the absolute `<session>/grounding/pr-body.md` named in its order. Any other vendor
 path refuses `stage-unreachable-for-vendor`. Both verbs take `--vendor-path {engine,native}`
 and pass it to the same chokepoint validator.
@@ -88,7 +88,7 @@ as clean.
 `check`:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/grounding_stage.py" check --session-dir "$SESSION_DIR" --vendor-path <engine|native>
 ```
 
@@ -105,7 +105,7 @@ exactly one `id = "stage-token:<token>"` row with `verdict: "CONFIRMED"`.
 | **Engine** (`codex`/`cursor`) | After fold, extract `payload` from the `seat-result/1` envelope at `$SESSION_DIR/round-<N>/landing/<phase>/grounding-seat.a<K>.json` and write it to a session-local path (for example `$SESSION_DIR/grounding/attest-result.json`) before calling `attest`. The envelope nests verdicts under `payload`; `attest` refuses when `verdicts` is not at the root. |
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/grounding_stage.py" attest \
   --session-dir "$SESSION_DIR" \
   --vendor-path <engine|native> \

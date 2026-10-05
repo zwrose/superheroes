@@ -27,6 +27,19 @@ when the vet starts is not "already merged," even if the plan assumed it would b
 
 **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.**
 
+**A stacked feature** is a child whose delivery is a native stack: each layer pull request links its
+issues as [Each layer is a sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue),
+item 6, says, so **no layer merge closes the feature issue**.
+The vet that carries the closure receipt is the **top layer's** vet — the last vet before the
+atomic stack merge. At that moment the stack-specific test replaces the ordinary present-tense
+rule for layers: **every other layer of this stack already has a green vet** (they are not merged
+yet — the stack merges only after every layer is vetted). The ordinary present-tense test still
+applies to the spec's **other children** outside this stack: each must already be merged or
+closed. The receipt is **presented with the top layer's handback** in one sitting; the atomic
+stack merge and the advisor's post-merge read-back and issue closes are follow-through only — they do not mint a
+second closure trigger or a second receipt. The merge receipt on each closed issue references the
+closure receipt already accepted on the top layer's vet.
+
 Candidate closure moments look like two final vets running concurrently, or a vet racing a sibling's
 no-PR close. In the concurrent case, both PRs may look "final" until one merges — the advisor holds
 the receipt on the vet that will actually close the last child, and the other vet carries a
@@ -111,11 +124,11 @@ the acceptance is the owner's.
 Both outcomes are the design — a failing run does not mean the process is broken; it means the
 default and the alternative both have a sanctioned path.
 
-**A failing end-to-end validation run keeps the spec open by default and mints one repair issue per failure, each anchored to the failing run's record and naming the unmet acceptance criterion it restores; the owner may instead explicitly accept delivery with the failing run disclosed, and either way the cycle ends at an owner decision.**
+**A failing end-to-end validation run keeps the spec open by default and goes to the owner, who chooses repair or acceptance: on repair, one repair issue per failure files, each anchored to the failing run's record and naming the unmet acceptance criterion it restores; the owner may instead explicitly accept delivery with the failing run disclosed; no repair issue files before that decision.**
 
 ### The default — the spec stays open
 
-The spec does **not** close. Each failure produces a **repair issue**, and each repair issue carries
+The spec does **not** close. When the owner chooses repair, each failure produces a **repair issue**, and each carries
 **both**: a receipt anchor pointing at the **failing run's record**, and the **unmet acceptance
 criterion it restores**. The repair issues become children of the spec, so closure re-rides the vet
 of whichever PR closes the **new** last open child — [When closure fires](#when-closure-fires)'s

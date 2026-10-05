@@ -6,6 +6,7 @@ import shutil
 import pytest
 import round_certification as RC
 import round_driver as RD
+import session_contract
 
 from round_certification_fixtures import (
     DEFAULT_PANEL_PAYLOAD_SHA,
@@ -16,7 +17,14 @@ from round_certification_fixtures import (
 )
 
 CERTIFICATION_EXTRA_KEYS = frozenset(
-    ("terminalState", "terminalCause", "seats", "disclosures", "provenanceLabels")
+    (
+        "terminalState",
+        "terminalCause",
+        "seats",
+        "disclosures",
+        "provenanceLabels",
+        "independence",
+    )
 )
 
 # The writer's receipt is a superset of the driver's except certificationShape when any
@@ -29,6 +37,11 @@ PARITY_FIELD_EXCEPTIONS = frozenset({"certificationShape", "findings"})
 def _load_state(session_dir):
     with open(os.path.join(session_dir, STATE_FILE), encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def _seat_map_for_driver_parity(writer_seat_map):
+    """Writer seatMap matches driver seatMap after R28 host-seat exclusion removal."""
+    return writer_seat_map
 
 
 def _assert_findings_parity(session_dir, driver_findings, cert_findings):
@@ -54,7 +67,12 @@ def _assert_receipt_parity(session_dir):
     for key in driver_receipt:
         if key in PARITY_FIELD_EXCEPTIONS:
             continue
-        assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+        if key == "seatMap":
+            assert _seat_map_for_driver_parity(cert_receipt["seatMap"]) == driver_receipt[
+                "seatMap"
+            ], "mismatch on key %r" % key
+        else:
+            assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
     _assert_findings_parity(
         session_dir, driver_receipt["findings"], cert_receipt["findings"]
     )
@@ -81,6 +99,7 @@ def parity_hand_landed_shape(tmp_path):
         "recordDigest": "d" * 64,
         "resultDigest": "e" * 64,
         "resultKind": "findings",
+        "runKind": session_contract.run_kind_for_phase(RC.PANEL_PHASE),
         "observation": {
             "read": "engaged",
             "source": "runner",
@@ -181,7 +200,12 @@ def test_materialized_state_round_trip_matches_driver_receipt(tmp_path, label, b
         for key in driver_receipt:
             if key in PARITY_FIELD_EXCEPTIONS:
                 continue
-            assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
+            if key == "seatMap":
+                assert _seat_map_for_driver_parity(cert_receipt["seatMap"]) == driver_receipt[
+                    "seatMap"
+                ], "mismatch on key %r" % key
+            else:
+                assert cert_receipt[key] == driver_receipt[key], "mismatch on key %r" % key
         _assert_findings_parity(
             materialized, driver_receipt["findings"], cert_receipt["findings"]
         )

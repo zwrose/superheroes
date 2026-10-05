@@ -158,7 +158,7 @@ def _inv17_two_round_fixture():
     map1["seats"] = dict(map1["seats"])
     map1["seats"]["security-reviewer"] = {
         "vendor": "claude",
-        "model": "sonnet-5",
+        "model": "sonnet-5.5",
         "effort": "high",
         "tier": "reviewer",
         "family": "anthropic",

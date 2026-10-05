@@ -16,8 +16,6 @@ every ledger door fails closed until the file is cleared. Recovery is deleting
 the ledger file at the path ``ledger_path()`` reports — there is no in-place
 prune or forward-compat skip for unknown events.
 """
-# WORKAROUND: file-backed launch batch ledger when the host has no durable batch accounting
-# delete-when: the host records launch batches durably without this ledger module
 import fcntl
 import hashlib
 import json
@@ -528,6 +526,11 @@ def validate_candidate_root(repo_root, root, env=None):
     return _candidate_root_validation_reason(repo_root, root, env=env) is None
 
 
+def default_root():
+    """The ledger root used when no override names one."""
+    return os.path.join(tempfile.gettempdir(), LEDGER_DIR_NAME)
+
+
 def resolve_root(repo_root, env=None):
     """Resolve ledger root outside the repo; refuse in-repo paths."""
     if env is None:
@@ -538,7 +541,7 @@ def resolve_root(repo_root, env=None):
         return {"ok": False, "root": None, "reason": "ledger-repo-identity-unavailable"}
 
     override = env.get(LEDGER_ROOT_ENV)
-    root = override if override else os.path.join(tempfile.gettempdir(), LEDGER_DIR_NAME)
+    root = override if override else default_root()
     try:
         root = os.path.realpath(os.path.abspath(root))
     except OSError:
@@ -1245,6 +1248,9 @@ def fold(records):
             if rec["pid"] not in pids:
                 pids.append(rec["pid"])
             info["pids"] = pids
+            pid_started_ts = dict(info.get("pidStartedTs", {}))
+            pid_started_ts[rec["pid"]] = rec["ts"]
+            info["pidStartedTs"] = pid_started_ts
         elif event == "retry":
             pass
         elif event in TERMINAL_EVENTS:
@@ -1538,12 +1544,111 @@ def _started_pids_to_probe(info):
     return []
 
 
-def _child_group_is_live(pid):
+_PID_START_TOLERANCE_SECONDS = 5.0  # etime is whole seconds; started is written just after spawn
+# No recorded session id: no identity check (live pid reads live); etime on Linux is boot-relative.
+_PS_READ_TIMEOUT_SECONDS = 5.0
+
+
+def _parse_etime(text):
+    """Parse ``ps`` elapsed-time field ([[dd-]hh:]mm:ss) into whole seconds."""
+    if not text or not isinstance(text, str):
+        return None
+    text = text.strip()
+    days = 0
+    if "-" in text:
+        day_part, time_part = text.split("-", 1)
+        if not day_part.isdigit() or not time_part:
+            return None
+        days = int(day_part)
+        text = time_part
+    parts = text.split(":")
+    if len(parts) == 2:
+        try:
+            minutes, seconds = int(parts[0]), int(parts[1])
+        except ValueError:
+            return None
+        if minutes < 0 or seconds < 0 or seconds >= 60:
+            return None
+        return days * 86400 + minutes * 60 + seconds
+    if len(parts) == 3:
+        try:
+            hours, minutes, seconds = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            return None
+        if hours < 0 or minutes < 0 or seconds < 0 or minutes >= 60 or seconds >= 60:
+            return None
+        return days * 86400 + hours * 3600 + minutes * 60 + seconds
+    return None
+
+
+def _read_process_facts(pid):
+    """Return process stat, inferred start time, and command, or None when unreadable."""
+    try:
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return None
+        now = time.time()
+        result = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "stat=", "-o", "etime=", "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=_PS_READ_TIMEOUT_SECONDS,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        if result.returncode != 0:
+            return None
+        line = (result.stdout or "").strip()
+        if not line:
+            return None
+        fields = line.split(None, 2)
+        if len(fields) < 3:
+            return None
+        stat, etime, command = fields[0], fields[1], fields[2]
+        if not command:
+            return None
+        elapsed = _parse_etime(etime)
+        if elapsed is None:
+            return None
+        return {"stat": stat, "startTs": now - elapsed, "command": command}
+    except Exception:
+        return None
+
+
+def _pid_is_foreign(pid, started_ts, session_id):
+    """True only with a non-empty session id and positive foreign evidence; sessionless lanes skip."""
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    facts = _read_process_facts(pid)
+    if facts is None:
+        return False
+    if "Z" in facts["stat"]:
+        return False
+
+    foreign_start = False
+    same_start = False
+    if isinstance(started_ts, (int, float)) and not isinstance(started_ts, bool):
+        start_tolerance = _PID_START_TOLERANCE_SECONDS
+        foreign_start = facts["startTs"] > started_ts + start_tolerance
+        same_start = not foreign_start
+
+    foreign_session = False
+    same_session = False
+    if isinstance(session_id, str) and session_id:
+        same_session = session_id in facts["command"]
+        foreign_session = not same_session
+
+    return (foreign_start or foreign_session) and not (same_start or same_session)
+
+
+def _child_group_is_live(pid, *, started_ts, session_id):
     """True when the recorded pid or its process group still has live members.
 
     Signal 0 is an existence probe, never a real signal: this function must never
-    change another process's state. Every uncertain answer is True, because the
-    caller refuses on True — a wrong answer here costs a refusal, not a kill.
+    change another process's state. When the leader pid still exists (including
+    ``PermissionError`` on ``os.kill``, which means another uid owns the pid),
+    identity is checked once (``ps`` only) before any fail-closed live return so a
+    reused pid cannot block terminalization forever (one ``ps`` read, bounded by
+    ``_PS_READ_TIMEOUT_SECONDS``). Every uncertain identity answer stays True,
+    because the caller refuses on True.
     """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
@@ -1556,6 +1661,7 @@ def _child_group_is_live(pid):
     except OSError:
         return True
     deadline = time.monotonic() + settle_seconds
+    foreign_checked = False
     while True:
         proc_alive = False
         group_alive = False
@@ -1565,9 +1671,13 @@ def _child_group_is_live(pid):
         except ProcessLookupError:
             pass
         except PermissionError:
-            return True
+            proc_alive = True
         except OSError:
             return True
+        if proc_alive and not foreign_checked:
+            foreign_checked = True
+            if _pid_is_foreign(pid, started_ts, session_id):
+                return False
         try:
             os.killpg(pid, 0)
             group_alive = True
@@ -1697,7 +1807,11 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
             # One _child_group_is_live per recorded attempt, each with bounded
             # settle — all inside the lock. At most one started per launch today.
             for pid in _started_pids_to_probe(info):
-                if _child_group_is_live(pid):
+                if _child_group_is_live(
+                    pid,
+                    started_ts=info.get("pidStartedTs", {}).get(pid),
+                    session_id=info.get("sessionId"),
+                ):
                     return {
                         "ok": False,
                         "reason": "terminal-child-live:%s" % pid,
@@ -1713,7 +1827,11 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                         "ok": False, "reason": "terminal-repair-unavailable",
                         "kind": None, "outcome": None, "reaped": reaped,
                     }
-                if _child_group_is_live(started_repair["pid"]):
+                if _child_group_is_live(
+                    started_repair["pid"],
+                    started_ts=None,
+                    session_id=info.get("sessionId"),
+                ):
                     return {
                         "ok": False,
                         "reason": "terminal-child-live:%s" % started_repair["pid"],
@@ -1865,8 +1983,9 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     The ceiling bounds **how long this waits between attempts**, not the whole
     call: it is a sleep budget spent from the first live-child refusal onward.
     Two consequences worth knowing before picking a number. A live-child probe
-    settles for a couple of seconds before it answers, so wall-clock time runs to
-    the ceiling *plus* one probe per attempt -- a 5 s ceiling against a child that
+    settles for a couple of seconds before it answers and includes one ``ps`` read
+    (bounded by ``_PS_READ_TIMEOUT_SECONDS``), so wall-clock time runs to the
+    ceiling *plus* one probe per attempt -- a 5 s ceiling against a child that
     never exits takes about 5 s of sleep and two probes. And because the budget is
     spent rather than compared against a clock, a ceiling shorter than one probe
     still buys a re-attempt instead of silently becoming a no-op.

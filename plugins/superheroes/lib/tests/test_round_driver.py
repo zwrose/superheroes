@@ -30,6 +30,9 @@ from source_access_scan import source_obj_accesses_key
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from session_checkout import enter_checkout, seed_session_meta  # noqa: E402
 
 
 def _load(name):
@@ -419,8 +422,26 @@ def test_journal_appended_per_call(tmp_path):
 # a scripted driver harness (CLI end-to-end)
 # =============================================================================
 
+def _seed_repo_root_if_missing(session_dir, checkout_path):
+    """When meta.json lacks repoRoot, record the fixture checkout (never overwrite)."""
+    meta_path = os.path.join(session_dir, "meta.json")
+    meta = {}
+    if os.path.isfile(meta_path):
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+    if meta.get("repoRoot"):
+        return
+    seed_session_meta(session_dir, checkout_path)
+
+
 def _drive_cli(session_dir, cfg, respond, max_steps=80):
-    """Drive next/submit to a terminal using `respond(phase, payload, round) -> artifact`."""
+    """Drive next/submit to a terminal using `respond(phase, payload, round) -> artifact`.
+
+    The driven session runs inside a real checkout (`<session_dir>/checkout`), as it does in
+    production, so the driver's cwd-discovered repository read resolves a HEAD."""
+    checkout = os.path.join(session_dir, "checkout")
+    enter_checkout(checkout)
+    _seed_repo_root_if_missing(session_dir, checkout)
     first = True
     for _ in range(max_steps):
         n = RD.cmd_next(session_dir, cfg if first else None)
@@ -501,7 +522,11 @@ _GOOD_VERIFY = {"result": "pass"}
 def _drive_to_phase(session_dir, cfg, respond, target_phase, max_steps=80):
     """Drive next/submit with `respond` until the PENDING step is `target_phase`; return that
     `next`. Asserts the loop did not reach a terminal first, so a routing change that stops
-    reaching the phase fails loudly instead of silently skipping the test's body."""
+    reaching the phase fails loudly instead of silently skipping the test's body. The driven
+    session runs inside a real checkout (`<session_dir>/checkout`), as it does in production."""
+    checkout = os.path.join(session_dir, "checkout")
+    enter_checkout(checkout)
+    _seed_repo_root_if_missing(session_dir, checkout)
     first = True
     for _ in range(max_steps):
         n = RD.cmd_next(session_dir, cfg if first else None)
@@ -1157,7 +1182,12 @@ def test_clean_round1_certifies_full_panel_confirmed(tmp_path):
 def test_unknown_delta_surface_runs_full_panel(tmp_path):
     """A malformed/quoted-path head diff → unknown surface → a FULL reviewer-deep panel (the
     existing unknown→run-everything rule), not a scoped audit."""
+    from test_round_driver_round_economy_1272 import _commit_in_repo, _init_ceiling_git_repo
+
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    _commit_in_repo(repo, "unknown-surface-head")
     d = str(tmp_path)
+    seed_session_meta(d, repo)
     bad_head = 'diff --git "a/x y.py" "b/x y.py"\n@@ -1 +1 @@\n-a\n+b\n'
     seen = {"panel_r2": False}
 
@@ -1183,7 +1213,7 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path):
             return {"results": [], "findings": []}
         return {}
 
-    payload = _drive_cli(d, _cfg(), respond)
+    payload = _drive_cli(d, _cfg(repoRoot=repo, baseRef=init_head), respond)
     assert seen["panel_r2"] is True
     assert payload["verdict"] == "converged"
 
@@ -1342,7 +1372,12 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
     """An unreadable `headDiffPath` (no inline diff) is an UNKNOWN surface, not an empty one: the
     delta round runs a FULL reviewer-deep panel (unknown→run-everything), never a silent scoped skip
     over nothing. The source is journaled `unknown` and an `unknown-surface` decision is recorded."""
+    from test_round_driver_round_economy_1272 import _commit_in_repo, _init_ceiling_git_repo
+
+    repo, init_head = _init_ceiling_git_repo(tmp_path)
+    _commit_in_repo(repo, "panel-head")
     d = str(tmp_path)
+    seed_session_meta(d, repo)
     missing = str(tmp_path / "does-not-exist.txt")
     seen = {"panel_r2": False, "scoped": False}
 
@@ -1371,7 +1406,7 @@ def test_fixer_unreadable_head_diff_path_schedules_full_panel(tmp_path):
             return {"results": [], "findings": []}
         return {}
 
-    payload = _drive_cli(d, _cfg(), respond)
+    payload = _drive_cli(d, _cfg(repoRoot=repo, baseRef=init_head), respond)
     assert seen["panel_r2"] is True, "an unreadable head diff must run a full panel, not a scoped scan"
     assert seen["scoped"] is False
     assert payload["verdict"] == "converged"
@@ -1975,7 +2010,7 @@ def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
 
 
 def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
-    """#608 review contrast: known claude fixer at default sonnet-5/high has a next ladder rung."""
+    """#608 review contrast: known claude fixer at default sonnet-5.5/high has a next ladder rung."""
     state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
     RD._handle_stall(state, state["config"], _STALL_BREAKER)
     assert state["selfRecovered"] is True
@@ -2004,6 +2039,98 @@ def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
     assert state["step"] == RD.P_TERMINAL
     note = (state.get("certification") or {}).get("note") or ""
     assert "accepted the disclosed" in note, note
+
+
+def _dual_stall_target_state(confirmed, plausible):
+    """Two stalled audit targets for mixed accept-risk disposition tests."""
+    state = RD.new_state(_cfg_cert())
+    state["findings"] = []
+    compiled, _ = RD.mechanical_compile([dict(confirmed), dict(plausible)], None)
+    for row, src in zip(compiled, (confirmed, plausible)):
+        row["verdict"] = src["verdict"]
+        row["evidence"] = src.get("evidence")
+    RD._stage_findings(state, compiled)
+    state["fixBatch"] = compiled
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    targets = state["_auditTargets"]
+    state["_auditOutcome"] = {"notDischarged": [t["id"] for t in targets]}
+    state["selfRecovered"] = True
+    RD._handle_stall(state, state["config"], {
+        "reason": "audit-stall", "detail": "x",
+        "stalledIdentities": [t["identity"] for t in targets]})
+    return state, targets
+
+
+def _ledger_by_key(state):
+    SC = _load("session_contract")
+    return {SC.finding_identity_key(e): e
+            for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
+
+
+def _stall_cert_refusal(state, tmp_path):
+    RC = _load("round_certification")
+    RR = _load("round_records")
+    session_dir = str(tmp_path / "sess")
+    os.makedirs(session_dir, exist_ok=True)
+    state.setdefault("config", {})["baseGuard"] = RC.BASE_GUARD_CHECKED
+    head = "a" * 40
+    state["config"]["headSha"] = head
+    RD.save_state(session_dir, state)
+    with open(os.path.join(session_dir, RD.JOURNAL_FILE), "w", encoding="utf-8") as fh:
+        fh.write("")
+    with open(os.path.join(session_dir, RR.META_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"sessionId": "s", "headSha": head, "baseGuard": RC.BASE_GUARD_CHECKED}, fh)
+    ctx, err = RC._load_context(session_dir)
+    assert err is None
+    return RC.check_disposition_without_receipt(ctx)
+
+
+def test_accept_risk_dispositions_only_qualifying_targets_in_mixed_batch(tmp_path):
+    """accept-the-disclosed-risk must not clear PLAUSIBLE siblings — only per-target qualifiers."""
+    confirmed = {"title": "confirmed-bug", "severity": "Important", "file": "a.py", "line": 1,
+                 "verdict": "CONFIRMED", "evidence": "tests pass"}
+    plausible = {"title": "plausible-bug", "severity": "Important", "file": "b.py", "line": 2,
+                  "verdict": "PLAUSIBLE", "evidence": "maybe"}
+    state, targets = _dual_stall_target_state(confirmed, plausible)
+    assert state["_acceptRiskEligible"] is True
+    follow_up = {"item": "defer plausible sibling", "revisitTrigger": "next milestone",
+                 "classClosure": "tracked separately"}
+    RD._fold_stall(state, state["config"], {
+        "choice": RD.ACCEPT_RISK_CHOICE,
+        "followUp": follow_up,
+    })
+    ledger = _ledger_by_key(state)
+    confirmed_key = RD._finding_key_of(targets[0])
+    plausible_key = RD._finding_key_of(targets[1])
+    assert ledger[confirmed_key]["disposition"] == "out-of-scope"
+    assert ledger[confirmed_key]["followUp"] == follow_up
+    assert ledger[plausible_key].get("disposition") is None
+    refusal = _stall_cert_refusal(state, tmp_path)
+    assert refusal is not None
+    assert refusal["detail"] == "finding has no disposition recorded"
+
+
+def test_accept_risk_never_dispositions_critical_targets(tmp_path):
+    """Critical stalled targets stay open — out-of-scope on Critical is forbidden at certification."""
+    critical = {"title": "crit", "severity": "Critical", "file": "c.py", "line": 1,
+                "verdict": "CONFIRMED", "evidence": "proven"}
+    important = {"title": "imp", "severity": "Important", "file": "d.py", "line": 2,
+                 "verdict": "CONFIRMED", "evidence": "proven"}
+    state, targets = _dual_stall_target_state(critical, important)
+    follow_up = {"item": "accept important only", "revisitTrigger": "next milestone",
+                 "classClosure": "none"}
+    RD._fold_stall(state, state["config"], {
+        "choice": RD.ACCEPT_RISK_CHOICE,
+        "followUp": follow_up,
+    })
+    ledger = _ledger_by_key(state)
+    critical_key = RD._finding_key_of(targets[0])
+    important_key = RD._finding_key_of(targets[1])
+    assert ledger[critical_key].get("disposition") is None
+    assert ledger[important_key]["disposition"] == "out-of-scope"
+    refusal = _stall_cert_refusal(state, tmp_path)
+    assert refusal is not None
+    assert refusal["detail"] == "Critical finding may not take the non-blocking path"
 
 
 # =============================================================================
@@ -3100,6 +3227,7 @@ _ALL_CHANNELS = {
     "canaryPlantUndetected": {"seats": ["code-reviewer"], "detail": "plant not detected",
                               "evidence": {"probe": "engaged"}},
     "canaryVerified": {"codex": {"probe": "engaged"}},
+    "controlProbe": {"submitted": True, "vendors": {"codex": "ok"}},
     "adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer", "echo": "cursor",
                                                   "manifest": "codex"}]},
     "recordOrphansIgnored": ["code-reviewer"],
@@ -3163,12 +3291,11 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
                      "codex",
                      "vacuous-seat (round 1): seat(s) architecture-reviewer",
                      "engaged-artifact-seat (round 1): seat(s) premortem-reviewer",
-                     "canary-unverified (round 1): cross-vendor seat(s) code-reviewer",
-                     "engaged probe recorded for vendor(s) codex",
-                     "canary-failed (round 1): the control probe showed no engagement",
                      "seat-map-unjudgeable (round 1): a seat map was submitted and is readable, "
                      "but its violation basis is incomplete (no-author-family)"):
         assert marker in prose, marker
+    assert "canary-unverified (round 1):" not in prose
+    assert "canary-failed (round 1):" not in prose
     assert (
         "record-orphans-ignored (round 1): hand submit folded with durable seat record(s) "
         "code-reviewer still at this slot"
@@ -3920,15 +4047,26 @@ def test_panel_round_channels_are_all_accounted_for():
 def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
     """The census is the whole story only if `build_receipt` and the resume both READ the constant
     rather than a hand-copied literal list — and only if every named channel is really consumed by
-    the receipt (a fossil channel would pass the census while disclosing nothing)."""
+    the receipt (a fossil channel would pass the census while disclosing nothing). Record-only
+    probe channels are exempt from the read census when they are named in
+    `RECORD_ONLY_DISCLOSURE_CHANNELS` and their values reach the receipt round entry."""
     tree, ast_mod = _round_driver_ast()
     for fn in ("build_receipt", "_restore_round_disclosures"):
         names = {n.id for n in ast_mod.walk(_fn_node(tree, ast_mod, fn))
                  if isinstance(n, ast_mod.Name)}
         assert "RESUMABLE_DISCLOSURE_CHANNELS" in names, \
             "%s must read the channel set from its one home" % fn
+    record_only = set(RD.RECORD_ONLY_DISCLOSURE_CHANNELS)
+    assert record_only <= set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
     src = _disclosure_channel_consumer_source()
     for chan in RD.RESUMABLE_DISCLOSURE_CHANNELS:
+        if chan in record_only:
+            state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+            state["rounds"] = {"1": {chan: _ALL_CHANNELS[chan]}}
+            receipt = RD.build_receipt(state)
+            assert _round_channels(receipt, 1).get(chan) == _ALL_CHANNELS[chan], (
+                "record-only channel %r must reach receipt rounds[]" % chan)
+            continue
         assert source_obj_accesses_key(src, "rec|rrec|declared", chan), \
             "%r is named restorable but no round record read consumes it" % chan
 
@@ -4818,7 +4956,24 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_degraded():
 # `independent` return, and post-#651 no vendor can satisfy that branch — every vendor's
 # `code-fixer` and `verifier` roles now resolve to the same family — so it is unreachable, not
 # merely untested. #652 rider 4a deleted that loop; the invariant is pinned by
-# test_verifier_and_code_fixer_families_match_per_vendor in test_model_registry.py.
+# test_auditor_and_code_fixer_families_match_per_vendor in test_model_registry.py.
+
+
+# axis: _auditor_vendor independence follows the auditor role family, not verifier
+def test_auditor_vendor_reads_auditor_role(monkeypatch):
+    real_family_for = RD.model_registry.family_for
+
+    def fake_family_for(role, vendor):
+        if role == "auditor" and vendor == "codex":
+            return "openai"
+        if role == "verifier" and vendor == "codex":
+            return "xai"
+        return real_family_for(role, vendor)
+
+    monkeypatch.setattr(RD.model_registry, "family_for", fake_family_for)
+    auditor, independence = RD._auditor_vendor({"vendors": ["cursor", "codex"]}, "cursor")
+    assert independence == "independent"
+    assert auditor == "codex"
 
 
 def test_auditor_vendor_unknown_fixer_degraded():
@@ -5053,27 +5208,30 @@ def test_mechanical_blocker_carried_through_judgment_gate():
     assert [b["title"] for b in state["_fixBatch"]] == ["null deref"]
 
 
-def test_judgment_row_ids_occurrence_suffix_same_location():
-    """Repeated tradeoff findings at the same location get distinct disposition ids (#1, #2, …)."""
-    loc = RD._location_id(_TRADEOFF)
+def test_judgment_row_ids_same_finding_same_id():
+    """Byte-identical tradeoff findings at the same location are one finding and share one disposition id."""
+    key = RD._judgment_row_ids([dict(_TRADEOFF)])[0]
     findings = [dict(_TRADEOFF), dict(_TRADEOFF)]
-    assert RD._judgment_row_ids(findings) == [loc, "%s#1" % loc]
+    assert RD._judgment_row_ids(findings) == [key, key]
 
 
 def test_judgment_colliding_identity_different_severity_dispositions_not_collapse():
-    """Two tradeoff findings at the same location with different severities must each receive their
-    disposition — a skip for one must not silently override fix-as-suggested for a Critical."""
-    loc_id = RD._location_id({"title": "same choice", "severity": "Critical",
-                              "file": "f.py", "line": 10, "tradeoff": True})
-    critical = {"title": "same choice", "severity": "Critical", "file": "f.py", "line": 10,
-                "tradeoff": True}
-    important = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
-                 "tradeoff": True}
+    """Fixtures are two tradeoff findings at one location whose long titles agree past the title
+    clamp (alpha/bravo suffixes) and separate by the content-hash disambiguator; severity is what
+    the assertion then reads per row — severity is not the distinguishing axis."""
+    loc_id_prefix = RD.session_contract.location_key({"title": "same choice " + "x" * 205 + " alpha",
+                                                      "severity": "Critical", "file": "f.py", "line": 10,
+                                                      "tradeoff": True})
+    critical = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Critical",
+                "file": "f.py", "line": 10, "tradeoff": True}
+    important = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important",
+                 "file": "f.py", "line": 10, "tradeoff": True}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [dict(critical), dict(important)])
     step = RD._advance(state, state["config"])
     ids = [f["id"] for f in step["payload"]["findings"]]
-    assert ids == [loc_id, "%s#1" % loc_id]
+    assert len(ids) == 2 and ids[0] != ids[1]
+    assert all(i.startswith(loc_id_prefix) for i in ids)
     RD._fold_judgment(state, state["config"], {"dispositions": [
         {"id": ids[0], "disposition": "fix-as-suggested"},
         {"id": ids[1], "disposition": "skip", "reason": "defer the important one"},
@@ -5305,10 +5463,10 @@ def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
 
 def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
     """E4: two guided tradeoffs at the same location — ambiguity note, both guidance texts kept."""
-    a = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
-         "tradeoff": True}
-    b = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
-         "tradeoff": True}
+    a = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Important",
+         "file": "f.py", "line": 10, "tradeoff": True}
+    b = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important",
+         "file": "f.py", "line": 10, "tradeoff": True}
     state = RD.new_state(_cfg())
     RD._route_judgment_blockers(state, [dict(a), dict(b)])
     step = RD._advance(state, state["config"])
@@ -5339,7 +5497,9 @@ def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
     for guidance, record_id in record_by_guidance.items():
         assert record_id in block
         assert "> %s" % guidance in block
-    assert block.count("### f.py:10 — same choice") == 2
+    identity_line = RD._gate_guidance_identity_line(
+        {"file": "f.py", "line": 10, "title": "same choice " + "x" * 205 + " alpha"})
+    assert block.count(identity_line) == 2
     assert block.count("Note: 2 guided findings share this identity") == 2
     assert block.count("BEGIN owner-gate guidance") == 2
 
@@ -5685,8 +5845,8 @@ def test_seat_map_unavailable_round1_map_round2_absent():
     assert "seat-map-unavailable" not in state["certification"]["shapeDrivers"]
 
 
-def test_seat_map_round2_no_map_no_canary_withholds_certification():
-    """Round 2 with no seat map and no canary probe withholds certification (#681)."""
+def test_seat_map_round2_no_map_no_canary_records_unverified_panel_still_complete():
+    """Round 2 with no seat map and no canary probe records canaryUnverified but panel stays complete."""
     state = RD.new_state(_cfg(leg="panel", vendors=["claude", "codex"]))
     seat_map = _verified_clean_seat_map(["claude", "codex"])
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
@@ -5698,11 +5858,10 @@ def test_seat_map_round2_no_map_no_canary_withholds_certification():
     state["round"] = 2
     RD._fold_panel(state, state["config"], {"seats": seats})
     assert "seatMapUnavailable" not in state["rounds"]["2"]
-    assert state["_incompletePanel"] is True
+    assert state["_incompletePanel"] is False
+    assert state["fullPanelRan"] is True
     assert "canaryUnverified" in state["rounds"]["2"]
-    RD._terminal_converged(state, state["config"], full_panel=True)
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["shape"] is None
+    assert state["rounds"]["2"]["controlProbe"]["submitted"] is False
 
 
 @pytest.mark.parametrize("bad_manifest", [
@@ -5727,7 +5886,8 @@ def test_canary_round2_no_map_malformed_ran_manifest_demands_liveness(bad_manife
     RD._fold_panel(state, state["config"], round2_art)
     r2 = state["rounds"]["2"]
     assert r2["canaryUnverified"] == ["code-reviewer"]
-    assert state["_incompletePanel"] is True
+    assert state["_incompletePanel"] is False
+    assert state["fullPanelRan"] is True
     live = RD.canary_liveness(
         list(RD.DIMENSIONS), r2["seatStatus"], seats,
         RD._sm_canary_map(state, {}), {}, None)
@@ -5853,8 +6013,8 @@ def test_seat_map_unavailable_disclosure_not_unjudgeable_prose():
     assert unj_lines == []
 
 
-def test_unattested_cross_vendor_map_without_canary_still_parks():
-    """NR-D: submitted cross-vendor map without canary still parks — never certifies (#714)."""
+def test_unattested_cross_vendor_map_refuses_unrun_review_not_probe_parked():
+    """NR-D: unattested cross-vendor map refuses unrun-review; probe gap no longer parks (#1272)."""
     cfg = _cfg_cert(leg="panel", vendors=["codex", "cursor"])
     seat_map = _seat_map_vendors({
         "code-reviewer": "codex",
@@ -5864,10 +6024,10 @@ def test_unattested_cross_vendor_map_without_canary_still_parks():
         "premortem-reviewer": "cursor",
     })
     result = RD.run_loop(_seams(io={"seatMap": seat_map}), cfg)
-    assert "class" in result
+    assert result["class"] == "unrun-review"
     assert "verdict" not in result
-    assert result["loopTerminal"] == "cannot-certify"
-    assert result["loopCertificationShape"] is None
+    assert result["loopTerminal"] == "converged"
+    assert result["loopCertificationShape"] == "full-panel-confirmed-constraint-violated"
 
 
 def test_unattested_map_still_drives_fell_open_and_effective_seat_map():
@@ -6272,7 +6432,7 @@ _SEAT_MAP_RECEIPTS_CALLERS = frozenset({
     "unexcused_violations",
     "pin_excused_records",
     "unjudgeable_receipts",
-    "round_governing_unjudgeable",
+    "round_governing_map",
     "emit_receipt_seat_map",
 })
 
@@ -6596,17 +6756,15 @@ def test_canary_unverified_when_cross_vendor_all_empty_no_probe():
     RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
     assert state["rounds"]["1"]["canaryUnverified"] == ["code-reviewer"]
     assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "run"
-    assert state["fullPanelRan"] is False
-    assert state["_incompletePanel"] is True
+    assert state["fullPanelRan"] is True
+    assert state["_incompletePanel"] is False
     assert "canary-unverified" in _decision_kinds(state)
     receipt = RD.build_receipt(state)
     assert receipt["rounds"][0]["canaryUnverified"] == ["code-reviewer"]
-    cu_lines = [d for d in receipt["degraded"] if d.startswith("canary-unverified (round 1):")]
-    assert len(cu_lines) == 1
-    assert "code-reviewer" in cu_lines[0]
+    assert not any(d.startswith("canary-") for d in receipt["degraded"])
 
 
-def test_canary_failed_downgrades_cross_vendor_seats():
+def test_canary_failed_records_cross_vendor_probe_not_seat_downgrade():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
@@ -6618,14 +6776,13 @@ def test_canary_failed_downgrades_cross_vendor_seats():
     RD._fold_panel(state, state["config"], {
         "seats": seats, "seatMap": seat_map, "canaryResult": canary,
     })
-    assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "missing"
-    assert state["fullPanelRan"] is False
+    assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "run"
+    assert state["fullPanelRan"] is True
     assert "canaryFailed" in state["rounds"]["1"]
     assert "canary-failed" in _decision_kinds(state)
     receipt = RD.build_receipt(state)
-    cf_lines = [d for d in receipt["degraded"] if d.startswith("canary-failed (round 1):")]
-    assert len(cf_lines) == 1
-    assert "code-reviewer" in cf_lines[0]
+    assert not any(d.startswith("canary-") for d in receipt["degraded"])
+    assert state["rounds"]["1"]["controlProbe"]["vendors"]["codex"] == "vacuous"
 
 
 def test_canary_verified_cross_vendor_empty_stays_run():
@@ -6649,7 +6806,7 @@ def test_canary_verified_cross_vendor_empty_stays_run():
     assert not any("canary-" in d for d in receipt["degraded"])
 
 
-def test_canary_plant_undetected_engaged_miss_withholds_certification():
+def test_canary_plant_undetected_engaged_miss_records_not_withholds():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
@@ -6663,13 +6820,14 @@ def test_canary_plant_undetected_engaged_miss_withholds_certification():
     })
     r1 = state["rounds"]["1"]
     assert r1["seatStatus"]["code-reviewer"] == "run"
-    assert state["fullPanelRan"] is False
-    assert state["_incompletePanel"] is True
+    assert state["fullPanelRan"] is True
+    assert state["_incompletePanel"] is False
     assert "canaryPlantUndetected" in r1
     assert "canaryVerified" not in r1
     assert "canary-plant-undetected" in _decision_kinds(state)
     receipt = RD.build_receipt(state)
-    assert any(d.startswith("canary-plant-undetected (round 1):") for d in receipt["degraded"])
+    assert not any(d.startswith("canary-") for d in receipt["degraded"])
+    assert r1["controlProbe"]["vendors"]["codex"] == "plant-undetected"
 
 
 def test_canary_per_vendor_codex_finding_cursor_empty_still_unverified():
@@ -6685,7 +6843,7 @@ def test_canary_per_vendor_codex_finding_cursor_empty_still_unverified():
     assert sorted(r1["canaryUnverified"]) == ["security-reviewer"]
     assert "canaryVerified" not in r1
     assert "canaryFailed" not in r1
-    assert state["fullPanelRan"] is False
+    assert state["fullPanelRan"] is True
     assert "canary-unverified" in _decision_kinds(state)
     assert "panel-seat-missing" not in _decision_kinds(state)
     assert r1.get("missingSeats") is None or r1.get("missingSeats") == []
@@ -6718,16 +6876,13 @@ def test_canary_mixed_panel_only_codex_probed_cursor_unverified():
     assert r1["canaryVerified"] == {"codex": {"tokens": 100}}
     assert r1["seatStatus"]["code-reviewer"] == "run"
     assert r1["seatStatus"]["security-reviewer"] == "run"
-    assert state["fullPanelRan"] is False
-    assert state["_incompletePanel"] is True
+    assert state["fullPanelRan"] is True
+    assert state["_incompletePanel"] is False
     assert "canaryFailed" not in r1
     receipt = RD.build_receipt(state)
     rr = receipt["rounds"][0]
     assert "canaryUnverified" in rr and "canaryVerified" in rr
-    cu = [d for d in receipt["degraded"] if d.startswith("canary-unverified (round 1):")]
-    assert len(cu) == 1
-    assert "security-reviewer" in cu[0]
-    assert not any(d.startswith("canary-failed") for d in receipt["degraded"])
+    assert not any(d.startswith("canary-") for d in receipt["degraded"])
 
 
 def test_io_seam_forwards_multi_probe_canary_result_list():
@@ -6797,10 +6952,10 @@ def test_canary_engine_matches_no_panel_vendor_all_unverified():
     })
     assert state["rounds"]["1"]["canaryUnverified"] == ["code-reviewer"]
     assert "canaryVerified" not in state["rounds"]["1"]
-    assert state["fullPanelRan"] is False
+    assert state["fullPanelRan"] is True
 
 
-def test_canary_malformed_result_not_dict_or_list():
+def test_canary_malformed_result_records_control_probe_not_incomplete():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
@@ -6811,7 +6966,13 @@ def test_canary_malformed_result_not_dict_or_list():
             "seats": seats, "seatMap": seat_map, "canaryResult": bad,
         })
         assert st["rounds"]["1"]["canaryUnverified"] == ["code-reviewer"]
-        assert st["fullPanelRan"] is False
+        assert st["fullPanelRan"] is True
+        cp = st["rounds"]["1"]["controlProbe"]
+        if bad is None:
+            assert cp == {"submitted": False, "vendors": {}}
+        else:
+            assert cp["submitted"] is True
+            assert cp["vendors"]["<malformed-0>"] == "malformed"
 
 
 def test_canary_list_ignores_non_dict_members():
@@ -6831,7 +6992,7 @@ def test_canary_list_ignores_non_dict_members():
     assert state["fullPanelRan"] is True
 
 
-def test_canary_failed_one_vendor_only_downgrades_that_vendor_seats():
+def test_canary_failed_one_vendor_only_records_that_vendor():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
@@ -6854,10 +7015,11 @@ def test_canary_failed_one_vendor_only_downgrades_that_vendor_seats():
     r1 = state["rounds"]["1"]
     assert r1["seatStatus"]["code-reviewer"] == "run"
     assert r1["seatStatus"]["test-reviewer"] == "run"
-    assert r1["seatStatus"]["security-reviewer"] == "missing"
+    assert r1["seatStatus"]["security-reviewer"] == "run"
     assert sorted(r1["canaryFailed"]["seats"]) == ["security-reviewer"]
     assert r1["canaryVerified"] == {"codex": {"tokens": 1}}
-    assert state["fullPanelRan"] is False
+    assert state["fullPanelRan"] is True
+    assert r1["controlProbe"]["vendors"]["cursor"] == "vacuous"
 
 
 def _canary_dims_from_by_vendor(by_vendor, status):
@@ -7001,7 +7163,7 @@ def test_canary_ok_contradicts_fields_not_proven():
     assert r1["canaryPlantUndetected"]["detail"] == (
         "canary-outcome-contradicts-fields; claimed ok"
     )
-    assert state["fullPanelRan"] is False
+    assert state["fullPanelRan"] is True
 
 
 def test_canary_unknown_outcome_not_proven():
@@ -7020,7 +7182,7 @@ def test_canary_unknown_outcome_not_proven():
     assert "canaryVerified" not in r1
     assert "canaryPlantUndetected" in r1
     assert r1["canaryPlantUndetected"]["detail"].startswith("canary-outcome-unknown:")
-    assert state["fullPanelRan"] is False
+    assert state["fullPanelRan"] is True
 
 
 def test_canary_dead_beats_plant_undetected_beats_proven_both_orders():
@@ -7084,14 +7246,12 @@ def test_canary_engaged_dispatch_failure_outcome_failed_not_never_ran():
     assert r1["seatStatus"]["code-reviewer"] == "run"
     assert "canaryVerified" not in r1
     assert r1["canaryOutcomeFailed"]["engagedFailure"] is True
-    assert state["fullPanelRan"] is False
+    assert state["fullPanelRan"] is True
     assert "canary-outcome-failed" in _decision_kinds(state)
     assert "canary-failed" not in _decision_kinds(state)
     receipt = RD.build_receipt(state)
-    cof_lines = [d for d in receipt["degraded"] if d.startswith("canary-outcome-failed (round 1):")]
-    assert len(cof_lines) == 1
-    assert "no engagement" not in cof_lines[0]
-    assert "outcome failure" in cof_lines[0]
+    assert not any(d.startswith("canary-") for d in receipt["degraded"])
+    assert r1["controlProbe"]["vendors"]["codex"] == "vacuous"
 
 
 def test_canary_dead_and_outcome_failed_same_round_both_disclosed():
@@ -7122,15 +7282,11 @@ def test_canary_dead_and_outcome_failed_same_round_both_disclosed():
     assert sorted(r1["canaryFailed"]["seats"]) == ["code-reviewer"]
     assert r1["canaryOutcomeFailed"]["engagedFailure"] is True
     assert sorted(r1["canaryOutcomeFailed"]["seats"]) == ["security-reviewer"]
-    assert r1["seatStatus"]["code-reviewer"] == "missing"
+    assert r1["seatStatus"]["code-reviewer"] == "run"
     assert r1["seatStatus"]["security-reviewer"] == "run"
+    assert state["fullPanelRan"] is True
     receipt = RD.build_receipt(state)
-    cf_lines = [d for d in receipt["degraded"] if d.startswith("canary-failed (round 1):")]
-    cof_lines = [d for d in receipt["degraded"] if d.startswith("canary-outcome-failed (round 1):")]
-    assert len(cf_lines) == 1
-    assert len(cof_lines) == 1
-    assert "code-reviewer" in cf_lines[0]
-    assert "security-reviewer" in cof_lines[0]
+    assert not any(d.startswith("canary-") for d in receipt["degraded"])
 
 
 def test_canary_liveness_engaged_dispatch_failure_status_outcome_failed():
@@ -7212,12 +7368,10 @@ def test_canary_mixed_panel_receipt_does_not_claim_no_probe_ran():
         "seats": seats, "seatMap": seat_map, "canaryResult": canary,
     })
     receipt = RD.build_receipt(state)
-    cu = [d for d in receipt["degraded"] if d.startswith("canary-unverified (round 1):")]
-    assert len(cu) == 1
-    line = cu[0].lower()
-    assert "security-reviewer" in cu[0]
-    assert "no control probe was run" not in line
-    assert "every cross-vendor seat" not in line
+    r0 = receipt["rounds"][0]
+    assert r0["canaryUnverified"] == ["security-reviewer"]
+    assert r0["controlProbe"]["vendors"]["codex"] == "plant-undetected"
+    assert not any(d.startswith("canary-") for d in receipt["degraded"])
 
 
 def test_canary_fell_open_codex_configured_claude_ran_not_subject():
@@ -7263,7 +7417,7 @@ def test_canary_liveness_usable_findings_only_dicts_count(findings, expected_dim
     assert out["byDim"]["code-reviewer"] == expected_dim_status
 
 
-def test_fold_panel_null_finding_cross_vendor_unverified_not_full_panel():
+def test_fold_panel_null_finding_cross_vendor_unverified_panel_still_complete():
     state = RD.new_state(_cfg(leg="panel"))
     seats = {d: {"findings": []} for d in RD.DIMENSIONS}
     seats["code-reviewer"] = {"findings": [None]}
@@ -7272,7 +7426,7 @@ def test_fold_panel_null_finding_cross_vendor_unverified_not_full_panel():
     RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
     r1 = state["rounds"]["1"]
     assert r1["canaryUnverified"] == ["code-reviewer"]
-    assert state["fullPanelRan"] is False
+    assert state["fullPanelRan"] is True
     assert "canary-unverified" in _decision_kinds(state)
 
 
@@ -7310,7 +7464,7 @@ def test_fold_panel_malformed_config_dimensions_no_raise():
         st = RD.new_state(_cfg(leg="panel", dimensions=bad_dims))
         RD._fold_panel(st, st["config"], {"seats": seats, "seatMap": seat_map})
         assert st["rounds"]["1"]["canaryUnverified"] == ["code-reviewer"]
-        assert st["fullPanelRan"] is False
+        assert st["fullPanelRan"] is True
 
 
 def test_canary_verified_record_stable_two_engaged_probe_orders():
@@ -8360,9 +8514,12 @@ def test_write_certification_artifacts_refusal_write_failure_returns_fault(tmp_p
 def test_write_certification_artifacts_fault_strings_match_terminal_receipt_gate_coupling(
         tmp_path, monkeypatch):
     """_terminal_receipt_gate distinguishes certification-write faults from every other fault by
-    matching the substring 'certification' in the fault string (_receiptFinalized is set only when
-    fault is None or 'certification' not in fault). A reworded message here would silently re-open
-    the replay fall-open over a missing certification artifact."""
+    the typed fault class RECEIPT_FAULT_CERTIFICATION (layer 1b), not by substring matching on the
+    message. _receiptFinalized is set only when fault is None or fault.kind is not
+    RECEIPT_FAULT_CERTIFICATION. This test still pins that the certification-write fault path is
+    the only non-None return from _write_certification_artifacts and that the fault carries that
+    class; a reworded message must not silently re-open the replay fall-open over a missing
+    certification artifact."""
     _COUPLING_SUBSTRING = "certification"
 
     # Census of every non-None return from _write_certification_artifacts — only one path exists:
