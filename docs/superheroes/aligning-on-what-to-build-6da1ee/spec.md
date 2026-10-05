@@ -18,8 +18,8 @@ updated: "2026-10-03"
 Every statement ends with its source in plain text. The sources are:
 
 - **ruling N**: the owner's numbered rulings in the discovery handoff,
-  `docs/superheroes/discovery-notes/spec-alignment/HANDOFF.md`, items 1 to 52 under "Session 3",
-  the board rounds that follow it, and "Remainder sheet 1 rulings". These move into Canon once Canon exists. (source: ruling 41)
+  `docs/superheroes/discovery-notes/spec-alignment/HANDOFF.md`, items 1 to 61 under "Session 3",
+  the board rounds that follow it, "Remainder sheet 1 rulings" and "Final sheet rulings". The decisions among them move into Canon once Canon exists; go-words stay here. (source: rulings 41, 55)
 - **the line**: the ratified owner-vs-craft line, `OWNER-VS-CRAFT-LINE.md` beside the handoff, as
   amended by rulings 21 and 22. (source: ruling 22)
 - **board · <artboard>**: the approved board, https://claude.ai/artifact/FDiMfa95mWjEPCaT64d5pf,
@@ -43,6 +43,9 @@ owner-stamped amendment where it lives, at this spec's approval. (source: adviso
   discovery, and discovery's final sheet, not the advisor, asks the owner for approval (FR-37,
   FR-38). (source: rulings 25, 29) [cite: plugins/superheroes/skills/showrunner/SKILL.md § ready for your approval]
 - **review-spec:** retires (FR-49, FR-49b). (source: ruling 11)
+- **The issue contract's anchor resolution:** a `ruling` anchor may point to a Canon entry, which
+  counts as reachable where the ruling was made; the contract's attribution, date and supersession
+  checks still apply. (source: ruling 55) [cite: plugins/superheroes/skills/showrunner/reference/issue-contract.md § Anchor resolution]
 
 ## Purpose
 
@@ -172,14 +175,18 @@ definition-docs, holding the owner's decisions: answers to owner calls, principl
     and walk records and the declined-items registry carry on as they are; an issue's ruling anchor
     may point to a Canon entry. (source: ruling 55) [cite: plugins/superheroes/skills/showrunner/reference/issue-contract.md § Anchor resolution]
 
-**FR-15.** When the owner makes a ruling in any session, that session shall add the ruling to
-Canon and commit it at once to the branch it is working on; the ruling reaches the default branch
+**FR-15.** When the owner makes a ruling that decides something (FR-14) in any session, that
+session shall add the ruling to Canon and commit it at once to the branch it is working on; the ruling reaches the default branch
 when that branch merges. (source: board · Source tags and Canon; ruling 61)
   - *Acceptance (Given-When-Then):* Given a ruling made in chat, when the session moves on to its
     next step, then the ruling is already committed in Canon on that session's branch. (source:
     as its requirement)
   - *Acceptance (rule):* Canon never gets a PR of its own; a spec's rulings ride the spec PR and
     the advisor's ride the PRs it already opens. (source: ruling 61)
+  - *Acceptance (rule):* a ruling binds every session working on the branch that holds it at once,
+    and sessions on other branches once it reaches the default branch; until then, they may not
+    see it. (source: ruling 61, the
+    trade-off the owner accepted)
 
 **FR-16.** Each Canon entry shall carry: an id, the date, the ruling, whether it is standing
 (applies to all later work) or for this piece, the owner's exact words where there are any, and
@@ -398,8 +405,9 @@ conflict to the owner as its own decision. (source: ruling 16)
 as numbered chat prose, each with its context, options and recommendation. (source: framing)
 
 **UFR-5.** If the session running a sheet ends before the owner finishes, then another session
-shall be able to take the sheet over, with the answers and any verdict already given. The plugin
-assumes nothing about an owner having more than one Claude account. (source: framing; ruling 59)
+shall be able to take the sheet over, with the answers and any verdict already given, because the
+sheet's source and its answers are saved where a later session can read them. The plugin assumes
+nothing about an owner having more than one Claude account. (source: framing; ruling 59)
 
 **UFR-6.** If the advisor's vet finds a product call the spec doesn't settle, then the call shall
 reach the owner on the final sheet from discovery, never as a fix the advisor made. (source:
@@ -429,8 +437,8 @@ owner-vs-craft line, in full". The tap sheets, the review template and the theme
 On a project that uses superheroes, a new discovery runs from intake to handoff as drawn on the
 board: the owner rules one question at a time, approves a board where the work has one, sees on
 their sheets only unruled items plus findings the review didn't settle, agrees "ready for vet", approves on a final sheet after a clean vet, and gives one merge
-word, while every ruling lands in Canon and no session asks a question Canon already answers.
-(source: ruling 8, 16; board · The flow)
+word, while every decision lands in Canon and no session asks a question Canon already answers
+once that ruling has reached its branch. (source: ruling 8, 16, 55, 61; board · The flow)
 
 ## Assumptions & dependencies
 
@@ -477,8 +485,9 @@ summarizes)
 
 ## Glossary
 
-- **Canon:** the project's record of every owner ruling, standing or for one piece. (source:
-  ruling 35)
+- **Canon:** the project's record of the owner's decisions (answers to owner calls, principles and
+  ceded calls), standing or for one piece; go-words stay where they're given. (source: rulings 35,
+  55, 60)
 - **Ceded call:** a kind of call the owner has told agents to decide from now on, kept in Canon as a
   standing ruling; not the same as a builder's handback. (source: ruling 60)
 - **Standing ruling:** a ruling that applies to all later work; the project's principles are its
