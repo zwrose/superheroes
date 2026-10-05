@@ -1092,7 +1092,8 @@ def test_canon_origin_main_without_origin_head_refuses(tmp_path, monkeypatch):
     _canon_stub(monkeypatch, "global", str(tmp_path / "store"))
     with pytest.raises(DD.CanonLookupError) as exc:
         DD.resolve_canon(root=repo)
-    assert "git remote set-head origin --auto" in str(exc.value)
+    assert "origin/HEAD does not resolve" in str(exc.value)
+    assert "git remote set-head origin --auto" in (exc.value.remedy or "")
 
 
 # axis: an origin remote whose default branch is unresolvable makes the canon verb refuse with exit 1
