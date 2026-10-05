@@ -1182,3 +1182,45 @@ def test_canon_lookup_writes_no_registry_backfill(tmp_path):
     assert not os.path.exists(mode_registry.registry_path(repo))
     DD.resolve_canon(root=repo)
     assert not os.path.exists(mode_registry.registry_path(repo))
+
+
+# axis: two branches that each create Canon merge with no hand edit, under the shipped union attribute
+def test_canon_created_on_two_branches_union_merges_with_shipped_attribute(tmp_path):
+    with open(os.path.join(_REPO_ROOT, "docs/superheroes/canon.md"), encoding="utf-8") as fh:
+        lines = fh.read().split("\n")
+    header = "\n".join(lines[:lines.index("## Entries") + 2]) + "\n"
+    with open(os.path.join(_REPO_ROOT, "docs/superheroes/.gitattributes"), encoding="utf-8") as fh:
+        attributes = fh.read()
+    repo = str(tmp_path / "repo")
+    _git_repo(repo)
+
+    def git(*args):
+        return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+
+    open(os.path.join(repo, "README.md"), "w").write("readme\n")
+    assert git("add", "-A").returncode == 0
+    assert git("commit", "-q", "-m", "base").returncode == 0
+    base = git("rev-parse", "HEAD").stdout.strip()
+    entries = {}
+    for name, tag in (("a", "aaaaaaaa"), ("b", "bbbbbbbb")):
+        entries[name] = (
+            f"- **2026-10-05-{tag}-1** \u00b7 2026-10-05 \u00b7 standing \u00b7 Ruling written on branch {name}. "
+            f"\u00b7 owner's words: none recorded \u00b7 where: test session on branch {name}, time not recorded"
+        )
+        assert git("checkout", "-q", "-b", name, base).returncode == 0
+        folder = os.path.join(repo, "docs", "superheroes")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "canon.md"), "w", encoding="utf-8") as fh:
+            fh.write(header + entries[name] + "\n")
+        with open(os.path.join(folder, ".gitattributes"), "w", encoding="utf-8") as fh:
+            fh.write(attributes)
+        assert git("add", "-A").returncode == 0
+        assert git("commit", "-q", "-m", f"canon on {name}").returncode == 0
+    assert git("checkout", "-q", "a").returncode == 0
+    merged = git("merge", "--no-edit", "b")
+    assert merged.returncode == 0, merged.stdout + merged.stderr
+    with open(os.path.join(repo, "docs", "superheroes", "canon.md"), encoding="utf-8") as fh:
+        result = fh.read().split("\n")
+    assert entries["a"] in result
+    assert entries["b"] in result
+    assert git("status", "--porcelain").stdout == ""

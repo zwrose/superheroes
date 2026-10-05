@@ -27,6 +27,11 @@ A project that keeps them out of the repository keeps Canon at `docs/canon.md` i
 gitignored file never reaches the default branch, lives in one worktree only, and is lost when that
 worktree is removed. This is a choice recorded for the owner's veto.
 
+A switch to in-repository storage made through configure moves a project-store Canon into the
+repository when the definition-docs policy is committed, and refuses when the repository already
+holds a `canon.md` on disk, because the copy would overwrite entries. Every other switch leaves
+Canon where it is: the lookup below finds it there in either mode.
+
 Every session finds the file with:
 
 ```
@@ -143,34 +148,27 @@ call, a principle, or a ceded call or its take-back. Go-words are never written.
    lookup itself never fetches.
 2. If `gitRoot` is not a git repository, stop and report. Never initialize one. Configure sets the
    project store up.
-3. If the file does not exist on disk and `home` is `"project-store"`, the store holds no Canon and
-   the lookup gives no `defaultRef` by design: skip the default-branch probe and create the file in
-   the store's own repository (step 2 already confirmed it is one). The rest of this step applies
-   when `home` is `"repo"`. If the file does not exist on disk, check the default branch first,
-   telling absence from failure. Run `git ls-tree <defaultRef> -- <repo-relative path>`. Exit 0 with output means the
-   default branch has a Canon: bring the default branch into the working branch with the ordinary
-   bring-the-branch-current merge (`git merge <defaultRef>`, never a rebase or force), so the
-   working copy shares history with the default-branch Canon, then go on to step 4. Make the merge
-   only on a clean working tree: if the tree has uncommitted changes, stop and report. Commit the
-   merge on its own, before the Canon commit. If the merge stops on any conflict, run
-   `git merge --abort`, which returns the branch to where it was, then stop and report; never
-   resolve a non-Canon conflict to get Canon written, and never create a parallel copy. Exit 0 with
-   empty output means the default branch has no Canon. Any non-zero exit, or a `defaultRef` the
-   lookup could not give for a reason other than the repository having no origin remote, means the
-   session stops and reports and never creates the file. Create the file with the shape below (and,
-   in the repository home, the `.gitattributes` beside it) only when it is absent on disk AND the
-   `ls-tree` check succeeded empty, or the lookup returned `defaultRef` null because the repository
-   has no origin remote.
-4. Read the ids already present in the working copy and, when `defaultRef` is set, in the default-branch
-   copy, found with the same absence test as step 3: run `git ls-tree <defaultRef> -- <repo-relative path>`;
-   exit 0 with empty output means the default branch has no Canon yet, so read the working copy only;
-   exit 0 with output means read it with `git show <defaultRef>:<repo-relative path>`; any non-zero exit
-   means stop and report.
-5. Append the entry as one new last line. Never rewrite the file.
-6. Make the Canon commit: commit only Canon's paths at once, before the session's next step. Commit to the branch the
+3. Probe the default-branch copy before writing anything. In the repository home, when `defaultRef`
+   is set, run `git ls-tree <defaultRef> -- <repo-relative path>`. Exit 0 with output means the
+   default branch has a Canon. Exit 0 with empty output means it has none yet. Any non-zero exit
+   means stop and report, and write nothing. In the store home, or when `defaultRef` is null because
+   the repository has no origin remote, there is no default-branch copy: skip the probe.
+4. If the file does not exist on disk, create it with the shape below: on the branch the session is
+   working on in the repository home, and in the store's own repository in the store home (step 2
+   confirmed it is one). Create it even when step 3 found a Canon on the default branch. **Writing a
+   ruling never merges anything into the working branch.** A branch takes in only its own base, and
+   only when its lane already would. The two files join when the branch lands, by the union merge
+   in [Merging](#merging), and the repeated header that leaves is valid. In the repository home, on
+   every write, make sure the `.gitattributes` beside `canon.md` holds the line
+   `canon.md merge=union`, creating the file or adding the line when it is missing.
+5. Read the ids already present in the working copy and, when step 3 found a default-branch Canon,
+   in that copy, with `git show <defaultRef>:<repo-relative path>`.
+6. Append the entry as one new last line. Never rewrite the file.
+7. Make the Canon commit: commit only Canon's paths (`canon.md`, and in the repository home the
+   `.gitattributes` beside it) at once, before the session's next step. Commit to the branch the
    session is working on in the repository home, and to the store's own repository in the store
    home.
-7. Confirm that `git show HEAD:<path relative to gitRoot>` holds the new line. If the commit was
+8. Confirm that `git show HEAD:<path relative to gitRoot>` holds the new line. If the commit was
    refused or the line is missing, append again where needed and commit again. A session never moves
    on with an uncommitted ruling.
 
