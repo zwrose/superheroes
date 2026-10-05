@@ -550,3 +550,10 @@ are re-running on the changed parts before the re-vet.
   make it not super painful to put in a project?"
 - Sheet defects the owner hit: Send verdict gave no visible feedback; the verdict note saved to a
   stray answers doc. Fix in the template; candidate acceptance for the review surface.
+60. (resolved) Hand-backs are renamed **ceded calls** (owner: "ceded call is fine"; "handback" is a
+    builder/advisor term). They live in Canon; configure item 13 points there.
+61. **Canon: one source, committed at once** (owner: the dual store-plus-repo idea is "very ripe for
+    confusion"; "probably need to just commit every rule right away"; then "yeah probably a"):
+    Canon is one file where the project keeps its definition-docs; every ruling is committed at
+    once to the session's working branch and reaches main when that branch merges (spec rulings
+    ride the spec PR; the advisor's ride PRs it already opens); no Canon-only PRs, no new merge words.
