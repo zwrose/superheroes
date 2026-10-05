@@ -25,12 +25,12 @@ import control_plane   # noqa: E402  (sibling)
 import core_md         # noqa: E402  (sibling)
 import mode_registry   # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
+from definition_doc import CANON_FILE as _CANON_FILE  # noqa: E402  (sibling)
 
 # The journal filename + rebind-kind sentinel are owned by mode_registry (the lower module
 # mode_registry.resolve's backfill guard also reads), so both share one source of truth.
 _JOURNAL = mode_registry.MIGRATION_JOURNAL
 _REBIND = mode_registry.REBIND_KIND
-_CANON_FILE = "canon.md"  # the project Canon (definition_doc.CANON_FILE); moved only into the repo
 _CAL_BASENAMES_PRESERVE = ("core.md", "patterns.md")  # plus any <plugin>.md layer
 # The definition-doc basenames — the three docs that carry §3.1 frontmatter and gates.
 # This is the *classification* set: it answers "is this a definition-doc?", nothing else.
