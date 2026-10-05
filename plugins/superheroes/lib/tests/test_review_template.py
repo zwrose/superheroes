@@ -478,6 +478,7 @@ def _unsupported_rule_cases():
         ("E14-boolean-sub-schema", _plant_at("properties", title=True), "properties", "#/properties/title"),
         ("E15-items-as-a-list", _plant_at("properties", "cards", items=[{"type": "object"}]), "items", "#/properties/cards"),
         ("E16-additionalProperties-as-an-object", _plant_at("properties", "remainder", additionalProperties={"type": "string"}), "additionalProperties", "#/properties/remainder"),
+        ("E18-nested-id", _plant_at("properties", "title", **{"$id": "https://example.test/title"}), "$id", "#/properties/title"),
         ("E17-else", _plant_at("allOf", 0, **{"else": {"type": "object"}}), "else", "#/allOf/0"),
     ]
 
@@ -506,6 +507,19 @@ def test_check_sheet_ends_on_a_ref_cycle():
     assert _run_check_sheet([{"cards": [], "child": {"child": {}}}], schema=tree) == [[]]
 
 
+# Bites on: a $ref cycle reached under not, if or anyOf being read as a mismatch, so the sheet is drawn.
+@pytest.mark.parametrize("wrap", [
+    {"not": {"$ref": "#/$defs/loop"}},
+    {"if": {"$ref": "#/$defs/loop"}, "then": {"type": "object"}},
+    {"anyOf": [{"$ref": "#/$defs/loop"}, {"type": "string"}]},
+], ids=["not", "if", "anyOf"])
+def test_check_sheet_does_not_draw_on_a_ref_cycle_under_a_condition(wrap):
+    schema = {"properties": {"node": wrap}, "$defs": {"loop": {"$ref": "#/$defs/loop"}}}
+    problems = _run_check_sheet([{"cards": [], "node": 1}], schema=schema)[0]
+    assert problems != [], "a cycle under a condition drew the sheet"
+    assert any("can't be checked" in problem for problem in problems), problems
+
+
 # Bites on: an annotation keyword being refused, or read as a rule, at any position.
 def test_check_sheet_allows_annotations_anywhere():
     annotations = {
@@ -515,7 +529,8 @@ def test_check_sheet_allows_annotations_anywhere():
 
     def mutate(schema):
         schema.update({key: copy.deepcopy(value) for key, value in annotations.items() if key not in ("$defs", "definitions")})
-        schema["$defs"]["card"]["properties"]["question"].update(copy.deepcopy(annotations))
+        nested = {key: value for key, value in annotations.items() if key != "$id"}  # a nested $id is refused
+        schema["$defs"]["card"]["properties"]["question"].update(copy.deepcopy(nested))
         schema["$defs"]["extra"] = {"type": "string"}
         schema["definitions"] = {"spare": {"title": "unused"}}
 

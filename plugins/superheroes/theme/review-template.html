@@ -158,6 +158,9 @@
           } else {
             walk(resolved.target, value, key);
           }
+        } else if (key === "$id" && pointer !== "#") {
+          // A nested $id opens a new reference scope, which resolvePointer (root only) does not follow.
+          refuse('"$id" inside a sub-schema (it would change what a $ref points at)', pointer);
         } else if (Object.prototype.hasOwnProperty.call(readableForms, key)) {
           if (!readableForms[key](value)) refuse('"' + key + '" with a value this page does not read', pointer);
         } else if (!READ_RULES.includes(key) && !ANNOTATIONS.includes(key)) {
@@ -169,6 +172,9 @@
     walk(root, "#", "schema");
     return problems;
   }
+
+  const UNFOLLOWABLE_ENDINGS = [" follows a rule this page can't find.", " follows a rule that leads back to itself."];
+  class UncheckableSchema extends Error {}
 
   function validateAgainstSchema(root, schema, value, path, problems, viaRefs) {
     const isObject = (item) => item !== null && typeof item === "object" && !Array.isArray(item);
@@ -182,6 +188,10 @@
     const quiet = (sub, item) => {
       const found = [];
       validateAgainstSchema(root, sub, item, path, found, chain);
+      // A reference that cannot be followed is not a mismatch: it must not turn into a passing
+      // "not", a skipped "if" or a failed "anyOf" branch, so it ends the whole check.
+      const stuck = found.find((problem) => problem.endsWith(UNFOLLOWABLE_ENDINGS[0]) || problem.endsWith(UNFOLLOWABLE_ENDINGS[1]));
+      if (stuck !== undefined) throw new UncheckableSchema(stuck);
       return found;
     };
     const where = path || "The sheet";
@@ -286,7 +296,12 @@
     }
 
     const shape = [];
-    validateAgainstSchema(schema, schema, sheet, "", shape);
+    try {
+      validateAgainstSchema(schema, schema, sheet, "", shape);
+    } catch (error) {
+      if (error instanceof UncheckableSchema) return ["The sheet's schema can't be checked: " + error.message];
+      throw error;
+    }
     if (shape.length > 0) {
       // Name a card by its id, not its position, when it has one.
       return shape.map((problem) => problem.replace(/^cards\.(\d+)(?=[. ])/, (whole, index) => {
