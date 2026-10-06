@@ -632,6 +632,7 @@ def _sample_files(sheet=None):
     return {
         "sheet.json": {"status": 200, "body": sheet_text},
         "sheet.schema.json": {"status": 200, "body": (THEME / "sheet.schema.json").read_text(encoding="utf-8")},
+        "sheet-words.json": {"status": 200, "body": (THEME / "sheet-words.json").read_text(encoding="utf-8")},
     }
 
 
@@ -2524,8 +2525,11 @@ def test_the_sheet_is_frozen_while_sending():
         count: t.count(),
         saves: [t.saveText("leftovers-handling"), t.lastSaveText()],
         controls: t.controls(),
+        doneScreen: t.done().hidden,
+        doneOff: t.control("done").disabled,
       });
       const attempt = () => {
+        t.fire(t.control("done"), "click");
         t.buttons("leftovers-handling").forEach((button) => t.fire(button, "click"));
         t.buttons("saved-plan-history").forEach((button) => t.fire(button, "click"));
         for (const note of [t.note("leftovers-handling"), t.note("saved-plan-history"), t.lastNote()]) {
@@ -2573,6 +2577,9 @@ def test_the_sheet_is_frozen_while_sending():
     assert result["sentAfter"]["sets"] == result["sent"]["sets"] == result["writing"]["sets"]
     assert result["sentAfter"]["verdicts"] == [_verdict_write("approve")]
     assert result["sentAfter"]["status"] == result["sent"]["status"]
+    for stage in ("waiting", "waitingAfter", "writing", "writingAfter", "sent", "sentAfter"):
+        assert result[stage]["doneScreen"] is True and result[stage]["doneOff"] is True, \
+            "Done for now was live (or its screen showed) at the %s stage of a Send" % stage
 
 
 # Bites on: a rejected verdict write showing sent or offering no Try again, a Try again that does not run the whole Send again from the current state, a stalled write saying sent or offering Try again, a late resolve not showing sent, or a late rejection not showing the rejected state.
@@ -2841,3 +2848,69 @@ def test_usage_doc_describes_the_final_sheet():
     answers = doc.split("## How answers come back", 1)[1].split("\n## ", 1)[0]
     assert "Send verdict" in answers and "`verdict/final`" in answers
     assert "never acts on a draft" in " ".join(answers.split())
+
+
+# Bites on: a draft verdict that is pending or rejected being reported as saved on the Done screen (the last card is hidden there), or Done for now not sending the owner back to the last card's Try again.
+def test_done_for_now_counts_an_unsaved_verdict_draft():
+    result = _sheet_page(_sample_final(), """
+      const out = {};
+      t.click(t.lastButton("Approve"));
+      t.click(t.control("done"));
+      out.pending = t.done().message;
+      t.sets[0].reject({ code: "unavailable", message: "try later" });
+      await t.tick();
+      out.failed = t.done().message;
+      t.click(t.control("back"));
+      out.back = { done: t.done().hidden, final: t.finalParts().finalHidden, retry: t.lastSaveText() };
+      return out;
+    """, host={"set": "pending"})
+    assert result["pending"] == "1 answer isn't saved yet. Keep this page open until this says they're saved."
+    assert result["failed"] == "1 answer didn't save. Go back to the sheet and tap Try again on each."
+    assert result["back"]["done"] is True and result["back"]["final"] is False
+
+
+# Bites on: leaving a final sheet going unguarded while its draft verdict (pick or note) is unconfirmed or a Send is in flight, or the guard staying on once the verdict is sent.
+def test_leaving_a_final_sheet_is_guarded_while_the_verdict_is_unconfirmed_or_sending():
+    result = _sheet_page(_sample_final(), """
+      const out = {};
+      out.idle = t.unload();
+      t.click(t.lastButton("Approve"));
+      out.pick = t.unload();
+      t.sets[0].resolve();
+      await t.tick();
+      out.pickSaved = t.unload();
+      t.type(t.lastNote(), "Ship it", "input");
+      out.note = t.unload();
+      t.type(t.lastNote(), "Ship it", "change");
+      t.sets[1].resolve();
+      await t.tick();
+      out.noteSaved = t.unload();
+      t.click(t.sendButton());
+      await t.tick();
+      await t.tick();
+      out.sending = { status: t.sendStatus(), guarded: t.unload() };
+      t.sets[t.sets.length - 1].resolve();
+      await t.tick();
+      out.sent = { status: t.sendStatus(), guarded: t.unload() };
+      return out;
+    """, host={"set": "pending"})
+    assert result["idle"] is False
+    assert result["pick"] is True, "an unconfirmed draft verdict pick was not guarded"
+    assert result["pickSaved"] is False
+    assert result["note"] is True, "a draft verdict note waiting to save was not guarded"
+    assert result["noteSaved"] is False
+    assert result["sending"] == {"status": "Sending…", "guarded": True}, "a Send in flight was not guarded"
+    assert result["sent"] == {"status": "Verdict sent: Approve", "guarded": False}
+
+
+# Bites on: the final sheet's shared wording being retyped in the page or the prose renderer instead of read from sheet-words.json, or the usage doc leaving that file out of the published files.
+def test_final_sheet_wording_has_one_home():
+    words = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
+    prose_source = (THEME.parent / "lib" / "sheet_prose.py").read_text(encoding="utf-8")
+    for key in ("history", "tracesBoard", "tracesNoBoard", "boardSaved", "boardNotSaved", "next", "noDeclines", "approveHeading", "nextHeading"):
+        for name, text in (("the page", _template_text()), ("sheet_prose.py", prose_source)):
+            assert words[key] not in text, "%s retypes the shared wording %r" % (name, key)
+    assert re.search(r"""fetchJson\(\s*['"]sheet-words\.json['"]""", _template_text())
+    publishing = USAGE_DOC.read_text(encoding="utf-8").split("## Publishing a sheet", 1)[1]
+    assert '"sheet-words.json": "<staged sheet-words.json>"' in publishing
+    assert "`sheet-words.json`" in publishing

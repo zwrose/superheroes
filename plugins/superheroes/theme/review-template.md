@@ -36,11 +36,11 @@ On Claude Code, the Artifact tool publishes only files under the working directo
 session's scratchpad. So:
 
 1. Make one folder under the scratchpad.
-2. Copy `review-template.html`, `comic-panel.css` and `sheet.schema.json` into it, unchanged.
+2. Copy `review-template.html`, `comic-panel.css`, `sheet.schema.json` and `sheet-words.json` into it, unchanged.
 3. Write the data file into the same folder as `sheet.json`.
 4. Publish the template as the page, with the stylesheet, the schema and the data file as
-   supporting files, so the published paths are `comic-panel.css`, `sheet.schema.json` and
-   `sheet.json`.
+   supporting files, so the published paths are `comic-panel.css`, `sheet.schema.json`,
+   `sheet-words.json` and `sheet.json`.
 
 The shape of the publish call:
 
@@ -48,12 +48,17 @@ The shape of the publish call:
 file_path = <staged folder>/review-template.html
 files     = {"comic-panel.css": "<staged comic-panel.css>",
              "sheet.schema.json": "<staged sheet.schema.json>",
+             "sheet-words.json": "<staged sheet-words.json>",
              "sheet.json": "<staged sheet.json>"}
 capabilities = {"db": {"rules": [{"path": "", "read": "view", "write": "owner"}]}, "user": {}}
 ```
 
 The publish call also declares the sheet's store and viewer. This lets everyone who can open the
 sheet read it, and only its owner answer.
+
+`sheet-words.json` holds the owner-facing words a final sheet shares with the chat prose
+(`lib/sheet_prose.py`): the page fetches it before drawing a final sheet, and the prose renderer reads
+it from the same folder, so the two cannot drift apart. Change those words there and nowhere else.
 
 A published sheet is private to the owner. The owner may share it from the page's Share menu.
 Anyone it is shared with sees it but cannot answer.

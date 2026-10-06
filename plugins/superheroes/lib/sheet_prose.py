@@ -23,15 +23,14 @@ ENFORCED = {
 }
 ANNOTATIONS = {"$schema", "title", "description", "$comment", "examples", "default", "$defs", "definitions"}
 
-HISTORY = "The review ran %s and fixed %s itself. The vet: %s"
-TRACES_BOARD = ("Every statement in the spec traces to your board, your framing, your rulings, your answers, "
-                "or craft recorded for your veto.")
-TRACES_NO_BOARD = ("Every statement in the spec traces to your framing, your rulings, your answers, "
-                   "or craft recorded for your veto.")
-BOARD_SAVED = "The approved board is saved with the spec."
-BOARD_NOT_SAVED = "The approved board is not saved with the spec."
-NEXT = ("The advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or "
-        "gitignored, to the spec where it is kept) and vets it, then one merge word covers both.")
+# The owner-facing words a final sheet shares with the page: one file, theme/sheet-words.json, read by both.
+WORDS = json.loads((SCHEMA.parent / "sheet-words.json").read_text(encoding="utf-8"))
+HISTORY = WORDS["history"]
+TRACES_BOARD = WORDS["tracesBoard"]
+TRACES_NO_BOARD = WORDS["tracesNoBoard"]
+BOARD_SAVED = WORDS["boardSaved"]
+BOARD_NOT_SAVED = WORDS["boardNotSaved"]
+NEXT = WORDS["next"]
 
 TYPE_NAMES = ("object", "array", "string", "boolean", "null", "integer", "number")
 
@@ -341,10 +340,12 @@ def _render_card(number, card):
 def _final_head(final):
     """A final sheet's history and declined findings, each part followed by a blank line."""
     history, declined = final["history"], final["declinedFindings"]
-    rounds, fixes = _plural(history["reviewRounds"], "round"), _plural(history["fixesMade"], "thing")
-    lines = ["**How the spec got here.** " + HISTORY % (rounds, fixes, _text(history["vet"])), ""]
+    rounds = _plural(history["reviewRounds"], WORDS["roundNoun"])
+    fixes = _plural(history["fixesMade"], WORDS["thingNoun"])
+    sentence = HISTORY.replace("{rounds}", rounds).replace("{fixes}", fixes).replace("{vet}", _text(history["vet"]))
+    lines = ["**%s.** %s" % (WORDS["historyHeading"], sentence), ""]
     if not declined:
-        return lines + ["**Declined findings.** No findings were declined.", ""]
+        return lines + ["**Declined findings.** " + WORDS["noDeclines"], ""]
     lines.append("**Declined findings (%d).**" % len(declined))
     lines += ["- %s (why declined: %s)" % (_text(item["summary"]), _text(item["reason"])) for item in declined]
     return lines + [""]
@@ -353,10 +354,10 @@ def _final_head(final):
 def _final_tail(final):
     """A final sheet's approval box and what happens next, ending with a blank line."""
     approval = final["approval"]
-    lines = ["**Approve the spec?**", "- " + (TRACES_BOARD if approval["approvedBoard"] else TRACES_NO_BOARD)]
+    lines = ["**%s**" % WORDS["approveHeading"], "- " + (TRACES_BOARD if approval["approvedBoard"] else TRACES_NO_BOARD)]
     if approval["approvedBoard"]:
         lines.append("- " + (BOARD_SAVED if approval["boardSavedWithSpec"] else BOARD_NOT_SAVED))
-    return lines + ["- Answer: Approve or Not yet, with any note.", "", "**What happens next.** " + NEXT, ""]
+    return lines + ["- Answer: Approve or Not yet, with any note.", "", "**%s.** %s" % (WORDS["nextHeading"], NEXT), ""]
 
 
 def render(sheet):

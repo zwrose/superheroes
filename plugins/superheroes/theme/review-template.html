@@ -1008,6 +1008,8 @@
     doneBox.replaceChildren(textElement("h2", "", "Done for now"), doneMessage, backButton);
 
     const doneButton = actionButton("Done for now", function () {
+      // Part of the freeze: once Send verdict is tapped, Done can neither replace the sending or sent status nor claim the verdict does not count.
+      if (sending || sent) return;
       controllers.forEach(function (controller) { controller.flush(); });
       if (verdictController !== null) verdictController.flush();
       done = true;
@@ -1093,8 +1095,12 @@
       prevButton.disabled = openIndex === 0;
       nextButton.disabled = openIndex === total - 1;
 
-      const unsavedCards = items.filter(function (item) { return controllers.get(item.id).unsaved(); }).length;
-      const failedCards = states.filter(function (state) { return state.save === "failed"; }).length;
+      // The last card's draft verdict counts with the others: it is hidden on the Done screen, so a draft that is
+      // pending or failed there must not be reported as saved.
+      const unsavedCards = items.filter(function (item) { return controllers.get(item.id).unsaved(); }).length
+        + (verdictController !== null && verdictController.unsaved() ? 1 : 0);
+      const failedCards = states.filter(function (state) { return state.save === "failed"; }).length
+        + (verdictController !== null && verdictController.state().save === "failed" ? 1 : 0);
       if (!ready) {
         doneMessage.textContent = cannotSave
           ? "Answers can't be saved in this view, so nothing here was saved."
@@ -1122,19 +1128,17 @@
       refreshVerdict();
     }
 
-    // The words a final sheet shares with the chat prose (lib/sheet_prose.py): the two must read the same.
-    const FINAL_WORDS = {
-      history: function (rounds, fixes, vet) {
-        return "The review ran " + rounds + (rounds === 1 ? " round" : " rounds") + " and fixed " + fixes
-          + (fixes === 1 ? " thing" : " things") + " itself. The vet: " + vet;
-      },
-      tracesBoard: "Every statement in the spec traces to your board, your framing, your rulings, your answers, or craft recorded for your veto.",
-      tracesNoBoard: "Every statement in the spec traces to your framing, your rulings, your answers, or craft recorded for your veto.",
-      boardSaved: "The approved board is saved with the spec.",
-      boardNotSaved: "The approved board is not saved with the spec.",
-      next: "The advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, to the spec where it is kept) and vets it, then one merge word covers both.",
-      noDeclines: "No findings were declined.",
-    };
+    // The words a final sheet shares with the chat prose (lib/sheet_prose.py) live in one file, sheet-words.json,
+    // which both read; the page fetches it before drawing a final sheet. Nothing here retypes them.
+    let finalWords = null;
+    function plural(count, noun) {
+      return count + " " + noun + (count === 1 ? "" : "s");
+    }
+    function historySentence(rounds, fixes, vet) {
+      return finalWords.history.replace("{rounds}", function () { return plural(rounds, finalWords.roundNoun); })
+        .replace("{fixes}", function () { return plural(fixes, finalWords.thingNoun); })
+        .replace("{vet}", function () { return vet; });
+    }
 
     // A final sheet's own parts: { send, status, row, retry }, once the sheet is drawn. What Send verdict says
     // when it is not the plain draft line is { kind, text, retry }: while a send is under way, why it refused,
@@ -1148,14 +1152,15 @@
       const on = canEdit();
       controllers.forEach(function (controller) { controller.setEnabled(on); });
       if (verdictController !== null) verdictController.setEnabled(on && verdictShape !== null);
+      doneButton.disabled = sending || sent;
     }
 
     function buildFinal(final) {
       const history = final.history;
       const declined = final.declinedFindings;
       const parts = [
-        textElement("h2", "", "How the spec got here"),
-        textElement("p", "", FINAL_WORDS.history(history.reviewRounds, history.fixesMade, history.vet)),
+        textElement("h2", "", finalWords.historyHeading),
+        textElement("p", "", historySentence(history.reviewRounds, history.fixesMade, history.vet)),
       ];
       if (declined.length > 0) {
         const list = document.createElement("ul");
@@ -1170,7 +1175,7 @@
         toggle.setAttribute("aria-expanded", "false");
         parts.push(toggle, list);
       } else {
-        parts.push(textElement("p", "", FINAL_WORDS.noDeclines));
+        parts.push(textElement("p", "", finalWords.noDeclines));
       }
       historyBox.replaceChildren(...parts);
 
@@ -1178,10 +1183,10 @@
       const article = document.createElement("article");
       article.className = "sh-card";
       article.id = "sheet-approval";
-      article.appendChild(textElement("h2", "", "Approve the spec?"));
-      article.appendChild(textElement("p", "", approval.approvedBoard ? FINAL_WORDS.tracesBoard : FINAL_WORDS.tracesNoBoard));
+      article.appendChild(textElement("h2", "", finalWords.approveHeading));
+      article.appendChild(textElement("p", "", approval.approvedBoard ? finalWords.tracesBoard : finalWords.tracesNoBoard));
       if (approval.approvedBoard) {
-        article.appendChild(textElement("p", "", approval.boardSavedWithSpec ? FINAL_WORDS.boardSaved : FINAL_WORDS.boardNotSaved));
+        article.appendChild(textElement("p", "", approval.boardSavedWithSpec ? finalWords.boardSaved : finalWords.boardNotSaved));
       }
       addVerdictParts(article);
       const send = actionButton("Send verdict", function () { sendVerdict(); });
@@ -1199,8 +1204,8 @@
 
       const next = document.createElement("div");
       next.className = "sh-box";
-      next.appendChild(textElement("p", "sh-label", "What happens next"));
-      next.appendChild(textElement("p", "", FINAL_WORDS.next));
+      next.appendChild(textElement("p", "sh-label", finalWords.nextHeading));
+      next.appendChild(textElement("p", "", finalWords.next));
       finalHost.replaceChildren(article, next);
     }
 
@@ -1529,6 +1534,14 @@
       if (problems.length > 0) {
         showErrors(problems);
         return;
+      }
+      if (sheet.kind === "final") {
+        try {
+          finalWords = await fetchJson("sheet-words.json", "The sheet's wording file");
+        } catch (problems) {
+          showErrors(Array.isArray(problems) ? problems : ["The sheet could not be drawn."]);
+          return;
+        }
       }
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema);
