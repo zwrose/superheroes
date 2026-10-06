@@ -4,9 +4,13 @@
 Stdlib only. Every item's value is read and written only through this module and the
 ``core_md`` writers it routes to."""
 import argparse
+import datetime
 import json
 import math
 import os
+import re
+import secrets
+import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +34,11 @@ REASON_LADDER_CITATION_REQUIRED = "ladder-example-citation-required"
 REASON_PROFILE_ABSENT = "profile-absent"
 REASON_PROFILE_UNPARSEABLE = "profile-unparseable"
 REASON_SET_MISMATCH = "set-read-mismatch"
+REASON_MATERIAL_LINE_IN_CANON = "material-line-in-canon"
+
+MATERIAL_LINE_SLUG = "materialConsequenceLine"
+MATERIAL_LINE_MARKER_CANON = "standing-rulings"
+_MATERIAL_LINE_POINTER_EFFECTIVE = "the project's Canon standing rulings"
 
 _DEPENDENCY_FALLBACKS = {
     "launchLedger": "lanes are counted by hand beside the launch word",
@@ -186,6 +195,22 @@ def _validate_non_empty_prose(value):
     if not value.strip():
         return REASON_MALFORMED_VALUE
     return None
+
+
+def is_material_line_marker(raw):
+    """True when ``raw`` is exactly the item-13 Canon pointer: two keys, a valid ISO ``migratedOn``."""
+    # axis: only the exact two-key marker counts as adopted — see bite-proof record wo_a_1618_marker-shape
+    if not isinstance(raw, dict) or set(raw) != {"canon", "migratedOn"}:
+        return False
+    if raw["canon"] != MATERIAL_LINE_MARKER_CANON:
+        return False
+    stamp = raw["migratedOn"]
+    if not isinstance(stamp, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(stamp).isoformat() == stamp
+    except ValueError:
+        return False
 
 
 def _validate_threat_model(value):
@@ -457,6 +482,14 @@ def _resolve_item_entry(item, raw, *, dial_effective=None, guardian_cfg=None):
             "malformed": malformed,
         }
 
+    if slug == MATERIAL_LINE_SLUG and is_material_line_marker(raw):
+        return {
+            "raw": raw,
+            "effective": _MATERIAL_LINE_POINTER_EFFECTIVE,
+            "source": "canon-pointer",
+            "malformed": False,
+        }
+
     if raw is None:
         default = item["plugin_default"]
         if default is not None:
@@ -601,6 +634,21 @@ def set_item(cwd, slug, value, root=None):
     if item is None:
         return {"action": "refused", "reason": REASON_UNKNOWN_SLUG}
 
+    if slug == MATERIAL_LINE_SLUG:
+        # axis: an adopted item 13 refuses a set before the value is looked at — see bite-proof record wo_a_1618_adopted-set-refusal
+        current = core_md.read(cwd, root)
+        stored = _read_project_config_raw(_project_config_mapping(current), slug)
+        if is_material_line_marker(stored):
+            return {
+                "action": "refused",
+                "reason": REASON_MATERIAL_LINE_IN_CANON,
+                "detail": (
+                    "Item 13 now points to the project's Canon standing rulings and holds no "
+                    "value of its own. Record a new example in Canon as a standing ruling, "
+                    "by Canon's write procedure."
+                ),
+            }
+
     reason = validate_item_value(item, value)
     if reason is not None:
         return {"action": "refused", "reason": reason}
@@ -635,6 +683,313 @@ def set_item(cwd, slug, value, root=None):
             "observed": reread.get("raw"),
         }
     return write_result
+
+
+_CANON_HEADER = (
+    "This file is the project's Canon, the record of the owner's decisions. Its rules live in the\n"
+    "superheroes plugin's `rubric/canon-contract.md`. Entries are appended one per line at the end\n"
+    "and are never edited or deleted."
+)
+_GITATTRIBUTES_LINE = "canon.md merge=union"
+_MIGRATION_COMMIT_MESSAGE = "docs: record configure item 13 in Canon as standing rulings"
+_MIGRATION_ORIGIN_PHRASE = "migrated from configure item 13"
+_SESSION_PATTERN = re.compile(r"^[0-9a-z]{8}$")
+_ENTRY_ID_PATTERN = re.compile(r"^- \*\*(.+?)\*\* · ")
+
+
+class _MigrationRefusal(Exception):
+    def __init__(self, reason, detail=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+def _migration_result():
+    return {
+        "action": "refused",
+        "reason": None,
+        "detail": None,
+        "entries": [],
+        "skipped": [],
+        "canonPath": None,
+        "canonHome": None,
+        "commit": None,
+        "fetch": "not-needed",
+        "sanitized": False,
+    }
+
+
+def _git_run(root, reason, *args, timeout=10):
+    """Run ``git -C root args``; a git that cannot run is a refusal named ``reason``."""
+    try:
+        return subprocess.run(["git", "-C", root, *args], capture_output=True,
+                              encoding="utf-8", timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise _MigrationRefusal(
+            reason, "git could not be run (%s: %s)" % (type(exc).__name__, exc))
+
+
+def _first_line(text, fallback):
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return fallback
+
+
+def _split_rulings(raw):
+    """Item 13's prose as one ruling per paragraph, ` · ` replaced; returns (rulings, sanitized)."""
+    if not isinstance(raw, str) or not raw.strip():
+        return [], False
+    paragraphs = []
+    current = []
+    for line in raw.splitlines():
+        if line.strip():
+            current.append(line.strip())
+        elif current:
+            paragraphs.append(" ".join(current))
+            current = []
+    if current:
+        paragraphs.append(" ".join(current))
+    sanitized = False
+    rulings = []
+    for text in paragraphs:
+        while " · " in text:
+            text = text.replace(" · ", "; ")
+            sanitized = True
+        if text.strip():
+            rulings.append(text.strip())
+    return rulings, sanitized
+
+
+def _canon_copy_at(git_root, ref, rel):
+    """Canon's text at ``ref``; empty when the path is not in that tree."""
+    reason = "canon-default-probe-failed"
+    tree = _git_run(git_root, reason, "ls-tree", ref, "--", rel)
+    if tree.returncode != 0:
+        raise _MigrationRefusal(reason, _first_line(tree.stderr, "git exit %d" % tree.returncode))
+    if not tree.stdout.strip():
+        return ""
+    shown = _git_run(git_root, reason, "show", "%s:%s" % (ref, rel))
+    if shown.returncode != 0:
+        raise _MigrationRefusal(reason, _first_line(shown.stderr, "git exit %d" % shown.returncode))
+    return shown.stdout
+
+
+def _canon_head_copy(git_root, rel):
+    """Canon's text at HEAD; empty when HEAD is unborn or the path is not in HEAD."""
+    unborn = _git_run(git_root, "canon-default-probe-failed",
+                      "rev-parse", "--verify", "--quiet", "HEAD")
+    if unborn.returncode != 0:
+        return ""
+    return _canon_copy_at(git_root, "HEAD", rel)
+
+
+def _committed_match(rulings, committed_text):
+    """Split ``rulings`` into (ids of committed matching entries, rulings not yet committed)."""
+    entries = [ln for ln in committed_text.splitlines() if ln.startswith("- **")]
+    skipped = []
+    pending = []
+    for ruling in rulings:
+        needle = " · %s · " % ruling
+        hit = [ln for ln in entries if needle in ln and _MIGRATION_ORIGIN_PHRASE in ln]
+        if hit:
+            for ln in hit:
+                found = _ENTRY_ID_PATTERN.match(ln)
+                if found and found.group(1) not in skipped:
+                    skipped.append(found.group(1))
+        else:
+            pending.append(ruling)
+    return skipped, pending
+
+
+def _ensure_gitattributes(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        text = None
+    if text is None:
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(_GITATTRIBUTES_LINE + "\n")
+        return
+    if _GITATTRIBUTES_LINE in [ln.strip() for ln in text.splitlines()]:
+        return
+    with open(path, "a", encoding="utf-8", newline="\n") as fh:
+        if text and not text.endswith("\n"):
+            fh.write("\n")
+        fh.write(_GITATTRIBUTES_LINE + "\n")
+
+
+def _write_canon_rulings(cwd, root, rulings, date, session, result):
+    """Canon's write procedure for ``rulings``; fills ``result`` and raises _MigrationRefusal."""
+    import definition_doc
+    import store_core
+
+    try:
+        repo_root = store_core.repo_root(cwd)
+    except Exception as exc:
+        raise _MigrationRefusal("canon-lookup-refused", str(exc))
+
+    origin = _git_run(repo_root, "canon-lookup-refused", "remote", "get-url", "origin")
+    if origin.returncode != 0:
+        result["fetch"] = "no-origin"
+    else:
+        try:
+            fetched = _git_run(repo_root, "canon-lookup-refused", "fetch", "origin", timeout=60)
+            if fetched.returncode == 0:
+                result["fetch"] = "ok"
+            else:
+                result["fetch"] = "failed: %s" % _first_line(
+                    fetched.stderr, "git exit %d" % fetched.returncode)
+        except _MigrationRefusal as exc:
+            result["fetch"] = "failed: %s" % (exc.detail or exc.reason)
+
+    try:
+        info = definition_doc.resolve_canon(root=repo_root, cwd=cwd, store_root=root)
+    except Exception as exc:
+        raise _MigrationRefusal("canon-lookup-refused", str(exc))
+    canon_path = info["path"]
+    git_root = info["gitRoot"]
+    result["canonPath"] = canon_path
+    result["canonHome"] = info["home"]
+
+    top = _git_run(git_root, "canon-git-root-not-a-repo", "rev-parse", "--show-toplevel")
+    if top.returncode != 0 or os.path.realpath(top.stdout.strip()) != os.path.realpath(git_root):
+        raise _MigrationRefusal(
+            "canon-git-root-not-a-repo",
+            "%s is not the top level of a git repository" % git_root)
+
+    rel = os.path.relpath(os.path.realpath(canon_path), os.path.realpath(git_root))
+    rel = rel.replace(os.sep, "/")
+    paths = [rel]
+    attributes_rel = None
+    if info["home"] == "repo":
+        attributes_rel = "/".join(rel.split("/")[:-1] + [".gitattributes"])
+        paths.append(attributes_rel)
+
+    # axis: a Canon with uncommitted changes is never built on — see bite-proof record wo_a_1618_clean-baseline
+    status = _git_run(git_root, "canon-dirty", "status", "--porcelain",
+                      "--untracked-files=all", "--", *paths)
+    if status.returncode != 0:
+        raise _MigrationRefusal("canon-dirty", _first_line(status.stderr, "git status failed"))
+    if status.stdout.strip():
+        raise _MigrationRefusal("canon-dirty", status.stdout.rstrip("\n"))
+
+    default_text = ""
+    if info["home"] == "repo" and info["defaultRef"]:
+        default_text = _canon_copy_at(git_root, info["defaultRef"], rel)
+    head_text = _canon_head_copy(git_root, rel)
+
+    # axis: only a committed entry counts as already recorded — see bite-proof record wo_a_1618_committed-only-dedupe
+    skipped, pending = _committed_match(rulings, head_text + "\n" + default_text)
+    result["skipped"] = skipped
+    # axis: nothing new to append means no commit at all — see bite-proof record wo_a_1618_never-commit-empty
+    if not pending:
+        return
+
+    working_text = ""
+    if os.path.isfile(canon_path):
+        with open(canon_path, encoding="utf-8") as fh:
+            working_text = fh.read()
+    else:
+        os.makedirs(os.path.dirname(canon_path), exist_ok=True)
+        with open(canon_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("# Canon\n\n%s\n\n## Entries\n\n" % _CANON_HEADER)
+    if attributes_rel is not None:
+        _ensure_gitattributes(os.path.join(os.path.realpath(git_root), *attributes_rel.split("/")))
+
+    prefix = "%s-%s-" % (date, session)
+    used = re.compile(r"^- \*\*%s(\d+)\*\*" % re.escape(prefix), re.MULTILINE)
+    highest = max([int(n) for n in used.findall(working_text + "\n" + default_text)] or [0])
+    ids = ["%s%d" % (prefix, highest + 1 + i) for i in range(len(pending))]
+    lines = [
+        "- **%s** · %s · standing · %s · owner's words: none recorded · where: "
+        "%s on %s (original session unknown), time not recorded"
+        % (entry_id, date, ruling, _MIGRATION_ORIGIN_PHRASE, date)
+        for entry_id, ruling in zip(ids, pending)
+    ]
+    with open(canon_path, "a", encoding="utf-8", newline="\n") as fh:
+        if working_text and not working_text.endswith("\n"):
+            fh.write("\n")
+        fh.write("\n".join(lines) + "\n")
+    result["entries"] = ids
+
+    added = _git_run(git_root, "canon-commit-failed", "add", "--", *paths)
+    if added.returncode != 0:
+        raise _MigrationRefusal("canon-commit-failed", added.stderr.strip())
+    committed = _git_run(git_root, "canon-commit-failed", "commit", "-m",
+                         _MIGRATION_COMMIT_MESSAGE, "--", *paths)
+    if committed.returncode != 0:
+        raise _MigrationRefusal(
+            "canon-commit-failed", (committed.stderr or committed.stdout).strip())
+
+    shown = _git_run(git_root, "canon-commit-failed", "show", "HEAD:%s" % rel)
+    new_text = shown.stdout if shown.returncode == 0 else ""
+    # axis: the commit extends the prior HEAD copy and holds every appended line — see bite-proof record wo_a_1618_prefix-check
+    if not new_text.startswith(head_text) or not set(lines) <= set(new_text.splitlines()):
+        raise _MigrationRefusal(
+            "canon-commit-failed", "the committed Canon does not hold the appended entries")
+    head = _git_run(git_root, "canon-commit-failed", "rev-parse", "HEAD")
+    result["commit"] = head.stdout.strip() or None
+
+
+def migrate_material_line(cwd, *, root=None, session=None, date=None):
+    """Move item 13's rulings into committed Canon, then swap item 13 for the Canon pointer."""
+    result = _migration_result()
+    try:
+        _migrate_material_line(cwd, root, session, date, result)
+    except _MigrationRefusal as refusal:
+        result["action"] = "refused"
+        result["reason"] = refusal.reason
+        result["detail"] = refusal.detail
+    return result
+
+
+def _migrate_material_line(cwd, root, session, date, result):
+    facts = core_md.read(cwd, root)
+    if facts is None:
+        if core_md.gate_config_profile_is_absent(cwd, root):
+            raise _MigrationRefusal(REASON_PROFILE_ABSENT)
+        raise _MigrationRefusal(REASON_PROFILE_UNPARSEABLE)
+    if facts.get("behind"):
+        raise _MigrationRefusal("behind")
+
+    raw = _read_project_config_raw(_project_config_mapping(facts), MATERIAL_LINE_SLUG)
+    if is_material_line_marker(raw):
+        result["action"] = "already-adopted"
+        return
+    if raw is not None and not isinstance(raw, str):
+        raise _MigrationRefusal(REASON_MALFORMED_VALUE)
+
+    if session is None:
+        session = secrets.token_hex(4)
+    else:
+        session = str(session).strip().lower()[:8]
+        if not _SESSION_PATTERN.match(session):
+            raise _MigrationRefusal("session-id-malformed")
+    if date is None:
+        date = datetime.date.today().isoformat()
+    else:
+        try:
+            if datetime.date.fromisoformat(date).isoformat() != date:
+                raise ValueError(date)
+        except (TypeError, ValueError):
+            raise _MigrationRefusal("date-malformed")
+
+    rulings, result["sanitized"] = _split_rulings(raw)
+    if rulings:
+        _write_canon_rulings(cwd, root, rulings, date, session, result)
+
+    marker = {"canon": MATERIAL_LINE_MARKER_CANON, "migratedOn": date}
+    # axis: the marker lands only if item 13 still equals the snapshot — see bite-proof record wo_a_1618_cas-compare
+    written = core_md.write_project_config_item_if(
+        cwd, MATERIAL_LINE_SLUG, marker, expected=raw, root=root)
+    if written.get("action") not in ("written", "noop"):
+        if written.get("reason") == "item-changed":
+            raise _MigrationRefusal("material-line-changed-during-migration")
+        raise _MigrationRefusal(
+            "marker-write-failed", str(written.get("reason") or written.get("action")))
+    result["action"] = "migrated"
 
 
 def _detect_launch_ledger(cwd, root):
@@ -787,6 +1142,12 @@ def main(argv):
     dp.add_argument("--cwd", default=".")
     dp.add_argument("--root", default=None)
 
+    mp = sub.add_parser("migrate-material-line")
+    mp.add_argument("--cwd", default=".")
+    mp.add_argument("--root", default=None)
+    mp.add_argument("--session", default=None)
+    mp.add_argument("--date", default=None)
+
     decl = sub.add_parser("declare")
     decl.add_argument("--dependency", required=True)
     decl.add_argument("--cwd", default=".")
@@ -806,6 +1167,9 @@ def main(argv):
             out = {"action": "refused", "reason": "input-unparseable"}
         else:
             out = set_item(args.cwd, args.item, value, root=args.root)
+    elif args.cmd == "migrate-material-line":
+        out = migrate_material_line(
+            args.cwd, root=args.root, session=args.session, date=args.date)
     elif args.cmd == "declare":
         raw = sys.stdin.read()
         try:

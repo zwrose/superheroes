@@ -1711,9 +1711,16 @@ def write_review_gate_policy(cwd, policy, *, root=None):
         return {"action": "written"}
 
 
+_MISSING_EXPECTED = object()
+
+
 def _write_json_block_key_item(cwd, block_key, slug, value, *, root=None,
-                               not_a_mapping_reason, round_trip_reason):
-    """Shared lock-guarded writer that merges one key into a superheroes-core json object."""
+                               not_a_mapping_reason, round_trip_reason,
+                               expected=_MISSING_EXPECTED):
+    """Shared lock-guarded writer that merges one key into a superheroes-core json object.
+
+    When ``expected`` is supplied, the write happens only if the slug's current value (absent
+    reading as ``None``) equals it, compared inside the lock after the re-read."""
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
         return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
@@ -1772,6 +1779,12 @@ def _write_json_block_key_item(cwd, block_key, slug, value, *, root=None,
             current = {}
         else:
             current = dict(current)
+        if expected is not _MISSING_EXPECTED:
+            observed = current.get(slug)
+            # axis: a compare-and-swap write refuses when the stored value moved — see bite-proof record wo_a_1618_cas-compare
+            if (json.dumps(observed, sort_keys=True)
+                    != json.dumps(expected, sort_keys=True)):
+                return {"action": "refused", "reason": "item-changed", "observed": observed}
         if value is None:
             if slug not in current:
                 return {"action": "noop"}
@@ -1934,6 +1947,15 @@ def write_project_config_item(cwd, slug, value, *, root=None):
         cwd, PROJECT_CONFIGURATION_KEY, slug, value, root=root,
         not_a_mapping_reason=PROJECT_CONFIG_REASON_NOT_A_MAPPING,
         round_trip_reason=PROJECT_CONFIG_REASON_ROUND_TRIP)
+
+
+def write_project_config_item_if(cwd, slug, value, *, expected, root=None):
+    """Like ``write_project_config_item``, but only when the slug still equals ``expected``."""
+    return _write_json_block_key_item(
+        cwd, PROJECT_CONFIGURATION_KEY, slug, value, root=root,
+        not_a_mapping_reason=PROJECT_CONFIG_REASON_NOT_A_MAPPING,
+        round_trip_reason=PROJECT_CONFIG_REASON_ROUND_TRIP,
+        expected=expected)
 
 
 def write_declared_dependencies(cwd, mapping, *, root=None):
