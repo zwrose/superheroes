@@ -89,3 +89,18 @@ def test_new_glossary_section_carries_no_provenance():
     section = _section(GLOSSARY.read_text(encoding="utf-8"), "Review sheets")
     for pattern in PROVENANCE_PATTERNS:
         assert not re.search(pattern, section), "## Review sheets matches %s" % pattern
+
+
+# Bites on: the layout section going missing, or dropping the Done for now, Previous and Next, Why only these, not-loaded or never-folds statements.
+def test_usage_doc_describes_the_sheet_layout():
+    section = " ".join(_section(_doc(), "How a sheet is laid out").split())
+    for phrase in ("Done for now", "Previous", "Next", "Why only these", "answers not loaded", "never folds"):
+        assert phrase in section, "the layout section doesn't name %r" % phrase
+
+
+# Bites on: the fallback section no longer pointing at the prose renderer, or pointing at a script that isn't there.
+def test_usage_doc_names_the_prose_renderer():
+    section = " ".join(_section(_doc(), "When the host can't show a sheet").split())
+    assert "lib/sheet_prose.py" in section, "the fallback section doesn't name lib/sheet_prose.py"
+    assert "render --sheet" in section, "the fallback section doesn't show the render command"
+    assert (PLUGIN / "lib" / "sheet_prose.py").is_file(), "plugins/superheroes/lib/sheet_prose.py doesn't exist"
