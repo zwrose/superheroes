@@ -962,19 +962,15 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
             "defaultRef": info["defaultRef"]}
 
 
-def _rulings_unreachable_from_default(cwd, root, rulings, canon):
-    """True when item 13's readers cannot yet see every ruling in the default branch's Canon.
+def _rulings_unreachable_from_default(rulings, canon):
+    """True when the default branch's Canon does not yet hold every migrated ruling.
 
-    Only a core.md outside the Canon repository (the shared project store) can be read by a
-    session on another branch; a core.md inside the repository travels with the branch. With no
-    default ref (no origin remote) nothing establishes that another branch or worktree sees the
-    entries, so a shared item 13 stays pending.
+    Only a Canon in the repository rides a branch; the project store's Canon is one shared copy,
+    so it adopts in one step. The marker is written when every ruling is in the default-branch
+    copy, wherever core.md lives. With no default ref (no origin remote) nothing shows that
+    another branch or worktree reads the entries, so the move stays pending.
     """
     if canon["home"] != "repo":
-        return False
-    core = os.path.realpath(core_md.core_path(cwd, root))
-    git_root = os.path.realpath(canon["gitRoot"])
-    if os.path.commonpath([core, git_root]) == git_root:
         return False
     if not canon["defaultRef"]:
         return True
@@ -1029,7 +1025,7 @@ def _migrate_material_line(cwd, root, session, date, result):
     if rulings:
         canon = _write_canon_rulings(cwd, root, rulings, date, session, result)
         # axis: a shared item 13 keeps its examples until Canon's entries reach the default branch — see bite-proof record wo_a_1618_pending-default-branch
-        if _rulings_unreachable_from_default(cwd, root, rulings, canon):
+        if _rulings_unreachable_from_default(rulings, canon):
             result["action"] = "pending-default-branch"
             if canon["defaultRef"]:
                 result["detail"] = (
@@ -1040,8 +1036,9 @@ def _migrate_material_line(cwd, root, session, date, result):
                 result["detail"] = (
                     "The Canon entries are committed on this branch, but this repository has no "
                     "origin remote, so nothing shows that other branches and worktrees can read "
-                    "them. Item 13 keeps its value; add an origin remote and run the move again "
-                    "to finish it.")
+                    "them. Item 13 keeps its value; the move finishes once the repository has an "
+                    "origin default branch holding them. Add an origin remote, land the entries, "
+                    "and run the move again.")
             return
 
     marker = {"canon": MATERIAL_LINE_MARKER_CANON, "migratedOn": date}

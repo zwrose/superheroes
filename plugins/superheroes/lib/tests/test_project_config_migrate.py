@@ -82,6 +82,28 @@ class World:
         kw.setdefault("date", _DATE)
         return PC.migrate_material_line(self.repo, root=self.store, **kw)
 
+    def land(self):
+        """Put the current HEAD on origin's default branch, as a landed branch would."""
+        _git(self.repo, "push", "-q", self.origin, "HEAD:main")
+        _git(self.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    def migrate_landed(self, **kw):
+        """The two-step move as one observation.
+
+        A repository Canon finishes in two steps: the first run commits the entries and stays
+        pending, then the branch lands, then the second run writes the pointer. The result is the
+        first run's, with the final action, reason and detail of the second.
+        """
+        first = self.migrate(**kw)
+        if first["action"] != "pending-default-branch":
+            return first
+        self.land()
+        second = self.migrate(**kw)
+        merged = dict(first)
+        for key in ("action", "reason", "detail"):
+            merged[key] = second[key]
+        return merged
+
     def item13(self):
         return PC.get_item(self.repo, "materialConsequenceLine", root=self.store)
 
@@ -246,17 +268,19 @@ def test_session_is_lowercased_stripped_and_cut_to_eight(tmp_path):
 def test_session_and_date_default_when_omitted(tmp_path):
     w = _world(tmp_path)
     got = PC.migrate_material_line(w.repo, root=w.store)
-    assert got["action"] == "migrated"
+    assert got["action"] == "pending-default-branch"
     assert re.match(r"^\d{4}-\d\d-\d\d-[0-9a-f]{8}-1$", got["entries"][0])
+    w.land()
+    assert PC.migrate_material_line(w.repo, root=w.store)["action"] == "migrated"
     assert w.item13()["raw"]["migratedOn"] == got["entries"][0][:10]
 
 
 # --- E9-E12: the Canon lookup ---
 
-def test_e9_no_origin_remote_reports_no_origin_and_migrates(tmp_path):
+def test_e9_no_origin_remote_reports_no_origin_and_stays_pending(tmp_path):
     w = _world(tmp_path, origin=False)
     got = _shape(w.migrate())
-    assert got["action"] == "migrated"
+    assert got["action"] == "pending-default-branch"
     assert got["fetch"] == "no-origin"
     assert got["commit"] == w.head()
     assert len(got["entries"]) == 2
@@ -265,7 +289,7 @@ def test_e9_no_origin_remote_reports_no_origin_and_migrates(tmp_path):
 def test_e10_failed_fetch_is_reported_not_fatal(tmp_path):
     w = _world(tmp_path)
     _git(w.repo, "remote", "set-url", "origin", os.path.join(str(tmp_path), "missing.git"))
-    got = _shape(w.migrate())
+    got = _shape(w.migrate_landed())
     assert got["action"] == "migrated"
     assert got["fetch"].startswith("failed: ")
     assert len(got["fetch"]) > len("failed: ")
@@ -388,7 +412,7 @@ def test_default_branch_canon_is_read_for_ids_and_dedupe(tmp_path):
     _git(w.repo, "checkout", "-q", "-b", "work", "HEAD~1")
     assert not os.path.exists(w.canon)
     got = _shape(w.migrate())
-    assert got["action"] == "migrated"
+    assert got["action"] == "pending-default-branch"
     assert got["skipped"] == ["2026-10-05-abcdef12-1"]
     assert got["entries"] == ["2026-10-05-abcdef12-2"]
     text = open(w.canon).read()
@@ -401,7 +425,7 @@ def test_default_branch_canon_is_read_for_ids_and_dedupe(tmp_path):
 # axis: with every ruling already committed the migration makes no commit and leaves other staged work alone — wo_a_1618_never-commit-empty
 def test_e16_every_ruling_committed_makes_no_commit(tmp_path):
     w = _world(tmp_path)
-    first = _shape(w.migrate())
+    first = _shape(w.migrate_landed())
     assert first["action"] == "migrated"
     commit = w.head()
     CM.write_project_config_item(w.repo, "materialConsequenceLine", _TWO_RULINGS, root=w.store)
@@ -421,11 +445,11 @@ def test_e16_every_ruling_committed_makes_no_commit(tmp_path):
 
 def test_e17_some_committed_appends_only_the_rest(tmp_path):
     w = _world(tmp_path, raw="First ruling, kept whole.")
-    first = _shape(w.migrate())
+    first = _shape(w.migrate_landed())
     assert first["entries"] == ["2026-10-05-abcdef12-1"]
     CM.write_project_config_item(w.repo, "materialConsequenceLine", _TWO_RULINGS, root=w.store)
     before = open(w.canon, "rb").read()
-    got = _shape(w.migrate())
+    got = _shape(w.migrate_landed())
     assert got["action"] == "migrated"
     assert got["skipped"] == ["2026-10-05-abcdef12-1"]
     assert got["entries"] == ["2026-10-05-abcdef12-2"]
@@ -545,7 +569,7 @@ def test_e19d_contended_configuration_lock_refuses_before_touching_canon(tmp_pat
     assert not os.path.exists(w.canon)
     assert w.head() == head
     assert w.item13()["raw"] == _TWO_RULINGS
-    assert _shape(w.migrate())["action"] == "migrated"
+    assert _shape(w.migrate_landed())["action"] == "migrated"
 
 
 # --- E20-E21: the marker write ---
@@ -560,7 +584,7 @@ def test_e20_item_13_changed_between_read_and_marker_write(tmp_path, monkeypatch
         return real(cwd, slug, value, expected=expected, root=root)
 
     monkeypatch.setattr(PC.core_md, "write_project_config_item_if", _race)
-    got = _shape(w.migrate())
+    got = _shape(w.migrate_landed())
     assert (got["action"], got["reason"]) == ("refused", "material-line-changed-during-migration")
     assert len(got["entries"]) == 2
     assert got["commit"] == w.head()
@@ -573,7 +597,7 @@ def test_e21_marker_writer_deferring_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(
         PC.core_md, "write_project_config_item_if",
         lambda *a, **k: {"action": "deferred", "reason": "lock-contended"})
-    got = _shape(w.migrate())
+    got = _shape(w.migrate_landed())
     assert (got["action"], got["reason"], got["detail"]) == (
         "refused", "marker-write-failed", "lock-contended")
     assert len(got["entries"]) == 2
@@ -592,7 +616,7 @@ def test_marker_failed_then_rerun_skips_the_committed_entries(tmp_path, monkeypa
         return real(*a, **k)
 
     monkeypatch.setattr(PC.core_md, "write_project_config_item_if", _once)
-    first = _shape(w.migrate())
+    first = _shape(w.migrate_landed())
     assert (first["action"], first["reason"]) == ("refused", "marker-write-failed")
     assert len(first["entries"]) == 2
     commit = w.head()
@@ -610,7 +634,7 @@ def test_marker_failed_then_rerun_skips_the_committed_entries(tmp_path, monkeypa
 
 def test_e22_a_ruling_containing_the_field_separator_is_sanitized(tmp_path):
     w = _world(tmp_path, raw="Alpha · Beta · · Gamma\n\nPlain ruling.")
-    got = _shape(w.migrate())
+    got = _shape(w.migrate_landed())
     assert got["action"] == "migrated"
     assert got["sanitized"] is True
     lines = _entry_lines(w.head_canon())
@@ -631,7 +655,7 @@ def test_e23_unrelated_staged_file_stays_staged_and_uncommitted(tmp_path):
     w = _world(tmp_path)
     open(os.path.join(w.repo, "other.txt"), "w").write("unrelated\n")
     _git(w.repo, "add", "other.txt")
-    got = _shape(w.migrate())
+    got = _shape(w.migrate_landed())
     assert got["action"] == "migrated"
     assert sorted(w.commit_files()) == ["docs/superheroes/.gitattributes", _REL]
     assert _out(w.repo, "diff", "--cached", "--name-only") == "other.txt"
@@ -654,7 +678,7 @@ def test_e24_store_home_has_no_gitattributes_and_commits_to_the_store_repo(tmp_p
 
 def test_created_canon_has_the_file_shape_and_the_header_from_this_repos_canon(tmp_path):
     w = _world(tmp_path)
-    assert w.migrate()["action"] == "migrated"
+    assert w.migrate_landed()["action"] == "migrated"
     repo_canon = open(os.path.join(_REPO_ROOT, "docs", "superheroes", "canon.md")).read().splitlines()
     header = "\n".join(repo_canon[2:5])
     assert PC._CANON_HEADER == header
@@ -673,7 +697,7 @@ def test_gitattributes_line_appended_when_the_file_lacks_a_trailing_newline(tmp_
     open(attrs, "w").write("*.png binary")
     _git(w.repo, "add", "--", "docs/superheroes/.gitattributes")
     _git(w.repo, "commit", "-q", "-m", "attrs", "--", "docs/superheroes/.gitattributes")
-    assert w.migrate()["action"] == "migrated"
+    assert w.migrate_landed()["action"] == "migrated"
     assert open(attrs).read() == "*.png binary\ncanon.md merge=union\n"
 
 
@@ -684,14 +708,14 @@ def test_existing_gitattributes_line_is_left_alone(tmp_path):
     open(attrs, "w").write("canon.md merge=union\n")
     _git(w.repo, "add", "--", "docs/superheroes/.gitattributes")
     _git(w.repo, "commit", "-q", "-m", "attrs", "--", "docs/superheroes/.gitattributes")
-    assert w.migrate()["action"] == "migrated"
+    assert w.migrate_landed()["action"] == "migrated"
     assert open(attrs).read() == "canon.md merge=union\n"
     assert w.commit_files() == [_REL]
 
 
 def test_entry_lines_have_the_exact_shape(tmp_path):
     w = _world(tmp_path)
-    got = _shape(w.migrate())
+    got = _shape(w.migrate_landed())
     lines = _entry_lines(w.head_canon())
     assert len(lines) == 2
     for line in lines:
@@ -728,7 +752,7 @@ def test_appended_to_a_file_without_a_trailing_newline_never_rewrites_earlier_by
     w = _world(tmp_path)
     seed = "# Canon\n\nheader\n\n## Entries\n\n- **2026-09-01-11111111-1** · 2026-09-01 · standing · Seeded. · owner's words: none recorded · where: s, time not recorded"
     w.commit_canon(seed)
-    got = _shape(w.migrate())
+    got = _shape(w.migrate_landed())
     assert got["action"] == "migrated"
     new = w.head_canon()
     assert new.startswith(seed + "\n- **2026-10-05-abcdef12-1**")
@@ -736,7 +760,7 @@ def test_appended_to_a_file_without_a_trailing_newline_never_rewrites_earlier_by
 
 def test_run_twice_second_run_is_already_adopted_and_canon_unchanged(tmp_path):
     w = _world(tmp_path)
-    first = _shape(w.migrate())
+    first = _shape(w.migrate_landed())
     assert first["action"] == "migrated"
     commit, canon = w.head(), open(w.canon, "rb").read()
     second = _shape(w.migrate())
@@ -748,7 +772,7 @@ def test_run_twice_second_run_is_already_adopted_and_canon_unchanged(tmp_path):
 
 def test_this_repos_real_item_13_text_produces_exactly_four_entries(tmp_path):
     w = _world(tmp_path, raw=_REAL_ITEM_13)
-    got = _shape(w.migrate())
+    got = _shape(w.migrate_landed())
     assert got["action"] == "migrated"
     assert len(got["entries"]) == 4
     lines = _entry_lines(w.head_canon())
@@ -766,7 +790,7 @@ def test_migration_never_changes_an_existing_canon_line(tmp_path):
     w = _world(tmp_path)
     w.commit_canon(_SEED)
     before = w.head_canon()
-    assert w.migrate()["action"] == "migrated"
+    assert w.migrate_landed()["action"] == "migrated"
     after = w.head_canon()
     assert after.startswith(before)
     assert after[:len(before)] == before
@@ -776,12 +800,15 @@ def test_migration_never_changes_an_existing_canon_line(tmp_path):
 
 def test_cli_verb_prints_one_json_object_and_exits_zero(tmp_path, capsys):
     w = _world(tmp_path)
-    rc = PC.main(["migrate-material-line", "--cwd", w.repo, "--root", w.store,
-                  "--session", _SESSION, "--date", _DATE])
-    assert rc == 0
+    argv = ["migrate-material-line", "--cwd", w.repo, "--root", w.store,
+            "--session", _SESSION, "--date", _DATE]
+    assert PC.main(argv) == 0
     got = _shape(json.loads(capsys.readouterr().out))
-    assert got["action"] == "migrated"
+    assert got["action"] == "pending-default-branch"
     assert got["entries"] == ["2026-10-05-abcdef12-1", "2026-10-05-abcdef12-2"]
+    w.land()
+    assert PC.main(argv) == 0
+    assert _shape(json.loads(capsys.readouterr().out))["action"] == "migrated"
 
 
 def test_cli_verb_exits_zero_on_a_refusal(tmp_path, capsys):
@@ -837,14 +864,18 @@ def test_shared_core_rerun_after_the_entries_reach_the_default_branch_writes_the
     assert w.item13()["raw"] == _MARKER
 
 
-def test_core_inside_the_repository_still_adopts_in_one_step_on_a_feature_branch(tmp_path):
+# axis: where core.md lives never decides adoption; a repository Canon waits for the default branch — wo_a_1618_pending-default-branch
+def test_core_inside_the_repository_on_a_feature_branch_commits_canon_and_leaves_item_13_pending(tmp_path):
     w = _world(tmp_path)
     assert os.path.realpath(CM.core_path(w.repo, w.store)).startswith(w.repo + os.sep)
     _git(w.repo, "checkout", "-q", "-b", "work")
+    before = w.core_bytes()
     got = _shape(w.migrate())
-    assert got["action"] == "migrated"
+    assert (got["action"], got["reason"]) == ("pending-default-branch", None)
     assert got["commit"] == w.head()
-    assert w.item13()["raw"] == _MARKER
+    assert "default branch" in got["detail"]
+    assert w.core_bytes() == before
+    assert w.item13()["raw"] == _TWO_RULINGS
 
 
 # axis: with no default ref nothing shows other branches can read Canon, so a shared item 13 stays pending — wo_a_1618_pending-default-branch
@@ -866,12 +897,13 @@ def test_shared_core_without_an_origin_remote_commits_canon_and_leaves_item_13_p
     assert again["commit"] is None
 
 
-def test_core_inside_the_repository_without_an_origin_remote_adopts_in_one_step(tmp_path):
+def test_core_inside_the_repository_without_an_origin_remote_leaves_item_13_pending(tmp_path):
     w = _world(tmp_path, origin=False)
     assert os.path.realpath(CM.core_path(w.repo, w.store)).startswith(w.repo + os.sep)
     got = _shape(w.migrate())
-    assert got["action"] == "migrated"
-    assert w.item13()["raw"] == _MARKER
+    assert got["action"] == "pending-default-branch"
+    assert "no origin remote" in got["detail"]
+    assert w.item13()["raw"] == _TWO_RULINGS
 
 
 # --- a set never undoes an adoption that lands while it runs ---
