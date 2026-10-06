@@ -1297,11 +1297,9 @@ def _splice_single_json_block(text, new_body):
     return text[:m.start(1)] + new_body + text[m.end(1):]
 
 
-def write_builder_dispatch_tier(cwd, tier, *, root=None):
-    """Lock-guarded surgical write of enginePreferences.builderDispatchTier only — the ONE writer
-    of that key. Every other ``enginePreferences`` key and core fact is preserved semantically, and
-    everything outside the ```json superheroes-core``` fence is preserved byte-identically. Never
-    raises."""
+def _engine_pref_scalar_preflight(cwd, root):
+    """The store and gate checks every scalar ``enginePreferences`` writer runs before it classifies
+    its input. Returns a refusal/deferral result dict, or None when the write may proceed."""
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
         return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
@@ -1309,10 +1307,14 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
     if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
         return {"action": "deferred",
                 "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
-    import engine_pref
-    classified = engine_pref.classify_builder_dispatch_tier(tier)
-    if classified["state"] == "invalid":
-        return {"action": "refused", "reason": classified["reason"]}
+    return None
+
+
+def _write_engine_pref_scalar(cwd, key, value, *, root=None):
+    """Lock-guarded surgical write of one scalar ``enginePreferences[key]`` (``value is None``
+    deletes it) after the caller's preflight and classification. Every other ``enginePreferences``
+    key and core fact is preserved semantically, and everything outside the ```json
+    superheroes-core``` fence is preserved byte-identically. Never raises."""
     structural = profile_structural_refusal(cwd, root=root)
     if structural is not None:
         return {"action": "refused", "reason": structural}
@@ -1363,11 +1365,11 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
         if not isinstance(prefs, dict):
             prefs = {}
             block["enginePreferences"] = prefs
-        if classified["state"] == "unset":
-            if "builderDispatchTier" in prefs:
-                del prefs["builderDispatchTier"]
+        if value is None:
+            if key in prefs:
+                del prefs[key]
         else:
-            prefs["builderDispatchTier"] = classified["tier"]
+            prefs[key] = value
         new_body = json.dumps(block, indent=2)
         new_text = _splice_single_json_block(text, new_body)
         if new_text is None:
@@ -1375,7 +1377,7 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
         if new_text == text:
             return {"action": "noop"}
         new_parsed = parse_core(new_text)
-        if not _engine_pref_round_trip_ok(orig, new_parsed, "builderDispatchTier"):
+        if not _engine_pref_round_trip_ok(orig, new_parsed, key):
             return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ROUND_TRIP}
         try:
             store_core.atomic_write(path, new_text)
@@ -1387,6 +1389,40 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
             }
         clear_pending(cwd, root)
         return {"action": "written"}
+
+
+
+def write_builder_dispatch_tier(cwd, tier, *, root=None):
+    """Lock-guarded surgical write of enginePreferences.builderDispatchTier only — the ONE writer
+    of that key. Every other ``enginePreferences`` key and core fact is preserved semantically, and
+    everything outside the ```json superheroes-core``` fence is preserved byte-identically. Never
+    raises."""
+    early = _engine_pref_scalar_preflight(cwd, root)
+    if early is not None:
+        return early
+    import engine_pref
+    classified = engine_pref.classify_builder_dispatch_tier(tier)
+    if classified["state"] == "invalid":
+        return {"action": "refused", "reason": classified["reason"]}
+    return _write_engine_pref_scalar(
+        cwd, "builderDispatchTier",
+        None if classified["state"] == "unset" else classified["tier"], root=root)
+
+
+def write_spec_reviewer(cwd, engine, *, root=None):
+    """Lock-guarded surgical write of enginePreferences.specReviewer only — the ONE writer of that
+    key. ``engine`` None/blank clears it; a valid engine stores its canonical lowercase token; an
+    unknown engine is refused. Never raises."""
+    early = _engine_pref_scalar_preflight(cwd, root)
+    if early is not None:
+        return early
+    import engine_pref
+    classified = engine_pref.classify_spec_reviewer(engine)
+    if classified["state"] == "invalid":
+        return {"action": "refused", "reason": classified["reason"]}
+    return _write_engine_pref_scalar(
+        cwd, engine_pref.SPEC_REVIEWER_KEY,
+        None if classified["state"] == "unset" else classified["engine"], root=root)
 
 
 def _drop_legacy_codex_pin_aliases(merged, canonical_role):
@@ -2778,6 +2814,8 @@ def confirm(cwd, *, root=None, now=None):
                 facts[SANDBOX_ACCESS_KEY] = existing[SANDBOX_ACCESS_KEY]
             if SIZE_EXCLUDE_KEY in existing:
                 facts[SIZE_EXCLUDE_KEY] = existing[SIZE_EXCLUDE_KEY]
+            if existing.get("enginePreferences"):
+                facts["enginePreferences"] = existing["enginePreferences"]
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),
@@ -2883,6 +2921,9 @@ def main(argv):
     btp = sub.add_parser("write-builder-tier")  # enginePreferences.builderDispatchTier only
     btp.add_argument("--cwd", default=".")
     btp.add_argument("--root", default=None)
+    srp = sub.add_parser("write-spec-reviewer")  # enginePreferences.specReviewer only
+    srp.add_argument("--cwd", default=".")
+    srp.add_argument("--root", default=None)
     epp = sub.add_parser("write-engine-pins")  # enginePreferences.codexModels / seatPins
     epp.add_argument("--key", choices=ENGINE_PREF_PIN_KEYS, required=True)
     epp.add_argument("--cwd", default=".")
@@ -2993,6 +3034,17 @@ def main(argv):
                 "action": "deferred",
                 "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED,
             }
+    elif args.cmd == "write-spec-reviewer":
+        try:
+            raw = sys.stdin.read().strip()
+            engine = None if raw == "" else raw
+            out = write_spec_reviewer(args.cwd, engine, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": "spec-reviewer-cli-failed"}
     elif args.cmd == "write-engine-pins":
         try:
             raw = sys.stdin.read()

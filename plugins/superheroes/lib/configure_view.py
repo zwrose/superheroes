@@ -34,6 +34,18 @@ import store_sweep     # noqa: E402
 _NON_LAYER = ("core.md", "patterns.md")
 _PROSE_CONFIG_SHAPES = frozenset({"prose"})
 _PROSE_DISPLAY_MAX = 120
+
+_SPEC_REVIEWER_HEADING = "## Spec reviewer seat"
+_SPEC_REVIEWER_FALLBACK = (
+    "The spec checks use a reviewer from an installed engine of a different model family than "
+    "the spec's author; when none is installed, they use a fresh reviewer from the author's own "
+    "family.")
+_SPEC_REVIEWER_UNSET = "spec reviewer — unset (no model named). " + _SPEC_REVIEWER_FALLBACK
+_SPEC_REVIEWER_VALID = (
+    "spec reviewer — %(engine)s (no model named). When %(engine)s is the spec author's own model "
+    "family, the checks use an installed engine of a different family instead.")
+_SPEC_REVIEWER_INVALID = (
+    "spec reviewer — unset: the recorded value %s is not an engine and is not applied ⚠")
 def _read(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -592,6 +604,23 @@ def _append_builder_dispatch_row(out, cwd, root):
             out.append("  %s" % display)
 
 
+def _spec_reviewer_lines(eng):
+    """The `## Spec reviewer seat` block from the validated prefs (`load_engine_prefs` output) — the
+    seat is its own block, never a Dispatch-calibration row. Absent/invalid reads as unset."""
+    eng = eng if isinstance(eng, dict) else {}
+    lines = [_SPEC_REVIEWER_HEADING]
+    engine = eng.get(engine_pref.SPEC_REVIEWER_KEY)
+    invalid = eng.get("invalidSpecReviewer")
+    if isinstance(engine, str) and engine in engine_pref.ENGINES:
+        lines.append(_SPEC_REVIEWER_VALID % {"engine": engine})
+    elif isinstance(invalid, dict):
+        lines.append(_SPEC_REVIEWER_INVALID % engine_pref.safe_config_echo(invalid.get("value")))
+        lines.append(_SPEC_REVIEWER_FALLBACK)
+    else:
+        lines.append(_SPEC_REVIEWER_UNSET)
+    return lines
+
+
 def render(cwd, *, root=None):
     """One plain-text screen — 'here is everything superheroes knows about this project'.
     Read-only; the FR-7 drift notice (if any) trails the profile, re-shown on every run."""
@@ -615,6 +644,9 @@ def render(cwd, *, root=None):
             out.append(line)
         out.append("")
         for line in _size_exclude_view_lines(data.get("sizeExclude")):
+            out.append(line)
+        out.append("")
+        for line in _spec_reviewer_lines(data.get("enginePrefs")):
             out.append(line)
         out.append("")
         out.append("## Review gate policy")
@@ -708,6 +740,9 @@ def render(cwd, *, root=None):
             out.append("Rejected seat pins (not applied — seat falls back to rotation):")
             for seat, reason in sorted(rejected_seats.items()):
                 out.append(f"  {seat}: {reason} ⚠")
+        out.append("")
+        for line in _spec_reviewer_lines(eng):
+            out.append(line)
         out.append("")
         out.append("## Review gate policy")
         for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
