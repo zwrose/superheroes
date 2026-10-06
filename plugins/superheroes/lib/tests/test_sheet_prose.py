@@ -534,6 +534,24 @@ def test_prose_const_and_enum_compare_by_type(tmp_path, monkeypatch):
     assert problems_for({"enum": [{"a": 1, "b": 2}]}, {"b": 2, "a": 1}) == []
 
 
+# Bites on: uniqueItems comparing objects by their written key order, so two objects with the same keys in a different order pass as distinct, as the page does not.
+def test_prose_uniqueitems_treats_reordered_objects_as_a_repeat(tmp_path, monkeypatch):
+    module = _load_prose_module()
+    planted_path = tmp_path / "planted.schema.json"
+    tags = {"type": "array", "uniqueItems": True, "items": {"type": "object"}}
+    schema = _planted_schema(lambda s: s["$defs"]["card"]["properties"].update(tags=tags))
+    planted_path.write_text(json.dumps(schema), encoding="utf-8")
+    monkeypatch.setattr(module, "SCHEMA", planted_path)
+
+    sheet = _valid_sheet()
+    sheet["cards"][0]["tags"] = [{"a": 1, "b": 2}, {"b": 2, "a": 1}]
+    problems = module.check_sheet(sheet)
+    assert problems != [] and all("must not repeat an item" in problem for problem in problems)
+
+    sheet["cards"][0]["tags"] = [{"a": 1, "b": 2}, {"a": 1, "b": 3}]
+    assert module.check_sheet(sheet) == []
+
+
 # Bites on: a minLength above 1 reading "must not be empty", or minLength 1 reading as a length.
 @pytest.mark.parametrize("shortest, expected", [
     (1, "Title must not be empty."),
