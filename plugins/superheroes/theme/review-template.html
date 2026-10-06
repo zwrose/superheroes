@@ -551,6 +551,8 @@
       verdictSending: "Sending…",
       verdictSlow: "Sending is taking longer than it should. Keep this page open.",
       verdictFailed: "The verdict didn't send.",
+      verdictConflict: "More than one verdict was sent for this sheet from different windows. The session will ask you which one counts.",
+      verdictNoId: "This browser can't make a unique id for the verdict, so it can't be sent here.",
       verdictStale: "This sheet was updated after you opened it. Reload the page to see the current version before sending.",
       sheetUnchecked: "The sheet could not be checked, so nothing was sent.",
       verdictNoDigest: "This browser can't tell which version of the sheet this is, so the verdict can't be sent here.",
@@ -1167,6 +1169,9 @@
     let sendView = null;
     let sentWord = "";
 
+    // True when the sends found for this revision disagree, so no one verdict can be shown.
+    let sentConflict = false;
+
     // Controls are on only when the sheet allows edits; the last card's also need a schema that says what a verdict is.
     function syncControls() {
       const on = canEdit();
@@ -1233,7 +1238,8 @@
     function refreshVerdict() {
       if (finalUi === null || verdictController === null) return;
       const picked = verdictController.current().answer !== null;
-      const usable = ready && verdictShape !== null && sheetDigest !== null;
+      const digested = ready && verdictShape !== null && sheetDigest !== null;
+      const usable = digested && canMakeSendId();
       // A refusal because answers were unsaved goes away once every answer is saved.
       if (sendView !== null && sendView.kind === "refused" && !sending
           && !items.some(function (item) { return controllers.get(item.id).unsaved(); })) {
@@ -1243,12 +1249,14 @@
       let text = "";
       let retry = false;
       if (sent) {
-        text = "Verdict sent: " + sentWord;
+        text = sentConflict ? SAY.verdictConflict : "Verdict sent: " + sentWord;
       } else if (sendView !== null) {
         text = sendView.text;
         retry = sendView.retry === true;
       } else if (usable) {
         text = picked ? SAY.verdictDraft : SAY.verdictFirst;
+      } else if (digested) {
+        text = SAY.verdictNoId;
       } else if (ready && verdictShape !== null) {
         text = SAY.verdictNoDigest;
       }
@@ -1286,10 +1294,10 @@
 
     // The only place the verdict is written. It is single-flight and freezes the sheet while it runs: first every
     // pending note is saved and every answer waited for, then the last card's pick and note are captured once and
-    // written to verdict/<digest>. "Sent" is shown only after that write resolved. A write that is rejected leaves
+    // written as a new document under verdict/<digest>/sends. "Sent" is shown only after that write resolved. A write that is rejected leaves
     // nothing sent and offers Try again; one that stays unanswered offers no Try again while it may still land.
     async function sendVerdict() {
-      if (sending || sent || !ready || verdictShape === null || sheetDigest === null || verdictController === null) return;
+      if (sending || sent || !ready || verdictShape === null || sheetDigest === null || !canMakeSendId() || verdictController === null) return;
       if (verdictController.current().answer === null) return;
       sending = true;
       sendView = { kind: "working", text: SAY.verdictChecking };
@@ -1332,16 +1340,15 @@
         }),
       };
 
-      // The sent verdict is this revision's one record, stored under the revision's own digest, so a late write
-      // from a page showing an older revision lands on that older revision's document and never on a newer one.
-      // Just before writing, look again: a verdict for this revision that another open copy already sent is
-      // shown as sent and left alone. Two copies of the same revision sending at the same instant can still
-      // both write; that is a known residual.
-      let earlier = null;
+      // Every Send creates its own document, verdict/<digest>/sends/<sendId>, with an id nobody else will pick, so
+      // no send can replace another (the store keeps the last write to a path and has no transactions, so one
+      // shared document could never be made safe). The digest keeps a late write from a page showing an older
+      // revision out of a newer revision's sends. Just before writing, look at this revision's sends: when one
+      // is already there (another open copy sent it), write nothing and show it as sent.
+      let earlier = [];
       try {
-        const snapshot = await withDeadline(function () { return store.collection("verdict").get(); });
-        const stored = documentData(snapshot.docs.find(function (doc) { return doc.id === sheetDigest; }));
-        if (stored !== null) earlier = stored;
+        const snapshot = await withDeadline(function () { return store.collection(sendsPath()).get(); });
+        earlier = sentVerdictsIn(snapshot);
       } catch (error) {
         sending = false;
         sendView = { kind: "failed", text: SAY.verdictFailed, retry: true };
@@ -1349,8 +1356,8 @@
         refreshSheet();
         return;
       }
-      if (earlier !== null && isSentVerdict(earlier)) {
-        showSent(earlier);
+      if (earlier.length > 0) {
+        showSends(earlier);
         sending = false;
         sendView = null;
         syncControls();
@@ -1386,7 +1393,7 @@
       }, STALL_MS);
       let request;
       try {
-        request = Promise.resolve(store.doc("verdict/" + sheetDigest).set(payload));
+        request = Promise.resolve(store.doc(sendsPath() + "/" + newSendId()).set(payload));
       } catch (error) {
         request = Promise.reject(error);
       }
@@ -1418,6 +1425,7 @@
       sent = false;
       sendView = null;
       sentWord = "";
+      sentConflict = false;
       historyBox.replaceChildren();
       finalHost.replaceChildren();
       items = sheet.cards.map(function (card, index) {
@@ -1470,17 +1478,59 @@
     }
 
     // The last card's saved draft, and the verdict if one was sent. A draft puts the pick and note back and
-    // counts as nothing. A verdict that fits the schema's $defs.verdict means the verdict was sent: the sheet
-    // shows it and stays locked. A verdict document that does not fit is not a verdict and is ignored.
-    function applyVerdicts(drafts, verdicts) {
+    // counts as nothing. A send that fits the schema's $defs.verdict means the verdict was sent: the sheet
+    // shows it and stays locked. A document that does not fit is not a verdict and is ignored.
+    function applyVerdicts(drafts, sends) {
       if (verdictController === null) return;
-      const mine = function (snapshot) { return snapshot.docs.find(function (doc) { return doc.id === sheetDigest; }); };
-      // Only this revision's own documents (the ones stored under its digest) are read: another revision's draft
-      // or verdict is never looked at, so nothing of it is restored and nothing locks.
-      const draft = documentData(mine(drafts));
+      // Only this revision's own documents are read (its draft under its digest, its sends under its digest):
+      // another revision's draft or verdict is never looked at, so nothing of it is restored and nothing locks.
+      const draft = documentData(drafts.docs.find(function (doc) { return doc.id === sheetDigest; }));
       if (draft !== null && forThisSheet(draft)) verdictController.restore(draft);
-      const verdict = documentData(mine(verdicts));
-      if (verdict !== null && isSentVerdict(verdict)) showSent(verdict);
+      const found = sentVerdictsIn(sends);
+      if (found.length > 0) showSends(found);
+    }
+
+    // The collection this revision's sends live in: one document per Send, each under an id of its own.
+    function sendsPath() {
+      return "verdict/" + sheetDigest + "/sends";
+    }
+
+    // True when this browser can make the random id a send is stored under.
+    function canMakeSendId() {
+      return typeof crypto !== "undefined" && crypto !== null && typeof crypto.getRandomValues === "function";
+    }
+
+    // 32 lowercase hex characters from the browser's random source; throws when there is none.
+    function newSendId() {
+      if (!canMakeSendId()) throw new Error("no random source");
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(bytes, function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+    }
+
+    // The stored sends that are verdicts on this sheet revision, in the order the store listed them.
+    function sentVerdictsIn(snapshot) {
+      return snapshot.docs.map(documentData).filter(function (data) { return data !== null && isSentVerdict(data); });
+    }
+
+    // A value written the same way whatever order its keys came in, to tell whether two sends say the same thing.
+    function canonical(value) {
+      if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
+      if (value !== null && typeof value === "object") {
+        return "{" + Object.keys(value).sort().map(function (key) { return JSON.stringify(key) + ":" + canonical(value[key]); }).join(",") + "}";
+      }
+      return JSON.stringify(value);
+    }
+
+    // Shows the sends found for this revision. One send, or several that say the same thing, is the verdict.
+    // Several that differ in verdict, note or answers are not a verdict anyone can pick: the sheet locks and says so.
+    function showSends(found) {
+      const key = function (data) { return canonical({ verdict: data.verdict, note: data.note, answers: data.answers }); };
+      if (found.every(function (data) { return key(data) === key(found[0]); })) {
+        showSent(found[0]);
+        return;
+      }
+      sentConflict = true;
+      sent = true;
     }
 
     // True when a stored verdict fits the schema's $defs.verdict, carries a verdict this page knows, and answers
@@ -1520,11 +1570,12 @@
       }, STALL_MS);
       try {
         // A final sheet also reads its draft verdict and its verdict; a failed or stalled read of any one is a failed read.
-        const names = sheetKind === "final" ? ["answers", "draft-verdict", "verdict"] : ["answers"];
-        const [saved, drafts, verdicts] = await Promise.all(names.map(function (name) { return store.collection(name).get(); }));
+        // Its sends live under its own digest, so without a digest there is nothing of this revision to read.
+        const names = sheetKind === "final" ? ["answers", "draft-verdict"].concat(sheetDigest === null ? [] : [sendsPath()]) : ["answers"];
+        const [saved, drafts, sends] = await Promise.all(names.map(function (name) { return store.collection(name).get(); }));
         if (ready) return;
         saved.docs.forEach(applyDocument);
-        if (sheetKind === "final") applyVerdicts(drafts, verdicts);
+        if (sheetKind === "final" && sends !== undefined) applyVerdicts(drafts, sends);
       } catch (error) {
         if (ready || attempt !== readAttempt) return;
         clearTimeout(readTimer);

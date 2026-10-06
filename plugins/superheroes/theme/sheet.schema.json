@@ -198,7 +198,7 @@
       ]
     },
     "verdict": {
-      "description": "The one document a final sheet stores at verdict/<digest>, where <digest> is its own sheet field, when the owner taps Send verdict. It is the only document that counts as the owner's verdict. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The document a final sheet stores, as a new document of its own at verdict/<digest>/sends/<sendId>, each time the owner taps Send verdict: <digest> is its own sheet field and <sendId> is 32 lowercase hex characters the page draws at random, so one send can never replace another. Sends are the only documents that count as the owner's verdict; exactly one send, or several that say the same thing, is the verdict, and several that differ mean the owner is asked which one counts. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["verdict", "note", "sheet", "answers"],

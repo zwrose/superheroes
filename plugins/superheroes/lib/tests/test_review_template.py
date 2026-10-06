@@ -254,12 +254,23 @@ Object.keys(host.readByCollection || {}).forEach((name) => { namedModes[name] = 
 const nextMode = (queue) => (queue.length > 1 ? queue.shift() : queue[0]);
 const readCounts = {};
 // `host.later` gives a collection's documents from its second read on, as another open copy of the sheet would have written them in between.
+// A collection name may be nested (`verdict/<digest>/sends`), as the store's paths are: a document path has an even
+// number of segments and a collection path an odd number. Documents the page (or a scenario) wrote and the store
+// accepted are read back from the collection their path sits directly under, as a real store would give them.
+const written = {};
+const writtenIn = (name) => Object.keys(written)
+  .filter((path) => path.startsWith(name + "/") && !path.slice(name.length + 1).includes("/"))
+  .map((path) => ({ id: path.slice(name.length + 1), data: written[path] }));
 const docsOf = (name) => {
   readCounts[name] = (readCounts[name] || 0) + 1;
-  if (readCounts[name] > 1 && host.later && host.later[name]) return host.later[name];
-  return host.collections ? host.collections[name] || [] : name === "answers" ? host.docs : [];
+  let base;
+  if (readCounts[name] > 1 && host.later && host.later[name]) base = host.later[name];
+  else base = host.collections ? host.collections[name] || [] : name === "answers" ? host.docs : [];
+  const added = writtenIn(name);
+  return base.filter((doc) => !added.some((extra) => extra.id === doc.id)).concat(added);
 };
 if (host.noCrypto) Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
+if (host.noRandom) Object.defineProperty(globalThis, "crypto", { value: { subtle: globalThis.crypto.subtle }, configurable: true });
 const fakeStore = {
   doc: (path) => ({
     set: (body) => {
@@ -267,6 +278,7 @@ const fakeStore = {
       call.path = path;
       call.body = JSON.parse(JSON.stringify(body));
       setLog.push(call);
+      call.promise.then(() => { written[path] = call.body; }, () => {});
       if (host.set === "ok") call.resolve();
       return call.promise;
     },
@@ -341,6 +353,7 @@ const hasClass = (node, name) => node.className.split(/\s+/).includes(name);
 const fire = (node, type) => (node.listeners[type] || []).forEach((listener) => listener({ type: type, target: node }));
 const tools = {
   sets: setLog,
+  written: () => JSON.parse(JSON.stringify(written)),
   reads: reads,
   uses: uses,
   ownerChecks: ownerChecks,
@@ -610,7 +623,7 @@ def _run_page(files, host=None, scenario="return null;"):
         elif re.fullmatch(r"draft-verdict/[0-9a-f]{64}", path):
             DRAFT_VERDICT_VALIDATOR.validate(recorded["body"])
             assert recorded["body"]["sheet"] == path.split("/")[1], "a draft not stored under its own revision's digest"
-        elif re.fullmatch(r"verdict/[0-9a-f]{64}", path):
+        elif re.fullmatch(r"verdict/[0-9a-f]{64}/sends/[0-9a-f]{32}", path):
             VERDICT_VALIDATOR.validate(recorded["body"])
             assert recorded["body"]["sheet"] == path.split("/")[1], "a verdict not stored under its own revision's digest"
         else:
@@ -2266,7 +2279,8 @@ SLOW_SEND_LINE = "Sending is taking longer than it should. Keep this page open."
 CHECKING_LINE = "Making sure your answers are saved…"
 
 # In a scenario: the verdict writes so far, and every control's off state.
-VERDICT_WRITES = 'const verdicts = () => t.setLog().filter((call) => call.path.startsWith("verdict/"));'
+# Each send is a new document under an id of its own, so a send's path is shown with that id as <id> (its shape is checked on every run).
+VERDICT_WRITES = 'const verdicts = () => t.setLog().filter((call) => call.path.startsWith("verdict/")).map((call) => ({ path: call.path.replace(/[0-9a-f]{32}$/, "<id>"), body: call.body }));'
 
 
 def _sample_final(cards=None, declined=None, approved=True, saved=True):
@@ -2277,6 +2291,16 @@ def _sample_final(cards=None, declined=None, approved=True, saved=True):
         sheet["final"]["declinedFindings"] = declined
     sheet["final"]["approval"] = {"approvedBoard": approved, "boardSavedWithSpec": saved}
     return sheet
+
+
+def _sends_key(digest=None):
+    """The collection a revision's sends live in (this sample's revision unless a digest is given)."""
+    return "verdict/" + (_sheet_digest(_sample_final()) if digest is None else digest) + "/sends"
+
+
+def _send_doc(data, n=1):
+    """A stored send; each one has an id of its own, as a real send does."""
+    return {"id": ("%x" % n).rjust(32, "a"), "data": data}
 
 
 def _final_doc(data, doc_id=None):
@@ -2307,7 +2331,7 @@ def _empty_answer(card_id, answer=None, option=None, note=""):
 
 
 def _verdict_write(verdict, note="", answers=None):
-    return {"path": "verdict/" + _sheet_digest(_sample_final()), "body": _sent(verdict, note, answers=answers)}
+    return {"path": _sends_key() + "/<id>", "body": _sent(verdict, note, answers=answers)}
 
 
 def _draft_write(verdict, note=""):
@@ -2449,7 +2473,7 @@ def test_a_draft_verdict_is_restored_on_reopen_and_counts_as_nothing():
     assert picked["send"] is False
     assert picked["sets"] == [], "reopening wrote something"
     assert picked["count"] == "0 of 2 answered"
-    assert picked["reads"] == ["answers", "draft-verdict", "verdict"]
+    assert picked["reads"] == sorted(["answers", "draft-verdict", _sends_key()])
     assert _all_on(picked["controls"])
 
     noted = reopen(_draft(None, "Only a note"))
@@ -2487,7 +2511,7 @@ def test_send_verdict_writes_one_verdict_and_shows_sent():
       return out;
     """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending"})
     assert result["before"] == {"writes": 2, "status": DRAFT_LINE, "disabled": False}
-    assert result["during"]["last"] == "verdict/" + _sheet_digest(_sample_final())
+    assert re.fullmatch(re.escape(_sends_key()) + "/[0-9a-f]{32}", result["during"]["last"]), "the verdict was not written as a new document under this revision's sends"
     assert result["during"]["verdicts"] == [_verdict_write("approve", "Ship it")]
     assert result["during"]["verdicts"][0]["body"]["sheet"] == hashlib.sha256(_sample_files(_sample_final())["sheet.json"]["body"].encode("utf-8")).hexdigest(), "the sent document does not carry the digest of the served bytes"
     assert result["during"]["status"] == "Sending…", "the page said more than it knew before the write resolved"
@@ -2498,7 +2522,8 @@ def test_send_verdict_writes_one_verdict_and_shows_sent():
     assert result["after"]["last"]["pressed"] == ["true", "false"] and result["after"]["last"]["note"] == "Ship it"
     assert result["after"]["retry"] is False
     keyed = _sheet_digest(_sample_final())
-    assert result["paths"] == ["draft-verdict/" + keyed, "draft-verdict/" + keyed, "verdict/" + keyed]
+    assert result["paths"][:2] == ["draft-verdict/" + keyed, "draft-verdict/" + keyed]
+    assert len(result["paths"]) == 3 and re.fullmatch("verdict/" + keyed + "/sends/[0-9a-f]{32}", result["paths"][2])
 
 
 # Bites on: Send verdict writing while an answer is rejected or still unsaved at the deadline (or sooner than that), saying anything but how many answers and what to do, or leaving the sheet frozen after refusing.
@@ -2705,12 +2730,12 @@ def test_a_sent_verdict_is_shown_on_reopen():
           return { last: t.lastState(), status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), controls: t.controls() };
         """.replace("__POKE__", "true" if poke else "false"), host={"fakeTimers": True, "collections": collections})
 
-    sent = reopen({"verdict": [_final_doc(_sent("approve", "Good to go"))], "draft-verdict": [_final_doc(_draft("not-yet", "An older draft"))]}, poke=True)
+    sent = reopen({_sends_key(): [_send_doc(_sent("approve", "Good to go"))], "draft-verdict": [_final_doc(_draft("not-yet", "An older draft"))]}, poke=True)
     assert sent["status"] == "Verdict sent: Approve"
     assert sent["last"]["pressed"] == ["true", "false"] and sent["last"]["note"] == "Good to go"
     assert sent["send"] is True and _all_off(sent["controls"])
     assert sent["sets"] == [], "a sent sheet wrote after reopening"
-    assert reopen({"verdict": [_final_doc(_sent("not-yet"))]})["status"] == "Verdict sent: Not yet"
+    assert reopen({_sends_key(): [_send_doc(_sent("not-yet"))]})["status"] == "Verdict sent: Not yet"
 
     for name, bad in (
         ("unknown verdict", dict(_sent("approve"), verdict="maybe")),
@@ -2722,11 +2747,11 @@ def test_a_sent_verdict_is_shown_on_reopen():
         ("no sheet digest", {key: value for key, value in _sent("approve").items() if key != "sheet"}),
         ("malformed sheet digest", dict(_sent("approve"), sheet="ABC")),
     ):
-        ignored = reopen({"verdict": [_final_doc(bad)], "draft-verdict": [_final_doc(_draft("not-yet", "Still a draft"))]})
+        ignored = reopen({_sends_key(): [_send_doc(bad)], "draft-verdict": [_final_doc(_draft("not-yet", "Still a draft"))]})
         assert ignored["status"] == DRAFT_LINE, name
         assert ignored["last"]["pressed"] == ["false", "true"] and ignored["last"]["note"] == "Still a draft", name
         assert ignored["send"] is False and ignored["sets"] == [], name
-    only_bad = reopen({"verdict": [_final_doc(dict(_sent("approve"), verdict="maybe"))]})
+    only_bad = reopen({_sends_key(): [_send_doc(dict(_sent("approve"), verdict="maybe"))]})
     assert only_bad["status"] == PICK_FIRST_LINE and only_bad["send"] is True
 
 
@@ -2739,23 +2764,24 @@ def test_a_verdict_and_a_draft_for_another_revision_are_ignored_on_reopen():
         """, host={"fakeTimers": True, "collections": collections})
 
     other = reopen({
-        "verdict": [_final_doc(_sent("approve", "Old sign-off", sheet=OTHER_DIGEST))],
+        _sends_key(): [_send_doc(_sent("approve", "Old sign-off", sheet=OTHER_DIGEST))],
         "draft-verdict": [_final_doc(_draft("not-yet", "Old draft", sheet=OTHER_DIGEST))],
     })
     assert other["status"] == PICK_FIRST_LINE and other["send"] is True, "a verdict for another revision locked or restored"
     assert other["last"]["pressed"] == ["false", "false"] and other["last"]["note"] == ""
     assert _all_on([control for control in other["controls"] if control["text"] != "Send verdict"]), "the sheet stayed locked"
     assert other["sets"] == []
-    assert reopen({"verdict": [_final_doc(_sent("approve", sheet=OTHER_DIGEST))]})["status"] == PICK_FIRST_LINE
-    mixed = reopen({"verdict": [_final_doc(_sent("approve", sheet=OTHER_DIGEST))], "draft-verdict": [_final_doc(_draft("not-yet", "Mine"))]})
+    assert reopen({_sends_key(): [_send_doc(_sent("approve", sheet=OTHER_DIGEST))]})["status"] == PICK_FIRST_LINE
+    mixed = reopen({_sends_key(): [_send_doc(_sent("approve", sheet=OTHER_DIGEST))], "draft-verdict": [_final_doc(_draft("not-yet", "Mine"))]})
     assert mixed["last"]["note"] == "Mine" and mixed["status"] == DRAFT_LINE
 
 
-# Bites on: the sent document or a draft not carrying the digest of the served sheet.json bytes, or the sent answers not equal to the cards' saved answers.
+# Bites on: the sent document or a draft not carrying the digest of the served sheet.json bytes, or the sent answers not equal to the cards' saved answers (including an option pick keeping its option id).
 def test_the_sent_document_carries_the_digest_and_every_cards_answer():
     result = _sheet_page(_sample_final(), """
       ${VERDICTS}
       t.click(t.button("saved-plan-history", "Discuss"));
+      t.click(t.button("leftovers-handling", "Let leftovers fill a lunch slot"));
       t.type(t.note("leftovers-handling"), "Keep it short", "change");
       t.click(t.lastButton("Not yet"));
       await t.tick();
@@ -2765,10 +2791,10 @@ def test_the_sent_document_carries_the_digest_and_every_cards_answer():
     """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
     digest = hashlib.sha256(_sample_files(_sample_final())["sheet.json"]["body"].encode("utf-8")).hexdigest()
     assert result["status"] == "Verdict sent: Not yet"
-    assert result["verdicts"] == [{"path": "verdict/" + digest, "body": {
+    assert result["verdicts"] == [{"path": _sends_key() + "/<id>", "body": {
         "verdict": "not-yet", "note": "", "sheet": digest,
         "answers": [
-            _empty_answer("leftovers-handling", None, None, "Keep it short"),
+            _empty_answer("leftovers-handling", "option", "allow-leftovers", "Keep it short"),
             _empty_answer("saved-plan-history", "discuss"),
         ],
     }}]
@@ -2789,12 +2815,101 @@ def test_a_send_that_finds_a_verdict_for_this_revision_writes_nothing():
         send: t.sendButton().disabled, retry: t.sendTryAgain() !== undefined,
         reads: t.reads.map((read) => read.name),
       };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "later": {"verdict": [_final_doc(earlier)]}})
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "later": {_sends_key(): [_send_doc(earlier)]}})
     assert result["verdicts"] == [], "a verdict was written over the one already sent"
     assert result["status"] == "Verdict sent: Not yet"
     assert result["last"]["pressed"] == ["false", "true"] and result["last"]["note"] == "From the other tab"
     assert result["send"] is True and _all_off(result["controls"]) and result["retry"] is False
-    assert result["reads"][-1] == "verdict", "Send did not look at the verdict collection just before writing"
+    assert result["reads"][-1] == _sends_key(), "Send did not list this revision's sends just before writing"
+
+
+CONFLICT_LINE = "More than one verdict was sent for this sheet from different windows. The session will ask you which one counts."
+
+
+def _send_from_a_fresh_page(pick):
+    """One page, opened with no send yet stored, sends the given pick; gives what it wrote under the sends collection."""
+    result = _sheet_page(_sample_final(), """
+      t.click(t.lastButton("__PICK__"));
+      await t.advance(200);
+      t.click(t.sendButton());
+      await t.advance(200);
+      return { written: t.written(), status: t.sendStatus() };
+    """.replace("__PICK__", pick), host={"fakeTimers": True, "set": "ok"})
+    return {path: body for path, body in result["written"].items() if path.startswith(_sends_key() + "/")}, result["status"]
+
+
+# Bites on: a Send replacing another window's send for the same revision (one shared document), so two windows that both read no send before either wrote leave one document and lose a verdict; or a send's id not being its own.
+def test_two_sends_from_two_pages_for_one_revision_leave_two_documents_and_neither_changes():
+    first, first_status = _send_from_a_fresh_page("Approve")
+    second, second_status = _send_from_a_fresh_page("Not yet")
+    assert first_status == "Verdict sent: Approve" and second_status == "Verdict sent: Not yet"
+    assert len(first) == 1 and len(second) == 1
+    (first_path, first_body), = first.items()
+    (second_path, second_body), = second.items()
+    assert first_path != second_path, "two windows wrote to the same document, so the later one replaced the earlier"
+    assert re.fullmatch(re.escape(_sends_key()) + "/[0-9a-f]{32}", first_path) and re.fullmatch(re.escape(_sends_key()) + "/[0-9a-f]{32}", second_path)
+    store = {first_path: first_body, second_path: second_body}
+    assert len(store) == 2
+    assert store[first_path]["verdict"] == "approve" and store[second_path]["verdict"] == "not-yet", "a send changed"
+    # Opened again, the two sends are both there and disagree.
+    reopened = _sheet_page(_sample_final(), """
+      await t.advance(1500);
+      return { status: t.sendStatus(), send: t.sendButton().disabled, controls: t.controls(), sets: t.setLog() };
+    """, host={"fakeTimers": True, "collections": {_sends_key(): [{"id": path.rsplit("/", 1)[1], "data": body} for path, body in store.items()]}})
+    assert reopened["status"] == CONFLICT_LINE
+
+
+# Bites on: several sends for one revision that differ (in verdict, note or answers) showing one of them as the verdict or leaving the sheet unlocked, several identical sends not counting as one sent verdict, or a send's key order making two identical sends look different.
+def test_reopening_with_more_than_one_send_locks_on_a_difference_and_shows_sent_otherwise():
+    def reopen(sends):
+        return _sheet_page(_sample_final(), """
+          await t.advance(200);
+          const fire = (node) => ["click", "input", "change"].forEach((type) => t.fire(node, type));
+          t.lastButtons().forEach(fire);
+          fire(t.lastNote());
+          t.buttons("leftovers-handling").forEach(fire);
+          t.fire(t.sendButton(), "click");
+          await t.advance(1500);
+          return { status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), controls: t.controls(), last: t.lastState() };
+        """, host={"fakeTimers": True, "collections": {_sends_key(): [_send_doc(body, n) for n, body in enumerate(sends, 1)]}})
+
+    one = reopen([_sent("approve", "Fine")])
+    assert one["status"] == "Verdict sent: Approve" and one["last"]["note"] == "Fine"
+    assert one["send"] is True and _all_off(one["controls"]) and one["sets"] == []
+
+    reordered = dict(reversed(list(_sent("approve", "Fine").items())))
+    assert list(reordered) != list(_sent("approve", "Fine"))
+    same = reopen([_sent("approve", "Fine"), reordered])
+    assert same["status"] == "Verdict sent: Approve" and same["last"]["note"] == "Fine"
+
+    other_answers = [_empty_answer("leftovers-handling", "discuss"), _empty_answer("saved-plan-history")]
+    for name, pair in (
+        ("verdict", [_sent("approve", "Fine"), _sent("not-yet", "Fine")]),
+        ("note", [_sent("approve", "Fine"), _sent("approve", "Other note")]),
+        ("answers", [_sent("approve", "Fine"), _sent("approve", "Fine", answers=other_answers)]),
+    ):
+        conflicted = reopen(pair)
+        assert conflicted["status"] == CONFLICT_LINE, name
+        assert conflicted["send"] is True and _all_off(conflicted["controls"]), name
+        assert conflicted["sets"] == [], name
+
+    # A document that is not a send for this revision does not make a conflict.
+    mixed = reopen([_sent("approve", "Fine"), _sent("not-yet", "Elsewhere", sheet=OTHER_DIGEST)])
+    assert mixed["status"] == "Verdict sent: Approve"
+
+
+# Bites on: a browser with no random source still sending (a send needs an id nobody else will pick) or saying nothing about why.
+def test_without_a_random_source_send_stays_off():
+    result = _sheet_page(_sample_final(), """
+      t.click(t.lastButton("Approve"));
+      await t.advance(1500);
+      t.fire(t.sendButton(), "click");
+      await t.advance(1500);
+      return { status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog().map((call) => call.path) };
+    """, host={"fakeTimers": True, "noRandom": True})
+    assert result["status"] == "This browser can't make a unique id for the verdict, so it can't be sent here."
+    assert result["send"] is True
+    assert not [path for path in result["sets"] if path.startswith("verdict/")]
 
 
 # Bites on: a reopened sent sheet showing a later draft's answers instead of the answers the verdict was sent with.
@@ -2804,7 +2919,7 @@ def test_a_sent_verdict_shows_the_answers_it_was_sent_with():
     result = _sheet_page(_sample_final(), """
       await t.advance(1500);
       return { state: t.state("leftovers-handling"), status: t.sendStatus() };
-    """, host={"fakeTimers": True, "collections": {"verdict": [_final_doc(signed)], "answers": [{"id": "leftovers-handling", "data": later}]}})
+    """, host={"fakeTimers": True, "collections": {_sends_key(): [_send_doc(signed)], "answers": [{"id": "leftovers-handling", "data": later}]}})
     assert result["status"] == "Verdict sent: Approve"
     assert result["state"]["note"] == "Signed note"
     assert result["state"]["pressed"] != ["true"] * len(result["state"]["pressed"])
@@ -2842,13 +2957,13 @@ def test_a_delayed_write_from_an_old_revision_leaves_the_newer_verdict_document_
       return { written: written, verdicts: verdicts(), status: t.sendStatus() };
     """.replace("${VERDICTS}", VERDICT_WRITES), host={
         "fakeTimers": True, "set": "pending",
-        "collections": {"verdict": [_final_doc(newer_verdict, doc_id=newer)], "draft-verdict": [_final_doc(_draft("not-yet", "Newer draft", sheet=newer), doc_id=newer)]},
+        "collections": {_sends_key(newer): [_send_doc(newer_verdict)], "draft-verdict": [_final_doc(_draft("not-yet", "Newer draft", sheet=newer), doc_id=newer)]},
     })
     own = _sheet_digest(_sample_final())
     assert own != newer
-    assert result["written"] and all(path.endswith("/" + own) for path in result["written"]), result["written"]
+    assert result["written"] and all(own in path.split("/") for path in result["written"]), result["written"]
     assert not [path for path in result["written"] if newer in path], "an old revision wrote to the newer revision's document"
-    assert [call["path"] for call in result["verdicts"]] == ["verdict/" + own]
+    assert [call["path"] for call in result["verdicts"]] == [_sends_key(own) + "/<id>"]
     assert result["status"] == "Verdict sent: Approve"
     assert newer_verdict["sheet"] == newer, "the newer verdict document was changed"
 
@@ -2870,7 +2985,7 @@ def test_the_digest_covers_the_served_bytes_including_a_byte_order_mark():
     digest = hashlib.sha256(served).hexdigest()
     assert digest != hashlib.sha256(served[3:]).hexdigest()
     assert page["result"]["status"] == "Verdict sent: Approve"
-    assert [(call["path"], call["body"]["sheet"]) for call in page["result"]["verdicts"]] == [("verdict/" + digest, digest)]
+    assert [(re.sub(r"[0-9a-f]{32}$", "<id>", call["path"]), call["body"]["sheet"]) for call in page["result"]["verdicts"]] == [(_sends_key(digest) + "/<id>", digest)]
 
 
 # Bites on: a Send that cannot re-check the published sheet writing anyway, or saying nothing about why and offering no retry.
@@ -2898,7 +3013,7 @@ def test_a_send_looks_before_writing_and_a_failed_look_writes_nothing():
       t.click(t.sendButton());
       await t.advance(200);
       return { verdicts: verdicts(), status: t.sendStatus() };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "set": "pending", "later": {"verdict": [_final_doc(_sent("not-yet", sheet=OTHER_DIGEST))]}})
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "set": "pending", "later": {_sends_key(): [_send_doc(_sent("not-yet", sheet=OTHER_DIGEST))]}})
     assert other["verdicts"] == [_verdict_write("approve")], "a verdict for another revision blocked this one"
     failed = _sheet_page(_sample_final(), """
       ${VERDICTS}
@@ -2907,11 +3022,11 @@ def test_a_send_looks_before_writing_and_a_failed_look_writes_nothing():
       t.click(t.sendButton());
       await t.advance(200);
       return { verdicts: verdicts(), status: t.sendStatus(), retry: t.sendTryAgain() !== undefined, send: t.sendButton().disabled };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "readByCollection": {"verdict": ["docs", "reject"]}})
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "readByCollection": {_sends_key(): ["docs", "reject"]}})
     assert failed["verdicts"] == [] and failed["status"] == FAILED_SEND_LINE and failed["retry"] is True
 
 
-# Bites on: a verdict document being changed by anything written to answers/ after it was sent (another open copy's later tap).
+# Bites on: a verdict document being changed by anything written to answers/ after it was sent (another open copy's later tap), or the sent page taking such a write into its cards.
 def test_a_later_answer_write_leaves_the_sent_document_unchanged():
     result = _sheet_page(_sample_final(), """
       ${VERDICTS}
@@ -2920,15 +3035,26 @@ def test_a_later_answer_write_leaves_the_sent_document_unchanged():
       await t.advance(200);
       t.click(t.sendButton());
       await t.advance(200);
-      const before = JSON.stringify(verdicts());
-      t.fire(t.button("leftovers-handling", "Discuss"), "click");
+      const sentAt = t.setLog().length;
+      const before = { verdicts: JSON.stringify(verdicts()), written: JSON.stringify(t.written()), cards: t.state("leftovers-handling").pressed, status: t.sendStatus() };
+      // Another open copy of the sheet taps a different answer: a write straight into the store, not through this page's locked controls.
+      await fakeStore.doc("answers/leftovers-handling").set({ answer: "discuss", optionId: null, note: "From another window" });
       await t.advance(1500);
-      return { before: before, after: JSON.stringify(verdicts()), paths: t.setLog().map((call) => call.path) };
-    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
-    assert result["before"] == result["after"]
-    sent_path = "verdict/" + _sheet_digest(_sample_final())
-    assert result["paths"].count(sent_path) == 1
-    assert result["paths"][-1] == sent_path, "a sent sheet took a later answer"
+      return {
+        before: before, sentAt: sentAt,
+        after: { verdicts: JSON.stringify(verdicts()), cards: t.state("leftovers-handling").pressed, status: t.sendStatus() },
+        log: t.setLog(), written: t.written(),
+      };
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "set": "ok"})
+    assert result["log"][result["sentAt"]] == {"path": "answers/leftovers-handling", "body": {"answer": "discuss", "optionId": None, "note": "From another window"}}, "the other copy's answer was not written to the store"
+    assert len(result["log"]) == result["sentAt"] + 1, "the sent page wrote something after the answer write"
+    sends = [path for path in result["written"] if path.startswith(_sends_key() + "/")]
+    assert len(sends) == 1
+    assert json.dumps(result["written"][sends[0]]) == json.dumps(json.loads(result["before"]["written"])[sends[0]]), "the stored send changed after the answer write"
+    assert result["written"][sends[0]]["answers"][0] == _empty_answer("leftovers-handling", "aligned"), "the send does not carry the answers it was sent with"
+    assert result["before"]["verdicts"] == result["after"]["verdicts"]
+    assert result["before"]["cards"] == result["after"]["cards"], "the sent page took a later answer into its cards"
+    assert result["before"]["status"] == result["after"]["status"] == "Verdict sent: Approve"
 
 
 # Bites on: a browser with no crypto.subtle leaving the last card or Send on, or saying nothing about why.
@@ -2997,7 +3123,7 @@ def test_a_final_sheet_with_no_cards():
     assert result["parts"]["finalHidden"] is False and result["parts"]["finalChildren"] == 2
     assert result["next"] == NEXT_TEXT
     assert result["status"] == PICK_FIRST_LINE
-    assert result["verdicts"] == [{"path": "verdict/" + _sheet_digest(_sample_final(cards=[])), "body": {
+    assert result["verdicts"] == [{"path": _sends_key(_sheet_digest(_sample_final(cards=[]))) + "/<id>", "body": {
         "verdict": "approve", "note": "", "sheet": _sheet_digest(_sample_final(cards=[])), "answers": [],
     }}]
     assert result["sent"] == "Verdict sent: Approve"
@@ -3007,8 +3133,8 @@ def test_a_final_sheet_with_no_cards():
 # Bites on: a failed or stalled read of the draft verdict or of the verdict (not only of the answers) being taken as an empty collection, so the controls turn on, or its Try again not reading all three collections again.
 @pytest.mark.parametrize("host,stall", [
     pytest.param({"readByCollection": {"draft-verdict": ["reject", "docs"]}}, False, id="draft-verdict-rejects"),
-    pytest.param({"readByCollection": {"verdict": ["reject", "docs"]}}, False, id="verdict-rejects"),
-    pytest.param({"readByCollection": {"verdict": ["pending", "docs"]}, "fakeTimers": True}, True, id="verdict-stalls"),
+    pytest.param({"readByCollection": {_sends_key(): ["reject", "docs"]}}, False, id="verdict-rejects"),
+    pytest.param({"readByCollection": {_sends_key(): ["pending", "docs"]}, "fakeTimers": True}, True, id="verdict-stalls"),
     pytest.param({"readByCollection": {"answers": ["reject", "docs"]}}, False, id="answers-reject"),
 ])
 def test_a_failed_verdict_read_keeps_the_sheet_off(host, stall):
@@ -3032,10 +3158,10 @@ def test_a_failed_verdict_read_keeps_the_sheet_off(host, stall):
     assert failed["hidden"] is False and failed["retry"] is True
     assert _all_off(failed["controls"]) and failed["send"] is True
     assert failed["status"] == ""
-    assert failed["reads"] == ["answers", "draft-verdict", "verdict"]
+    assert failed["reads"] == ["answers", "draft-verdict", _sends_key()]
     assert result["writes"] == 0
     assert result["recovered"]["hidden"] is True
-    assert result["recovered"]["reads"] == ["answers", "draft-verdict", "verdict"] * 2, "the retry did not read all three again"
+    assert result["recovered"]["reads"] == ["answers", "draft-verdict", _sends_key()] * 2, "the retry did not read all three again"
     assert _all_on([control for control in result["recovered"]["controls"] if control["text"] != "Send verdict"])
     assert result["recovered"]["send"] is True and result["recovered"]["status"] == PICK_FIRST_LINE
 
@@ -3121,14 +3247,14 @@ def test_usage_doc_describes_the_final_sheet():
     doc = USAGE_DOC.read_text(encoding="utf-8")
     assert "## A final sheet" in doc
     section = doc.split("## A final sheet", 1)[1].split("\n## ", 1)[0]
-    for needle in ("`draft-verdict/<digest>`", "`verdict/<digest>`", "`$defs/draftVerdict`", "`$defs/verdict`", "Send verdict"):
+    for needle in ("`draft-verdict/<digest>`", "`verdict/<digest>/sends/<sendId>`", "`$defs/draftVerdict`", "`$defs/verdict`", "Send verdict"):
         assert needle in section, needle
     squeezed = " ".join(section.split())
     assert "never counts" in squeezed
     assert "no cards" in squeezed
     assert doc.index("## How a sheet is laid out") < doc.index("## A final sheet") < doc.index("## How answers come back")
     answers = doc.split("## How answers come back", 1)[1].split("\n## ", 1)[0]
-    assert "Send verdict" in answers and "`verdict/<SHA-256 of the sheet.json it published>`" in answers
+    assert "Send verdict" in answers and "`verdict/<SHA-256 of the sheet.json it published>/sends`" in answers
     assert "and nothing else" in " ".join(answers.split())
     assert "never acts on a draft" in " ".join(answers.split())
 
