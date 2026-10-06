@@ -70,8 +70,14 @@ action that owns it, leaving the rest of the calibration untouched:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  printf '%s\n' '<the answer as a JSON string>' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item whoItsFor --cwd .
+  python3 -B "$ROOT_DIR/lib/project_config.py" set --item whoItsFor --cwd . <<'SUPERHEROES_ANSWER'
+  <the answer as a one-line JSON string>
+  SUPERHEROES_ANSWER
   ```
+
+  The answer is free text, so it goes in through a quoted here-document, never inside shell single
+  quotes: an apostrophe would break the command and a `$(...)` would run. Write the JSON on one
+  line, flush left, with no indent before the closing `SUPERHEROES_ANSWER` line.
 
 - **Set or clear the spec-reviewer seat** → write the engine that reviews specs. Empty stdin clears
   it.

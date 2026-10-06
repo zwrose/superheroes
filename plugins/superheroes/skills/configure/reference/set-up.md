@@ -96,8 +96,14 @@ Record the answer as configuration item 14 through `project_config`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-printf '%s\n' '<the answer as a JSON string>' | python3 -B "$ROOT_DIR/lib/project_config.py" set --item whoItsFor --cwd .
+python3 -B "$ROOT_DIR/lib/project_config.py" set --item whoItsFor --cwd . <<'SUPERHEROES_ANSWER'
+<the answer as a one-line JSON string>
+SUPERHEROES_ANSWER
 ```
+
+The answer is the owner's own free text, so it goes in through a quoted here-document, never inside
+shell single quotes: an apostrophe in the answer would break a single-quoted argument, and a
+`$(...)` in it would run. Write it as one line of JSON, with its quotes and backslashes escaped.
 
 Read the result as the other `set` calls are read: only `written` or `noop` means the answer was
 saved. If the owner would rather not answer now, leave item 14 unset, say so in the set-up output,
