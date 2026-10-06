@@ -26,9 +26,14 @@ belongs to and lists every change with its replacement.
 - New configuration item 14, slug `whoItsFor` (in `projectConfiguration`), "Who it's for and what it's for". It has no plugin default and is listed after item 10. Set-up asks for it as its own step.
 - Item 13 (`materialConsequenceLine`) can hold the marker `{"canon": "standing-rulings", "migratedOn": "<date>"}`. A read of it reports `source: "canon-pointer"`, and `set` on it then refuses `material-line-in-canon`. To record a new example, write a standing ruling in Canon.
 - New verb `project_config.py migrate-material-line --cwd . [--root R] [--session ID] [--date YYYY-MM-DD]`. Its result keys are `action` (`migrated`, `already-adopted`, or `refused`), `reason`, `detail`, `entries`, `skipped`, `canonPath`, `canonHome`, `commit`, `fetch` and `sanitized`. Its refusal reasons are `profile-absent`, `profile-unparseable`, `behind`, `malformed-value`, `session-id-malformed`, `date-malformed`, `canon-lookup-refused`, `canon-git-root-not-a-repo`, `canon-dirty`, `canon-default-probe-failed`, `canon-commit-failed`, `material-line-changed-during-migration` and `marker-write-failed`.
-- New key `enginePreferences.specReviewer` (an engine token, no model) and new verb `core_md.py write-spec-reviewer --cwd .`. The verb refuses a value that is not a known engine with `spec-reviewer-unknown-engine`. `load_engine_prefs` gains `specReviewer` and `invalidSpecReviewer`.
+- New key `enginePreferences.specReviewer` (an engine token, no model) and new verb `core_md.py write-spec-reviewer --cwd .`. The verb refuses a value that is not a known engine with `spec-reviewer-unknown-engine`; its own write failures report `spec-reviewer-round-trip-refused` and `spec-reviewer-write-failed`. `load_engine_prefs` gains `specReviewer` and `invalidSpecReviewer`.
 - `core_md` confirm now keeps `enginePreferences` when it confirms a provisional calibration. Before, it dropped them.
 - New `core_md.write_project_config_item_if`, a compare-and-swap write of a single item. It refuses with `item-changed` when the item no longer holds the expected value.
+
+### Guardian dead-code ids are repo-relative
+
+- Dead-code candidate ids and their stored `path` no longer carry the checkout's absolute path, so a sweep from a different checkout no longer reports every carried dead-code hit as new.
+- **One transition sweep** for a baseline written with absolute ids: it reports every current dead-code candidate as new, once, and every old absolute-keyed id as resolved. The old checkout folder is not guessed, because a wrong guess could hide a finding. That sweep stores repo-relative ids, and from the next sweep on the dead-code drift is real again, from any checkout. If one ecosystem's tool cannot run on that sweep (a partial sweep), its old absolute ids are carried unchanged and make the same one-time transition on the first sweep where that tool runs.
 
 ## 0.40.0
 
