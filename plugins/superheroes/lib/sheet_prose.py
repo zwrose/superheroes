@@ -2,9 +2,10 @@
 """Render a review sheet's data file as numbered chat prose, for a host that can't show the sheet.
 
 Reads the same `sheet.json` the page draws and prints each card as a numbered item with its context,
-options and recommendation. It checks the file against sheet.schema.json, read at run time by a small reader of
-the keywords that schema uses, plus the schema's four cross-field rules. It uses the standard library only, so it
-runs under a plain python3.
+options and recommendation; a final sheet also prints its history, declined findings and approval. It checks the
+file against sheet.schema.json, read at run time by a small reader of the keywords that schema uses, plus the
+schema's four cross-field rules. A schema that uses a keyword the reader doesn't enforce is refused whole. It uses
+the standard library only, so it runs under a plain python3.
 It refuses a data file it can't trust: one problem per line on stderr, nothing on stdout, exit 1.
 """
 import argparse
@@ -15,9 +16,32 @@ from pathlib import Path
 
 SCHEMA = Path(__file__).resolve().parents[1] / "theme" / "sheet.schema.json"
 
+ENFORCED = {
+    "type", "const", "enum", "minLength", "minimum", "minItems", "uniqueItems", "pattern", "required",
+    "properties", "additionalProperties", "items", "$ref", "allOf", "if", "then", "not", "anyOf",
+}
+ANNOTATIONS = {"$schema", "title", "description", "$comment", "examples", "default", "$defs", "definitions"}
+
+HISTORY = "The review ran %s and fixed %s itself. The vet: %s"
+TRACES_BOARD = ("Every statement in the spec traces to your board, your framing, your rulings, your answers, "
+                "or craft recorded for your veto.")
+TRACES_NO_BOARD = ("Every statement in the spec traces to your framing, your rulings, your answers, "
+                   "or craft recorded for your veto.")
+BOARD_SAVED = "The approved board is saved with the spec."
+BOARD_NOT_SAVED = "The approved board is not saved with the spec."
+NEXT = ("The advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or "
+        "gitignored, to the spec where it is kept) and vets it, then one merge word covers both.")
+
+_MARKDOWN_CHARACTERS = re.compile(r"([\\`*_\[\]<>~|&])")
+
 
 def _one_line(text):
     return re.sub(r"\s*[\r\n]+\s*", " ", text)
+
+
+def _text(value):
+    """A string from the data file as one line, with its Markdown characters escaped so they print as typed."""
+    return _MARKDOWN_CHARACTERS.sub(r"\\\1", _one_line(value))
 
 
 def _plural(count, word):
@@ -30,20 +54,72 @@ def _is(kind, value):
     return {"object": dict, "array": list, "string": str, "boolean": bool, "null": type(None)}[kind] is type(value)
 
 
+def _pointer(steps):
+    return "#" + "".join("/" + str(step).replace("~", "~0").replace("/", "~1") for step in steps)
+
+
+def _unchecked_rules(schema):
+    """Every place the schema uses a keyword, or a form of one, that _validate does not enforce; empty when none.
+
+    It walks the root and every sub-schema a keyword holds. A $ref is only ever followed into $defs, which the
+    walk reaches on its own, so it is not followed here.
+    """
+    problems = []
+    defs = schema.get("$defs") if isinstance(schema, dict) else None
+
+    def refuse(what, steps):
+        problems.append("The sheet's schema uses %s at %s, which this renderer can't check." % (what, _pointer(steps)))
+
+    def walk(node, steps, holder):
+        if not isinstance(node, dict):
+            refuse('"%s" with something that is not a schema' % holder, steps)
+            return
+        for key, value in node.items():
+            if key in ("properties", "$defs", "definitions"):
+                if not isinstance(value, dict):
+                    refuse('"%s" as something other than a map of schemas' % key, steps)
+                else:
+                    for name, sub in value.items():
+                        walk(sub, steps + [key, name], key)
+            elif key in ("allOf", "anyOf"):
+                if not isinstance(value, list):
+                    refuse('"%s" as something other than a list of schemas' % key, steps)
+                else:
+                    for index, sub in enumerate(value):
+                        walk(sub, steps + [key, index], key)
+            elif key in ("if", "then", "not"):
+                walk(value, steps + [key], key)
+            elif key == "items":
+                if isinstance(value, list):
+                    refuse('"items" as a list', steps)
+                else:
+                    walk(value, steps + [key], key)
+            elif key == "additionalProperties":
+                if not isinstance(value, bool):
+                    refuse('"additionalProperties" as something other than true or false', steps)
+            elif key == "$ref":
+                named = re.fullmatch(r"#/\$defs/([^/~%]+)", value) if isinstance(value, str) else None
+                if not named or not isinstance(defs, dict) or named.group(1) not in defs:
+                    refuse('"$ref" with %s (it must name an entry under #/$defs/)' % json.dumps(value), steps)
+            elif key not in ENFORCED and key not in ANNOTATIONS:
+                refuse('the rule "%s"' % key, steps)
+
+    walk(schema, [], "schema")
+    return problems
+
+
 def _validate(schema, value, path, defs):
     """Problems from checking value against the schema keywords sheet.schema.json uses; empty when it fits."""
     where = path or "the data file"
-    if "$ref" in schema:
-        return _validate(defs[schema["$ref"].rsplit("/", 1)[1]], value, path, defs)
+    problems = _validate(defs[schema["$ref"].rsplit("/", 1)[1]], value, path, defs) if "$ref" in schema else []
     kinds = schema.get("type", [])
     kinds = [kinds] if isinstance(kinds, str) else kinds
     if kinds and not any(_is(kind, value) for kind in kinds):
-        return ["%s must be %s." % (where, " or ".join(kinds))]
+        return problems + ["%s must be %s." % (where, " or ".join(kinds))]
     if "const" in schema and value != schema["const"]:
-        return ['%s must be "%s".' % (where, schema["const"])]
+        return problems + ["%s must be %s." % (where, json.dumps(schema["const"]))]
     if "enum" in schema and value not in schema["enum"]:
-        return ["%s must be one of %s." % (where, ", ".join(map(str, schema["enum"])))]
-    problems = []
+        return problems + ["%s must be one of %s." % (where, ", ".join(map(str, schema["enum"])))]
     if isinstance(value, str):
         if len(value) < schema.get("minLength", 0):
             problems.append("%s must not be empty." % where)
@@ -67,8 +143,9 @@ def _validate(schema, value, path, defs):
             elif schema.get("additionalProperties") is False:
                 problems.append("%s has %s, which the sheet does not use." % (where, key))
     for part in schema.get("allOf", []):
-        if not part.get("if") or not _validate(part["if"], value, path, defs):
-            problems += _validate(part.get("then", part), value, path, defs)
+        problems += _validate(part, value, path, defs)
+    if "if" in schema and "then" in schema and not _validate(schema["if"], value, path, defs):
+        problems += _validate(schema["then"], value, path, defs)
     if "not" in schema and not _validate(schema["not"], value, path, defs):
         problems.append("%s holds a part this kind of sheet must not have." % where)
     if "anyOf" in schema and all(_validate(option, value, path, defs) for option in schema["anyOf"]):
@@ -104,7 +181,10 @@ def check_sheet(sheet):
     """Every problem that makes the data file untrustworthy for rendering; empty when it is fine."""
     with open(SCHEMA, encoding="utf-8") as handle:
         schema = json.load(handle)
-    problems = _validate(schema, sheet, "", schema["$defs"])
+    problems = _unchecked_rules(schema)
+    if problems:
+        return problems
+    problems = _validate(schema, sheet, "", schema.get("$defs", {}))
     return [p[0].upper() + p[1:] for p in problems] or _check_cross_fields(sheet)
 
 
@@ -123,32 +203,37 @@ def _why_line(sheet):
 
 
 def _letter(position):
-    return chr(ord("a") + position)
+    """a to z, then aa, ab and on, so any number of options has its own letter."""
+    number, letters = position + 1, ""
+    while number:
+        number, rest = divmod(number - 1, 26)
+        letters = chr(ord("a") + rest) + letters
+    return letters
 
 
 def _render_card(number, card):
     context = card["context"]
-    kind = card["callKind"] + (" (warning)" if card["warning"] else "")
+    kind = _text(card["callKind"]) + (" (warning)" if card["warning"] else "")
     lines = [
-        "%d. **%s**" % (number, _one_line(card["question"])),
-        "   - Kind of call: %s" % _one_line(kind),
-        "   - What's true now: %s" % _one_line(context["now"]),
-        "   - Why it needs you: %s" % _one_line(context["whyOwner"]),
+        "%d. **%s**" % (number, _text(card["question"])),
+        "   - Kind of call: %s" % kind,
+        "   - What's true now: %s" % _text(context["now"]),
+        "   - Why it needs you: %s" % _text(context["whyOwner"]),
     ]
     if context["exactText"] is not None:
-        lines.append('   - The exact text: "%s"' % _one_line(context["exactText"]))
+        lines.append('   - The exact text: "%s"' % _text(context["exactText"]))
     if card["images"]:
-        pictures = "; ".join("%s%s (%s)" % (_one_line(i["alt"]), ": " + _one_line(i["caption"]) if i.get("caption") else "", _one_line(i["src"])) for i in card["images"])
+        pictures = "; ".join("%s%s (%s)" % (_text(i["alt"]), ": " + _text(i["caption"]) if i.get("caption") else "", _text(i["src"])) for i in card["images"])
         lines.append("   - Images: %s" % pictures)
     options = card["options"]
     if options:
         lines.append("   - Options:")
         for position, option in enumerate(options):
-            lines.append("     - %s. %s: %s" % (_letter(position), _one_line(option["label"]),
-                                                _one_line(option["consequence"])))
+            lines.append("     - %s. %s: %s" % (_letter(position), _text(option["label"]),
+                                                _text(option["consequence"])))
     recommendation = card.get("recommendation")
     if recommendation is not None:
-        line = "   - Recommendation: %s %s" % (_one_line(recommendation["text"]), _one_line(recommendation["reason"]))
+        line = "   - Recommendation: %s %s" % (_text(recommendation["text"]), _text(recommendation["reason"]))
         if "optionId" in recommendation:
             ids = [option["id"] for option in options]
             line += " (option %s)" % _letter(ids.index(recommendation["optionId"]))
@@ -160,15 +245,40 @@ def _render_card(number, card):
     return lines
 
 
+def _final_head(final):
+    """A final sheet's history and declined findings, each part followed by a blank line."""
+    history, declined = final["history"], final["declinedFindings"]
+    rounds, fixes = _plural(history["reviewRounds"], "round"), _plural(history["fixesMade"], "thing")
+    lines = ["**How the spec got here.** " + HISTORY % (rounds, fixes, _text(history["vet"])), ""]
+    if not declined:
+        return lines + ["**Declined findings.** No findings were declined.", ""]
+    lines.append("**Declined findings (%d).**" % len(declined))
+    lines += ["- %s (why declined: %s)" % (_text(item["summary"]), _text(item["reason"])) for item in declined]
+    return lines + [""]
+
+
+def _final_tail(final):
+    """A final sheet's approval box and what happens next, ending with a blank line."""
+    approval = final["approval"]
+    lines = ["**Approve the spec?**", "- " + (TRACES_BOARD if approval["approvedBoard"] else TRACES_NO_BOARD)]
+    if approval["approvedBoard"]:
+        lines.append("- " + (BOARD_SAVED if approval["boardSavedWithSpec"] else BOARD_NOT_SAVED))
+    return lines + ["- Answer: Approve or Not yet, with any note.", "", "**What happens next.** " + NEXT, ""]
+
+
 def render(sheet):
     """The sheet's prose as one string; the sheet must already have passed check_sheet."""
     cards = sheet["cards"]
-    lines = ["**%s**: %s for you." % (_one_line(sheet["title"]), _plural(len(cards), "item")), ""]
+    lines = ["**%s**: %s for you." % (_text(sheet["title"]), _plural(len(cards), "item")), ""]
     if sheet["kind"] == "remainder":
         lines += [_why_line(sheet), ""]
+    if sheet["kind"] == "final":
+        lines += _final_head(sheet["final"])
     for number, card in enumerate(cards, 1):
         lines += _render_card(number, card)
         lines.append("")
+    if sheet["kind"] == "final":
+        lines += _final_tail(sheet["final"])
     return "\n".join(line.rstrip() for line in lines[:-1]) + "\n"
 
 
