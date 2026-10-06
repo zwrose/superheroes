@@ -1,3 +1,13 @@
+      const choices = [];
+      STORED_ANSWERS.forEach(function (stored) {
+        if (stored.carriesOption) {
+          card.options.forEach(function (option) {
+            choices.push({ label: option.label, answer: stored.value, optionId: option.id });
+          });
+        } else {
+          choices.push({ label: stored.label, answer: stored.value, optionId: null });
+        }
+      });
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Review sheet</title>
@@ -412,6 +422,14 @@
     const titleHost = document.getElementById("sheet-title");
     const gate = document.getElementById("sheet-gate");
 
+    // The three values a stored answer can take, and which of them carries an option id. This is the
+    // shape answer.schema.json defines; the choices and the restore check below both come from here.
+    const STORED_ANSWERS = [
+      { value: "aligned", label: "Aligned", carriesOption: false },
+      { value: "discuss", label: "Discuss", carriesOption: false },
+      { value: "option", label: null, carriesOption: true },
+    ];
+
     const SAY = {
       noStore: "Answers can't be saved in this view.",
       readOnly: "This sheet is read-only for you. Only its owner can answer.",
@@ -672,10 +690,11 @@
         // A stored document restores a pick only when it names one the card offers.
         restore: function (data) {
           const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
-          if (data.answer === "aligned" || data.answer === "discuss") {
-            state.answer = data.answer;
-          } else if (data.answer === "option" && typeof data.optionId === "string" && optionIds.has(data.optionId)) {
-            state.answer = "option";
+          const stored = STORED_ANSWERS.find(function (entry) { return entry.value === data.answer; });
+          if (stored && !stored.carriesOption) {
+            state.answer = stored.value;
+          } else if (stored && typeof data.optionId === "string" && optionIds.has(data.optionId)) {
+            state.answer = stored.value;
             state.optionId = data.optionId;
           }
           latest = state;
