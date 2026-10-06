@@ -114,12 +114,13 @@ It comes back when the owner opens the link again, and it is not counted as an a
 
 Every stored verdict, draft or sent, carries `sheet`: the SHA-256, in lowercase hex, of the exact
 bytes of the published `sheet.json` as the page fetched them (the bytes themselves, so a file with a
-byte-order mark hashes with it). That digest, written `<digest>` here, is also the document's own id:
+byte-order mark hashes with it). That digest, written `<digest>` here, is the draft's id:
 the draft is stored at `draft-verdict/<digest>` and each sent verdict at `verdict/<digest>/sends/<sendId>`,
 so each revision of the sheet has its own draft and its own sends, and `sheet` equals the `<digest>`
 in the path. The page reads and writes only its own revision's documents; a delayed write from a page
 showing an older revision lands among that older revision's sends and can never touch a newer revision's verdict. A republished final sheet
-has a new digest, so it starts unsigned. A document whose `sheet` is not its own id is ignored: nothing
+has a new digest, so it starts unsigned. A stored document counts only when its `sheet` equals the `<digest>` in its path (the draft's id; for a
+send, the segment between `verdict/` and `/sends/`). Any other is ignored: nothing
 is restored and nothing locks. A browser that cannot compute the digest
 (no `crypto.subtle`) leaves the last card and Send verdict off, with a plain line saying so.
 

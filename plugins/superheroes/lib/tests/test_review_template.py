@@ -828,6 +828,23 @@ def test_page_shows_an_error_for_a_rejected_fetch():
     assert any("data file could not be loaded" in error for error in page["errors"]), page["errors"]
 
 
+# Bites on: a final sheet drawn, or the store reached for, when its wording file is missing, not valid JSON or cannot be fetched.
+@pytest.mark.parametrize("broken, expected", [
+    ({"status": 404, "body": "missing"}, "HTTP 404"),
+    ({"status": 200, "body": '{"history": '}, "valid JSON"),
+    ({"reject": True}, "could not be loaded"),
+], ids=["missing", "invalid-json", "rejected"])
+def test_a_final_sheet_without_its_wording_file_shows_the_error_box(broken, expected):
+    files = _sample_files(_sample_final())
+    files["sheet-words.json"] = broken
+    page = _run_page(files, scenario="""
+      return { uses: t.uses, reads: t.reads.length, sets: t.sets.length };
+    """)
+    _assert_error_shown(page)
+    assert any("wording file" in error and expected in error for error in page["errors"]), page["errors"]
+    assert page["result"] == {"uses": [], "reads": 0, "sets": 0}
+
+
 # Bites on: the page drawing a sheet its schema check refuses (here, two cards sharing an id).
 def test_page_refuses_a_sheet_the_schema_rejects():
     sheet = json.loads((THEME / "sample-sheet.json").read_text(encoding="utf-8"))
@@ -3276,6 +3293,31 @@ def test_done_for_now_counts_an_unsaved_verdict_draft():
     assert result["pending"] == "1 answer isn't saved yet. Keep this page open until this says they're saved."
     assert result["failed"] == "1 answer didn't save. Go back to the sheet and tap Try again on each."
     assert result["back"]["done"] is True and result["back"]["final"] is False
+    assert "Try again" in result["back"]["retry"], "Back to the sheet did not leave the last card offering Try again"
+
+
+# Bites on: a draft verdict write that rejects after the verdict was sent still leaving "Not saved" on the locked last card or the leave-page warning on.
+def test_a_sent_verdict_retires_the_draft_save_state():
+    result = _sheet_page(_sample_final(), """
+      const out = {};
+      t.click(t.lastButton("Approve"));
+      out.beforeSend = t.unload();
+      t.click(t.sendButton());
+      await t.tick();
+      await t.tick();
+      t.sets[t.sets.length - 1].resolve();
+      await t.tick();
+      out.sent = t.sendStatus();
+      t.sets[0].reject({ code: "unavailable", message: "try later" });
+      await t.tick();
+      out.after = { status: t.sendStatus(), save: t.lastSaveText(), guarded: t.unload() };
+      return out;
+    """, host={"set": "pending"})
+    assert result["beforeSend"] is True
+    assert result["sent"] == "Verdict sent: Approve"
+    assert result["after"]["save"] == "", result["after"]
+    assert result["after"]["guarded"] is False, "the leave-page warning stayed on for a verdict already sent"
+    assert result["after"]["status"] == "Verdict sent: Approve"
 
 
 # Bites on: leaving a final sheet going unguarded while its draft verdict (pick or note) is unconfirmed or a Send is in flight, or the guard staying on once the verdict is sent.
@@ -3316,7 +3358,7 @@ def test_leaving_a_final_sheet_is_guarded_while_the_verdict_is_unconfirmed_or_se
 def test_final_sheet_wording_has_one_home():
     words = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
     prose_source = (THEME.parent / "lib" / "sheet_prose.py").read_text(encoding="utf-8")
-    for key in ("history", "tracesBoard", "tracesNoBoard", "boardSaved", "boardNotSaved", "next", "noDeclines", "declinedHeading", "declinedItem", "approveHeading", "nextHeading"):
+    for key in ("history", "tracesBoard", "tracesNoBoard", "boardSaved", "boardNotSaved", "next", "noDeclines", "declinedHeading", "declinedItem", "approveHeading", "nextHeading", "historyHeading"):
         for name, text in (("the page", _template_text()), ("sheet_prose.py", prose_source)):
             assert words[key] not in text, "%s retypes the shared wording %r" % (name, key)
     assert re.search(r"""fetchJson\(\s*['"]sheet-words\.json['"]""", _template_text())

@@ -513,7 +513,7 @@
     let verdictShape = null;
 
     // The SHA-256 (lowercase hex) of the exact bytes the page fetched as sheet.json: the revision every stored
-    // verdict is bound to, and the id of that revision's own draft and verdict documents. Null until worked out,
+    // verdict is bound to, and the id of that revision's draft (its sends live under it). Null until worked out,
     // and left null when the browser can't compute it.
     let sheetDigest = null;
 
@@ -689,6 +689,8 @@
       let timer = null;
       let switchedOn = false;
       let retryButton = null;
+      // True once the verdict this saver drafts is shown as sent: the draft is then nothing to save, show or warn about.
+      let retired = false;
 
       const row = document.createElement("div");
       row.className = "answer-row";
@@ -743,6 +745,7 @@
       }
 
       function showStatus(kind) {
+        if (retired) kind = "idle";
         shown = kind;
         retryButton = null;
         const parts = [];
@@ -819,6 +822,8 @@
         inFlight = null;
         stalled = false;
         clearTimeout(stallTimer);
+        // A write that was still in flight when the verdict was sent may finish; how it ended is not shown.
+        if (retired) return;
         if (saved) acked = body;
         // A note's pause is still running: it sends the newest state itself when it ends.
         if (timer !== null) {
@@ -852,6 +857,7 @@
         // True while this saver holds an answer or note the store has not confirmed: a write in flight, a
         // newer state waiting behind it, a note-pause timer still running, or a write that failed or stalled.
         unsaved: function () {
+          if (retired) return false;
           return inFlight !== null || timer !== null || !sameAnswer(latest, acked);
         },
         // The latest pick (what the pressed button shows) and the kind the save line shows now.
@@ -861,6 +867,13 @@
         // The latest pick and note, as they stand now.
         current: function () {
           return { answer: latest.answer, optionId: latest.optionId, note: latest.note };
+        },
+        // Once the verdict is shown as sent its draft is dropped: no save line, no unsaved count, no further writes.
+        retire: function () {
+          retired = true;
+          clearTimeout(timer);
+          timer = null;
+          showStatus("idle");
         },
         // Cuts a note's pause short: the pending save runs now.
         flush: function () {
@@ -1292,6 +1305,11 @@
       });
     }
 
+    // Once a verdict is shown as sent, the last card's draft is retired: it is not saved, shown or counted any more.
+    function retireDraft() {
+      if (verdictController !== null) verdictController.retire();
+    }
+
     // The only place the verdict is written. It is single-flight and freezes the sheet while it runs: first every
     // pending note is saved and every answer waited for, then the last card's pick and note are captured once and
     // written as a new document under verdict/<digest>/sends. "Sent" is shown only after that write resolved. A write that is rejected leaves
@@ -1402,6 +1420,7 @@
         clearTimeout(slow);
         sentWord = VERDICT_LABELS[payload.verdict];
         sent = true;
+        retireDraft();
         sending = false;
         sendView = null;
         syncControls();
@@ -1512,15 +1531,6 @@
       return snapshot.docs.map(documentData).filter(function (data) { return data !== null && isSentVerdict(data); });
     }
 
-    // A value written the same way whatever order its keys came in, to tell whether two sends say the same thing.
-    function canonical(value) {
-      if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
-      if (value !== null && typeof value === "object") {
-        return "{" + Object.keys(value).sort().map(function (key) { return JSON.stringify(key) + ":" + canonical(value[key]); }).join(",") + "}";
-      }
-      return JSON.stringify(value);
-    }
-
     // Shows the sends found for this revision. One send, or several that say the same thing, is the verdict.
     // Several that differ in verdict, note or answers are not a verdict anyone can pick: the sheet locks and says so.
     function showSends(found) {
@@ -1531,6 +1541,7 @@
       }
       sentConflict = true;
       sent = true;
+      retireDraft();
     }
 
     // True when a stored verdict fits the schema's $defs.verdict, carries a verdict this page knows, and answers
@@ -1544,6 +1555,7 @@
     function showSent(verdict) {
       sentWord = VERDICT_LABELS[verdict.verdict];
       sent = true;
+      retireDraft();
       verdictController.restore({ verdict: verdict.verdict, note: verdict.note, sheet: verdict.sheet });
       // The sent verdict carries the answers it was sent with; the cards show those, not a later draft.
       verdict.answers.forEach(function (entry) {
