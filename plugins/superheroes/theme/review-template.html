@@ -50,7 +50,7 @@
     .sheet-page .sheet-fold { display: none; }
   }
   .sheet-page .sheet-figure img[role="button"] { cursor: pointer; }
-  .sheet-viewer { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); inset: 0; padding: 0; position: fixed; z-index: 2; }
+  .sheet-viewer { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); inset: 0; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); position: fixed; z-index: 2; }
   .sheet-viewer-bar { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; }
   .sheet-viewer-bar .sheet-viewer-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
   .sheet-viewer-frame { display: flex; overflow: auto; overscroll-behavior: contain; touch-action: none; }
