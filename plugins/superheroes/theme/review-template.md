@@ -74,15 +74,8 @@ of call.
 ## How answers come back
 
 A tap saves at once, as a draft the owner can change, into the sheet's own store. The last tap
-counts. Each card's document is at `answers/<card id>`, written whole on every change:
-
-```
-{"answer": "aligned" | "discuss" | "option" | null, "optionId": <the option's id> | null, "note": <string>}
-```
-
-`optionId` is set exactly when `answer` is `"option"`. `answer` is `null` only when a note was saved
-before any pick. Anyone but the owner who opens a shared sheet sees it with the answer controls
-turned off.
+counts. Each card's stored document has the shape `answer.schema.json` defines. Anyone but the
+owner who opens a shared sheet sees it with the answer controls turned off.
 
 A save that fails says so on the card and offers Try again.
 

@@ -643,6 +643,7 @@
         showStatus("saving");
         let request;
         try {
+          // The document written here has the shape answer.schema.json defines.
           request = Promise.resolve(store.doc("answers/" + card.id).set({ answer: body.answer, optionId: body.optionId, note: body.note }));
         } catch (error) {
           request = Promise.reject(error);

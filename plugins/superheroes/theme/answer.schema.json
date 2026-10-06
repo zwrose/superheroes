@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review sheet stored answer",
+  "description": "The document a review sheet page stores for one card, in the sheet's own store. The collection is answers, with one document per card id at answers/<card id>, and each document is written whole on every change. The owner's last tap counts, and the answer is null only when a note was saved before any pick.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["answer", "optionId", "note"],
+  "properties": {
+    "answer": {
+      "description": "What the owner tapped: aligned, discuss, option for a pick of one of the card's options, or null when nothing was picked yet.",
+      "enum": ["aligned", "discuss", "option", null]
+    },
+    "optionId": {
+      "description": "The id of the picked option, or null. It is a string exactly when the answer is option.",
+      "type": ["string", "null"],
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "note": {
+      "description": "The owner's note on the card, an empty string when there is none.",
+      "type": "string"
+    }
+  },
+  "if": {
+    "properties": {"answer": {"const": "option"}},
+    "required": ["answer"]
+  },
+  "then": {
+    "properties": {"optionId": {"type": "string"}}
+  },
+  "else": {
+    "properties": {"optionId": {"type": "null"}}
+  }
+}

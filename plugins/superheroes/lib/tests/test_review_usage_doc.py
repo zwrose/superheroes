@@ -80,9 +80,7 @@ def test_usage_doc_declares_the_store_and_document_shape():
     root = [rule for rule in capabilities["db"]["rules"] if rule["path"] == ""]
     assert len(root) == 1 and root[0]["write"] == "owner", "the declaration no longer limits writes to the owner"
     assert "user" in capabilities
-    for value in ('"aligned"', '"discuss"', '"option"'):
-        assert value in doc, "the doc doesn't show the answer value %s" % value
-    assert "`answers/<card id>`" in doc
+    assert "answer.schema.json" in doc, "the doc doesn't cite the answer document's schema"
 
 
 # Bites on: spec provenance (requirement, ruling, issue, work-item numbers or handoff references) leaking into the glossary section.

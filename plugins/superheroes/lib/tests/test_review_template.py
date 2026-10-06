@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 from provenance_patterns import PROVENANCE_PATTERNS
@@ -13,6 +14,7 @@ from provenance_patterns import PROVENANCE_PATTERNS
 THEME = Path(__file__).resolve().parents[2] / "theme"
 TEMPLATE = THEME / "review-template.html"
 USAGE_DOC = THEME / "review-template.md"
+ANSWER_SCHEMA = json.loads((THEME / "answer.schema.json").read_text(encoding="utf-8"))
 
 FORBIDDEN_PROPERTIES = (
     "font-family", "font-weight", "box-shadow", "letter-spacing", "text-transform", "color",
@@ -381,6 +383,7 @@ __SCENARIO__
     errorHidden: elements["sheet-error"].hidden,
     errors: elements["sheet-error-list"].children.map((item) => item.textContent),
     cards: cards,
+    recordedSets: tools.setLog(),
   }));
   process.exit(0);
 })();
@@ -406,7 +409,10 @@ def _run_page(files, host=None, scenario="return null;"):
     )
     result = subprocess.run([node], input=program, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    page = json.loads(result.stdout)
+    for recorded in page["recordedSets"]:
+        jsonschema.validate(recorded["body"], ANSWER_SCHEMA)
+    return page
 
 
 def _sample_files(sheet=None):
@@ -525,7 +531,7 @@ def test_check_sheet_refuses_a_non_schema_and_malformed_lists():
 
 # Bites on: spec provenance (requirement, ruling, issue, work-item numbers or handoff references) leaking into shipped text.
 def test_shipped_files_carry_no_provenance():
-    for path in (TEMPLATE, USAGE_DOC):
+    for path in (TEMPLATE, USAGE_DOC, THEME / "answer.schema.json"):
         text = path.read_text(encoding="utf-8")
         for pattern in PROVENANCE_PATTERNS:
             assert not re.search(pattern, text), "%s matches %s" % (path.name, pattern)
