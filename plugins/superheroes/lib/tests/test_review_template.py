@@ -750,7 +750,7 @@ def test_check_sheet_uniqueitems_ignores_key_order():
 def test_check_sheet_minlength_counts_characters():
     schema = {"properties": {"word": {"type": "string", "minLength": 2}}}
     results = _run_check_sheet([{"cards": [], "word": "\U0001F600"}, {"cards": [], "word": "ab"}], schema=schema)
-    assert any("empty" in problem for problem in results[0]), results[0]
+    assert any("at least 2 characters" in problem for problem in results[0]), results[0]
     assert results[1] == [], results[1]
 
 
