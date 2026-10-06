@@ -1022,6 +1022,10 @@ def _migrate_material_line(cwd, root, session, date, result):
             raise _MigrationRefusal("date-malformed")
 
     rulings, result["sanitized"] = _split_rulings(raw)
+    # axis: an ambiguous profile refuses before Canon is touched, since core_md.read picked this item 13 value out of it
+    structural = core_md.profile_structural_refusal(cwd, root)
+    if structural is not None:
+        raise _MigrationRefusal("profile-structurally-ambiguous", structural)
     if rulings:
         canon = _write_canon_rulings(cwd, root, rulings, date, session, result)
         # axis: a shared item 13 keeps its examples until Canon's entries reach the default branch — see bite-proof record wo_a_1618_pending-default-branch

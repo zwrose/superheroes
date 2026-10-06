@@ -572,6 +572,33 @@ def test_e19d_contended_configuration_lock_refuses_before_touching_canon(tmp_pat
     assert _shape(w.migrate_landed())["action"] == "migrated"
 
 
+# --- E19e: an ambiguous profile refuses before Canon is touched ---
+
+# axis: a profile with a duplicate key or a second core block refuses before any Canon entry is committed — wo_a_1646_structural-before-canon
+@pytest.mark.parametrize("ambiguity", ["duplicate-key", "second-block"])
+def test_e19e_structurally_ambiguous_profile_refuses_before_touching_canon(tmp_path, ambiguity):
+    w = _world(tmp_path)
+    path = CM.core_path(w.repo, w.store)
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    if ambiguity == "duplicate-key":
+        key = '"materialConsequenceLine"'
+        assert key in text
+        text = text.replace(key, '"materialConsequenceLine": "- other ruling",\n  ' + key, 1)
+    else:
+        text += "\n```json superheroes-core\n{}\n```\n"
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    head = w.head()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "profile-structurally-ambiguous")
+    assert got["detail"]
+    assert got["entries"] == []
+    assert got["commit"] is None
+    assert not os.path.exists(w.canon)
+    assert w.head() == head
+
+
 # --- E20-E21: the marker write ---
 
 # axis: the marker never overwrites an item 13 that changed after the snapshot — wo_a_1618_cas-compare
