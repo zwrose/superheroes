@@ -2,11 +2,16 @@
 
 ## What a sheet is
 
-A sheet is the review template page (`review-template.html`) published together with one data
-file that holds the sheet's cards. The page draws the sheet's title and one card per call, in the
+A [sheet](../rubric/glossary.md#sheet) is the review template page (`review-template.html`) published together with one data
+file that holds the sheet's [cards](../rubric/glossary.md#card). The page draws the sheet's title and one card per call, in the
 plugin's theme (`comic-panel.css`).
 
 A session never edits the template's code to make a sheet. It writes a data file.
+
+## Who uses it
+
+Discovery's remainder sheets and its final sheet use the template. Any session may use it when it
+has calls for the owner, and the owner may ask for one. No other review is required to use it.
 
 ## The data file
 
@@ -44,11 +49,49 @@ file_path = <staged folder>/review-template.html
 files     = {"comic-panel.css": "<staged comic-panel.css>",
              "sheet.schema.json": "<staged sheet.schema.json>",
              "sheet.json": "<staged sheet.json>"}
+capabilities = {"db": {"rules": [{"path": "", "read": "view", "write": "owner"}]}, "user": {}}
 ```
 
+The publish call also declares the sheet's store and viewer. This lets everyone who can open the
+sheet read it, and only its owner answer.
+
 A published sheet is private to the owner. The owner may share it from the page's Share menu.
+Anyone it is shared with sees it but cannot answer.
 
 Keep the returned link with the data file.
+
+## The answers
+
+Each card offers Aligned, Discuss and, when it has options, one button per option, labelled with
+the option's own label. Aligned agrees with the card's recommendation, or with the statement when
+there is no recommendation. A pick chooses that option. Discuss leaves the call open for chat. No
+review adds its own answer buttons.
+
+A card's `warning` is true for a gap a reviewer found, a statement with no source, or a finding the
+review didn't settle. It draws the red badge. Every other card draws a plain badge naming its kind
+of call.
+
+## How answers come back
+
+A tap saves at once, as a draft the owner can change, into the sheet's own store. The last tap
+counts. Each card's document is at `answers/<card id>`, written whole on every change:
+
+```
+{"answer": "aligned" | "discuss" | "option" | null, "optionId": <the option's id> | null, "note": <string>}
+```
+
+`optionId` is set exactly when `answer` is `"option"`. `answer` is `null` only when a note was saved
+before any pick. Anyone but the owner who opens a shared sheet sees it with the answer controls
+turned off.
+
+A save that fails says so on the card and offers Try again.
+
+The session that sent the sheet reads every answer together once the owner says the sheet is done,
+and never acts on a single tap.
+
+A card whose note disagrees with its answer is read as Discuss: ask the owner about it.
+
+Another session can take a sheet over by reading its data file and its store.
 
 ## Updating a sheet
 
@@ -65,3 +108,8 @@ finished one.
 The problems name the data file: it (or the schema file) could not be loaded, it isn't valid JSON, or a card is
 missing something (the problem names the card's `id`). Fix the data file and republish to the
 same link.
+
+## When the host can't show a sheet
+
+Where the host can't show a sheet, the session puts the same cards to the owner as numbered chat
+prose, each with its context, options and recommendation, built from the same data file.
