@@ -1,13 +1,3 @@
-      const choices = [];
-      STORED_ANSWERS.forEach(function (stored) {
-        if (stored.carriesOption) {
-          card.options.forEach(function (option) {
-            choices.push({ label: option.label, answer: stored.value, optionId: option.id });
-          });
-        } else {
-          choices.push({ label: stored.label, answer: stored.value, optionId: null });
-        }
-      });
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Review sheet</title>
@@ -538,12 +528,16 @@
     // resolved: from the moment a write starts until it resolves it is unknown, so a rejected or stalled
     // write leaves every later save sending the newest answer, and "Saved" follows only a resolved write.
     function addAnswerParts(card, article) {
-      const choices = [
-        { label: "Aligned", answer: "aligned", optionId: null },
-        { label: "Discuss", answer: "discuss", optionId: null },
-      ].concat(card.options.map(function (option) {
-        return { label: option.label, answer: "option", optionId: option.id };
-      }));
+      const choices = [];
+      STORED_ANSWERS.forEach(function (stored) {
+        if (stored.carriesOption) {
+          card.options.forEach(function (option) {
+            choices.push({ label: option.label, answer: stored.value, optionId: option.id });
+          });
+        } else {
+          choices.push({ label: stored.label, answer: stored.value, optionId: null });
+        }
+      });
       const optionIds = new Set(card.options.map(function (option) { return option.id; }));
       const none = { answer: null, optionId: null, note: "" };
       let latest = none;

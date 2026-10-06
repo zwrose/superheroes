@@ -1407,3 +1407,13 @@ def test_note_field_is_a_theme_part():
     assert re.sub(token, "", declared.get("border", "")).split() == ["solid"], declared.get("border")
     for name in re.findall(r"var\((--sh-[a-z-]+)\)", match.group(1)):
         assert re.search(r"(?m)^\s*%s\s*:" % re.escape(name), css), "%s is not a theme token" % name
+
+
+def test_template_outside_script_and_style_is_only_markup():
+    text = _template_text()
+    assert text.lstrip().startswith('<meta charset="utf-8">'), text.lstrip()[:60]
+    outside = re.sub(r"(?is)<(script|style)\b.*?</\1\s*>", "", text)
+    prose = re.sub(r"(?s)<!--.*?-->", "", outside)
+    prose = re.sub(r"(?s)<[^>]*>", "", prose)
+    for pattern in (r"\bconst\s", r"\bfunction\b", r"=>", r";[ \t]*$"):
+        assert not re.search(pattern, prose, re.M), "stray script text outside script/style (%s): %r" % (pattern, prose[:200])
