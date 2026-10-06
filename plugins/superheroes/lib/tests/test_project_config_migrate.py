@@ -487,9 +487,65 @@ def test_e19_post_commit_prefix_check_refuses(tmp_path, monkeypatch):
     monkeypatch.setattr(PC, "_git_run", _rewritten)
     got = _shape(w.migrate())
     assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert got["detail"] == "the committed Canon does not hold the appended entries"
     assert got["commit"] is None
     assert len(got["entries"]) == 2
     assert w.item13()["raw"] == _TWO_RULINGS
+
+
+def _show_returns(monkeypatch, commits_after, stdout):
+    """Make the post-commit ``git show HEAD:<canon>`` answer ``stdout`` with exit 0."""
+    real = PC._git_run
+
+    def _stubbed(root, reason, *args, **kw):
+        got = real(root, reason, *args, **kw)
+        if (args[:1] == ("show",) and args[1] == "HEAD:%s" % _REL
+                and _out(root, "rev-list", "--count", "HEAD") == commits_after):
+            return subprocess.CompletedProcess(args, 0, stdout, "")
+        return got
+
+    monkeypatch.setattr(PC, "_git_run", _stubbed)
+
+
+# axis: a commit that extends the prior copy but drops the appended lines is refused — wo_a_1618_prefix-check
+def test_e19b_post_commit_copy_missing_the_appended_lines_refuses(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    w.commit_canon(_SEED)
+    _show_returns(monkeypatch, "3", _SEED)
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert got["detail"] == "the committed Canon does not hold the appended entries"
+    assert got["commit"] is None
+    assert w.item13()["raw"] == _TWO_RULINGS
+
+
+# axis: a first-time migration whose post-commit copy cannot be read is refused — wo_a_1618_prefix-check
+def test_e19c_first_commit_whose_copy_is_unreadable_refuses(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    _show_returns(monkeypatch, "2", "")
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert got["detail"] == "the committed Canon does not hold the appended entries"
+    assert got["commit"] is None
+    assert w.item13()["raw"] == _TWO_RULINGS
+
+
+# --- E19d: one writer owns the Canon from baseline through commit ---
+
+# axis: a migration that cannot take the configuration lock leaves Canon and item 13 alone — wo_a_1618_canon-lock
+def test_e19d_contended_configuration_lock_refuses_before_touching_canon(tmp_path):
+    w = _world(tmp_path)
+    head = w.head()
+    with MR.config_lock_at(MR.project_store_dir(w.repo, w.store)) as held:
+        assert held
+        got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-lock-contended")
+    assert got["entries"] == []
+    assert got["commit"] is None
+    assert not os.path.exists(w.canon)
+    assert w.head() == head
+    assert w.item13()["raw"] == _TWO_RULINGS
+    assert _shape(w.migrate())["action"] == "migrated"
 
 
 # --- E20-E21: the marker write ---
@@ -791,9 +847,28 @@ def test_core_inside_the_repository_still_adopts_in_one_step_on_a_feature_branch
     assert w.item13()["raw"] == _MARKER
 
 
-def test_shared_core_without_an_origin_remote_still_adopts_in_one_step(tmp_path):
+# axis: with no default ref nothing shows other branches can read Canon, so a shared item 13 stays pending — wo_a_1618_pending-default-branch
+def test_shared_core_without_an_origin_remote_commits_canon_and_leaves_item_13_pending(tmp_path):
     w = _world(tmp_path, origin=False)
     _move_core_to_store(w)
+    before = w.core_bytes()
+    got = _shape(w.migrate())
+    assert got["action"] == "pending-default-branch"
+    assert "no origin remote" in got["detail"]
+    assert len(got["entries"]) == 2
+    assert got["commit"] == w.head()
+    assert w.core_bytes() == before
+    assert w.item13()["raw"] == _TWO_RULINGS
+    again = _shape(w.migrate())
+    assert again["action"] == "pending-default-branch"
+    assert again["entries"] == []
+    assert again["skipped"] == got["entries"]
+    assert again["commit"] is None
+
+
+def test_core_inside_the_repository_without_an_origin_remote_adopts_in_one_step(tmp_path):
+    w = _world(tmp_path, origin=False)
+    assert os.path.realpath(CM.core_path(w.repo, w.store)).startswith(w.repo + os.sep)
     got = _shape(w.migrate())
     assert got["action"] == "migrated"
     assert w.item13()["raw"] == _MARKER

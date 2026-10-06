@@ -879,6 +879,20 @@ def _write_canon_rulings(cwd, root, rulings, date, session, result):
         attributes_rel = "/".join(rel.split("/")[:-1] + [".gitattributes"])
         paths.append(attributes_rel)
 
+    # axis: one writer at a time owns the Canon from baseline read through commit — see bite-proof record wo_a_1618_canon-lock
+    with core_md.mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            raise _MigrationRefusal(
+                "canon-lock-contended",
+                "another writer holds the project store's configuration lock; run the move again")
+        return _append_canon_rulings(
+            result, info, git_root, rel, paths, attributes_rel, rulings, date, session)
+
+
+def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, rulings, date,
+                          session):
+    """The locked half of Canon's write procedure: baseline, append, commit, prefix check."""
+    canon_path = info["path"]
     # axis: a Canon with uncommitted changes is never built on — see bite-proof record wo_a_1618_clean-baseline
     status = _git_run(git_root, "canon-dirty", "status", "--porcelain",
                       "--untracked-files=all", "--", *paths)
@@ -952,14 +966,18 @@ def _rulings_unreachable_from_default(cwd, root, rulings, canon):
     """True when item 13's readers cannot yet see every ruling in the default branch's Canon.
 
     Only a core.md outside the Canon repository (the shared project store) can be read by a
-    session on another branch; a core.md inside the repository travels with the branch.
+    session on another branch; a core.md inside the repository travels with the branch. With no
+    default ref (no origin remote) nothing establishes that another branch or worktree sees the
+    entries, so a shared item 13 stays pending.
     """
-    if canon["home"] != "repo" or not canon["defaultRef"]:
+    if canon["home"] != "repo":
         return False
     core = os.path.realpath(core_md.core_path(cwd, root))
     git_root = os.path.realpath(canon["gitRoot"])
     if os.path.commonpath([core, git_root]) == git_root:
         return False
+    if not canon["defaultRef"]:
+        return True
     default_text = _canon_copy_at(canon["gitRoot"], canon["defaultRef"], canon["rel"])
     return bool(_committed_match(rulings, default_text)[1])
 
@@ -1013,10 +1031,17 @@ def _migrate_material_line(cwd, root, session, date, result):
         # axis: a shared item 13 keeps its examples until Canon's entries reach the default branch — see bite-proof record wo_a_1618_pending-default-branch
         if _rulings_unreachable_from_default(cwd, root, rulings, canon):
             result["action"] = "pending-default-branch"
-            result["detail"] = (
-                "The Canon entries are committed on this branch, and item 13 keeps its value "
-                "until they reach the default branch. Run the move again after the branch "
-                "lands to finish it.")
+            if canon["defaultRef"]:
+                result["detail"] = (
+                    "The Canon entries are committed on this branch, and item 13 keeps its value "
+                    "until they reach the default branch. Run the move again after the branch "
+                    "lands to finish it.")
+            else:
+                result["detail"] = (
+                    "The Canon entries are committed on this branch, but this repository has no "
+                    "origin remote, so nothing shows that other branches and worktrees can read "
+                    "them. Item 13 keeps its value; add an origin remote and run the move again "
+                    "to finish it.")
             return
 
     marker = {"canon": MATERIAL_LINE_MARKER_CANON, "migratedOn": date}
