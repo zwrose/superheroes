@@ -2,25 +2,18 @@
 """Render a review sheet's data file as numbered chat prose, for a host that can't show the sheet.
 
 Reads the same `sheet.json` the page draws and prints each card as a numbered item with its context,
-options and recommendation. It checks only the fields it reads, plus the page's four cross-field rules;
-full schema checking stays the page's. It uses the standard library only, so it runs under a plain python3.
+options and recommendation. It checks the file against sheet.schema.json, read at run time by a small reader of
+the keywords that schema uses, plus the schema's four cross-field rules. It uses the standard library only, so it
+runs under a plain python3.
 It refuses a data file it can't trust: one problem per line on stderr, nothing on stdout, exit 1.
 """
 import argparse
 import json
 import re
 import sys
+from pathlib import Path
 
-SCHEMA_NAME = "superheroes-sheet/1"
-KINDS = ("remainder", "final", "plain")
-
-
-def _is_text(value):
-    return isinstance(value, str) and value != ""
-
-
-def _is_count(value):
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+SCHEMA = Path(__file__).resolve().parents[1] / "theme" / "sheet.schema.json"
 
 
 def _one_line(text):
@@ -31,163 +24,83 @@ def _plural(count, word):
     return "%d %s%s" % (count, word, "" if count == 1 else "s")
 
 
-def _card_name(card, index):
-    if isinstance(card, dict) and _is_text(card.get("id")):
-        return 'Card "%s"' % card["id"]
-    return "Card %d" % (index + 1)
+def _is(kind, value):
+    if kind == "integer":
+        return (isinstance(value, int) and not isinstance(value, bool)) or (isinstance(value, float) and value.is_integer())
+    return {"object": dict, "array": list, "string": str, "boolean": bool, "null": type(None)}[kind] is type(value)
 
 
-def _check_text(problems, name, owner, key, label):
-    """Require owner[key] to be a non-empty string; owner is a dict."""
-    if key not in owner:
-        problems.append("%s has no %s." % (name, label))
-    elif not _is_text(owner[key]):
-        problems.append("%s has a %s that is not a non-empty string." % (name, label))
+def _validate(schema, value, path, defs):
+    """Problems from checking value against the schema keywords sheet.schema.json uses; empty when it fits."""
+    where = path or "the data file"
+    if "$ref" in schema:
+        return _validate(defs[schema["$ref"].rsplit("/", 1)[1]], value, path, defs)
+    kinds = schema.get("type", [])
+    kinds = [kinds] if isinstance(kinds, str) else kinds
+    if kinds and not any(_is(kind, value) for kind in kinds):
+        return ["%s must be %s." % (where, " or ".join(kinds))]
+    if "const" in schema and value != schema["const"]:
+        return ['%s must be "%s".' % (where, schema["const"])]
+    if "enum" in schema and value not in schema["enum"]:
+        return ["%s must be one of %s." % (where, ", ".join(map(str, schema["enum"])))]
+    problems = []
+    if isinstance(value, str):
+        if len(value) < schema.get("minLength", 0):
+            problems.append("%s must not be empty." % where)
+        if "pattern" in schema and not re.search(schema["pattern"], value):
+            problems.append('%s ("%s") is not a lowercase id of letters, digits and hyphens.' % (where, value))
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value < schema.get("minimum", value):
+        problems.append("%s must be %s or more." % (where, schema["minimum"]))
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            problems.append("%s must not be empty." % where)
+        if schema.get("uniqueItems") and len({json.dumps(item) for item in value}) < len(value):
+            problems.append("%s must not repeat an item." % where)
+        for position, item in enumerate(value):
+            problems += _validate(schema.get("items", {}), item, "%s[%d]" % (path, position), defs)
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        problems += ["%s has no %s." % (where, key) for key in schema.get("required", []) if key not in value]
+        for key, item in value.items():
+            if key in properties:
+                problems += _validate(properties[key], item, "%s.%s" % (path, key) if path else key, defs)
+            elif schema.get("additionalProperties") is False:
+                problems.append("%s has %s, which the sheet does not use." % (where, key))
+    for part in schema.get("allOf", []):
+        if not part.get("if") or not _validate(part["if"], value, path, defs):
+            problems += _validate(part.get("then", part), value, path, defs)
+    if "not" in schema and not _validate(schema["not"], value, path, defs):
+        problems.append("%s holds a part this kind of sheet must not have." % where)
+    if "anyOf" in schema and all(_validate(option, value, path, defs) for option in schema["anyOf"]):
+        problems.append("%s fits none of its allowed shapes." % where)
+    return problems
 
 
-def _check_list_of_objects(problems, name, card, key, check_item):
-    if key not in card:
-        problems.append("%s has no %s." % (name, key))
-        return
-    items = card[key]
-    if not isinstance(items, list):
-        problems.append("%s has %s that is not a list." % (name, key))
-        return
-    for position, item in enumerate(items, 1):
-        label = "%s %d" % (key, position)
-        if not isinstance(item, dict):
-            problems.append("%s has %s that is not an object." % (name, label))
-        else:
-            check_item(problems, name, label, item)
+def _duplicates(ids):
+    return sorted({i for i in ids if ids.count(i) > 1})
 
 
-def _check_image(problems, name, label, image):
-    for key in ("src", "alt"):
-        if key not in image:
-            problems.append("%s has %s with no %s." % (name, label, key))
-        elif not isinstance(image[key], str):
-            problems.append("%s has %s with a %s that is not a string." % (name, label, key))
-
-
-def _check_option(problems, name, label, option):
-    for key in ("id", "label", "consequence"):
-        _check_text(problems, name, option, key, "%s %s" % (label, key))
-
-
-def _check_card(problems, card, index):
-    name = _card_name(card, index)
-    if not isinstance(card, dict):
-        problems.append("%s is not an object." % name)
-        return
-    for key in ("id", "callKind", "question"):
-        _check_text(problems, name, card, key, key)
-    if "warning" not in card:
-        problems.append("%s has no warning." % name)
-    elif not isinstance(card["warning"], bool):
-        problems.append("%s has a warning that is not true or false." % name)
-    context = card.get("context")
-    if "context" not in card:
-        problems.append("%s has no context." % name)
-    elif not isinstance(context, dict):
-        problems.append("%s has a context that is not an object." % name)
-    else:
-        for key in ("now", "whyOwner"):
-            _check_text(problems, name, context, key, "context.%s" % key)
-        if "exactText" not in context:
-            problems.append("%s has no context.exactText." % name)
-        elif context["exactText"] is not None and not isinstance(context["exactText"], str):
-            problems.append("%s has a context.exactText that is not a string or null." % name)
-    _check_list_of_objects(problems, name, card, "images", _check_image)
-    _check_list_of_objects(problems, name, card, "options", _check_option)
-    if "recommendation" in card:
-        _check_recommendation(problems, name, card["recommendation"])
-
-
-def _check_recommendation(problems, name, recommendation):
-    if not isinstance(recommendation, dict):
-        problems.append("%s has a recommendation that is not an object." % name)
-        return
-    for key in ("text", "reason"):
-        _check_text(problems, name, recommendation, key, "recommendation.%s" % key)
-    if "optionId" in recommendation and not isinstance(recommendation["optionId"], str):
-        problems.append("%s has a recommendation.optionId that is not a string." % name)
-
-
-def _check_remainder(problems, sheet):
-    remainder = sheet.get("remainder")
-    if "remainder" not in sheet:
-        problems.append("The sheet has no remainder block.")
-        return
-    if not isinstance(remainder, dict):
-        problems.append("The sheet has a remainder block that is not an object.")
-        return
-    for key in ("roundsRun", "fixesMade"):
-        if key not in remainder:
-            problems.append("The remainder block has no %s." % key)
-        elif not _is_count(remainder[key]):
-            problems.append("The remainder block has a %s that is not a whole number of 0 or more." % key)
-    unsettled = remainder.get("unsettled")
-    if "unsettled" not in remainder:
-        problems.append("The remainder block has no unsettled list.")
-    elif not isinstance(unsettled, list) or not all(isinstance(item, str) for item in unsettled):
-        problems.append("The remainder block has an unsettled list that is not a list of strings.")
-
-
-def _check_cross_fields(problems, sheet):
-    """The page's four cross-field rules, over the cards that are well-formed enough to name."""
-    cards = [card for card in sheet["cards"] if isinstance(card, dict)]
-    seen = set()
-    for card in cards:
-        card_id = card.get("id")
-        if not _is_text(card_id):
-            continue
-        if card_id in seen:
-            problems.append('Card id "%s" is used more than once.' % card_id)
-        seen.add(card_id)
-    for index, card in enumerate(sheet["cards"]):
-        if not isinstance(card, dict):
-            continue
-        name = _card_name(card, index)
-        options = card.get("options")
-        option_ids = []
-        if isinstance(options, list):
-            option_ids = [o["id"] for o in options if isinstance(o, dict) and _is_text(o.get("id"))]
-        for option_id in sorted({i for i in option_ids if option_ids.count(i) > 1}):
-            problems.append('%s has the option id "%s" more than once.' % (name, option_id))
-        recommendation = card.get("recommendation")
-        if isinstance(recommendation, dict) and isinstance(recommendation.get("optionId"), str):
-            if recommendation["optionId"] not in option_ids:
-                problems.append('%s recommends option "%s", which is not one of its options.'
-                                % (name, recommendation["optionId"]))
-    remainder = sheet.get("remainder")
-    if sheet["kind"] == "remainder" and isinstance(remainder, dict) and isinstance(remainder.get("unsettled"), list):
-        for card_id in remainder["unsettled"]:
-            if isinstance(card_id, str) and card_id not in seen:
-                problems.append('remainder.unsettled names "%s", which is not a card.' % card_id)
+def _check_cross_fields(sheet):
+    """The rules the schema cannot express, over a sheet that already fits it."""
+    problems = []
+    card_ids = [card["id"] for card in sheet["cards"]]
+    problems += ['Card id "%s" is used more than once.' % i for i in _duplicates(card_ids)]
+    for card in sheet["cards"]:
+        option_ids = [option["id"] for option in card["options"]]
+        problems += ['Card "%s" has the option id "%s" more than once.' % (card["id"], i) for i in _duplicates(option_ids)]
+        picked = card.get("recommendation", {}).get("optionId")
+        if picked is not None and picked not in option_ids:
+            problems.append('Card "%s" recommends option "%s", which is not one of its options.' % (card["id"], picked))
+    unsettled = sheet.get("remainder", {}).get("unsettled", [])
+    return problems + ['remainder.unsettled names "%s", which is not a card.' % i for i in unsettled if i not in card_ids]
 
 
 def check_sheet(sheet):
     """Every problem that makes the data file untrustworthy for rendering; empty when it is fine."""
-    if not isinstance(sheet, dict):
-        return ["The data file's top level is not an object."]
-    problems = []
-    if sheet.get("schema") != SCHEMA_NAME:
-        problems.append('The data file\'s schema is not "%s".' % SCHEMA_NAME)
-    if sheet.get("kind") not in KINDS:
-        problems.append("The data file's kind is not one of remainder, final or plain.")
-    if not _is_text(sheet.get("title")):
-        problems.append("The data file has no title that is a non-empty string.")
-    cards = sheet.get("cards")
-    if not isinstance(cards, list) or not cards:
-        problems.append("The data file's cards is not a non-empty list.")
-        return problems
-    for index, card in enumerate(cards):
-        _check_card(problems, card, index)
-    if sheet.get("kind") == "remainder":
-        _check_remainder(problems, sheet)
-    if sheet.get("kind") in KINDS:
-        _check_cross_fields(problems, sheet)
-    return problems
+    with open(SCHEMA, encoding="utf-8") as handle:
+        schema = json.load(handle)
+    problems = _validate(schema, sheet, "", schema["$defs"])
+    return [p[0].upper() + p[1:] for p in problems] or _check_cross_fields(sheet)
 
 
 def _why_line(sheet):

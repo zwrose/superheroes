@@ -1994,6 +1994,28 @@ def test_done_for_now_flushes_and_reports_unsaved():
     assert unsaved == {"message": "Answers can't be saved in this view, so nothing here was saved.", "sets": 0, "hidden": True}
 
 
+# Bites on: Done for now telling the owner to wait after a write was rejected, or Back to the sheet not opening the first card whose save failed so its Try again is in view.
+def test_done_for_now_after_a_rejected_save_points_to_try_again():
+    result = _answer_page(_named_cards("plan-day", "fridge-check", "garage"), """
+      const out = {};
+      t.click(t.button("plan-day", "Aligned"));
+      t.click(t.button("garage", "Aligned"));
+      t.sets[0].resolve();
+      t.sets[1].reject({ code: "unavailable", message: "no" });
+      await t.tick();
+      t.open("fridge-check");
+      t.click(t.control("done"));
+      out.one = t.done().message;
+      t.click(t.control("back"));
+      out.open = t.openCard();
+      out.retry = t.saveText("garage");
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["one"] == "1 answer didn't save. Go back to the sheet and tap Try again on each."
+    assert result["open"] == "garage"
+    assert "Try again" in result["retry"]
+
+
 # Bites on: an earlier write settling cutting a note's one-second pause short, so a half-typed note is written early.
 def test_an_earlier_save_settling_keeps_the_note_pause():
     result = _answer_page([_card("plan-day")], """

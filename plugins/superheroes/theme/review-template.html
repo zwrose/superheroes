@@ -885,6 +885,9 @@
 
     const doneMessage = textElement("p", "", "");
     const backButton = actionButton("Back to the sheet", function () {
+      // A card whose save was rejected opens first, so its Try again is in view.
+      const failed = items.findIndex(function (item) { return controllers.get(item.id).state().save === "failed"; });
+      if (failed >= 0) openIndex = failed;
       done = false;
       refreshSheet();
     });
@@ -974,8 +977,12 @@
       nextButton.disabled = openIndex === total - 1;
 
       const unsavedCards = items.filter(function (item) { return controllers.get(item.id).unsaved(); }).length;
+      const failedCards = states.filter(function (state) { return state.save === "failed"; }).length;
       if (!ready) {
         doneMessage.textContent = "Answers can't be saved in this view, so nothing here was saved.";
+      } else if (failedCards > 0) {
+        doneMessage.textContent = failedCards + (failedCards === 1 ? " answer" : " answers")
+          + " didn't save. Go back to the sheet and tap Try again on each.";
       } else if (unsavedCards > 0) {
         doneMessage.textContent = unsavedCards + (unsavedCards === 1 ? " answer isn't" : " answers aren't")
           + " saved yet. Keep this page open until this says they're saved.";

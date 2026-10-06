@@ -190,26 +190,28 @@ def _set(sheet, value, *path):
 REFUSALS = {
     "unreadable file": (lambda: None, "can't be read"),
     "invalid JSON": (lambda: "{not json", "not valid JSON"),
-    "top level not an object": (lambda: "[1, 2]", "top level is not an object"),
-    "wrong schema": (_mutated(lambda s: _set(s, "superheroes-sheet/2", "schema")), "schema"),
-    "unknown kind": (_mutated(lambda s: _set(s, "weekly", "kind")), "kind"),
-    "empty title": (_mutated(lambda s: _set(s, "", "title")), "title"),
-    "empty cards": (_mutated(lambda s: _set(s, [], "cards")), "cards"),
-    "missing context.now": (_mutated(lambda s: _drop(s, "cards", 1, "context", "now")), 'Card "card-1" has no context.now'),
-    "missing question": (_mutated(lambda s: _drop(s, "cards", 0, "question")), 'Card "card-0" has no question'),
-    "missing warning": (_mutated(lambda s: _drop(s, "cards", 1, "warning")), 'Card "card-1" has no warning'),
-    "wrong-typed warning": (_mutated(lambda s: _set(s, "yes", "cards", 1, "warning")), 'Card "card-1" has a warning'),
+    "top level not an object": (lambda: "[1, 2]", "The data file must be object."),
+    "wrong schema": (_mutated(lambda s: _set(s, "superheroes-sheet/2", "schema")), 'Schema must be "superheroes-sheet/1".'),
+    "unknown kind": (_mutated(lambda s: _set(s, "weekly", "kind")), "Kind must be one of remainder, final, plain."),
+    "empty title": (_mutated(lambda s: _set(s, "", "title")), "Title must not be empty."),
+    "empty cards": (_mutated(lambda s: _set(s, [], "cards")), "Cards must not be empty."),
+    "missing context.now": (_mutated(lambda s: _drop(s, "cards", 1, "context", "now")), "Cards[1].context has no now."),
+    "missing question": (_mutated(lambda s: _drop(s, "cards", 0, "question")), "Cards[0] has no question."),
+    "missing warning": (_mutated(lambda s: _drop(s, "cards", 1, "warning")), "Cards[1] has no warning."),
+    "wrong-typed warning": (_mutated(lambda s: _set(s, "yes", "cards", 1, "warning")), "Cards[1].warning must be boolean."),
     "wrong-typed option label": (_mutated(lambda s: _set(s, 7, "cards", 0, "options", 0, "label")),
-                                 'Card "card-0" has a options 1 label'),
+                                 "Cards[0].options[0].label must be string."),
     "wrong-typed exactText": (_mutated(lambda s: _set(s, 3, "cards", 1, "context", "exactText")),
-                              'Card "card-1" has a context.exactText'),
-    "image with no alt": (_mutated(lambda s: _set(s, [{"src": "a.png"}], "cards", 1, "images")), 'Card "card-1" has images 1 with no alt'),
+                              "Cards[1].context.exactText must be string or null."),
+    "image with no alt": (_mutated(lambda s: _set(s, [{"src": "a.png"}], "cards", 1, "images")), "Cards[1].images[0] has no alt."),
     "recommendation with no reason": (_mutated(lambda s: _drop(s, "cards", 0, "recommendation", "reason")),
-                                      'Card "card-0" has no recommendation.reason'),
-    "bool roundsRun": (_mutated(lambda s: _set(s, True, "remainder", "roundsRun")), "roundsRun"),
-    "negative fixesMade": (_mutated(lambda s: _set(s, -1, "remainder", "fixesMade")), "fixesMade"),
-    "unsettled not strings": (_mutated(lambda s: _set(s, [4], "remainder", "unsettled")), "unsettled"),
-    "no remainder block": (_mutated(lambda s: _drop(s, "remainder")), "remainder block"),
+                                      "Cards[0].recommendation has no reason."),
+    "repeated unsettled id": (_mutated(lambda s: _set(s, ["card-0", "card-0"], "remainder", "unsettled")),
+                              "Remainder.unsettled must not repeat an item."),
+    "bool roundsRun": (_mutated(lambda s: _set(s, True, "remainder", "roundsRun")), "Remainder.roundsRun must be integer."),
+    "negative fixesMade": (_mutated(lambda s: _set(s, -1, "remainder", "fixesMade")), "Remainder.fixesMade must be 0 or more."),
+    "unsettled not strings": (_mutated(lambda s: _set(s, [4], "remainder", "unsettled")), "Remainder.unsettled[0] must be string."),
+    "no remainder block": (_mutated(lambda s: _drop(s, "remainder")), "The data file has no remainder."),
     "duplicate card id": (_mutated(lambda s: _set(s, "card-0", "cards", 1, "id")), 'Card id "card-0" is used more than once'),
     "duplicate option id": (_mutated(lambda s: _set(s, "yes", "cards", 0, "options", 1, "id")),
                             'Card "card-0" has the option id "yes" more than once'),
@@ -218,6 +220,13 @@ REFUSALS = {
     "recommendation names a missing option": (_mutated(lambda s: _set(s, "maybe", "cards", 0, "recommendation", "optionId")),
                                               'Card "card-0" recommends option "maybe"'),
 }
+
+
+# Bites on: the fallback's rules drifting from sheet.schema.json, which it must read rather than copy.
+def test_prose_accepts_a_whole_number_written_with_a_decimal_point(tmp_path):
+    sheet = json.dumps(_valid_sheet()).replace('"roundsRun": 2', '"roundsRun": 2.0')
+    assert '"roundsRun": 2.0' in sheet
+    assert _render(tmp_path, sheet).returncode == 0
 
 
 # Bites on: the renderer printing prose for a data file it can't trust, or a refusal that skips stderr, prints to stdout, or exits 0.
@@ -237,7 +246,7 @@ def test_prose_refusal_lists_one_problem_per_line(tmp_path):
     _drop(sheet, "cards", 1, "context", "now")
     result = _render(tmp_path, sheet)
     assert result.returncode == 1
-    assert result.stderr.splitlines() == ['Card "card-0" has no question.', 'Card "card-1" has no context.now.']
+    assert result.stderr.splitlines() == ["Cards[0] has no question.", "Cards[1].context has no now."]
 
 
 # Bites on: the renderer needing a third-party package, which a plain python3 on the owner's host may not have.
