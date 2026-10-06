@@ -256,9 +256,13 @@ viewerNodes["sheet-viewer"].children = [viewerBar, viewerNodes["sheet-viewer-fra
     },
   });
 });
+const documentListeners = {};
 const document = {
   title: "Review sheet",
   activeElement: null,
+  addEventListener: (type, listener) => {
+    (documentListeners[type] = documentListeners[type] || []).push(listener);
+  },
   getElementById: (id) => elements[id],
   querySelector: (selector) => (selector === ".sheet-page" ? sheetPageNode : null),
   createElement: (tag) => new Node(tag),
@@ -645,6 +649,14 @@ const tools = {
     page: sheetPageNode,
   },
   focused: () => document.activeElement,
+  // A key pressed with focus anywhere: a browser gives it to the focused node and then to the document, so a listener on the document hears it wherever focus is.
+  fireDocument: (type, fields) => {
+    const event = Object.assign({ type: type, target: document.activeElement, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, fields);
+    (documentListeners[type] || []).forEach((listener) => listener(event));
+    return event;
+  },
+  // Focus leaves everything the page drew, as a click on the view's frame leaves it on the page body.
+  blur: () => { document.activeElement = null; },
   // A card's pictures, in order (the node that opens the view, or null where the picture is now a missing line).
   pictures: (id) => tools.all(tools.card(id)).filter((node) => node.tagName === "img"),
   figures: (id) => tools.all(tools.card(id)).filter((node) => node.tagName === "figure"),
@@ -1333,13 +1345,13 @@ def test_a_card_picture_opens_the_view_and_close_returns_to_the_card():
       const enter = t.fire(second, "keydown", { key: "Enter" });
       out.enter = state();
       out.enterPrevented = enter.defaultPrevented;
-      t.fire(view.root, "keydown", { key: "Escape" });
+      t.fireDocument("keydown", { key: "Escape" });
       out.enterEscaped = state();
       t.fire(first, "keydown", { key: " " });
       out.spaceDown = state().hidden;
       t.fire(first, "keyup", { key: " " });
       out.space = state();
-      t.fire(view.root, "keydown", { key: "Escape" });
+      t.fireDocument("keydown", { key: "Escape" });
       out.spaceEscaped = state();
       t.fire(second, "keydown", { key: "a" });
       out.otherKey = state().hidden;
@@ -1365,6 +1377,38 @@ def test_a_card_picture_opens_the_view_and_close_returns_to_the_card():
     assert result["space"] == opened("plan.png", "The plan drawn out")
     assert {key: result["spaceEscaped"][key] for key in ("hidden", "src", "inert", "focus")} == closed("first")
     assert result["otherKey"] is True
+
+
+# Bites on: an Escape heard only by the view itself, so that with focus on the page body (after a click in the view's frame) the view stays up, the sheet stays inert, the src stays set or the focus is not returned to the opener; or an Escape with the view shut that changes anything or throws.
+def test_escape_closes_the_view_with_focus_outside_it():
+    result = _answer_page([_picture_card()], """
+      const view = t.view;
+      const [first] = t.pictures("pic-card");
+      const state = () => ({
+        hidden: view.root.hidden,
+        src: view.picture.getAttribute("src"),
+        inert: view.page.getAttribute("inert"),
+        focus: t.focused() === first ? "first" : t.focused() === view.close ? "close" : t.focused() === null ? "none" : "other",
+      });
+      t.click(first);
+      const opened = state();
+      t.blur();
+      const blurred = state();
+      t.fireDocument("keydown", { key: "Escape" });
+      const closed = state();
+      let thrown = null;
+      try {
+        t.fireDocument("keydown", { key: "Escape" });
+      } catch (error) {
+        thrown = String(error);
+      }
+      return { opened, blurred, closed, again: state(), thrown };
+    """)
+    assert result["opened"] == {"hidden": False, "src": "plan.png", "inert": "", "focus": "close"}
+    assert result["blurred"] == {"hidden": False, "src": "plan.png", "inert": "", "focus": "none"}, "the focus never left the view, so the test proves nothing"
+    assert result["closed"] == {"hidden": True, "src": None, "inert": None, "focus": "first"}
+    assert result["again"] == result["closed"]
+    assert result["thrown"] is None
 
 
 # Bites on: the sheet behind the view staying live (an answer button that can still be activated and writes an answer while the view covers it), or the view offering an answer control of its own.

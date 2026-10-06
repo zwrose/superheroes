@@ -876,9 +876,12 @@
     }
 
     viewerClose.addEventListener("click", closeViewer);
-    viewer.addEventListener("keydown", function (event) {
-      if (event.key === "Escape") closeViewer();
-    });
+    // Escape closes the view wherever focus is: a click in the frame moves focus to the page body, so the view itself never hears the key.
+    if (typeof document.addEventListener === "function") {
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") closeViewer();
+      });
+    }
 
     // A card's pictures. Each opens the image view by tap, Enter or Space; one that cannot load becomes a line
     // saying so, with the card's other parts and the picture's caption left alone.
