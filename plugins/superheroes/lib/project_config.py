@@ -827,30 +827,38 @@ def _canon_entries(committed_text):
     """Every entry in the text; refuses when one id is held by differing entries, one a migration's.
 
     Canon's contract resolves an id shared by differing entries for no reader, so the move neither
-    counts such an entry as recorded nor retires item 13 in favour of it. The same entry in two
-    copies of Canon (this branch and the default branch) is one entry.
+    counts such an entry as recorded nor retires item 13 in favour of it: each entry under such an
+    id is marked ``disputed`` and never matches a ruling. The owner's resolution is a later entry
+    that supersedes the id; the move then stops refusing for it and leaves the lines as they are.
+    The same entry in two copies of Canon (this branch and the default branch) is one entry.
     """
     fields = (_entry_fields(ln) for ln in committed_text.splitlines() if ln.startswith("- **"))
     entries = [entry for entry in fields if entry is not None]
     by_id = {}
     for entry in entries:
         by_id.setdefault(entry["id"], []).append(entry)
-    conflicting = [
+    disputed = [
         entry_id for entry_id, held in by_id.items()
         if any(e["migrated"] for e in held) and any(e["line"] != held[0]["line"] for e in held)]
+    for entry in entries:
+        entry["disputed"] = entry["id"] in disputed
+    retired = {gone for entry in entries for gone in entry["supersedes"]}
+    conflicting = [entry_id for entry_id in disputed if entry_id not in retired]
     if conflicting:
         raise _MigrationRefusal(
             "canon-id-conflict",
             "Canon holds differing entries under one id: %s. An id shared by differing entries "
             "resolves for no reader, so it goes to the owner: record the owner's ruling in Canon "
-            "as a new entry (Canon never edits or deletes an entry), then run the move again."
+            "as a new entry under a fresh id, with a `supersedes: ` field naming the shared id "
+            "(Canon never edits or deletes an entry), then run the move again."
             % ", ".join(conflicting))
     return entries
 
 
 def _committed_match(rulings, committed_text):
     """Split ``rulings`` into (ids of committed matching entries, rulings not yet committed)."""
-    entries = [entry for entry in _canon_entries(committed_text) if entry["migrated"]]
+    entries = [entry for entry in _canon_entries(committed_text)
+               if entry["migrated"] and not entry["disputed"]]
     skipped = []
     pending = []
     for ruling in rulings:
@@ -864,19 +872,28 @@ def _committed_match(rulings, committed_text):
     return skipped, pending
 
 
-def _refuse_replaced_migrated_rulings(rulings, committed_text):
-    """Refuse when a committed migrated entry holds a ruling item 13 no longer holds.
+def _stale_migrated_ids(rulings, text):
+    """Ids of the text's active migrated entries whose ruling ``rulings`` no longer holds.
 
-    Configure never mints a supersession, since that is a ruling in Canon. An entry another
-    entry supersedes is already retired and does not count.
+    An entry another entry in the same text supersedes is already retired and does not count.
     """
-    entries = _canon_entries(committed_text)
+    entries = _canon_entries(text)
     retired = {gone for entry in entries for gone in entry["supersedes"]}
     stale = []
     for entry in entries:
         if (entry["migrated"] and entry["id"] not in retired
                 and entry["ruling"] not in rulings and entry["id"] not in stale):
             stale.append(entry["id"])
+    return stale
+
+
+def _refuse_replaced_migrated_rulings(rulings, committed_text):
+    """Refuse when a committed migrated entry holds a ruling item 13 no longer holds.
+
+    Configure never mints a supersession, since that is a ruling in Canon. An entry another
+    entry supersedes is already retired and does not count.
+    """
+    stale = _stale_migrated_ids(rulings, committed_text)
     if stale:
         raise _MigrationRefusal(
             "material-line-changed-since-migration",
@@ -891,7 +908,8 @@ def _refuse_replaced_in_recorded_canon(cwd, root, result):
 
     Emptying item 13 drops every ruling an earlier run recorded, so those entries stay active in
     Canon while the move would retire the prose. A project with no earlier run has no migrated
-    entry in either copy of Canon, so it adopts at once.
+    entry in either copy of Canon, so it adopts at once. Returns where Canon lives, for the
+    readiness check that holds the marker back until the supersessions reach the default branch.
     """
     import definition_doc
     import store_core
@@ -913,6 +931,7 @@ def _refuse_replaced_in_recorded_canon(cwd, root, result):
         default_text = _canon_copy_at(git_root, info["defaultRef"], rel)
     # axis: an emptied item 13 meets the same replaced-ruling refusal as a changed one — see bite-proof record wo_a_1646_replaced-ruling
     _refuse_replaced_migrated_rulings([], _canon_head_copy(git_root, rel) + "\n" + default_text)
+    return {"gitRoot": git_root, "rel": rel, "home": info["home"], "defaultRef": info["defaultRef"]}
 
 
 def _ensure_gitattributes(path):
@@ -950,8 +969,11 @@ def _fetch_default_branch(repo_root, result):
             result["fetch"] = "failed: %s" % (exc.detail or exc.reason)
 
 
-def _write_canon_rulings(cwd, root, rulings, date, session, result):
-    """Canon's write procedure for ``rulings``; fills ``result`` and raises _MigrationRefusal."""
+def _write_canon_rulings(cwd, root, rulings, raw, date, session, result):
+    """Canon's write procedure for ``rulings``; fills ``result`` and raises _MigrationRefusal.
+
+    ``raw`` is the item 13 value the rulings were split from; it is read again under the lock.
+    """
     import definition_doc
     import store_core
 
@@ -991,6 +1013,11 @@ def _write_canon_rulings(cwd, root, rulings, date, session, result):
             raise _MigrationRefusal(
                 "canon-lock-contended",
                 "another writer holds the project store's configuration lock; run the move again")
+        # axis: item 13 is read again under the lock, so a set that landed during the fetch is never recorded as a standing ruling — see bite-proof record wo_a_1646_locked-recheck
+        facts = core_md.read(cwd, root)
+        current = _read_project_config_raw(_project_config_mapping(facts), MATERIAL_LINE_SLUG)
+        if current != raw:
+            raise _MigrationRefusal("material-line-changed-during-migration")
         return _append_canon_rulings(
             result, info, git_root, rel, paths, attributes_rel, rulings, date, session)
 
@@ -1072,7 +1099,11 @@ def _append_canon_rulings(result, info, git_root, rel, paths, attributes_rel, ru
 
 
 def _rulings_unreachable_from_default(rulings, canon):
-    """True when the default branch's Canon does not yet hold every migrated ruling.
+    """True when the default branch's Canon does not yet hold what lets item 13 be retired.
+
+    That is every migrated ruling, and a supersession for every migrated entry item 13 no longer
+    holds: a supersession only on this branch leaves the replaced entry active for every reader
+    on another branch or worktree.
 
     Only a Canon in the repository rides a branch; the project store's Canon is one shared copy,
     so it adopts in one step. The marker is written when every ruling is in the default-branch
@@ -1082,9 +1113,17 @@ def _rulings_unreachable_from_default(rulings, canon):
     if canon["home"] != "repo":
         return False
     if not canon["defaultRef"]:
-        return True
+        head_text = _canon_head_copy(canon["gitRoot"], canon["rel"])
+        return bool(rulings) or any(entry["migrated"] for entry in _canon_entries(head_text))
     default_text = _canon_copy_at(canon["gitRoot"], canon["defaultRef"], canon["rel"])
-    return bool(_committed_match(rulings, default_text)[1])
+    try:
+        pending = _committed_match(rulings, default_text)[1]
+        stale = _stale_migrated_ids(rulings, default_text)
+    except _MigrationRefusal as refusal:
+        if refusal.reason == "canon-id-conflict":
+            return True
+        raise
+    return bool(pending) or bool(stale)
 
 
 def migrate_material_line(cwd, *, root=None, session=None, date=None):
@@ -1137,25 +1176,26 @@ def _migrate_material_line(cwd, root, session, date, result):
 
     rulings, result["sanitized"] = _split_rulings(raw)
     if rulings:
-        canon = _write_canon_rulings(cwd, root, rulings, date, session, result)
-        # axis: a shared item 13 keeps its examples until Canon's entries reach the default branch — see bite-proof record wo_a_1618_pending-default-branch
-        if _rulings_unreachable_from_default(rulings, canon):
-            result["action"] = "pending-default-branch"
-            if canon["defaultRef"]:
-                result["detail"] = (
-                    "The Canon entries are committed on this branch, and item 13 keeps its value "
-                    "until they reach the default branch. Run the move again after the branch "
-                    "lands to finish it.")
-            else:
-                result["detail"] = (
-                    "The Canon entries are committed on this branch, but this repository has no "
-                    "origin remote, so nothing shows that other branches and worktrees can read "
-                    "them. Item 13 keeps its value; the move finishes once the repository has an "
-                    "origin default branch holding them. Add an origin remote, land the entries, "
-                    "and run the move again.")
-            return
+        canon = _write_canon_rulings(cwd, root, rulings, raw, date, session, result)
     else:
-        _refuse_replaced_in_recorded_canon(cwd, root, result)
+        canon = _refuse_replaced_in_recorded_canon(cwd, root, result)
+    # axis: a shared item 13 keeps its examples until Canon's entries and the supersessions that let it change reach the default branch — see bite-proof record wo_a_1618_pending-default-branch
+    if _rulings_unreachable_from_default(rulings, canon):
+        result["action"] = "pending-default-branch"
+        if canon["defaultRef"]:
+            result["detail"] = (
+                "Canon on this branch holds entries the default branch does not (the recorded "
+                "rulings, or the supersession of a replaced one), and item 13 keeps its value "
+                "until they reach the default branch. Run the move again after the branch "
+                "lands to finish it.")
+        else:
+            result["detail"] = (
+                "The Canon entries are committed on this branch, but this repository has no "
+                "origin remote, so nothing shows that other branches and worktrees can read "
+                "them. Item 13 keeps its value; the move finishes once the repository has an "
+                "origin default branch holding them. Add an origin remote, land the entries, "
+                "and run the move again.")
+        return
 
     marker = {"canon": MATERIAL_LINE_MARKER_CANON, "migratedOn": date}
     # axis: the marker lands only if item 13 still equals the snapshot — see bite-proof record wo_a_1618_cas-compare

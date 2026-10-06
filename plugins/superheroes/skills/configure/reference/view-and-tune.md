@@ -99,9 +99,10 @@ action that owns it, leaving the rest of the calibration untouched:
   or `refused` with a `reason`. Only `migrated` and `already-adopted` mean done.
   `pending-default-branch` is the first of two steps. When Canon lives in the repository, the move
   always finishes in two steps, wherever the project's calibration lives, unless the default branch
-  already holds every ruling. The entries are committed on this branch, and item 13 keeps its value
-  so other branches still see the examples. Land the branch, then run the move again. That second
-  run commits nothing new and writes the pointer. A repository with no origin default branch stays
+  already holds every ruling and every supersession of a ruling item 13 no longer holds. The
+  entries are committed on this branch, and item 13 keeps its value so other branches still see the
+  examples. Land the branch, then run the move again. That second run commits nothing new and
+  writes the pointer. A repository with no origin default branch stays
   pending until it has one holding the entries. When Canon lives in the project store, there is one
   shared copy and the move finishes in one step. Report a `refused` result to the owner with its
   `reason`, and never work around it. Eight reasons are ones the owner can act on:
@@ -119,8 +120,9 @@ action that owns it, leaving the rest of the calibration untouched:
     that supersedes them (Canon's write procedure), then run the move again. An emptied item 13
     meets the same refusal while those entries stand.
   - `canon-id-conflict`: Canon holds differing entries under one id, which resolves for no reader;
-    take it to the owner, record their ruling in Canon as a new entry (Canon never edits or
-    deletes an entry), then run the move again.
+    take it to the owner, record their ruling in Canon as a new entry under a fresh id whose
+    `supersedes` field names the shared id (Canon never edits or deletes an entry), then run the
+    move again.
 
   The other reasons are `profile-absent`, `profile-unparseable`, `behind`, `malformed-value`,
   `session-id-malformed`, `date-malformed`, `canon-lookup-refused`, `canon-commit-failed`, and

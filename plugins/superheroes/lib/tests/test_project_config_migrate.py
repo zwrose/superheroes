@@ -496,6 +496,26 @@ def test_e18_commit_failure_refused_and_item_13_unchanged(tmp_path):
     assert w.item13()["raw"] == _TWO_RULINGS
 
 
+# axis: the commit takes its identity from the environment, so a run with none supplied refuses — wo_a_1646_git-identity
+def test_e18b_commit_without_a_git_identity_refused_and_item_13_unchanged(tmp_path, monkeypatch):
+    w = _world(tmp_path)
+    for key in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.delenv(key)
+    empty_config = str(tmp_path / "empty.gitconfig")
+    open(empty_config, "w").close()
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", empty_config)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.useConfigOnly")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+    head = w.head()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert got["commit"] is None
+    assert w.head() == head
+    assert w.item13()["raw"] == _TWO_RULINGS
+
+
 # axis: a commit whose Canon does not extend the prior copy is refused — wo_a_1618_prefix-check
 def test_e19_post_commit_prefix_check_refuses(tmp_path, monkeypatch):
     w = _world(tmp_path)
@@ -721,6 +741,33 @@ def test_e19g_item_13_emptied_after_the_entries_were_superseded_adopts(tmp_path)
     assert w.item13()["raw"] == _MARKER
 
 
+# axis: a supersession that sits only on this branch holds the marker back until it reaches the default branch — wo_a_1646_supersession-reaches-default
+@pytest.mark.parametrize("raw, held", [
+    ("Y is craft.", ["X is material.", "Y is craft."]),
+    ("", ["X is material."]),
+], ids=["ruling-kept", "emptied"])
+def test_e19g_a_supersession_only_on_this_branch_leaves_adoption_pending(tmp_path, raw, held):
+    w = _world(tmp_path, raw=raw)
+    seeded = "# Canon\n\nheader\n\n## Entries\n\n" + "".join(
+        _migrated_line("2026-10-05-abcdef12-%d" % (i + 1), ruling) for i, ruling in enumerate(held))
+    w.commit_canon(seeded)
+    w.land()
+    superseding = ("- **2026-10-05-feedbeef-1** · 2026-10-05 · standing · X is craft. · "
+                   "supersedes: 2026-10-05-abcdef12-1 · owner's words: \"X is craft\" · where: s, "
+                   "time not recorded\n")
+    w.commit_canon(seeded + superseding)
+    core_before = w.core_bytes()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("pending-default-branch", None)
+    assert got["entries"] == []
+    assert w.core_bytes() == core_before
+    assert w.item13()["raw"] == raw
+    w.land()
+    done = _shape(w.migrate())
+    assert (done["action"], done["reason"]) == ("migrated", None)
+    assert w.item13()["raw"] == _MARKER
+
+
 # axis: differing entries under one id refuse before any count — wo_a_1646_conflicting-ids
 def test_e19h_conflicting_migrated_entries_under_one_id_refuse(tmp_path):
     w = _world(tmp_path, raw="X is material.\n\nY is craft.")
@@ -734,6 +781,29 @@ def test_e19h_conflicting_migrated_entries_under_one_id_refuse(tmp_path):
     assert "2026-10-05-abcdef12-1" in got["detail"]
     assert w.head() == head
     assert w.item13()["raw"] == "X is material.\n\nY is craft."
+
+
+# axis: the owner's superseding entry resolves an id conflict, and the disputed lines never match — wo_a_1646_conflicting-ids
+def test_e19h_an_owner_resolution_superseding_the_shared_id_lets_the_move_proceed(tmp_path):
+    w = _world(tmp_path, raw="X is material.")
+    resolution = ("- **2026-10-05-feedbeef-1** · 2026-10-05 · standing · Y is craft. · supersedes: "
+                  "2026-10-05-abcdef12-1 · owner's words: \"Y is craft\" · where: s, time not "
+                  "recorded\n")
+    seeded = ("# Canon\n\nheader\n\n## Entries\n\n"
+              + _migrated_line("2026-10-05-abcdef12-1", "X is material.")
+              + _migrated_line("2026-10-05-abcdef12-1", "Y is craft."))
+    w.commit_canon(seeded)
+    w.land()
+    assert _shape(w.migrate())["reason"] == "canon-id-conflict"
+    w.commit_canon(seeded + resolution)
+    w.land()
+    got = _shape(w.migrate_landed())
+    assert (got["action"], got["reason"]) == ("migrated", None)
+    assert got["entries"] == ["2026-10-05-abcdef12-2"]
+    canon = w.head_canon()
+    assert canon.startswith(seeded + resolution)
+    assert _migrated_line("2026-10-05-abcdef12-2", "X is material.").strip() in canon
+    assert w.item13()["raw"] == _MARKER
 
 
 # axis: entries differing only outside the id, ruling and supersedes fields still conflict — wo_a_1646_conflicting-ids
@@ -811,6 +881,26 @@ def test_e19g_a_migrated_entry_with_a_shorter_ruling_does_not_skip_the_longer_pa
 
 
 # --- E20-E21: the marker write ---
+
+# axis: item 13 is read again under the lock, so a set that lands during the fetch is never committed — wo_a_1646_locked-recheck
+def test_e19i_item_13_changed_during_the_fetch_is_refused_before_any_canon_write(tmp_path, monkeypatch):
+    w = _world(tmp_path, raw="X is material.")
+    real = PC._fetch_default_branch
+
+    def _race(repo_root, result):
+        real(repo_root, result)
+        CM.write_project_config_item(w.repo, "materialConsequenceLine", "X is craft.", root=w.store)
+
+    monkeypatch.setattr(PC, "_fetch_default_branch", _race)
+    head = w.head()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "material-line-changed-during-migration")
+    assert got["entries"] == []
+    assert got["commit"] is None
+    assert w.head() == head
+    assert not os.path.exists(w.canon)
+    assert w.item13()["raw"] == "X is craft."
+
 
 # axis: the marker never overwrites an item 13 that changed after the snapshot — wo_a_1618_cas-compare
 def test_e20_item_13_changed_between_read_and_marker_write(tmp_path, monkeypatch):
