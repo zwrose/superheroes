@@ -157,6 +157,7 @@ class Node {
     this.textContent = "";
     this.hidden = false;
     this.children = [];
+    this.parent = null;
     this.disabled = false;
     this.value = "";
     this.attributes = {};
@@ -197,8 +198,12 @@ class Node {
   }
   appendChild(child) {
     if (child.tagName === "#fragment") {
-      child.children.splice(0).forEach((inner) => this.children.push(inner));
+      child.children.splice(0).forEach((inner) => {
+        inner.parent = this;
+        this.children.push(inner);
+      });
     } else {
+      child.parent = this;
       this.children.push(child);
     }
     return child;
@@ -226,8 +231,12 @@ const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "she
   elements[id].className = markupClasses[id] || "";
 });
 // The sheet page the image view covers, and the view: a bar (the picture's description, the hint, Close) and a frame holding one picture.
+// Nested as the template nests them: the sheet's parts under .sheet-page, and the view beside it, not inside it.
+const documentRoot = new Node("div");
 const sheetPageNode = new Node("div");
 sheetPageNode.className = "sheet-page";
+documentRoot.appendChild(sheetPageNode);
+Object.keys(elements).forEach((id) => sheetPageNode.appendChild(elements[id]));
 const viewerNodes = {};
 [["sheet-viewer", "div"], ["sheet-viewer-caption", "span"], ["sheet-viewer-close", "button"], ["sheet-viewer-frame", "div"], ["sheet-viewer-picture", "img"]].forEach(([id, tag]) => {
   viewerNodes[id] = new Node(tag);
@@ -239,14 +248,15 @@ viewerNodes["sheet-viewer"].hidden = true;
 viewerNodes["sheet-viewer-close"].className = "sh-button";
 viewerNodes["sheet-viewer-close"].setAttribute("type", "button");
 viewerNodes["sheet-viewer-close"].textContent = "Close";
-const viewerHint = new Node("span");
-viewerHint.className = "sh-caption";
-viewerHint.textContent = "Pinch or double-tap to zoom.";
 const viewerBar = new Node("div");
 viewerBar.className = "sheet-viewer-bar";
-viewerBar.children = [viewerNodes["sheet-viewer-caption"], viewerHint, viewerNodes["sheet-viewer-close"]];
+viewerBar.children = [viewerNodes["sheet-viewer-caption"], viewerNodes["sheet-viewer-close"]];
 viewerNodes["sheet-viewer-frame"].children = [viewerNodes["sheet-viewer-picture"]];
 viewerNodes["sheet-viewer"].children = [viewerBar, viewerNodes["sheet-viewer-frame"]];
+documentRoot.appendChild(viewerNodes["sheet-viewer"]);
+[viewerBar, viewerNodes["sheet-viewer-frame"]].forEach((node) => { node.parent = viewerNodes["sheet-viewer"]; });
+[viewerNodes["sheet-viewer-caption"], viewerNodes["sheet-viewer-close"]].forEach((node) => { node.parent = viewerBar; });
+viewerNodes["sheet-viewer-picture"].parent = viewerNodes["sheet-viewer-frame"];
 // A frame's scroll size is its own size or the picture's width and height attributes, whichever is larger, so a scroll position can really be clamped.
 ["Width", "Height"].forEach((side) => {
   Object.defineProperty(viewerNodes["sheet-viewer-frame"], "scroll" + side, {
@@ -662,8 +672,9 @@ const tools = {
   figures: (id) => tools.all(tools.card(id)).filter((node) => node.tagName === "figure"),
   // A tap as a browser handles it: nothing under an inert sheet can be activated, and a disabled control ignores it.
   press: (node) => {
-    const inView = tools.all(viewerNodes["sheet-viewer"]).includes(node);
-    if (!inView && sheetPageNode.getAttribute("inert") !== null) return false;
+    for (let up = node; up; up = up.parent) {
+      if (up.getAttribute("inert") !== null) return false;
+    }
     return tools.click(node);
   },
   // Loads the view's picture at a natural size, in a frame of a given size, as the browser does once the file arrives.
@@ -1335,7 +1346,6 @@ def test_a_card_picture_opens_the_view_and_close_returns_to_the_card():
       const out = {
         before: state(),
         opener: ["tabindex", "role", "aria-label"].map((name) => first.getAttribute(name)),
-        hint: t.text(view.root),
       };
       t.click(first);
       out.tap = state();
@@ -1359,7 +1369,6 @@ def test_a_card_picture_opens_the_view_and_close_returns_to_the_card():
     """)
     assert result["before"]["hidden"] is True and result["before"]["inert"] is None
     assert result["opener"] == ["0", "button", "Open picture: The plan drawn out"]
-    assert "Pinch or double-tap to zoom." in result["hint"] and "Close" in result["hint"]
 
     def opened(src, alt):
         return {"hidden": False, "src": src, "alt": alt, "caption": alt, "label": alt, "images": 1, "controls": ["Close"], "inert": "", "focus": "close"}
@@ -1409,6 +1418,25 @@ def test_escape_closes_the_view_with_focus_outside_it():
     assert result["closed"] == {"hidden": True, "src": None, "inert": None, "focus": "first"}
     assert result["again"] == result["closed"]
     assert result["thrown"] is None
+
+
+# Bites on: the image view in the template losing its hidden start, nesting inside the sheet page (so the sheet's inert would cover it), losing its dialog roles, or losing its Close button or its zoom hint.
+def test_the_image_view_in_the_template_is_a_hidden_modal_beside_the_sheet_page():
+    text = _template_text()
+    view = re.search(r'<div id="sheet-viewer"([^>]*)>', text)
+    assert view, "the template has no #sheet-viewer"
+    attributes = view.group(1)
+    assert re.search(r"\bhidden\b", attributes)
+    assert 'role="dialog"' in attributes and 'aria-modal="true"' in attributes
+    page = re.search(r'<div class="sheet-page">', text)
+    assert page and page.start() < view.start()
+    depth = 0
+    for tag in re.finditer(r"<(/?)div\b[^>]*>", text[page.start():view.start()]):
+        depth += -1 if tag.group(1) else 1
+    assert depth == 0, "#sheet-viewer sits inside .sheet-page"
+    body = text[view.end():]
+    assert "Pinch or double-tap to zoom." in body
+    assert re.search(r'<button id="sheet-viewer-close"[^>]*>\s*Close\s*</button>', body)
 
 
 # Bites on: the sheet behind the view staying live (an answer button that can still be activated and writes an answer while the view covers it), or the view offering an answer control of its own.

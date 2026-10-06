@@ -709,12 +709,11 @@
     function zoomTo(next, px, py) {
       const from = { w: Number(viewerPicture.getAttribute("width")), h: Number(viewerPicture.getAttribute("height")) };
       if (!(from.w > 0 && from.h > 0)) return;
+      // The frame's scroll position is read before the size changes: a smaller picture can make the browser clamp it.
+      const view = { left: viewerFrame.scrollLeft, top: viewerFrame.scrollTop, w: viewerFrame.clientWidth, h: viewerFrame.clientHeight };
       scale = clamp(next, 1, ZOOM_MAX);
       showSize();
-      const target = zoomedScroll(
-        { left: viewerFrame.scrollLeft, top: viewerFrame.scrollTop, w: viewerFrame.clientWidth, h: viewerFrame.clientHeight },
-        from, sizeAt(scale), px, py
-      );
+      const target = zoomedScroll(view, from, sizeAt(scale), px, py);
       placeScroll(target.left, target.top);
     }
 
