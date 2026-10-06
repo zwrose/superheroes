@@ -1,5 +1,6 @@
 """Guards for the review template page and its usage doc."""
 import copy
+import hashlib
 import json
 import re
 import shutil
@@ -251,7 +252,14 @@ const sharedModes = modeQueue(host.read);
 const namedModes = {};
 Object.keys(host.readByCollection || {}).forEach((name) => { namedModes[name] = modeQueue(host.readByCollection[name]); });
 const nextMode = (queue) => (queue.length > 1 ? queue.shift() : queue[0]);
-const docsOf = (name) => (host.collections ? host.collections[name] || [] : name === "answers" ? host.docs : []);
+const readCounts = {};
+// `host.later` gives a collection's documents from its second read on, as another open copy of the sheet would have written them in between.
+const docsOf = (name) => {
+  readCounts[name] = (readCounts[name] || 0) + 1;
+  if (readCounts[name] > 1 && host.later && host.later[name]) return host.later[name];
+  return host.collections ? host.collections[name] || [] : name === "answers" ? host.docs : [];
+};
+if (host.noCrypto) Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
 const fakeStore = {
   doc: (path) => ({
     set: (body) => {
@@ -655,7 +663,7 @@ def test_template_has_no_document_skeleton():
 def test_template_loads_the_stylesheet_and_data_file():
     text = _template_text()
     assert len(re.findall(r'<link rel="stylesheet" href="comic-panel\.css">', text)) == 1
-    assert re.search(r"""fetchJson\(\s*['"]sheet\.json['"]""", text)
+    assert re.search(r"""fetch(?:Json|File)\(\s*['"]sheet\.json['"]""", text)
     assert re.search(r"""fetchJson\(\s*['"]sheet\.schema\.json['"]""", text)
     assert re.search(r"\bfetch\(\s*name\b", text)
 
@@ -1658,6 +1666,8 @@ def _schema_without_answers(mutate):
 
 
 def _drop_answer_definition(schema):
+    # The sent verdict's answers point at the answer definition; they stop pointing at it so only the answer reader is left without a shape.
+    schema["$defs"]["sentAnswer"]["properties"]["answer"] = {"type": "object"}
     del schema["$defs"]["answer"]
 
 
@@ -2264,12 +2274,30 @@ def _final_doc(data):
     return {"id": "final", "data": data}
 
 
-def _draft(verdict, note=""):
-    return {"verdict": verdict, "note": note}
+def _sheet_digest(sheet=None):
+    """The SHA-256 the page computes: of the exact text the harness serves as sheet.json."""
+    return hashlib.sha256(_sample_files(sheet)["sheet.json"]["body"].encode("utf-8")).hexdigest()
 
 
-def _verdict_write(verdict, note=""):
-    return {"path": "verdict/final", "body": _draft(verdict, note)}
+OTHER_DIGEST = "0" * 64
+
+
+def _draft(verdict, note="", sheet=None):
+    return {"verdict": verdict, "note": note, "sheet": _sheet_digest(_sample_final()) if sheet is None else sheet}
+
+
+def _sent(verdict, note="", sheet=None, answers=None):
+    document = _draft(verdict, note, sheet)
+    document["answers"] = [_empty_answer(card["id"]) for card in FINAL_SAMPLE["cards"]] if answers is None else answers
+    return document
+
+
+def _empty_answer(card_id, answer=None, option=None, note=""):
+    return {"card": card_id, "answer": {"answer": answer, "optionId": option, "note": note}}
+
+
+def _verdict_write(verdict, note="", answers=None):
+    return {"path": "verdict/final", "body": _sent(verdict, note, answers=answers)}
 
 
 def _draft_write(verdict, note=""):
@@ -2385,7 +2413,7 @@ def test_a_verdict_tap_saves_a_draft_and_never_a_verdict():
         _draft_write("approve", "Looks right"),
         _draft_write("not-yet", "Looks right"),
     ]
-    assert result["sets"][-1]["body"] == {"verdict": "not-yet", "note": "Looks right"}
+    assert result["sets"][-1]["body"] == {"verdict": "not-yet", "note": "Looks right", "sheet": _sheet_digest(_sample_final())}
     assert not [call for call in result["sets"] if call["path"].startswith(("verdict/", "answers/"))]
     assert result["after"] == result["before"] == {"count": "0 of 2 answered", "pills": ["Open", "Open"]}
     assert result["last"]["pressed"] == ["false", "true"] and result["last"]["note"] == "Looks right"
@@ -2418,7 +2446,10 @@ def test_a_draft_verdict_is_restored_on_reopen_and_counts_as_nothing():
     assert noted["last"]["pressed"] == ["false", "false"] and noted["last"]["note"] == "Only a note"
     assert noted["status"] == PICK_FIRST_LINE and noted["send"] is True
 
-    for bad in ({"verdict": "maybe", "note": "kept"}, {"verdict": "approve", "note": "kept", "extra": 1}):
+    for bad in (
+        {"verdict": "maybe", "note": "kept", "sheet": _sheet_digest(_sample_final())},
+        {"verdict": "approve", "note": "kept", "sheet": _sheet_digest(_sample_final()), "extra": 1},
+    ):
         unfit = reopen(bad)
         assert unfit["last"]["pressed"] == ["false", "false"] and unfit["last"]["note"] == "kept"
         assert unfit["send"] is True and unfit["sets"] == []
@@ -2448,6 +2479,7 @@ def test_send_verdict_writes_one_verdict_and_shows_sent():
     assert result["before"] == {"writes": 2, "status": DRAFT_LINE, "disabled": False}
     assert result["during"]["last"] == "verdict/final"
     assert result["during"]["verdicts"] == [_verdict_write("approve", "Ship it")]
+    assert result["during"]["verdicts"][0]["body"]["sheet"] == hashlib.sha256(_sample_files(_sample_final())["sheet.json"]["body"].encode("utf-8")).hexdigest(), "the sent document does not carry the digest of the served bytes"
     assert result["during"]["status"] == "Sending…", "the page said more than it knew before the write resolved"
     assert result["during"]["send"] is True and _all_off(result["during"]["controls"])
     assert result["after"]["verdicts"] == [_verdict_write("approve", "Ship it")], "the verdict was not written exactly once"
@@ -2570,12 +2602,13 @@ def test_the_sheet_is_frozen_while_sending():
     assert result["waiting"]["status"] == CHECKING_LINE and _all_off(result["waiting"]["controls"])
     assert result["waitingAfter"] == result["waiting"], "the sheet changed while Send verdict waited for the answers"
     assert result["writing"]["status"] == "Sending…" and _all_off(result["writing"]["controls"])
-    assert result["writing"]["verdicts"] == [_verdict_write("approve")]
+    frozen = [_empty_answer("leftovers-handling", "aligned"), _empty_answer("saved-plan-history")]
+    assert result["writing"]["verdicts"] == [_verdict_write("approve", answers=frozen)]
     assert result["writingAfter"] == result["writing"], "the sheet changed, or a second write started, while the verdict write was pending"
     assert result["sent"]["status"] == "Verdict sent: Approve" and _all_off(result["sent"]["controls"])
     assert _all_off(result["sentAfter"]["controls"])
     assert result["sentAfter"]["sets"] == result["sent"]["sets"] == result["writing"]["sets"]
-    assert result["sentAfter"]["verdicts"] == [_verdict_write("approve")]
+    assert result["sentAfter"]["verdicts"] == [_verdict_write("approve", answers=frozen)]
     assert result["sentAfter"]["status"] == result["sent"]["status"]
     for stage in ("waiting", "waitingAfter", "writing", "writingAfter", "sent", "sentAfter"):
         assert result[stage]["doneScreen"] is True and result[stage]["doneOff"] is True, \
@@ -2661,25 +2694,168 @@ def test_a_sent_verdict_is_shown_on_reopen():
           return { last: t.lastState(), status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), controls: t.controls() };
         """.replace("__POKE__", "true" if poke else "false"), host={"fakeTimers": True, "collections": collections})
 
-    sent = reopen({"verdict": [_final_doc(_draft("approve", "Good to go"))], "draft-verdict": [_final_doc(_draft("not-yet", "An older draft"))]}, poke=True)
+    sent = reopen({"verdict": [_final_doc(_sent("approve", "Good to go"))], "draft-verdict": [_final_doc(_draft("not-yet", "An older draft"))]}, poke=True)
     assert sent["status"] == "Verdict sent: Approve"
     assert sent["last"]["pressed"] == ["true", "false"] and sent["last"]["note"] == "Good to go"
     assert sent["send"] is True and _all_off(sent["controls"])
     assert sent["sets"] == [], "a sent sheet wrote after reopening"
-    assert reopen({"verdict": [_final_doc(_draft("not-yet"))]})["status"] == "Verdict sent: Not yet"
+    assert reopen({"verdict": [_final_doc(_sent("not-yet"))]})["status"] == "Verdict sent: Not yet"
 
     for name, bad in (
-        ("unknown verdict", {"verdict": "maybe", "note": ""}),
-        ("no verdict", {"verdict": None, "note": ""}),
-        ("extra key", {"verdict": "approve", "note": "", "extra": 1}),
-        ("note that is not text", {"verdict": "approve", "note": 3}),
+        ("unknown verdict", dict(_sent("approve"), verdict="maybe")),
+        ("no verdict", dict(_sent("approve"), verdict=None)),
+        ("extra key", dict(_sent("approve"), extra=1)),
+        ("note that is not text", dict(_sent("approve"), note=3)),
+        ("no answers", {key: value for key, value in _sent("approve").items() if key != "answers"}),
+        ("answers that are not answer documents", dict(_sent("approve"), answers=[{"card": "x", "answer": {"answer": "maybe"}}])),
+        ("no sheet digest", {key: value for key, value in _sent("approve").items() if key != "sheet"}),
+        ("malformed sheet digest", dict(_sent("approve"), sheet="ABC")),
     ):
         ignored = reopen({"verdict": [_final_doc(bad)], "draft-verdict": [_final_doc(_draft("not-yet", "Still a draft"))]})
         assert ignored["status"] == DRAFT_LINE, name
         assert ignored["last"]["pressed"] == ["false", "true"] and ignored["last"]["note"] == "Still a draft", name
         assert ignored["send"] is False and ignored["sets"] == [], name
-    only_bad = reopen({"verdict": [_final_doc({"verdict": "maybe", "note": ""})]})
+    only_bad = reopen({"verdict": [_final_doc(dict(_sent("approve"), verdict="maybe"))]})
     assert only_bad["status"] == PICK_FIRST_LINE and only_bad["send"] is True
+
+
+# Bites on: a verdict or a draft written for another revision of the sheet being restored or locking the sheet on reopen, or a document with no digest counting.
+def test_a_verdict_and_a_draft_for_another_revision_are_ignored_on_reopen():
+    def reopen(collections):
+        return _sheet_page(_sample_final(), """
+          await t.advance(1500);
+          return { last: t.lastState(), status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), controls: t.controls() };
+        """, host={"fakeTimers": True, "collections": collections})
+
+    other = reopen({
+        "verdict": [_final_doc(_sent("approve", "Old sign-off", sheet=OTHER_DIGEST))],
+        "draft-verdict": [_final_doc(_draft("not-yet", "Old draft", sheet=OTHER_DIGEST))],
+    })
+    assert other["status"] == PICK_FIRST_LINE and other["send"] is True, "a verdict for another revision locked or restored"
+    assert other["last"]["pressed"] == ["false", "false"] and other["last"]["note"] == ""
+    assert _all_on([control for control in other["controls"] if control["text"] != "Send verdict"]), "the sheet stayed locked"
+    assert other["sets"] == []
+    assert reopen({"verdict": [_final_doc(_sent("approve", sheet=OTHER_DIGEST))]})["status"] == PICK_FIRST_LINE
+    mixed = reopen({"verdict": [_final_doc(_sent("approve", sheet=OTHER_DIGEST))], "draft-verdict": [_final_doc(_draft("not-yet", "Mine"))]})
+    assert mixed["last"]["note"] == "Mine" and mixed["status"] == DRAFT_LINE
+
+
+# Bites on: the sent document or a draft not carrying the digest of the served sheet.json bytes, or the sent answers not equal to the cards' saved answers.
+def test_the_sent_document_carries_the_digest_and_every_cards_answer():
+    result = _sheet_page(_sample_final(), """
+      ${VERDICTS}
+      t.click(t.button("saved-plan-history", "Discuss"));
+      t.type(t.note("leftovers-handling"), "Keep it short", "change");
+      t.click(t.lastButton("Not yet"));
+      await t.tick();
+      t.click(t.sendButton());
+      await t.advance(200);
+      return { verdicts: verdicts(), drafts: t.setLog().filter((call) => call.path === "draft-verdict/final"), status: t.sendStatus() };
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
+    digest = hashlib.sha256(_sample_files(_sample_final())["sheet.json"]["body"].encode("utf-8")).hexdigest()
+    assert result["status"] == "Verdict sent: Not yet"
+    assert result["verdicts"] == [{"path": "verdict/final", "body": {
+        "verdict": "not-yet", "note": "", "sheet": digest,
+        "answers": [
+            _empty_answer("leftovers-handling", None, None, "Keep it short"),
+            _empty_answer("saved-plan-history", "discuss"),
+        ],
+    }}]
+    assert result["drafts"] and all(call["body"]["sheet"] == digest for call in result["drafts"])
+
+
+# Bites on: Send writing over a verdict another open copy already sent for this revision, not showing that verdict as sent, or leaving the sheet unlocked; and a later answers write changing the sent document.
+def test_a_send_that_finds_a_verdict_for_this_revision_writes_nothing():
+    earlier = _sent("not-yet", "From the other tab", answers=[_empty_answer("leftovers-handling", "discuss"), _empty_answer("saved-plan-history")])
+    result = _sheet_page(_sample_final(), """
+      ${VERDICTS}
+      t.click(t.lastButton("Approve"));
+      await t.advance(200);
+      t.click(t.sendButton());
+      await t.advance(200);
+      return {
+        verdicts: verdicts(), status: t.sendStatus(), last: t.lastState(), controls: t.controls(),
+        send: t.sendButton().disabled, retry: t.sendTryAgain() !== undefined,
+        reads: t.reads.map((read) => read.name),
+      };
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "later": {"verdict": [_final_doc(earlier)]}})
+    assert result["verdicts"] == [], "a verdict was written over the one already sent"
+    assert result["status"] == "Verdict sent: Not yet"
+    assert result["last"]["pressed"] == ["false", "true"] and result["last"]["note"] == "From the other tab"
+    assert result["send"] is True and _all_off(result["controls"]) and result["retry"] is False
+    assert result["reads"][-1] == "verdict", "Send did not look at the verdict collection just before writing"
+
+
+# Bites on: a verdict for another revision blocking a Send (it is not a verdict on this sheet), or a pre-read that fails being taken as nothing sent.
+def test_a_send_looks_before_writing_and_a_failed_look_writes_nothing():
+    other = _sheet_page(_sample_final(), """
+      ${VERDICTS}
+      t.click(t.lastButton("Approve"));
+      await t.advance(200);
+      t.click(t.sendButton());
+      await t.advance(200);
+      return { verdicts: verdicts(), status: t.sendStatus() };
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "set": "pending", "later": {"verdict": [_final_doc(_sent("not-yet", sheet=OTHER_DIGEST))]}})
+    assert other["verdicts"] == [_verdict_write("approve")], "a verdict for another revision blocked this one"
+    failed = _sheet_page(_sample_final(), """
+      ${VERDICTS}
+      t.click(t.lastButton("Approve"));
+      await t.advance(200);
+      t.click(t.sendButton());
+      await t.advance(200);
+      return { verdicts: verdicts(), status: t.sendStatus(), retry: t.sendTryAgain() !== undefined, send: t.sendButton().disabled };
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True, "readByCollection": {"verdict": ["docs", "reject"]}})
+    assert failed["verdicts"] == [] and failed["status"] == FAILED_SEND_LINE and failed["retry"] is True
+
+
+# Bites on: a verdict document being changed by anything written to answers/ after it was sent (another open copy's later tap).
+def test_a_later_answer_write_leaves_the_sent_document_unchanged():
+    result = _sheet_page(_sample_final(), """
+      ${VERDICTS}
+      t.click(t.button("leftovers-handling", "Aligned"));
+      t.click(t.lastButton("Approve"));
+      await t.advance(200);
+      t.click(t.sendButton());
+      await t.advance(200);
+      const before = JSON.stringify(verdicts());
+      t.fire(t.button("leftovers-handling", "Discuss"), "click");
+      await t.advance(1500);
+      return { before: before, after: JSON.stringify(verdicts()), paths: t.setLog().map((call) => call.path) };
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
+    assert result["before"] == result["after"]
+    assert result["paths"].count("verdict/final") == 1
+    assert result["paths"][-1] == "verdict/final", "a sent sheet took a later answer"
+
+
+# Bites on: a browser with no crypto.subtle leaving the last card or Send on, or saying nothing about why.
+def test_without_a_digest_the_last_card_and_send_stay_off():
+    result = _sheet_page(_sample_final(), """
+      await t.advance(1500);
+      t.fire(t.lastButton("Approve"), "click");
+      t.fire(t.sendButton(), "click");
+      await t.advance(1500);
+      return { status: t.sendStatus(), send: t.sendButton().disabled, last: t.lastState(), sets: t.setLog().map((call) => call.path) };
+    """, host={"fakeTimers": True, "noCrypto": True})
+    assert result["status"] == "This browser can't tell which version of the sheet this is, so the verdict can't be sent here."
+    assert result["send"] is True and all(result["last"]["disabled"]) and result["last"]["pressed"] == ["false", "false"]
+    assert not [path for path in result["sets"] if path.endswith("/final")], "the last card wrote without a digest"
+
+
+# Bites on: the schema accepting a draft or a sent verdict with no sheet digest or a malformed one, or a sent verdict without its answers.
+def test_the_schema_refuses_a_missing_or_malformed_sheet_digest():
+    digest = "a" * 64
+    answers = [_empty_answer("leftovers-handling")]
+    assert DRAFT_VERDICT_VALIDATOR.is_valid({"verdict": None, "note": "", "sheet": digest})
+    assert VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest, "answers": answers})
+    assert VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest, "answers": []})
+    for bad in (None, "", "A" * 64, "a" * 63, "a" * 65, "g" * 64, 5):
+        assert not DRAFT_VERDICT_VALIDATOR.is_valid({"verdict": None, "note": "", "sheet": bad}), bad
+        assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": bad, "answers": answers}), bad
+    assert not DRAFT_VERDICT_VALIDATOR.is_valid({"verdict": None, "note": ""})
+    assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "answers": answers})
+    assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest})
+    assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest, "answers": [{"card": "x", "answer": {"answer": "option", "optionId": None, "note": ""}}]})
+    assert not VERDICT_VALIDATOR.is_valid({"verdict": "approve", "note": "", "sheet": digest, "answers": [{"card": "X Y", "answer": answers[0]["answer"]}]})
 
 
 # Bites on: a final sheet with no cards drawing a stepper, rows or cards, a count that is not "Nothing left to answer", or losing its history, last card, Send or next line.
@@ -2717,7 +2893,9 @@ def test_a_final_sheet_with_no_cards():
     assert result["parts"]["finalHidden"] is False and result["parts"]["finalChildren"] == 2
     assert result["next"] == NEXT_TEXT
     assert result["status"] == PICK_FIRST_LINE
-    assert result["verdicts"] == [_verdict_write("approve")]
+    assert result["verdicts"] == [{"path": "verdict/final", "body": {
+        "verdict": "approve", "note": "", "sheet": _sheet_digest(_sample_final(cards=[])), "answers": [],
+    }}]
     assert result["sent"] == "Verdict sent: Approve"
     assert result["countAfter"] == "Nothing left to answer"
 

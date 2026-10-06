@@ -292,17 +292,25 @@ def document_errors(name, document):
 
 
 def test_verdict_document_accepts_only_a_taken_verdict():
-    # Axis: the stored verdict is approve or not-yet with a note and nothing else, so a draft's null verdict never counts as one.
-    for good in [{"verdict": "approve", "note": ""}, {"verdict": "not-yet", "note": "n"}]:
+    # Axis: the stored verdict is approve or not-yet with a note, the sheet digest it answers and every card's answer, and nothing else, so a draft's null verdict never counts as one.
+    digest = "a" * 64
+    full = {"verdict": "approve", "note": "", "sheet": digest, "answers": []}
+    for good in [full, dict(full, verdict="not-yet", note="n"),
+                 dict(full, answers=[{"card": "c1", "answer": {"answer": "aligned", "optionId": None, "note": ""}}])]:
         assert document_errors("verdict", good) == [], good
-    for bad in [{"verdict": None, "note": ""}, {"verdict": "maybe", "note": ""}, {"verdict": "approve"},
-                {"verdict": "approve", "note": "", "extra": 1}]:
+    for bad in [dict(full, verdict=None), dict(full, verdict="maybe"), {"verdict": "approve", "sheet": digest, "answers": []},
+                dict(full, extra=1), {k: v for k, v in full.items() if k != "sheet"}, {k: v for k, v in full.items() if k != "answers"},
+                dict(full, sheet="A" * 64), dict(full, sheet="a" * 63)]:
         assert document_errors("verdict", bad) != [], bad
 
 
 def test_draft_verdict_document_also_accepts_a_null_verdict():
-    # Axis: the stored draft may hold a note with no verdict yet, and still refuses an unknown verdict or an extra key.
-    for good in [{"verdict": None, "note": "only a note"}, {"verdict": "approve", "note": ""}, {"verdict": "not-yet", "note": "n"}]:
+    # Axis: the stored draft may hold a note with no verdict yet, still carries the sheet digest, and still refuses an unknown verdict or an extra key.
+    digest = "a" * 64
+    for good in [{"verdict": None, "note": "only a note", "sheet": digest}, {"verdict": "approve", "note": "", "sheet": digest},
+                 {"verdict": "not-yet", "note": "n", "sheet": digest}]:
         assert document_errors("draftVerdict", good) == [], good
-    for bad in [{"verdict": "maybe", "note": ""}, {"verdict": None}, {"verdict": None, "note": "", "extra": 1}]:
+    for bad in [{"verdict": "maybe", "note": "", "sheet": digest}, {"verdict": None, "sheet": digest},
+                {"verdict": None, "note": "", "sheet": digest, "extra": 1}, {"verdict": None, "note": ""},
+                {"verdict": None, "note": "", "sheet": "xyz"}]:
         assert document_errors("draftVerdict", bad) != [], bad

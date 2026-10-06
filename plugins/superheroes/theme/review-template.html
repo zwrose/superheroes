@@ -512,6 +512,15 @@
     // until the schema was read, and left null when it is not in that shape: the last card's controls stay off.
     let verdictShape = null;
 
+    // The SHA-256 (lowercase hex) of the exact text the page fetched as sheet.json: the revision every stored
+    // verdict is bound to. Null until worked out, and left null when the browser can't compute it.
+    let sheetDigest = null;
+
+    // True when a stored verdict document belongs to the sheet revision on screen.
+    function forThisSheet(data) {
+      return sheetDigest !== null && typeof data.sheet === "string" && data.sheet === sheetDigest;
+    }
+
     function readVerdictShape(schema) {
       const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
       const defs = isObject(schema.$defs) ? schema.$defs : {};
@@ -538,6 +547,7 @@
       verdictSending: "Sending…",
       verdictSlow: "Sending is taking longer than it should. Keep this page open.",
       verdictFailed: "The verdict didn't send.",
+      verdictNoDigest: "This browser can't tell which version of the sheet this is, so the verdict can't be sent here.",
     };
     const NOTE_PAUSE_MS = 1000;
     // How long a save or a read of the saved answers may stay unanswered before the page says so.
@@ -907,8 +917,8 @@
         rowLabel: "Your verdict",
         noteId: "verdict-note",
         path: "draft-verdict/final",
-        live: function () { return canEdit() && verdictShape !== null; },
-        document: function (body) { return { verdict: body.answer, note: body.note }; },
+        live: function () { return canEdit() && verdictShape !== null && sheetDigest !== null; },
+        document: function (body) { return { verdict: body.answer, note: body.note, sheet: sheetDigest }; },
         // A stored draft restores a pick only when it fits the schema's draft rule; one that does not fit
         // restores only its note, and only when that is text.
         state: function (data) {
@@ -1151,7 +1161,7 @@
     function syncControls() {
       const on = canEdit();
       controllers.forEach(function (controller) { controller.setEnabled(on); });
-      if (verdictController !== null) verdictController.setEnabled(on && verdictShape !== null);
+      if (verdictController !== null) verdictController.setEnabled(on && verdictShape !== null && sheetDigest !== null);
       doneButton.disabled = sending || sent;
     }
 
@@ -1213,7 +1223,7 @@
     function refreshVerdict() {
       if (finalUi === null || verdictController === null) return;
       const picked = verdictController.current().answer !== null;
-      const usable = ready && verdictShape !== null;
+      const usable = ready && verdictShape !== null && sheetDigest !== null;
       // A refusal because answers were unsaved goes away once every answer is saved.
       if (sendView !== null && sendView.kind === "refused" && !sending
           && !items.some(function (item) { return controllers.get(item.id).unsaved(); })) {
@@ -1229,6 +1239,8 @@
         retry = sendView.retry === true;
       } else if (usable) {
         text = picked ? SAY.verdictDraft : SAY.verdictFirst;
+      } else if (ready && verdictShape !== null) {
+        text = SAY.verdictNoDigest;
       }
       finalUi.status.textContent = text;
       finalUi.row.replaceChildren(finalUi.send, finalUi.status, ...(retry ? [finalUi.retry] : []));
@@ -1267,7 +1279,7 @@
     // written to verdict/final. "Sent" is shown only after that write resolved. A write that is rejected leaves
     // nothing sent and offers Try again; one that stays unanswered offers no Try again while it may still land.
     async function sendVerdict() {
-      if (sending || sent || !ready || verdictShape === null || verdictController === null) return;
+      if (sending || sent || !ready || verdictShape === null || sheetDigest === null || verdictController === null) return;
       if (verdictController.current().answer === null) return;
       sending = true;
       sendView = { kind: "working", text: SAY.verdictChecking };
@@ -1297,8 +1309,42 @@
       }
 
       const chosen = verdictController.current();
-      // The document written here has the shape the schema's $defs.verdict defines.
-      const payload = { verdict: chosen.answer, note: chosen.note };
+      // The document written here has the shape the schema's $defs.verdict defines: the verdict and its note,
+      // the sheet revision it answers, and every card's answer as the sheet froze it (the sheet cannot change
+      // from here until the write settles).
+      const payload = {
+        verdict: chosen.answer,
+        note: chosen.note,
+        sheet: sheetDigest,
+        answers: items.map(function (item) {
+          const answer = controllers.get(item.id).current();
+          return { card: item.id, answer: { answer: answer.answer, optionId: answer.optionId, note: answer.note } };
+        }),
+      };
+
+      // The sent verdict is the one record. Just before writing, look again: a verdict for this revision that
+      // another open copy already sent is shown as sent and left alone. Two copies sending at the same instant
+      // can still both write; that is a known residual.
+      let earlier = null;
+      try {
+        const snapshot = await withDeadline(function () { return store.collection("verdict").get(); });
+        const stored = documentData(snapshot.docs.find(function (doc) { return doc.id === "final"; }));
+        if (stored !== null) earlier = stored;
+      } catch (error) {
+        sending = false;
+        sendView = { kind: "failed", text: SAY.verdictFailed, retry: true };
+        syncControls();
+        refreshSheet();
+        return;
+      }
+      if (earlier !== null && isSentVerdict(earlier)) {
+        showSent(earlier);
+        sending = false;
+        sendView = null;
+        syncControls();
+        refreshSheet();
+        return;
+      }
       sendView = { kind: "sending", text: SAY.verdictSending };
       refreshSheet();
       let finished = false;
@@ -1398,15 +1444,25 @@
     function applyVerdicts(drafts, verdicts) {
       if (verdictController === null) return;
       const final = function (snapshot) { return snapshot.docs.find(function (doc) { return doc.id === "final"; }); };
+      // A draft or verdict written for another revision of the sheet is ignored: nothing is restored, nothing locks.
       const draft = documentData(final(drafts));
-      if (draft !== null) verdictController.restore(draft);
+      if (draft !== null && forThisSheet(draft)) verdictController.restore(draft);
       const verdict = documentData(final(verdicts));
-      if (verdict !== null && verdictShape !== null && fitsRule(verdictShape.root, verdictShape.sent, verdict)
-          && verdictShape.values.includes(verdict.verdict)) {
-        sentWord = VERDICT_LABELS[verdict.verdict];
-        sent = true;
-        verdictController.restore(verdict);
-      }
+      if (verdict !== null && isSentVerdict(verdict)) showSent(verdict);
+    }
+
+    // True when a stored verdict fits the schema's $defs.verdict, carries a verdict this page knows, and answers
+    // the sheet revision on screen.
+    function isSentVerdict(verdict) {
+      return verdictShape !== null && forThisSheet(verdict) && fitsRule(verdictShape.root, verdictShape.sent, verdict)
+        && verdictShape.values.includes(verdict.verdict);
+    }
+
+    // Shows a stored verdict as the sent one: its word, its pick and note, and the sheet locked.
+    function showSent(verdict) {
+      sentWord = VERDICT_LABELS[verdict.verdict];
+      sent = true;
+      verdictController.restore({ verdict: verdict.verdict, note: verdict.note, sheet: verdict.sheet });
     }
 
     // Controls turn on only after the saved answers were read and put on the cards. A failed or stalled
@@ -1497,7 +1553,8 @@
       await restore();
     }
 
-    async function fetchJson(name, label) {
+    // The fetched file's text and what it parses to.
+    async function fetchFile(name, label) {
       let response;
       try {
         response = await fetch(name, { cache: "no-store" });
@@ -1514,17 +1571,34 @@
         throw [label + " could not be loaded."];
       }
       try {
-        return JSON.parse(text);
+        return { text: text, data: JSON.parse(text) };
       } catch (error) {
         throw [label + " isn't valid JSON."];
       }
     }
 
+    async function fetchJson(name, label) {
+      return (await fetchFile(name, label)).data;
+    }
+
+    // The SHA-256 of the text as UTF-8, in lowercase hex; null when this browser can't compute it.
+    async function digestOf(text) {
+      try {
+        if (typeof crypto === "undefined" || crypto === null || !crypto.subtle || typeof crypto.subtle.digest !== "function") return null;
+        const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+        return Array.from(bytes, function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+      } catch (error) {
+        return null;
+      }
+    }
+
     async function load() {
+      let sheetFile;
       let sheet;
       let schema;
       try {
-        sheet = await fetchJson("sheet.json", "The sheet's data file");
+        sheetFile = await fetchFile("sheet.json", "The sheet's data file");
+        sheet = sheetFile.data;
         schema = await fetchJson("sheet.schema.json", "The sheet's schema file");
       } catch (problems) {
         showErrors(Array.isArray(problems) ? problems : ["The sheet could not be drawn."]);
@@ -1543,6 +1617,7 @@
           return;
         }
       }
+      sheetDigest = sheet.kind === "final" ? await digestOf(sheetFile.text) : null;
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema);
       render(sheet);
