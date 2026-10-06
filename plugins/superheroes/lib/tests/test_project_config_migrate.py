@@ -279,6 +279,7 @@ def test_fetch_ok_when_origin_reachable(tmp_path):
 
 def test_e11_canon_lookup_raising_is_refused_and_writes_nothing(tmp_path):
     w = _world(tmp_path)
+    _git(w.repo, "config", "remote.origin.followRemoteHEAD", "never")
     _git(w.repo, "remote", "set-head", "origin", "-d")
     before = w.core_bytes()
     got = _shape(w.migrate())
@@ -557,7 +558,9 @@ def test_e22_a_ruling_containing_the_field_separator_is_sanitized(tmp_path):
     assert got["action"] == "migrated"
     assert got["sanitized"] is True
     lines = _entry_lines(w.head_canon())
-    assert " · Alpha; Beta; ; Gamma · " in lines[0]
+    assert " · Alpha; Beta;; Gamma · " in lines[0]
+    ruling = lines[0].split(" · standing · ", 1)[1].split(" · owner's words", 1)[0]
+    assert " · " not in ruling
     for line in lines:
         assert line.count(" · ") == 5
         assert _ENTRY_LINE.match(line)
