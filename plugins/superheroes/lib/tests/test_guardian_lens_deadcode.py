@@ -1218,3 +1218,93 @@ def test_knip_filtered_untracked_does_not_trip_contradiction_gate(tmp_path):
     assert out["status"] == "collected", out.get("reason")
     assert out["candidates"] == []
     assert out["digest"]["ecosystems"]["node"]["untrackedFiltered"] == 1
+
+
+# ------------------------------------------------- checkout-independent ids (#1610)
+
+_EXCERPT_PATHS = sorted(_vulture_excerpt_files())
+_LEGACY_ROOT = "/private/tmp/claude-501/guardian-garden2/wt"
+
+
+def _absolute_excerpt(root):
+    """VULTURE_EXCERPT as real vulture prints it when handed absolute operands."""
+    return "".join(root + "/" + line + "\n" for line in VULTURE_EXCERPT.strip().splitlines())
+
+
+def _sweep_from(root_dir):
+    """One collect() of the excerpt tree checked out at `root_dir`, vulture reporting
+    absolute paths under that checkout and knip reporting the knip fixture."""
+    files = _vulture_excerpt_files()
+    files["pyproject.toml"] = "[project]\nname = \"x\"\n"
+    repo = os.path.realpath(_node_repo_with_knip_fixture(root_dir, extra=files))
+    knip_abs = json.loads(KNIP_JSON)
+    for entry in knip_abs["issues"]:
+        entry["file"] = repo + "/" + entry["file"]
+    run = FakeRun([
+        ("vulture", (3, _absolute_excerpt(repo), "")),
+        ("knip", (1, json.dumps(knip_abs), "")),
+    ], tracked=sorted(files) + _knip_tracked_files())
+    out = gld.LENS.collect(_ctx(repo, run))
+    assert out["status"] == "collected", out
+    return out
+
+
+def test_two_checkout_roots_yield_identical_repo_relative_ids(tmp_path):
+    a = _sweep_from(tmp_path / "checkout-a")
+    b = _sweep_from(tmp_path / "elsewhere" / "checkout-b")
+    ids_a = sorted(a["digest"]["candidates"])
+    ids_b = sorted(b["digest"]["candidates"])
+    assert ids_a == ids_b
+    assert len(ids_a) == 8
+    for cand in b["digest"]["candidates"].values():
+        assert not os.path.isabs(cand["path"]), cand
+        assert str(tmp_path) not in cand["id"], cand
+    assert "deadcode:vulture:plugins/superheroes/lib/repo_doctor.py:variable:engine_plugin_ver" in ids_b
+    assert "deadcode:knip:scripts/docgen/lib.js:GENERATED_HEADER" in ids_b
+    assert gld.LENS.diff(a["digest"], b["digest"]) == {"new": [], "worsened": [], "resolved": []}
+
+
+def _legacy_vulture(path, kind, symbol, lines):
+    cid = "deadcode:vulture:%s:%s:%s" % (path, kind, symbol)
+    return cid, {"id": cid, "tool": "vulture", "kind": kind, "path": path, "symbol": symbol,
+                 "metric": len(lines), "lines": lines, "receipt": "vulture: legacy"}
+
+
+def _legacy_digest():
+    """A literal absolute-keyed baseline, shaped like the stored 2026-10-03 one."""
+    rows = [
+        _legacy_vulture(_LEGACY_ROOT + "/plugins/superheroes/lib/repo_doctor.py",
+                        "variable", "engine_plugin_ver", [243]),
+        _legacy_vulture(_LEGACY_ROOT + "/plugins/superheroes/lib/control_plane.py",
+                        "function", "allowance_trail", [135]),
+        _legacy_vulture(_LEGACY_ROOT + "/plugins/superheroes/lib/tests/test_guardian_lens.py",
+                        "variable", "clean_registry", [88, 97]),
+        _legacy_vulture(_LEGACY_ROOT + "/plugins/superheroes/lib/gone.py",
+                        "function", "removed_since", [9]),
+    ]
+    knip_id = "deadcode:knip:%s/scripts/old-file.js" % _LEGACY_ROOT
+    rows.append((knip_id, {"id": knip_id, "tool": "knip", "kind": "file",
+                           "path": _LEGACY_ROOT + "/scripts/old-file.js", "export": None,
+                           "metric": 1, "lines": [], "receipt": "knip: legacy"}))
+    return {"schema": gld.DIGEST_SCHEMA, "collectorVersion": gld.COLLECTOR_VERSION,
+            "detected": ["python", "node"], "ecosystems": {}, "candidates": dict(rows)}
+
+
+
+def test_absolute_keyed_baseline_reports_one_loud_transition(tmp_path):
+    """No guessed carry-forward (#1610, owner ruling option 3): the first sweep after the
+    fix reports every current candidate as new and every old absolute id as resolved."""
+    prev = _legacy_digest()
+    repo = _py_repo_with_excerpt(tmp_path)
+    run = FakeRun([("vulture", (3, _absolute_excerpt(os.path.realpath(repo)), ""))],
+                  tracked=_EXCERPT_PATHS + ["pyproject.toml"])
+    out = gld.LENS.collect(_ctx(repo, run, prev=prev))
+    cur = out["digest"]["candidates"]
+    assert len(cur) == 4
+    assert not [c for c in cur if _LEGACY_ROOT in c]
+    # Carried under the old absolute key, still reported once as new under its relative id.
+    assert "deadcode:vulture:plugins/superheroes/lib/repo_doctor.py:variable:engine_plugin_ver" in cur
+    d = gld.LENS.diff(prev, out["digest"])
+    assert d["new"] == sorted(cur)
+    assert d["worsened"] == []
+    assert d["resolved"] == sorted(prev["candidates"])

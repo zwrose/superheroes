@@ -267,15 +267,17 @@ def _vulture_argv():
 
 
 def _filter_vulture_hits(hits, tracked, repo):
-    """Drop hits whose path is not in the tracked census; return (kept, dropped_count)."""
+    """Drop hits whose path is not in the tracked census; return (kept, dropped_count).
+    Kept paths become repo-relative: vulture echoes its absolute operands (#1610)."""
     if not hits:
         return [], 0
     tracked_norm = {_norm_repo_path(repo, p) for p in tracked}
     kept = []
     dropped = 0
     for h in hits:
-        if _norm_repo_path(repo, h.get("path")) in tracked_norm:
-            kept.append(h)
+        rel = _norm_repo_path(repo, h.get("path"))
+        if rel in tracked_norm:
+            kept.append(dict(h, path=rel))
         else:
             dropped += 1
     return kept, dropped
@@ -295,6 +297,8 @@ def _filter_knip_issues(issues, tracked, repo):
         path_norm = _norm_repo_path(repo, path) if isinstance(path, str) else ""
         tracked_file = bool(path_norm and path_norm in tracked_norm)
         new_entry = dict(entry)
+        if tracked_file:
+            new_entry["file"] = path_norm  # repo-relative id key, as for vulture (#1610)
         files = entry.get("files")
         if isinstance(files, list):
             if tracked_file:
