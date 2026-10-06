@@ -2786,6 +2786,35 @@ def test_a_send_that_finds_a_verdict_for_this_revision_writes_nothing():
     assert result["reads"][-1] == "verdict", "Send did not look at the verdict collection just before writing"
 
 
+# Bites on: a reopened sent sheet showing a later draft's answers instead of the answers the verdict was sent with.
+def test_a_sent_verdict_shows_the_answers_it_was_sent_with():
+    signed = _sent("approve", "", answers=[_empty_answer("leftovers-handling", "discuss", None, "Signed note"), _empty_answer("saved-plan-history")])
+    later = {"answer": "aligned", "optionId": None, "note": "A later draft"}
+    result = _sheet_page(_sample_final(), """
+      await t.advance(1500);
+      return { state: t.state("leftovers-handling"), status: t.sendStatus() };
+    """, host={"fakeTimers": True, "collections": {"verdict": [_final_doc(signed)], "answers": [{"id": "leftovers-handling", "data": later}]}})
+    assert result["status"] == "Verdict sent: Approve"
+    assert result["state"]["note"] == "Signed note"
+    assert result["state"]["pressed"] != ["true"] * len(result["state"]["pressed"])
+    assert result["state"]["labels"][result["state"]["pressed"].index("true")] == "Discuss"
+
+
+# Bites on: an older open copy of the sheet writing its verdict after the sheet was republished.
+def test_a_send_from_a_stale_copy_of_the_sheet_writes_nothing():
+    result = _sheet_page(_sample_final(), """
+      ${VERDICTS}
+      t.click(t.lastButton("Approve"));
+      await t.advance(200);
+      files["sheet.json"] = { status: 200, body: files["sheet.json"].body + " " };
+      t.click(t.sendButton());
+      await t.advance(200);
+      return { verdicts: verdicts(), status: t.sendStatus() };
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
+    assert result["verdicts"] == []
+    assert "older version" in result["status"]
+
+
 # Bites on: a verdict for another revision blocking a Send (it is not a verdict on this sheet), or a pre-read that fails being taken as nothing sent.
 def test_a_send_looks_before_writing_and_a_failed_look_writes_nothing():
     other = _sheet_page(_sample_final(), """
@@ -3085,7 +3114,7 @@ def test_leaving_a_final_sheet_is_guarded_while_the_verdict_is_unconfirmed_or_se
 def test_final_sheet_wording_has_one_home():
     words = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
     prose_source = (THEME.parent / "lib" / "sheet_prose.py").read_text(encoding="utf-8")
-    for key in ("history", "tracesBoard", "tracesNoBoard", "boardSaved", "boardNotSaved", "next", "noDeclines", "approveHeading", "nextHeading"):
+    for key in ("history", "tracesBoard", "tracesNoBoard", "boardSaved", "boardNotSaved", "next", "noDeclines", "declinedHeading", "declinedItem", "approveHeading", "nextHeading"):
         for name, text in (("the page", _template_text()), ("sheet_prose.py", prose_source)):
             assert words[key] not in text, "%s retypes the shared wording %r" % (name, key)
     assert re.search(r"""fetchJson\(\s*['"]sheet-words\.json['"]""", _template_text())

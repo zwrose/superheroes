@@ -3,6 +3,8 @@
   "history": "The review ran {rounds} and fixed {fixes} itself. The vet: {vet}",
   "roundNoun": "round",
   "thingNoun": "thing",
+  "declinedHeading": "Declined findings",
+  "declinedItem": "{summary} (why declined: {reason})",
   "noDeclines": "No findings were declined.",
   "approveHeading": "Approve the spec?",
   "tracesBoard": "Every statement in the spec traces to your board, your framing, your rulings, your answers, or craft recorded for your veto.",

@@ -337,6 +337,11 @@ def _render_card(number, card):
     return lines
 
 
+def _fill(template, **values):
+    """A shared template with each {name} replaced by its value, in one pass so a value is never re-read."""
+    return re.sub(r"\{(\w+)\}", lambda found: values.get(found.group(1), found.group(0)), template)
+
+
 def _final_head(final):
     """A final sheet's history and declined findings, each part followed by a blank line."""
     history, declined = final["history"], final["declinedFindings"]
@@ -345,9 +350,9 @@ def _final_head(final):
     sentence = HISTORY.replace("{rounds}", rounds).replace("{fixes}", fixes).replace("{vet}", _text(history["vet"]))
     lines = ["**%s.** %s" % (WORDS["historyHeading"], sentence), ""]
     if not declined:
-        return lines + ["**Declined findings.** " + WORDS["noDeclines"], ""]
-    lines.append("**Declined findings (%d).**" % len(declined))
-    lines += ["- %s (why declined: %s)" % (_text(item["summary"]), _text(item["reason"])) for item in declined]
+        return lines + ["**%s.** %s" % (WORDS["declinedHeading"], WORDS["noDeclines"]), ""]
+    lines.append("**%s (%d).**" % (WORDS["declinedHeading"], len(declined)))
+    lines += ["- " + _fill(WORDS["declinedItem"], summary=_text(item["summary"]), reason=_text(item["reason"])) for item in declined]
     return lines + [""]
 
 

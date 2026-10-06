@@ -516,6 +516,9 @@
     // verdict is bound to. Null until worked out, and left null when the browser can't compute it.
     let sheetDigest = null;
 
+    // The exact text of that same fetch, kept to tell at Send time whether the published sheet has moved on.
+    let sheetText = null;
+
     // True when a stored verdict document belongs to the sheet revision on screen.
     function forThisSheet(data) {
       return sheetDigest !== null && typeof data.sheet === "string" && data.sheet === sheetDigest;
@@ -547,6 +550,7 @@
       verdictSending: "Sending…",
       verdictSlow: "Sending is taking longer than it should. Keep this page open.",
       verdictFailed: "The verdict didn't send.",
+      verdictStale: "This page is an older version of the sheet. Reload it to see the current one before sending a verdict.",
       verdictNoDigest: "This browser can't tell which version of the sheet this is, so the verdict can't be sent here.",
     };
     const NOTE_PAUSE_MS = 1000;
@@ -1144,6 +1148,10 @@
     function plural(count, noun) {
       return count + " " + noun + (count === 1 ? "" : "s");
     }
+    function fill(template, values) {
+      return template.replace(/\{(\w+)\}/g, function (whole, name) { return Object.prototype.hasOwnProperty.call(values, name) ? values[name] : whole; });
+    }
+
     function historySentence(rounds, fixes, vet) {
       return finalWords.history.replace("{rounds}", function () { return plural(rounds, finalWords.roundNoun); })
         .replace("{fixes}", function () { return plural(fixes, finalWords.thingNoun); })
@@ -1176,9 +1184,9 @@
         const list = document.createElement("ul");
         list.hidden = true;
         declined.forEach(function (finding) {
-          list.appendChild(textElement("li", "", finding.summary + " (why declined: " + finding.reason + ")"));
+          list.appendChild(textElement("li", "", fill(finalWords.declinedItem, { summary: finding.summary, reason: finding.reason })));
         });
-        const toggle = actionButton("Declined findings · " + declined.length, function () {
+        const toggle = actionButton(finalWords.declinedHeading + " · " + declined.length, function () {
           list.hidden = !list.hidden;
           toggle.setAttribute("aria-expanded", list.hidden ? "false" : "true");
         });
@@ -1322,6 +1330,25 @@
         }),
       };
 
+      // An older copy of the sheet must not write over a newer revision's verdict: look at the published sheet again,
+      // and refuse when it is no longer the revision on screen.
+      try {
+        const current = await withDeadline(function () { return fetchFile("sheet.json", "The sheet's data file"); });
+        if (current.text !== sheetText) {
+          sending = false;
+          sendView = { kind: "stale", text: SAY.verdictStale };
+          syncControls();
+          refreshSheet();
+          return;
+        }
+      } catch (error) {
+        sending = false;
+        sendView = { kind: "failed", text: SAY.verdictFailed, retry: true };
+        syncControls();
+        refreshSheet();
+        return;
+      }
+
       // The sent verdict is the one record. Just before writing, look again: a verdict for this revision that
       // another open copy already sent is shown as sent and left alone. Two copies sending at the same instant
       // can still both write; that is a known residual.
@@ -1463,6 +1490,11 @@
       sentWord = VERDICT_LABELS[verdict.verdict];
       sent = true;
       verdictController.restore({ verdict: verdict.verdict, note: verdict.note, sheet: verdict.sheet });
+      // The sent verdict carries the answers it was sent with; the cards show those, not a later draft.
+      verdict.answers.forEach(function (entry) {
+        const controller = controllers.get(entry.card);
+        if (controller !== undefined) controller.restore(entry.answer);
+      });
     }
 
     // Controls turn on only after the saved answers were read and put on the cards. A failed or stalled
@@ -1617,6 +1649,7 @@
           return;
         }
       }
+      sheetText = sheetFile.text;
       sheetDigest = sheet.kind === "final" ? await digestOf(sheetFile.text) : null;
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema);
