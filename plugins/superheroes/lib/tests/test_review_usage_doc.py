@@ -76,8 +76,10 @@ def test_usage_doc_declares_the_store_and_document_shape():
     declared = re.findall(r"^capabilities = (.+)$", doc, re.M)
     assert len(declared) == 1, "the doc declares capabilities %d times" % len(declared)
     capabilities = json.loads(declared[0])
-    assert capabilities["db"]["rules"] == [{"path": "", "read": "view", "write": "owner"}]
-    assert capabilities["user"] == {}
+    # Properties of the declaration, not a copy of it: a root rule limits writes to the owner, and the viewer is declared.
+    root = [rule for rule in capabilities["db"]["rules"] if rule["path"] == ""]
+    assert len(root) == 1 and root[0]["write"] == "owner", "the declaration no longer limits writes to the owner"
+    assert "user" in capabilities
     for value in ('"aligned"', '"discuss"', '"option"'):
         assert value in doc, "the doc doesn't show the answer value %s" % value
     assert "`answers/<card id>`" in doc

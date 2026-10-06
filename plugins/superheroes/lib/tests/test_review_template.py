@@ -209,6 +209,7 @@ if (host.fakeTimers) {
 const setLog = [];
 const reads = [];
 const uses = [];
+const ownerChecks = [];
 function deferred() {
   const handle = {};
   handle.promise = new Promise((resolve, reject) => {
@@ -261,6 +262,7 @@ if (host.claude !== "missing") {
         if (host.hang === "user") return new Promise(() => {});
         return Promise.resolve({
           isOwner: () => {
+            ownerChecks.push("isOwner");
             if (host.user === "is-owner-throws") throw new Error("isOwner threw");
             if (host.user === "is-owner-rejects") return Promise.reject(new Error("isOwner failed"));
             if (host.hang === "isOwner") return new Promise(() => {});
@@ -295,6 +297,7 @@ const tools = {
   sets: setLog,
   reads: reads,
   uses: uses,
+  ownerChecks: ownerChecks,
   snapshotOf: snapshotOf,
   fire: fire,
   hasClass: hasClass,
@@ -1140,7 +1143,9 @@ def test_stalled_save_is_single_flight_and_the_latest_state_lands_last():
     """, host={"set": "pending", "fakeTimers": True})
     assert result["early"] == "Saving…"
     assert result["stalled"]["text"].startswith("Not saved") and result["stalled"]["retry"] is False
-    assert "Reloading the page shows what was saved" in result["stalled"]["text"]
+    assert "Keep this page open" in result["stalled"]["text"]
+    assert "Reloading shows only what was saved" in result["stalled"]["text"]
+    assert "Reloading the page shows what was saved" not in result["stalled"]["text"], "the stalled text still offers a reload as recovery"
     assert result["edited"] == {"sets": 1, "text": result["stalled"]["text"], "retry": False}, "a write started while the first was pending"
     assert result["olderDone"] == {"sets": 2, "write": _write("plan-day", "discuss", None, "x"), "text": "Saving…"}
     assert result["final"] == {"sets": 2, "text": "Saved"}
@@ -1158,15 +1163,19 @@ def test_stalled_host_initialization_offers_retry(hang):
       out.early = { message: t.gate().message, retry: t.gate().retry !== undefined };
       await t.advance(1);
       out.stalled = { message: t.gate().message, retry: t.gate().retry !== undefined, disabled: t.state("plan-day").disabled };
+      const before = { uses: t.uses.slice(), owner: t.ownerChecks.length };
       t.click(t.gate().retry);
       await t.tick();
-      out.retried = { message: t.gate().message, uses: t.uses.length };
+      out.retried = { message: t.gate().message, newUses: t.uses.slice(before.uses.length), newOwner: t.ownerChecks.length - before.owner };
       return out;
     """, host={"hang": hang, "fakeTimers": True})
     assert result["early"] == {"message": "Loading your saved answers…", "retry": False}
     assert result["stalled"] == {"message": "The sheet's store isn't answering.", "retry": True, "disabled": [True] * 5}
     assert result["retried"]["message"] == "Loading your saved answers…"
-    assert result["retried"]["uses"] > 0
+    if hang == "isOwner":
+        assert result["retried"]["newOwner"] > 0, "the retry did not ask isOwner() again"
+    else:
+        assert hang in result["retried"]["newUses"], "the retry did not ask use(%r) again" % hang
 
 
 # Bites on: a read of the saved answers that never answers leaving the page waiting with no way out, a retry that cannot overlap it, or a late read result replacing what was applied.
