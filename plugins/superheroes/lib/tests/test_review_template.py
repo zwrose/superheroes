@@ -1475,6 +1475,13 @@ def test_a_pinch_zooms_about_the_midpoint():
     result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
       view.frame.rect = { left: 10, top: 20 };
       const out = { fit: t.shown() };
+      // From fit, fingers 200 px apart come to 50 px apart: the picture stays at fit.
+      p("pointerdown", 1, 260, 170);
+      p("pointerdown", 2, 460, 170);
+      p("pointermove", 2, 310, 170);
+      out.floorAtFit = t.shown();
+      p("pointerup", 1, 260, 170);
+      p("pointerup", 2, 310, 170);
       p("pointerdown", 1, 260, 170);
       p("pointerdown", 2, 360, 170);
       p("pointermove", 1, 160, 170);
@@ -1485,14 +1492,31 @@ def test_a_pinch_zooms_about_the_midpoint():
       out.shareAfter = share(out.pinched);
       p("pointermove", 2, 1260, 170);
       out.limit = t.shown();
-      out.captured = view.frame.captured;
+      out.captured = view.frame.captured.slice(2);
+      // Back down to a zoom of 2 (from 4, the fingers 100 px apart come to 50), then from 2 the fingers 200 px apart come to 50: the ask is for a zoom of 0.5.
+      p("pointerup", 1, 160, 170);
+      p("pointerup", 2, 1260, 170);
+      p("pointerdown", 1, 260, 170);
+      p("pointerdown", 2, 360, 170);
+      p("pointermove", 1, 310, 170);
+      out.backToTwo = t.shown();
+      p("pointerup", 1, 310, 170);
+      p("pointerup", 2, 360, 170);
+      p("pointerdown", 1, 160, 170);
+      p("pointerdown", 2, 360, 170);
+      p("pointermove", 2, 210, 170);
+      out.floorFromTwo = t.shown();
       return out;
     """)
-    assert result["fit"] == {"width": 400, "height": 200, "left": 0, "top": 0}
+    fit = {"width": 400, "height": 200, "left": 0, "top": 0}
+    assert result["fit"] == fit
+    assert result["floorAtFit"] == fit, "a pinch inward from fit went below fit"
     assert result["pinched"] == {"width": 800, "height": 400, "left": 250, "top": 50}
     assert result["shareBefore"] == result["shareAfter"] == [0.625, 0.5]
     assert (result["limit"]["width"], result["limit"]["height"]) == (1600, 800)
     assert result["captured"] == [1, 2]
+    assert (result["backToTwo"]["width"], result["backToTwo"]["height"]) == (800, 400), "the test did not start the last pinch from a zoom of 2"
+    assert result["floorFromTwo"] == fit, "a pinch inward from a zoom of 2 went below fit"
 
 
 # Bites on: a double-tap window that is not about 300 ms or 24 px, a double-tap that does not zoom to 2.5 about the tap point or back to fit, a second tap after a drag that still counts as a double-tap, or two taps too far apart in time or space that zoom anyway.
@@ -1514,9 +1538,10 @@ def test_double_tap_zooms_in_about_the_tap_and_back_out():
       tap(340, 100, 4100);
       out.far = t.shown();
       tap(300, 100, 5000);
+      // A 16 px drag (past the 10 px slop) that ends within 24 px of the first tap, then a tap inside 300 ms of it.
       p("pointerdown", 1, 300, 100, 5100);
-      p("pointermove", 1, 340, 100, 5120);
-      p("pointerup", 1, 340, 100, 5140);
+      p("pointermove", 1, 316, 100, 5120);
+      p("pointerup", 1, 316, 100, 5140);
       tap(300, 100, 5200);
       out.afterDrag = t.shown();
       return out;
@@ -1528,6 +1553,35 @@ def test_double_tap_zooms_in_about_the_tap_and_back_out():
     assert result["slow"] == fit, "two taps 400 ms apart zoomed"
     assert result["far"] == fit, "two taps 40 px apart zoomed"
     assert result["afterDrag"] == fit, "a tap after a drag counted as a double-tap"
+
+
+# Bites on: a fit worked out from the frame's width alone, so that a tall picture (400 x 800 in a frame of 400 x 300) is drawn at its full width and overflows the frame, a double-tap zoom that does not scale from that fit, or a resize that does not fit by height again.
+def test_a_tall_picture_fits_by_its_height():
+    result = _answer_page([_picture_card()], POINTER + """
+      const view = t.view;
+      t.click(t.pictures("pic-card")[0]);
+      t.loadView([400, 800], [400, 300]);
+      const out = { fit: t.shown() };
+      p("pointerdown", 1, 200, 150, 1000);
+      p("pointerup", 1, 200, 150, 1050);
+      p("pointerdown", 1, 200, 150, 1100);
+      p("pointerup", 1, 200, 150, 1150);
+      out.zoomed = t.shown();
+      p("pointerdown", 1, 200, 150, 2000);
+      p("pointerup", 1, 200, 150, 2050);
+      p("pointerdown", 1, 200, 150, 2100);
+      p("pointerup", 1, 200, 150, 2150);
+      out.back = t.shown();
+      view.frame.clientHeight = 400;
+      t.resizeWindow();
+      out.resized = t.shown();
+      return out;
+    """)
+    size = lambda shown: (shown["width"], shown["height"])
+    assert size(result["fit"]) == (150, 300), "a tall picture did not fit by its height"
+    assert abs(result["zoomed"]["width"] - 375) <= 1 and abs(result["zoomed"]["height"] - 750) <= 1
+    assert size(result["back"]) == (150, 300)
+    assert size(result["resized"]) == (200, 400), "a resize did not fit a tall picture by its height again"
 
 
 # Bites on: a drag that does not pan by the movement (or goes past the edges of the picture), a drag at fit that moves anything, or any gesture (a long sideways swipe included) that shows another picture in the view.
