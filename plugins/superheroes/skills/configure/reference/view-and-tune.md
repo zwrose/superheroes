@@ -93,19 +93,22 @@ action that owns it, leaving the rest of the calibration untouched:
   python3 -B "$ROOT_DIR/lib/project_config.py" migrate-material-line --cwd .
   ```
 
+  Once the first step has run, item 13's examples cannot change until the move finishes. Finish
+  the move first, then record any change in Canon as a new ruling.
+
   Each paragraph of the item-13 value becomes one standing ruling. Each ruling is marked as migrated
   from configure item 13 on that date, with its original session and time unknown. Then item 13
   points to Canon. The result's `action` is `migrated`, `already-adopted`, `pending-default-branch`,
   or `refused` with a `reason`. Only `migrated` and `already-adopted` mean done.
   `pending-default-branch` is the first of two steps. When Canon lives in the repository, the move
   always finishes in two steps, wherever the project's calibration lives, unless the default branch
-  already holds every ruling and every supersession of a ruling item 13 no longer holds. The
+  already holds every ruling. The
   entries are committed on this branch, and item 13 keeps its value so other branches still see the
   examples. Land the branch, then run the move again. That second run commits nothing new and
   writes the pointer. A repository with no origin default branch stays
   pending until it has one holding the entries. When Canon lives in the project store, there is one
   shared copy and the move finishes in one step. Report a `refused` result to the owner with its
-  `reason`, and never work around it. Eight reasons are ones the owner can act on:
+  `reason`, and never work around it. Seven reasons are ones the owner can act on:
   - `canon-dirty`: commit or discard local edits to `canon.md`, then run the move again.
   - `canon-git-root-not-a-repo`: run configure's set-up for the project store.
   - `material-line-changed-during-migration`: item 13 changed while it was moving, so run the move
@@ -116,13 +119,9 @@ action that owns it, leaving the rest of the calibration untouched:
   - `profile-structurally-ambiguous`: the project's calibration file is ambiguous (a repeated key or
     two calibration blocks); fix it through configure's fix path, then run the move again.
   - `material-line-changed-since-migration`: item 13 changed after an earlier run of the move
-    recorded these entries; either set item 13 back to the recorded text or record a ruling in Canon
-    that supersedes them (Canon's write procedure), then run the move again. An emptied item 13
-    meets the same refusal while those entries stand.
-  - `canon-id-conflict`: Canon holds differing entries under one id, which resolves for no reader;
-    take it to the owner, record their ruling in Canon as a new entry under a fresh id whose
-    `supersedes` field names the shared id (Canon never edits or deletes an entry), then run the
-    move again.
+    recorded these entries. Set item 13 back to exactly the text the detail lists, finish the
+    move, then record any change in Canon as a new ruling. An emptied item 13 meets the same
+    refusal while those entries stand.
 
   The other reasons are `profile-absent`, `profile-unparseable`, `behind`, `malformed-value`,
   `session-id-malformed`, `date-malformed`, `canon-lookup-refused`, `canon-commit-failed`, and
