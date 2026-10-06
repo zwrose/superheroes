@@ -101,7 +101,7 @@ def test_all_thirteen_items_in_registry_order_unstamped(tmp_path):
 def test_block_driven_by_items_registry(tmp_path, monkeypatch):
     repo, store = _setup_repo(tmp_path)
     extra = {
-        "number": 14,
+        "number": 15,
         "slug": "testOnlyItem",
         "name": "Test-only item",
         "home": PC.HOME_PROJECT_CONFIGURATION,
@@ -111,7 +111,7 @@ def test_block_driven_by_items_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(CV.project_config, "ITEMS", tuple(list(PC.ITEMS) + [extra]))
     screen = CV.render(repo, root=store)
     rows = _numbered_rows(_project_config_section(screen))
-    assert len(rows) == 14
+    assert len(rows) == 15
     assert any("Test-only item" in row for row in rows)
 
 
