@@ -512,12 +512,13 @@
     // until the schema was read, and left null when it is not in that shape: the last card's controls stay off.
     let verdictShape = null;
 
-    // The SHA-256 (lowercase hex) of the exact text the page fetched as sheet.json: the revision every stored
-    // verdict is bound to. Null until worked out, and left null when the browser can't compute it.
+    // The SHA-256 (lowercase hex) of the exact bytes the page fetched as sheet.json: the revision every stored
+    // verdict is bound to, and the id of that revision's own draft and verdict documents. Null until worked out,
+    // and left null when the browser can't compute it.
     let sheetDigest = null;
 
-    // The exact text of that same fetch, kept to tell at Send time whether the published sheet has moved on.
-    let sheetText = null;
+    // The exact bytes of that same fetch, kept to tell at Send time whether the published sheet has moved on.
+    let sheetBytes = null;
 
     // True when a stored verdict document belongs to the sheet revision on screen.
     function forThisSheet(data) {
@@ -912,8 +913,8 @@
       }, article);
     }
 
-    // The final sheet's last card: the verdict's buttons, written whole at draft-verdict/final as the owner
-    // taps. Nothing it writes counts as the owner's verdict; only sendVerdict writes verdict/final.
+    // The final sheet's last card: the verdict's buttons, written whole at draft-verdict/<digest> as the owner
+    // taps. Nothing it writes counts as the owner's verdict; only sendVerdict writes verdict/<digest>.
     function addVerdictParts(article) {
       addSaver({
         choices: verdictShape === null ? [] : verdictShape.values.map(function (value) {
@@ -921,7 +922,7 @@
         }),
         rowLabel: "Your verdict",
         noteId: "verdict-note",
-        path: "draft-verdict/final",
+        path: "draft-verdict/" + sheetDigest,
         live: function () { return canEdit() && verdictShape !== null && sheetDigest !== null; },
         document: function (body) { return { verdict: body.answer, note: body.note, sheet: sheetDigest }; },
         // A stored draft restores a pick only when it fits the schema's draft rule; one that does not fit
@@ -1285,7 +1286,7 @@
 
     // The only place the verdict is written. It is single-flight and freezes the sheet while it runs: first every
     // pending note is saved and every answer waited for, then the last card's pick and note are captured once and
-    // written to verdict/final. "Sent" is shown only after that write resolved. A write that is rejected leaves
+    // written to verdict/<digest>. "Sent" is shown only after that write resolved. A write that is rejected leaves
     // nothing sent and offers Try again; one that stays unanswered offers no Try again while it may still land.
     async function sendVerdict() {
       if (sending || sent || !ready || verdictShape === null || sheetDigest === null || verdictController === null) return;
@@ -1331,13 +1332,15 @@
         }),
       };
 
-      // The sent verdict is the one record. Just before writing, look again: a verdict for this revision that
-      // another open copy already sent is shown as sent and left alone. Two copies sending at the same instant
-      // can still both write; that is a known residual.
+      // The sent verdict is this revision's one record, stored under the revision's own digest, so a late write
+      // from a page showing an older revision lands on that older revision's document and never on a newer one.
+      // Just before writing, look again: a verdict for this revision that another open copy already sent is
+      // shown as sent and left alone. Two copies of the same revision sending at the same instant can still
+      // both write; that is a known residual.
       let earlier = null;
       try {
         const snapshot = await withDeadline(function () { return store.collection("verdict").get(); });
-        const stored = documentData(snapshot.docs.find(function (doc) { return doc.id === "final"; }));
+        const stored = documentData(snapshot.docs.find(function (doc) { return doc.id === sheetDigest; }));
         if (stored !== null) earlier = stored;
       } catch (error) {
         sending = false;
@@ -1358,7 +1361,7 @@
       // and refuse when it is no longer the revision on screen.
       try {
         const current = await withDeadline(function () { return fetchFile("sheet.json", "The sheet's data file"); });
-        if (current.text !== sheetText) {
+        if (!sameBytes(current.bytes, sheetBytes)) {
           sending = false;
           sendView = { kind: "stale", text: SAY.verdictStale };
           syncControls();
@@ -1383,7 +1386,7 @@
       }, STALL_MS);
       let request;
       try {
-        request = Promise.resolve(store.doc("verdict/final").set(payload));
+        request = Promise.resolve(store.doc("verdict/" + sheetDigest).set(payload));
       } catch (error) {
         request = Promise.reject(error);
       }
@@ -1471,11 +1474,12 @@
     // shows it and stays locked. A verdict document that does not fit is not a verdict and is ignored.
     function applyVerdicts(drafts, verdicts) {
       if (verdictController === null) return;
-      const final = function (snapshot) { return snapshot.docs.find(function (doc) { return doc.id === "final"; }); };
-      // A draft or verdict written for another revision of the sheet is ignored: nothing is restored, nothing locks.
-      const draft = documentData(final(drafts));
+      const mine = function (snapshot) { return snapshot.docs.find(function (doc) { return doc.id === sheetDigest; }); };
+      // Only this revision's own documents (the ones stored under its digest) are read: another revision's draft
+      // or verdict is never looked at, so nothing of it is restored and nothing locks.
+      const draft = documentData(mine(drafts));
       if (draft !== null && forThisSheet(draft)) verdictController.restore(draft);
-      const verdict = documentData(final(verdicts));
+      const verdict = documentData(mine(verdicts));
       if (verdict !== null && isSentVerdict(verdict)) showSent(verdict);
     }
 
@@ -1586,7 +1590,7 @@
       await restore();
     }
 
-    // The fetched file's text and what it parses to.
+    // The fetched file's exact bytes, the text decoded from them, and what that parses to.
     async function fetchFile(name, label) {
       let response;
       try {
@@ -1597,14 +1601,17 @@
       if (!response.ok) {
         throw [label + " could not be loaded (HTTP " + response.status + ")."];
       }
+      let bytes;
       let text;
       try {
-        text = await response.text();
+        bytes = new Uint8Array(await response.arrayBuffer());
+        // The text is decoded from a separate view of the same bytes; the bytes themselves are what a digest covers.
+        text = new TextDecoder().decode(bytes);
       } catch (error) {
         throw [label + " could not be loaded."];
       }
       try {
-        return { text: text, data: JSON.parse(text) };
+        return { bytes: bytes, text: text, data: JSON.parse(text) };
       } catch (error) {
         throw [label + " isn't valid JSON."];
       }
@@ -1614,12 +1621,20 @@
       return (await fetchFile(name, label)).data;
     }
 
-    // The SHA-256 of the text as UTF-8, in lowercase hex; null when this browser can't compute it.
-    async function digestOf(text) {
+    function sameBytes(left, right) {
+      if (left === null || right === null || left.length !== right.length) return false;
+      for (let at = 0; at < left.length; at += 1) {
+        if (left[at] !== right[at]) return false;
+      }
+      return true;
+    }
+
+    // The SHA-256 of the bytes, in lowercase hex; null when this browser can't compute it.
+    async function digestOf(bytes) {
       try {
         if (typeof crypto === "undefined" || crypto === null || !crypto.subtle || typeof crypto.subtle.digest !== "function") return null;
-        const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
-        return Array.from(bytes, function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+        const hashed = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+        return Array.from(hashed, function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
       } catch (error) {
         return null;
       }
@@ -1650,8 +1665,8 @@
           return;
         }
       }
-      sheetText = sheetFile.text;
-      sheetDigest = sheet.kind === "final" ? await digestOf(sheetFile.text) : null;
+      sheetBytes = sheetFile.bytes;
+      sheetDigest = sheet.kind === "final" ? await digestOf(sheetFile.bytes) : null;
       answerShape = readAnswerShape(schema);
       verdictShape = readVerdictShape(schema);
       render(sheet);

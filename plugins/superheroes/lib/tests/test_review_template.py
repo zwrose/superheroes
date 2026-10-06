@@ -319,7 +319,14 @@ async function fetch(name, options) {
   if (file === undefined) return { ok: false, status: 404, text: async () => "" };
   if (file.reject) throw new Error("network down");
   if (file.hang) await new Promise(() => {});
-  return { ok: file.status >= 200 && file.status < 300, status: file.status, text: async () => file.body };
+  const bytes = () => Buffer.from(file.body, "utf8");
+  return {
+    ok: file.status >= 200 && file.status < 300,
+    status: file.status,
+    // The exact bytes served, as a real response gives them (a byte-order mark included); text() drops that mark, as a browser does.
+    arrayBuffer: async () => { const served = bytes(); return served.buffer.slice(served.byteOffset, served.byteOffset + served.length); },
+    text: async () => file.body.replace(/^\ufeff/, ""),
+  };
 }
 __CHECK__
 __PAGE__
@@ -600,10 +607,12 @@ def _run_page(files, host=None, scenario="return null;"):
         path = recorded["path"]
         if re.fullmatch(r"answers/[a-z0-9][a-z0-9-]*", path):
             ANSWER_VALIDATOR.validate(recorded["body"])
-        elif path == "draft-verdict/final":
+        elif re.fullmatch(r"draft-verdict/[0-9a-f]{64}", path):
             DRAFT_VERDICT_VALIDATOR.validate(recorded["body"])
-        elif path == "verdict/final":
+            assert recorded["body"]["sheet"] == path.split("/")[1], "a draft not stored under its own revision's digest"
+        elif re.fullmatch(r"verdict/[0-9a-f]{64}", path):
             VERDICT_VALIDATOR.validate(recorded["body"])
+            assert recorded["body"]["sheet"] == path.split("/")[1], "a verdict not stored under its own revision's digest"
         else:
             pytest.fail("the page wrote to %s, which is not a document it may write" % path)
     return page
@@ -2257,7 +2266,7 @@ SLOW_SEND_LINE = "Sending is taking longer than it should. Keep this page open."
 CHECKING_LINE = "Making sure your answers are saved…"
 
 # In a scenario: the verdict writes so far, and every control's off state.
-VERDICT_WRITES = 'const verdicts = () => t.setLog().filter((call) => call.path === "verdict/final");'
+VERDICT_WRITES = 'const verdicts = () => t.setLog().filter((call) => call.path.startsWith("verdict/"));'
 
 
 def _sample_final(cards=None, declined=None, approved=True, saved=True):
@@ -2270,12 +2279,13 @@ def _sample_final(cards=None, declined=None, approved=True, saved=True):
     return sheet
 
 
-def _final_doc(data):
-    return {"id": "final", "data": data}
+def _final_doc(data, doc_id=None):
+    """A stored verdict document; keyed by the digest of the sheet on screen unless a test names another id."""
+    return {"id": _sheet_digest(_sample_final()) if doc_id is None else doc_id, "data": data}
 
 
 def _sheet_digest(sheet=None):
-    """The SHA-256 the page computes: of the exact text the harness serves as sheet.json."""
+    """The SHA-256 the page computes: of the exact bytes the harness serves as sheet.json."""
     return hashlib.sha256(_sample_files(sheet)["sheet.json"]["body"].encode("utf-8")).hexdigest()
 
 
@@ -2297,11 +2307,11 @@ def _empty_answer(card_id, answer=None, option=None, note=""):
 
 
 def _verdict_write(verdict, note="", answers=None):
-    return {"path": "verdict/final", "body": _sent(verdict, note, answers=answers)}
+    return {"path": "verdict/" + _sheet_digest(_sample_final()), "body": _sent(verdict, note, answers=answers)}
 
 
 def _draft_write(verdict, note=""):
-    return {"path": "draft-verdict/final", "body": _draft(verdict, note)}
+    return {"path": "draft-verdict/" + _sheet_digest(_sample_final()), "body": _draft(verdict, note)}
 
 
 def _all_off(controls):
@@ -2389,7 +2399,7 @@ def test_final_parts_absent_off_a_final_sheet(sheet):
     assert result["controls"] == 2 * (4 + 1)
 
 
-# Bites on: a verdict tap or its note being written anywhere but draft-verdict/final (as a verdict, or as an answer), a tap not saving at once, a note not waiting for its pause, or the last card feeding the count or the rows.
+# Bites on: a verdict tap or its note being written anywhere but draft-verdict/<digest> (as a verdict, or as an answer), a tap not saving at once, a note not waiting for its pause, or the last card feeding the count or the rows.
 def test_a_verdict_tap_saves_a_draft_and_never_a_verdict():
     result = _sheet_page(_sample_final(), """
       const out = { before: { count: t.count(), pills: t.rows().map((row) => row.pill[1]) } };
@@ -2477,7 +2487,7 @@ def test_send_verdict_writes_one_verdict_and_shows_sent():
       return out;
     """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending"})
     assert result["before"] == {"writes": 2, "status": DRAFT_LINE, "disabled": False}
-    assert result["during"]["last"] == "verdict/final"
+    assert result["during"]["last"] == "verdict/" + _sheet_digest(_sample_final())
     assert result["during"]["verdicts"] == [_verdict_write("approve", "Ship it")]
     assert result["during"]["verdicts"][0]["body"]["sheet"] == hashlib.sha256(_sample_files(_sample_final())["sheet.json"]["body"].encode("utf-8")).hexdigest(), "the sent document does not carry the digest of the served bytes"
     assert result["during"]["status"] == "Sending…", "the page said more than it knew before the write resolved"
@@ -2487,7 +2497,8 @@ def test_send_verdict_writes_one_verdict_and_shows_sent():
     assert result["after"]["send"] is True and _all_off(result["after"]["controls"])
     assert result["after"]["last"]["pressed"] == ["true", "false"] and result["after"]["last"]["note"] == "Ship it"
     assert result["after"]["retry"] is False
-    assert result["paths"] == ["draft-verdict/final", "draft-verdict/final", "verdict/final"]
+    keyed = _sheet_digest(_sample_final())
+    assert result["paths"] == ["draft-verdict/" + keyed, "draft-verdict/" + keyed, "verdict/" + keyed]
 
 
 # Bites on: Send verdict writing while an answer is rejected or still unsaved at the deadline (or sooner than that), saying anything but how many answers and what to do, or leaving the sheet frozen after refusing.
@@ -2750,11 +2761,11 @@ def test_the_sent_document_carries_the_digest_and_every_cards_answer():
       await t.tick();
       t.click(t.sendButton());
       await t.advance(200);
-      return { verdicts: verdicts(), drafts: t.setLog().filter((call) => call.path === "draft-verdict/final"), status: t.sendStatus() };
+      return { verdicts: verdicts(), drafts: t.setLog().filter((call) => call.path.startsWith("draft-verdict/")), status: t.sendStatus() };
     """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
     digest = hashlib.sha256(_sample_files(_sample_final())["sheet.json"]["body"].encode("utf-8")).hexdigest()
     assert result["status"] == "Verdict sent: Not yet"
-    assert result["verdicts"] == [{"path": "verdict/final", "body": {
+    assert result["verdicts"] == [{"path": "verdict/" + digest, "body": {
         "verdict": "not-yet", "note": "", "sheet": digest,
         "answers": [
             _empty_answer("leftovers-handling", None, None, "Keep it short"),
@@ -2815,6 +2826,53 @@ def test_a_send_from_a_stale_copy_of_the_sheet_writes_nothing():
     assert result["status"] == "This sheet was updated after you opened it. Reload the page to see the current version before sending."
 
 
+# Bites on: a page showing an older revision of the sheet writing to a document a newer revision's verdict lives in (the verdict and its draft are keyed by the revision they answer, so a delayed old write can only land on the old revision's own document).
+def test_a_delayed_write_from_an_old_revision_leaves_the_newer_verdict_document_alone():
+    newer = hashlib.sha256(b"a newer published sheet.json").hexdigest()
+    newer_verdict = _sent("not-yet", "The current sign-off", sheet=newer)
+    result = _sheet_page(_sample_final(), """
+      ${VERDICTS}
+      t.click(t.lastButton("Approve"));
+      await t.advance(200);
+      t.click(t.sendButton());
+      await t.advance(200);
+      const written = t.setLog().map((call) => call.path);
+      t.sets.forEach((call) => call.resolve());
+      await t.advance(200);
+      return { written: written, verdicts: verdicts(), status: t.sendStatus() };
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={
+        "fakeTimers": True, "set": "pending",
+        "collections": {"verdict": [_final_doc(newer_verdict, doc_id=newer)], "draft-verdict": [_final_doc(_draft("not-yet", "Newer draft", sheet=newer), doc_id=newer)]},
+    })
+    own = _sheet_digest(_sample_final())
+    assert own != newer
+    assert result["written"] and all(path.endswith("/" + own) for path in result["written"]), result["written"]
+    assert not [path for path in result["written"] if newer in path], "an old revision wrote to the newer revision's document"
+    assert [call["path"] for call in result["verdicts"]] == ["verdict/" + own]
+    assert result["status"] == "Verdict sent: Approve"
+    assert newer_verdict["sheet"] == newer, "the newer verdict document was changed"
+
+
+# Bites on: the digest hashing text decoded from the response instead of the bytes the file was published with (a byte-order mark is dropped by decoding, so the stored digest would differ from `shasum -a 256 sheet.json`), or the page failing to read a BOM-prefixed sheet.
+def test_the_digest_covers_the_served_bytes_including_a_byte_order_mark():
+    files = _sample_files(_sample_final())
+    files["sheet.json"]["body"] = "\ufeff" + files["sheet.json"]["body"]
+    served = files["sheet.json"]["body"].encode("utf-8")
+    assert served.startswith(b"\xef\xbb\xbf")
+    page = _run_page(files, host={"fakeTimers": True}, scenario="""
+      t.click(t.lastButton("Approve"));
+      await t.advance(200);
+      t.click(t.sendButton());
+      await t.advance(200);
+      return { verdicts: t.setLog().filter((call) => call.path.startsWith("verdict/")), status: t.sendStatus() };
+    """)
+    assert page["settled"] and page["errorHidden"] is True, page["errors"]
+    digest = hashlib.sha256(served).hexdigest()
+    assert digest != hashlib.sha256(served[3:]).hexdigest()
+    assert page["result"]["status"] == "Verdict sent: Approve"
+    assert [(call["path"], call["body"]["sheet"]) for call in page["result"]["verdicts"]] == [("verdict/" + digest, digest)]
+
+
 # Bites on: a Send that cannot re-check the published sheet writing anyway, or saying nothing about why and offering no retry.
 def test_a_send_that_cannot_recheck_the_sheet_writes_nothing_and_offers_try_again():
     result = _sheet_page(_sample_final(), """
@@ -2868,8 +2926,9 @@ def test_a_later_answer_write_leaves_the_sent_document_unchanged():
       return { before: before, after: JSON.stringify(verdicts()), paths: t.setLog().map((call) => call.path) };
     """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
     assert result["before"] == result["after"]
-    assert result["paths"].count("verdict/final") == 1
-    assert result["paths"][-1] == "verdict/final", "a sent sheet took a later answer"
+    sent_path = "verdict/" + _sheet_digest(_sample_final())
+    assert result["paths"].count(sent_path) == 1
+    assert result["paths"][-1] == sent_path, "a sent sheet took a later answer"
 
 
 # Bites on: a browser with no crypto.subtle leaving the last card or Send on, or saying nothing about why.
@@ -2883,7 +2942,7 @@ def test_without_a_digest_the_last_card_and_send_stay_off():
     """, host={"fakeTimers": True, "noCrypto": True})
     assert result["status"] == "This browser can't tell which version of the sheet this is, so the verdict can't be sent here."
     assert result["send"] is True and all(result["last"]["disabled"]) and result["last"]["pressed"] == ["false", "false"]
-    assert not [path for path in result["sets"] if path.endswith("/final")], "the last card wrote without a digest"
+    assert not [path for path in result["sets"] if "verdict" in path], "the last card wrote without a digest"
 
 
 # Bites on: the schema accepting a draft or a sent verdict with no sheet digest or a malformed one, or a sent verdict without its answers.
@@ -2938,7 +2997,7 @@ def test_a_final_sheet_with_no_cards():
     assert result["parts"]["finalHidden"] is False and result["parts"]["finalChildren"] == 2
     assert result["next"] == NEXT_TEXT
     assert result["status"] == PICK_FIRST_LINE
-    assert result["verdicts"] == [{"path": "verdict/final", "body": {
+    assert result["verdicts"] == [{"path": "verdict/" + _sheet_digest(_sample_final(cards=[])), "body": {
         "verdict": "approve", "note": "", "sheet": _sheet_digest(_sample_final(cards=[])), "answers": [],
     }}]
     assert result["sent"] == "Verdict sent: Approve"
@@ -3062,14 +3121,15 @@ def test_usage_doc_describes_the_final_sheet():
     doc = USAGE_DOC.read_text(encoding="utf-8")
     assert "## A final sheet" in doc
     section = doc.split("## A final sheet", 1)[1].split("\n## ", 1)[0]
-    for needle in ("`draft-verdict/final`", "`verdict/final`", "`$defs/draftVerdict`", "`$defs/verdict`", "Send verdict"):
+    for needle in ("`draft-verdict/<digest>`", "`verdict/<digest>`", "`$defs/draftVerdict`", "`$defs/verdict`", "Send verdict"):
         assert needle in section, needle
     squeezed = " ".join(section.split())
     assert "never counts" in squeezed
     assert "no cards" in squeezed
     assert doc.index("## How a sheet is laid out") < doc.index("## A final sheet") < doc.index("## How answers come back")
     answers = doc.split("## How answers come back", 1)[1].split("\n## ", 1)[0]
-    assert "Send verdict" in answers and "`verdict/final`" in answers
+    assert "Send verdict" in answers and "`verdict/<SHA-256 of the sheet.json it published>`" in answers
+    assert "and nothing else" in " ".join(answers.split())
     assert "never acts on a draft" in " ".join(answers.split())
 
 

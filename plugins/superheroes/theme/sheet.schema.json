@@ -198,7 +198,7 @@
       ]
     },
     "verdict": {
-      "description": "The one document a final sheet stores at verdict/final when the owner taps Send verdict. It is the only document that counts as the owner's verdict. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The one document a final sheet stores at verdict/<digest>, where <digest> is its own sheet field, when the owner taps Send verdict. It is the only document that counts as the owner's verdict. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["verdict", "note", "sheet", "answers"],
@@ -240,7 +240,7 @@
       }
     },
     "draftVerdict": {
-      "description": "The document a final sheet stores at draft-verdict/final the moment the owner taps a verdict or edits its note. It never counts as a verdict and is put back when the sheet reopens. This is not part of the data file: no property of the sheet refers to it.",
+      "description": "The document a final sheet stores at draft-verdict/<digest>, where <digest> is its own sheet field, the moment the owner taps a verdict or edits its note. It never counts as a verdict and is put back when the sheet reopens. This is not part of the data file: no property of the sheet refers to it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["verdict", "note", "sheet"],
