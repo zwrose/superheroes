@@ -7,6 +7,19 @@ Add a section when a release drops, renames, or newly requires an argument, a re
 result shape a consumer depends on. Put the newest release first. Each section names the release it
 belongs to and lists every change with its replacement.
 
+## Unreleased
+
+### Before you upgrade
+
+- Nothing to do. A project gains `canon.md` the first time a session records a ruling, and an in-repository project also gains a one-line `.gitattributes` beside it.
+
+### Canon: the record of the owner's decisions
+
+- New contract doc `rubric/canon-contract.md`: what Canon holds, how an entry is written, how sessions read, write and merge it.
+- New verb `definition_doc.py canon --root <root>`. It prints one JSON line with five keys: `path`, `home`, `gitRoot`, `exists` and `defaultRef`.
+- The issue contract's ruling anchor may now cite a Canon entry by its id.
+- Owner stamp for the anchor-resolution amendment: the owner's approval of the spec `aligning-on-what-to-build-6da1ee` on 2026-10-04.
+
 ## 0.40.0
 
 ### Before you upgrade
