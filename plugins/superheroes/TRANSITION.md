@@ -23,7 +23,7 @@ belongs to and lists every change with its replacement.
 ### Configure: who it's for, and the spec-reviewer seat
 
 - New configuration item 14, slug `whoItsFor` (in `projectConfiguration`), "Who it's for and what it's for". It has no plugin default and is listed after item 10. Set-up asks for it as its own step.
-- New key `enginePreferences.specReviewer` (an engine token, no model) and new verb `core_md.py write-spec-reviewer --cwd .`. The verb refuses a value that is not a known engine with `spec-reviewer-unknown-engine`. `load_engine_prefs` gains `specReviewer` and `invalidSpecReviewer`.
+- New key `enginePreferences.specReviewer` (an engine token, no model) and new verb `core_md.py write-spec-reviewer --cwd .`. The verb refuses a value that is not a known engine with `spec-reviewer-unknown-engine`; its own write failures report `spec-reviewer-round-trip-refused` and `spec-reviewer-write-failed`. `load_engine_prefs` gains `specReviewer` and `invalidSpecReviewer`.
 - `core_md` confirm now keeps `enginePreferences` when it confirms a provisional calibration. Before, it dropped them.
 
 ### Guardian dead-code ids are repo-relative

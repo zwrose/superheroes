@@ -80,6 +80,8 @@ ENGINE_PINS_REASON_INPUT_UNPARSEABLE = "engine-pins-input-unparseable"
 ENGINE_PINS_REASON_NOT_A_MAPPING = "engine-pins-not-a-mapping"
 ENGINE_PINS_REASON_INVALID = "engine-pins-invalid"
 ENGINE_PINS_REASON_ROUND_TRIP = "engine-pins-round-trip-refused"
+SPEC_REVIEWER_REASON_ROUND_TRIP = "spec-reviewer-round-trip-refused"
+SPEC_REVIEWER_DEFER_WRITE_FAILED = "spec-reviewer-write-failed"
 REVIEW_GATE_POLICY_KEY = "reviewGatePolicy"
 PROJECT_CONFIGURATION_KEY = "projectConfiguration"
 DECLARED_DEPENDENCIES_KEY = "declaredDependencies"
@@ -1310,9 +1312,11 @@ def _engine_pref_scalar_preflight(cwd, root):
     return None
 
 
-def _write_engine_pref_scalar(cwd, key, value, *, root=None):
+def _write_engine_pref_scalar(cwd, key, value, *, round_trip_reason, write_failed_reason, root=None):
     """Lock-guarded surgical write of one scalar ``enginePreferences[key]`` (``value is None``
-    deletes it) after the caller's preflight and classification. Every other ``enginePreferences``
+    deletes it) after the caller's preflight and classification. ``round_trip_reason`` and
+    ``write_failed_reason`` are the caller's own tokens for the two failures that would otherwise
+    name the wrong key. Every other ``enginePreferences``
     key and core fact is preserved semantically, and everything outside the ```json
     superheroes-core``` fence is preserved byte-identically. Never raises."""
     structural = profile_structural_refusal(cwd, root=root)
@@ -1378,14 +1382,14 @@ def _write_engine_pref_scalar(cwd, key, value, *, root=None):
             return {"action": "noop"}
         new_parsed = parse_core(new_text)
         if not _engine_pref_round_trip_ok(orig, new_parsed, key):
-            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ROUND_TRIP}
+            return {"action": "refused", "reason": round_trip_reason}
         try:
             store_core.atomic_write(path, new_text)
         except OSError as exc:
             mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
             return {
                 "action": "deferred",
-                "reason": BUILDER_DISPATCH_DEFER_WRITE_FAILED,
+                "reason": write_failed_reason,
             }
         clear_pending(cwd, root)
         return {"action": "written"}
@@ -1406,7 +1410,9 @@ def write_builder_dispatch_tier(cwd, tier, *, root=None):
         return {"action": "refused", "reason": classified["reason"]}
     return _write_engine_pref_scalar(
         cwd, "builderDispatchTier",
-        None if classified["state"] == "unset" else classified["tier"], root=root)
+        None if classified["state"] == "unset" else classified["tier"],
+        round_trip_reason=BUILDER_DISPATCH_REASON_ROUND_TRIP,
+        write_failed_reason=BUILDER_DISPATCH_DEFER_WRITE_FAILED, root=root)
 
 
 def write_spec_reviewer(cwd, engine, *, root=None):
@@ -1422,7 +1428,9 @@ def write_spec_reviewer(cwd, engine, *, root=None):
         return {"action": "refused", "reason": classified["reason"]}
     return _write_engine_pref_scalar(
         cwd, engine_pref.SPEC_REVIEWER_KEY,
-        None if classified["state"] == "unset" else classified["engine"], root=root)
+        None if classified["state"] == "unset" else classified["engine"],
+        round_trip_reason=SPEC_REVIEWER_REASON_ROUND_TRIP,
+        write_failed_reason=SPEC_REVIEWER_DEFER_WRITE_FAILED, root=root)
 
 
 def _drop_legacy_codex_pin_aliases(merged, canonical_role):

@@ -133,6 +133,38 @@ def test_write_spec_reviewer_lock_contended_is_deferred(tmp_path, monkeypatch):
     assert open(path, encoding="utf-8").read() == before
 
 
+def _raise_oserror(*_args, **_kwargs):
+    raise OSError("disk full")
+
+
+def test_write_spec_reviewer_write_failure_names_the_seat_not_the_builder_tier(tmp_path, monkeypatch):
+    repo, store = _seed(tmp_path, prefs=_PREFS)
+    monkeypatch.setattr(CM.store_core, "atomic_write", _raise_oserror)
+    res = CM.write_spec_reviewer(repo, "codex", root=store)
+    assert res == {"action": "deferred", "reason": "spec-reviewer-write-failed"}
+
+
+def test_write_spec_reviewer_round_trip_refusal_names_the_seat_not_the_builder_tier(tmp_path, monkeypatch):
+    repo, store = _seed(tmp_path, prefs=_PREFS)
+    monkeypatch.setattr(CM, "_engine_pref_round_trip_ok", lambda *args, **kwargs: False)
+    res = CM.write_spec_reviewer(repo, "codex", root=store)
+    assert res == {"action": "refused", "reason": "spec-reviewer-round-trip-refused"}
+
+
+def test_write_builder_dispatch_tier_write_failure_keeps_the_builder_token(tmp_path, monkeypatch):
+    repo, store = _seed(tmp_path, prefs=_PREFS)
+    monkeypatch.setattr(CM.store_core, "atomic_write", _raise_oserror)
+    res = CM.write_builder_dispatch_tier(repo, "opus", root=store)
+    assert res == {"action": "deferred", "reason": "builder-tier-write-failed"}
+
+
+def test_write_builder_dispatch_tier_round_trip_refusal_keeps_the_builder_token(tmp_path, monkeypatch):
+    repo, store = _seed(tmp_path, prefs=_PREFS)
+    monkeypatch.setattr(CM, "_engine_pref_round_trip_ok", lambda *args, **kwargs: False)
+    res = CM.write_builder_dispatch_tier(repo, "opus", root=store)
+    assert res == {"action": "refused", "reason": "builder-dispatch-round-trip-refused"}
+
+
 def test_cli_write_spec_reviewer_round_trip(tmp_path, capsys, monkeypatch):
     repo, store = _seed(tmp_path, prefs=_PREFS)
     monkeypatch.setattr("sys.stdin", io.StringIO("cursor\n"))

@@ -94,8 +94,9 @@ action that owns it, leaving the rest of the calibration untouched:
   restating it. Read the result, don't assume success: `write-spec-reviewer` returns `{action,
   reason?}` and exits 0 either way, so only `written` or `noop` means the seat was saved. Surface
   `refused` (`spec-reviewer-unknown-engine` names a value that is not `claude`, `codex`, or
-  `cursor`), `deferred` (`lock-contended`, `store-unwritable`, `builder-tier-write-failed`,
-  `repo-root-unavailable`, `spec-reviewer-cli-failed`), and `behind` (`core-schema-behind`) to the
+  `cursor`; `spec-reviewer-round-trip-refused`), `deferred` (`lock-contended`, `store-unwritable`,
+  `spec-reviewer-write-failed`, `repo-root-unavailable`, `spec-reviewer-cli-failed`), and `behind`
+  (`core-schema-behind`) to the
   owner with the `reason`.
 - **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
 - **Tune the guardian calibration** → read the existing `guardian.md` layer first, change the
