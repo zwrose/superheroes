@@ -149,6 +149,32 @@ def test_prose_why_line_matches_the_page_wording(tmp_path, rounds, fixes, unsett
     assert why == ["**Why only these 2.** " + expected]
 
 
+# Bites on: the prose dropping an image's caption, or printing a caption an image does not have.
+def test_prose_carries_an_images_caption_when_it_has_one(tmp_path):
+    sheet = _remainder_sheet(1, 1, 0)
+    sheet["cards"][0]["images"] = [{"src": "img/a.png", "alt": "A chart", "caption": "Sales by week"},
+                                   {"src": "img/b.png", "alt": "A map"}]
+    result = _render(tmp_path, sheet)
+    assert result.returncode == 0, result.stderr
+    assert "   - Images: A chart: Sales by week (img/a.png); A map (img/b.png)\n" in result.stdout
+
+
+# Bites on: the why line's wording drifting from the page's box, which the wording table above only compares against fixed text.
+@pytest.mark.parametrize("rounds, fixes, unsettled", [(1, 1, 0), (3, 7, 1), (2, 0, 2)])
+def test_why_line_is_the_same_on_the_page_and_in_the_prose(tmp_path, rounds, fixes, unsettled):
+    from test_review_template import _run_page, _sample_files
+
+    sheet = _remainder_sheet(rounds, fixes, unsettled)
+    page = _run_page(_sample_files(sheet), scenario="return t.why();")
+    assert page["settled"], "the page never settled: %s" % page
+    prose = _render(tmp_path, sheet)
+    assert prose.returncode == 0, prose.stderr
+    why = [line for line in prose.stdout.split("\n") if line.startswith("**Why only these")]
+    assert len(why) == 1
+    heading, text = re.fullmatch(r"\*\*(.+)\.\*\* (.+)", why[0]).groups()
+    assert (page["result"]["heading"], page["result"]["text"]) == (heading, text)
+
+
 # Bites on: a final or plain sheet printing the remainder sheet's why line.
 @pytest.mark.parametrize("kind", ["plain", "final"])
 def test_prose_why_line_is_absent_off_a_remainder_sheet(tmp_path, kind):
@@ -212,6 +238,10 @@ REFUSALS = {
     "negative fixesMade": (_mutated(lambda s: _set(s, -1, "remainder", "fixesMade")), "Remainder.fixesMade must be 0 or more."),
     "unsettled not strings": (_mutated(lambda s: _set(s, [4], "remainder", "unsettled")), "Remainder.unsettled[0] must be string."),
     "no remainder block": (_mutated(lambda s: _drop(s, "remainder")), "The data file has no remainder."),
+    "plain sheet carrying a remainder block": (_mutated(lambda s: _set(s, "plain", "kind")),
+                                               "The data file holds a part this kind of sheet must not have."),
+    "card with an unknown property": (_mutated(lambda s: _set(s, 1, "cards", 0, "bogus")),
+                                      "Cards[0] has bogus, which the sheet does not use."),
     "duplicate card id": (_mutated(lambda s: _set(s, "card-0", "cards", 1, "id")), 'Card id "card-0" is used more than once'),
     "duplicate option id": (_mutated(lambda s: _set(s, "yes", "cards", 0, "options", 1, "id")),
                             'Card "card-0" has the option id "yes" more than once'),

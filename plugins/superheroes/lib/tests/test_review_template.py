@@ -1927,6 +1927,23 @@ def test_an_unsaved_answer_never_folds():
     assert result["recovered"]["badges"] == [None, None, None]
 
 
+# Bites on: an answer whose write stalled folding away with the rest, losing its Not saved mark, or going missing from the fold's "not saved" count.
+def test_a_stalled_answer_never_folds():
+    result = _sheet_page(_remainder_of(_named_cards("plan-day", "fridge-check", "third-card"), unsettled=["third-card"]), """
+      t.click(t.button("plan-day", "Aligned"));
+      t.open("fridge-check");
+      t.click(t.button("fridge-check", "Discuss"));
+      t.sets[1].resolve();
+      await t.tick();
+      t.open("third-card");
+      await t.advance(10000);
+      return { folded: t.rows().map((row) => row.folded), badges: t.rows().map((row) => row.badge), fold: t.fold() };
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["folded"] == [False, True, False]
+    assert result["badges"] == [["sh-badge sh-badge--warning", "Not saved"], None, None]
+    assert [part[1] for part in result["fold"]["parts"]] == ["Answered · 1", "0 Aligned", "1 Discuss", "1 not saved"]
+
+
 # Bites on: the "why only these" line built from anything but the review's own rounds, fixes and unsettled count, the card count, or shown on a plain or final sheet.
 def test_why_only_these_is_built_from_the_remainder_facts():
     ending = " Everything else traces to your board or your rulings, so it isn't here."

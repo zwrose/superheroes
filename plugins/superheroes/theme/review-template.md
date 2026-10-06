@@ -82,7 +82,7 @@ shows each one's state: Aligned, Discuss, Picked or Open. An item whose save did
 red Not saved badge.
 
 On a phone, a remainder sheet folds the items that are answered into one row, with their Aligned,
-Discuss and Picked counts. An answer that isn't saved never folds, so it stays in the list where it
+Discuss and Picked counts. An answer whose save failed or stalled never folds, so it stays in the list where it
 can be seen and retried. On a desktop, every item is listed beside the open card.
 
 A remainder sheet also shows a "Why only these" box. It is built only from the `remainder` block's

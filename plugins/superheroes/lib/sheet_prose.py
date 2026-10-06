@@ -138,7 +138,7 @@ def _render_card(number, card):
     if context["exactText"] is not None:
         lines.append('   - The exact text: "%s"' % _one_line(context["exactText"]))
     if card["images"]:
-        pictures = "; ".join("%s (%s)" % (_one_line(i["alt"]), _one_line(i["src"])) for i in card["images"])
+        pictures = "; ".join("%s%s (%s)" % (_one_line(i["alt"]), ": " + _one_line(i["caption"]) if i.get("caption") else "", _one_line(i["src"])) for i in card["images"])
         lines.append("   - Images: %s" % pictures)
     options = card["options"]
     if options:
