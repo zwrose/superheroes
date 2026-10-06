@@ -482,6 +482,15 @@ def test_set_item_14_refuses_non_string(tmp_path):
     assert PC.set_item(repo, "whoItsFor", ["a"], root=store)["reason"] == "malformed-value"
 
 
+@pytest.mark.parametrize("value", ["", "   "], ids=["empty", "spaces"])
+def test_item_14_empty_stored_value_reads_malformed(tmp_path, value):
+    repo, store = _setup_repo(tmp_path)
+    CM.write_project_config_item(repo, "whoItsFor", value, root=store)
+    got = PC.get_item(repo, "whoItsFor", root=store)
+    assert got["malformed"] is True
+    assert got["source"] == "unset"
+
+
 def test_item_13_marker_reads_as_canon_pointer(tmp_path):
     repo, store = _setup_repo(tmp_path)
     CM.write_project_config_item(repo, "materialConsequenceLine", dict(_MARKER), root=store)

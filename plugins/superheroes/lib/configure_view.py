@@ -43,7 +43,8 @@ _SPEC_REVIEWER_FALLBACK = (
 _SPEC_REVIEWER_UNSET = "spec reviewer — unset (no model named). " + _SPEC_REVIEWER_FALLBACK
 _SPEC_REVIEWER_VALID = (
     "spec reviewer — %(engine)s (no model named). When %(engine)s is the spec author's own model "
-    "family, the checks use an installed engine of a different family instead.")
+    "family, the checks use an installed engine of a different family instead; when none is "
+    "installed, they use a fresh reviewer from the author's own family.")
 _SPEC_REVIEWER_INVALID = (
     "spec reviewer — unset: the recorded value %s is not an engine and is not applied ⚠")
 def _read(path):

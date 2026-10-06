@@ -99,8 +99,11 @@ def test_write_spec_reviewer_refuses_unparseable_profile(tmp_path):
     path = CM.core_path(repo, store)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("not a core profile at all\n")
+    before = open(path, "rb").read()
     res = CM.write_spec_reviewer(repo, "codex", root=store)
     assert res["action"] == "refused"
+    assert res["reason"] == CM.BUILDER_DISPATCH_REASON_UNPARSEABLE
+    assert open(path, "rb").read() == before
 
 
 def test_write_spec_reviewer_schema_behind_is_not_rewritten(tmp_path):
