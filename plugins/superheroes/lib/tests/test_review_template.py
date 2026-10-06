@@ -333,7 +333,7 @@ const tools = {
   buttons: (id) => tools.card(id).children.find((child) => hasClass(child, "answer-row")).children,
   note: (id) => tools.card(id).children.find((child) => child.tagName === "textarea"),
   saveLine: (id) => tools.card(id).children.find((child) => hasClass(child, "save-line")),
-  saveText: (id) => tools.text(tools.saveLine(id)),
+  saveText: (id) => [elements["sheet-cards"], tools.card(id), tools.saveLine(id)].some((node) => node.hidden) ? "" : tools.text(tools.saveLine(id)),
   tryAgain: (id) => tools.saveLine(id).children.find((child) => child.tagName === "button"),
   click: (node) => {
     if (node.disabled) return false;
@@ -994,23 +994,34 @@ def test_owner_tap_writes_one_whole_document_per_card():
     assert result["save"] == "Saved"
 
 
-# Bites on: a typed note saving before its pause ends, or saving more than once for a burst of typing.
+# Bites on: a typed note saving before its one-second pause ends or a millisecond late, saving more than once for a burst of typing, or typing within the pause not restarting it.
 def test_typing_saves_once_after_a_pause():
     result = _answer_page([_card("plan-day")], """
+      const out = {};
       const note = t.note("plan-day");
       t.type(note, "a", "input");
-      await t.sleep(600);
+      await t.advance(999);
+      out.beforePause = { sets: t.setLog(), save: t.saveText("plan-day") };
+      await t.advance(1);
+      out.atPause = { sets: t.setLog(), save: t.saveText("plan-day") };
+      t.sets[0].resolve();
+      await t.tick();
+      out.firstSaved = t.saveText("plan-day");
       t.type(note, "ab", "input");
-      await t.sleep(600);
-      const early = t.sets.length;
-      const during = t.saveText("plan-day");
-      await t.sleep(800);
-      return { early: early, during: during, sets: t.setLog(), after: t.saveText("plan-day") };
-    """)
-    assert result["early"] == 0, "the pause timer was not reset by the second input"
-    assert result["during"] == "Saving…"
-    assert result["sets"] == [_write("plan-day", None, None, "ab")]
-    assert result["after"] == "Saved"
+      await t.advance(999);
+      out.restartedBefore = { sets: t.setLog().length, save: t.saveText("plan-day") };
+      await t.advance(1);
+      out.restartedAt = { sets: t.setLog(), save: t.saveText("plan-day") };
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["beforePause"] == {"sets": [], "save": "Saving…"}
+    assert result["atPause"] == {"sets": [_write("plan-day", None, None, "a")], "save": "Saving…"}
+    assert result["firstSaved"] == "Saved"
+    assert result["restartedBefore"] == {"sets": 1, "save": "Saving…"}
+    assert result["restartedAt"] == {
+        "sets": [_write("plan-day", None, None, "a"), _write("plan-day", None, None, "ab")],
+        "save": "Saving…",
+    }
 
 
 # Bites on: "Saved" showing for a state that is not the latest, a second write in flight, or the older state being sent last.
