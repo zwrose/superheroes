@@ -2,17 +2,13 @@
 import re
 from pathlib import Path
 
+from provenance_patterns import PROVENANCE_PATTERNS
+
 PLUGIN = Path(__file__).resolve().parents[2]
 USAGE_DOC = PLUGIN / "theme" / "review-template.md"
 GLOSSARY = PLUGIN / "rubric" / "glossary.md"
 
 CAPABILITIES = '{"db": {"rules": [{"path": "", "read": "view", "write": "owner"}]}, "user": {}}'
-
-# The same patterns test_review_template.py forbids in the shipped files.
-PROVENANCE_PATTERNS = [
-    r"\b(?:U?FR|NFR)-?\d", r"\bR\d{1,2}\b", r"\bC\d(?:-L\d)?\b", r"[Rr]uling \d",
-    r"#\d{2,}", r"HANDOFF", r"discovery-notes",
-]
 
 
 def _doc():

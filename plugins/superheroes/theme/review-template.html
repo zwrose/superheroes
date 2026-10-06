@@ -419,12 +419,17 @@
       readFailed: "Your saved answers couldn't be loaded.",
     };
     const NOTE_PAUSE_MS = 1000;
+    // How long a save or a read of the saved answers may stay unanswered before the page says so.
+    const STALL_MS = 10000;
     // Every card's controls, by card id. Nothing can be answered until ready is true, which happens
     // only once the store, the owner check and the read of the saved answers have all succeeded.
     const controllers = new Map();
     let store = null;
     let ready = false;
     let restoring = false;
+    let readStalled = false;
+    let readAttempt = 0;
+    let readTimer = null;
 
     function showErrors(problems) {
       errorList.replaceChildren();
@@ -487,7 +492,9 @@
     }
 
     // The answer row, the note and the save line of one card. Every write goes through save(), which
-    // keeps at most one write in flight and always sends the newest answer: the last tap counts.
+    // keeps at most one write in flight and always sends the newest answer: the last tap counts. A write
+    // that stays unanswered past STALL_MS shows "Not saved"; Try again then sends the newest answer as a
+    // new write, and only the newest write's outcome speaks for the card.
     function addAnswerParts(card, article) {
       const choices = [
         { label: "Aligned", answer: "aligned", optionId: null },
@@ -500,6 +507,10 @@
       let latest = none;
       let acked = none;
       let sending = null;
+      let sendSeq = 0;
+      let stalled = false;
+      let resendAfter = false;
+      let stallTimer = null;
       let shown = "idle";
       let timer = null;
 
@@ -567,7 +578,7 @@
           parts.push(textElement("span", "sh-caption", "That answer didn't reach the sheet."));
           const retry = textElement("button", "sh-button", "Try again");
           retry.setAttribute("type", "button");
-          retry.addEventListener("click", function () { save(); });
+          retry.addEventListener("click", function () { save(true); });
           parts.push(retry);
         }
         saveLine.replaceChildren(...parts);
@@ -579,16 +590,18 @@
         if (sameAnswer(next, latest)) return;
         latest = next;
         paint();
-        showStatus("saving");
+        if (!stalled) showStatus("saving");
       }
 
       // The one place a write is started. A write already in flight settles first, then settle() asks
-      // again, so the store only ever receives the newest state.
-      function save() {
+      // again, so the store only ever receives the newest state. Try again (forced) sends the newest
+      // state even when a stalled write is still pending.
+      function save(forced) {
         clearTimeout(timer);
         timer = null;
-        if (!ready || sending !== null) return;
-        if (sameAnswer(latest, acked)) {
+        if (!ready) return;
+        if (sending !== null && forced !== true) return;
+        if (forced !== true && sameAnswer(latest, acked)) {
           if (shown === "saving") showStatus("idle");
           return;
         }
@@ -596,8 +609,17 @@
       }
 
       function send() {
+        sendSeq += 1;
+        const seq = sendSeq;
         const body = latest;
         sending = body;
+        stalled = false;
+        clearTimeout(stallTimer);
+        stallTimer = setTimeout(function () {
+          if (seq !== sendSeq || sending === null) return;
+          stalled = true;
+          showStatus("failed");
+        }, STALL_MS);
         showStatus("saving");
         let request;
         try {
@@ -605,12 +627,28 @@
         } catch (error) {
           request = Promise.reject(error);
         }
-        request.then(function () { settle(body, true); }, function () { settle(body, false); });
+        request.then(function () { settle(seq, body, true); }, function () { settle(seq, body, false); });
       }
 
-      function settle(body, saved) {
+      function settle(seq, body, saved) {
+        if (seq !== sendSeq) {
+          // An older write answering after a newer one was sent: its outcome says nothing about the
+          // card, but if it went through it may have landed last, so the newest state goes out again.
+          if (saved) {
+            if (sending !== null) resendAfter = true;
+            else send();
+          }
+          return;
+        }
         sending = null;
+        stalled = false;
+        clearTimeout(stallTimer);
         if (saved) acked = body;
+        if (resendAfter) {
+          resendAfter = false;
+          send();
+          return;
+        }
         if (!sameAnswer(latest, body)) {
           save();
           return;
@@ -708,21 +746,37 @@
       controller.restore(data);
     }
 
-    // Controls turn on only after the saved answers were read and put on the cards. A failed read is
-    // never an empty sheet: the controls stay off and the owner can ask again.
+    // Controls turn on only after the saved answers were read and put on the cards. A failed or stalled
+    // read is never an empty sheet: the controls stay off and the owner can ask again. A retry may
+    // overlap a stalled read; the first read to succeed is applied once and any later one is ignored.
     async function restore() {
-      if (restoring) return;
+      if (ready || (restoring && !readStalled)) return;
+      readAttempt += 1;
+      const attempt = readAttempt;
       restoring = true;
+      readStalled = false;
+      clearTimeout(readTimer);
       say(SAY.loading, false);
+      readTimer = setTimeout(function () {
+        if (ready || attempt !== readAttempt) return;
+        readStalled = true;
+        say(SAY.readFailed, true);
+      }, STALL_MS);
       try {
         const saved = await store.collection("answers").get();
+        if (ready) return;
         saved.docs.forEach(applyDocument);
       } catch (error) {
+        if (ready || attempt !== readAttempt) return;
+        clearTimeout(readTimer);
         restoring = false;
+        readStalled = false;
         say(SAY.readFailed, true);
         return;
       }
+      clearTimeout(readTimer);
       restoring = false;
+      readStalled = false;
       ready = true;
       controllers.forEach(function (controller) { controller.enable(); });
       gate.hidden = true;

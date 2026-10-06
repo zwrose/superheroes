@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from provenance_patterns import PROVENANCE_PATTERNS
+
 THEME = Path(__file__).resolve().parents[2] / "theme"
 TEMPLATE = THEME / "review-template.html"
 USAGE_DOC = THEME / "review-template.md"
@@ -189,6 +191,21 @@ const document = {
 // The fake host runtime. Each test says how `use("db")` and `use("user")` behave through `host`, and
 // drives the store's calls through the controlled promises logged in `setLog` and `reads`.
 const host = __HOST__;
+// The page's own timers can be replaced by a clock the scenario advances (`host.fakeTimers`); the
+// harness itself always waits on the real ones.
+const realSetTimeout = setTimeout;
+const fakeTimers = new Map();
+let fakeNow = 0;
+let fakeNext = 1;
+if (host.fakeTimers) {
+  globalThis.setTimeout = (fn, ms) => {
+    const id = fakeNext;
+    fakeNext += 1;
+    fakeTimers.set(id, { at: fakeNow + (ms || 0), fn: fn });
+    return id;
+  };
+  globalThis.clearTimeout = (id) => { fakeTimers.delete(id); };
+}
 const setLog = [];
 const reads = [];
 const uses = [];
@@ -279,8 +296,21 @@ const tools = {
   fire: fire,
   hasClass: hasClass,
   all: (node) => [...walk(node)],
-  tick: () => new Promise((resolve) => setTimeout(resolve, 0)),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  tick: () => new Promise((resolve) => realSetTimeout(resolve, 0)),
+  sleep: (ms) => new Promise((resolve) => realSetTimeout(resolve, ms)),
+  advance: async (ms) => {
+    const target = fakeNow + ms;
+    for (;;) {
+      const due = [...fakeTimers.entries()].filter((entry) => entry[1].at <= target).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!due) break;
+      fakeTimers.delete(due[0]);
+      fakeNow = due[1].at;
+      due[1].fn();
+      await new Promise((resolve) => realSetTimeout(resolve, 0));
+    }
+    fakeNow = target;
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+  },
   text: (node) => [...walk(node)].filter((item) => item.children.length === 0).map((item) => item.textContent).filter((item) => item !== "").join(" "),
   card: (id) => elements["sheet-cards"].children.find((article) => article.id === "card-" + id),
   buttons: (id) => tools.card(id).children.find((child) => hasClass(child, "answer-row")).children,
@@ -325,7 +355,7 @@ __SCENARIO__
 (async () => {
   const settled = () => elements["sheet-status"].hidden === true || elements["sheet-error"].hidden === false;
   for (let tries = 0; tries < 20 && !settled(); tries += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => realSetTimeout(resolve, 50));
   }
   await tools.tick();
   await tools.tick();
@@ -489,13 +519,9 @@ def test_check_sheet_refuses_a_non_schema_and_malformed_lists():
 
 # Bites on: spec provenance (requirement, ruling, issue, work-item numbers or handoff references) leaking into shipped text.
 def test_shipped_files_carry_no_provenance():
-    patterns = [
-        r"\b(?:U?FR|NFR)-?\d", r"\bR\d{1,2}\b", r"\bC\d(?:-L\d)?\b", r"[Rr]uling \d",
-        r"#\d{2,}", r"HANDOFF", r"discovery-notes",
-    ]
     for path in (TEMPLATE, USAGE_DOC):
         text = path.read_text(encoding="utf-8")
-        for pattern in patterns:
+        for pattern in PROVENANCE_PATTERNS:
             assert not re.search(pattern, text), "%s matches %s" % (path.name, pattern)
 
 
@@ -1024,7 +1050,7 @@ def test_failed_save_offers_retry_of_the_latest():
 def test_controls_stay_disabled_until_answers_are_restored():
     result = _answer_page([_card("plan-day"), _card("fridge-check")], """
       const states = () => t.state("plan-day").disabled.concat(t.state("fridge-check").disabled);
-      const before = { gate: t.gate().message, disabled: states(), reads: t.reads.length };
+      const before = { gate: t.gate().message, disabled: states(), reads: t.reads.length, names: t.reads.map((read) => read.name) };
       t.fire(t.button("plan-day", "Aligned"), "click");
       t.note("plan-day").value = "sneaky";
       t.fire(t.note("plan-day"), "input");
@@ -1041,6 +1067,7 @@ def test_controls_stay_disabled_until_answers_are_restored():
     assert result["before"]["gate"] == "Loading your saved answers…"
     assert result["before"]["disabled"] == [True] * 10
     assert result["before"]["reads"] == 1
+    assert result["before"]["names"] == ["answers"], "the saved answers were read from another collection"
     assert result["forced"] == 0, "a control wrote while the saved answers were still loading"
     assert result["clicked"] is False
     assert result["after"]["gate"] is True
@@ -1062,7 +1089,7 @@ def test_failed_restore_is_not_an_empty_sheet():
       const forced = t.sets.length;
       t.click(t.gate().retry);
       await t.tick();
-      const recovered = { hidden: t.gate().hidden, reads: t.reads.length, disabled: states(), plan: t.state("plan-day") };
+      const recovered = { hidden: t.gate().hidden, reads: t.reads.length, names: t.reads.map((read) => read.name), disabled: states(), plan: t.state("plan-day") };
       return { failed: failed, forced: forced, recovered: recovered };
     """, host={"read": ["reject", "docs"], "docs": docs})
     assert result["failed"] == {
@@ -1071,8 +1098,90 @@ def test_failed_restore_is_not_an_empty_sheet():
     assert result["forced"] == 0
     assert result["recovered"]["hidden"] is True
     assert result["recovered"]["reads"] == 2
+    assert result["recovered"]["names"] == ["answers", "answers"], "a read, or its retry, used another collection"
     assert result["recovered"]["disabled"] == [False] * 10
     assert result["recovered"]["plan"]["pressed"] == ["false", "true", "false", "false"]
+
+
+# Bites on: a write that never answers blocking the card for good, a stalled write not showing Not saved, a stale write's outcome speaking for the card, or an older write that lands last leaving the store behind the latest state.
+def test_stalled_save_shows_not_saved_and_the_latest_state_lands_last():
+    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+      const out = {};
+      t.click(t.button("plan-day", "Aligned"));
+      await t.advance(9999);
+      out.early = t.saveText("plan-day");
+      await t.advance(1);
+      out.stalled = { text: t.saveText("plan-day"), retry: t.tryAgain("plan-day") !== undefined };
+      t.click(t.button("plan-day", "Discuss"));
+      t.type(t.note("plan-day"), "x", "change");
+      out.edited = { sets: t.sets.length, text: t.saveText("plan-day"), retry: t.tryAgain("plan-day") !== undefined };
+      t.click(t.tryAgain("plan-day"));
+      out.retried = { sets: t.sets.length, write: t.setLog()[1], text: t.saveText("plan-day") };
+      t.sets[0].resolve();
+      await t.tick();
+      out.olderDone = { sets: t.sets.length, text: t.saveText("plan-day") };
+      t.sets[1].resolve();
+      await t.tick();
+      out.newerDone = { sets: t.sets.length, write: t.setLog()[2], text: t.saveText("plan-day") };
+      t.sets[2].resolve();
+      await t.tick();
+      out.final = t.saveText("plan-day");
+
+      t.click(t.button("fridge-check", "Aligned"));
+      await t.advance(10000);
+      t.click(t.tryAgain("fridge-check"));
+      t.sets[3].reject({ code: "unavailable", message: "late" });
+      await t.tick();
+      out.olderFailed = { sets: t.sets.length, text: t.saveText("fridge-check") };
+      t.sets[4].resolve();
+      await t.tick();
+      out.second = t.saveText("fridge-check");
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert result["early"] == "Saving…"
+    assert result["stalled"]["text"].startswith("Not saved") and result["stalled"]["retry"] is True
+    assert result["edited"] == {"sets": 1, "text": result["stalled"]["text"], "retry": True}
+    assert result["retried"] == {"sets": 2, "write": _write("plan-day", "discuss", None, "x"), "text": "Saving…"}
+    assert result["olderDone"] == {"sets": 2, "text": "Saving…"}
+    assert result["newerDone"] == {"sets": 3, "write": _write("plan-day", "discuss", None, "x"), "text": "Saving…"}
+    assert result["final"] == "Saved"
+    assert result["olderFailed"] == {"sets": 5, "text": "Saving…"}
+    assert result["second"] == "Saved"
+
+
+# Bites on: a read of the saved answers that never answers leaving the page waiting with no way out, a retry that cannot overlap it, or a late read result replacing what was applied.
+def test_stalled_restore_offers_retry_and_applies_the_first_read_once():
+    first = [{"id": "plan-day", "data": {"answer": "discuss", "optionId": None, "note": "from the retry"}}]
+    late = [{"id": "plan-day", "data": {"answer": "aligned", "optionId": None, "note": "too late"}}]
+    result = _answer_page([_card("plan-day")], """
+      const out = {};
+      await t.advance(9999);
+      out.early = { message: t.gate().message, disabled: t.state("plan-day").disabled };
+      await t.advance(1);
+      const gate = t.gate();
+      out.stalled = { message: gate.message, hidden: gate.hidden, retry: gate.retry !== undefined, disabled: t.state("plan-day").disabled, reads: t.reads.length };
+      t.click(t.gate().retry);
+      out.retried = { message: t.gate().message, reads: t.reads.length, names: t.reads.map((read) => read.name) };
+      t.reads[1].resolve(t.snapshotOf(__FIRST__));
+      await t.tick();
+      out.applied = { hidden: t.gate().hidden, state: t.state("plan-day") };
+      t.reads[0].resolve(t.snapshotOf(__LATE__));
+      await t.tick();
+      out.afterLate = t.state("plan-day");
+      await t.advance(20000);
+      out.afterTimer = { hidden: t.gate().hidden, reads: t.reads.length };
+      return out;
+    """.replace("__FIRST__", json.dumps(first)).replace("__LATE__", json.dumps(late)), host={"read": "pending", "fakeTimers": True})
+    assert result["early"] == {"message": "Loading your saved answers…", "disabled": [True] * 5}
+    assert result["stalled"] == {
+        "message": "Your saved answers couldn't be loaded.", "hidden": False, "retry": True, "disabled": [True] * 5, "reads": 1,
+    }
+    assert result["retried"] == {"message": "Loading your saved answers…", "reads": 2, "names": ["answers", "answers"]}
+    assert result["applied"]["hidden"] is True
+    assert result["applied"]["state"]["disabled"] == [False] * 5
+    assert result["applied"]["state"]["note"] == "from the retry"
+    assert result["afterLate"] == result["applied"]["state"], "a late read replaced the applied answers"
+    assert result["afterTimer"] == {"hidden": True, "reads": 2}
 
 
 NOT_SAVED_HERE = "Answers can't be saved in this view."
