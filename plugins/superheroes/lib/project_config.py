@@ -1019,8 +1019,13 @@ def _write_canon_rulings(cwd, root, rulings, raw, date, session, result):
     result["canonPath"] = canon_path
     result["canonHome"] = info["home"]
 
-    top = _git_run(git_root, "canon-git-root-not-a-repo", "rev-parse", "--show-toplevel")
-    if top.returncode != 0 or os.path.realpath(top.stdout.strip()) != os.path.realpath(git_root):
+    try:
+        git_root_real = os.path.realpath(git_root)
+        is_top_level = (store_core.git_dot_entry_ancestor(git_root) == git_root_real
+                        and store_core.repo_root(git_root) == git_root_real)
+    except Exception:
+        is_top_level = False
+    if not is_top_level:
         raise _MigrationRefusal(
             "canon-git-root-not-a-repo",
             "%s is not the top level of a git repository" % git_root)
