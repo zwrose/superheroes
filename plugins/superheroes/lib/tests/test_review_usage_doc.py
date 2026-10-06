@@ -1,4 +1,5 @@
 """Guards for the review template's usage doc and the glossary entries it links."""
+import json
 import re
 from pathlib import Path
 
@@ -8,7 +9,6 @@ PLUGIN = Path(__file__).resolve().parents[2]
 USAGE_DOC = PLUGIN / "theme" / "review-template.md"
 GLOSSARY = PLUGIN / "rubric" / "glossary.md"
 
-CAPABILITIES = '{"db": {"rules": [{"path": "", "read": "view", "write": "owner"}]}, "user": {}}'
 
 
 def _doc():
@@ -72,7 +72,12 @@ def test_usage_doc_names_no_other_expected_use():
 # Bites on: the publish call losing its store and viewer declaration, or the doc dropping the answer document's shape.
 def test_usage_doc_declares_the_store_and_document_shape():
     doc = _doc()
-    assert "capabilities = %s" % CAPABILITIES in doc
+    # The doc's own publish call is the one home of the declaration; the test reads it, never restates it.
+    declared = re.findall(r"^capabilities = (.+)$", doc, re.M)
+    assert len(declared) == 1, "the doc declares capabilities %d times" % len(declared)
+    capabilities = json.loads(declared[0])
+    assert capabilities["db"]["rules"] == [{"path": "", "read": "view", "write": "owner"}]
+    assert capabilities["user"] == {}
     for value in ('"aligned"', '"discuss"', '"option"'):
         assert value in doc, "the doc doesn't show the answer value %s" % value
     assert "`answers/<card id>`" in doc

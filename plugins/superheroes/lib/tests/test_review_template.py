@@ -252,15 +252,18 @@ if (host.claude !== "missing") {
       if (name === "db") {
         if (host.db === "throw") throw new Error("use threw");
         if (host.db === "reject") return Promise.reject(new Error("no db"));
+        if (host.hang === "db") return new Promise(() => {});
         return Promise.resolve(host.db === "null" ? null : fakeStore);
       }
       if (name === "user") {
         if (host.user === "null") return Promise.resolve(null);
         if (host.user === "reject") return Promise.reject(new Error("no user"));
+        if (host.hang === "user") return new Promise(() => {});
         return Promise.resolve({
           isOwner: () => {
             if (host.user === "is-owner-throws") throw new Error("isOwner threw");
             if (host.user === "is-owner-rejects") return Promise.reject(new Error("isOwner failed"));
+            if (host.hang === "isOwner") return new Promise(() => {});
             return Promise.resolve(host.user === "owner");
           },
         });
@@ -1103,8 +1106,8 @@ def test_failed_restore_is_not_an_empty_sheet():
     assert result["recovered"]["plan"]["pressed"] == ["false", "true", "false", "false"]
 
 
-# Bites on: a write that never answers blocking the card for good, a stalled write not showing Not saved, a stale write's outcome speaking for the card, or an older write that lands last leaving the store behind the latest state.
-def test_stalled_save_shows_not_saved_and_the_latest_state_lands_last():
+# Bites on: a write that never answers blocking the card for good, a stalled write offering a Try again that would overlap it, a second write in flight, an older write landing after a newer one, or Saved showing before the newest answer was sent and acknowledged.
+def test_stalled_save_is_single_flight_and_the_latest_state_lands_last():
     result = _answer_page([_card("plan-day"), _card("fridge-check")], """
       const out = {};
       t.click(t.button("plan-day", "Aligned"));
@@ -1114,39 +1117,56 @@ def test_stalled_save_shows_not_saved_and_the_latest_state_lands_last():
       out.stalled = { text: t.saveText("plan-day"), retry: t.tryAgain("plan-day") !== undefined };
       t.click(t.button("plan-day", "Discuss"));
       t.type(t.note("plan-day"), "x", "change");
+      await t.advance(5000);
       out.edited = { sets: t.sets.length, text: t.saveText("plan-day"), retry: t.tryAgain("plan-day") !== undefined };
-      t.click(t.tryAgain("plan-day"));
-      out.retried = { sets: t.sets.length, write: t.setLog()[1], text: t.saveText("plan-day") };
       t.sets[0].resolve();
       await t.tick();
-      out.olderDone = { sets: t.sets.length, text: t.saveText("plan-day") };
+      out.olderDone = { sets: t.sets.length, write: t.setLog()[1], text: t.saveText("plan-day") };
       t.sets[1].resolve();
       await t.tick();
-      out.newerDone = { sets: t.sets.length, write: t.setLog()[2], text: t.saveText("plan-day") };
-      t.sets[2].resolve();
-      await t.tick();
-      out.final = t.saveText("plan-day");
+      out.final = { sets: t.sets.length, text: t.saveText("plan-day") };
 
       t.click(t.button("fridge-check", "Aligned"));
       await t.advance(10000);
-      t.click(t.tryAgain("fridge-check"));
-      t.sets[3].reject({ code: "unavailable", message: "late" });
+      t.sets[2].reject({ code: "unavailable", message: "late" });
       await t.tick();
-      out.olderFailed = { sets: t.sets.length, text: t.saveText("fridge-check") };
-      t.sets[4].resolve();
+      out.failed = { sets: t.sets.length, text: t.saveText("fridge-check"), retry: t.tryAgain("fridge-check") !== undefined };
+      t.click(t.tryAgain("fridge-check"));
+      out.retried = { sets: t.sets.length, write: t.setLog()[3] };
+      t.sets[3].resolve();
       await t.tick();
       out.second = t.saveText("fridge-check");
       return out;
     """, host={"set": "pending", "fakeTimers": True})
     assert result["early"] == "Saving…"
-    assert result["stalled"]["text"].startswith("Not saved") and result["stalled"]["retry"] is True
-    assert result["edited"] == {"sets": 1, "text": result["stalled"]["text"], "retry": True}
-    assert result["retried"] == {"sets": 2, "write": _write("plan-day", "discuss", None, "x"), "text": "Saving…"}
-    assert result["olderDone"] == {"sets": 2, "text": "Saving…"}
-    assert result["newerDone"] == {"sets": 3, "write": _write("plan-day", "discuss", None, "x"), "text": "Saving…"}
-    assert result["final"] == "Saved"
-    assert result["olderFailed"] == {"sets": 5, "text": "Saving…"}
+    assert result["stalled"]["text"].startswith("Not saved") and result["stalled"]["retry"] is False
+    assert "Reloading the page shows what was saved" in result["stalled"]["text"]
+    assert result["edited"] == {"sets": 1, "text": result["stalled"]["text"], "retry": False}, "a write started while the first was pending"
+    assert result["olderDone"] == {"sets": 2, "write": _write("plan-day", "discuss", None, "x"), "text": "Saving…"}
+    assert result["final"] == {"sets": 2, "text": "Saved"}
+    assert result["failed"]["sets"] == 3 and result["failed"]["text"].startswith("Not saved") and result["failed"]["retry"] is True
+    assert result["retried"] == {"sets": 4, "write": _write("fridge-check", "aligned", None, "")}
     assert result["second"] == "Saved"
+
+
+# Bites on: a host that never answers use("db"), use("user") or isOwner() leaving the sheet on Loading with no way out, or a retry that does not ask again.
+@pytest.mark.parametrize("hang", ["db", "user", "isOwner"])
+def test_stalled_host_initialization_offers_retry(hang):
+    result = _answer_page([_card("plan-day")], """
+      const out = {};
+      await t.advance(9999);
+      out.early = { message: t.gate().message, retry: t.gate().retry !== undefined };
+      await t.advance(1);
+      out.stalled = { message: t.gate().message, retry: t.gate().retry !== undefined, disabled: t.state("plan-day").disabled };
+      t.click(t.gate().retry);
+      await t.tick();
+      out.retried = { message: t.gate().message, uses: t.uses.length };
+      return out;
+    """, host={"hang": hang, "fakeTimers": True})
+    assert result["early"] == {"message": "Loading your saved answers…", "retry": False}
+    assert result["stalled"] == {"message": "The sheet's store isn't answering.", "retry": True, "disabled": [True] * 5}
+    assert result["retried"]["message"] == "Loading your saved answers…"
+    assert result["retried"]["uses"] > 0
 
 
 # Bites on: a read of the saved answers that never answers leaving the page waiting with no way out, a retry that cannot overlap it, or a late read result replacing what was applied.

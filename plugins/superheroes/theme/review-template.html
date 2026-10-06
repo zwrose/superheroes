@@ -417,6 +417,8 @@
       readOnly: "This sheet is read-only for you. Only its owner can answer.",
       loading: "Loading your saved answers…",
       readFailed: "Your saved answers couldn't be loaded.",
+      connectStalled: "The sheet's store isn't answering.",
+      writeStalled: "The sheet's store isn't answering. Reloading the page shows what was saved.",
     };
     const NOTE_PAUSE_MS = 1000;
     // How long a save or a read of the saved answers may stay unanswered before the page says so.
@@ -430,6 +432,25 @@
     let readStalled = false;
     let readAttempt = 0;
     let readTimer = null;
+    let connectAttempt = 0;
+    const DEADLINE = { stalled: true };
+
+    // Waits for one step of getting the store and the owner check, but no longer than STALL_MS. A step
+    // that stays unanswered is rejected with DEADLINE so the caller can offer a retry.
+    function withDeadline(start) {
+      return new Promise(function (resolve, reject) {
+        const timer = setTimeout(function () { reject(DEADLINE); }, STALL_MS);
+        let pending;
+        try {
+          pending = Promise.resolve(start());
+        } catch (error) {
+          clearTimeout(timer);
+          reject(error);
+          return;
+        }
+        pending.then(function (value) { clearTimeout(timer); resolve(value); }, function (error) { clearTimeout(timer); reject(error); });
+      });
+    }
 
     function showErrors(problems) {
       errorList.replaceChildren();
@@ -492,9 +513,10 @@
     }
 
     // The answer row, the note and the save line of one card. Every write goes through save(), which
-    // keeps at most one write in flight and always sends the newest answer: the last tap counts. A write
-    // that stays unanswered past STALL_MS shows "Not saved"; Try again then sends the newest answer as a
-    // new write, and only the newest write's outcome speaks for the card.
+    // keeps at most one write in flight per card, so the store receives writes in tap order and the last
+    // tap is the last write. A write that stays unanswered past STALL_MS shows "Not saved" with no Try
+    // again (a second write now could land out of order); later taps wait, and when the stalled write
+    // settles the newest answer goes out next.
     function addAnswerParts(card, article) {
       const choices = [
         { label: "Aligned", answer: "aligned", optionId: null },
@@ -507,9 +529,7 @@
       let latest = none;
       let acked = none;
       let sending = null;
-      let sendSeq = 0;
       let stalled = false;
-      let resendAfter = false;
       let stallTimer = null;
       let shown = "idle";
       let timer = null;
@@ -573,6 +593,9 @@
           parts.push(textElement("span", "sh-caption", "Saving…"));
         } else if (kind === "saved") {
           parts.push(textElement("span", "sh-caption", "Saved"));
+        } else if (kind === "stalled") {
+          parts.push(textElement("span", "sh-badge sh-badge--warning", "Not saved"));
+          parts.push(textElement("span", "sh-caption", SAY.writeStalled));
         } else if (kind === "failed") {
           parts.push(textElement("span", "sh-badge sh-badge--warning", "Not saved"));
           parts.push(textElement("span", "sh-caption", "That answer didn't reach the sheet."));
@@ -593,14 +616,13 @@
         if (!stalled) showStatus("saving");
       }
 
-      // The one place a write is started. A write already in flight settles first, then settle() asks
-      // again, so the store only ever receives the newest state. Try again (forced) sends the newest
-      // state even when a stalled write is still pending.
+      // The one place a write is started. While a write is in flight nothing else is sent; settle() sends
+      // the newest state once it answers. Try again (forced) only exists when nothing is in flight.
       function save(forced) {
         clearTimeout(timer);
         timer = null;
         if (!ready) return;
-        if (sending !== null && forced !== true) return;
+        if (sending !== null) return;
         if (forced !== true && sameAnswer(latest, acked)) {
           if (shown === "saving") showStatus("idle");
           return;
@@ -609,16 +631,14 @@
       }
 
       function send() {
-        sendSeq += 1;
-        const seq = sendSeq;
         const body = latest;
         sending = body;
         stalled = false;
         clearTimeout(stallTimer);
         stallTimer = setTimeout(function () {
-          if (seq !== sendSeq || sending === null) return;
+          if (sending === null) return;
           stalled = true;
-          showStatus("failed");
+          showStatus("stalled");
         }, STALL_MS);
         showStatus("saving");
         let request;
@@ -627,30 +647,17 @@
         } catch (error) {
           request = Promise.reject(error);
         }
-        request.then(function () { settle(seq, body, true); }, function () { settle(seq, body, false); });
+        request.then(function () { settle(body, true); }, function () { settle(body, false); });
       }
 
-      function settle(seq, body, saved) {
-        if (seq !== sendSeq) {
-          // An older write answering after a newer one was sent: its outcome says nothing about the
-          // card, but if it went through it may have landed last, so the newest state goes out again.
-          if (saved) {
-            if (sending !== null) resendAfter = true;
-            else send();
-          }
-          return;
-        }
+      function settle(body, saved) {
         sending = null;
         stalled = false;
         clearTimeout(stallTimer);
         if (saved) acked = body;
-        if (resendAfter) {
-          resendAfter = false;
-          send();
-          return;
-        }
         if (!sameAnswer(latest, body)) {
-          save();
+          if (sameAnswer(latest, acked)) showStatus("saved");
+          else send();
           return;
         }
         showStatus(saved ? "saved" : "failed");
@@ -726,13 +733,13 @@
     }
 
     // The line under the app bar that says why the controls are off; a retry button rides along
-    // when the saved answers could not be read.
-    function say(text, retryable) {
+    // when there is something to ask again (the function it runs).
+    function say(text, onRetry) {
       const parts = [textElement("span", "", text)];
-      if (retryable) {
+      if (onRetry) {
         const retry = textElement("button", "sh-button", "Try again");
         retry.setAttribute("type", "button");
-        retry.addEventListener("click", function () { restore(); });
+        retry.addEventListener("click", function () { onRetry(); });
         parts.push(retry);
       }
       gate.replaceChildren(...parts);
@@ -760,7 +767,7 @@
       readTimer = setTimeout(function () {
         if (ready || attempt !== readAttempt) return;
         readStalled = true;
-        say(SAY.readFailed, true);
+        say(SAY.readFailed, restore);
       }, STALL_MS);
       try {
         const saved = await store.collection("answers").get();
@@ -771,7 +778,7 @@
         clearTimeout(readTimer);
         restoring = false;
         readStalled = false;
-        say(SAY.readFailed, true);
+        say(SAY.readFailed, restore);
         return;
       }
       clearTimeout(readTimer);
@@ -789,24 +796,36 @@
         say(SAY.noStore, false);
         return;
       }
+      connectAttempt += 1;
+      const attempt = connectAttempt;
       say(SAY.loading, false);
       let db = null;
       try {
-        db = await host.use("db");
+        db = await withDeadline(function () { return host.use("db"); });
       } catch (error) {
+        if (error === DEADLINE) {
+          if (attempt === connectAttempt) say(SAY.connectStalled, connect);
+          return;
+        }
         db = null;
       }
+      if (attempt !== connectAttempt) return;
       if (!db) {
         say(SAY.noStore, false);
         return;
       }
       let owner = false;
       try {
-        const user = await host.use("user");
-        owner = Boolean(user) && (await user.isOwner()) === true;
+        const user = await withDeadline(function () { return host.use("user"); });
+        owner = Boolean(user) && (await withDeadline(function () { return user.isOwner(); })) === true;
       } catch (error) {
+        if (error === DEADLINE) {
+          if (attempt === connectAttempt) say(SAY.connectStalled, connect);
+          return;
+        }
         owner = false;
       }
+      if (attempt !== connectAttempt) return;
       if (!owner) {
         say(SAY.readOnly, false);
         return;
