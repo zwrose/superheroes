@@ -994,32 +994,52 @@ def test_owner_tap_writes_one_whole_document_per_card():
     assert result["save"] == "Saved"
 
 
-# Bites on: a typed note saving before its one-second pause ends or a millisecond late, saving more than once for a burst of typing, or typing within the pause not restarting it.
+# Bites on: a typed note saving before its one-second pause ends or a millisecond late, saving more than once for a burst of typing, or a keystroke during a pending pause not restarting it.
 def test_typing_saves_once_after_a_pause():
     result = _answer_page([_card("plan-day")], """
       const out = {};
       const note = t.note("plan-day");
-      t.type(note, "a", "input");
+      t.type(note, "x", "input");
+      await t.advance(500);
+      t.type(note, "xy", "input");
       await t.advance(999);
-      out.beforePause = { sets: t.setLog(), save: t.saveText("plan-day") };
+      out.burstBefore = { sets: t.setLog(), save: t.saveText("plan-day") };
       await t.advance(1);
-      out.atPause = { sets: t.setLog(), save: t.saveText("plan-day") };
+      out.burstAt = { sets: t.setLog(), save: t.saveText("plan-day") };
       t.sets[0].resolve();
       await t.tick();
+      out.burstSaved = t.saveText("plan-day");
+      t.type(note, "xya", "input");
+      await t.advance(999);
+      out.beforePause = { sets: t.setLog().length, save: t.saveText("plan-day") };
+      await t.advance(1);
+      out.atPause = { sets: t.setLog(), save: t.saveText("plan-day") };
+      t.sets[1].resolve();
+      await t.tick();
       out.firstSaved = t.saveText("plan-day");
-      t.type(note, "ab", "input");
+      t.type(note, "xyab", "input");
       await t.advance(999);
       out.restartedBefore = { sets: t.setLog().length, save: t.saveText("plan-day") };
       await t.advance(1);
       out.restartedAt = { sets: t.setLog(), save: t.saveText("plan-day") };
       return out;
     """, host={"set": "pending", "fakeTimers": True})
-    assert result["beforePause"] == {"sets": [], "save": "Saving…"}
-    assert result["atPause"] == {"sets": [_write("plan-day", None, None, "a")], "save": "Saving…"}
+    assert result["burstBefore"] == {"sets": [], "save": "Saving…"}
+    assert result["burstAt"] == {"sets": [_write("plan-day", None, None, "xy")], "save": "Saving…"}
+    assert result["burstSaved"] == "Saved"
+    assert result["beforePause"] == {"sets": 1, "save": "Saving…"}
+    assert result["atPause"] == {
+        "sets": [_write("plan-day", None, None, "xy"), _write("plan-day", None, None, "xya")],
+        "save": "Saving…",
+    }
     assert result["firstSaved"] == "Saved"
-    assert result["restartedBefore"] == {"sets": 1, "save": "Saving…"}
+    assert result["restartedBefore"] == {"sets": 2, "save": "Saving…"}
     assert result["restartedAt"] == {
-        "sets": [_write("plan-day", None, None, "a"), _write("plan-day", None, None, "ab")],
+        "sets": [
+            _write("plan-day", None, None, "xy"),
+            _write("plan-day", None, None, "xya"),
+            _write("plan-day", None, None, "xyab"),
+        ],
         "save": "Saving…",
     }
 
