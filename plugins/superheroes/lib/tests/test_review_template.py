@@ -161,8 +161,29 @@ class Node {
     this.value = "";
     this.attributes = {};
     this.listeners = {};
+    this.focusCount = 0;
+    this.captured = [];
+    this.clientWidth = 0;
+    this.clientHeight = 0;
+    this.scrollLeft = 0;
+    this.scrollTop = 0;
+    this.naturalWidth = 0;
+    this.naturalHeight = 0;
+    this.rect = { left: 0, top: 0 };
+  }
+  focus() {
+    this.focusCount += 1;
+    document.activeElement = this;
+  }
+  setPointerCapture(id) {
+    this.captured.push(id);
+  }
+  getBoundingClientRect() {
+    return this.rect;
   }
   setAttribute(name, value) {
+    // What a card picture already listens for at the moment it is given its src.
+    if (name === "src") this.listenersAtSrc = Object.keys(this.listeners).filter((type) => this.listeners[type].length > 0);
     this.attributes[name] = String(value);
   }
   getAttribute(name) {
@@ -204,9 +225,42 @@ const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "she
   elements[id].hidden = true;
   elements[id].className = markupClasses[id] || "";
 });
+// The sheet page the image view covers, and the view: a bar (the picture's description, the hint, Close) and a frame holding one picture.
+const sheetPageNode = new Node("div");
+sheetPageNode.className = "sheet-page";
+const viewerNodes = {};
+[["sheet-viewer", "div"], ["sheet-viewer-caption", "span"], ["sheet-viewer-close", "button"], ["sheet-viewer-frame", "div"], ["sheet-viewer-picture", "img"]].forEach(([id, tag]) => {
+  viewerNodes[id] = new Node(tag);
+  viewerNodes[id].id = id;
+  elements[id] = viewerNodes[id];
+});
+viewerNodes["sheet-viewer"].className = "sh-theme sheet-viewer";
+viewerNodes["sheet-viewer"].hidden = true;
+viewerNodes["sheet-viewer-close"].className = "sh-button";
+viewerNodes["sheet-viewer-close"].setAttribute("type", "button");
+viewerNodes["sheet-viewer-close"].textContent = "Close";
+const viewerHint = new Node("span");
+viewerHint.className = "sh-caption";
+viewerHint.textContent = "Pinch or double-tap to zoom.";
+const viewerBar = new Node("div");
+viewerBar.className = "sheet-viewer-bar";
+viewerBar.children = [viewerNodes["sheet-viewer-caption"], viewerHint, viewerNodes["sheet-viewer-close"]];
+viewerNodes["sheet-viewer-frame"].children = [viewerNodes["sheet-viewer-picture"]];
+viewerNodes["sheet-viewer"].children = [viewerBar, viewerNodes["sheet-viewer-frame"]];
+// A frame's scroll size is its own size or the picture's width and height attributes, whichever is larger, so a scroll position can really be clamped.
+["Width", "Height"].forEach((side) => {
+  Object.defineProperty(viewerNodes["sheet-viewer-frame"], "scroll" + side, {
+    get() {
+      const picture = this.children.find((child) => child.tagName === "img");
+      return Math.max(this["client" + side], picture ? Number(picture.getAttribute(side.toLowerCase())) || 0 : 0);
+    },
+  });
+});
 const document = {
   title: "Review sheet",
+  activeElement: null,
   getElementById: (id) => elements[id],
+  querySelector: (selector) => (selector === ".sheet-page" ? sheetPageNode : null),
   createElement: (tag) => new Node(tag),
   createDocumentFragment: () => new Node("#fragment"),
 };
@@ -296,7 +350,30 @@ const fakeStore = {
   }),
 };
 const unloadListeners = [];
-const window = { addEventListener: (type, listener) => { if (type === "beforeunload") unloadListeners.push(listener); } };
+const windowListeners = {};
+const window = {
+  addEventListener: (type, listener) => {
+    if (type === "beforeunload") unloadListeners.push(listener);
+    (windowListeners[type] = windowListeners[type] || []).push(listener);
+  },
+};
+const observers = [];
+if (host.resizeObserver) {
+  globalThis.ResizeObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+      this.observed = [];
+      this.disconnected = false;
+      observers.push(this);
+    }
+    observe(node) {
+      this.observed.push(node);
+    }
+    disconnect() {
+      this.disconnected = true;
+    }
+  };
+}
 if (host.claude !== "missing") {
   window.claude = host.claude === "no-use" ? {} : {
     use: (name) => {
@@ -350,7 +427,11 @@ function* walk(node) {
   for (const child of node.children) yield* walk(child);
 }
 const hasClass = (node, name) => node.className.split(/\s+/).includes(name);
-const fire = (node, type) => (node.listeners[type] || []).forEach((listener) => listener({ type: type, target: node }));
+const fire = (node, type, fields) => {
+  const event = Object.assign({ type: type, target: node, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, fields);
+  (node.listeners[type] || []).forEach((listener) => listener(event));
+  return event;
+};
 const tools = {
   sets: setLog,
   written: () => JSON.parse(JSON.stringify(written)),
@@ -554,6 +635,43 @@ const tools = {
   controls: () => [...walk(elements["sheet-cards"]), ...walk(elements["sheet-final"])]
     .filter((node) => node.tagName === "button" || node.tagName === "textarea")
     .map((node) => ({ text: node.tagName === "textarea" ? "note" : tools.text(node), disabled: node.disabled })),
+  // The image view: its parts, what is shown, and the sheet behind it.
+  view: {
+    root: viewerNodes["sheet-viewer"],
+    caption: viewerNodes["sheet-viewer-caption"],
+    close: viewerNodes["sheet-viewer-close"],
+    frame: viewerNodes["sheet-viewer-frame"],
+    picture: viewerNodes["sheet-viewer-picture"],
+    page: sheetPageNode,
+  },
+  focused: () => document.activeElement,
+  // A card's pictures, in order (the node that opens the view, or null where the picture is now a missing line).
+  pictures: (id) => tools.all(tools.card(id)).filter((node) => node.tagName === "img"),
+  figures: (id) => tools.all(tools.card(id)).filter((node) => node.tagName === "figure"),
+  // A tap as a browser handles it: nothing under an inert sheet can be activated, and a disabled control ignores it.
+  press: (node) => {
+    const inView = tools.all(viewerNodes["sheet-viewer"]).includes(node);
+    if (!inView && sheetPageNode.getAttribute("inert") !== null) return false;
+    return tools.click(node);
+  },
+  // Loads the view's picture at a natural size, in a frame of a given size, as the browser does once the file arrives.
+  loadView: (natural, frame) => {
+    viewerNodes["sheet-viewer-frame"].clientWidth = frame[0];
+    viewerNodes["sheet-viewer-frame"].clientHeight = frame[1];
+    viewerNodes["sheet-viewer-picture"].naturalWidth = natural[0];
+    viewerNodes["sheet-viewer-picture"].naturalHeight = natural[1];
+    fire(viewerNodes["sheet-viewer-picture"], "load");
+  },
+  // A pointer event on the frame, with fields a browser gives (pointerId, clientX, clientY, timeStamp).
+  pointer: (type, fields) => fire(viewerNodes["sheet-viewer-frame"], type, fields),
+  shown: () => ({
+    width: Number(viewerNodes["sheet-viewer-picture"].getAttribute("width")),
+    height: Number(viewerNodes["sheet-viewer-picture"].getAttribute("height")),
+    left: viewerNodes["sheet-viewer-frame"].scrollLeft,
+    top: viewerNodes["sheet-viewer-frame"].scrollTop,
+  }),
+  resizeWindow: () => (windowListeners.resize || []).forEach((listener) => listener({ type: "resize" })),
+  observers: observers,
   // Every button node anywhere on the page, for the checks on what a control wears.
   allButtons: () => [...new Set(Object.values(elements).flatMap((root) => [...walk(root)]).filter((node) => node.tagName === "button"))].map((node) => ({
     text: tools.text(node),
@@ -1161,6 +1279,368 @@ def test_card_draws_its_parts_in_order():
     assert result["options"] == [["Yes", "We go ahead."], ["No", "We stop."]]
     assert result["recommendation"] == ["Say yes.", "It is cheap."]
     assert result["noteLabelFor"] == result["noteId"]
+
+
+# The image view. A card with two pictures, the first with a caption; the view is opened from a card picture and shows exactly one.
+def _picture_card(card_id="pic-card"):
+    return _card(
+        card_id,
+        images=[
+            {"src": "plan.png", "alt": "The plan drawn out", "caption": "The draft plan"},
+            {"src": "https://example.test/fridge.png", "alt": "The fridge"},
+        ],
+        recommendation={"text": "Say yes.", "reason": "It is cheap.", "optionId": "yes"},
+    )
+
+
+# A pointer event on the view's frame, as a browser sends it: p(type, id, x, y, time).
+POINTER = 'const p = (type, id, x, y, time, kind) => t.pointer(type, { pointerId: id, clientX: x, clientY: y, timeStamp: time || 0, pointerType: kind || "touch" });'
+# A wide picture (800 x 400) in a frame of 400 x 300: it fits at 400 x 200 and sits centred, 50 px from the top and bottom.
+OPEN_WIDE = """
+  const view = t.view;
+  t.click(t.pictures("pic-card")[0]);
+  t.loadView([800, 400], [400, 300]);
+"""
+
+
+# Bites on: a card picture that does not open the view by tap, Enter or Space (or opens it with another picture's src or alt), a view holding more than one picture or offering more than Close, the sheet left live behind it, a Close or Escape that leaves the view up, the sheet inert, the src set or the focus lost (including Escape straight after a keyboard open).
+def test_a_card_picture_opens_the_view_and_close_returns_to_the_card():
+    result = _answer_page([_picture_card()], """
+      const view = t.view;
+      const [first, second] = t.pictures("pic-card");
+      const who = () => (t.focused() === view.close ? "close" : t.focused() === first ? "first" : t.focused() === second ? "second" : "other");
+      const state = () => ({
+        hidden: view.root.hidden,
+        src: view.picture.getAttribute("src"),
+        alt: view.picture.getAttribute("alt"),
+        caption: view.caption.textContent,
+        label: view.root.getAttribute("aria-label"),
+        images: t.all(view.root).filter((node) => node.tagName === "img").length,
+        controls: t.all(view.root).filter((node) => node.tagName === "button").map((node) => node.textContent),
+        inert: view.page.getAttribute("inert"),
+        focus: who(),
+      });
+      const out = {
+        before: state(),
+        opener: ["tabindex", "role", "aria-label"].map((name) => first.getAttribute(name)),
+        hint: t.text(view.root),
+      };
+      t.click(first);
+      out.tap = state();
+      out.draggable = view.picture.getAttribute("draggable");
+      t.click(view.close);
+      out.closed = state();
+      const enter = t.fire(second, "keydown", { key: "Enter" });
+      out.enter = state();
+      out.enterPrevented = enter.defaultPrevented;
+      t.fire(view.root, "keydown", { key: "Escape" });
+      out.enterEscaped = state();
+      t.fire(first, "keydown", { key: " " });
+      out.spaceDown = state().hidden;
+      t.fire(first, "keyup", { key: " " });
+      out.space = state();
+      t.fire(view.root, "keydown", { key: "Escape" });
+      out.spaceEscaped = state();
+      t.fire(second, "keydown", { key: "a" });
+      out.otherKey = state().hidden;
+      return out;
+    """)
+    assert result["before"]["hidden"] is True and result["before"]["inert"] is None
+    assert result["opener"] == ["0", "button", "Open picture: The plan drawn out"]
+    assert "Pinch or double-tap to zoom." in result["hint"] and "Close" in result["hint"]
+
+    def opened(src, alt):
+        return {"hidden": False, "src": src, "alt": alt, "caption": alt, "label": alt, "images": 1, "controls": ["Close"], "inert": "", "focus": "close"}
+
+    def closed(who):
+        return {"hidden": True, "src": None, "inert": None, "focus": who}
+
+    assert result["tap"] == opened("plan.png", "The plan drawn out")
+    assert result["draggable"] == "false"
+    assert {key: result["closed"][key] for key in ("hidden", "src", "inert", "focus")} == closed("first")
+    assert result["enter"] == opened("https://example.test/fridge.png", "The fridge")
+    assert result["enterPrevented"] is True
+    assert {key: result["enterEscaped"][key] for key in ("hidden", "src", "inert", "focus")} == closed("second")
+    assert result["spaceDown"] is True, "Space opened the view before the key came up"
+    assert result["space"] == opened("plan.png", "The plan drawn out")
+    assert {key: result["spaceEscaped"][key] for key in ("hidden", "src", "inert", "focus")} == closed("first")
+    assert result["otherKey"] is True
+
+
+# Bites on: the sheet behind the view staying live (an answer button that can still be activated and writes an answer while the view covers it), or the view offering an answer control of its own.
+def test_the_sheet_behind_the_view_cannot_be_answered_while_it_is_open():
+    result = _answer_page([_picture_card()], """
+      const view = t.view;
+      t.click(t.pictures("pic-card")[0]);
+      const answer = t.button("pic-card", "Aligned");
+      const out = {
+        controls: t.all(view.root).filter((node) => node.tagName === "button" || node.tagName === "textarea").map((node) => t.text(node) || node.tagName),
+        answerRows: t.all(view.root).filter((node) => t.hasClass(node, "answer-row")).length,
+        inert: view.page.getAttribute("inert"),
+        pressed: t.press(answer),
+        noteTyped: t.press(t.note("pic-card")),
+      };
+      await t.tick();
+      out.writesWhileOpen = t.setLog().length;
+      t.click(view.close);
+      out.pressedAfter = t.press(answer);
+      await t.tick();
+      out.writesAfter = t.setLog();
+      out.inertAfter = view.page.getAttribute("inert");
+      return out;
+    """)
+    assert result["controls"] == ["Close"]
+    assert result["answerRows"] == 0
+    assert result["inert"] == ""
+    assert result["pressed"] is False and result["noteTyped"] is False and result["writesWhileOpen"] == 0
+    assert result["pressedAfter"] is True, "the answer button was never usable, so the inert check proves nothing"
+    assert result["writesAfter"] == [_write("pic-card", "aligned", None, "")]
+    assert result["inertAfter"] is None
+
+
+# Bites on: a pinch that does not scale the picture by the fingers' spread (the width and height attributes), that lets the picture point under the fingers' midpoint slide (the scroll position), that goes past the zoom limits, or that works out the frame point from the screen point instead of the frame's own corner.
+def test_a_pinch_zooms_about_the_midpoint():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      view.frame.rect = { left: 10, top: 20 };
+      const out = { fit: t.shown() };
+      p("pointerdown", 1, 260, 170);
+      p("pointerdown", 2, 360, 170);
+      p("pointermove", 1, 160, 170);
+      out.pinched = t.shown();
+      // The picture point under the midpoint (frame 250, 150), as a share of the picture, before and after.
+      const share = (shown) => [(shown.left + 250 - Math.max(0, (400 - shown.width) / 2)) / shown.width, (shown.top + 150 - Math.max(0, (300 - shown.height) / 2)) / shown.height];
+      out.shareBefore = share(out.fit);
+      out.shareAfter = share(out.pinched);
+      p("pointermove", 2, 1260, 170);
+      out.limit = t.shown();
+      out.captured = view.frame.captured;
+      return out;
+    """)
+    assert result["fit"] == {"width": 400, "height": 200, "left": 0, "top": 0}
+    assert result["pinched"] == {"width": 800, "height": 400, "left": 250, "top": 50}
+    assert result["shareBefore"] == result["shareAfter"] == [0.625, 0.5]
+    assert (result["limit"]["width"], result["limit"]["height"]) == (1600, 800)
+    assert result["captured"] == [1, 2]
+
+
+# Bites on: a double-tap window that is not about 300 ms or 24 px, a double-tap that does not zoom to 2.5 about the tap point or back to fit, a second tap after a drag that still counts as a double-tap, or two taps too far apart in time or space that zoom anyway.
+def test_double_tap_zooms_in_about_the_tap_and_back_out():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      const tap = (x, y, time) => { p("pointerdown", 1, x, y, time); p("pointerup", 1, x, y, time + 50); };
+      const out = { fit: t.shown() };
+      tap(300, 100, 1000);
+      out.afterOne = t.shown();
+      tap(300, 100, 1100);
+      out.zoomed = t.shown();
+      tap(310, 110, 2000);
+      tap(310, 110, 2100);
+      out.back = t.shown();
+      tap(300, 100, 3000);
+      tap(300, 100, 3400);
+      out.slow = t.shown();
+      tap(300, 100, 4000);
+      tap(340, 100, 4100);
+      out.far = t.shown();
+      tap(300, 100, 5000);
+      p("pointerdown", 1, 300, 100, 5100);
+      p("pointermove", 1, 340, 100, 5120);
+      p("pointerup", 1, 340, 100, 5140);
+      tap(300, 100, 5200);
+      out.afterDrag = t.shown();
+      return out;
+    """)
+    fit = {"width": 400, "height": 200, "left": 0, "top": 0}
+    assert result["fit"] == result["afterOne"] == fit
+    assert result["zoomed"] == {"width": 1000, "height": 500, "left": 450, "top": 25}
+    assert result["back"] == fit
+    assert result["slow"] == fit, "two taps 400 ms apart zoomed"
+    assert result["far"] == fit, "two taps 40 px apart zoomed"
+    assert result["afterDrag"] == fit, "a tap after a drag counted as a double-tap"
+
+
+# Bites on: a drag that does not pan by the movement (or goes past the edges of the picture), a drag at fit that moves anything, or any gesture (a long sideways swipe included) that shows another picture in the view.
+def test_drag_pans_when_zoomed_and_nothing_moves_to_another_picture():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      const src = () => view.picture.getAttribute("src");
+      const out = { sources: [src()] };
+      p("pointerdown", 1, 300, 150, 0, "mouse");
+      p("pointermove", 1, 200, 150, 20, "mouse");
+      p("pointermove", 1, 100, 150, 40, "mouse");
+      p("pointerup", 1, 100, 150, 60, "mouse");
+      out.sideways = t.shown();
+      out.sources.push(src());
+      p("pointerdown", 1, 200, 150, 1000);
+      p("pointerup", 1, 200, 150, 1050);
+      p("pointerdown", 1, 200, 150, 1100);
+      p("pointerup", 1, 200, 150, 1150);
+      out.zoomed = t.shown();
+      p("pointerdown", 1, 300, 200, 2000);
+      p("pointermove", 1, 260, 180, 2020);
+      out.dragged = t.shown();
+      p("pointermove", 1, -740, -820, 2040);
+      out.farUpLeft = t.shown();
+      p("pointermove", 1, 1260, 1180, 2060);
+      out.farDownRight = t.shown();
+      p("pointerup", 1, 1260, 1180, 2080);
+      out.sources.push(src());
+      out.controls = t.all(view.root).filter((node) => node.tagName === "button").map((node) => node.textContent);
+      out.images = t.all(view.root).filter((node) => node.tagName === "img").length;
+      return out;
+    """)
+    fit = {"width": 400, "height": 200, "left": 0, "top": 0}
+    assert result["sideways"] == fit
+    assert result["zoomed"] == {"width": 1000, "height": 500, "left": 300, "top": 100}
+    assert result["dragged"] == {"width": 1000, "height": 500, "left": 340, "top": 120}
+    assert result["farUpLeft"] == {"width": 1000, "height": 500, "left": 600, "top": 200}
+    assert result["farDownRight"] == {"width": 1000, "height": 500, "left": 0, "top": 0}
+    assert result["sources"] == ["plan.png"] * 3
+    assert result["controls"] == ["Close"] and result["images"] == 1
+
+
+# Bites on: a cancelled pointer left behind (so the next one-finger drag is read as a pinch against it), or a pinch that loses a finger and does not carry on as a plain drag from where the other finger is.
+def test_a_cancelled_pointer_never_corrupts_the_next_gesture():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      p("pointerdown", 1, 250, 150);
+      p("pointerdown", 2, 350, 150);
+      p("pointermove", 1, 150, 150);
+      const out = { pinched: t.shown() };
+      p("pointercancel", 1, 150, 150);
+      p("pointermove", 2, 320, 140);
+      out.rebased = t.shown();
+      p("pointerup", 2, 320, 140);
+      p("pointerdown", 3, 100, 100);
+      p("pointermove", 3, 90, 70);
+      out.fresh = t.shown();
+      p("pointerup", 3, 90, 70);
+      return out;
+    """)
+    assert result["pinched"] == {"width": 800, "height": 400, "left": 250, "top": 50}
+    assert result["rebased"] == {"width": 800, "height": 400, "left": 280, "top": 60}, "the remaining finger did not pan by its own movement"
+    assert result["fresh"] == {"width": 800, "height": 400, "left": 290, "top": 90}, "the next drag did not pan by exactly its own movement"
+
+
+# Bites on: the view not working out its fit again when the window or the frame changes size (attributes that stay at the old size, or a zoom that is lost), a scroll position left outside the new size, or a size watcher that is never started or never stopped.
+def test_a_resize_with_the_view_open_fits_again_at_the_same_zoom():
+    result = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      p("pointerdown", 1, 300, 100, 1000);
+      p("pointerup", 1, 300, 100, 1050);
+      p("pointerdown", 1, 300, 100, 1100);
+      p("pointerup", 1, 300, 100, 1150);
+      const out = { zoomed: t.shown() };
+      view.frame.clientWidth = 600;
+      view.frame.clientHeight = 300;
+      t.resizeWindow();
+      out.bigger = t.shown();
+      view.frame.clientWidth = 200;
+      view.frame.clientHeight = 100;
+      t.resizeWindow();
+      out.smaller = t.shown();
+      t.click(view.close);
+      view.frame.clientWidth = 400;
+      t.resizeWindow();
+      out.afterClose = t.shown();
+      return out;
+    """)
+    assert result["zoomed"] == {"width": 1000, "height": 500, "left": 450, "top": 25}
+    assert result["bigger"] == {"width": 1500, "height": 750, "left": 450, "top": 25}
+    assert result["smaller"] == {"width": 500, "height": 250, "left": 300, "top": 25}
+    assert (result["afterClose"]["width"], result["afterClose"]["height"]) == (500, 250), "a closed view was resized"
+
+    watched = _answer_page([_picture_card()], POINTER + OPEN_WIDE + """
+      const out = { count: t.observers.length, observed: t.observers[0].observed.map((node) => node === view.frame) };
+      view.frame.clientWidth = 200;
+      view.frame.clientHeight = 150;
+      t.observers[0].callback([]);
+      out.resized = t.shown();
+      t.click(view.close);
+      out.disconnected = t.observers[0].disconnected;
+      return out;
+    """, host={"resizeObserver": True})
+    assert watched["count"] == 1 and watched["observed"] == [True]
+    assert (watched["resized"]["width"], watched["resized"]["height"]) == (200, 100)
+    assert watched["disconnected"] is True
+
+
+# Bites on: a picture that cannot load blanking its card (or any other part of it), or leaving the picture in place with no word, or losing its caption, or still opening the view; and another picture on the same card that loaded no longer opening it.
+def test_a_missing_picture_leaves_the_card_in_place_and_says_so():
+    result = _answer_page([_picture_card("full-card"), _bare_card()], """
+      const view = t.view;
+      const card = t.card("full-card");
+      const [first, second] = t.pictures("full-card");
+      const outside = () => {
+        const inside = t.all(t.figures("full-card")[0]);
+        return t.all(card).filter((node) => !inside.includes(node)).map((node) => [node.tagName, node.className, node.textContent, node.hidden]);
+      };
+      const out = {
+        before: t.parts("full-card"),
+        listeners: first.listenersAtSrc,
+        outsideBefore: outside(),
+      };
+      t.fire(first, "error");
+      out.after = t.parts("full-card");
+      out.outsideAfter = outside();
+      out.figure = t.figures("full-card")[0].children.map((child) => [child.tagName, child.className, child.textContent]);
+      out.pictures = t.pictures("full-card").length;
+      out.cardHidden = card.hidden;
+      t.click(first);
+      t.fire(first, "keydown", { key: "Enter" });
+      out.openedFromMissing = !view.root.hidden;
+      t.click(t.button("full-card", "Aligned"));
+      await t.tick();
+      out.writes = t.setLog();
+      out.opens = t.all(t.figures("full-card")[0]).filter((node) => node.getAttribute("role") === "button").length;
+      t.click(second);
+      out.second = [view.root.hidden, view.picture.getAttribute("src")];
+      return out;
+    """)
+    parts = [
+        "span.sh-badge", "h2",
+        "label:What's true now", "p", "label:Why it needs you", "p", "label:The exact text", "blockquote",
+        "div.sheet-images",
+        "label:Options", "ul",
+        "label:Recommendation", "div.sheet-recommendation",
+        "div.answer-row",
+        "label:Note", "textarea.sh-field",
+        "div.save-line",
+    ]
+    assert result["before"] == result["after"] == parts
+    assert "error" in result["listeners"], "the picture was given its src before its error listener"
+    assert result["outsideAfter"] == result["outsideBefore"]
+    assert result["figure"] == [
+        ["p", "sh-caption", "This picture is missing: The plan drawn out"],
+        ["figcaption", "sh-caption", "The draft plan"],
+    ]
+    assert result["pictures"] == 1 and result["cardHidden"] is False
+    assert result["openedFromMissing"] is False and result["opens"] == 0
+    assert result["writes"] == [_write("full-card", "aligned", None, "")]
+    assert result["second"] == [False, "https://example.test/fridge.png"]
+
+
+# Bites on: a view whose picture cannot load showing nothing (or keeping the broken picture), or a Close that stops working then; and the next open not showing its picture again.
+def test_a_picture_missing_in_the_view_says_so_and_close_still_works():
+    result = _answer_page([_picture_card()], POINTER + """
+      const view = t.view;
+      const first = t.pictures("pic-card")[0];
+      t.click(first);
+      t.fire(view.picture, "error");
+      const out = {
+        frame: view.frame.children.map((child) => [child.tagName, child.className, child.textContent]),
+        images: t.all(view.root).filter((node) => node.tagName === "img").length,
+        shown: !view.root.hidden,
+      };
+      p("pointerdown", 1, 100, 100);
+      p("pointermove", 1, 80, 80);
+      p("pointerup", 1, 80, 80);
+      t.click(view.close);
+      out.closed = [view.root.hidden, view.page.getAttribute("inert"), view.picture.getAttribute("src"), t.focused() === first];
+      t.click(first);
+      out.reopened = [view.frame.children.map((child) => child.tagName), view.picture.getAttribute("src")];
+      return out;
+    """)
+    assert result["frame"] == [["p", "sh-caption", "This picture is missing: The plan drawn out"]]
+    assert result["images"] == 0 and result["shown"] is True
+    assert result["closed"] == [True, None, None, True]
+    assert result["reopened"] == [["img"], "plan.png"]
 
 
 # Bites on: the answer row gaining, losing or renaming a button, or a button losing its pressed state.

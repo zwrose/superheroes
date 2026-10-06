@@ -38,9 +38,11 @@ session's scratchpad. So:
 1. Make one folder under the scratchpad.
 2. Copy `review-template.html`, `comic-panel.css`, `sheet.schema.json` and `sheet-words.json` into it, unchanged.
 3. Write the data file into the same folder as `sheet.json`.
-4. Publish the template as the page, with the stylesheet, the schema and the data file as
-   supporting files, so the published paths are `comic-panel.css`, `sheet.schema.json`,
-   `sheet-words.json` and `sheet.json`.
+4. Copy every picture a card names by a relative `src` into the staged folder at that same relative
+   path, and add it to `files` under that path.
+5. Publish the template as the page, with the stylesheet, the schema, the data file and every picture
+   as supporting files, so the published paths are `comic-panel.css`, `sheet.schema.json`,
+   `sheet-words.json`, `sheet.json` and each picture's relative path.
 
 The shape of the publish call:
 
@@ -49,12 +51,21 @@ file_path = <staged folder>/review-template.html
 files     = {"comic-panel.css": "<staged comic-panel.css>",
              "sheet.schema.json": "<staged sheet.schema.json>",
              "sheet-words.json": "<staged sheet-words.json>",
-             "sheet.json": "<staged sheet.json>"}
+             "sheet.json": "<staged sheet.json>",
+             "plan.png": "<staged plan.png>"}
 capabilities = {"db": {"rules": [{"path": "", "read": "view", "write": "owner"}]}, "user": {}}
 ```
 
 The publish call also declares the sheet's store and viewer. This lets everyone who can open the
 sheet read it, and only its owner answer.
+
+The example publishes one picture, `plan.png`, which a card names as `"src": "plan.png"`. A picture whose
+`src` is a URL loads from that URL and is not copied. If the host can't reach it, the sheet shows it as
+missing.
+
+A changed picture is published under a new path (a new name), so changing a picture always changes
+`sheet.json` and, on a final sheet, starts it unsigned. A final sheet's pictures are published with the
+sheet, never by URL, because a URL picture can change without the sheet changing.
 
 `sheet-words.json` holds the owner-facing words a final sheet shares with the chat prose
 (`lib/sheet_prose.py`): the page fetches it before drawing a final sheet, and the prose renderer reads
@@ -89,6 +100,11 @@ red Not saved badge.
 On a phone, a remainder sheet folds the items that are answered into one row, with their Aligned,
 Discuss and Picked counts. An answer whose save failed or stalled never folds, so it stays in the list where it
 can be seen and retried. On a desktop, every item is listed beside the open card.
+
+Tap a picture on a card to open it on its own, large. Pinch or double-tap to zoom, and drag to look
+around. The view holds that one picture and has no way to move to another. Close returns to the card.
+A picture that can't load says "This picture is missing" and its description, and the rest of the card,
+its answers and its note stay in place, so the card can still be answered.
 
 A remainder sheet also shows a "Why only these" box. It is built only from the `remainder` block's
 rounds run, fixes made and unsettled list, so it says how many items are here and why, and nothing
