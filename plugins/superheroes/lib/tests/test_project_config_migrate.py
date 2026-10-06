@@ -325,6 +325,50 @@ def test_e12_git_root_not_a_repo_refused_and_never_inits(tmp_path):
     assert w.core_bytes() == before
 
 
+def _no_git_pointers(monkeypatch):
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+
+
+def test_is_git_top_level_true_at_the_root_of_a_repository(tmp_path, monkeypatch):
+    _no_git_pointers(monkeypatch)
+    repo = str(tmp_path / "repo")
+    os.mkdir(repo)
+    _git(repo, "init", "-q")
+    assert PC._is_git_top_level(repo) is True
+
+
+def test_is_git_top_level_false_in_a_subdirectory_of_a_repository(tmp_path, monkeypatch):
+    _no_git_pointers(monkeypatch)
+    repo = str(tmp_path / "repo2")
+    os.mkdir(repo)
+    _git(repo, "init", "-q")
+    sub = os.path.join(repo, "sub")
+    os.mkdir(sub)
+    assert PC._is_git_top_level(sub) is False
+
+
+def test_is_git_top_level_false_in_a_plain_directory(tmp_path, monkeypatch):
+    _no_git_pointers(monkeypatch)
+    plain = str(tmp_path / "plain")
+    os.mkdir(plain)
+    assert PC._is_git_top_level(plain) is False
+
+
+def test_is_git_top_level_true_for_a_working_tree_chosen_by_an_external_git_dir(tmp_path, monkeypatch):
+    holder = str(tmp_path / "holder")
+    wt = str(tmp_path / "wt")
+    os.mkdir(holder)
+    os.mkdir(wt)
+    _git(holder, "init", "-q")
+    # The case only means something when nothing at or above the working tree is a .git entry.
+    import store_core
+    assert store_core.git_dot_entry_ancestor(wt) is None
+    monkeypatch.setenv("GIT_DIR", os.path.join(holder, ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", wt)
+    assert PC._is_git_top_level(wt) is True
+
+
 # --- E13-E14: the clean baseline ---
 
 _SEED = "# Canon\n\nheader\n\n## Entries\n\n- **2026-09-01-11111111-1** · 2026-09-01 · standing · Seeded. · owner's words: none recorded · where: s, time not recorded\n"

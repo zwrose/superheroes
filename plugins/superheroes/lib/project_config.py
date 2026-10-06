@@ -995,6 +995,25 @@ def _fetch_default_branch(repo_root, result):
             result["fetch"] = "failed: %s" % (exc.detail or exc.reason)
 
 
+def _is_git_top_level(git_root):
+    """True when ``git_root`` is the top level of a git repository; any failure is False.
+
+    ``store_core.repo_root`` answers ``realpath(cwd)`` for a plain directory (greenfield), so a
+    ``.git`` entry at or above ``git_root`` — or ``GIT_DIR``/``GIT_WORK_TREE`` pointing git at an
+    external git directory — is required as well.
+    """
+    import store_core
+
+    try:
+        git_root_real = os.path.realpath(git_root)
+        if store_core.repo_root(git_root) != git_root_real:
+            return False
+        return (store_core.git_dot_entry_ancestor(git_root) is not None
+                or bool(os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE")))
+    except Exception:
+        return False
+
+
 def _write_canon_rulings(cwd, root, rulings, raw, date, session, result):
     """Canon's write procedure for ``rulings``; fills ``result`` and raises _MigrationRefusal.
 
@@ -1019,13 +1038,7 @@ def _write_canon_rulings(cwd, root, rulings, raw, date, session, result):
     result["canonPath"] = canon_path
     result["canonHome"] = info["home"]
 
-    try:
-        git_root_real = os.path.realpath(git_root)
-        is_top_level = (store_core.git_dot_entry_ancestor(git_root) == git_root_real
-                        and store_core.repo_root(git_root) == git_root_real)
-    except Exception:
-        is_top_level = False
-    if not is_top_level:
+    if not _is_git_top_level(git_root):
         raise _MigrationRefusal(
             "canon-git-root-not-a-repo",
             "%s is not the top level of a git repository" % git_root)
