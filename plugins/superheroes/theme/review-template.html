@@ -516,7 +516,9 @@
     // keeps at most one write in flight per card, so the store receives writes in tap order and the last
     // tap is the last write. A write that stays unanswered past STALL_MS shows "Not saved" with no Try
     // again (a second write now could land out of order); later taps wait, and when the stalled write
-    // settles the newest answer goes out next.
+    // settles the newest answer goes out next. The acknowledged answer is trusted only after a write
+    // resolved: from the moment a write starts until it resolves it is unknown, so a rejected or stalled
+    // write leaves every later save sending the newest answer, and "Saved" follows only a resolved write.
     function addAnswerParts(card, article) {
       const choices = [
         { label: "Aligned", answer: "aligned", optionId: null },
@@ -527,6 +529,7 @@
       const optionIds = new Set(card.options.map(function (option) { return option.id; }));
       const none = { answer: null, optionId: null, note: "" };
       let latest = none;
+      const unknown = { answer: undefined, optionId: undefined, note: undefined };
       let acked = none;
       let sending = null;
       let stalled = false;
@@ -633,6 +636,8 @@
       function send() {
         const body = latest;
         sending = body;
+        // What the store holds is unknown until this write resolves; a rejected or stalled one leaves it so.
+        acked = unknown;
         stalled = false;
         clearTimeout(stallTimer);
         stallTimer = setTimeout(function () {
@@ -657,9 +662,7 @@
         clearTimeout(stallTimer);
         if (saved) acked = body;
         if (!sameAnswer(latest, body)) {
-          // A failed write may still have landed, so a revert to the acknowledged answer is sent again.
-          if (saved && sameAnswer(latest, acked)) showStatus("saved");
-          else send();
+          send();
           return;
         }
         showStatus(saved ? "saved" : "failed");

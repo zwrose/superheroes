@@ -1355,6 +1355,30 @@ def test_a_revert_after_a_failed_write_is_sent_again():
     assert result["save"] == "Saved", result
 
 
+# Bites on: a rejected write leaving the acknowledged answer trusted, so a later revert to it was skipped and the failure cleared.
+def test_a_revert_after_a_settled_rejection_is_sent_and_saved_only_after_it_resolves():
+    docs = [{"id": "plan-day", "data": {"answer": "aligned", "optionId": None, "note": ""}}]
+    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+      t.click(t.button("plan-day", "Discuss"));
+      t.sets[0].reject({ code: "unavailable", message: "lost ack" });
+      await t.tick();
+      const failed = t.saveText("plan-day");
+      t.click(t.button("plan-day", "Aligned"));
+      const during = t.saveText("plan-day");
+      const sent = t.setLog().length;
+      t.sets[1].resolve();
+      await t.tick();
+      return { sets: t.setLog(), failed: failed, during: during, sent: sent, save: t.saveText("plan-day") };
+    """, host={"docs": docs, "set": "pending"})
+    assert result["sets"] == [
+        _write("plan-day", "discuss", None, ""),
+        _write("plan-day", "aligned", None, ""),
+    ]
+    assert result["sent"] == 2, result
+    assert result["during"] == "Saving…", result
+    assert result["save"] == "Saved", result
+
+
 # Bites on: a sheet the schema check refuses still reaching for the store, or drawing a gate line.
 def test_a_refused_sheet_touches_no_store():
     cards = [_card("plan-day"), _card("plan-day")]

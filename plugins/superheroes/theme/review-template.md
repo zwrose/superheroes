@@ -67,8 +67,8 @@ the option's own label. Aligned agrees with the card's recommendation, or with t
 there is no recommendation. A pick chooses that option. Discuss leaves the call open for chat. No
 review adds its own answer buttons.
 
-A card's `warning` is true for a gap a reviewer found, a statement with no source, or a finding the
-review didn't settle. It draws the red badge. Every other card draws a plain badge naming its kind
+A card's `warning` follows the rule in `sheet.schema.json` (`$defs/card/properties/warning`). It
+draws the red badge. Every other card draws a plain badge naming its kind
 of call.
 
 ## How answers come back
