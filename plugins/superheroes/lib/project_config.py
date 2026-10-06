@@ -842,8 +842,9 @@ def _canon_entries(committed_text):
         raise _MigrationRefusal(
             "canon-id-conflict",
             "Canon holds differing entries under one id: %s. An id shared by differing entries "
-            "resolves for no reader; give them distinct ids in Canon (Canon's write procedure), "
-            "then run the move again." % ", ".join(conflicting))
+            "resolves for no reader, so it goes to the owner: record the owner's ruling in Canon "
+            "as a new entry (Canon never edits or deletes an entry), then run the move again."
+            % ", ".join(conflicting))
     return entries
 
 
