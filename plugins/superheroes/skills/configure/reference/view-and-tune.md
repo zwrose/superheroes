@@ -77,7 +77,8 @@ action that owns it, leaving the rest of the calibration untouched:
 
   The answer is free text, so it goes in through a quoted here-document, never inside shell single
   quotes: an apostrophe would break the command and a `$(...)` would run. Write the JSON on one
-  line, flush left, with no indent before the closing `SUPERHEROES_ANSWER` line.
+  line, flush left, with no indent before the closing `SUPERHEROES_ANSWER` line. Read the result
+  the same way as the `stackingTool` write above: only `written` or `noop` means it was saved.
 
 - **Set or clear the spec-reviewer seat** → write the engine that reviews specs. Empty stdin clears
   it.
@@ -87,11 +88,15 @@ action that owns it, leaving the rest of the calibration untouched:
   printf '%s\n' 'codex' | python3 -B "$ROOT_DIR/lib/core_md.py" write-spec-reviewer --cwd .
   ```
 
-  The seat names an engine only, never a model, and is separate from the review-panel seats. Unset,
-  the spec checks use a reviewer from an installed engine of a different model family than the
-  spec's author. They fall back to a fresh reviewer from the author's own family only when no such
-  engine is installed. Read the result: `written` or `noop` means the seat was saved. `refused` with
-  `spec-reviewer-unknown-engine` names a value that is not `claude`, `codex`, or `cursor`.
+  The seat names an engine only, never a model, and is separate from the review-panel seats. What
+  the spec checks do while it is unset is the `## Spec reviewer seat` block of the rendered view
+  (`lib/configure_view.py` owns that wording) — point the owner at that block rather than
+  restating it. Read the result, don't assume success: `write-spec-reviewer` returns `{action,
+  reason?}` and exits 0 either way, so only `written` or `noop` means the seat was saved. Surface
+  `refused` (`spec-reviewer-unknown-engine` names a value that is not `claude`, `codex`, or
+  `cursor`), `deferred` (`lock-contended`, `store-unwritable`, `builder-tier-write-failed`,
+  `repo-root-unavailable`, `spec-reviewer-cli-failed`), and `behind` (`core-schema-behind`) to the
+  owner with the `reason`.
 - **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
 - **Tune the guardian calibration** → read the existing `guardian.md` layer first, change the
   knob you want inside the `guardian-config` JSON fence, and submit the **complete** body (the
