@@ -250,7 +250,8 @@ const fakeStore = {
     },
   }),
 };
-const window = {};
+const unloadListeners = [];
+const window = { addEventListener: (type, listener) => { if (type === "beforeunload") unloadListeners.push(listener); } };
 if (host.claude !== "missing") {
   window.claude = host.claude === "no-use" ? {} : {
     use: (name) => {
@@ -305,6 +306,11 @@ const tools = {
   ownerChecks: ownerChecks,
   snapshotOf: snapshotOf,
   fire: fire,
+  unload: () => {
+    const event = { type: "beforeunload", defaultPrevented: false, returnValue: undefined, preventDefault() { this.defaultPrevented = true; } };
+    unloadListeners.forEach((listener) => listener(event));
+    return event.defaultPrevented;
+  },
   hasClass: hasClass,
   all: (node) => [...walk(node)],
   tick: () => new Promise((resolve) => realSetTimeout(resolve, 0)),
@@ -1028,6 +1034,28 @@ def test_saved_shows_only_for_the_latest_state():
     assert result["afterFirst"] == {"sets": 2, "save": "Saving…", "body": _body("discuss", None, "")}
     assert result["afterSecond"] == "Saved"
     assert result["cleared"] == "Saving…", "a new tap left Saved on screen"
+
+
+# Bites on: leaving or reloading the sheet while an answer or note is not yet confirmed by the store going unguarded, or the guard staying on once everything is saved.
+def test_leaving_the_sheet_is_guarded_only_while_an_answer_is_unconfirmed():
+    result = _answer_page([_card("plan-day")], """
+      const out = {};
+      out.idle = t.unload();
+      t.click(t.button("plan-day", "Aligned"));
+      out.pending = t.unload();
+      t.sets[0].resolve();
+      await t.tick();
+      out.savedText = t.saveText("plan-day");
+      out.saved = t.unload();
+      t.type(t.note("plan-day"), "later", "input");
+      out.noteTimer = t.unload();
+      return out;
+    """, host={"set": "pending"})
+    assert result["idle"] is False
+    assert result["pending"] is True, "closing with a write pending was not guarded"
+    assert result["savedText"] == "Saved"
+    assert result["saved"] is False, "the guard stayed on after the write was confirmed"
+    assert result["noteTimer"] is True, "a note waiting for its pause was not guarded"
 
 
 # Bites on: a rejected write being hidden, a retry that does not send the latest state, or an older write's failure speaking for a newer one.

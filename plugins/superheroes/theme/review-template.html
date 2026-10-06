@@ -741,6 +741,11 @@
           buttons.forEach(function (button) { button.disabled = false; });
           note.disabled = false;
         },
+        // True while this card holds an answer or note the store has not confirmed: a write in flight, a
+        // newer state waiting behind it, a note-pause timer still running, or a write that failed or stalled.
+        unsaved: function () {
+          return sending !== null || timer !== null || !sameAnswer(latest, acked);
+        },
       });
 
       article.appendChild(row);
@@ -940,6 +945,20 @@
       // The cards are already drawn: whatever goes wrong from here only leaves the controls off.
       connect().catch(function () {
         say(SAY.noStore, false);
+      });
+    }
+
+    // One guard for the page: leaving or reloading while any card holds an unconfirmed answer or note
+    // makes the browser ask first. When every card is saved or idle it does nothing.
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("beforeunload", function (event) {
+        let pending = false;
+        controllers.forEach(function (controller) {
+          if (controller.unsaved()) pending = true;
+        });
+        if (!pending) return;
+        event.preventDefault();
+        event.returnValue = "";
       });
     }
 
