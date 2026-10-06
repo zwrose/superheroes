@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "answer.schema.json",
   "title": "Review sheet stored answer",
   "description": "The document a review sheet page stores for one card, in the sheet's own store. The collection is answers, with one document per card id at answers/<card id>, and each document is written whole on every change. The owner's last tap counts, and the answer is null only when a note was saved before any pick.",
   "type": "object",
@@ -12,8 +13,7 @@
     },
     "optionId": {
       "description": "The id of the picked option, or null. It is a string exactly when the answer is option.",
-      "type": ["string", "null"],
-      "pattern": "^[a-z0-9][a-z0-9-]*$"
+      "oneOf": [{"$ref": "sheet.schema.json#/$defs/id"}, {"type": "null"}]
     },
     "note": {
       "description": "The owner's note on the card, an empty string when there is none.",

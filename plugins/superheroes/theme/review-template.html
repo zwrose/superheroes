@@ -657,7 +657,8 @@
         clearTimeout(stallTimer);
         if (saved) acked = body;
         if (!sameAnswer(latest, body)) {
-          if (sameAnswer(latest, acked)) showStatus("saved");
+          // A failed write may still have landed, so a revert to the acknowledged answer is sent again.
+          if (saved && sameAnswer(latest, acked)) showStatus("saved");
           else send();
           return;
         }

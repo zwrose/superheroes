@@ -8,6 +8,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from referencing import Registry, Resource
 
 from provenance_patterns import PROVENANCE_PATTERNS
 
@@ -15,6 +16,10 @@ THEME = Path(__file__).resolve().parents[2] / "theme"
 TEMPLATE = THEME / "review-template.html"
 USAGE_DOC = THEME / "review-template.md"
 ANSWER_SCHEMA = json.loads((THEME / "answer.schema.json").read_text(encoding="utf-8"))
+SHEET_SCHEMA = json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-8"))
+# The answer schema reaches the sheet schema's identifier rule by a relative reference, so the validator is given the sheet schema to resolve it.
+ANSWER_REGISTRY = Registry().with_resources([("sheet.schema.json", Resource.from_contents(SHEET_SCHEMA))])
+ANSWER_VALIDATOR = jsonschema.Draft202012Validator(ANSWER_SCHEMA, registry=ANSWER_REGISTRY)
 
 FORBIDDEN_PROPERTIES = (
     "font-family", "font-weight", "box-shadow", "letter-spacing", "text-transform", "color",
@@ -411,8 +416,34 @@ def _run_page(files, host=None, scenario="return null;"):
     assert result.returncode == 0, result.stderr
     page = json.loads(result.stdout)
     for recorded in page["recordedSets"]:
-        jsonschema.validate(recorded["body"], ANSWER_SCHEMA)
+        ANSWER_VALIDATOR.validate(recorded["body"])
     return page
+
+
+# Bites on: the stored-answer schema accepting a document the page must never write (an option pick with no option, an option on a non-option answer, a missing note, an extra property, an option id outside the sheet's identifier rule), or refusing one it should keep.
+def test_answer_schema_rejects_bad_documents():
+    jsonschema.Draft202012Validator.check_schema(ANSWER_SCHEMA)
+    good = [
+        {"answer": None, "optionId": None, "note": ""},
+        {"answer": "aligned", "optionId": None, "note": "n"},
+        {"answer": "discuss", "optionId": None, "note": ""},
+        {"answer": "option", "optionId": "yes", "note": ""},
+        {"answer": None, "optionId": None, "note": "only a note"},
+    ]
+    for document in good:
+        assert ANSWER_VALIDATOR.is_valid(document), document
+    bad = [
+        {"answer": "option", "optionId": None, "note": ""},
+        {"answer": "aligned", "optionId": "yes", "note": ""},
+        {"answer": None, "optionId": "yes", "note": ""},
+        {"answer": "aligned", "optionId": None},
+        {"answer": "aligned", "optionId": None, "note": "", "extra": 1},
+        {"answer": "option", "optionId": "Not Valid", "note": ""},
+        {"answer": "option", "optionId": "", "note": ""},
+        {"answer": "maybe", "optionId": None, "note": ""},
+    ]
+    for document in bad:
+        assert not ANSWER_VALIDATOR.is_valid(document), document
 
 
 def _sample_files(sheet=None):
@@ -1290,6 +1321,38 @@ def test_restore_ignores_answers_it_cannot_place():
         _write("fridge-check", None, None, "edited fridge-check"),
         _write("third-card", "option", "yes", "edited third-card"),
     ]
+
+
+# Bites on: a saved Aligned pick (or its note) not being restored onto the card it was saved for.
+def test_a_saved_aligned_pick_is_restored():
+    docs = [{"id": "plan-day", "data": {"answer": "aligned", "optionId": None, "note": "agreed"}}]
+    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+      return { plan: t.state("plan-day"), other: t.state("fridge-check") };
+    """, host={"docs": docs})
+    assert result["plan"]["pressed"] == ["true", "false", "false", "false"]
+    assert result["plan"]["note"] == "agreed"
+    assert result["other"]["pressed"] == ["false"] * 4
+
+
+# Bites on: a failed write of a different answer leaving a revert to the acknowledged answer reported Saved without sending it.
+def test_a_revert_after_a_failed_write_is_sent_again():
+    docs = [{"id": "plan-day", "data": {"answer": "aligned", "optionId": None, "note": ""}}]
+    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+      t.click(t.button("plan-day", "Discuss"));
+      t.click(t.button("plan-day", "Aligned"));
+      t.sets[0].reject({ code: "unavailable", message: "lost ack" });
+      await t.tick();
+      const during = t.saveText("plan-day");
+      t.sets[1].resolve();
+      await t.tick();
+      return { sets: t.setLog(), during: during, save: t.saveText("plan-day") };
+    """, host={"docs": docs, "set": "pending"})
+    assert result["sets"] == [
+        _write("plan-day", "discuss", None, ""),
+        _write("plan-day", "aligned", None, ""),
+    ]
+    assert result["during"] == "Saving…", result
+    assert result["save"] == "Saved", result
 
 
 # Bites on: a sheet the schema check refuses still reaching for the store, or drawing a gate line.
