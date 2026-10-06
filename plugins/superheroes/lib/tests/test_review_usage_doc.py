@@ -69,7 +69,7 @@ def test_usage_doc_names_no_other_expected_use():
         assert banned.lower() not in lowered, "the section names %r" % banned
 
 
-# Bites on: the publish call losing its store and viewer declaration, or the doc dropping the answer document's shape.
+# Bites on: the publish call losing its store and viewer declaration (the owner-only write or the view read), or the doc dropping the answer document's shape.
 def test_usage_doc_declares_the_store_and_document_shape():
     doc = _doc()
     # The doc's own publish call is the one home of the declaration; the test reads it, never restates it.
@@ -79,8 +79,9 @@ def test_usage_doc_declares_the_store_and_document_shape():
     # Properties of the declaration, not a copy of it: a root rule limits writes to the owner, and the viewer is declared.
     root = [rule for rule in capabilities["db"]["rules"] if rule["path"] == ""]
     assert len(root) == 1 and root[0]["write"] == "owner", "the declaration no longer limits writes to the owner"
+    assert root[0]["read"] == "view", "the declaration no longer lets everyone who can open the sheet read it"
     assert "user" in capabilities
-    assert "answer.schema.json" in doc, "the doc doesn't cite the answer document's schema"
+    assert "`sheet.schema.json` defines at `$defs/answer`" in doc, "the doc doesn't cite the answer document's schema"
 
 
 # Bites on: spec provenance (requirement, ruling, issue, work-item numbers or handoff references) leaking into the glossary section.

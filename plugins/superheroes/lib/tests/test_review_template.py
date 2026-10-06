@@ -8,18 +8,16 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-from referencing import Registry, Resource
 
 from provenance_patterns import PROVENANCE_PATTERNS
 
 THEME = Path(__file__).resolve().parents[2] / "theme"
 TEMPLATE = THEME / "review-template.html"
 USAGE_DOC = THEME / "review-template.md"
-ANSWER_SCHEMA = json.loads((THEME / "answer.schema.json").read_text(encoding="utf-8"))
 SHEET_SCHEMA = json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-8"))
-# The answer schema reaches the sheet schema's identifier rule by a relative reference, so the validator is given the sheet schema to resolve it.
-ANSWER_REGISTRY = Registry().with_resources([("sheet.schema.json", Resource.from_contents(SHEET_SCHEMA))])
-ANSWER_VALIDATOR = jsonschema.Draft202012Validator(ANSWER_SCHEMA, registry=ANSWER_REGISTRY)
+# The stored-answer rule lives in the sheet schema's $defs.answer and reaches the identifier rule by a pointer into the same file, so the validator is given the whole sheet schema and pointed at that definition.
+ANSWER_SCHEMA = {"$schema": SHEET_SCHEMA["$schema"], "$defs": SHEET_SCHEMA["$defs"], "$ref": "#/$defs/answer"}
+ANSWER_VALIDATOR = jsonschema.Draft202012Validator(ANSWER_SCHEMA)
 
 FORBIDDEN_PROPERTIES = (
     "font-family", "font-weight", "box-shadow", "letter-spacing", "text-transform", "color",
@@ -562,7 +560,7 @@ def test_check_sheet_refuses_a_non_schema_and_malformed_lists():
 
 # Bites on: spec provenance (requirement, ruling, issue, work-item numbers or handoff references) leaking into shipped text.
 def test_shipped_files_carry_no_provenance():
-    for path in (TEMPLATE, USAGE_DOC, THEME / "answer.schema.json"):
+    for path in (TEMPLATE, USAGE_DOC, THEME / "sheet.schema.json"):
         text = path.read_text(encoding="utf-8")
         for pattern in PROVENANCE_PATTERNS:
             assert not re.search(pattern, text), "%s matches %s" % (path.name, pattern)
@@ -1292,7 +1290,7 @@ def test_non_owner_and_missing_store_cannot_answer(host, message):
     assert result["reads"] == 0, "the answers were read for a viewer who cannot answer"
 
 
-# Bites on: a saved answer that names no pick the card offers still restoring a pick, a note being lost, or an unknown card id breaking the restore.
+# Bites on: a saved answer that names no pick the card offers, or does not fit the schema's answer rule, still restoring a pick, a note being lost, or an unknown card id breaking the restore.
 def test_restore_ignores_answers_it_cannot_place():
     docs = [
         {"id": "plan-day", "data": {"answer": "maybe", "optionId": None, "note": "keep my note"}},
@@ -1314,12 +1312,13 @@ def test_restore_ignores_answers_it_cannot_place():
     assert result["gateHidden"] is True
     assert plan["pressed"] == ["false"] * 4 and plan["note"] == "keep my note"
     assert fridge["pressed"] == ["false"] * 4 and fridge["note"] == "n2"
-    assert third["pressed"] == ["false", "false", "true", "false"] and third["note"] == ""
+    # A document that does not fit the schema's answer rule (here a note that is not text) restores no pick.
+    assert third["pressed"] == ["false"] * 4 and third["note"] == ""
     assert all(not any(state["disabled"]) for state in result["restored"])
     assert result["sets"] == [
         _write("plan-day", None, None, "edited plan-day"),
         _write("fridge-check", None, None, "edited fridge-check"),
-        _write("third-card", "option", "yes", "edited third-card"),
+        _write("third-card", None, None, "edited third-card"),
     ]
 
 

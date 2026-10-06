@@ -74,7 +74,7 @@ of call.
 ## How answers come back
 
 A tap saves at once, as a draft the owner can change, into the sheet's own store. The last tap
-counts. Each card's stored document has the shape `answer.schema.json` defines. Anyone but the
+counts. Each card's stored document has the shape `sheet.schema.json` defines at `$defs/answer`. Anyone but the
 owner who opens a shared sheet sees it with the answer controls turned off.
 
 A save that fails says so on the card and offers Try again.

@@ -412,13 +412,49 @@
     const titleHost = document.getElementById("sheet-title");
     const gate = document.getElementById("sheet-gate");
 
-    // The three values a stored answer can take, and which of them carries an option id. This is the
-    // shape answer.schema.json defines; the choices and the restore check below both come from here.
-    const STORED_ANSWERS = [
-      { value: "aligned", label: "Aligned", carriesOption: false },
-      { value: "discuss", label: "Discuss", carriesOption: false },
-      { value: "option", label: null, carriesOption: true },
-    ];
+    // The words on the answer buttons, by the value a stored answer takes. A value the schema lists that
+    // has no words here leaves the answer controls off. The option value takes its words from the card.
+    const ANSWER_LABELS = { aligned: "Aligned", discuss: "Discuss" };
+
+    // What the sheet's schema says a stored answer is (its $defs.answer): { root, rule, kinds }, where
+    // kinds lists the values in the order the schema gives them, and carriesOption marks the one the schema
+    // ties to a string optionId. Null until the schema was read, and left null when it is not in that shape.
+    let answerShape = null;
+
+    function readAnswerShape(schema) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const rule = isObject(schema.$defs) ? schema.$defs.answer : undefined;
+      if (!isObject(rule) || !isObject(rule.properties) || !isObject(rule.properties.answer)) return null;
+      const listed = rule.properties.answer.enum;
+      if (!Array.isArray(listed)) return null;
+      const values = listed.filter(function (item) { return item !== null; });
+      if (values.length === 0 || values.some(function (item) { return typeof item !== "string"; })) return null;
+      const carrying = [];
+      (Array.isArray(rule.allOf) ? rule.allOf : []).forEach(function (entry) {
+        if (!isObject(entry) || !isObject(entry.if) || !isObject(entry.then)) return;
+        const picked = isObject(entry.if.properties) ? entry.if.properties.answer : undefined;
+        const named = isObject(entry.then.properties) ? entry.then.properties.optionId : undefined;
+        if (isObject(picked) && typeof picked.const === "string" && isObject(named) && named.type === "string") {
+          carrying.push(picked.const);
+        }
+      });
+      if (carrying.length !== 1 || !values.includes(carrying[0])) return null;
+      const kinds = values.map(function (value) { return { value: value, carriesOption: value === carrying[0] }; });
+      if (kinds.some(function (kind) { return !kind.carriesOption && typeof ANSWER_LABELS[kind.value] !== "string"; })) return null;
+      return { root: schema, rule: rule, kinds: kinds };
+    }
+
+    // True when the stored document fits the schema's answer rule.
+    function fitsAnswerRule(data) {
+      const problems = [];
+      try {
+        validateAgainstSchema(answerShape.root, answerShape.rule, data, "", problems);
+      } catch (error) {
+        if (error instanceof UncheckableSchema) return false;
+        throw error;
+      }
+      return problems.length === 0;
+    }
 
     const SAY = {
       noStore: "Answers can't be saved in this view.",
@@ -529,13 +565,13 @@
     // write leaves every later save sending the newest answer, and "Saved" follows only a resolved write.
     function addAnswerParts(card, article) {
       const choices = [];
-      STORED_ANSWERS.forEach(function (stored) {
-        if (stored.carriesOption) {
+      (answerShape === null ? [] : answerShape.kinds).forEach(function (kind) {
+        if (kind.carriesOption) {
           card.options.forEach(function (option) {
-            choices.push({ label: option.label, answer: stored.value, optionId: option.id });
+            choices.push({ label: option.label, answer: kind.value, optionId: option.id });
           });
         } else {
-          choices.push({ label: stored.label, answer: stored.value, optionId: null });
+          choices.push({ label: ANSWER_LABELS[kind.value], answer: kind.value, optionId: null });
         }
       });
       const optionIds = new Set(card.options.map(function (option) { return option.id; }));
@@ -660,7 +696,7 @@
         showStatus("saving");
         let request;
         try {
-          // The document written here has the shape answer.schema.json defines.
+          // The document written here has the shape the schema's $defs.answer defines.
           request = Promise.resolve(store.doc("answers/" + card.id).set({ answer: body.answer, optionId: body.optionId, note: body.note }));
         } catch (error) {
           request = Promise.reject(error);
@@ -681,14 +717,18 @@
       }
 
       controllers.set(card.id, {
-        // A stored document restores a pick only when it names one the card offers.
+        // A stored document restores a pick only when it fits the schema's answer rule and, for an option
+        // pick, names an option the card offers. A document that does not fit restores only its note, and
+        // only when that is text.
         restore: function (data) {
           const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
-          const stored = STORED_ANSWERS.find(function (entry) { return entry.value === data.answer; });
-          if (stored && !stored.carriesOption) {
-            state.answer = stored.value;
-          } else if (stored && typeof data.optionId === "string" && optionIds.has(data.optionId)) {
-            state.answer = stored.value;
+          const kind = answerShape !== null && fitsAnswerRule(data)
+            ? answerShape.kinds.find(function (entry) { return entry.value === data.answer; })
+            : undefined;
+          if (kind && !kind.carriesOption) {
+            state.answer = kind.value;
+          } else if (kind && optionIds.has(data.optionId)) {
+            state.answer = kind.value;
             state.optionId = data.optionId;
           }
           latest = state;
@@ -890,7 +930,13 @@
         showErrors(problems);
         return;
       }
+      answerShape = readAnswerShape(schema);
       render(sheet);
+      if (answerShape === null) {
+        // The schema does not say what an answer is, so nothing could be saved or read back.
+        say(SAY.noStore, false);
+        return;
+      }
       // The cards are already drawn: whatever goes wrong from here only leaves the controls off.
       connect().catch(function () {
         say(SAY.noStore, false);
