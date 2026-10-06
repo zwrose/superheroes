@@ -797,7 +797,7 @@ def _canon_head_copy(git_root, rel):
 
 
 def _entry_fields(line):
-    """One Canon entry line's id, ruling field and migration origin; None if not an entry.
+    """One Canon entry line's id, scope, ruling, migration origin and whole line; None if not one.
 
     The ruling is the field after the scope, exactly: Canon's rule is that a ruling never holds
     ` · `, so the fields split cleanly on it.
@@ -810,8 +810,10 @@ def _entry_fields(line):
         return None
     return {
         "id": found.group(1),
+        "scope": parts[2],
         "ruling": parts[3],
         "migrated": parts[-1].startswith("where: " + _MIGRATION_ORIGIN_PHRASE),
+        "line": line.strip(),
     }
 
 
@@ -825,7 +827,8 @@ def _canon_entries(committed_text):
         if fields is None:
             found = _ENTRY_ID_PATTERN.match(line)
             if found:
-                fields = {"id": found.group(1), "ruling": line, "migrated": False}
+                fields = {"id": found.group(1), "scope": None, "ruling": line, "migrated": False,
+                          "line": line.strip()}
         if fields is not None:
             entries.append(fields)
     return entries
@@ -839,10 +842,10 @@ def _migrated_entries(committed_text):
 def _refuse_conflicting_ids(entries):
     """Refuse when an id a migrated entry carries is shared by a different entry of any kind.
 
-    The same entry repeated across the HEAD and default-branch copies is one entry. Entries that
-    share an id with different rulings, or a migrated and an ordinary entry that share one, resolve
-    for no reader (``rubric/canon-contract.md``), so the move never retires item 13's prose on top
-    of them.
+    The same entry line repeated across the HEAD and default-branch copies is one entry. Entries
+    that share an id and differ in any field (ruling, scope, supersession, provenance), or a
+    migrated and an ordinary entry that share one, resolve for no reader
+    (``rubric/canon-contract.md``), so the move never retires item 13's prose on top of them.
     """
     migrated_ids = {entry["id"] for entry in entries if entry["migrated"]}
     seen = {}
@@ -850,20 +853,21 @@ def _refuse_conflicting_ids(entries):
         if entry["id"] not in migrated_ids:
             continue
         held = seen.setdefault(entry["id"], [])
-        kind = (entry["ruling"], entry["migrated"])
-        if kind not in held:
-            held.append(kind)
+        if entry["line"] not in {other["line"] for other in held}:
+            held.append(entry)
     for entry_id, held in seen.items():
         if len(held) > 1:
             raise _MigrationRefusal(
                 "canon-id-conflict",
                 "Canon holds entries sharing the id %s, at least one of them migrated, with "
-                "different rulings or kinds: %s. Entries sharing one id resolve for no reader, "
+                "different fields: %s. Entries sharing one id resolve for no reader, "
                 "and the duplicate goes to the owner; item 13 keeps its value until the owner has "
                 "settled it."
                 % (entry_id, ", ".join(
-                    '"%s" (%s)' % (ruling, "migrated" if migrated else "ordinary")
-                    for ruling, migrated in held)))
+                    '"%s" (%s) scoped %s' % (
+                        entry["ruling"], "migrated" if entry["migrated"] else "ordinary",
+                        entry["scope"] or "unreadable")
+                    for entry in held)))
 
 
 def _refuse_unless_recorded_set(rulings, canon_text):
@@ -976,9 +980,15 @@ def _restore_canon_files(git_root, saved, paths):
 
 
 def _head_sha(git_root):
-    """HEAD's commit id; None when HEAD is unborn."""
+    """HEAD's commit id; None when HEAD is unborn; a probe that failed otherwise is a refusal."""
     head = _git_run(git_root, "canon-commit-failed", "rev-parse", "--verify", "--quiet", "HEAD")
-    return head.stdout.strip() if head.returncode == 0 else None
+    if head.returncode == 0:
+        return head.stdout.strip()
+    # an unborn HEAD is `--quiet`'s exit 1 with nothing said; any other failure is a read error
+    if head.returncode == 1 and not head.stderr.strip():
+        return None
+    raise _MigrationRefusal(
+        "canon-commit-failed", _first_line(head.stderr, "git exit %d" % head.returncode))
 
 
 def _commit_landed(git_root, rel, before_head, lines):
@@ -986,16 +996,15 @@ def _commit_landed(git_root, rel, before_head, lines):
 
     A commit that errored or timed out may still have landed, since a hook after it can outlast the
     timeout. It landed when HEAD moved off ``before_head`` and the committed Canon holds ``lines``.
+    A git read that fails is no evidence either way, so it is None, never False.
     """
     try:
         if _head_sha(git_root) == before_head:
             return False
-        shown = _git_run(git_root, "canon-commit-failed", "show", "HEAD:%s" % rel)
+        committed = _canon_copy_at(git_root, "HEAD", rel)
     except _MigrationRefusal:
         return None
-    if shown.returncode != 0:
-        return False
-    return set(lines) <= set(shown.stdout.splitlines())
+    return set(lines) <= set(committed.splitlines())
 
 
 def _fetch_default_branch(repo_root, result):

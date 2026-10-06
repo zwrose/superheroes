@@ -697,6 +697,39 @@ def test_e19e_a_commit_that_timed_out_without_landing_is_undone(tmp_path, monkey
     assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
 
 
+# axis: a commit whose landing git cannot establish keeps the files and says so — wo_a_1646_commit-landed
+@pytest.mark.parametrize("failing", ["rev-parse", "ls-tree", "show"])
+def test_e19e_a_commit_whose_landing_git_cannot_say_keeps_the_files(tmp_path, monkeypatch, failing):
+    w = _world(tmp_path)
+    head = w.head()
+    real = PC._git_run
+    state = {"committed": False}
+
+    def _unreadable(root, reason, *args, **k):
+        if args and args[0] == "commit":
+            real(root, reason, *args, **k)
+            state["committed"] = True
+            raise PC._MigrationRefusal(reason, "git could not be run (TimeoutExpired)")
+        if state["committed"] and args and args[0] == failing:
+            if failing == "rev-parse":
+                raise PC._MigrationRefusal(reason, "git could not be run (TimeoutExpired)")
+            done = real(root, reason, *args, **k)
+            done.returncode, done.stdout, done.stderr = 128, "", "fatal: unable to read"
+            return done
+        return real(root, reason, *args, **k)
+
+    monkeypatch.setattr(PC, "_git_run", _unreadable)
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-commit-failed")
+    assert "could not say whether the commit landed" in got["detail"]
+    assert w.head() != head
+    assert os.path.exists(w.canon)
+    assert w.item13()["raw"] == _TWO_RULINGS
+    monkeypatch.undo()
+    assert _out(w.repo, "status", "--porcelain", "--untracked-files=all", "--", "docs") == ""
+    assert "First ruling, kept whole." in w.head_canon()
+
+
 # axis: an OSError anywhere in the move surfaces as the structured refusal — wo_a_1646_canon-write-recovery
 def test_e19e_an_os_error_elsewhere_surfaces_as_a_structured_refusal(tmp_path, monkeypatch):
     w = _world(tmp_path)
@@ -972,6 +1005,26 @@ def test_e19h_a_conflict_between_the_head_and_default_copies_refuses_an_emptied_
                    + _migrated_line("2026-10-05-abcdef12-1", "Y is craft."))
     got = _shape(w.migrate())
     assert (got["action"], got["reason"]) == ("refused", "canon-id-conflict")
+
+
+# axis: migrated entries sharing an id refuse when they differ in any field, not only the ruling — wo_a_1646_id-conflict
+def test_e19h_duplicate_ids_with_the_same_ruling_and_a_different_scope_refuse(tmp_path):
+    w = _world(tmp_path, raw="X is material.")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
+                   + _migrated_line("2026-10-05-abcdef12-1", "X is material.")
+                   + _migrated_line("2026-10-05-abcdef12-1", "X is material.").replace(
+                       "· standing ·", "· piece example-123abc ·"))
+    w.land()
+    head = w.head()
+    core_before = w.core_bytes()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-id-conflict")
+    assert "scoped standing" in got["detail"]
+    assert "scoped piece example-123abc" in got["detail"]
+    assert got["commit"] is None
+    assert w.head() == head
+    assert w.core_bytes() == core_before
+    assert w.item13()["raw"] == "X is material."
 
 
 # axis: an ordinary entry sharing a migrated entry's id refuses before any adoption — wo_a_1646_id-conflict
