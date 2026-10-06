@@ -1,0 +1,486 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Review sheet</title>
+<link rel="stylesheet" href="comic-panel.css">
+<style>
+  body { background: var(--sh-paper); margin: 0; }
+  .sh-theme { padding-block: 16px 40px; padding-inline: 16px; }
+  .sheet-page { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-inline: auto; max-width: 720px; overflow-wrap: anywhere; }
+  .sheet-page .sh-appbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 1; }
+  .sheet-page > main { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page :is(h2, p, ul, blockquote) { margin: 0; }
+  .sheet-page :is(.sh-card, .sh-box) > * + * { margin-top: 8px; }
+  .sheet-page .sh-card > h2 { font-size: 22px; margin-top: 12px; }
+  .sheet-page .sh-card > .sh-label { margin-top: 16px; }
+  .sheet-page .sh-card > .sh-label + * { margin-top: 4px; }
+  .sheet-page .sh-box h2 { font-size: 22px; }
+  .sheet-page .sh-box ul { padding-left: 20px; }
+  .sh-theme [hidden] { display: none; }
+</style>
+
+<div class="sh-theme">
+  <div class="sheet-page">
+    <header class="sh-appbar">
+      <span class="sh-appbar__name" id="sheet-title">Review sheet</span>
+    </header>
+    <p id="sheet-status" class="sh-caption">Loading the sheet…</p>
+    <div id="sheet-error" class="sh-box" role="alert" hidden>
+      <h2>This sheet can't be shown</h2>
+      <ul id="sheet-error-list"></ul>
+    </div>
+    <main id="sheet-cards"></main>
+  </div>
+</div>
+
+<script id="sheet-check">
+  // sheet.schema.json is the only home of a sheet's shape: the page fetches it and checks the data
+  // file against it with the small reader below. READ_RULES lists the keywords the reader enforces
+  // and ANNOTATIONS the ones that carry no rule. A schema that uses any other keyword ($id included,
+  // since every $ref is read from the root and no reference scope is honoured), or one of
+  // these in a form the reader does not implement, is refused whole before any sheet is checked, so
+  // a sheet is never drawn against a rule this page cannot check. The rest is authored here
+  // because a schema cannot express it: unique card ids, unique option ids within a card,
+  // unsettled ids that name real cards, and a recommendation that names one of its card's options.
+  const READ_RULES = [
+    "type", "const", "enum", "minLength", "minimum", "minItems", "uniqueItems", "pattern", "required",
+    "properties", "additionalProperties", "items", "$ref", "allOf", "if", "then", "not", "anyOf",
+  ];
+  const ANNOTATIONS = [
+    "$schema", "title", "description", "$comment", "examples", "default", "$defs", "definitions",
+  ];
+
+  // Two values are equal when they hold the same data, whatever order an object's keys came in.
+  function canonical(value) {
+    if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
+    if (value !== null && typeof value === "object") {
+      return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + canonical(value[key])).join(",") + "}";
+    }
+    return JSON.stringify(value);
+  }
+
+  // Follows a "#/a/b" pointer from the schema's root. Returns { target } or { problem }.
+  function resolvePointer(root, ref) {
+    if (typeof ref !== "string" || !ref.startsWith("#/")) {
+      return { problem: "it must be a string that starts with #/" };
+    }
+    let target = root;
+    for (const key of ref.slice(2).split("/")) {
+      if (key.includes("~") || key.includes("%")) {
+        return { problem: "it uses an escape this page does not follow" };
+      }
+      const steppable = Array.isArray(target) ? /^(0|[1-9][0-9]*)$/.test(key) : target !== null && typeof target === "object";
+      if (!steppable || !Object.prototype.hasOwnProperty.call(target, key)) {
+        return { problem: "it does not lead anywhere in the schema" };
+      }
+      target = target[key];
+    }
+    if (target === undefined) {
+      return { problem: "it does not lead anywhere in the schema" };
+    }
+    return { target: target };
+  }
+
+  // Lists every place the schema uses a rule, or a form of a rule, that validateAgainstSchema
+  // does not implement. It walks the root, every sub-schema a rule holds and every $ref target.
+  function unsupportedRules(root) {
+    const isObject = (item) => item !== null && typeof item === "object" && !Array.isArray(item);
+    const isNumber = (item) => typeof item === "number" && Number.isFinite(item);
+    const isNames = (item) => Array.isArray(item) && item.every((name) => typeof name === "string");
+    const isPattern = (item) => {
+      if (typeof item !== "string") return false;
+      try {
+        new RegExp(item);
+        return true;
+      } catch (error) {
+        return false;
+      }
+    };
+    const readableForms = {
+      type: (item) => typeof item === "string" || isNames(item),
+      enum: (item) => Array.isArray(item),
+      minLength: isNumber,
+      minimum: isNumber,
+      minItems: isNumber,
+      uniqueItems: (item) => typeof item === "boolean",
+      pattern: isPattern,
+      required: isNames,
+    };
+    const escape = (key) => key.replace(/~/g, "~0").replace(/\//g, "~1");
+    const problems = [];
+    const walked = new Set();
+    const refuse = (what, pointer) => {
+      problems.push("The sheet's schema uses " + what + " at " + pointer + ", which this page can't check.");
+    };
+
+    const walk = (schema, pointer, holder) => {
+      if (!isObject(schema)) {
+        refuse('"' + holder + '" with something that is not a schema', pointer);
+        return;
+      }
+      if (walked.has(schema)) return;
+      walked.add(schema);
+
+      const members = (value, key, at, each) => {
+        if (!isObject(value)) {
+          refuse('"' + key + '" as something other than a map of schemas', pointer);
+          return;
+        }
+        Object.keys(value).forEach((name) => each(value[name], at + "/" + escape(name)));
+      };
+      const entries = (value, key, at) => {
+        if (!Array.isArray(value)) {
+          refuse('"' + key + '" as something other than a list of schemas', pointer);
+          return;
+        }
+        value.forEach((sub, index) => walk(sub, at + "/" + index, key));
+      };
+
+      Object.keys(schema).forEach((key) => {
+        const value = schema[key];
+        const at = pointer + "/" + escape(key);
+        if (key === "$defs" || key === "definitions" || key === "properties") {
+          members(value, key, at, (sub, subPointer) => walk(sub, subPointer, key));
+        } else if (key === "allOf" || key === "anyOf") {
+          entries(value, key, at);
+        } else if (key === "if" || key === "then" || key === "not") {
+          walk(value, at, key);
+        } else if (key === "items") {
+          if (Array.isArray(value)) {
+            refuse('"items" as a list', pointer);
+          } else {
+            walk(value, at, key);
+          }
+        } else if (key === "additionalProperties") {
+          if (typeof value !== "boolean") refuse('"additionalProperties" as something other than true or false', pointer);
+        } else if (key === "$ref") {
+          const resolved = resolvePointer(root, value);
+          if (resolved.problem !== undefined) {
+            refuse('"$ref" with ' + JSON.stringify(value) + " (" + resolved.problem + ")", pointer);
+          } else {
+            walk(resolved.target, value, key);
+          }
+        } else if (Object.prototype.hasOwnProperty.call(readableForms, key)) {
+          if (!readableForms[key](value)) refuse('"' + key + '" with a value this page does not read', pointer);
+        } else if (!READ_RULES.includes(key) && !ANNOTATIONS.includes(key)) {
+          refuse('the rule "' + key + '"', pointer);
+        }
+      });
+    };
+
+    // A cycle that never descends into a child value (only $ref, allOf, anyOf, not, if, then) can never
+    // end for any value, so it is refused here whatever the data or the order of an anyOf's branches.
+    // Cycles through "properties" or "items" descend into a child value and stay allowed.
+    const state = new Map();
+    const sameValue = (schema, pointer) => {
+      if (!isObject(schema) || state.get(schema) === 2) return;
+      state.set(schema, 1);
+      const next = (sub, at) => {
+        if (!isObject(sub)) return;
+        if (state.get(sub) === 1) {
+          refuse('"$ref" that leads back to itself without reading anything', pointer);
+          return;
+        }
+        sameValue(sub, at);
+      };
+      if (schema.$ref !== undefined) {
+        const resolved = resolvePointer(root, schema.$ref);
+        if (resolved.problem === undefined) next(resolved.target, schema.$ref);
+      }
+      ["allOf", "anyOf"].forEach((key) => {
+        if (Array.isArray(schema[key])) schema[key].forEach((sub, index) => next(sub, pointer + "/" + key + "/" + index));
+      });
+      ["not", "if", "then"].forEach((key) => next(schema[key], pointer + "/" + key));
+      state.set(schema, 2);
+    };
+
+    walk(root, "#", "schema");
+    // Start from every schema the walk reached, since a cycle may sit under a property.
+    Array.from(walked).forEach((schema) => sameValue(schema, "#"));
+    return problems;
+  }
+
+  class UncheckableSchema extends Error {}
+
+  function validateAgainstSchema(root, schema, value, path, problems, viaRefs) {
+    const isObject = (item) => item !== null && typeof item === "object" && !Array.isArray(item);
+    const typeOf = (item) => {
+      if (item === null) return "null";
+      if (Array.isArray(item)) return "array";
+      if (typeof item === "number") return Number.isInteger(item) ? "integer" : "number";
+      return typeof item;
+    };
+    const matchesType = (name, item) => typeOf(item) === name || (name === "number" && typeOf(item) === "integer");
+    const quiet = (sub, item) => {
+      const found = [];
+      validateAgainstSchema(root, sub, item, path, found, chain);
+      return found;
+    };
+    const where = path || "The sheet";
+    // The $refs followed so far for this same value, so a $ref that leads back to itself ends.
+    const chain = viaRefs || [];
+
+    if (schema.$ref !== undefined) {
+      const resolved = resolvePointer(root, schema.$ref);
+      if (resolved.problem !== undefined) {
+        // Not a mismatch: it must not turn into a passing "not", a skipped "if" or a failed "anyOf"
+        // branch, so it ends the whole check by type, whatever any schema text says.
+        throw new UncheckableSchema(where + " follows a rule this page can't find.");
+      }
+      if (chain.includes(schema.$ref)) {
+        throw new UncheckableSchema(where + " follows a rule that leads back to itself.");
+      }
+      validateAgainstSchema(root, resolved.target, value, path, problems, chain.concat([schema.$ref]));
+    }
+
+    if (schema.type !== undefined) {
+      const names = Array.isArray(schema.type) ? schema.type : [schema.type];
+      if (!names.some((name) => matchesType(name, value))) {
+        problems.push(where + " must be " + names.join(" or ") + ".");
+        return;
+      }
+    }
+    if (schema.const !== undefined && canonical(value) !== canonical(schema.const)) {
+      problems.push(where + " must be " + JSON.stringify(schema.const) + ".");
+    }
+    if (schema.enum && !schema.enum.some((option) => canonical(option) === canonical(value))) {
+      problems.push(where + " must be one of " + schema.enum.map((option) => typeof option === "string" ? option : JSON.stringify(option)).join(", ") + ".");
+    }
+
+    if (typeof value === "string") {
+      if (schema.minLength !== undefined && [...value].length < schema.minLength) {
+        problems.push(where + " must not be empty.");
+      }
+      if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
+        problems.push(where + ' has the value "' + value + '", which is not a valid id (lowercase letters, digits and hyphens).');
+      }
+    }
+    if (typeof value === "number" && schema.minimum !== undefined && value < schema.minimum) {
+      problems.push(where + " must be at least " + schema.minimum + ".");
+    }
+
+    if (Array.isArray(value)) {
+      if (schema.minItems !== undefined && value.length < schema.minItems) {
+        problems.push(where + " must have at least " + schema.minItems + " item(s).");
+      }
+      if (schema.uniqueItems === true && new Set(value.map(canonical)).size !== value.length) {
+        problems.push(where + " must not repeat an item.");
+      }
+      if (schema.items) {
+        value.forEach((item, index) => {
+          validateAgainstSchema(root, schema.items, item, (path ? path + "." : "") + index, problems);
+        });
+      }
+    }
+
+    if (isObject(value)) {
+      (schema.required || []).forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) {
+          problems.push(where + " has no " + key + " key.");
+        }
+      });
+      const known = schema.properties || {};
+      Object.keys(value).forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(known, key)) {
+          validateAgainstSchema(root, known[key], value[key], (path ? path + "." : "") + key, problems);
+        } else if (schema.additionalProperties === false) {
+          problems.push(where + " has an unexpected key " + key + ".");
+        }
+      });
+    }
+
+    (schema.allOf || []).forEach((sub) => {
+      validateAgainstSchema(root, sub, value, path, problems, chain);
+    });
+    if (schema.if && schema.then && quiet(schema.if, value).length === 0) {
+      if (quiet(schema.then, value).length > 0) {
+        problems.push(schema.description || (where + " does not fit its kind."));
+      }
+    }
+    if (schema.not && quiet(schema.not, value).length === 0) {
+      problems.push(schema.description || (where + " carries something it must not."));
+    }
+    if (schema.anyOf && !schema.anyOf.some((sub) => quiet(sub, value).length === 0)) {
+      problems.push(where + " fits none of its allowed shapes.");
+    }
+  }
+
+  function checkSheet(sheet, schema) {
+    const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+    const isText = (value) => typeof value === "string" && value.length > 0;
+
+    if (!isObject(schema) || !(isObject(schema.properties) || isObject(schema.$defs))) {
+      return ["The sheet's schema file isn't a schema."];
+    }
+    const unsupported = unsupportedRules(schema);
+    if (unsupported.length > 0) {
+      return unsupported;
+    }
+
+    const shape = [];
+    try {
+      validateAgainstSchema(schema, schema, sheet, "", shape);
+    } catch (error) {
+      if (error instanceof UncheckableSchema) return ["The sheet's schema can't be checked: " + error.message];
+      throw error;
+    }
+    if (shape.length > 0) {
+      // Name a card by its id, not its position, when it has one.
+      return shape.map((problem) => problem.replace(/^cards\.(\d+)(?=[. ])/, (whole, index) => {
+        const card = sheet.cards[Number(index)];
+        return isObject(card) && isText(card.id) ? 'Card "' + card.id + '"' : "Card number " + (Number(index) + 1);
+      }));
+    }
+
+    const problems = [];
+    if (!Array.isArray(sheet.cards)) {
+      return ["The sheet's cards must be a list."];
+    }
+    const cardIds = new Set();
+    const reportedDuplicates = new Set();
+    sheet.cards.forEach((card, cardIndex) => {
+      if (!isObject(card)) {
+        problems.push("Card number " + (cardIndex + 1) + " must be an object.");
+        return;
+      }
+      if (cardIds.has(card.id) && !reportedDuplicates.has(card.id)) {
+        reportedDuplicates.add(card.id);
+        problems.push('Two cards share the id "' + card.id + '".');
+      }
+      cardIds.add(card.id);
+
+      const optionIds = new Set();
+      const reportedOptions = new Set();
+      if (!Array.isArray(card.options)) {
+        problems.push('Card "' + card.id + '" must have its options as a list.');
+        return;
+      }
+      card.options.forEach((option) => {
+        if (!isObject(option)) {
+          problems.push('Card "' + card.id + '" has an option that is not an object.');
+          return;
+        }
+        if (optionIds.has(option.id) && !reportedOptions.has(option.id)) {
+          reportedOptions.add(option.id);
+          problems.push('Card "' + card.id + '" has two options with the id "' + option.id + '".');
+        }
+        optionIds.add(option.id);
+      });
+
+      if (card.recommendation && card.recommendation.optionId !== undefined && !optionIds.has(card.recommendation.optionId)) {
+        problems.push('Card "' + card.id + '" recommends the option "' + card.recommendation.optionId + '", which is not one of its options.');
+      }
+    });
+
+    if (sheet.remainder && Array.isArray(sheet.remainder.unsettled)) {
+      sheet.remainder.unsettled.forEach((id) => {
+        if (!cardIds.has(id)) {
+          problems.push('The unsettled list names "' + id + '", which is not a card in this sheet.');
+        }
+      });
+    }
+
+    return problems;
+  }
+</script>
+
+<script>
+  (function () {
+    const status = document.getElementById("sheet-status");
+    const errorBox = document.getElementById("sheet-error");
+    const errorList = document.getElementById("sheet-error-list");
+    const cardsHost = document.getElementById("sheet-cards");
+    const titleHost = document.getElementById("sheet-title");
+
+    function showErrors(problems) {
+      errorList.replaceChildren();
+      problems.forEach(function (problem) {
+        const item = document.createElement("li");
+        item.textContent = problem;
+        errorList.appendChild(item);
+      });
+      cardsHost.replaceChildren();
+      status.hidden = true;
+      errorBox.hidden = false;
+    }
+
+    function textElement(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      element.textContent = text;
+      return element;
+    }
+
+    function buildCard(card) {
+      const article = document.createElement("article");
+      article.className = "sh-card";
+      article.id = "card-" + card.id;
+      article.appendChild(textElement("span", card.warning ? "sh-badge sh-badge--warning" : "sh-badge", card.callKind));
+      article.appendChild(textElement("h2", "", card.question));
+      article.appendChild(textElement("p", "sh-label", "What's true now"));
+      article.appendChild(textElement("p", "", card.context.now));
+      article.appendChild(textElement("p", "sh-label", "Why it needs you"));
+      article.appendChild(textElement("p", "", card.context.whyOwner));
+      if (card.context.exactText !== null) {
+        article.appendChild(textElement("p", "sh-label", "The exact text"));
+        article.appendChild(textElement("blockquote", "", card.context.exactText));
+      }
+      return article;
+    }
+
+    function render(sheet) {
+      const fragment = document.createDocumentFragment();
+      sheet.cards.forEach(function (card) {
+        fragment.appendChild(buildCard(card));
+      });
+      document.title = sheet.title;
+      titleHost.textContent = sheet.title;
+      cardsHost.replaceChildren(fragment);
+      status.hidden = true;
+    }
+
+    async function fetchJson(name, label) {
+      let response;
+      try {
+        response = await fetch(name, { cache: "no-store" });
+      } catch (error) {
+        throw [label + " could not be loaded."];
+      }
+      if (!response.ok) {
+        throw [label + " could not be loaded (HTTP " + response.status + ")."];
+      }
+      let text;
+      try {
+        text = await response.text();
+      } catch (error) {
+        throw [label + " could not be loaded."];
+      }
+      try {
+        return JSON.parse(text);
+      } catch (error) {
+        throw [label + " isn't valid JSON."];
+      }
+    }
+
+    async function load() {
+      let sheet;
+      let schema;
+      try {
+        sheet = await fetchJson("sheet.json", "The sheet's data file");
+        schema = await fetchJson("sheet.schema.json", "The sheet's schema file");
+      } catch (problems) {
+        showErrors(Array.isArray(problems) ? problems : ["The sheet could not be drawn."]);
+        return;
+      }
+      const problems = checkSheet(sheet, schema);
+      if (problems.length > 0) {
+        showErrors(problems);
+        return;
+      }
+      render(sheet);
+    }
+
+    load().catch(function () {
+      showErrors(["The sheet could not be drawn."]);
+    });
+  })();
+</script>

@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review sheet data file",
+  "description": "The data file a review sheet page renders from, published as sheet.json beside the page. It holds the review's title, one card per call the owner has to make, and a block that depends on the sheet's kind. The rules this schema cannot express are: card ids are unique within the sheet; option ids are unique within their card; every id in remainder.unsettled names a card in the sheet; a recommendation's optionId, when present, names one of that card's option ids.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "kind", "title", "cards"],
+  "properties": {
+    "schema": {
+      "description": "The name and version of this data format, which is always superheroes-sheet/1.",
+      "type": "string",
+      "const": "superheroes-sheet/1"
+    },
+    "kind": {
+      "description": "Which sheet this is: a remainder sheet for a review that left findings unsettled, a final sheet for a finished review, or a plain sheet with only cards.",
+      "type": "string",
+      "enum": ["remainder", "final", "plain"]
+    },
+    "title": {
+      "description": "The review's name, shown in the app bar.",
+      "type": "string",
+      "minLength": 1
+    },
+    "remainder": {
+      "description": "The summary of a review that left findings unsettled, present only on a remainder sheet.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roundsRun", "fixesMade", "unsettled"],
+      "properties": {
+        "roundsRun": {
+          "description": "How many review rounds ran.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "fixesMade": {
+          "description": "How many fixes the review made.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "unsettled": {
+          "description": "The ids of the cards that hold a finding the review did not settle.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        }
+      }
+    },
+    "final": {
+      "description": "The summary of a finished review, present only on a final sheet.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["history", "declinedFindings", "approval"],
+      "properties": {
+        "history": {
+          "description": "What the review did, in counts and one line about the vet.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reviewRounds", "fixesMade", "vet"],
+          "properties": {
+            "reviewRounds": {
+              "description": "How many review rounds ran.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "fixesMade": {
+              "description": "How many fixes the review made.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "vet": {
+              "description": "The vet's outcome in one line.",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "declinedFindings": {
+          "description": "The findings the review chose not to act on, each with its reason.",
+          "type": "array",
+          "items": {
+            "description": "One finding the review declined, with the reason it was declined.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["summary", "reason"],
+            "properties": {
+              "summary": {
+                "description": "What the declined finding said.",
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "description": "Why the finding was declined.",
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "approval": {
+          "description": "Whether the review ended with an approved board and where that board is kept.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["approvedBoard", "boardSavedWithSpec"],
+          "properties": {
+            "approvedBoard": {
+              "description": "True when there is an approved board.",
+              "type": "boolean"
+            },
+            "boardSavedWithSpec": {
+              "description": "True when the approved board is saved with the spec.",
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "cards": {
+      "description": "The calls the owner has to make, one card each.",
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/card"}
+    }
+  },
+  "allOf": [
+    {
+      "description": "A remainder sheet must carry the remainder block and must not carry the final block.",
+      "if": {"properties": {"kind": {"const": "remainder"}}, "required": ["kind"]},
+      "then": {"required": ["remainder"], "not": {"required": ["final"]}}
+    },
+    {
+      "description": "A final sheet must carry the final block and must not carry the remainder block.",
+      "if": {"properties": {"kind": {"const": "final"}}, "required": ["kind"]},
+      "then": {"required": ["final"], "not": {"required": ["remainder"]}}
+    },
+    {
+      "description": "A plain sheet must carry neither the remainder block nor the final block.",
+      "if": {"properties": {"kind": {"const": "plain"}}, "required": ["kind"]},
+      "then": {"not": {"anyOf": [{"required": ["remainder"]}, {"required": ["final"]}]}}
+    }
+  ],
+  "$defs": {
+    "id": {
+      "description": "A short lowercase identifier made of letters, digits and hyphens that starts with a letter or digit.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "card": {
+      "description": "One call the owner has to make, with the question, what is true now, and the options and recommendation if there are any.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "callKind", "warning", "question", "context", "images", "options"],
+      "properties": {
+        "id": {
+          "description": "The card's identifier, unique within the sheet and kept the same across republishes so saved answers still match.",
+          "$ref": "#/$defs/id"
+        },
+        "callKind": {
+          "description": "The kind of call in plain words, shown on the card's badge.",
+          "type": "string",
+          "minLength": 1
+        },
+        "warning": {
+          "description": "True for the red warning badge: a gap the reviewer found, a statement with no source, or a finding the review did not settle.",
+          "type": "boolean"
+        },
+        "question": {
+          "description": "The question the owner is asked, in one line.",
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "description": "What the owner needs to know to answer: what is true now, why it needs them, and the exact underlying text if there is any.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["now", "whyOwner", "exactText"],
+          "properties": {
+            "now": {
+              "description": "What is true now.",
+              "type": "string",
+              "minLength": 1
+            },
+            "whyOwner": {
+              "description": "Why this call needs the owner.",
+              "type": "string",
+              "minLength": 1
+            },
+            "exactText": {
+              "description": "The exact text the call is about, or null when the call has no underlying text; the key itself is always present.",
+              "type": ["string", "null"],
+              "minLength": 1
+            }
+          }
+        },
+        "images": {
+          "description": "Pictures that help the owner answer, which may be empty.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/image"}
+        },
+        "options": {
+          "description": "The choices the owner can pick from, which may be empty when the call has no fixed choices.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/option"}
+        },
+        "recommendation": {"$ref": "#/$defs/recommendation"}
+      }
+    },
+    "image": {
+      "description": "One picture shown on a card.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["src", "alt"],
+      "properties": {
+        "src": {
+          "description": "Where the picture is, either a path published with the sheet or a URL.",
+          "type": "string",
+          "minLength": 1
+        },
+        "alt": {
+          "description": "A plain-words description of the picture for people who cannot see it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "caption": {
+          "description": "A short line shown under the picture.",
+          "type": "string"
+        }
+      }
+    },
+    "option": {
+      "description": "One choice the owner can pick on a card.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "consequence"],
+      "properties": {
+        "id": {
+          "description": "The option's identifier, unique within its card.",
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "description": "The option's name as the owner sees it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "consequence": {
+          "description": "The plain consequence of picking this option.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "recommendation": {
+      "description": "What the review recommends for a card, which a card may leave out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "reason"],
+      "properties": {
+        "text": {
+          "description": "The recommendation in one line.",
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "description": "Why the review recommends it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "optionId": {
+          "description": "The id of the option this recommends, which must be one of the same card's option ids.",
+          "$ref": "#/$defs/id"
+        }
+      }
+    }
+  }
+}
