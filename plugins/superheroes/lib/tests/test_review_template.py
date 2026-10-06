@@ -19,6 +19,15 @@ SHEET_SCHEMA = json.loads((THEME / "sheet.schema.json").read_text(encoding="utf-
 ANSWER_SCHEMA = {"$schema": SHEET_SCHEMA["$schema"], "$defs": SHEET_SCHEMA["$defs"], "$ref": "#/$defs/answer"}
 ANSWER_VALIDATOR = jsonschema.Draft202012Validator(ANSWER_SCHEMA)
 
+
+def _validator_for(definition):
+    return jsonschema.Draft202012Validator({"$schema": SHEET_SCHEMA["$schema"], "$defs": SHEET_SCHEMA["$defs"], "$ref": "#/$defs/" + definition})
+
+
+# Every document the page may write, by where it goes. A write anywhere else fails the test that made it.
+DRAFT_VERDICT_VALIDATOR = _validator_for("draftVerdict")
+VERDICT_VALIDATOR = _validator_for("verdict")
+
 FORBIDDEN_PROPERTIES = (
     "font-family", "font-weight", "box-shadow", "letter-spacing", "text-transform", "color",
 )
@@ -179,7 +188,8 @@ class Node {
 }
 const elements = {};
 ["sheet-status", "sheet-gate", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title",
-  "sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done"].forEach((id) => {
+  "sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done",
+  "sheet-history", "sheet-final"].forEach((id) => {
   elements[id] = new Node("div");
   elements[id].id = id;
 });
@@ -188,8 +198,8 @@ elements["sheet-gate"].hidden = true;
 elements["sheet-error"].hidden = true;
 elements["sheet-title"].textContent = "Review sheet";
 // The sheet's own parts start hidden, with the classes the markup gives them, until a sheet is drawn.
-const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "sheet-stepper": "sheet-stepper", "sheet-footer": "sheet-footer", "sheet-done": "sh-box" };
-["sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done"].forEach((id) => {
+const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "sheet-stepper": "sheet-stepper", "sheet-footer": "sheet-footer", "sheet-done": "sh-box", "sheet-history": "sh-box" };
+["sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done", "sheet-history", "sheet-final"].forEach((id) => {
   elements[id].hidden = true;
   elements[id].className = markupClasses[id] || "";
 });
@@ -201,7 +211,10 @@ const document = {
 };
 
 // The fake host runtime. Each test says how `use("db")` and `use("user")` behave through `host`, and
-// drives the store's calls through the controlled promises logged in `setLog` and `reads`.
+// drives the store's calls through the controlled promises logged in `setLog` and `reads`. A collection's
+// documents come from `host.collections` (collection name to its docs), or, when a test gives none, from
+// `host.docs` for `answers` and nothing for any other collection. A read's mode is `host.read`, or the one
+// `host.readByCollection` gives that collection; either may be a list, used one read at a time.
 const host = __HOST__;
 // The page's own timers can be replaced by a clock the scenario advances (`host.fakeTimers`); the
 // harness itself always waits on the real ones.
@@ -233,7 +246,12 @@ function deferred() {
 function snapshotOf(docs) {
   return { docs: docs.map((doc) => ({ id: doc.id, exists: true, data: () => doc.data })), size: docs.length, empty: docs.length === 0 };
 }
-const readModes = Array.isArray(host.read) ? host.read.slice() : [host.read];
+const modeQueue = (given) => (Array.isArray(given) ? given.slice() : [given]);
+const sharedModes = modeQueue(host.read);
+const namedModes = {};
+Object.keys(host.readByCollection || {}).forEach((name) => { namedModes[name] = modeQueue(host.readByCollection[name]); });
+const nextMode = (queue) => (queue.length > 1 ? queue.shift() : queue[0]);
+const docsOf = (name) => (host.collections ? host.collections[name] || [] : name === "answers" ? host.docs : []);
 const fakeStore = {
   doc: (path) => ({
     set: (body) => {
@@ -250,8 +268,8 @@ const fakeStore = {
       const read = deferred();
       read.name = name;
       reads.push(read);
-      const mode = readModes.length > 1 ? readModes.shift() : readModes[0];
-      if (mode === "docs") read.resolve(snapshotOf(host.docs));
+      const mode = nextMode(namedModes[name] || sharedModes);
+      if (mode === "docs") read.resolve(snapshotOf(docsOf(name)));
       if (mode === "reject") read.reject({ code: "unavailable", message: "the read failed" });
       return read.promise;
     },
@@ -446,9 +464,68 @@ const tools = {
       fold: () => elements["sheet-items"].children.find((child) => hasClass(child, "sheet-fold")),
       done: () => among(elements["sheet-footer"], "Done for now"),
       back: () => among(elements["sheet-done"], "Back to the sheet"),
+      declines: () => elements["sheet-history"].children.find((child) => child.tagName === "button"),
     }[name]();
   },
   footer: () => ({ hidden: elements["sheet-footer"].hidden, caption: elements["sheet-footer"].children[0].textContent }),
+  // The final sheet's parts: the history box (heading, paragraphs, the declines toggle and its list) and the last card.
+  history: () => {
+    const box = elements["sheet-history"];
+    const kids = box.children;
+    const toggle = kids.find((child) => child.tagName === "button");
+    const list = kids.find((child) => child.tagName === "ul");
+    const heading = kids.find((child) => child.tagName === "h2");
+    return {
+      hidden: box.hidden,
+      className: box.className,
+      heading: heading ? heading.textContent : null,
+      paragraphs: kids.filter((child) => child.tagName === "p").map((child) => child.textContent),
+      toggle: toggle ? { text: toggle.textContent, aria: toggle.getAttribute("aria-expanded"), type: toggle.getAttribute("type"), className: toggle.className } : null,
+      listHidden: list ? list.hidden : null,
+      items: list ? list.children.map((item) => [item.tagName, item.textContent]) : [],
+    };
+  },
+  finalParts: () => ({
+    historyHidden: elements["sheet-history"].hidden,
+    historyChildren: elements["sheet-history"].children.length,
+    finalHidden: elements["sheet-final"].hidden,
+    finalChildren: elements["sheet-final"].children.length,
+  }),
+  lastCard: () => elements["sheet-final"].children.find((child) => child.id === "sheet-approval"),
+  lastParts: () => tools.lastCard().children.map((child) => {
+    if (hasClass(child, "sh-label")) return "label:" + child.textContent;
+    return child.tagName + (child.className ? "." + child.className.split(/\s+/).join(".") : "");
+  }),
+  lastParagraphs: () => tools.lastCard().children.filter((child) => child.tagName === "p").map((child) => child.textContent),
+  lastHeading: () => tools.lastCard().children.find((child) => child.tagName === "h2").textContent,
+  lastButtons: () => tools.lastCard().children.find((child) => hasClass(child, "answer-row")).children,
+  lastButton: (label) => tools.lastButtons().find((button) => button.textContent === label),
+  lastNote: () => tools.lastCard().children.find((child) => child.tagName === "textarea"),
+  lastSaveLine: () => tools.lastCard().children.find((child) => hasClass(child, "save-line")),
+  lastSaveText: () => [elements["sheet-final"], tools.lastCard(), tools.lastSaveLine()].some((node) => node.hidden) ? "" : tools.text(tools.lastSaveLine()),
+  lastTryAgain: () => tools.lastSaveLine().children.find((child) => child.tagName === "button"),
+  lastState: () => ({
+    labels: tools.lastButtons().map((button) => button.textContent),
+    pressed: tools.lastButtons().map((button) => button.getAttribute("aria-pressed")),
+    classes: tools.lastButtons().map((button) => button.className),
+    disabled: tools.lastButtons().map((button) => button.disabled).concat([tools.lastNote().disabled]),
+    note: tools.lastNote().value,
+  }),
+  sendRow: () => tools.lastCard().children.find((child) => hasClass(child, "send-row")),
+  sendButton: () => tools.sendRow().children.find((child) => child.tagName === "button" && child.textContent === "Send verdict"),
+  sendStatus: () => {
+    const status = tools.sendRow().children.find((child) => child.tagName === "span" && hasClass(child, "sh-caption"));
+    return status ? status.textContent : null;
+  },
+  sendTryAgain: () => tools.sendRow().children.find((child) => child.tagName === "button" && child.textContent === "Try again"),
+  nextBox: () => {
+    const box = elements["sheet-final"].children.find((child) => child !== tools.lastCard());
+    return { className: box.className, label: box.children[0].textContent, labelClass: box.children[0].className, text: box.children[1].textContent };
+  },
+  // Every control a person could press or type in on the cards and the last card, with whether it is off.
+  controls: () => [...walk(elements["sheet-cards"]), ...walk(elements["sheet-final"])]
+    .filter((node) => node.tagName === "button" || node.tagName === "textarea")
+    .map((node) => ({ text: node.tagName === "textarea" ? "note" : tools.text(node), disabled: node.disabled })),
   // Every button node anywhere on the page, for the checks on what a control wears.
   allButtons: () => [...new Set(Object.values(elements).flatMap((root) => [...walk(root)]).filter((node) => node.tagName === "button"))].map((node) => ({
     text: tools.text(node),
@@ -512,7 +589,15 @@ def _run_page(files, host=None, scenario="return null;"):
     assert result.returncode == 0, result.stderr
     page = json.loads(result.stdout)
     for recorded in page["recordedSets"]:
-        ANSWER_VALIDATOR.validate(recorded["body"])
+        path = recorded["path"]
+        if re.fullmatch(r"answers/[a-z0-9][a-z0-9-]*", path):
+            ANSWER_VALIDATOR.validate(recorded["body"])
+        elif path == "draft-verdict/final":
+            DRAFT_VERDICT_VALIDATOR.validate(recorded["body"])
+        elif path == "verdict/final":
+            VERDICT_VALIDATOR.validate(recorded["body"])
+        else:
+            pytest.fail("the page wrote to %s, which is not a document it may write" % path)
     return page
 
 
@@ -2099,6 +2184,32 @@ def test_new_controls_are_theme_buttons():
     assert not re.search(r"(?<![\w-])outline(?:-[a-z-]+)?\s*:", text), "the template declares an outline"
     assert ".sh-theme [hidden] { display: none; }" in text
 
+    # A final sheet's controls (the declines toggle, the verdict buttons, Send verdict, and a Send's Try again) are theme buttons too.
+    final = _sheet_page(_sample_final(), """
+      t.click(t.lastButton("Approve"));
+      t.sets[0].resolve();
+      await t.tick();
+      t.click(t.sendButton());
+      await t.tick();
+      await t.tick();
+      t.sets[1].reject({ code: "unavailable", message: "no" });
+      await t.tick();
+      const hosts = ["sheet-history", "sheet-final"];
+      return {
+        own: hosts.flatMap((id) => t.all(elements[id]).filter((node) => node.tagName === "button" || node.tagName === "textarea")).map((node) => ({
+          text: node.tagName === "textarea" ? "note" : t.text(node), tag: node.tagName, className: node.className, type: node.getAttribute("type"),
+        })),
+        everything: t.allButtons().map((button) => button.className),
+      };
+    """, host={"set": "pending"})
+    assert all("sh-button" in name.split() for name in final["everything"]), final["everything"]
+    assert [control["text"] for control in final["own"]] == ["Declined findings · 2", "Approve", "Not yet", "note", "Send verdict", "Try again"], final
+    for control in final["own"]:
+        if control["tag"] == "button":
+            assert "sh-button" in control["className"].split() and control["type"] == "button", control
+        else:
+            assert control["className"] == "sh-field", control
+
 
 # Bites on: JavaScript or other non-markup text sitting outside the page's script and style blocks.
 def test_template_outside_script_and_style_is_only_markup():
@@ -2109,3 +2220,624 @@ def test_template_outside_script_and_style_is_only_markup():
     prose = re.sub(r"(?s)<[^>]*>", "", prose)
     for pattern in (r"\bconst\s", r"\bfunction\b", r"=>", r";[ \t]*$"):
         assert not re.search(pattern, prose, re.M), "stray script text outside script/style (%s): %r" % (pattern, prose[:200])
+
+
+# The final sheet: its history, its last card, the draft verdict and the verdict.
+FINAL_SAMPLE = json.loads((THEME / "sample-final-sheet.json").read_text(encoding="utf-8"))
+FIRST_CARD, SECOND_CARD = "leftovers-handling", "saved-plan-history"
+
+HISTORY_TEXT = "The review ran 4 rounds and fixed 9 things itself. The vet: The vet found nothing left to fix and raised two calls for you."
+TRACES_BOARD = "Every statement in the spec traces to your board, your framing, your rulings, your answers, or craft recorded for your veto."
+TRACES_NO_BOARD = "Every statement in the spec traces to your framing, your rulings, your answers, or craft recorded for your veto."
+BOARD_SAVED = "The approved board is saved with the spec."
+BOARD_NOT_SAVED = "The approved board is not saved with the spec."
+NEXT_TEXT = (
+    "The advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, "
+    "to the spec where it is kept) and vets it, then one merge word covers both."
+)
+DECLINED_ITEMS = [
+    ["li", "Add a calorie count to every recipe on the plan. (why declined: Nothing in your framing asks for nutrition numbers, so adding them would be new scope.)"],
+    ["li", "Let two people edit the same plan at once. (why declined: You said the planner is for one household cook, so sharing a plan is out of scope.)"],
+]
+DRAFT_LINE = "Your verdict is a draft until you send it."
+PICK_FIRST_LINE = "Tap Approve or Not yet first."
+FAILED_SEND_LINE = "The verdict didn't send."
+SLOW_SEND_LINE = "Sending is taking longer than it should. Keep this page open."
+CHECKING_LINE = "Making sure your answers are saved…"
+
+# In a scenario: the verdict writes so far, and every control's off state.
+VERDICT_WRITES = 'const verdicts = () => t.setLog().filter((call) => call.path === "verdict/final");'
+
+
+def _sample_final(cards=None, declined=None, approved=True, saved=True):
+    sheet = copy.deepcopy(FINAL_SAMPLE)
+    if cards is not None:
+        sheet["cards"] = cards
+    if declined is not None:
+        sheet["final"]["declinedFindings"] = declined
+    sheet["final"]["approval"] = {"approvedBoard": approved, "boardSavedWithSpec": saved}
+    return sheet
+
+
+def _final_doc(data):
+    return {"id": "final", "data": data}
+
+
+def _draft(verdict, note=""):
+    return {"verdict": verdict, "note": note}
+
+
+def _verdict_write(verdict, note=""):
+    return {"path": "verdict/final", "body": _draft(verdict, note)}
+
+
+def _draft_write(verdict, note=""):
+    return {"path": "draft-verdict/final", "body": _draft(verdict, note)}
+
+
+def _all_off(controls):
+    return all(control["disabled"] for control in controls)
+
+
+def _all_on(controls):
+    return not any(control["disabled"] for control in controls)
+
+
+# Bites on: a final sheet missing its history, declined findings (collapsed until toggled), last card (traces line, board line only with an approved board and following whether it is saved, answer row, note, save line, send row, no badge) or next line, or any of their words.
+@pytest.mark.parametrize("declines", [True, False], ids=["with-declines", "no-declines"])
+@pytest.mark.parametrize("approved,saved,lines", [
+    pytest.param(True, True, [TRACES_BOARD, BOARD_SAVED], id="board-saved"),
+    pytest.param(True, False, [TRACES_BOARD, BOARD_NOT_SAVED], id="board-not-saved"),
+    pytest.param(False, False, [TRACES_NO_BOARD], id="no-board"),
+])
+def test_final_sheet_draws_its_history_declines_last_card_and_next_line(approved, saved, lines, declines):
+    declined = None if declines else []
+    result = _sheet_page(_sample_final(declined=declined, approved=approved, saved=saved), """
+      const out = { history: t.history(), count: t.count() };
+      out.last = {
+        card: [t.lastCard().tagName, t.lastCard().className, t.lastCard().id],
+        heading: t.lastHeading(),
+        parts: t.lastParts(),
+        paragraphs: t.lastParagraphs(),
+        buttons: t.lastState(),
+        send: [t.sendButton().textContent, t.sendButton().className, t.sendButton().getAttribute("type"), t.sendButton().disabled],
+        status: t.sendStatus(),
+      };
+      out.next = t.nextBox();
+      out.parts = t.finalParts();
+      if (t.control("declines")) {
+        t.click(t.control("declines"));
+        out.expanded = t.history();
+        t.click(t.control("declines"));
+        out.collapsed = t.history();
+      }
+      return out;
+    """)
+    history = result["history"]
+    assert history["hidden"] is False and history["className"] == "sh-box"
+    assert history["heading"] == "How the spec got here"
+    assert history["paragraphs"][0] == HISTORY_TEXT
+    if declines:
+        assert history["paragraphs"] == [HISTORY_TEXT]
+        assert history["toggle"] == {"text": "Declined findings · 2", "aria": "false", "type": "button", "className": "sh-button"}
+        assert history["listHidden"] is True, "the declined findings were not collapsed"
+        assert history["items"] == DECLINED_ITEMS
+        assert result["expanded"]["toggle"]["aria"] == "true" and result["expanded"]["listHidden"] is False
+        assert result["collapsed"]["toggle"]["aria"] == "false" and result["collapsed"]["listHidden"] is True
+    else:
+        assert history["paragraphs"] == [HISTORY_TEXT, "No findings were declined."]
+        assert history["toggle"] is None and history["items"] == []
+        assert "expanded" not in result
+    last = result["last"]
+    assert last["card"] == ["article", "sh-card", "sheet-approval"]
+    assert last["heading"] == "Approve the spec?"
+    assert last["paragraphs"] == lines
+    assert last["parts"] == (
+        ["h2"] + ["p"] * len(lines)
+        + ["div.answer-row", "label:Note", "textarea.sh-field", "div.save-line", "div.send-row"]
+    ), "the last card's parts, or a badge on it"
+    assert last["buttons"]["labels"] == ["Approve", "Not yet"]
+    assert last["buttons"]["pressed"] == ["false", "false"]
+    assert last["send"] == ["Send verdict", "sh-button sh-button--main", "button", True]
+    assert last["status"] == PICK_FIRST_LINE
+    assert result["next"] == {"className": "sh-box", "label": "What happens next", "labelClass": "sh-label", "text": NEXT_TEXT}
+    assert result["parts"] == {"historyHidden": False, "historyChildren": 4 if declines else 3, "finalHidden": False, "finalChildren": 2}
+    # The vet's calls are the same cards, count and rows as on any sheet.
+    assert result["count"] == "0 of 2 answered"
+
+
+# Bites on: a remainder or plain sheet drawing the final sheet's history, last card, Send or next line, or reading the verdict collections.
+@pytest.mark.parametrize("sheet", [
+    pytest.param(_remainder_of(_named_cards("plan-day", "fridge-check"), unsettled=["fridge-check"]), id="remainder"),
+    pytest.param(_sheet(cards=_named_cards("plan-day", "fridge-check")), id="plain"),
+])
+def test_final_parts_absent_off_a_final_sheet(sheet):
+    result = _sheet_page(sheet, """
+      return { parts: t.finalParts(), reads: t.reads.map((read) => read.name), controls: t.controls().length };
+    """)
+    assert result["parts"] == {"historyHidden": True, "historyChildren": 0, "finalHidden": True, "finalChildren": 0}
+    assert result["reads"] == ["answers"]
+    assert result["controls"] == 2 * (4 + 1)
+
+
+# Bites on: a verdict tap or its note being written anywhere but draft-verdict/final (as a verdict, or as an answer), a tap not saving at once, a note not waiting for its pause, or the last card feeding the count or the rows.
+def test_a_verdict_tap_saves_a_draft_and_never_a_verdict():
+    result = _sheet_page(_sample_final(), """
+      const out = { before: { count: t.count(), pills: t.rows().map((row) => row.pill[1]) } };
+      t.click(t.lastButton("Approve"));
+      await t.tick();
+      t.type(t.lastNote(), "Looks right", "input");
+      out.early = t.sets.length;
+      await t.advance(1000);
+      t.click(t.lastButton("Not yet"));
+      await t.tick();
+      out.sets = t.setLog();
+      out.after = { count: t.count(), pills: t.rows().map((row) => row.pill[1]) };
+      out.last = t.lastState();
+      out.save = t.lastSaveText();
+      out.status = t.sendStatus();
+      return out;
+    """, host={"fakeTimers": True})
+    assert result["early"] == 1, "the note was written before its pause ended"
+    assert result["sets"] == [
+        _draft_write("approve"),
+        _draft_write("approve", "Looks right"),
+        _draft_write("not-yet", "Looks right"),
+    ]
+    assert result["sets"][-1]["body"] == {"verdict": "not-yet", "note": "Looks right"}
+    assert not [call for call in result["sets"] if call["path"].startswith(("verdict/", "answers/"))]
+    assert result["after"] == result["before"] == {"count": "0 of 2 answered", "pills": ["Open", "Open"]}
+    assert result["last"]["pressed"] == ["false", "true"] and result["last"]["note"] == "Looks right"
+    assert result["save"] == "Saved"
+    assert result["status"] == DRAFT_LINE
+
+
+# Bites on: a saved draft verdict not coming back on reopen (its pick or note), a draft counting as a verdict or an answer, a reopen writing anything, a draft that does not fit the schema restoring a pick, or the draft not being read from its own collection.
+def test_a_draft_verdict_is_restored_on_reopen_and_counts_as_nothing():
+    def reopen(draft):
+        return _sheet_page(_sample_final(), """
+          await t.advance(200);
+          return {
+            last: t.lastState(), status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), count: t.count(),
+            reads: t.reads.map((read) => read.name).sort(), controls: t.controls(),
+          };
+        """, host={"fakeTimers": True, "collections": {"draft-verdict": [_final_doc(draft)]}})
+
+    picked = reopen(_draft("not-yet", "Wait for the board"))
+    assert picked["last"]["pressed"] == ["false", "true"]
+    assert picked["last"]["note"] == "Wait for the board"
+    assert picked["status"] == DRAFT_LINE
+    assert picked["send"] is False
+    assert picked["sets"] == [], "reopening wrote something"
+    assert picked["count"] == "0 of 2 answered"
+    assert picked["reads"] == ["answers", "draft-verdict", "verdict"]
+    assert _all_on(picked["controls"])
+
+    noted = reopen(_draft(None, "Only a note"))
+    assert noted["last"]["pressed"] == ["false", "false"] and noted["last"]["note"] == "Only a note"
+    assert noted["status"] == PICK_FIRST_LINE and noted["send"] is True
+
+    for bad in ({"verdict": "maybe", "note": "kept"}, {"verdict": "approve", "note": "kept", "extra": 1}):
+        unfit = reopen(bad)
+        assert unfit["last"]["pressed"] == ["false", "false"] and unfit["last"]["note"] == "kept"
+        assert unfit["send"] is True and unfit["sets"] == []
+
+
+# Bites on: Send verdict not writing the verdict once (with the pick and note), writing it anywhere else or also writing an answer, saying "sent" before the write resolved, or leaving a control on after it resolved.
+def test_send_verdict_writes_one_verdict_and_shows_sent():
+    result = _sheet_page(_sample_final(), """
+      t.click(t.lastButton("Approve"));
+      t.sets[0].resolve();
+      await t.tick();
+      t.type(t.lastNote(), "Ship it", "change");
+      t.sets[1].resolve();
+      await t.tick();
+      ${VERDICTS}
+      const out = { before: { writes: t.sets.length, status: t.sendStatus(), disabled: t.sendButton().disabled } };
+      t.click(t.sendButton());
+      await t.tick();
+      await t.tick();
+      out.during = { verdicts: verdicts(), status: t.sendStatus(), controls: t.controls(), send: t.sendButton().disabled, last: t.sets[t.sets.length - 1].path };
+      t.sets[t.sets.length - 1].resolve();
+      await t.tick();
+      out.after = { verdicts: verdicts(), status: t.sendStatus(), controls: t.controls(), send: t.sendButton().disabled, last: t.lastState(), retry: t.sendTryAgain() !== undefined };
+      out.paths = t.setLog().map((call) => call.path);
+      return out;
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending"})
+    assert result["before"] == {"writes": 2, "status": DRAFT_LINE, "disabled": False}
+    assert result["during"]["last"] == "verdict/final"
+    assert result["during"]["verdicts"] == [_verdict_write("approve", "Ship it")]
+    assert result["during"]["status"] == "Sending…", "the page said more than it knew before the write resolved"
+    assert result["during"]["send"] is True and _all_off(result["during"]["controls"])
+    assert result["after"]["verdicts"] == [_verdict_write("approve", "Ship it")], "the verdict was not written exactly once"
+    assert result["after"]["status"] == "Verdict sent: Approve"
+    assert result["after"]["send"] is True and _all_off(result["after"]["controls"])
+    assert result["after"]["last"]["pressed"] == ["true", "false"] and result["after"]["last"]["note"] == "Ship it"
+    assert result["after"]["retry"] is False
+    assert result["paths"] == ["draft-verdict/final", "draft-verdict/final", "verdict/final"]
+
+
+# Bites on: Send verdict writing while an answer is rejected or still unsaved at the deadline (or sooner than that), saying anything but how many answers and what to do, or leaving the sheet frozen after refusing.
+@pytest.mark.parametrize("count,failed,stalled", [
+    pytest.param(1, "1 answer didn't save. Go back to it and tap Try again, then send again.",
+                 "1 answer isn't saved yet. Keep this page open until it says Saved, then send again.", id="one-answer"),
+    pytest.param(2, "2 answers didn't save. Go back to them and tap Try again, then send again.",
+                 "2 answers aren't saved yet. Keep this page open until they say Saved, then send again.", id="two-answers"),
+])
+def test_send_refuses_while_an_answer_is_unsaved(count, failed, stalled):
+    setup = """
+      const ids = [__IDS__][0];
+      ids.forEach((id) => t.click(t.button(id, "Aligned")));
+      t.click(t.lastButton("Approve"));
+      t.sets[ids.length].resolve();
+      await t.tick();
+      ${VERDICTS}
+    """.replace("${VERDICTS}", VERDICT_WRITES).replace("__IDS__", json.dumps([FIRST_CARD, SECOND_CARD][:count]))
+    rejected = _sheet_page(_sample_final(), setup + """
+      ids.forEach((id, index) => t.sets[index].reject({ code: "unavailable", message: "no" }));
+      await t.tick();
+      t.click(t.sendButton());
+      await t.tick();
+      await t.tick();
+      await t.advance(30000);
+      return { status: t.sendStatus(), verdicts: verdicts(), controls: t.controls(), retry: t.sendTryAgain() !== undefined, open: t.openCard(), send: t.sendButton().disabled };
+    """, host={"set": "pending", "fakeTimers": True})
+    assert rejected["status"] == failed
+    assert rejected["verdicts"] == [], "a verdict was written while an answer was rejected"
+    assert _all_on(rejected["controls"]) and rejected["send"] is False, "the sheet stayed frozen"
+    assert rejected["retry"] is False
+    assert rejected["open"] == FIRST_CARD
+
+    unsaved = _sheet_page(_sample_final(), setup + """
+      t.click(t.sendButton());
+      await t.tick();
+      await t.advance(9800);
+      const waiting = { status: t.sendStatus(), verdicts: verdicts(), controls: t.controls() };
+      await t.advance(200);
+      const out = { waiting: waiting, status: t.sendStatus(), verdicts: verdicts(), controls: t.controls(), send: t.sendButton().disabled };
+      await t.advance(30000);
+      out.later = { status: t.sendStatus(), verdicts: verdicts() };
+      return out;
+    """, host={"set": "pending", "fakeTimers": True})
+    assert unsaved["waiting"]["status"] == CHECKING_LINE
+    assert unsaved["waiting"]["verdicts"] == [] and _all_off(unsaved["waiting"]["controls"])
+    assert unsaved["status"] == stalled
+    assert unsaved["verdicts"] == [], "a verdict was written while an answer was still unsaved"
+    assert _all_on(unsaved["controls"]) and unsaved["send"] is False, "the sheet stayed frozen"
+    assert unsaved["later"] == {"status": stalled, "verdicts": []}
+
+
+# Bites on: the sheet changing, or a second write starting, while Send verdict waits for the answers or waits for the verdict write (a card tap, a note, Not yet, a second Send), or the guard living only in a control's disabled flag.
+def test_the_sheet_is_frozen_while_sending():
+    result = _sheet_page(_sample_final(), """
+      t.click(t.button("leftovers-handling", "Aligned"));
+      t.click(t.lastButton("Approve"));
+      t.sets[1].resolve();
+      await t.tick();
+      ${VERDICTS}
+      const snapshot = () => ({
+        sets: t.sets.length,
+        first: t.state("leftovers-handling").pressed,
+        second: t.state("saved-plan-history").pressed,
+        last: t.lastState().pressed,
+        status: t.sendStatus(),
+        count: t.count(),
+        saves: [t.saveText("leftovers-handling"), t.lastSaveText()],
+        controls: t.controls(),
+      });
+      const attempt = () => {
+        t.buttons("leftovers-handling").forEach((button) => t.fire(button, "click"));
+        t.buttons("saved-plan-history").forEach((button) => t.fire(button, "click"));
+        for (const note of [t.note("leftovers-handling"), t.note("saved-plan-history"), t.lastNote()]) {
+          const kept = note.value;
+          note.value = "sneaky";
+          t.fire(note, "input");
+          t.fire(note, "change");
+          note.value = kept;
+        }
+        t.lastButtons().forEach((button) => t.fire(button, "click"));
+        t.fire(t.sendButton(), "click");
+      };
+      const out = {};
+      t.click(t.sendButton());
+      await t.tick();
+      out.waiting = snapshot();
+      attempt();
+      await t.advance(1500);
+      out.waitingAfter = snapshot();
+      t.sets[0].resolve();
+      await t.tick();
+      await t.advance(200);
+      out.writing = snapshot();
+      out.writing.verdicts = verdicts();
+      attempt();
+      await t.advance(1500);
+      out.writingAfter = snapshot();
+      out.writingAfter.verdicts = verdicts();
+      t.sets[t.sets.length - 1].resolve();
+      await t.tick();
+      out.sent = snapshot();
+      attempt();
+      await t.advance(1500);
+      out.sentAfter = snapshot();
+      out.sentAfter.verdicts = verdicts();
+      return out;
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending", "fakeTimers": True})
+    assert result["waiting"]["status"] == CHECKING_LINE and _all_off(result["waiting"]["controls"])
+    assert result["waitingAfter"] == result["waiting"], "the sheet changed while Send verdict waited for the answers"
+    assert result["writing"]["status"] == "Sending…" and _all_off(result["writing"]["controls"])
+    assert result["writing"]["verdicts"] == [_verdict_write("approve")]
+    assert result["writingAfter"] == result["writing"], "the sheet changed, or a second write started, while the verdict write was pending"
+    assert result["sent"]["status"] == "Verdict sent: Approve" and _all_off(result["sent"]["controls"])
+    assert _all_off(result["sentAfter"]["controls"])
+    assert result["sentAfter"]["sets"] == result["sent"]["sets"] == result["writing"]["sets"]
+    assert result["sentAfter"]["verdicts"] == [_verdict_write("approve")]
+    assert result["sentAfter"]["status"] == result["sent"]["status"]
+
+
+# Bites on: a rejected verdict write showing sent or offering no Try again, a Try again that does not run the whole Send again from the current state, a stalled write saying sent or offering Try again, a late resolve not showing sent, or a late rejection not showing the rejected state.
+def test_a_failed_or_stalled_verdict_send():
+    for late in ("resolve", "reject"):
+        stalled = _sheet_page(_sample_final(), """
+          t.click(t.lastButton("Approve"));
+          t.sets[0].resolve();
+          await t.tick();
+          t.click(t.sendButton());
+          await t.tick();
+          await t.advance(9999);
+          const out = { early: t.sendStatus() };
+          await t.advance(1);
+          const snapshot = () => ({ status: t.sendStatus(), retry: t.sendTryAgain() !== undefined, controls: t.controls(), send: t.sendButton().disabled });
+          out.stalled = snapshot();
+          t.sets[1].__LATE__({ code: "unavailable", message: "late" });
+          await t.tick();
+          out.late = snapshot();
+          return out;
+        """.replace("__LATE__", late), host={"set": "pending", "fakeTimers": True})
+        assert stalled["early"] == "Sending…"
+        assert stalled["stalled"]["status"] == SLOW_SEND_LINE
+        assert stalled["stalled"]["retry"] is False, "a stalled write offered Try again while it could still land"
+        assert _all_off(stalled["stalled"]["controls"]) and stalled["stalled"]["send"] is True
+        if late == "resolve":
+            assert stalled["late"]["status"] == "Verdict sent: Approve"
+            assert stalled["late"]["retry"] is False and _all_off(stalled["late"]["controls"])
+        else:
+            assert stalled["late"]["status"] == FAILED_SEND_LINE
+            assert stalled["late"]["retry"] is True and _all_on(stalled["late"]["controls"])
+
+    rejected = _sheet_page(_sample_final(), """
+      ${VERDICTS}
+      t.click(t.lastButton("Approve"));
+      t.sets[0].resolve();
+      await t.tick();
+      t.click(t.sendButton());
+      await t.tick();
+      await t.tick();
+      t.sets[1].reject({ code: "unavailable", message: "no" });
+      await t.tick();
+      const out = { rejected: { status: t.sendStatus(), retry: t.sendTryAgain() !== undefined, controls: t.controls(), send: t.sendButton().disabled, verdicts: verdicts() } };
+      t.click(t.lastButton("Not yet"));
+      t.sets[2].resolve();
+      await t.tick();
+      t.click(t.sendTryAgain());
+      await t.tick();
+      await t.tick();
+      out.again = { status: t.sendStatus(), retry: t.sendTryAgain() !== undefined, controls: t.controls(), verdicts: verdicts() };
+      t.sets[3].resolve();
+      await t.tick();
+      out.sent = { status: t.sendStatus(), controls: t.controls() };
+      return out;
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending"})
+    assert rejected["rejected"]["status"] == FAILED_SEND_LINE
+    assert rejected["rejected"]["retry"] is True and rejected["rejected"]["send"] is False
+    assert _all_on(rejected["rejected"]["controls"]), "the sheet stayed frozen after a failed send"
+    assert rejected["rejected"]["verdicts"] == [_verdict_write("approve")]
+    assert rejected["again"]["status"] == "Sending…" and rejected["again"]["retry"] is False
+    assert _all_off(rejected["again"]["controls"])
+    assert rejected["again"]["verdicts"] == [_verdict_write("approve"), _verdict_write("not-yet")]
+    assert rejected["sent"]["status"] == "Verdict sent: Not yet" and _all_off(rejected["sent"]["controls"])
+
+
+# Bites on: a sent verdict not coming back on reopen (its status, pressed verdict or note), a reopened sent sheet leaving a control on or writing, a verdict that does not fit the schema counting as sent, or a draft being shown over a sent verdict.
+def test_a_sent_verdict_is_shown_on_reopen():
+    def reopen(collections, poke=False):
+        return _sheet_page(_sample_final(), """
+          await t.advance(200);
+          const fire = (node) => ["click", "input", "change"].forEach((type) => t.fire(node, type));
+          if (__POKE__) {
+            t.lastButtons().forEach(fire);
+            fire(t.lastNote());
+            t.buttons("leftovers-handling").forEach(fire);
+            t.fire(t.sendButton(), "click");
+          }
+          await t.advance(1500);
+          return { last: t.lastState(), status: t.sendStatus(), send: t.sendButton().disabled, sets: t.setLog(), controls: t.controls() };
+        """.replace("__POKE__", "true" if poke else "false"), host={"fakeTimers": True, "collections": collections})
+
+    sent = reopen({"verdict": [_final_doc(_draft("approve", "Good to go"))], "draft-verdict": [_final_doc(_draft("not-yet", "An older draft"))]}, poke=True)
+    assert sent["status"] == "Verdict sent: Approve"
+    assert sent["last"]["pressed"] == ["true", "false"] and sent["last"]["note"] == "Good to go"
+    assert sent["send"] is True and _all_off(sent["controls"])
+    assert sent["sets"] == [], "a sent sheet wrote after reopening"
+    assert reopen({"verdict": [_final_doc(_draft("not-yet"))]})["status"] == "Verdict sent: Not yet"
+
+    for name, bad in (
+        ("unknown verdict", {"verdict": "maybe", "note": ""}),
+        ("no verdict", {"verdict": None, "note": ""}),
+        ("extra key", {"verdict": "approve", "note": "", "extra": 1}),
+        ("note that is not text", {"verdict": "approve", "note": 3}),
+    ):
+        ignored = reopen({"verdict": [_final_doc(bad)], "draft-verdict": [_final_doc(_draft("not-yet", "Still a draft"))]})
+        assert ignored["status"] == DRAFT_LINE, name
+        assert ignored["last"]["pressed"] == ["false", "true"] and ignored["last"]["note"] == "Still a draft", name
+        assert ignored["send"] is False and ignored["sets"] == [], name
+    only_bad = reopen({"verdict": [_final_doc({"verdict": "maybe", "note": ""})]})
+    assert only_bad["status"] == PICK_FIRST_LINE and only_bad["send"] is True
+
+
+# Bites on: a final sheet with no cards drawing a stepper, rows or cards, a count that is not "Nothing left to answer", or losing its history, last card, Send or next line.
+def test_a_final_sheet_with_no_cards():
+    result = _sheet_page(_sample_final(cards=[]), """
+      ${VERDICTS}
+      const out = {
+        count: [t.count(), elements["sheet-count"].hidden],
+        stepperHidden: elements["sheet-stepper"].hidden,
+        itemsHidden: elements["sheet-items"].hidden,
+        rows: t.rowNodes().length,
+        cards: elements["sheet-cards"].children.length,
+        history: t.history(),
+        parts: t.finalParts(),
+        next: t.nextBox().text,
+        status: t.sendStatus(),
+      };
+      t.click(t.lastButton("Approve"));
+      t.sets[0].resolve();
+      await t.tick();
+      t.click(t.sendButton());
+      await t.tick();
+      await t.tick();
+      out.verdicts = verdicts();
+      t.sets[1].resolve();
+      await t.tick();
+      out.sent = t.sendStatus();
+      out.countAfter = t.count();
+      return out;
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"set": "pending"})
+    assert result["count"] == ["Nothing left to answer", False]
+    assert result["stepperHidden"] is True and result["itemsHidden"] is True
+    assert result["rows"] == 0 and result["cards"] == 0
+    assert result["history"]["hidden"] is False and result["history"]["paragraphs"][0] == HISTORY_TEXT
+    assert result["parts"]["finalHidden"] is False and result["parts"]["finalChildren"] == 2
+    assert result["next"] == NEXT_TEXT
+    assert result["status"] == PICK_FIRST_LINE
+    assert result["verdicts"] == [_verdict_write("approve")]
+    assert result["sent"] == "Verdict sent: Approve"
+    assert result["countAfter"] == "Nothing left to answer"
+
+
+# Bites on: a failed or stalled read of the draft verdict or of the verdict (not only of the answers) being taken as an empty collection, so the controls turn on, or its Try again not reading all three collections again.
+@pytest.mark.parametrize("host,stall", [
+    pytest.param({"readByCollection": {"draft-verdict": ["reject", "docs"]}}, False, id="draft-verdict-rejects"),
+    pytest.param({"readByCollection": {"verdict": ["reject", "docs"]}}, False, id="verdict-rejects"),
+    pytest.param({"readByCollection": {"verdict": ["pending", "docs"]}, "fakeTimers": True}, True, id="verdict-stalls"),
+    pytest.param({"readByCollection": {"answers": ["reject", "docs"]}}, False, id="answers-reject"),
+])
+def test_a_failed_verdict_read_keeps_the_sheet_off(host, stall):
+    result = _sheet_page(_sample_final(), """
+      if (__STALL__) await t.advance(10000);
+      const snapshot = () => ({ gate: t.gate().message, hidden: t.gate().hidden, retry: t.gate().retry !== undefined, controls: t.controls(), send: t.sendButton().disabled, status: t.sendStatus(), reads: t.reads.map((read) => read.name) });
+      const out = { failed: snapshot() };
+      t.fire(t.lastButton("Approve"), "click");
+      t.fire(t.sendButton(), "click");
+      out.writes = t.sets.length;
+      if (t.gate().retry) {
+        t.click(t.gate().retry);
+        await t.tick();
+        await t.tick();
+      }
+      out.recovered = snapshot();
+      return out;
+    """.replace("__STALL__", "true" if stall else "false"), host=host)
+    failed = result["failed"]
+    assert failed["gate"] == "Your saved answers couldn't be loaded."
+    assert failed["hidden"] is False and failed["retry"] is True
+    assert _all_off(failed["controls"]) and failed["send"] is True
+    assert failed["status"] == ""
+    assert failed["reads"] == ["answers", "draft-verdict", "verdict"]
+    assert result["writes"] == 0
+    assert result["recovered"]["hidden"] is True
+    assert result["recovered"]["reads"] == ["answers", "draft-verdict", "verdict"] * 2, "the retry did not read all three again"
+    assert _all_on([control for control in result["recovered"]["controls"] if control["text"] != "Send verdict"])
+    assert result["recovered"]["send"] is True and result["recovered"]["status"] == PICK_FIRST_LINE
+
+
+NON_OWNER_CASES = [
+    pytest.param({"claude": "missing"}, id="no-window-claude"),
+    pytest.param({"claude": "no-use"}, id="use-is-not-a-function"),
+    pytest.param({"db": "null"}, id="store-is-null"),
+    pytest.param({"db": "reject"}, id="use-db-rejects"),
+    pytest.param({"user": "null"}, id="user-is-null"),
+    pytest.param({"user": "viewer"}, id="is-owner-false"),
+    pytest.param({"user": "is-owner-rejects"}, id="is-owner-rejects"),
+]
+
+
+# Bites on: a viewer who is not the owner, or a view with no store, getting a working last card or Send verdict, or any write or read.
+@pytest.mark.parametrize("host", NON_OWNER_CASES)
+def test_the_last_card_and_send_are_off_for_a_non_owner_and_with_no_store(host):
+    result = _sheet_page(_sample_final(), """
+      const fire = (node) => ["click", "input", "change"].forEach((type) => t.fire(node, type));
+      t.lastButtons().forEach(fire);
+      t.lastNote().value = "sneaky";
+      fire(t.lastNote());
+      fire(t.sendButton());
+      await t.advance(1500);
+      return { controls: t.controls(), send: t.sendButton().disabled, sets: t.sets.length, reads: t.reads.length, last: t.lastState(), parts: t.finalParts() };
+    """, host=dict(host, fakeTimers=True))
+    assert result["parts"]["finalChildren"] == 2, "the last card did not draw"
+    assert _all_off(result["controls"]) and result["send"] is True
+    assert result["sets"] == 0, "a control wrote although the viewer cannot answer"
+    assert result["reads"] == 0
+    assert result["last"]["pressed"] == ["false", "false"]
+
+
+# Bites on: a schema that does not say what a verdict is still giving the last card working buttons, or Send verdict.
+@pytest.mark.parametrize("mutate", [
+    pytest.param(lambda schema: schema["$defs"].pop("draftVerdict"), id="no-draft-verdict-definition"),
+    pytest.param(lambda schema: schema["$defs"].pop("verdict"), id="no-verdict-definition"),
+    pytest.param(lambda schema: schema["$defs"]["draftVerdict"]["properties"]["verdict"].update(enum=["approve", "not-yet", "maybe", None]), id="a-verdict-with-no-words"),
+])
+def test_a_schema_without_a_verdict_shape_keeps_the_last_card_off(mutate):
+    files = _sample_files(_sample_final())
+    files["sheet.schema.json"]["body"] = json.dumps(_schema_without_answers(mutate))
+    page = _run_page(files, scenario="""
+      await t.advance(200);
+      const fire = (node) => ["click", "input", "change"].forEach((type) => t.fire(node, type));
+      t.lastButtons().forEach(fire);
+      fire(t.lastNote());
+      fire(t.sendButton());
+      await t.advance(1500);
+      return { last: t.lastState(), send: t.sendButton().disabled, sets: t.setLog(), cardControls: t.state("leftovers-handling").disabled, gate: t.gate().hidden };
+    """, host={"fakeTimers": True})
+    assert page["settled"] and page["errors"] == [], page
+    result = page["result"]
+    assert result["last"]["disabled"][-1] is True and all(result["last"]["disabled"])
+    assert result["send"] is True and result["sets"] == []
+    assert result["cardControls"] == [False] * 5, "the cards stopped working too"
+    assert result["gate"] is True
+
+
+# Bites on: Done for now on a final sheet not saying the verdict counts only after Send verdict (or saying it elsewhere), not saving a pending verdict note, or changing its message on a remainder sheet.
+def test_done_for_now_on_a_final_sheet_names_send_verdict():
+    final = _sheet_page(_sample_final(), """
+      t.type(t.lastNote(), "A thought", "input");
+      const pending = t.sets.length;
+      t.click(t.control("done"));
+      const writes = t.setLog();
+      t.sets.forEach((call) => call.resolve());
+      await t.tick();
+      return { pending: pending, writes: writes, message: t.done().message, parts: t.finalParts() };
+    """, host={"set": "pending", "fakeTimers": True})
+    assert final["pending"] == 0
+    assert final["writes"] == [_draft_write(None, "A thought")], "Done for now left the pending verdict note unwritten"
+    assert final["message"] == "Your answers are saved as drafts. Open this link again any time to carry on. Your verdict counts only once you tap Send verdict."
+    assert final["parts"]["historyHidden"] is True and final["parts"]["finalHidden"] is True
+
+    remainder = _sheet_page(_remainder_of(_named_cards("plan-day"), unsettled=["plan-day"]), "t.click(t.control(\"done\")); return t.done().message;")
+    assert remainder == "Your answers are saved as drafts. Open this link again any time to carry on, and tell the session when the sheet is done."
+
+
+# Bites on: the usage doc leaving out the final sheet, the draft verdict's and the verdict's paths, Send verdict, or that a draft never counts.
+def test_usage_doc_describes_the_final_sheet():
+    doc = USAGE_DOC.read_text(encoding="utf-8")
+    assert "## A final sheet" in doc
+    section = doc.split("## A final sheet", 1)[1].split("\n## ", 1)[0]
+    for needle in ("`draft-verdict/final`", "`verdict/final`", "`$defs/draftVerdict`", "`$defs/verdict`", "Send verdict"):
+        assert needle in section, needle
+    squeezed = " ".join(section.split())
+    assert "never counts" in squeezed
+    assert "no cards" in squeezed
+    assert doc.index("## How a sheet is laid out") < doc.index("## A final sheet") < doc.index("## How answers come back")
+    answers = doc.split("## How answers come back", 1)[1].split("\n## ", 1)[0]
+    assert "Send verdict" in answers and "`verdict/final`" in answers
+    assert "never acts on a draft" in " ".join(answers.split())

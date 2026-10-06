@@ -38,7 +38,8 @@
   .sheet-page .sheet-figure figcaption { margin-top: 4px; }
   .sheet-page .answer-row { display: flex; flex-wrap: wrap; gap: 8px; }
   .sheet-page .answer-row .sh-button { max-width: 100%; padding-block: 8px; text-align: center; white-space: normal; }
-  .sheet-page .save-line, .sheet-page .sheet-gate { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+  .sheet-page .save-line, .sheet-page .sheet-gate, .sheet-page .send-row { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+  .sheet-page #sheet-final > * + * { margin-top: 16px; }
   .sheet-page :is(.sh-button, .sh-field):disabled { cursor: not-allowed; opacity: 0.5; }
   @media (min-width: 900px) {
     .sheet-page { max-width: 1200px; }
@@ -63,6 +64,7 @@
       <h2>This sheet can't be shown</h2>
       <ul id="sheet-error-list"></ul>
     </div>
+    <div id="sheet-history" class="sh-box" hidden></div>
     <div class="sheet-layout">
       <div class="sheet-main">
         <div id="sheet-stepper" class="sheet-stepper" hidden></div>
@@ -74,6 +76,7 @@
         <div id="sheet-items" class="sheet-list" role="group" aria-label="Items" hidden></div>
       </div>
     </div>
+    <div id="sheet-final" hidden></div>
     <div id="sheet-done" class="sh-box" hidden></div>
   </div>
 </div>
@@ -450,6 +453,8 @@
     const stepperHost = document.getElementById("sheet-stepper");
     const footerHost = document.getElementById("sheet-footer");
     const doneBox = document.getElementById("sheet-done");
+    const historyBox = document.getElementById("sheet-history");
+    const finalHost = document.getElementById("sheet-final");
 
     // The words on the answer buttons, by the value a stored answer takes. A value the schema lists that
     // has no words here leaves the answer controls off. The option value takes its words from the card.
@@ -483,16 +488,41 @@
       return { root: schema, rule: rule, kinds: kinds };
     }
 
-    // True when the stored document fits the schema's answer rule.
-    function fitsAnswerRule(data) {
+    // True when the stored document fits the given rule of the schema (answer, draftVerdict or verdict).
+    function fitsRule(root, rule, data) {
       const problems = [];
       try {
-        validateAgainstSchema(answerShape.root, answerShape.rule, data, "", problems);
+        validateAgainstSchema(root, rule, data, "", problems);
       } catch (error) {
         if (error instanceof UncheckableSchema) return false;
         throw error;
       }
       return problems.length === 0;
+    }
+
+    function fitsAnswerRule(data) {
+      return fitsRule(answerShape.root, answerShape.rule, data);
+    }
+
+    // The words on the final sheet's verdict buttons, by the value a stored verdict takes.
+    const VERDICT_LABELS = { approve: "Approve", "not-yet": "Not yet" };
+
+    // What the sheet's schema says a verdict is: { root, draft, sent, values }, where draft is $defs.draftVerdict,
+    // sent is $defs.verdict and values lists the non-null verdicts the draft allows, in the schema's order. Null
+    // until the schema was read, and left null when it is not in that shape: the last card's controls stay off.
+    let verdictShape = null;
+
+    function readVerdictShape(schema) {
+      const isObject = function (item) { return item !== null && typeof item === "object" && !Array.isArray(item); };
+      const defs = isObject(schema.$defs) ? schema.$defs : {};
+      const draft = defs.draftVerdict;
+      const sent = defs.verdict;
+      if (!isObject(draft) || !isObject(draft.properties) || !isObject(draft.properties.verdict) || !isObject(sent)) return null;
+      const listed = draft.properties.verdict.enum;
+      if (!Array.isArray(listed)) return null;
+      const values = listed.filter(function (item) { return item !== null; });
+      if (values.length === 0 || values.some(function (item) { return typeof item !== "string" || typeof VERDICT_LABELS[item] !== "string"; })) return null;
+      return { root: schema, draft: draft, sent: sent, values: values };
     }
 
     const SAY = {
@@ -502,15 +532,29 @@
       readFailed: "Your saved answers couldn't be loaded.",
       connectStalled: "The sheet's store isn't answering.",
       writeStalled: "Your latest answer isn't saved yet. Keep this page open: it saves when the sheet's store answers. Reloading shows only what was saved.",
+      verdictDraft: "Your verdict is a draft until you send it.",
+      verdictFirst: "Tap Approve or Not yet first.",
+      verdictChecking: "Making sure your answers are saved…",
+      verdictSending: "Sending…",
+      verdictSlow: "Sending is taking longer than it should. Keep this page open.",
+      verdictFailed: "The verdict didn't send.",
     };
     const NOTE_PAUSE_MS = 1000;
     // How long a save or a read of the saved answers may stay unanswered before the page says so.
     const STALL_MS = 10000;
+    // How often Send verdict looks again while it waits for the cards' answers to be saved.
+    const SEND_POLL_MS = 200;
     // Every card's controls, by card id. Nothing can be answered until ready is true, which happens
     // only once the store, the owner check and the read of the saved answers have all succeeded.
     const controllers = new Map();
+    // The final sheet's last card, kept apart from the cards: it never feeds the count or the rows.
+    let verdictController = null;
     let store = null;
     let ready = false;
+    // True from the moment Send verdict is tapped until its write fails or the verdict is sent, and for
+    // good once the verdict is sent: nothing on the sheet may change while either holds.
+    let sending = false;
+    let sent = false;
     // True once the store is known to be unusable here (no store, a non-owner, no answer shape), as opposed to still loading.
     let cannotSave = false;
     let restoring = false;
@@ -597,46 +641,48 @@
       return one.answer === other.answer && one.optionId === other.optionId && one.note === other.note;
     }
 
-    // The answer row, the note and the save line of one card. Every write goes through save(), which
-    // keeps at most one write in flight per card, so the store receives writes in tap order and the last
+    // Nothing on the sheet may be edited before the saved answers are read, while a Send is under way or
+    // once the verdict is sent.
+    function canEdit() {
+      return ready && !sending && !sent;
+    }
+
+    // The answer row, the note and the save line of one saver: a card's answers, or the final sheet's draft
+    // verdict. The spec says what differs: the choices, the document's path, how a state becomes a document
+    // and a stored document becomes a state, the id of the note, whether the controls may be used now, and
+    // where the controller is kept. Every write goes through save(), which
+    // keeps at most one write in flight per saver, so the store receives writes in tap order and the last
     // tap is the last write. A write that stays unanswered past STALL_MS shows "Not saved" with no Try
     // again (a second write now could land out of order); later taps wait, and when the stalled write
     // settles the newest answer goes out next. The acknowledged answer is trusted only after a write
     // resolved: from the moment a write starts until it resolves it is unknown, so a rejected or stalled
     // write leaves every later save sending the newest answer, and "Saved" follows only a resolved write.
-    function addAnswerParts(card, article) {
-      const choices = [];
-      (answerShape === null ? [] : answerShape.kinds).forEach(function (kind) {
-        if (kind.carriesOption) {
-          card.options.forEach(function (option) {
-            choices.push({ label: option.label, answer: kind.value, optionId: option.id });
-          });
-        } else {
-          choices.push({ label: ANSWER_LABELS[kind.value], answer: kind.value, optionId: null });
-        }
-      });
-      const optionIds = new Set(card.options.map(function (option) { return option.id; }));
+    // A state is always { answer, optionId, note }: a verdict is the answer, with no option.
+    function addSaver(spec, article) {
+      const choices = spec.choices;
       const none = { answer: null, optionId: null, note: "" };
       let latest = none;
       const unknown = { answer: undefined, optionId: undefined, note: undefined };
       let acked = none;
-      let sending = null;
+      let inFlight = null;
       let stalled = false;
       let stallTimer = null;
       let shown = "idle";
       let timer = null;
+      let switchedOn = false;
+      let retryButton = null;
 
       const row = document.createElement("div");
       row.className = "answer-row";
       row.setAttribute("role", "group");
-      row.setAttribute("aria-label", "Your answer");
+      row.setAttribute("aria-label", spec.rowLabel);
       const buttons = choices.map(function (choice) {
         const button = textElement("button", "sh-button", choice.label);
         button.setAttribute("type", "button");
         button.setAttribute("aria-pressed", "false");
         button.disabled = true;
         button.addEventListener("click", function () {
-          if (!ready) return;
+          if (!spec.live()) return;
           setLatest({ answer: choice.answer, optionId: choice.optionId, note: latest.note });
           save();
         });
@@ -644,22 +690,21 @@
         return button;
       });
 
-      const noteId = "note-" + card.id;
       const noteLabel = textElement("label", "sh-label", "Note");
-      noteLabel.setAttribute("for", noteId);
+      noteLabel.setAttribute("for", spec.noteId);
       const note = document.createElement("textarea");
-      note.id = noteId;
+      note.id = spec.noteId;
       note.className = "sh-field";
       note.setAttribute("rows", "3");
       note.disabled = true;
       note.addEventListener("input", function () {
-        if (!ready) return;
+        if (!spec.live()) return;
         setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
         clearTimeout(timer);
         timer = setTimeout(save, NOTE_PAUSE_MS);
       });
       note.addEventListener("change", function () {
-        if (!ready) return;
+        if (!spec.live()) return;
         setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
         save();
       });
@@ -681,6 +726,7 @@
 
       function showStatus(kind) {
         shown = kind;
+        retryButton = null;
         const parts = [];
         if (kind === "saving") {
           parts.push(textElement("span", "sh-caption", "Saving…"));
@@ -692,10 +738,14 @@
         } else if (kind === "failed") {
           parts.push(textElement("span", "sh-badge sh-badge--warning", "Not saved"));
           parts.push(textElement("span", "sh-caption", "That answer didn't reach the sheet."));
-          const retry = textElement("button", "sh-button", "Try again");
-          retry.setAttribute("type", "button");
-          retry.addEventListener("click", function () { save(true); });
-          parts.push(retry);
+          retryButton = textElement("button", "sh-button", "Try again");
+          retryButton.setAttribute("type", "button");
+          retryButton.disabled = !switchedOn;
+          retryButton.addEventListener("click", function () {
+            if (!spec.live()) return;
+            save(true);
+          });
+          parts.push(retryButton);
         }
         saveLine.replaceChildren(...parts);
         saveLine.hidden = kind === "idle";
@@ -716,7 +766,7 @@
         clearTimeout(timer);
         timer = null;
         if (!ready) return;
-        if (sending !== null) return;
+        if (inFlight !== null) return;
         if (forced !== true && sameAnswer(latest, acked)) {
           if (shown === "saving") showStatus("idle");
           return;
@@ -726,21 +776,21 @@
 
       function send() {
         const body = latest;
-        sending = body;
+        inFlight = body;
         // What the store holds is unknown until this write resolves; a rejected or stalled one leaves it so.
         acked = unknown;
         stalled = false;
         clearTimeout(stallTimer);
         stallTimer = setTimeout(function () {
-          if (sending === null) return;
+          if (inFlight === null) return;
           stalled = true;
           showStatus("stalled");
         }, STALL_MS);
         showStatus("saving");
         let request;
         try {
-          // The document written here has the shape the schema's $defs.answer defines.
-          request = Promise.resolve(store.doc("answers/" + card.id).set({ answer: body.answer, optionId: body.optionId, note: body.note }));
+          // The document written here has the shape the schema defines for this saver's path.
+          request = Promise.resolve(store.doc(spec.path).set(spec.document(body)));
         } catch (error) {
           request = Promise.reject(error);
         }
@@ -748,7 +798,7 @@
       }
 
       function settle(body, saved) {
-        sending = null;
+        inFlight = null;
         stalled = false;
         clearTimeout(stallTimer);
         if (saved) acked = body;
@@ -764,39 +814,35 @@
         showStatus(saved ? "saved" : "failed");
       }
 
-      controllers.set(card.id, {
-        // A stored document restores a pick only when it fits the schema's answer rule and, for an option
-        // pick, names an option the card offers. A document that does not fit restores only its note, and
-        // only when that is text.
+      spec.keep({
+        // A stored document restores what the spec's rule lets it restore.
         restore: function (data) {
-          const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
-          const kind = answerShape !== null && fitsAnswerRule(data)
-            ? answerShape.kinds.find(function (entry) { return entry.value === data.answer; })
-            : undefined;
-          if (kind && !kind.carriesOption) {
-            state.answer = kind.value;
-          } else if (kind && optionIds.has(data.optionId)) {
-            state.answer = kind.value;
-            state.optionId = data.optionId;
-          }
+          const state = spec.state(data);
           latest = state;
           acked = state;
           note.value = state.note;
           paint();
           showStatus("idle");
         },
-        enable: function () {
-          buttons.forEach(function (button) { button.disabled = false; });
-          note.disabled = false;
+        // Turns the controls (and a Try again on the save line) on or off.
+        setEnabled: function (on) {
+          switchedOn = on;
+          buttons.forEach(function (button) { button.disabled = !on; });
+          note.disabled = !on;
+          if (retryButton !== null) retryButton.disabled = !on;
         },
-        // True while this card holds an answer or note the store has not confirmed: a write in flight, a
+        // True while this saver holds an answer or note the store has not confirmed: a write in flight, a
         // newer state waiting behind it, a note-pause timer still running, or a write that failed or stalled.
         unsaved: function () {
-          return sending !== null || timer !== null || !sameAnswer(latest, acked);
+          return inFlight !== null || timer !== null || !sameAnswer(latest, acked);
         },
-        // The card's latest pick (what the pressed button shows) and the kind its save line shows now.
+        // The latest pick (what the pressed button shows) and the kind the save line shows now.
         state: function () {
           return { answer: latest.answer, optionId: latest.optionId, save: shown };
+        },
+        // The latest pick and note, as they stand now.
+        current: function () {
+          return { answer: latest.answer, optionId: latest.optionId, note: latest.note };
         },
         // Cuts a note's pause short: the pending save runs now.
         flush: function () {
@@ -808,6 +854,72 @@
       article.appendChild(noteLabel);
       article.appendChild(note);
       article.appendChild(saveLine);
+    }
+
+    // A card's answers: the schema's answer kinds, one button per option for the kind tied to an option, and a
+    // document written whole at answers/<card id>.
+    function addAnswerParts(card, article) {
+      const choices = [];
+      (answerShape === null ? [] : answerShape.kinds).forEach(function (kind) {
+        if (kind.carriesOption) {
+          card.options.forEach(function (option) {
+            choices.push({ label: option.label, answer: kind.value, optionId: option.id });
+          });
+        } else {
+          choices.push({ label: ANSWER_LABELS[kind.value], answer: kind.value, optionId: null });
+        }
+      });
+      const optionIds = new Set(card.options.map(function (option) { return option.id; }));
+      addSaver({
+        choices: choices,
+        rowLabel: "Your answer",
+        noteId: "note-" + card.id,
+        path: "answers/" + card.id,
+        live: canEdit,
+        document: function (body) { return { answer: body.answer, optionId: body.optionId, note: body.note }; },
+        // A stored document restores a pick only when it fits the schema's answer rule and, for an option
+        // pick, names an option the card offers. A document that does not fit restores only its note, and
+        // only when that is text.
+        state: function (data) {
+          const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
+          const kind = answerShape !== null && fitsAnswerRule(data)
+            ? answerShape.kinds.find(function (entry) { return entry.value === data.answer; })
+            : undefined;
+          if (kind && !kind.carriesOption) {
+            state.answer = kind.value;
+          } else if (kind && optionIds.has(data.optionId)) {
+            state.answer = kind.value;
+            state.optionId = data.optionId;
+          }
+          return state;
+        },
+        keep: function (controller) { controllers.set(card.id, controller); },
+      }, article);
+    }
+
+    // The final sheet's last card: the verdict's buttons, written whole at draft-verdict/final as the owner
+    // taps. Nothing it writes counts as the owner's verdict; only sendVerdict writes verdict/final.
+    function addVerdictParts(article) {
+      addSaver({
+        choices: verdictShape === null ? [] : verdictShape.values.map(function (value) {
+          return { label: VERDICT_LABELS[value], answer: value, optionId: null };
+        }),
+        rowLabel: "Your verdict",
+        noteId: "verdict-note",
+        path: "draft-verdict/final",
+        live: function () { return canEdit() && verdictShape !== null; },
+        document: function (body) { return { verdict: body.answer, note: body.note }; },
+        // A stored draft restores a pick only when it fits the schema's draft rule; one that does not fit
+        // restores only its note, and only when that is text.
+        state: function (data) {
+          const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
+          if (verdictShape !== null && fitsRule(verdictShape.root, verdictShape.draft, data) && verdictShape.values.includes(data.verdict)) {
+            state.answer = data.verdict;
+          }
+          return state;
+        },
+        keep: function (controller) { verdictController = controller; },
+      }, article);
     }
 
     function buildCard(card) {
@@ -897,6 +1009,7 @@
 
     const doneButton = actionButton("Done for now", function () {
       controllers.forEach(function (controller) { controller.flush(); });
+      if (verdictController !== null) verdictController.flush();
       done = true;
       refreshSheet();
     });
@@ -927,16 +1040,18 @@
     }
 
     function refreshSheet() {
-      if (items.length === 0) return;
       const total = items.length;
       const states = items.map(function (item) { return controllers.get(item.id).state(); });
       const notSavedKind = function (state) { return state.save === "failed" || state.save === "stalled"; };
       const answered = states.filter(function (state) { return state.answer !== null; });
       const discussing = answered.filter(function (state) { return state.answer === "discuss"; });
 
-      countHost.textContent = ready
-        ? answered.length + " of " + total + " answered" + (discussing.length > 0 ? " · " + discussing.length + " to discuss" : "")
-        : total + (total === 1 ? " item" : " items") + " · answers not loaded";
+      // A final sheet may have no cards: there is then nothing to count, step through or list.
+      countHost.textContent = total === 0
+        ? "Nothing left to answer"
+        : ready
+          ? answered.length + " of " + total + " answered" + (discussing.length > 0 ? " · " + discussing.length + " to discuss" : "")
+          : total + (total === 1 ? " item" : " items") + " · answers not loaded";
       countHost.hidden = false;
 
       // A card folds away only when it is answered, is not the open card and has nothing unsaved.
@@ -991,20 +1106,238 @@
         doneMessage.textContent = unsavedCards + (unsavedCards === 1 ? " answer isn't" : " answers aren't")
           + " saved yet. Keep this page open until this says they're saved.";
       } else {
-        doneMessage.textContent = "Your answers are saved as drafts. Open this link again any time to carry on, and tell the session when the sheet is done.";
+        doneMessage.textContent = sheetKind === "final"
+          ? "Your answers are saved as drafts. Open this link again any time to carry on. Your verdict counts only once you tap Send verdict."
+          : "Your answers are saved as drafts. Open this link again any time to carry on, and tell the session when the sheet is done.";
       }
 
-      stepperHost.hidden = done;
-      itemsHost.hidden = done;
-      cardsHost.hidden = done;
+      stepperHost.hidden = done || total === 0;
+      itemsHost.hidden = done || total === 0;
+      cardsHost.hidden = done || total === 0;
       footerHost.hidden = done;
       whyBox.hidden = done || sheetKind !== "remainder";
+      historyBox.hidden = done || sheetKind !== "final";
+      finalHost.hidden = done || sheetKind !== "final";
       doneBox.hidden = !done;
+      refreshVerdict();
+    }
+
+    // The words a final sheet shares with the chat prose (lib/sheet_prose.py): the two must read the same.
+    const FINAL_WORDS = {
+      history: function (rounds, fixes, vet) {
+        return "The review ran " + rounds + (rounds === 1 ? " round" : " rounds") + " and fixed " + fixes
+          + (fixes === 1 ? " thing" : " things") + " itself. The vet: " + vet;
+      },
+      tracesBoard: "Every statement in the spec traces to your board, your framing, your rulings, your answers, or craft recorded for your veto.",
+      tracesNoBoard: "Every statement in the spec traces to your framing, your rulings, your answers, or craft recorded for your veto.",
+      boardSaved: "The approved board is saved with the spec.",
+      boardNotSaved: "The approved board is not saved with the spec.",
+      next: "The advisor adds the breakdown to the same PR (or, where the project keeps specs outside the repo or gitignored, to the spec where it is kept) and vets it, then one merge word covers both.",
+      noDeclines: "No findings were declined.",
+    };
+
+    // A final sheet's own parts: { send, status, row, retry }, once the sheet is drawn. What Send verdict says
+    // when it is not the plain draft line is { kind, text, retry }: while a send is under way, why it refused,
+    // or that the verdict didn't send. The verdict counts as sent only once its write resolved (sent).
+    let finalUi = null;
+    let sendView = null;
+    let sentWord = "";
+
+    // Controls are on only when the sheet allows edits; the last card's also need a schema that says what a verdict is.
+    function syncControls() {
+      const on = canEdit();
+      controllers.forEach(function (controller) { controller.setEnabled(on); });
+      if (verdictController !== null) verdictController.setEnabled(on && verdictShape !== null);
+    }
+
+    function buildFinal(final) {
+      const history = final.history;
+      const declined = final.declinedFindings;
+      const parts = [
+        textElement("h2", "", "How the spec got here"),
+        textElement("p", "", FINAL_WORDS.history(history.reviewRounds, history.fixesMade, history.vet)),
+      ];
+      if (declined.length > 0) {
+        const list = document.createElement("ul");
+        list.hidden = true;
+        declined.forEach(function (finding) {
+          list.appendChild(textElement("li", "", finding.summary + " (why declined: " + finding.reason + ")"));
+        });
+        const toggle = actionButton("Declined findings · " + declined.length, function () {
+          list.hidden = !list.hidden;
+          toggle.setAttribute("aria-expanded", list.hidden ? "false" : "true");
+        });
+        toggle.setAttribute("aria-expanded", "false");
+        parts.push(toggle, list);
+      } else {
+        parts.push(textElement("p", "", FINAL_WORDS.noDeclines));
+      }
+      historyBox.replaceChildren(...parts);
+
+      const approval = final.approval;
+      const article = document.createElement("article");
+      article.className = "sh-card";
+      article.id = "sheet-approval";
+      article.appendChild(textElement("h2", "", "Approve the spec?"));
+      article.appendChild(textElement("p", "", approval.approvedBoard ? FINAL_WORDS.tracesBoard : FINAL_WORDS.tracesNoBoard));
+      if (approval.approvedBoard) {
+        article.appendChild(textElement("p", "", approval.boardSavedWithSpec ? FINAL_WORDS.boardSaved : FINAL_WORDS.boardNotSaved));
+      }
+      addVerdictParts(article);
+      const send = actionButton("Send verdict", function () { sendVerdict(); });
+      send.className = "sh-button sh-button--main";
+      send.disabled = true;
+      const row = document.createElement("div");
+      row.className = "send-row";
+      finalUi = {
+        send: send,
+        status: textElement("span", "sh-caption", ""),
+        row: row,
+        retry: actionButton("Try again", function () { sendVerdict(); }),
+      };
+      article.appendChild(row);
+
+      const next = document.createElement("div");
+      next.className = "sh-box";
+      next.appendChild(textElement("p", "sh-label", "What happens next"));
+      next.appendChild(textElement("p", "", FINAL_WORDS.next));
+      finalHost.replaceChildren(article, next);
+    }
+
+    // Send verdict and its line, worked out from the last card and the send state like everything else on the sheet.
+    function refreshVerdict() {
+      if (finalUi === null || verdictController === null) return;
+      const picked = verdictController.current().answer !== null;
+      const usable = ready && verdictShape !== null;
+      // A refusal because answers were unsaved goes away once every answer is saved.
+      if (sendView !== null && sendView.kind === "refused" && !sending
+          && !items.some(function (item) { return controllers.get(item.id).unsaved(); })) {
+        sendView = null;
+      }
+      finalUi.send.disabled = !(usable && picked && !sending && !sent);
+      let text = "";
+      let retry = false;
+      if (sent) {
+        text = "Verdict sent: " + sentWord;
+      } else if (sendView !== null) {
+        text = sendView.text;
+        retry = sendView.retry === true;
+      } else if (usable) {
+        text = picked ? SAY.verdictDraft : SAY.verdictFirst;
+      }
+      finalUi.status.textContent = text;
+      finalUi.row.replaceChildren(finalUi.send, finalUi.status, ...(retry ? [finalUi.retry] : []));
+    }
+
+    // Looks every SEND_POLL_MS until every card is saved. Gives { failed: n } as soon as a card's save was
+    // rejected, { stalled: n } when n cards are still unsaved after STALL_MS, and {} when all are saved.
+    function waitForSaves() {
+      return new Promise(function (resolve) {
+        let waited = 0;
+        const look = function () {
+          const all = items.map(function (item) { return controllers.get(item.id); });
+          const failed = all.filter(function (controller) { return controller.state().save === "failed"; }).length;
+          if (failed > 0) {
+            resolve({ failed: failed });
+            return;
+          }
+          const unsaved = all.filter(function (controller) { return controller.unsaved(); }).length;
+          if (unsaved === 0) {
+            resolve({});
+            return;
+          }
+          if (waited >= STALL_MS) {
+            resolve({ stalled: unsaved });
+            return;
+          }
+          waited += SEND_POLL_MS;
+          setTimeout(look, SEND_POLL_MS);
+        };
+        look();
+      });
+    }
+
+    // The only place the verdict is written. It is single-flight and freezes the sheet while it runs: first every
+    // pending note is saved and every answer waited for, then the last card's pick and note are captured once and
+    // written to verdict/final. "Sent" is shown only after that write resolved. A write that is rejected leaves
+    // nothing sent and offers Try again; one that stays unanswered offers no Try again while it may still land.
+    async function sendVerdict() {
+      if (sending || sent || !ready || verdictShape === null || verdictController === null) return;
+      if (verdictController.current().answer === null) return;
+      sending = true;
+      sendView = { kind: "working", text: SAY.verdictChecking };
+      syncControls();
+      refreshSheet();
+      controllers.forEach(function (controller) { controller.flush(); });
+      verdictController.flush();
+
+      const outcome = await waitForSaves();
+      const refuse = function (text) {
+        sending = false;
+        sendView = { kind: "refused", text: text };
+        syncControls();
+        refreshSheet();
+      };
+      if (outcome.failed !== undefined) {
+        const failedAt = items.findIndex(function (item) { return controllers.get(item.id).state().save === "failed"; });
+        if (failedAt >= 0) openIndex = failedAt;
+        refuse(outcome.failed + (outcome.failed === 1 ? " answer didn't" : " answers didn't") + " save. Go back to "
+          + (outcome.failed === 1 ? "it" : "them") + " and tap Try again, then send again.");
+        return;
+      }
+      if (outcome.stalled !== undefined) {
+        refuse(outcome.stalled + (outcome.stalled === 1 ? " answer isn't" : " answers aren't") + " saved yet. Keep this page open until "
+          + (outcome.stalled === 1 ? "it says" : "they say") + " Saved, then send again.");
+        return;
+      }
+
+      const chosen = verdictController.current();
+      // The document written here has the shape the schema's $defs.verdict defines.
+      const payload = { verdict: chosen.answer, note: chosen.note };
+      sendView = { kind: "sending", text: SAY.verdictSending };
+      refreshSheet();
+      let finished = false;
+      const slow = setTimeout(function () {
+        if (finished) return;
+        sendView = { kind: "slow", text: SAY.verdictSlow };
+        refreshSheet();
+      }, STALL_MS);
+      let request;
+      try {
+        request = Promise.resolve(store.doc("verdict/final").set(payload));
+      } catch (error) {
+        request = Promise.reject(error);
+      }
+      request.then(function () {
+        finished = true;
+        clearTimeout(slow);
+        sentWord = VERDICT_LABELS[payload.verdict];
+        sent = true;
+        sending = false;
+        sendView = null;
+        syncControls();
+        refreshSheet();
+      }, function () {
+        finished = true;
+        clearTimeout(slow);
+        sending = false;
+        sendView = { kind: "failed", text: SAY.verdictFailed, retry: true };
+        syncControls();
+        refreshSheet();
+      });
     }
 
     function render(sheet) {
       const fragment = document.createDocumentFragment();
       controllers.clear();
+      verdictController = null;
+      finalUi = null;
+      sending = false;
+      sent = false;
+      sendView = null;
+      sentWord = "";
+      historyBox.replaceChildren();
+      finalHost.replaceChildren();
       items = sheet.cards.map(function (card, index) {
         const article = buildCard(card);
         fragment.appendChild(article);
@@ -1016,6 +1349,7 @@
       done = false;
       whyHeading.textContent = "Why only these " + sheet.cards.length;
       whyText.textContent = sheetKind === "remainder" ? whySentence(sheet.remainder) : "";
+      if (sheetKind === "final") buildFinal(sheet.final);
       itemsHost.replaceChildren(foldButton, ...items.map(function (item) { return item.row; }));
       document.title = sheet.title;
       titleHost.textContent = sheet.title;
@@ -1040,11 +1374,34 @@
       if (done) refreshSheet();
     }
 
+    // A stored document's data when it is an object, else null.
+    function documentData(doc) {
+      const data = doc === undefined || doc.exists === false ? undefined : doc.data();
+      return data === undefined || data === null || typeof data !== "object" || Array.isArray(data) ? null : data;
+    }
+
     function applyDocument(doc) {
       const controller = controllers.get(doc.id);
-      const data = doc.exists === false ? undefined : doc.data();
-      if (controller === undefined || data === null || typeof data !== "object" || Array.isArray(data)) return;
+      const data = documentData(doc);
+      if (controller === undefined || data === null) return;
       controller.restore(data);
+    }
+
+    // The last card's saved draft, and the verdict if one was sent. A draft puts the pick and note back and
+    // counts as nothing. A verdict that fits the schema's $defs.verdict means the verdict was sent: the sheet
+    // shows it and stays locked. A verdict document that does not fit is not a verdict and is ignored.
+    function applyVerdicts(drafts, verdicts) {
+      if (verdictController === null) return;
+      const final = function (snapshot) { return snapshot.docs.find(function (doc) { return doc.id === "final"; }); };
+      const draft = documentData(final(drafts));
+      if (draft !== null) verdictController.restore(draft);
+      const verdict = documentData(final(verdicts));
+      if (verdict !== null && verdictShape !== null && fitsRule(verdictShape.root, verdictShape.sent, verdict)
+          && verdictShape.values.includes(verdict.verdict)) {
+        sentWord = VERDICT_LABELS[verdict.verdict];
+        sent = true;
+        verdictController.restore(verdict);
+      }
     }
 
     // Controls turn on only after the saved answers were read and put on the cards. A failed or stalled
@@ -1064,9 +1421,12 @@
         say(SAY.readFailed, restore);
       }, STALL_MS);
       try {
-        const saved = await store.collection("answers").get();
+        // A final sheet also reads its draft verdict and its verdict; a failed or stalled read of any one is a failed read.
+        const names = sheetKind === "final" ? ["answers", "draft-verdict", "verdict"] : ["answers"];
+        const [saved, drafts, verdicts] = await Promise.all(names.map(function (name) { return store.collection(name).get(); }));
         if (ready) return;
         saved.docs.forEach(applyDocument);
+        if (sheetKind === "final") applyVerdicts(drafts, verdicts);
       } catch (error) {
         if (ready || attempt !== readAttempt) return;
         clearTimeout(readTimer);
@@ -1079,7 +1439,7 @@
       restoring = false;
       readStalled = false;
       ready = true;
-      controllers.forEach(function (controller) { controller.enable(); });
+      syncControls();
       gate.hidden = true;
       // The owner lands on the first call still waiting for an answer, or on the first when none is.
       const waiting = items.findIndex(function (item) { return controllers.get(item.id).state().answer === null; });
@@ -1171,6 +1531,7 @@
         return;
       }
       answerShape = readAnswerShape(schema);
+      verdictShape = readVerdictShape(schema);
       render(sheet);
       if (answerShape === null) {
         // The schema does not say what an answer is, so nothing could be saved or read back.
@@ -1183,14 +1544,16 @@
       });
     }
 
-    // One guard for the page: leaving or reloading while any card holds an unconfirmed answer or note
-    // makes the browser ask first. When every card is saved or idle it does nothing.
+    // One guard for the page: leaving or reloading while any card (or the last card) holds an unconfirmed
+    // answer or note, or while a verdict is being sent, makes the browser ask first. When every card is saved
+    // or idle it does nothing.
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
       window.addEventListener("beforeunload", function (event) {
-        let pending = false;
+        let pending = sending;
         controllers.forEach(function (controller) {
           if (controller.unsaved()) pending = true;
         });
+        if (verdictController !== null && verdictController.unsaved()) pending = true;
         if (!pending) return;
         event.preventDefault();
         event.returnValue = "";

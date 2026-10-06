@@ -92,6 +92,41 @@ else.
 "Done for now" saves any note that is still pausing, shows whether every answer is saved, and returns
 to the same sheet. To come back to a sheet, open the same link.
 
+## A final sheet
+
+A final sheet (`kind` is `final`) is the owner's sign-off. Above the cards it shows how the spec got
+here: the rounds the review ran, the fixes it made and the vet's one line. Below that, the findings the
+review declined are folded behind a "Declined findings" button, each with the reason it was declined;
+when there were none, the sheet says so. The vet's calls are the cards, listed as rows and counted
+exactly as on any other sheet. After them comes a last card, "Approve the spec?", with what the spec
+traces to, whether the approved board is saved with it (shown only when there is an approved board),
+the Approve and Not yet buttons, a note and a Send verdict button. A box under it says what happens
+next.
+
+A tap on Approve or Not yet, and the note, save at once as a draft verdict at `draft-verdict/final`,
+in the shape `sheet.schema.json` defines at `$defs/draftVerdict`. A draft never counts as a verdict.
+It comes back when the owner opens the link again, and it is not counted as an answer.
+
+Send verdict is off until a verdict is picked. Once tapped, it freezes the sheet, saves any note that
+is still pausing and waits for every card's answer to be saved. If an answer didn't save, or is still
+unsaved after ten seconds, it says how many and what to do, writes nothing and unfreezes the sheet.
+When every answer is saved it writes `verdict/final`, in the shape `$defs/verdict`, the only document
+that counts as the owner's verdict. The page says "Verdict sent" only after that write has landed.
+If the write is refused, the page says the verdict didn't send and offers Try again, and the sheet
+unfreezes so the owner may change things first. If the write is slow, the page asks the owner to keep
+the page open and offers no Try again while the write may still land.
+
+A sent verdict locks the sheet: it shows the verdict that was sent, and every control stays off,
+including when the owner opens the link again. A `verdict/final` document that does not fit
+`$defs/verdict` is ignored, so it never counts as sent.
+
+A final sheet may have no cards, when the review left no calls. It then shows "Nothing left to
+answer" in place of the count, the list and the stepper, and the history, the last card, Send verdict
+and the next line work as usual.
+
+"Done for now" on a final sheet saves any pending note, including the verdict's, and says the owner's
+verdict counts only once they tap Send verdict.
+
 ## How answers come back
 
 A tap saves at once, as a draft the owner can change, into the sheet's own store. The last tap
@@ -102,6 +137,9 @@ A save that fails says so on the card and offers Try again.
 
 The session that sent the sheet reads every answer together once the owner says the sheet is done,
 and never acts on a single tap.
+
+On a final sheet the session reads the answers when the owner taps Send verdict, reading
+`verdict/final` and `answers` together, and never acts on a draft.
 
 A card whose note disagrees with its answer is read as Discuss: ask the owner about it.
 

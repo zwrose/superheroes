@@ -638,3 +638,61 @@ def test_prose_renders_a_final_sheet(tmp_path, name):
     assert result.stdout == "\n".join(lines) + "\n"
     assert result.stderr == ""
     assert not [line for line in result.stdout.split("\n") if line != line.rstrip()]
+
+
+def _unescaped(text):
+    """The prose's Markdown escapes taken out, so a line reads as the sheet's own text."""
+    return re.sub(r"\\(.)", r"\1", text)
+
+
+# Bites on: the final sheet's wording on the page (history line, traces line, board line, declined items, next line) drifting from the prose's, which the prose's own wording table pins only against fixed text.
+@pytest.mark.parametrize("declined", [
+    pytest.param([], id="no-declines"),
+    pytest.param([("Add a *counter* for each_item.", "It's <out> of scope & costly."), ("Use `tabs`.", "It costs too much.")], id="declines"),
+])
+@pytest.mark.parametrize("approved,saved", [
+    pytest.param(True, True, id="board-saved"),
+    pytest.param(True, False, id="board-not-saved"),
+    pytest.param(False, False, id="no-board"),
+])
+def test_final_sheet_wording_is_the_same_on_the_page_and_in_the_prose(tmp_path, approved, saved, declined):
+    from test_review_template import _run_page, _sample_files
+
+    sheet = _final_sheet(declined=declined, approved=approved, saved=saved)
+    page = _run_page(_sample_files(sheet), scenario="""
+      return { history: t.history(), approval: t.lastParagraphs(), next: t.nextBox().text };
+    """)
+    assert page["settled"], "the page never settled: %s" % page
+    seen = page["result"]
+    prose = _render(tmp_path, sheet)
+    assert prose.returncode == 0, prose.stderr
+    lines = prose.stdout.split("\n")
+
+    def after(prefix):
+        found = [line for line in lines if line.startswith(prefix)]
+        assert len(found) == 1, (prefix, found)
+        return _unescaped(found[0][len(prefix):])
+
+    assert seen["history"]["paragraphs"][0] == after("**How the spec got here.** ")
+    assert seen["next"] == after("**What happens next.** ")
+
+    approval = lines.index("**Approve the spec?**")
+    wording = []
+    for line in lines[approval + 1:]:
+        if not line.startswith("- ") or line.startswith("- Answer:"):
+            break
+        wording.append(_unescaped(line[2:]))
+    assert len(wording) == (2 if approved else 1)
+    assert seen["approval"] == wording, "the traces line or the board line differs (or one shows when it should not)"
+
+    if declined:
+        start = next(index for index, line in enumerate(lines) if line.startswith("**Declined findings ("))
+        items = []
+        for line in lines[start + 1:]:
+            if not line.startswith("- "):
+                break
+            items.append(_unescaped(line[2:]))
+        assert [text for _, text in seen["history"]["items"]] == items
+        assert len(items) == len(declined)
+    else:
+        assert seen["history"]["paragraphs"][1] == after("**Declined findings.** ")
