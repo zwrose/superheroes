@@ -15,6 +15,18 @@
   .sheet-page .sh-card > .sh-label + * { margin-top: 4px; }
   .sheet-page .sh-box h2 { font-size: 22px; }
   .sheet-page .sh-box ul { padding-left: 20px; }
+  .sheet-page .sh-card > label.sh-label { display: block; }
+  .sheet-page .sh-card ul { padding-left: 20px; }
+  .sheet-page .sheet-consequence { display: block; }
+  .sheet-page .sheet-recommendation > * + * { margin-top: 4px; }
+  .sheet-page .sheet-images { display: grid; gap: 12px; }
+  .sheet-page .sheet-figure { margin: 0; }
+  .sheet-page .sheet-figure img { display: block; height: auto; max-width: 100%; }
+  .sheet-page .sheet-figure figcaption { margin-top: 4px; }
+  .sheet-page .answer-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sheet-page .answer-row .sh-button { max-width: 100%; padding-block: 8px; text-align: center; white-space: normal; }
+  .sheet-page .save-line, .sheet-page .sheet-gate { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+  .sheet-page :is(.sh-button, .sh-field):disabled { cursor: not-allowed; opacity: 0.5; }
   .sh-theme [hidden] { display: none; }
 </style>
 
@@ -24,6 +36,7 @@
       <span class="sh-appbar__name" id="sheet-title">Review sheet</span>
     </header>
     <p id="sheet-status" class="sh-caption">Loading the sheet…</p>
+    <p id="sheet-gate" class="sh-caption sheet-gate" hidden></p>
     <div id="sheet-error" class="sh-box" role="alert" hidden>
       <h2>This sheet can't be shown</h2>
       <ul id="sheet-error-list"></ul>
@@ -248,10 +261,17 @@
 
     if (typeof value === "string") {
       if (schema.minLength !== undefined && [...value].length < schema.minLength) {
-        problems.push(where + " must not be empty.");
+        problems.push(where + (schema.minLength > 1 ? " must be at least " + schema.minLength + " characters long." : " must not be empty."));
       }
       if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
-        problems.push(where + ' has the value "' + value + '", which is not a valid id (lowercase letters, digits and hyphens).');
+        // The id wording belongs to the schema's own id rule; any other pattern is named by its description.
+        const idRule = isObject(root.$defs) && isObject(root.$defs.id) ? root.$defs.id.pattern : undefined;
+        if (schema.pattern === idRule) {
+          problems.push(where + ' has the value "' + value + '", which is not a valid id (lowercase letters, digits and hyphens).');
+        } else {
+          const rule = typeof schema.description === "string" && schema.description !== "" ? schema.description : "it must match the pattern " + schema.pattern;
+          problems.push(where + ' has the value "' + value + '", which does not fit its rule: ' + rule);
+        }
       }
     }
     if (typeof value === "number" && schema.minimum !== undefined && value < schema.minimum) {
@@ -390,6 +410,21 @@
     const errorList = document.getElementById("sheet-error-list");
     const cardsHost = document.getElementById("sheet-cards");
     const titleHost = document.getElementById("sheet-title");
+    const gate = document.getElementById("sheet-gate");
+
+    const SAY = {
+      noStore: "Answers can't be saved in this view.",
+      readOnly: "This sheet is read-only for you. Only its owner can answer.",
+      loading: "Loading your saved answers…",
+      readFailed: "Your saved answers couldn't be loaded.",
+    };
+    const NOTE_PAUSE_MS = 1000;
+    // Every card's controls, by card id. Nothing can be answered until ready is true, which happens
+    // only once the store, the owner check and the read of the saved answers have all succeeded.
+    const controllers = new Map();
+    let store = null;
+    let ready = false;
+    let restoring = false;
 
     function showErrors(problems) {
       errorList.replaceChildren();
@@ -410,6 +445,207 @@
       return element;
     }
 
+    function buildImages(images) {
+      const wrap = document.createElement("div");
+      wrap.className = "sheet-images";
+      images.forEach(function (image) {
+        const figure = document.createElement("figure");
+        figure.className = "sheet-figure";
+        const picture = document.createElement("img");
+        picture.setAttribute("src", image.src);
+        picture.setAttribute("alt", image.alt);
+        figure.appendChild(picture);
+        if (typeof image.caption === "string" && image.caption !== "") {
+          figure.appendChild(textElement("figcaption", "sh-caption", image.caption));
+        }
+        wrap.appendChild(figure);
+      });
+      return wrap;
+    }
+
+    function buildOptions(options) {
+      const list = document.createElement("ul");
+      options.forEach(function (option) {
+        const item = document.createElement("li");
+        item.appendChild(textElement("strong", "", option.label));
+        item.appendChild(textElement("span", "sheet-consequence", option.consequence));
+        list.appendChild(item);
+      });
+      return list;
+    }
+
+    function buildRecommendation(recommendation) {
+      const wrap = document.createElement("div");
+      wrap.className = "sheet-recommendation";
+      wrap.appendChild(textElement("p", "", recommendation.text));
+      wrap.appendChild(textElement("p", "", recommendation.reason));
+      return wrap;
+    }
+
+    function sameAnswer(one, other) {
+      return one.answer === other.answer && one.optionId === other.optionId && one.note === other.note;
+    }
+
+    // The answer row, the note and the save line of one card. Every write goes through save(), which
+    // keeps at most one write in flight and always sends the newest answer: the last tap counts.
+    function addAnswerParts(card, article) {
+      const choices = [
+        { label: "Aligned", answer: "aligned", optionId: null },
+        { label: "Discuss", answer: "discuss", optionId: null },
+      ].concat(card.options.map(function (option) {
+        return { label: option.label, answer: "option", optionId: option.id };
+      }));
+      const optionIds = new Set(card.options.map(function (option) { return option.id; }));
+      const none = { answer: null, optionId: null, note: "" };
+      let latest = none;
+      let acked = none;
+      let sending = null;
+      let shown = "idle";
+      let timer = null;
+
+      const row = document.createElement("div");
+      row.className = "answer-row";
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", "Your answer");
+      const buttons = choices.map(function (choice) {
+        const button = textElement("button", "sh-button", choice.label);
+        button.setAttribute("type", "button");
+        button.setAttribute("aria-pressed", "false");
+        button.disabled = true;
+        button.addEventListener("click", function () {
+          if (!ready) return;
+          setLatest({ answer: choice.answer, optionId: choice.optionId, note: latest.note });
+          save();
+        });
+        row.appendChild(button);
+        return button;
+      });
+
+      const noteId = "note-" + card.id;
+      const noteLabel = textElement("label", "sh-label", "Note");
+      noteLabel.setAttribute("for", noteId);
+      const note = document.createElement("textarea");
+      note.id = noteId;
+      note.className = "sh-field";
+      note.setAttribute("rows", "3");
+      note.disabled = true;
+      note.addEventListener("input", function () {
+        if (!ready) return;
+        setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
+        clearTimeout(timer);
+        timer = setTimeout(save, NOTE_PAUSE_MS);
+      });
+      note.addEventListener("change", function () {
+        if (!ready) return;
+        setLatest({ answer: latest.answer, optionId: latest.optionId, note: note.value });
+        save();
+      });
+
+      const saveLine = document.createElement("div");
+      saveLine.className = "save-line";
+      saveLine.setAttribute("aria-live", "polite");
+      saveLine.hidden = true;
+
+      function paint() {
+        buttons.forEach(function (button, index) {
+          const choice = choices[index];
+          const picked = latest.answer === choice.answer && latest.optionId === choice.optionId;
+          button.className = picked ? "sh-button sh-button--main" : "sh-button";
+          button.setAttribute("aria-pressed", picked ? "true" : "false");
+        });
+      }
+
+      function showStatus(kind) {
+        shown = kind;
+        const parts = [];
+        if (kind === "saving") {
+          parts.push(textElement("span", "sh-caption", "Saving…"));
+        } else if (kind === "saved") {
+          parts.push(textElement("span", "sh-caption", "Saved"));
+        } else if (kind === "failed") {
+          parts.push(textElement("span", "sh-badge sh-badge--warning", "Not saved"));
+          parts.push(textElement("span", "sh-caption", "That answer didn't reach the sheet."));
+          const retry = textElement("button", "sh-button", "Try again");
+          retry.setAttribute("type", "button");
+          retry.addEventListener("click", function () { save(); });
+          parts.push(retry);
+        }
+        saveLine.replaceChildren(...parts);
+        saveLine.hidden = kind === "idle";
+      }
+
+      // Any change to the answer or the note clears what the status said and shows that a save is due.
+      function setLatest(next) {
+        if (sameAnswer(next, latest)) return;
+        latest = next;
+        paint();
+        showStatus("saving");
+      }
+
+      // The one place a write is started. A write already in flight settles first, then settle() asks
+      // again, so the store only ever receives the newest state.
+      function save() {
+        clearTimeout(timer);
+        timer = null;
+        if (!ready || sending !== null) return;
+        if (sameAnswer(latest, acked)) {
+          if (shown === "saving") showStatus("idle");
+          return;
+        }
+        send();
+      }
+
+      function send() {
+        const body = latest;
+        sending = body;
+        showStatus("saving");
+        let request;
+        try {
+          request = Promise.resolve(store.doc("answers/" + card.id).set({ answer: body.answer, optionId: body.optionId, note: body.note }));
+        } catch (error) {
+          request = Promise.reject(error);
+        }
+        request.then(function () { settle(body, true); }, function () { settle(body, false); });
+      }
+
+      function settle(body, saved) {
+        sending = null;
+        if (saved) acked = body;
+        if (!sameAnswer(latest, body)) {
+          save();
+          return;
+        }
+        showStatus(saved ? "saved" : "failed");
+      }
+
+      controllers.set(card.id, {
+        // A stored document restores a pick only when it names one the card offers.
+        restore: function (data) {
+          const state = { answer: null, optionId: null, note: typeof data.note === "string" ? data.note : "" };
+          if (data.answer === "aligned" || data.answer === "discuss") {
+            state.answer = data.answer;
+          } else if (data.answer === "option" && typeof data.optionId === "string" && optionIds.has(data.optionId)) {
+            state.answer = "option";
+            state.optionId = data.optionId;
+          }
+          latest = state;
+          acked = state;
+          note.value = state.note;
+          paint();
+          showStatus("idle");
+        },
+        enable: function () {
+          buttons.forEach(function (button) { button.disabled = false; });
+          note.disabled = false;
+        },
+      });
+
+      article.appendChild(row);
+      article.appendChild(noteLabel);
+      article.appendChild(note);
+      article.appendChild(saveLine);
+    }
+
     function buildCard(card) {
       const article = document.createElement("article");
       article.className = "sh-card";
@@ -424,11 +660,24 @@
         article.appendChild(textElement("p", "sh-label", "The exact text"));
         article.appendChild(textElement("blockquote", "", card.context.exactText));
       }
+      if (card.images.length > 0) {
+        article.appendChild(buildImages(card.images));
+      }
+      if (card.options.length > 0) {
+        article.appendChild(textElement("p", "sh-label", "Options"));
+        article.appendChild(buildOptions(card.options));
+      }
+      if (card.recommendation) {
+        article.appendChild(textElement("p", "sh-label", "Recommendation"));
+        article.appendChild(buildRecommendation(card.recommendation));
+      }
+      addAnswerParts(card, article);
       return article;
     }
 
     function render(sheet) {
       const fragment = document.createDocumentFragment();
+      controllers.clear();
       sheet.cards.forEach(function (card) {
         fragment.appendChild(buildCard(card));
       });
@@ -436,6 +685,80 @@
       titleHost.textContent = sheet.title;
       cardsHost.replaceChildren(fragment);
       status.hidden = true;
+    }
+
+    // The line under the app bar that says why the controls are off; a retry button rides along
+    // when the saved answers could not be read.
+    function say(text, retryable) {
+      const parts = [textElement("span", "", text)];
+      if (retryable) {
+        const retry = textElement("button", "sh-button", "Try again");
+        retry.setAttribute("type", "button");
+        retry.addEventListener("click", function () { restore(); });
+        parts.push(retry);
+      }
+      gate.replaceChildren(...parts);
+      gate.hidden = false;
+    }
+
+    function applyDocument(doc) {
+      const controller = controllers.get(doc.id);
+      const data = doc.exists === false ? undefined : doc.data();
+      if (controller === undefined || data === null || typeof data !== "object" || Array.isArray(data)) return;
+      controller.restore(data);
+    }
+
+    // Controls turn on only after the saved answers were read and put on the cards. A failed read is
+    // never an empty sheet: the controls stay off and the owner can ask again.
+    async function restore() {
+      if (restoring) return;
+      restoring = true;
+      say(SAY.loading, false);
+      try {
+        const saved = await store.collection("answers").get();
+        saved.docs.forEach(applyDocument);
+      } catch (error) {
+        restoring = false;
+        say(SAY.readFailed, true);
+        return;
+      }
+      restoring = false;
+      ready = true;
+      controllers.forEach(function (controller) { controller.enable(); });
+      gate.hidden = true;
+    }
+
+    // Only the sheet's owner may answer, so every step that is missing or fails leaves the controls off.
+    async function connect() {
+      const host = typeof window === "undefined" ? undefined : window.claude;
+      if (!host || typeof host.use !== "function") {
+        say(SAY.noStore, false);
+        return;
+      }
+      say(SAY.loading, false);
+      let db = null;
+      try {
+        db = await host.use("db");
+      } catch (error) {
+        db = null;
+      }
+      if (!db) {
+        say(SAY.noStore, false);
+        return;
+      }
+      let owner = false;
+      try {
+        const user = await host.use("user");
+        owner = Boolean(user) && (await user.isOwner()) === true;
+      } catch (error) {
+        owner = false;
+      }
+      if (!owner) {
+        say(SAY.readOnly, false);
+        return;
+      }
+      store = db;
+      await restore();
     }
 
     async function fetchJson(name, label) {
@@ -477,6 +800,10 @@
         return;
       }
       render(sheet);
+      // The cards are already drawn: whatever goes wrong from here only leaves the controls off.
+      connect().catch(function () {
+        say(SAY.noStore, false);
+      });
     }
 
     load().catch(function () {

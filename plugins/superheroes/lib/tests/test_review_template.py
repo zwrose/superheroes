@@ -140,6 +140,22 @@ class Node {
     this.textContent = "";
     this.hidden = false;
     this.children = [];
+    this.disabled = false;
+    this.value = "";
+    this.attributes = {};
+    this.listeners = {};
+  }
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
+  }
+  getAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
+  }
+  removeAttribute(name) {
+    delete this.attributes[name];
+  }
+  addEventListener(type, listener) {
+    (this.listeners[type] = this.listeners[type] || []).push(listener);
   }
   appendChild(child) {
     if (child.tagName === "#fragment") {
@@ -155,11 +171,12 @@ class Node {
   }
 }
 const elements = {};
-["sheet-status", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title"].forEach((id) => {
+["sheet-status", "sheet-gate", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title"].forEach((id) => {
   elements[id] = new Node("div");
   elements[id].id = id;
 });
 elements["sheet-status"].hidden = false;
+elements["sheet-gate"].hidden = true;
 elements["sheet-error"].hidden = true;
 elements["sheet-title"].textContent = "Review sheet";
 const document = {
@@ -168,6 +185,73 @@ const document = {
   createElement: (tag) => new Node(tag),
   createDocumentFragment: () => new Node("#fragment"),
 };
+
+// The fake host runtime. Each test says how `use("db")` and `use("user")` behave through `host`, and
+// drives the store's calls through the controlled promises logged in `setLog` and `reads`.
+const host = __HOST__;
+const setLog = [];
+const reads = [];
+const uses = [];
+function deferred() {
+  const handle = {};
+  handle.promise = new Promise((resolve, reject) => {
+    handle.resolve = resolve;
+    handle.reject = reject;
+  });
+  return handle;
+}
+function snapshotOf(docs) {
+  return { docs: docs.map((doc) => ({ id: doc.id, exists: true, data: () => doc.data })), size: docs.length, empty: docs.length === 0 };
+}
+const readModes = Array.isArray(host.read) ? host.read.slice() : [host.read];
+const fakeStore = {
+  doc: (path) => ({
+    set: (body) => {
+      const call = deferred();
+      call.path = path;
+      call.body = JSON.parse(JSON.stringify(body));
+      setLog.push(call);
+      if (host.set === "ok") call.resolve();
+      return call.promise;
+    },
+  }),
+  collection: (name) => ({
+    get: () => {
+      const read = deferred();
+      read.name = name;
+      reads.push(read);
+      const mode = readModes.length > 1 ? readModes.shift() : readModes[0];
+      if (mode === "docs") read.resolve(snapshotOf(host.docs));
+      if (mode === "reject") read.reject({ code: "unavailable", message: "the read failed" });
+      return read.promise;
+    },
+  }),
+};
+const window = {};
+if (host.claude !== "missing") {
+  window.claude = host.claude === "no-use" ? {} : {
+    use: (name) => {
+      uses.push(name);
+      if (name === "db") {
+        if (host.db === "throw") throw new Error("use threw");
+        if (host.db === "reject") return Promise.reject(new Error("no db"));
+        return Promise.resolve(host.db === "null" ? null : fakeStore);
+      }
+      if (name === "user") {
+        if (host.user === "null") return Promise.resolve(null);
+        if (host.user === "reject") return Promise.reject(new Error("no user"));
+        return Promise.resolve({
+          isOwner: () => {
+            if (host.user === "is-owner-throws") throw new Error("isOwner threw");
+            if (host.user === "is-owner-rejects") return Promise.reject(new Error("isOwner failed"));
+            return Promise.resolve(host.user === "owner");
+          },
+        });
+      }
+      return Promise.resolve(null);
+    },
+  };
+}
 const files = __FILES__;
 async function fetch(name, options) {
   const file = files[name];
@@ -178,18 +262,82 @@ async function fetch(name, options) {
 }
 __CHECK__
 __PAGE__
+
+// What a test's scenario can do and see. A disabled control ignores `click` and `type`, as a browser
+// would; `fire` ignores the disabled flag so a test can prove the page guards itself too.
+function* walk(node) {
+  yield node;
+  for (const child of node.children) yield* walk(child);
+}
+const hasClass = (node, name) => node.className.split(/\s+/).includes(name);
+const fire = (node, type) => (node.listeners[type] || []).forEach((listener) => listener({ type: type, target: node }));
+const tools = {
+  sets: setLog,
+  reads: reads,
+  uses: uses,
+  snapshotOf: snapshotOf,
+  fire: fire,
+  hasClass: hasClass,
+  all: (node) => [...walk(node)],
+  tick: () => new Promise((resolve) => setTimeout(resolve, 0)),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  text: (node) => [...walk(node)].filter((item) => item.children.length === 0).map((item) => item.textContent).filter((item) => item !== "").join(" "),
+  card: (id) => elements["sheet-cards"].children.find((article) => article.id === "card-" + id),
+  buttons: (id) => tools.card(id).children.find((child) => hasClass(child, "answer-row")).children,
+  note: (id) => tools.card(id).children.find((child) => child.tagName === "textarea"),
+  saveLine: (id) => tools.card(id).children.find((child) => hasClass(child, "save-line")),
+  saveText: (id) => tools.text(tools.saveLine(id)),
+  tryAgain: (id) => tools.saveLine(id).children.find((child) => child.tagName === "button"),
+  click: (node) => {
+    if (node.disabled) return false;
+    fire(node, "click");
+    return true;
+  },
+  type: (node, value, kind) => {
+    if (node.disabled) return false;
+    node.value = value;
+    fire(node, kind);
+    return true;
+  },
+  button: (id, label) => tools.buttons(id).find((button) => button.textContent === label),
+  state: (id) => ({
+    labels: tools.buttons(id).map((button) => button.textContent),
+    pressed: tools.buttons(id).map((button) => button.getAttribute("aria-pressed")),
+    classes: tools.buttons(id).map((button) => button.className),
+    disabled: tools.buttons(id).map((button) => button.disabled).concat([tools.note(id).disabled]),
+    note: tools.note(id).value,
+  }),
+  parts: (id) => tools.card(id).children.map((child) => {
+    if (hasClass(child, "sh-label")) return "label:" + child.textContent;
+    return child.tagName + (child.className ? "." + child.className.split(/\s+/).join(".") : "");
+  }),
+  gate: () => {
+    const line = elements["sheet-gate"];
+    const retry = line.children.find((child) => child.tagName === "button");
+    return { hidden: line.hidden, message: line.children.length ? line.children[0].textContent : "", retry: retry };
+  },
+  setLog: () => setLog.map((call) => ({ path: call.path, body: call.body })),
+};
+const scenario = async (t) => {
+__SCENARIO__
+};
+
 (async () => {
   const settled = () => elements["sheet-status"].hidden === true || elements["sheet-error"].hidden === false;
   for (let tries = 0; tries < 20 && !settled(); tries += 1) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+  await tools.tick();
+  await tools.tick();
   const cards = elements["sheet-cards"].children.filter((child) => child.tagName === "article").map((article) => ({
     id: article.id,
     className: article.className,
     badgeClass: article.children[0].className,
     question: article.children.find((child) => child.tagName === "h2").textContent,
   }));
+  const result = await scenario(tools);
   console.log(JSON.stringify({
+    result: result === undefined ? null : result,
     settled: settled(),
     title: document.title,
     appBar: elements["sheet-title"].textContent,
@@ -203,7 +351,10 @@ __PAGE__
 """
 
 
-def _run_page(files):
+OWNER_HOST = {"claude": "present", "db": "store", "user": "owner", "read": "docs", "docs": [], "set": "ok"}
+
+
+def _run_page(files, host=None, scenario="return null;"):
     node = shutil.which("node")
     if node is None:
         pytest.fail("node is required to run the page and is not on PATH")
@@ -211,7 +362,9 @@ def _run_page(files):
     page = re.search(r"<script>(.*?)</script>", text, re.S)
     assert page, "no unnamed <script> in the template"
     program = (
-        PAGE_HARNESS.replace("__FILES__", json.dumps(files))
+        PAGE_HARNESS.replace("__HOST__", json.dumps(dict(OWNER_HOST, **(host or {}))))
+        .replace("__SCENARIO__", scenario)
+        .replace("__FILES__", json.dumps(files))
         .replace("__CHECK__", _script_by_id(text, "sheet-check"))
         .replace("__PAGE__", page.group(1))
     )
@@ -599,3 +752,427 @@ def test_check_sheet_minlength_counts_characters():
     results = _run_check_sheet([{"cards": [], "word": "\U0001F600"}, {"cards": [], "word": "ab"}], schema=schema)
     assert any("empty" in problem for problem in results[0]), results[0]
     assert results[1] == [], results[1]
+
+
+# Bites on: a reader message that says "must not be empty" for a field that needs more than one character, or that stops saying so for a field that needs one.
+def test_reader_states_a_longer_minlength():
+    def plant(schema):
+        schema["properties"]["nickname"] = {"type": "string", "minLength": 3}
+
+    fixtures = [
+        _with(_sheet(), lambda s: s.update(nickname="ab")),
+        _with(_sheet(), lambda s: s.update(nickname="")),
+        _with(_sheet(), lambda s: s.update(nickname="abc")),
+        _with(_sheet(), lambda s: s.update(title="")),
+    ]
+    results = _run_check_sheet(fixtures, schema=_planted(plant))
+    assert results[0] == ["nickname must be at least 3 characters long."]
+    assert results[1] == ["nickname must be at least 3 characters long."]
+    assert results[2] == []
+    assert results[3] == ["title must not be empty."]
+
+
+# Bites on: a reader message that calls any failing pattern an id, or that names no rule for a pattern that is not the id rule.
+def test_reader_states_a_non_id_pattern():
+    def plant(schema):
+        props = schema["properties"]
+        props["code"] = {"type": "string", "pattern": "^[A-Z]{3}$", "description": "Three capital letters."}
+        props["tag"] = {"type": "string", "pattern": "^t-[0-9]+$"}
+        props["blank"] = {"type": "string", "pattern": "^b$", "description": ""}
+
+    fixtures = [
+        _with(_sheet(), lambda s: s.update(code="abc")),
+        _with(_sheet(), lambda s: s.update(tag="x")),
+        _with(_sheet(), lambda s: s.update(blank="z")),
+        _with(_sheet(), lambda s: s.update(code="ABC", tag="t-1", blank="b")),
+        _with(_sheet(), _set(0, "id", "Bad_Id")),
+    ]
+    results = _run_check_sheet(fixtures, schema=_planted(plant))
+    assert results[0] == ['code has the value "abc", which does not fit its rule: Three capital letters.']
+    assert results[1] == ['tag has the value "x", which does not fit its rule: it must match the pattern ^t-[0-9]+$']
+    assert results[2] == ['blank has the value "z", which does not fit its rule: it must match the pattern ^b$']
+    assert results[3] == []
+    assert results[4] == [
+        'Card "Bad_Id".id has the value "Bad_Id", which is not a valid id (lowercase letters, digits and hyphens).'
+    ]
+
+
+def _answer_page(cards, scenario, host=None):
+    page = _run_page(_sample_files(_sheet(cards=cards)), host=host, scenario=scenario)
+    assert page["settled"], "the page never settled: %s" % page
+    assert len(page["cards"]) == len(cards), page["cards"]
+    return page["result"]
+
+
+def _body(answer, option_id, note):
+    return {"answer": answer, "optionId": option_id, "note": note}
+
+
+def _write(card_id, answer, option_id, note):
+    return {"path": "answers/" + card_id, "body": _body(answer, option_id, note)}
+
+
+def _bare_card(card_id="bare-card"):
+    return _card(card_id, options=[], context={"now": "Nothing is fixed yet.", "whyOwner": "It is your call.", "exactText": None})
+
+
+# Bites on: the order and presence of a card's parts (badge, question, context, images, options, recommendation, answers, note, save line).
+def test_card_draws_its_parts_in_order():
+    full = _card(
+        "full-card",
+        images=[
+            {"src": "plan.png", "alt": "The plan drawn out", "caption": "The draft plan"},
+            {"src": "https://example.test/fridge.png", "alt": "The fridge"},
+        ],
+        recommendation={"text": "Say yes.", "reason": "It is cheap.", "optionId": "yes"},
+    )
+    result = _answer_page([full, _bare_card()], """
+      const card = t.card("full-card");
+      const nodes = t.all(card);
+      return {
+        full: t.parts("full-card"),
+        bare: t.parts("bare-card"),
+        images: nodes.filter((node) => node.tagName === "img").map((img) => [img.getAttribute("src"), img.getAttribute("alt")]),
+        captions: nodes.filter((node) => node.tagName === "figcaption").map((node) => node.textContent),
+        options: nodes.filter((node) => node.tagName === "li").map((item) => item.children.map((child) => child.textContent)),
+        recommendation: nodes.find((node) => t.hasClass(node, "sheet-recommendation")).children.map((child) => child.textContent),
+        noteLabelFor: card.children.find((child) => child.tagName === "label").getAttribute("for"),
+        noteId: t.note("full-card").id,
+      };
+    """)
+    assert result["full"] == [
+        "span.sh-badge", "h2",
+        "label:What's true now", "p", "label:Why it needs you", "p", "label:The exact text", "blockquote",
+        "div.sheet-images",
+        "label:Options", "ul",
+        "label:Recommendation", "div.sheet-recommendation",
+        "div.answer-row",
+        "label:Note", "textarea.sh-field",
+        "div.save-line",
+    ]
+    assert result["bare"] == [
+        "span.sh-badge", "h2",
+        "label:What's true now", "p", "label:Why it needs you", "p",
+        "div.answer-row",
+        "label:Note", "textarea.sh-field",
+        "div.save-line",
+    ]
+    assert result["images"] == [["plan.png", "The plan drawn out"], ["https://example.test/fridge.png", "The fridge"]]
+    assert result["captions"] == ["The draft plan"]
+    assert result["options"] == [["Yes", "We go ahead."], ["No", "We stop."]]
+    assert result["recommendation"] == ["Say yes.", "It is cheap."]
+    assert result["noteLabelFor"] == result["noteId"]
+
+
+# Bites on: the answer row gaining, losing or renaming a button, or a button losing its pressed state.
+def test_answer_row_has_only_the_fixed_buttons():
+    result = _answer_page([_card("plan-day"), _bare_card()], """
+      const row = (id) => ({
+        tags: t.buttons(id).map((button) => button.tagName),
+        labels: t.buttons(id).map((button) => button.textContent),
+        pressed: t.buttons(id).map((button) => button.getAttribute("aria-pressed")),
+        classes: t.buttons(id).map((button) => button.className),
+      });
+      return { options: row("plan-day"), bare: row("bare-card") };
+    """)
+    assert result["options"]["labels"] == ["Aligned", "Discuss", "Yes", "No"]
+    assert result["bare"]["labels"] == ["Aligned", "Discuss"]
+    for row in result.values():
+        assert set(row["tags"]) == {"button"}
+        assert set(row["pressed"]) == {"false"}
+        assert set(row["classes"]) == {"sh-button"}
+
+
+# Bites on: an answer or note write that is not one whole document at answers/<card id>, or a pressed state that does not follow the last tap.
+def test_owner_tap_writes_one_whole_document_per_card():
+    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+      t.click(t.button("plan-day", "Yes"));
+      await t.tick();
+      t.click(t.button("plan-day", "Aligned"));
+      await t.tick();
+      const note = t.note("plan-day");
+      t.type(note, "Use the blue one", "input");
+      const afterInput = t.sets.length;
+      t.type(note, "Use the blue one", "change");
+      await t.tick();
+      t.click(t.button("fridge-check", "No"));
+      await t.tick();
+      return {
+        afterInput: afterInput,
+        sets: t.setLog(),
+        plan: t.state("plan-day"),
+        fridge: t.state("fridge-check"),
+        save: t.saveText("plan-day"),
+        uses: t.uses,
+      };
+    """)
+    assert result["uses"] == ["db", "user"]
+    assert result["afterInput"] == 2, "typing wrote before its pause or its change"
+    assert result["sets"] == [
+        _write("plan-day", "option", "yes", ""),
+        _write("plan-day", "aligned", None, ""),
+        _write("plan-day", "aligned", None, "Use the blue one"),
+        _write("fridge-check", "option", "no", ""),
+    ]
+    assert result["plan"]["pressed"] == ["true", "false", "false", "false"]
+    assert result["plan"]["classes"][0] == "sh-button sh-button--main"
+    assert result["plan"]["note"] == "Use the blue one"
+    assert result["fridge"]["pressed"] == ["false", "false", "false", "true"]
+    assert result["save"] == "Saved"
+
+
+# Bites on: a typed note saving before its pause ends, or saving more than once for a burst of typing.
+def test_typing_saves_once_after_a_pause():
+    result = _answer_page([_card("plan-day")], """
+      const note = t.note("plan-day");
+      t.type(note, "a", "input");
+      await t.sleep(600);
+      t.type(note, "ab", "input");
+      await t.sleep(600);
+      const early = t.sets.length;
+      const during = t.saveText("plan-day");
+      await t.sleep(800);
+      return { early: early, during: during, sets: t.setLog(), after: t.saveText("plan-day") };
+    """)
+    assert result["early"] == 0, "the pause timer was not reset by the second input"
+    assert result["during"] == "Saving…"
+    assert result["sets"] == [_write("plan-day", None, None, "ab")]
+    assert result["after"] == "Saved"
+
+
+# Bites on: "Saved" showing for a state that is not the latest, a second write in flight, or the older state being sent last.
+def test_saved_shows_only_for_the_latest_state():
+    result = _answer_page([_card("plan-day")], """
+      t.click(t.button("plan-day", "Aligned"));
+      const first = { sets: t.sets.length, save: t.saveText("plan-day") };
+      t.click(t.button("plan-day", "Discuss"));
+      const queued = { sets: t.sets.length, save: t.saveText("plan-day") };
+      t.sets[0].resolve();
+      await t.tick();
+      const afterFirst = { sets: t.sets.length, save: t.saveText("plan-day"), body: t.sets[1] && t.sets[1].body };
+      t.sets[1].resolve();
+      await t.tick();
+      const afterSecond = t.saveText("plan-day");
+      t.click(t.button("plan-day", "Aligned"));
+      return { first: first, queued: queued, afterFirst: afterFirst, afterSecond: afterSecond, cleared: t.saveText("plan-day") };
+    """, host={"set": "pending"})
+    assert result["first"] == {"sets": 1, "save": "Saving…"}
+    assert result["queued"] == {"sets": 1, "save": "Saving…"}, "a second write started while the first was in flight"
+    assert result["afterFirst"] == {"sets": 2, "save": "Saving…", "body": _body("discuss", None, "")}
+    assert result["afterSecond"] == "Saved"
+    assert result["cleared"] == "Saving…", "a new tap left Saved on screen"
+
+
+# Bites on: a rejected write being hidden, a retry that does not send the latest state, or an older write's failure speaking for a newer one.
+def test_failed_save_offers_retry_of_the_latest():
+    result = _answer_page([_card("plan-day"), _card("fridge-check"), _card("third-card")], """
+      const out = {};
+      const failure = { code: "unavailable", message: "try later" };
+      const badgeOf = (id) => t.saveLine(id).children.find((child) => t.hasClass(child, "sh-badge"));
+
+      t.click(t.button("plan-day", "Aligned"));
+      t.sets[0].reject(failure);
+      await t.tick();
+      const described = (node) => (node ? [node.className, node.textContent] : null);
+      out.failed = { text: t.saveText("plan-day"), badge: described(badgeOf("plan-day")), retry: described(t.tryAgain("plan-day")) };
+      if (!t.tryAgain("plan-day")) return out;
+      t.click(t.tryAgain("plan-day"));
+      out.retried = { sets: t.sets.length, body: t.sets[1].body, path: t.sets[1].path, save: t.saveText("plan-day") };
+      t.sets[1].resolve();
+      await t.tick();
+      out.recovered = { save: t.saveText("plan-day"), retry: t.tryAgain("plan-day") !== undefined };
+
+      // A held handle to the Try again button that a later change has already removed: its handler
+      // must still send the latest state, not the one that failed.
+      t.click(t.button("fridge-check", "Aligned"));
+      t.sets[2].reject({ code: "invalid_argument", message: "no" });
+      await t.tick();
+      const held = t.tryAgain("fridge-check");
+      t.type(t.note("fridge-check"), "later", "input");
+      out.moved = { save: t.saveText("fridge-check"), retry: t.tryAgain("fridge-check") !== undefined };
+      t.fire(held, "click");
+      out.heldRetry = { sets: t.sets.length, write: t.setLog()[3] };
+      t.sets[3].resolve();
+      await t.tick();
+
+      t.click(t.button("third-card", "Aligned"));
+      t.click(t.button("third-card", "Discuss"));
+      t.sets[4].reject(failure);
+      await t.tick();
+      out.afterOlder = { sets: t.sets.length, write: t.setLog()[5], save: t.saveText("third-card") };
+      t.sets[5].reject({ code: "revoked", message: "gone" });
+      await t.tick();
+      out.afterNewer = { save: t.saveText("third-card"), retry: t.tryAgain("third-card") !== undefined };
+      t.click(t.tryAgain("third-card"));
+      out.thirdRetry = { sets: t.sets.length, write: t.setLog()[6] };
+      return out;
+    """, host={"set": "pending"})
+    assert result["failed"]["text"].startswith("Not saved")
+    assert result["failed"]["badge"] == ["sh-badge sh-badge--warning", "Not saved"]
+    assert result["failed"]["retry"] == ["sh-button", "Try again"]
+    assert "didn't reach the sheet" in result["failed"]["text"]
+    assert result["retried"] == {"sets": 2, "body": _body("aligned", None, ""), "path": "answers/plan-day", "save": "Saving…"}
+    assert result["recovered"] == {"save": "Saved", "retry": False}
+    assert result["moved"] == {"save": "Saving…", "retry": False}
+    assert result["heldRetry"] == {"sets": 4, "write": _write("fridge-check", "aligned", None, "later")}
+    assert result["afterOlder"] == {"sets": 6, "write": _write("third-card", "discuss", None, ""), "save": "Saving…"}
+    assert result["afterNewer"] == {"save": result["failed"]["text"], "retry": True}
+    assert result["thirdRetry"] == {"sets": 7, "write": _write("third-card", "discuss", None, "")}
+
+
+# Bites on: controls turning on before the saved answers are read and applied, or a restore that drops the saved note.
+def test_controls_stay_disabled_until_answers_are_restored():
+    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+      const states = () => t.state("plan-day").disabled.concat(t.state("fridge-check").disabled);
+      const before = { gate: t.gate().message, disabled: states(), reads: t.reads.length };
+      t.fire(t.button("plan-day", "Aligned"), "click");
+      t.note("plan-day").value = "sneaky";
+      t.fire(t.note("plan-day"), "input");
+      t.fire(t.note("plan-day"), "change");
+      const forced = t.sets.length;
+      const clicked = t.click(t.button("plan-day", "Aligned"));
+      t.reads[0].resolve(t.snapshotOf([{ id: "plan-day", data: { answer: "option", optionId: "no", note: "Saved earlier" } }]));
+      await t.tick();
+      const after = { gate: t.gate().hidden, disabled: states(), plan: t.state("plan-day"), fridge: t.state("fridge-check") };
+      t.click(t.button("plan-day", "Aligned"));
+      await t.tick();
+      return { before: before, forced: forced, clicked: clicked, after: after, sets: t.setLog() };
+    """, host={"read": "pending"})
+    assert result["before"]["gate"] == "Loading your saved answers…"
+    assert result["before"]["disabled"] == [True] * 10
+    assert result["before"]["reads"] == 1
+    assert result["forced"] == 0, "a control wrote while the saved answers were still loading"
+    assert result["clicked"] is False
+    assert result["after"]["gate"] is True
+    assert result["after"]["disabled"] == [False] * 10
+    assert result["after"]["plan"]["pressed"] == ["false", "false", "false", "true"]
+    assert result["after"]["plan"]["note"] == "Saved earlier"
+    assert result["after"]["fridge"]["pressed"] == ["false"] * 4
+    assert result["sets"] == [_write("plan-day", "aligned", None, "Saved earlier")]
+
+
+# Bites on: a failed read of the saved answers being treated as an empty collection, or its retry not re-reading.
+def test_failed_restore_is_not_an_empty_sheet():
+    docs = [{"id": "plan-day", "data": {"answer": "discuss", "optionId": None, "note": "n"}}]
+    result = _answer_page([_card("plan-day"), _card("fridge-check")], """
+      const states = () => t.state("plan-day").disabled.concat(t.state("fridge-check").disabled);
+      const gate = t.gate();
+      const failed = { message: gate.message, hidden: gate.hidden, retry: gate.retry !== undefined, disabled: states(), reads: t.reads.length };
+      t.fire(t.button("plan-day", "Aligned"), "click");
+      const forced = t.sets.length;
+      t.click(t.gate().retry);
+      await t.tick();
+      const recovered = { hidden: t.gate().hidden, reads: t.reads.length, disabled: states(), plan: t.state("plan-day") };
+      return { failed: failed, forced: forced, recovered: recovered };
+    """, host={"read": ["reject", "docs"], "docs": docs})
+    assert result["failed"] == {
+        "message": "Your saved answers couldn't be loaded.", "hidden": False, "retry": True, "disabled": [True] * 10, "reads": 1,
+    }
+    assert result["forced"] == 0
+    assert result["recovered"]["hidden"] is True
+    assert result["recovered"]["reads"] == 2
+    assert result["recovered"]["disabled"] == [False] * 10
+    assert result["recovered"]["plan"]["pressed"] == ["false", "true", "false", "false"]
+
+
+NOT_SAVED_HERE = "Answers can't be saved in this view."
+READ_ONLY = "This sheet is read-only for you. Only its owner can answer."
+
+
+# Bites on: a missing runtime, a missing store, or a viewer who is not the owner getting working controls.
+@pytest.mark.parametrize("host,message", [
+    pytest.param({"claude": "missing"}, NOT_SAVED_HERE, id="E1-no-window-claude"),
+    pytest.param({"claude": "no-use"}, NOT_SAVED_HERE, id="E2-use-is-not-a-function"),
+    pytest.param({"db": "null"}, NOT_SAVED_HERE, id="E3-store-is-null"),
+    pytest.param({"db": "reject"}, NOT_SAVED_HERE, id="E4-use-db-rejects"),
+    pytest.param({"db": "throw"}, NOT_SAVED_HERE, id="E4-use-db-throws"),
+    pytest.param({"user": "null"}, READ_ONLY, id="E5-user-is-null"),
+    pytest.param({"user": "viewer"}, READ_ONLY, id="E6-is-owner-false"),
+    pytest.param({"user": "is-owner-rejects"}, READ_ONLY, id="E7-is-owner-rejects"),
+    pytest.param({"user": "is-owner-throws"}, READ_ONLY, id="E7-is-owner-throws"),
+    pytest.param({"user": "reject"}, READ_ONLY, id="E7-use-user-rejects"),
+])
+def test_non_owner_and_missing_store_cannot_answer(host, message):
+    result = _answer_page([_card("plan-day"), _bare_card()], """
+      const out = { states: [], parts: [] };
+      ["plan-day", "bare-card"].forEach((id) => {
+        out.states.push(t.state(id));
+        out.parts.push(t.parts(id).length);
+        t.buttons(id).forEach((button) => t.fire(button, "click"));
+        t.note(id).value = "sneaky";
+        t.fire(t.note(id), "input");
+        t.fire(t.note(id), "change");
+      });
+      const gate = t.gate();
+      out.gate = { hidden: gate.hidden, message: gate.message, retry: gate.retry !== undefined };
+      out.sets = t.sets.length;
+      out.reads = t.reads.length;
+      return out;
+    """, host=host)
+    assert result["parts"] == [14, 10], "the cards did not draw"
+    for state in result["states"]:
+        assert all(state["disabled"]), state
+    assert result["gate"] == {"hidden": False, "message": message, "retry": False}
+    assert result["sets"] == 0, "a control wrote although the viewer cannot answer"
+    assert result["reads"] == 0, "the answers were read for a viewer who cannot answer"
+
+
+# Bites on: a saved answer that names no pick the card offers still restoring a pick, a note being lost, or an unknown card id breaking the restore.
+def test_restore_ignores_answers_it_cannot_place():
+    docs = [
+        {"id": "plan-day", "data": {"answer": "maybe", "optionId": None, "note": "keep my note"}},
+        {"id": "fridge-check", "data": {"answer": "option", "optionId": "ghost", "note": "n2"}},
+        {"id": "no-such-card", "data": {"answer": "aligned", "optionId": None, "note": "x"}},
+        {"id": "third-card", "data": {"answer": "option", "optionId": "yes", "note": 7}},
+    ]
+    result = _answer_page([_card("plan-day"), _card("fridge-check"), _card("third-card")], """
+      const ids = ["plan-day", "fridge-check", "third-card"];
+      const restored = ids.map((id) => t.state(id));
+      const gateHidden = t.gate().hidden;
+      for (const id of ids) {
+        t.type(t.note(id), "edited " + id, "change");
+        await t.tick();
+      }
+      return { restored: restored, gateHidden: gateHidden, sets: t.setLog() };
+    """, host={"docs": docs})
+    plan, fridge, third = result["restored"]
+    assert result["gateHidden"] is True
+    assert plan["pressed"] == ["false"] * 4 and plan["note"] == "keep my note"
+    assert fridge["pressed"] == ["false"] * 4 and fridge["note"] == "n2"
+    assert third["pressed"] == ["false", "false", "true", "false"] and third["note"] == ""
+    assert all(not any(state["disabled"]) for state in result["restored"])
+    assert result["sets"] == [
+        _write("plan-day", None, None, "edited plan-day"),
+        _write("fridge-check", None, None, "edited fridge-check"),
+        _write("third-card", "option", "yes", "edited third-card"),
+    ]
+
+
+# Bites on: a sheet the schema check refuses still reaching for the store, or drawing a gate line.
+def test_a_refused_sheet_touches_no_store():
+    cards = [_card("plan-day"), _card("plan-day")]
+    page = _run_page(_sample_files(_sheet(cards=cards)), scenario="""
+      return { uses: t.uses, reads: t.reads.length, sets: t.sets.length, gateHidden: t.gate().hidden };
+    """)
+    _assert_error_shown(page)
+    assert page["result"] == {"uses": [], "reads": 0, "sets": 0, "gateHidden": True}
+
+
+# Bites on: the note being anything but a labelled textarea that wears the theme's field part.
+def test_note_field_is_a_theme_part():
+    result = _answer_page([_card("plan-day")], """
+      const note = t.note("plan-day");
+      return { tag: note.tagName, className: note.className };
+    """)
+    assert result == {"tag": "textarea", "className": "sh-field"}
+    css = (THEME / "comic-panel.css").read_text(encoding="utf-8")
+    match = re.search(r"(?m)^\.sh-field\s*\{([^{}]*)\}", css)
+    assert match, "comic-panel.css defines no .sh-field part"
+    declared = {prop.lower(): value.strip() for prop, value in re.findall(r"([a-zA-Z-]+)\s*:\s*([^;]+);", match.group(1))}
+    assert declared.get("min-height") == "var(--sh-touch)", declared
+    token = r"var\(--sh-[a-z-]+\)"
+    for prop in ("font-family", "background", "color"):
+        assert re.fullmatch(token, declared.get(prop, "")), "%s: %s" % (prop, declared.get(prop))
+    assert re.sub(token, "", declared.get("border", "")).split() == ["solid"], declared.get("border")
+    for name in re.findall(r"var\((--sh-[a-z-]+)\)", match.group(1)):
+        assert re.search(r"(?m)^\s*%s\s*:" % re.escape(name), css), "%s is not a theme token" % name
