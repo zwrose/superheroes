@@ -104,7 +104,7 @@ action that owns it, leaving the rest of the calibration untouched:
   run commits nothing new and writes the pointer. A repository with no origin default branch stays
   pending until it has one holding the entries. When Canon lives in the project store, there is one
   shared copy and the move finishes in one step. Report a `refused` result to the owner with its
-  `reason`, and never work around it. Five reasons are ones the owner can act on:
+  `reason`, and never work around it. Six reasons are ones the owner can act on:
   - `canon-dirty`: commit or discard local edits to `canon.md`, then run the move again.
   - `canon-git-root-not-a-repo`: run configure's set-up for the project store.
   - `material-line-changed-during-migration`: item 13 changed while it was moving, so run the move
@@ -112,6 +112,8 @@ action that owns it, leaving the rest of the calibration untouched:
   - `canon-default-probe-failed`: the default branch could not be read, so fetch and retry.
   - `canon-lock-contended`: another configure change was saving at the same moment, so run the move
     again.
+  - `profile-structurally-ambiguous`: the project's calibration file is ambiguous (a repeated key or
+    two calibration blocks); fix it through configure's fix path, then run the move again.
 
   The other reasons are `profile-absent`, `profile-unparseable`, `behind`, `malformed-value`,
   `session-id-malformed`, `date-malformed`, `canon-lookup-refused`, `canon-commit-failed`, and
