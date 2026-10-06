@@ -95,9 +95,14 @@ action that owns it, leaving the rest of the calibration untouched:
 
   Each paragraph of the item-13 value becomes one standing ruling. Each ruling is marked as migrated
   from configure item 13 on that date, with its original session and time unknown. Then item 13
-  points to Canon. The result's `action` is `migrated`, `already-adopted`, or `refused` with a
-  `reason`. Only `migrated` and `already-adopted` mean done. Report a `refused` result to the owner
-  with its `reason`, and never work around it. Four reasons are ones the owner can act on:
+  points to Canon. The result's `action` is `migrated`, `already-adopted`, `pending-default-branch`,
+  or `refused` with a `reason`. Only `migrated` and `already-adopted` mean done.
+  `pending-default-branch` is the first of two steps. It happens when Canon lives in the repository,
+  the project's calibration lives in the shared project store, and the default branch does not yet
+  hold every ruling. The entries are committed on this branch, and item 13 keeps its value so other
+  branches still see the examples. Land the branch, then run the move again. That second run
+  commits nothing new and writes the pointer. Report a `refused` result to the owner with its
+  `reason`, and never work around it. Four reasons are ones the owner can act on:
   - `canon-dirty`: commit or discard local edits to `canon.md`, then run the move again.
   - `canon-git-root-not-a-repo`: run configure's set-up for the project store.
   - `material-line-changed-during-migration`: item 13 changed while it was moving, so run the move

@@ -628,6 +628,18 @@ def _values_equal(stored, expected):
     return json.dumps(stored, sort_keys=True) == json.dumps(expected, sort_keys=True)
 
 
+def _material_line_in_canon_refusal():
+    return {
+        "action": "refused",
+        "reason": REASON_MATERIAL_LINE_IN_CANON,
+        "detail": (
+            "Item 13 now points to the project's Canon standing rulings and holds no "
+            "value of its own. Record a new example in Canon as a standing ruling, "
+            "by Canon's write procedure."
+        ),
+    }
+
+
 def set_item(cwd, slug, value, root=None):
     """Validate and write one item to its home only."""
     item = _item_by_slug(slug)
@@ -639,15 +651,7 @@ def set_item(cwd, slug, value, root=None):
         current = core_md.read(cwd, root)
         stored = _read_project_config_raw(_project_config_mapping(current), slug)
         if is_material_line_marker(stored):
-            return {
-                "action": "refused",
-                "reason": REASON_MATERIAL_LINE_IN_CANON,
-                "detail": (
-                    "Item 13 now points to the project's Canon standing rulings and holds no "
-                    "value of its own. Record a new example in Canon as a standing ruling, "
-                    "by Canon's write procedure."
-                ),
-            }
+            return _material_line_in_canon_refusal()
 
     reason = validate_item_value(item, value)
     if reason is not None:
@@ -665,6 +669,14 @@ def set_item(cwd, slug, value, root=None):
         write_result = core_md.write_threat_model(cwd, value, root=root)
     elif item["home"] == HOME_GUARDIAN_CADENCE:
         write_result = core_md.write_guardian_cadence(cwd, value, root=root)
+    elif slug == MATERIAL_LINE_SLUG:
+        # axis: the adoption check and the write share one lock, so a set never undoes a migration — see bite-proof record wo_a_1618_set-cas
+        write_result = core_md.write_project_config_item_if(
+            cwd, slug, value, expected=stored, root=root)
+        if write_result.get("reason") == "item-changed":
+            if is_material_line_marker(write_result.get("observed")):
+                return _material_line_in_canon_refusal()
+            return write_result
     else:
         # axis: sibling keys in projectConfiguration survive a single-item set — wo_b_1276_one-home
         write_result = core_md.write_project_config_item(cwd, slug, value, root=root)
@@ -885,7 +897,8 @@ def _write_canon_rulings(cwd, root, rulings, date, session, result):
     result["skipped"] = skipped
     # axis: nothing new to append means no commit at all — see bite-proof record wo_a_1618_never-commit-empty
     if not pending:
-        return
+        return {"gitRoot": git_root, "rel": rel, "home": info["home"],
+                "defaultRef": info["defaultRef"]}
 
     working_text = ""
     if os.path.isfile(canon_path):
@@ -931,6 +944,24 @@ def _write_canon_rulings(cwd, root, rulings, date, session, result):
             "canon-commit-failed", "the committed Canon does not hold the appended entries")
     head = _git_run(git_root, "canon-commit-failed", "rev-parse", "HEAD")
     result["commit"] = head.stdout.strip() or None
+    return {"gitRoot": git_root, "rel": rel, "home": info["home"],
+            "defaultRef": info["defaultRef"]}
+
+
+def _rulings_unreachable_from_default(cwd, root, rulings, canon):
+    """True when item 13's readers cannot yet see every ruling in the default branch's Canon.
+
+    Only a core.md outside the Canon repository (the shared project store) can be read by a
+    session on another branch; a core.md inside the repository travels with the branch.
+    """
+    if canon["home"] != "repo" or not canon["defaultRef"]:
+        return False
+    core = os.path.realpath(core_md.core_path(cwd, root))
+    git_root = os.path.realpath(canon["gitRoot"])
+    if os.path.commonpath([core, git_root]) == git_root:
+        return False
+    default_text = _canon_copy_at(canon["gitRoot"], canon["defaultRef"], canon["rel"])
+    return bool(_committed_match(rulings, default_text)[1])
 
 
 def migrate_material_line(cwd, *, root=None, session=None, date=None):
@@ -978,7 +1009,15 @@ def _migrate_material_line(cwd, root, session, date, result):
 
     rulings, result["sanitized"] = _split_rulings(raw)
     if rulings:
-        _write_canon_rulings(cwd, root, rulings, date, session, result)
+        canon = _write_canon_rulings(cwd, root, rulings, date, session, result)
+        # axis: a shared item 13 keeps its examples until Canon's entries reach the default branch — see bite-proof record wo_a_1618_pending-default-branch
+        if _rulings_unreachable_from_default(cwd, root, rulings, canon):
+            result["action"] = "pending-default-branch"
+            result["detail"] = (
+                "The Canon entries are committed on this branch, and item 13 keeps its value "
+                "until they reach the default branch. Run the move again after the branch "
+                "lands to finish it.")
+            return
 
     marker = {"canon": MATERIAL_LINE_MARKER_CANON, "migratedOn": date}
     # axis: the marker lands only if item 13 still equals the snapshot — see bite-proof record wo_a_1618_cas-compare

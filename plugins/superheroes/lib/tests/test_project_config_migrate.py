@@ -736,6 +736,100 @@ def test_cli_verb_exits_zero_on_a_refusal(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["reason"] == "session-id-malformed"
 
 
+# --- the shared item 13 waits for Canon to reach the default branch ---
+
+def _move_core_to_store(w):
+    """Put core.md in the shared project store, outside the Canon repository."""
+    dst = os.path.join(MR.project_store_dir(w.repo, w.store), "config", "core.md")
+    CM.relocate_file(CM.core_path(w.repo, w.store), dst)
+    assert CM.core_path(w.repo, w.store) == dst
+    return dst
+
+
+# axis: a shared item 13 keeps its examples until Canon's entries reach the default branch — wo_a_1618_pending-default-branch
+def test_shared_core_on_a_feature_branch_commits_canon_and_leaves_item_13_pending(tmp_path):
+    w = _world(tmp_path)
+    _move_core_to_store(w)
+    _git(w.repo, "checkout", "-q", "-b", "work")
+    before = w.core_bytes()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("pending-default-branch", None)
+    assert len(got["entries"]) == 2
+    assert got["commit"] == w.head()
+    assert "default branch" in got["detail"]
+    assert len(_entry_lines(w.head_canon())) == 2
+    assert w.core_bytes() == before
+    assert w.item13()["raw"] == _TWO_RULINGS
+
+
+def test_shared_core_rerun_after_the_entries_reach_the_default_branch_writes_the_marker(tmp_path):
+    w = _world(tmp_path)
+    _move_core_to_store(w)
+    _git(w.repo, "checkout", "-q", "-b", "work")
+    first = _shape(w.migrate())
+    assert first["action"] == "pending-default-branch"
+    _git(w.repo, "push", "-q", "origin", "work:main")
+    commit = w.head()
+    canon_before = open(w.canon, "rb").read()
+    got = _shape(w.migrate())
+    assert got["action"] == "migrated"
+    assert got["entries"] == []
+    assert got["skipped"] == first["entries"]
+    assert got["commit"] is None
+    assert w.head() == commit
+    assert open(w.canon, "rb").read() == canon_before
+    assert w.item13()["raw"] == _MARKER
+
+
+def test_core_inside_the_repository_still_adopts_in_one_step_on_a_feature_branch(tmp_path):
+    w = _world(tmp_path)
+    assert os.path.realpath(CM.core_path(w.repo, w.store)).startswith(w.repo + os.sep)
+    _git(w.repo, "checkout", "-q", "-b", "work")
+    got = _shape(w.migrate())
+    assert got["action"] == "migrated"
+    assert got["commit"] == w.head()
+    assert w.item13()["raw"] == _MARKER
+
+
+def test_shared_core_without_an_origin_remote_still_adopts_in_one_step(tmp_path):
+    w = _world(tmp_path, origin=False)
+    _move_core_to_store(w)
+    got = _shape(w.migrate())
+    assert got["action"] == "migrated"
+    assert w.item13()["raw"] == _MARKER
+
+
+# --- a set never undoes an adoption that lands while it runs ---
+
+# axis: the adoption check and the write share one lock, so a set never undoes a migration — wo_a_1618_set-cas
+def test_set_racing_a_migration_is_refused_and_the_marker_stands(tmp_path, monkeypatch):
+    w = _world(tmp_path, raw="mine")
+    real = PC.core_md.write_project_config_item_if
+
+    def _race(cwd, slug, value, *, expected, root=None):
+        PC.core_md.write_project_config_item(cwd, slug, dict(_MARKER), root=root)
+        return real(cwd, slug, value, expected=expected, root=root)
+
+    monkeypatch.setattr(PC.core_md, "write_project_config_item_if", _race)
+    got = PC.set_item(w.repo, "materialConsequenceLine", "yours", root=w.store)
+    assert (got["action"], got["reason"]) == ("refused", "material-line-in-canon")
+    assert w.item13()["raw"] == _MARKER
+
+
+def test_set_racing_another_set_is_refused_item_changed(tmp_path, monkeypatch):
+    w = _world(tmp_path, raw="mine")
+    real = PC.core_md.write_project_config_item_if
+
+    def _race(cwd, slug, value, *, expected, root=None):
+        PC.core_md.write_project_config_item(cwd, slug, "theirs", root=root)
+        return real(cwd, slug, value, expected=expected, root=root)
+
+    monkeypatch.setattr(PC.core_md, "write_project_config_item_if", _race)
+    got = PC.set_item(w.repo, "materialConsequenceLine", "yours", root=w.store)
+    assert (got["action"], got["reason"]) == ("refused", "item-changed")
+    assert w.item13()["raw"] == "theirs"
+
+
 # --- the compare-and-swap writer ---
 
 def test_cas_writer_refuses_when_the_stored_value_differs(tmp_path):
