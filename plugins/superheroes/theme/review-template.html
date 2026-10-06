@@ -18,7 +18,6 @@
   .sheet-page .sheet-row { justify-content: space-between; }
   .sheet-page .sheet-fold { flex-wrap: wrap; }
   .sheet-page .sheet-row-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sheet-page .sheet-row.is-current { outline: var(--sh-line) solid var(--sh-blue); outline-offset: 2px; }
   .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: none; }
   .sheet-page .sheet-list.is-expanded .sheet-row.is-folded { display: flex; }
   .sheet-page .sheet-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; }
@@ -932,7 +931,7 @@
 
       countHost.textContent = ready
         ? answered.length + " of " + total + " answered" + (discussing.length > 0 ? " · " + discussing.length + " to discuss" : "")
-        : total + " items · answers not loaded";
+        : total + (total === 1 ? " item" : " items") + " · answers not loaded";
       countHost.hidden = false;
 
       // A card folds away only when it is answered, is not the open card and has nothing unsaved.
@@ -944,7 +943,7 @@
         const state = states[index];
         const current = index === openIndex;
         item.article.hidden = !current;
-        item.row.className = "sh-button sheet-row" + (current ? " is-current" : "") + (folded[index] ? " is-folded" : "");
+        item.row.className = "sh-button" + (current ? " sh-button--main sheet-row is-current" : " sheet-row") + (folded[index] ? " is-folded" : "");
         item.row.setAttribute("aria-current", current ? "true" : "false");
         const parts = [textElement("span", "sheet-row-text", (index + 1) + " · " + item.question)];
         if (ready) parts.push(pillElement(pillOf(state)));
@@ -957,7 +956,7 @@
         return foldedStates.filter(function (state) { return state.answer === answer && state.optionId === null; }).length;
       };
       const foldedPicks = foldedStates.filter(function (state) { return state.optionId !== null; }).length;
-      const notSaved = answered.filter(notSavedKind).length;
+      const notSaved = states.filter(function (state, index) { return state.answer !== null && index !== openIndex && notSavedKind(state); }).length;
       const foldParts = [
         textElement("span", "", "Answered · " + foldedStates.length),
         textElement("span", PICK_PILLS.aligned[0], foldedWith("aligned") + " Aligned"),
