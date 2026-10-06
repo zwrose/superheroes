@@ -2812,7 +2812,23 @@ def test_a_send_from_a_stale_copy_of_the_sheet_writes_nothing():
       return { verdicts: verdicts(), status: t.sendStatus() };
     """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
     assert result["verdicts"] == []
-    assert "older version" in result["status"]
+    assert result["status"] == "This sheet was updated after you opened it. Reload the page to see the current version before sending."
+
+
+# Bites on: a Send that cannot re-check the published sheet writing anyway, or saying nothing about why and offering no retry.
+def test_a_send_that_cannot_recheck_the_sheet_writes_nothing_and_offers_try_again():
+    result = _sheet_page(_sample_final(), """
+      ${VERDICTS}
+      t.click(t.lastButton("Approve"));
+      await t.advance(200);
+      files["sheet.json"] = { reject: true };
+      t.click(t.sendButton());
+      await t.advance(200);
+      return { verdicts: verdicts(), status: t.sendStatus(), retry: t.sendTryAgain() !== undefined };
+    """.replace("${VERDICTS}", VERDICT_WRITES), host={"fakeTimers": True})
+    assert result["verdicts"] == []
+    assert result["status"] == "The sheet could not be checked, so nothing was sent."
+    assert result["retry"] is True
 
 
 # Bites on: a verdict for another revision blocking a Send (it is not a verdict on this sheet), or a pre-read that fails being taken as nothing sent.

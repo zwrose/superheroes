@@ -550,7 +550,8 @@
       verdictSending: "Sending…",
       verdictSlow: "Sending is taking longer than it should. Keep this page open.",
       verdictFailed: "The verdict didn't send.",
-      verdictStale: "This page is an older version of the sheet. Reload it to see the current one before sending a verdict.",
+      verdictStale: "This sheet was updated after you opened it. Reload the page to see the current version before sending.",
+      sheetUnchecked: "The sheet could not be checked, so nothing was sent.",
       verdictNoDigest: "This browser can't tell which version of the sheet this is, so the verdict can't be sent here.",
     };
     const NOTE_PAUSE_MS = 1000;
@@ -1330,25 +1331,6 @@
         }),
       };
 
-      // An older copy of the sheet must not write over a newer revision's verdict: look at the published sheet again,
-      // and refuse when it is no longer the revision on screen.
-      try {
-        const current = await withDeadline(function () { return fetchFile("sheet.json", "The sheet's data file"); });
-        if (current.text !== sheetText) {
-          sending = false;
-          sendView = { kind: "stale", text: SAY.verdictStale };
-          syncControls();
-          refreshSheet();
-          return;
-        }
-      } catch (error) {
-        sending = false;
-        sendView = { kind: "failed", text: SAY.verdictFailed, retry: true };
-        syncControls();
-        refreshSheet();
-        return;
-      }
-
       // The sent verdict is the one record. Just before writing, look again: a verdict for this revision that
       // another open copy already sent is shown as sent and left alone. Two copies sending at the same instant
       // can still both write; that is a known residual.
@@ -1372,6 +1354,25 @@
         refreshSheet();
         return;
       }
+      // An older copy of the sheet must not write over a newer revision's verdict: look at the published sheet again,
+      // and refuse when it is no longer the revision on screen.
+      try {
+        const current = await withDeadline(function () { return fetchFile("sheet.json", "The sheet's data file"); });
+        if (current.text !== sheetText) {
+          sending = false;
+          sendView = { kind: "stale", text: SAY.verdictStale };
+          syncControls();
+          refreshSheet();
+          return;
+        }
+      } catch (error) {
+        sending = false;
+        sendView = { kind: "failed", text: SAY.sheetUnchecked, retry: true };
+        syncControls();
+        refreshSheet();
+        return;
+      }
+
       sendView = { kind: "sending", text: SAY.verdictSending };
       refreshSheet();
       let finished = false;
