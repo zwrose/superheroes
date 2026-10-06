@@ -797,7 +797,7 @@ def _canon_head_copy(git_root, rel):
 
 
 def _entry_fields(line):
-    """One Canon entry line's id, ruling field, superseded ids and migration origin; None if not an entry.
+    """One Canon entry line's id, whole line, ruling field, superseded ids and migration origin; None if not an entry.
 
     The ruling is the field after the scope, exactly: Canon's rule is that a ruling never holds
     ` · `, so the fields split cleanly on it.
@@ -816,6 +816,7 @@ def _entry_fields(line):
             superseded.append(part[len("supersedes: "):].strip())
     return {
         "id": found.group(1),
+        "line": line.rstrip(),
         "ruling": parts[3],
         "supersedes": superseded,
         "migrated": parts[-1].startswith("where: " + _MIGRATION_ORIGIN_PHRASE),
@@ -836,7 +837,7 @@ def _canon_entries(committed_text):
         by_id.setdefault(entry["id"], []).append(entry)
     conflicting = [
         entry_id for entry_id, held in by_id.items()
-        if any(e["migrated"] for e in held) and any(e != held[0] for e in held)]
+        if any(e["migrated"] for e in held) and any(e["line"] != held[0]["line"] for e in held)]
     if conflicting:
         raise _MigrationRefusal(
             "canon-id-conflict",
@@ -884,7 +885,7 @@ def _refuse_replaced_migrated_rulings(rulings, committed_text):
             % ", ".join(stale))
 
 
-def _refuse_replaced_in_recorded_canon(cwd, root):
+def _refuse_replaced_in_recorded_canon(cwd, root, result):
     """The replaced-ruling guard for an item 13 holding no ruling, which writes nothing to Canon.
 
     Emptying item 13 drops every ruling an earlier run recorded, so those entries stay active in
@@ -896,6 +897,10 @@ def _refuse_replaced_in_recorded_canon(cwd, root):
 
     try:
         repo_root = store_core.repo_root(cwd)
+    except Exception as exc:
+        raise _MigrationRefusal("canon-lookup-refused", str(exc))
+    _fetch_default_branch(repo_root, result)
+    try:
         info = definition_doc.resolve_canon(root=repo_root, cwd=cwd, store_root=root)
     except Exception as exc:
         raise _MigrationRefusal("canon-lookup-refused", str(exc))
@@ -927,16 +932,8 @@ def _ensure_gitattributes(path):
         fh.write(_GITATTRIBUTES_LINE + "\n")
 
 
-def _write_canon_rulings(cwd, root, rulings, date, session, result):
-    """Canon's write procedure for ``rulings``; fills ``result`` and raises _MigrationRefusal."""
-    import definition_doc
-    import store_core
-
-    try:
-        repo_root = store_core.repo_root(cwd)
-    except Exception as exc:
-        raise _MigrationRefusal("canon-lookup-refused", str(exc))
-
+def _fetch_default_branch(repo_root, result):
+    """Refresh the remote refs before Canon is read; records the outcome in ``result["fetch"]``."""
     origin = _git_run(repo_root, "canon-lookup-refused", "remote", "get-url", "origin")
     if origin.returncode != 0:
         result["fetch"] = "no-origin"
@@ -950,6 +947,19 @@ def _write_canon_rulings(cwd, root, rulings, date, session, result):
                     fetched.stderr, "git exit %d" % fetched.returncode)
         except _MigrationRefusal as exc:
             result["fetch"] = "failed: %s" % (exc.detail or exc.reason)
+
+
+def _write_canon_rulings(cwd, root, rulings, date, session, result):
+    """Canon's write procedure for ``rulings``; fills ``result`` and raises _MigrationRefusal."""
+    import definition_doc
+    import store_core
+
+    try:
+        repo_root = store_core.repo_root(cwd)
+    except Exception as exc:
+        raise _MigrationRefusal("canon-lookup-refused", str(exc))
+
+    _fetch_default_branch(repo_root, result)
 
     try:
         info = definition_doc.resolve_canon(root=repo_root, cwd=cwd, store_root=root)
@@ -1144,7 +1154,7 @@ def _migrate_material_line(cwd, root, session, date, result):
                     "and run the move again.")
             return
     else:
-        _refuse_replaced_in_recorded_canon(cwd, root)
+        _refuse_replaced_in_recorded_canon(cwd, root, result)
 
     marker = {"canon": MATERIAL_LINE_MARKER_CANON, "migratedOn": date}
     # axis: the marker lands only if item 13 still equals the snapshot — see bite-proof record wo_a_1618_cas-compare

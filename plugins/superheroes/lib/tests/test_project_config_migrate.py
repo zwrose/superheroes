@@ -233,7 +233,7 @@ def test_e6_absent_or_blank_item_13_writes_marker_and_touches_no_canon(tmp_path,
     got = _shape(w.migrate())
     assert got["action"] == "migrated"
     assert (got["entries"], got["skipped"], got["canonPath"], got["commit"]) == ([], [], None, None)
-    assert got["fetch"] == "not-needed"
+    assert got["fetch"] == "ok"
     assert w.item13()["raw"] == _MARKER
     assert not os.path.exists(w.canon)
     assert w.head() == head
@@ -688,6 +688,28 @@ def test_e19g_item_13_emptied_after_an_earlier_run_refuses_and_touches_nothing(t
     assert w.item13()["raw"] == blank
 
 
+# axis: an emptied item 13 reads Canon only after the default branch is refreshed — wo_a_1646_replaced-ruling
+def test_e19g_item_13_emptied_sees_an_earlier_run_that_landed_remotely_only(tmp_path):
+    w = _world(tmp_path, raw="")
+    other = os.path.join(str(tmp_path), "other")
+    _git(str(tmp_path), "clone", "-q", w.origin, other)
+    os.makedirs(os.path.join(other, os.path.dirname(_REL)), exist_ok=True)
+    with open(os.path.join(other, *_REL.split("/")), "w", encoding="utf-8") as fh:
+        fh.write("# Canon\n\nheader\n\n## Entries\n\n"
+                 + _migrated_line("2026-10-05-abcdef12-1", "X is material."))
+    _git(other, "add", "--", _REL)
+    _git(other, "commit", "-q", "-m", "canon")
+    _git(other, "push", "-q", "origin", "HEAD:main")
+    head = w.head()
+    core_before = w.core_bytes()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "material-line-changed-since-migration")
+    assert "2026-10-05-abcdef12-1" in got["detail"]
+    assert got["fetch"] == "ok"
+    assert w.head() == head
+    assert w.core_bytes() == core_before
+
+
 def test_e19g_item_13_emptied_after_the_entries_were_superseded_adopts(tmp_path):
     w = _world(tmp_path, raw="")
     old = _migrated_line("2026-10-05-abcdef12-1", "X is material.")
@@ -712,6 +734,22 @@ def test_e19h_conflicting_migrated_entries_under_one_id_refuse(tmp_path):
     assert "2026-10-05-abcdef12-1" in got["detail"]
     assert w.head() == head
     assert w.item13()["raw"] == "X is material.\n\nY is craft."
+
+
+# axis: entries differing only outside the id, ruling and supersedes fields still conflict — wo_a_1646_conflicting-ids
+def test_e19h_entries_sharing_an_id_and_ruling_but_differing_in_scope_refuse(tmp_path):
+    w = _world(tmp_path, raw="X is material.")
+    standing = _migrated_line("2026-10-05-abcdef12-1", "X is material.")
+    piece = standing.replace(" · standing · ", " · piece example-piece · ")
+    assert piece != standing
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n" + standing + piece)
+    w.land()
+    head = w.head()
+    got = _shape(w.migrate())
+    assert (got["action"], got["reason"]) == ("refused", "canon-id-conflict")
+    assert "2026-10-05-abcdef12-1" in got["detail"]
+    assert w.head() == head
+    assert w.item13()["raw"] == "X is material."
 
 
 def test_e19h_the_same_entry_in_both_copies_is_one_entry(tmp_path):
@@ -747,13 +785,29 @@ def test_e19g_a_non_migrated_entry_with_identical_ruling_text_does_not_count(tmp
     assert got["entries"] == ["2026-10-05-abcdef12-1"]
 
 
+# axis: a committed ruling matches item 13 by whole-ruling equality, never as a substring in either direction — wo_a_1646_replaced-ruling
 def test_e19g_a_migrated_entry_with_a_longer_ruling_is_not_a_substring_match(tmp_path):
-    w = _world(tmp_path, raw="X is material.")
+    w = _world(tmp_path, raw="X is material.\n\nX is material. And more.")
     w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
                    + _migrated_line("2026-10-05-abcdef12-1", "X is material. And more."))
     got = _shape(w.migrate())
-    assert (got["action"], got["reason"]) == ("refused", "material-line-changed-since-migration")
-    assert got["skipped"] == []
+    assert got["reason"] != "material-line-changed-since-migration"
+    assert got["action"] == "pending-default-branch"
+    assert got["skipped"] == ["2026-10-05-abcdef12-1"]
+    assert got["entries"] == ["2026-10-05-abcdef12-2"]
+    assert "· standing · X is material. · owner's words:" in w.head_canon()
+
+
+def test_e19g_a_migrated_entry_with_a_shorter_ruling_does_not_skip_the_longer_paragraph(tmp_path):
+    w = _world(tmp_path, raw="X is material.\n\nX is material. And more.")
+    w.commit_canon("# Canon\n\nheader\n\n## Entries\n\n"
+                   + _migrated_line("2026-10-05-abcdef12-1", "X is material."))
+    got = _shape(w.migrate())
+    assert got["reason"] != "material-line-changed-since-migration"
+    assert got["action"] == "pending-default-branch"
+    assert got["skipped"] == ["2026-10-05-abcdef12-1"]
+    assert got["entries"] == ["2026-10-05-abcdef12-2"]
+    assert "· standing · X is material. And more. · owner's words:" in w.head_canon()
 
 
 # --- E20-E21: the marker write ---
