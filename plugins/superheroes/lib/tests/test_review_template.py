@@ -178,7 +178,8 @@ class Node {
   }
 }
 const elements = {};
-["sheet-status", "sheet-gate", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title"].forEach((id) => {
+["sheet-status", "sheet-gate", "sheet-error", "sheet-error-list", "sheet-cards", "sheet-title",
+  "sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done"].forEach((id) => {
   elements[id] = new Node("div");
   elements[id].id = id;
 });
@@ -186,6 +187,12 @@ elements["sheet-status"].hidden = false;
 elements["sheet-gate"].hidden = true;
 elements["sheet-error"].hidden = true;
 elements["sheet-title"].textContent = "Review sheet";
+// The sheet's own parts start hidden, with the classes the markup gives them, until a sheet is drawn.
+const markupClasses = { "sheet-why": "sh-box", "sheet-items": "sheet-list", "sheet-stepper": "sheet-stepper", "sheet-footer": "sheet-footer", "sheet-done": "sh-box" };
+["sheet-count", "sheet-why", "sheet-items", "sheet-stepper", "sheet-footer", "sheet-done"].forEach((id) => {
+  elements[id].hidden = true;
+  elements[id].className = markupClasses[id] || "";
+});
 const document = {
   title: "Review sheet",
   getElementById: (id) => elements[id],
@@ -333,6 +340,8 @@ const tools = {
   buttons: (id) => tools.card(id).children.find((child) => hasClass(child, "answer-row")).children,
   note: (id) => tools.card(id).children.find((child) => child.tagName === "textarea"),
   saveLine: (id) => tools.card(id).children.find((child) => hasClass(child, "save-line")),
+  // Nothing hidden is ever read as shown: a card's save line counts only while the card list, the card and the line are all shown.
+  visible: (id, node) => [elements["sheet-cards"], tools.card(id), tools.saveLine(id)].some((item) => item.hidden) ? null : node,
   saveText: (id) => [elements["sheet-cards"], tools.card(id), tools.saveLine(id)].some((node) => node.hidden) ? "" : tools.text(tools.saveLine(id)),
   tryAgain: (id) => tools.saveLine(id).children.find((child) => child.tagName === "button"),
   click: (node) => {
@@ -364,6 +373,88 @@ const tools = {
     return { hidden: line.hidden, message: line.children.length ? line.children[0].textContent : "", retry: retry };
   },
   setLog: () => setLog.map((call) => ({ path: call.path, body: call.body })),
+  rowNodes: () => elements["sheet-items"].children.filter((child) => hasClass(child, "sheet-row")),
+  open: (id) => {
+    const index = elements["sheet-cards"].children.findIndex((article) => article.id === "card-" + id);
+    const row = tools.rowNodes()[index];
+    return row === undefined ? false : tools.click(row);
+  },
+  rows: () => tools.rowNodes().map((row) => {
+    const described = (node) => (node ? [node.className, node.textContent] : null);
+    const text = row.children.find((child) => hasClass(child, "sheet-row-text"));
+    return {
+      text: text ? text.textContent : null,
+      pill: described(row.children.find((child) => hasClass(child, "sh-pill"))),
+      badge: described(row.children.find((child) => hasClass(child, "sh-badge"))),
+      current: row.getAttribute("aria-current") === "true" && hasClass(row, "is-current"),
+      ariaCurrent: row.getAttribute("aria-current"),
+      folded: hasClass(row, "is-folded"),
+      className: row.className,
+    };
+  }),
+  fold: () => {
+    const node = elements["sheet-items"].children.find((child) => hasClass(child, "sheet-fold"));
+    return {
+      hidden: node.hidden,
+      expanded: node.getAttribute("aria-expanded") === "true",
+      aria: node.getAttribute("aria-expanded"),
+      listExpanded: hasClass(elements["sheet-items"], "is-expanded"),
+      first: elements["sheet-items"].children[0] === node,
+      type: node.getAttribute("type"),
+      className: node.className,
+      text: tools.text(node),
+      parts: node.children.map((child) => [child.className, child.textContent]),
+    };
+  },
+  count: () => elements["sheet-count"].textContent,
+  openCard: () => {
+    const shown = elements["sheet-cards"].children.filter((article) => article.tagName === "article" && !article.hidden).map((article) => article.id.replace("card-", ""));
+    return shown.length === 1 ? shown[0] : shown;
+  },
+  stepper: () => {
+    const parts = elements["sheet-stepper"].children;
+    const named = (label) => parts.find((child) => child.tagName === "button" && child.textContent === label);
+    return {
+      hidden: elements["sheet-stepper"].hidden,
+      label: parts[0].textContent,
+      prevDisabled: named("‹ Previous").disabled,
+      nextDisabled: named("Next ›").disabled,
+    };
+  },
+  why: () => ({
+    hidden: elements["sheet-why"].hidden,
+    heading: elements["sheet-why"].children.find((child) => child.tagName === "h2").textContent,
+    text: elements["sheet-why"].children.find((child) => child.tagName === "p").textContent,
+  }),
+  done: () => ({
+    hidden: elements["sheet-done"].hidden,
+    message: elements["sheet-done"].children.find((child) => child.tagName === "p").textContent,
+    body: {
+      stepper: elements["sheet-stepper"].hidden,
+      items: elements["sheet-items"].hidden,
+      cards: elements["sheet-cards"].hidden,
+      why: elements["sheet-why"].hidden,
+      footer: elements["sheet-footer"].hidden,
+    },
+  }),
+  // The page's own controls by name, so a scenario can press them as a person would.
+  control: (name) => {
+    const among = (host, label) => host.children.find((child) => child.tagName === "button" && child.textContent === label);
+    return {
+      previous: () => among(elements["sheet-stepper"], "‹ Previous"),
+      next: () => among(elements["sheet-stepper"], "Next ›"),
+      fold: () => elements["sheet-items"].children.find((child) => hasClass(child, "sheet-fold")),
+      done: () => among(elements["sheet-footer"], "Done for now"),
+      back: () => among(elements["sheet-done"], "Back to the sheet"),
+    }[name]();
+  },
+  footer: () => ({ hidden: elements["sheet-footer"].hidden, caption: elements["sheet-footer"].children[0].textContent }),
+  // Every button node anywhere on the page, for the checks on what a control wears.
+  allButtons: () => [...new Set(Object.values(elements).flatMap((root) => [...walk(root)]).filter((node) => node.tagName === "button"))].map((node) => ({
+    text: tools.text(node),
+    className: node.className,
+    type: node.getAttribute("type"),
+  })),
 };
 const scenario = async (t) => {
 __SCENARIO__
@@ -393,6 +484,7 @@ __SCENARIO__
     errors: elements["sheet-error-list"].children.map((item) => item.textContent),
     cards: cards,
     recordedSets: tools.setLog(),
+    count: elements["sheet-count"].textContent,
   }));
   process.exit(0);
 })();
@@ -1100,7 +1192,7 @@ def test_failed_save_offers_retry_of_the_latest():
       t.sets[0].reject(failure);
       await t.tick();
       const described = (node) => (node ? [node.className, node.textContent] : null);
-      out.failed = { text: t.saveText("plan-day"), badge: described(badgeOf("plan-day")), retry: described(t.tryAgain("plan-day")) };
+      out.failed = { text: t.saveText("plan-day"), badge: described(t.visible("plan-day", badgeOf("plan-day"))), retry: described(t.visible("plan-day", t.tryAgain("plan-day"))) };
       if (!t.tryAgain("plan-day")) return out;
       t.click(t.tryAgain("plan-day"));
       out.retried = { sets: t.sets.length, body: t.sets[1].body, path: t.sets[1].path, save: t.saveText("plan-day") };
@@ -1115,6 +1207,7 @@ def test_failed_save_offers_retry_of_the_latest():
       await t.tick();
       const held = t.tryAgain("fridge-check");
       t.type(t.note("fridge-check"), "later", "input");
+      t.open("fridge-check");
       out.moved = { save: t.saveText("fridge-check"), retry: t.tryAgain("fridge-check") !== undefined };
       t.fire(held, "click");
       out.heldRetry = { sets: t.sets.length, write: t.setLog()[3] };
@@ -1125,6 +1218,7 @@ def test_failed_save_offers_retry_of_the_latest():
       t.click(t.button("third-card", "Discuss"));
       t.sets[4].reject(failure);
       await t.tick();
+      t.open("third-card");
       out.afterOlder = { sets: t.sets.length, write: t.setLog()[5], save: t.saveText("third-card") };
       t.sets[5].reject({ code: "revoked", message: "gone" });
       await t.tick();
@@ -1227,6 +1321,7 @@ def test_stalled_save_is_single_flight_and_the_latest_state_lands_last():
       await t.advance(10000);
       t.sets[2].reject({ code: "unavailable", message: "late" });
       await t.tick();
+      t.open("fridge-check");
       out.failed = { sets: t.sets.length, text: t.saveText("fridge-check"), retry: t.tryAgain("fridge-check") !== undefined };
       t.click(t.tryAgain("fridge-check"));
       out.retried = { sets: t.sets.length, write: t.setLog()[3] };

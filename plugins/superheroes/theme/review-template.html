@@ -7,7 +7,21 @@
   .sh-theme { padding-block: 16px 40px; padding-inline: 16px; }
   .sheet-page { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-inline: auto; max-width: 720px; overflow-wrap: anywhere; }
   .sheet-page .sh-appbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 1; }
-  .sheet-page > main { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sh-appbar { flex-wrap: wrap; }
+  .sheet-page main { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-layout { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-main, .sheet-side { align-content: start; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sheet-stepper { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+  .sheet-page .sheet-stepper .sh-label { flex: 1 1 auto; margin: 0; }
+  .sheet-page .sheet-list { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+  .sheet-page .sheet-row, .sheet-page .sheet-fold { align-items: center; display: flex; gap: 8px; max-width: 100%; text-align: left; }
+  .sheet-page .sheet-row { justify-content: space-between; }
+  .sheet-page .sheet-fold { flex-wrap: wrap; }
+  .sheet-page .sheet-row-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sheet-page .sheet-row.is-current { outline: var(--sh-line) solid var(--sh-blue); outline-offset: 2px; }
+  .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: none; }
+  .sheet-page .sheet-list.is-expanded .sheet-row.is-folded { display: flex; }
+  .sheet-page .sheet-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; }
   .sheet-page :is(h2, p, ul, blockquote) { margin: 0; }
   .sheet-page :is(.sh-card, .sh-box) > * + * { margin-top: 8px; }
   .sheet-page .sh-card > h2 { font-size: 22px; margin-top: 12px; }
@@ -27,6 +41,14 @@
   .sheet-page .answer-row .sh-button { max-width: 100%; padding-block: 8px; text-align: center; white-space: normal; }
   .sheet-page .save-line, .sheet-page .sheet-gate { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
   .sheet-page :is(.sh-button, .sh-field):disabled { cursor: not-allowed; opacity: 0.5; }
+  @media (min-width: 900px) {
+    .sheet-page { max-width: 1200px; }
+    .sheet-layout { grid-template-columns: 340px minmax(0, 1fr); }
+    .sheet-side { grid-column: 1; grid-row: 1; }
+    .sheet-main { grid-column: 2; grid-row: 1; }
+    .sheet-page .sheet-row.is-current, .sheet-page .sheet-row.is-folded { display: flex; }
+    .sheet-page .sheet-fold { display: none; }
+  }
   .sh-theme [hidden] { display: none; }
 </style>
 
@@ -34,6 +56,7 @@
   <div class="sheet-page">
     <header class="sh-appbar">
       <span class="sh-appbar__name" id="sheet-title">Review sheet</span>
+      <span id="sheet-count" hidden></span>
     </header>
     <p id="sheet-status" class="sh-caption">Loading the sheet…</p>
     <p id="sheet-gate" class="sh-caption sheet-gate" hidden></p>
@@ -41,7 +64,18 @@
       <h2>This sheet can't be shown</h2>
       <ul id="sheet-error-list"></ul>
     </div>
-    <main id="sheet-cards"></main>
+    <div class="sheet-layout">
+      <div class="sheet-main">
+        <div id="sheet-stepper" class="sheet-stepper" hidden></div>
+        <main id="sheet-cards"></main>
+        <div id="sheet-footer" class="sheet-footer" hidden></div>
+      </div>
+      <div class="sheet-side">
+        <div id="sheet-why" class="sh-box" hidden></div>
+        <div id="sheet-items" class="sheet-list" role="group" aria-label="Items" hidden></div>
+      </div>
+    </div>
+    <div id="sheet-done" class="sh-box" hidden></div>
   </div>
 </div>
 
@@ -411,6 +445,12 @@
     const cardsHost = document.getElementById("sheet-cards");
     const titleHost = document.getElementById("sheet-title");
     const gate = document.getElementById("sheet-gate");
+    const countHost = document.getElementById("sheet-count");
+    const whyBox = document.getElementById("sheet-why");
+    const itemsHost = document.getElementById("sheet-items");
+    const stepperHost = document.getElementById("sheet-stepper");
+    const footerHost = document.getElementById("sheet-footer");
+    const doneBox = document.getElementById("sheet-done");
 
     // The words on the answer buttons, by the value a stored answer takes. A value the schema lists that
     // has no words here leaves the answer controls off. The option value takes its words from the card.
@@ -635,6 +675,7 @@
           button.className = picked ? "sh-button sh-button--main" : "sh-button";
           button.setAttribute("aria-pressed", picked ? "true" : "false");
         });
+        refreshSheet();
       }
 
       function showStatus(kind) {
@@ -657,6 +698,7 @@
         }
         saveLine.replaceChildren(...parts);
         saveLine.hidden = kind === "idle";
+        refreshSheet();
       }
 
       // Any change to the answer or the note clears what the status said and shows that a save is due.
@@ -709,6 +751,11 @@
         stalled = false;
         clearTimeout(stallTimer);
         if (saved) acked = body;
+        // A note's pause is still running: it sends the newest state itself when it ends.
+        if (timer !== null) {
+          showStatus("saving");
+          return;
+        }
         if (!sameAnswer(latest, body)) {
           send();
           return;
@@ -745,6 +792,14 @@
         // newer state waiting behind it, a note-pause timer still running, or a write that failed or stalled.
         unsaved: function () {
           return sending !== null || timer !== null || !sameAnswer(latest, acked);
+        },
+        // The card's latest pick (what the pressed button shows) and the kind its save line shows now.
+        state: function () {
+          return { answer: latest.answer, optionId: latest.optionId, save: shown };
+        },
+        // Cuts a note's pause short: the pending save runs now.
+        flush: function () {
+          if (timer !== null) save();
         },
       });
 
@@ -783,16 +838,180 @@
       return article;
     }
 
+    // The sheet around the cards. Everything it shows (the count, the item rows and their pills, the fold,
+    // the stepper, the why box and the Done box) is worked out again from the cards' current states by
+    // refreshSheet() and from nothing else, so no display can drift from what the cards hold.
+    const PICK_PILLS = {
+      aligned: ["sh-pill sh-pill--aligned", "Aligned"],
+      discuss: ["sh-pill sh-pill--discuss", "Discuss"],
+      picked: ["sh-pill sh-pill--aligned", "Picked"],
+      open: ["sh-pill sh-pill--open", "Open"],
+    };
+    // One entry per card, in card order: { id, question, article, row }.
+    let items = [];
+    let sheetKind = "plain";
+    let openIndex = 0;
+    let expanded = false;
+    let done = false;
+
+    function actionButton(text, onClick) {
+      const button = textElement("button", "sh-button", text);
+      button.setAttribute("type", "button");
+      button.addEventListener("click", onClick);
+      return button;
+    }
+
+    function openAt(index) {
+      if (index < 0 || index >= items.length) return;
+      openIndex = index;
+      refreshSheet();
+    }
+
+    const stepLabel = textElement("span", "sh-label", "");
+    const prevButton = actionButton("‹ Previous", function () { openAt(openIndex - 1); });
+    const nextButton = actionButton("Next ›", function () { openAt(openIndex + 1); });
+    stepperHost.replaceChildren(stepLabel, prevButton, nextButton);
+
+    const foldButton = actionButton("", function () {
+      expanded = !expanded;
+      refreshSheet();
+    });
+    foldButton.className = "sh-button sheet-fold";
+    foldButton.setAttribute("aria-expanded", "false");
+    foldButton.hidden = true;
+
+    const whyHeading = textElement("h2", "", "");
+    const whyText = textElement("p", "", "");
+    whyBox.replaceChildren(whyHeading, whyText);
+
+    const doneMessage = textElement("p", "", "");
+    const backButton = actionButton("Back to the sheet", function () {
+      done = false;
+      refreshSheet();
+    });
+    doneBox.replaceChildren(textElement("h2", "", "Done for now"), doneMessage, backButton);
+
+    const doneButton = actionButton("Done for now", function () {
+      controllers.forEach(function (controller) { controller.flush(); });
+      done = true;
+      refreshSheet();
+    });
+    footerHost.replaceChildren(textElement("p", "sh-caption", "Answers save as you tap"), doneButton);
+
+    function whySentence(remainder) {
+      const rounds = remainder.roundsRun;
+      const fixes = remainder.fixesMade;
+      const unsettled = remainder.unsettled.length;
+      let text = "The review ran " + rounds + (rounds === 1 ? " round" : " rounds") + " and fixed " + fixes
+        + (fixes === 1 ? " thing" : " things") + " itself. Everything else traces to your board or your rulings, so it isn't here.";
+      if (unsettled === 1) {
+        text += " 1 item here is a finding the review didn't settle.";
+      } else if (unsettled > 1) {
+        text += " " + unsettled + " items here are findings the review didn't settle.";
+      }
+      return text;
+    }
+
+    function pillOf(state) {
+      if (state.answer === null) return PICK_PILLS.open;
+      if (state.optionId !== null) return PICK_PILLS.picked;
+      return PICK_PILLS[state.answer] || PICK_PILLS.aligned;
+    }
+
+    function pillElement(pill) {
+      return textElement("span", pill[0], pill[1]);
+    }
+
+    function refreshSheet() {
+      if (items.length === 0) return;
+      const total = items.length;
+      const states = items.map(function (item) { return controllers.get(item.id).state(); });
+      const notSavedKind = function (state) { return state.save === "failed" || state.save === "stalled"; };
+      const answered = states.filter(function (state) { return state.answer !== null; });
+      const discussing = answered.filter(function (state) { return state.answer === "discuss"; });
+
+      countHost.textContent = ready
+        ? answered.length + " of " + total + " answered" + (discussing.length > 0 ? " · " + discussing.length + " to discuss" : "")
+        : total + " items · answers not loaded";
+      countHost.hidden = false;
+
+      // A card folds away only when it is answered, is not the open card and has nothing unsaved.
+      const folding = ready && sheetKind === "remainder";
+      const folded = states.map(function (state, index) {
+        return folding && state.answer !== null && index !== openIndex && !notSavedKind(state);
+      });
+      items.forEach(function (item, index) {
+        const state = states[index];
+        const current = index === openIndex;
+        item.article.hidden = !current;
+        item.row.className = "sh-button sheet-row" + (current ? " is-current" : "") + (folded[index] ? " is-folded" : "");
+        item.row.setAttribute("aria-current", current ? "true" : "false");
+        const parts = [textElement("span", "sheet-row-text", (index + 1) + " · " + item.question)];
+        if (ready) parts.push(pillElement(pillOf(state)));
+        if (notSavedKind(state)) parts.push(textElement("span", "sh-badge sh-badge--warning", "Not saved"));
+        item.row.replaceChildren(...parts);
+      });
+
+      const foldedStates = states.filter(function (state, index) { return folded[index]; });
+      const foldedWith = function (answer) {
+        return foldedStates.filter(function (state) { return state.answer === answer && state.optionId === null; }).length;
+      };
+      const foldedPicks = foldedStates.filter(function (state) { return state.optionId !== null; }).length;
+      const notSaved = answered.filter(notSavedKind).length;
+      const foldParts = [
+        textElement("span", "", "Answered · " + foldedStates.length),
+        textElement("span", PICK_PILLS.aligned[0], foldedWith("aligned") + " Aligned"),
+        textElement("span", PICK_PILLS.discuss[0], foldedWith("discuss") + " Discuss"),
+      ];
+      if (foldedPicks > 0) foldParts.push(textElement("span", PICK_PILLS.picked[0], foldedPicks + " Picked"));
+      if (notSaved > 0) foldParts.push(textElement("span", "sh-badge sh-badge--warning", notSaved + " not saved"));
+      foldButton.replaceChildren(...foldParts);
+      foldButton.hidden = foldedStates.length === 0;
+      foldButton.setAttribute("aria-expanded", expanded ? "true" : "false");
+      itemsHost.className = expanded ? "sheet-list is-expanded" : "sheet-list";
+
+      stepLabel.textContent = "Item " + (openIndex + 1) + " of " + total;
+      prevButton.disabled = openIndex === 0;
+      nextButton.disabled = openIndex === total - 1;
+
+      const unsavedCards = items.filter(function (item) { return controllers.get(item.id).unsaved(); }).length;
+      if (!ready) {
+        doneMessage.textContent = "Answers can't be saved in this view, so nothing here was saved.";
+      } else if (unsavedCards > 0) {
+        doneMessage.textContent = unsavedCards + (unsavedCards === 1 ? " answer isn't" : " answers aren't")
+          + " saved yet. Keep this page open until this says they're saved.";
+      } else {
+        doneMessage.textContent = "Your answers are saved as drafts. Open this link again any time to carry on, and tell the session when the sheet is done.";
+      }
+
+      stepperHost.hidden = done;
+      itemsHost.hidden = done;
+      cardsHost.hidden = done;
+      footerHost.hidden = done;
+      whyBox.hidden = done || sheetKind !== "remainder";
+      doneBox.hidden = !done;
+    }
+
     function render(sheet) {
       const fragment = document.createDocumentFragment();
       controllers.clear();
-      sheet.cards.forEach(function (card) {
-        fragment.appendChild(buildCard(card));
+      items = sheet.cards.map(function (card, index) {
+        const article = buildCard(card);
+        fragment.appendChild(article);
+        return { id: card.id, question: card.question, article: article, row: actionButton("", function () { openAt(index); }) };
       });
+      sheetKind = sheet.kind;
+      openIndex = 0;
+      expanded = false;
+      done = false;
+      whyHeading.textContent = "Why only these " + sheet.cards.length;
+      whyText.textContent = sheetKind === "remainder" ? whySentence(sheet.remainder) : "";
+      itemsHost.replaceChildren(foldButton, ...items.map(function (item) { return item.row; }));
       document.title = sheet.title;
       titleHost.textContent = sheet.title;
       cardsHost.replaceChildren(fragment);
       status.hidden = true;
+      refreshSheet();
     }
 
     // The line under the app bar that says why the controls are off; a retry button rides along
@@ -850,6 +1069,10 @@
       ready = true;
       controllers.forEach(function (controller) { controller.enable(); });
       gate.hidden = true;
+      // The owner lands on the first call still waiting for an answer, or on the first when none is.
+      const waiting = items.findIndex(function (item) { return controllers.get(item.id).state().answer === null; });
+      openIndex = waiting === -1 ? 0 : waiting;
+      refreshSheet();
     }
 
     // Only the sheet's owner may answer, so every step that is missing or fails leaves the controls off.
